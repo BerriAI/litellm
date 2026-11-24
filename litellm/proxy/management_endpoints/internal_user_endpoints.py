@@ -545,6 +545,8 @@ async def _memberships_on_team_member_budget(
 async def _raise_if_over_seat_limit(prisma_client: "PrismaClient", added_users: int) -> None:
     from litellm.proxy.proxy_server import _license_check
 
+    if _license_check.user_seat_limit() is None:
+        return
     billable_users: Final = await UserRepository(prisma_client).count_billable_users()
     if _license_check.is_over_limit(total_users=billable_users + added_users):
         raise HTTPException(
@@ -1955,16 +1957,16 @@ async def _update_single_user_helper(
                 entity_id=TypeAdapter(str).validate_python(non_default_values["user_id"]),
             )
 
+        await evict_and_broadcast(
+            cache_keys=(non_default_values["user_id"],),
+            user_api_key_cache=user_api_key_cache,
+        )
+
         if user_request.blocked is not None:
             await set_user_keys_blocked(
                 user_id=TypeAdapter(str).validate_python(non_default_values["user_id"]),
                 blocked=user_request.blocked,
             )
-
-        await evict_and_broadcast(
-            cache_keys=(non_default_values["user_id"],),
-            user_api_key_cache=user_api_key_cache,
-        )
 
         if "object_permission_id" in non_default_values:
             await _invalidate_cached_user_entitlement(

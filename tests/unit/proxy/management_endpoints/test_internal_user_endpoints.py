@@ -2675,25 +2675,29 @@ async def test_user_update_blocked_maps_to_scim_active_and_flips_only_its_own_ke
     token_writes: Final = prisma_client.db.litellm_verificationtoken.update.await_args_list
     assert tuple(call.kwargs["where"]["token"] for call in token_writes) == flipped_tokens
     assert all(call.kwargs["data"]["blocked"] is blocked for call in token_writes)
-    reenables: Final = blocked is False and stored_metadata.get("scim_active") is False
-    assert prisma_client.db.litellm_usertable.count.await_count == (2 if reenables else 0)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("max_users", "total_users", "deactivated_users", "refused"),
+    ("stored_metadata", "max_users", "total_users", "deactivated_users", "refused"),
     [
-        (2, 3, 1, True),
-        (2, 3, 2, False),
-        (None, 500, 0, False),
+        ({"scim_active": False}, 2, 3, 1, True),
+        ({"scim_active": False}, 2, 3, 2, False),
+        ({"scim_active": False}, None, 500, 0, False),
+        ({}, 1, 5, 0, False),
     ],
 )
 async def test_reenabling_a_user_counts_them_against_the_license_seat_limit(
-    mocker: MockerFixture, max_users: int | None, total_users: int, deactivated_users: int, refused: bool
+    mocker: MockerFixture,
+    stored_metadata: dict[str, object],
+    max_users: int | None,
+    total_users: int,
+    deactivated_users: int,
+    refused: bool,
 ) -> None:
     _license_with_seats(mocker, max_users=max_users)
     prisma_client: Final = _blocked_update_rig(
-        mocker, {"scim_active": False}, total_users=total_users, deactivated_users=deactivated_users
+        mocker, stored_metadata, total_users=total_users, deactivated_users=deactivated_users
     )
 
     if refused:
@@ -2708,7 +2712,29 @@ async def test_reenabling_a_user_counts_them_against_the_license_seat_limit(
         return
 
     await _set_blocked(False)
-    assert prisma_client.update_data.call_args.kwargs["data"]["metadata"] == {"scim_active": True}
+    assert prisma_client.update_data.call_args.kwargs["data"]["metadata"].get("scim_active") is (
+        True if stored_metadata else None
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_failed_key_flip_still_evicts_the_cached_user(mocker: MockerFixture) -> None:
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    _license_with_seats(mocker, max_users=None)
+    prisma_client: Final = _blocked_update_rig(mocker, {})
+    prisma_client.db.litellm_verificationtoken.update = mocker.AsyncMock(side_effect=RuntimeError("connection reset"))
+    cache: Final = UserApiKeyCache()
+    cached_user: Final = LiteLLM_UserTable(user_id="user-fir", metadata={})
+    await cache.async_set_cache(key=AuthObject.user("user-fir"), value=cached_user, model_type=LiteLLM_UserTable)
+    mocker.patch(
+        "litellm.proxy.proxy_server.user_api_key_cache", cache
+    )  # test-quality-ok: exercise a real isolated cache
+
+    with pytest.raises(RuntimeError, match="connection reset"):
+        await _set_blocked(True)
+
+    assert await cache.async_get_cache(key=AuthObject.user("user-fir"), model_type=LiteLLM_UserTable) is None
 
 
 @pytest.mark.asyncio
