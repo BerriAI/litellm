@@ -17,16 +17,19 @@ from dataclasses import dataclass
 from functools import partial
 from itertools import accumulate, chain, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Final, Protocol  # noqa: TID251  # the request is read as a string tree
 
 from litellm._logging import verbose_router_logger
+from litellm.constants import PDF_DATA_URL_PREFIX
 from litellm.litellm_core_utils.core_helpers import allowed_openai_param_names, as_str_mapping
 from litellm.litellm_core_utils.deployment_pricing import deployment_backend_models
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import parts_of
 from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import is_plain_embedding_text
 from litellm.litellm_core_utils.token_counter import (
+    PdfDocumentPricing,
     offload_token_count,
+    pdf_page_pricing,
     served_openai_models,
     single_encoding_openai_model,
     split_embedding_input_tokens,
@@ -50,24 +53,8 @@ if TYPE_CHECKING:
 # The chat params a deployment must take when the request sends them (`_PRE_CALL_CHECK_FILTERED_PARAMS`).
 _FILTERED_PARAMS: Final = frozenset({"response_format"})
 _CHARS_PER_OFFLOADED_COUNT: Final = 1 << 16
-_SINGLE_IMAGE_PDF_COUNTER: Final = partial(token_counter, pdf_pricing="single_image")
 _NO_PDF_COUNTS: Final[Mapping[str, int]] = MappingProxyType({})
-_NO_PDF_PRICINGS: Final[Mapping[str, "_OwnPdfPricing"]] = MappingProxyType({})
-
-
-@dataclass(frozen=True, slots=True)
-class _SingleImagePdfs:
-    """Counted with each inline PDF priced as one opaque document, as before per-page PDF pricing."""
-
-
-@dataclass(frozen=True, slots=True)
-class _OpenAIPdfs:
-    """Counted with the deployment's own OpenAI model, as a group of only that model counts it."""
-
-    model: str
-
-
-_OwnPdfPricing: TypeAlias = _SingleImagePdfs | _OpenAIPdfs
+_NO_PDF_PRICINGS: Final[Mapping[str, PdfDocumentPricing]] = MappingProxyType({})
 
 
 @dataclass(frozen=True, slots=True)
@@ -378,9 +365,9 @@ class PreCallFacts:
     def _input_is_a_list(self) -> bool:
         return self._messages is None and _is_list(self._input)
 
-    def _count(self, counter: Callable[..., int] | None = None, count_model: str | None = None) -> int | None:
+    def _count(self, counter: Callable[..., int] | None = None) -> int | None:
         try:
-            tokenizer_model: Final = count_model if count_model is not None else self._tokenizer_model()
+            tokenizer_model: Final = self._tokenizer_model()
             if not self._input_is_a_list():
                 return count_tokens(
                     self._host,
@@ -406,11 +393,9 @@ class PreCallFacts:
             )
             return None
 
-    async def _count_async(
-        self, counter: Callable[..., int] | None = None, count_model: str | None = None
-    ) -> int | None:
+    async def _count_async(self, counter: Callable[..., int] | None = None) -> int | None:
         try:
-            tokenizer_model: Final = count_model if count_model is not None else self._tokenizer_model()
+            tokenizer_model: Final = self._tokenizer_model()
             if not self._input_is_a_list():
                 return await offload_token_count(count_tokens)(
                     self._host,
@@ -450,38 +435,37 @@ class PreCallFacts:
             )
             return None
 
-    def _own_pdf_pricings(self, input_tokens: int | None) -> Mapping[str, _OwnPdfPricing]:
-        """The candidates the shared count overflows that bill an inline PDF below its Claude page price. Only
-        litellm's own counter prices a PDF the way these recounts assume, so a custom one keeps the shared count."""
-        if input_tokens is None or compaction_pending(self._request) or not _counts_with_litellm(self._host):
+    def _own_pdf_pricings(self, input_tokens: int | None) -> Mapping[str, PdfDocumentPricing]:
+        """The candidates the shared count overflows that bill an inline PDF below its price there. Only litellm's
+        own counter prices a PDF the way these recounts assume, so a custom one keeps the shared count."""
+        if (
+            input_tokens is None
+            or compaction_pending(self._request)
+            or not _counts_with_litellm(self._host)
+            or not _may_carry_an_inline_pdf(self._messages, self._input)
+        ):
             return _NO_PDF_PRICINGS
-        tokenizer_model: Final = self._tokenizer_model()
+        shared: Final = pdf_page_pricing(self._tokenizer_model())
         overflowing: Final = (id for id in self._candidates if _overflows(self._windows.get(id), input_tokens))
         priced: Final = (
-            (id, _own_pdf_pricing(for_requested_model(self._record(id), self._name), self._model, tokenizer_model))
+            (id, _own_pdf_pricing(for_requested_model(self._record(id), self._name), self._model, shared))
             for id in overflowing
         )
         return MappingProxyType({id: pricing for id, pricing in priced if pricing is not None})
 
     def _pdf_counts(self, input_tokens: int | None) -> Mapping[str, int]:
         pricings: Final = self._own_pdf_pricings(input_tokens)
-        single_image: Final = self._count(_SINGLE_IMAGE_PDF_COUNTER) if pricings else None
-        openai_counts: Final = MappingProxyType(
-            {model: self._count(count_model=model) for model in _openai_models(pricings)}
-            if _reads_an_inline_pdf(input_tokens, single_image)
-            else {}
+        recounts: Final = MappingProxyType(
+            {pricing: self._count(_pdf_counter(pricing)) for pricing in frozenset(pricings.values())}
         )
-        return _own_pdf_counts(pricings, input_tokens, single_image, openai_counts)
+        return _own_pdf_counts(pricings, input_tokens, recounts)
 
     async def _pdf_counts_async(self, input_tokens: int | None) -> Mapping[str, int]:
         pricings: Final = self._own_pdf_pricings(input_tokens)
-        single_image: Final = await self._count_async(_SINGLE_IMAGE_PDF_COUNTER) if pricings else None
-        openai_counts: Final = MappingProxyType(
-            {model: await self._count_async(count_model=model) for model in _openai_models(pricings)}
-            if _reads_an_inline_pdf(input_tokens, single_image)
-            else {}
+        recounts: Final = MappingProxyType(
+            {pricing: await self._count_async(_pdf_counter(pricing)) for pricing in frozenset(pricings.values())}
         )
-        return _own_pdf_counts(pricings, input_tokens, single_image, openai_counts)
+        return _own_pdf_counts(pricings, input_tokens, recounts)
 
     def _answer(self, input_tokens: int | None, pdf_counts: Mapping[str, int] = _NO_PDF_COUNTS) -> Mapping[str, object]:
         if not self._has_input:
@@ -608,46 +592,83 @@ def _overflows(limit: int | None, input_tokens: int) -> bool:
 
 
 def _counts_with_litellm(host: "PythonHost") -> bool:
+    """The host counts with litellm's own counter, the public one and the core function it calls, so a recount
+    that prices PDFs differently changes only the PDFs. A core function replaced before this module was imported
+    is indistinguishable from the original and is called with ``pdf_pricing``."""
     import litellm
+    from litellm._lazy_imports import get_token_counter_new
     from litellm.router_python_host import PythonHost
     from litellm.utils import token_counter as litellm_token_counter
 
-    return type(host).invoke is PythonHost.invoke and litellm.token_counter is litellm_token_counter
+    return (
+        type(host).invoke is PythonHost.invoke
+        and litellm.token_counter is litellm_token_counter
+        and get_token_counter_new() is token_counter
+    )
 
 
-def _own_pdf_pricing(deployment: Mapping[str, object], group: str, tokenizer_model: str) -> _OwnPdfPricing | None:
+def _is_inline_pdf_part(value: object) -> bool:
+    match value:
+        case (
+            {"type": "file", "file": {"file_data": str() as data}}
+            | {"type": "input_file", "file_data": str() as data}
+            | {"type": "document", "source": {"type": "url", "url": str() as data}}
+        ):
+            return data.startswith(PDF_DATA_URL_PREFIX)
+        case {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": str() as data}}:
+            return bool(data)
+        case _:
+            return False
+
+
+def _may_carry_an_inline_pdf(*values: object) -> bool:
+    pending: Final[list[object]] = list(values)  # mutable-ok: content traversal without recursion
+    visited: Final[set[int]] = set()  # mutable-ok: prevent cycles in caller-owned content containers
+    while pending:
+        value: Final = pending.pop()
+        if id(value) in visited:
+            continue
+        visited.add(id(value))
+        if _is_inline_pdf_part(value):
+            return True
+        fields: Final = as_str_mapping(value)
+        if fields is None:
+            pending.extend(_items(value))
+            continue
+        pending.extend(_items(fields.get("content")))
+        if fields.get("type") in ("function_call_output", "custom_tool_call_output", "tool_result"):
+            pending.extend(_items(fields.get("output")))
+        if fields.get("type") == "document":
+            source: Final = as_str_mapping(fields.get("source")) or {}
+            if source.get("type") == "content":
+                pending.extend(_items(source.get("content")))
+    return False
+
+
+def _pdf_counter(pricing: PdfDocumentPricing) -> Callable[..., int]:
+    return partial(token_counter, pdf_pricing=pricing)
+
+
+def _own_pdf_pricing(
+    deployment: Mapping[str, object], group: str, shared: PdfDocumentPricing
+) -> PdfDocumentPricing | None:
     openai_model: Final = single_encoding_openai_model(served_openai_models((deployment,)))
-    if openai_model is not None:
-        return None if openai_model == tokenizer_model else _OpenAIPdfs(openai_model)
-    return _SingleImagePdfs() if _bills_pdfs_like_gemini(deployment, group) else None
-
-
-def _openai_models(pricings: Mapping[str, _OwnPdfPricing]) -> frozenset[str]:
-    return frozenset(pricing.model for pricing in pricings.values() if isinstance(pricing, _OpenAIPdfs))
-
-
-def _reads_an_inline_pdf(input_tokens: int | None, single_image: int | None) -> bool:
-    """Pricing each readable inline PDF as one image moves the count only when the request carries one."""
-    return input_tokens is not None and single_image is not None and single_image != input_tokens
+    own: Final = (
+        pdf_page_pricing(openai_model)
+        if openai_model is not None
+        else ("single_image" if _bills_pdfs_like_gemini(deployment, group) else None)
+    )
+    return None if own is None or own == shared else own
 
 
 def _own_pdf_counts(
-    pricings: Mapping[str, _OwnPdfPricing],
+    pricings: Mapping[str, PdfDocumentPricing],
     input_tokens: int | None,
-    single_image: int | None,
-    openai_counts: Mapping[str, int | None],
+    recounts: Mapping[PdfDocumentPricing, int | None],
 ) -> Mapping[str, int]:
-    if input_tokens is None or not _reads_an_inline_pdf(input_tokens, single_image):
+    if input_tokens is None:
         return _NO_PDF_COUNTS
-
-    def own(pricing: _OwnPdfPricing) -> int | None:
-        match pricing:
-            case _SingleImagePdfs():
-                return single_image
-            case _OpenAIPdfs(model):
-                return openai_counts.get(model)
-
-    counts: Final = ((id, own(pricing)) for id, pricing in pricings.items())
+    counts: Final = ((id, recounts.get(pricing)) for id, pricing in pricings.items())
     return MappingProxyType({id: count for id, count in counts if count is not None and count < input_tokens})
 
 

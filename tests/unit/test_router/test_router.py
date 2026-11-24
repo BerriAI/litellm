@@ -112,6 +112,7 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from tests.large_text import text
 from tests.unit.conftest import redis_cache_double
+from tests.unit.litellm_core_utils.handbuilt_pdf import pdf_base64
 from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 import traceback
 import inspect
@@ -4341,18 +4342,7 @@ def test_pre_call_checks_count_a_group_mixing_in_another_vendor_by_its_own_name(
         )
 
 
-def _blank_pdf_base64(pages: int) -> str:
-    from pypdf import PdfWriter
-
-    writer: Final = PdfWriter()
-    for _ in range(pages):
-        writer.add_blank_page(612, 792)
-    buffer: Final = io.BytesIO()
-    writer.write(buffer)
-    return base64.b64encode(buffer.getvalue()).decode()
-
-
-_PDF_BASE64: Final = _blank_pdf_base64(3)
+_PDF_BASE64: Final = pdf_base64(("", "", ""))
 _PDF_URL: Final = f"data:application/pdf;base64,{_PDF_BASE64}"
 _PDF_FILE_PROMPT: Final = [
     {
@@ -4395,6 +4385,12 @@ def _single_image_pdf_tokens() -> int:
     from litellm.litellm_core_utils.token_counter import token_counter
 
     return token_counter(model="", messages=_PDF_FILE_PROMPT, pdf_pricing="single_image")
+
+
+def _openai_priced_pdf_tokens(messages: list[dict[str, object]]) -> int:
+    from litellm.litellm_core_utils.token_counter import token_counter
+
+    return token_counter(model="", messages=messages, pdf_pricing="openai")
 
 
 def _between_pdf_prices() -> int:
@@ -4493,19 +4489,23 @@ def test_an_alias_of_gemini_openai_and_claude_keeps_every_deployment_whose_own_p
 
 
 @pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize("replaced", ["litellm", "core"])
 async def test_a_custom_token_counter_stays_authoritative_for_a_pdf_request(
-    monkeypatch: pytest.MonkeyPatch, wrapped: bool
+    monkeypatch: pytest.MonkeyPatch, wrapped: bool, replaced: str
 ):
+    import litellm.litellm_core_utils.token_counter as core_token_counter
+
     custom_count: Final = 10 * _page_priced_pdf_tokens()
     router: Final = _window_router(_between_pdf_prices(), _GEMINI_MODELS[0], "openai/gpt-6.1-sol")
+    owner: Final = litellm if replaced == "litellm" else core_token_counter
 
-    def custom_token_counter(**_: object) -> int:
+    def custom_token_counter(*_: object, **__: object) -> int:
         return custom_count
 
     configured_counter: Final = (
-        functools.wraps(litellm.token_counter)(custom_token_counter) if wrapped else custom_token_counter
+        functools.wraps(owner.token_counter)(custom_token_counter) if wrapped else custom_token_counter
     )
-    monkeypatch.setattr(litellm, "token_counter", configured_counter)
+    monkeypatch.setattr(owner, "token_counter", configured_counter)
 
     with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={custom_count}"):
         _kept_models(router, messages=_PDF_FILE_PROMPT)
@@ -4513,10 +4513,75 @@ async def test_a_custom_token_counter_stays_authoritative_for_a_pdf_request(
         await router.acompletion(model="docs", messages=_PDF_FILE_PROMPT)
 
 
+def test_an_openai_deployment_keeps_the_shared_text_count_around_a_pdf():
+    prompt: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": _MULTILINGUAL_PROMPT[0]["content"]},
+                {"type": "file", "file": {"file_data": _PDF_URL}},
+            ],
+        }
+    ]
+    limit: Final = _openai_priced_pdf_tokens(prompt) - 1
+    router: Final = _window_router(limit, "openai/gpt-6.1-sol", _CLAUDE_MODELS[0])
+
+    assert litellm.token_counter(model="openai/gpt-6.1-sol", messages=prompt) <= limit
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={limit + 1}"):
+        _kept_models(router, messages=prompt)
+
+
+_REMOTE_IMAGE_URL: Final = "https://images.example.com/chart.png"
+
+
+def _png_bytes(width: int, height: int) -> bytes:
+    from PIL import Image
+
+    image: Final = io.BytesIO()
+    Image.new("RGB", (width, height)).save(image, format="PNG")
+    return image.getvalue()
+
+
+@pytest.mark.parametrize("caption", ["chart", "application/pdf", "data:application/pdf;base64,example"])
+async def test_an_over_window_prompt_without_a_pdf_fetches_its_remote_image_once(
+    monkeypatch: pytest.MonkeyPatch, caption: str
+):
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    prompt: Final = [
+        {"role": "user", "content": [
+            {"type": "text", "text": caption},
+            {"type": "image_url", "image_url": {"url": _REMOTE_IMAGE_URL, "detail": "high"}},
+        ]}
+    ]
+    router: Final = _window_router(1, _GEMINI_MODELS[0], "openai/gpt-6.1-sol", _CLAUDE_MODELS[0])
+
+    with respx.mock(assert_all_called=True) as mock:
+        image: Final = mock.get(_REMOTE_IMAGE_URL).respond(200, content=_png_bytes(2048, 2048))
+        with pytest.raises(litellm.ContextWindowExceededError):
+            _kept_models(router, messages=prompt)
+        sync_fetches: Final = image.call_count
+        with pytest.raises(litellm.ContextWindowExceededError):
+            await router.acompletion(model="docs", messages=prompt)
+
+    assert (sync_fetches, image.call_count) == (1, 2)
+
+
 @pytest.mark.parametrize(
     "request_kwargs",
-    [{"messages": _PDF_DOCUMENT_PROMPT}, {"input": _PDF_RESPONSES_INPUT}],
-    ids=["anthropic_document", "responses_input_file"],
+    [
+        {"messages": _PDF_DOCUMENT_PROMPT},
+        {"input": _PDF_RESPONSES_INPUT},
+        {"messages": [{"role": "user", "content": [
+            {"type": "document", "source": {"type": "url", "url": _PDF_URL}},
+        ]}]},
+        {"messages": [{"role": "user", "content": [
+            {"type": "document", "source": {"type": "content", "content": _PDF_DOCUMENT_PROMPT[0]["content"]}},
+        ]}]},
+        {"messages": [{"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "document-tool", "content": _PDF_DOCUMENT_PROMPT[0]["content"]},
+        ]}]},
+    ],
+    ids=["anthropic_document", "responses_input_file", "document_url", "nested_document", "tool_result"],
 )
 @pytest.mark.parametrize("fitting", [_GEMINI_MODELS[0], "openai/gpt-6.1-sol"])
 def test_a_pdf_in_every_request_shape_reaches_the_deployment_its_own_pdf_price_fits(
