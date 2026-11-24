@@ -88,9 +88,17 @@ async def test_attempt_sends_the_merged_cache_controls_and_reports_ignored_ones(
             {"cache": _OFF, "allowed_cache_controls": []},
             {"cache": {"ttl": 600}, "allowed_cache_controls": ["ttl"]},
             _OFF,
-            _OFF,
+            {"ttl": 600, "no-cache": True, "no-store": True},
             "ttl",
-            id="the requested model's lock replaces the fallback's own rule and list",
+            id="the requested model's lock goes over the fallback's own rule and list",
+        ),
+        pytest.param(
+            {"cache": {"ttl": 60}, "allowed_cache_controls": ["ttl"]},
+            {"cache": {"no-store": True, "ttl": 600}, "allowed_cache_controls": []},
+            {"ttl": 5},
+            {"no-store": True, "ttl": 60},
+            "ttl",
+            id="the fallback keeps its own no-store and a request control needs both lists",
         ),
         pytest.param(
             {"cache": {"ttl": 60}},
@@ -129,19 +137,21 @@ async def test_a_fallback_follows_the_cache_lock_of_the_requested_model(
     assert headers(response).get(_HEADER) == ignored
 
 
+@pytest.mark.parametrize("requested", ["a", "alias-of-a"])
 @pytest.mark.asyncio
-async def test_a_fallback_follows_the_cache_lock_of_a_requested_model_that_is_cooling_down() -> None:
+async def test_a_fallback_follows_the_cache_lock_of_a_requested_model_that_is_cooling_down(requested: str) -> None:
     host: Final = ScriptedHost()
     core: Final = rust_core(
         host,
         model_list=[_deployment("a", cache=_OFF, allowed_cache_controls=[]), _deployment("b")],
         num_retries=0,
-        fallbacks=[{"a": ["b"]}],
+        fallbacks=[{"a": ["b"]}, {"alias-of-a": ["b"]}],
+        model_group_alias={"alias-of-a": "a"},
     )
     host.answer("openai/a", fresh(not_found))
-    _ = await complete(core, cache={"ttl": 5})
+    _ = await complete(core, requested, cache={"ttl": 5})
 
-    response: Final = await complete(core, cache={"ttl": 5})
+    response: Final = await complete(core, requested, cache={"ttl": 5})
 
     _, _, straight_to_fallback = host.calls_to("acompletion")
     assert straight_to_fallback.kwargs["model"] == "openai/b"
@@ -244,3 +254,32 @@ async def test_a_prompt_managed_model_sends_the_merged_cache_controls_and_report
     assert call.kwargs["cache"] == _OFF
     assert "allowed_cache_controls" not in call.kwargs
     assert headers(response)[_HEADER] == "ttl,no-store"
+
+
+@pytest.mark.parametrize(
+    ("stream_deployment", "fallback_cache"),
+    [
+        pytest.param("a-off", _OFF, id="the lock of the deployment the stream ran on"),
+        pytest.param("a", {"ttl": 60}, id="not the lock of another deployment of that model"),
+        pytest.param("gone", {"ttl": 60, **_OFF}, id="every lock of the model when none was attempted"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_fallback_of_a_failed_stream_follows_the_cache_lock_of_the_requested_model(
+    stream_deployment: str, fallback_cache: dict[str, object]
+) -> None:
+    host: Final = ScriptedHost()
+    ttl_locked: Final = _deployment("a", cache={"ttl": 60}, allowed_cache_controls=[])
+    off_locked: Final = {**_deployment("a", cache=_OFF, allowed_cache_controls=[]), "model_info": {"id": "a-off"}}
+    core: Final = rust_core(
+        host, model_list=[ttl_locked, off_locked, _deployment("b")], num_retries=0, fallbacks=[{"a": ["b"]}]
+    )
+    request: Final = {"model": "a", "messages": [{"role": "user", "content": "hi"}], "cache": {"ttl": 5}}
+    origin: Final = {"group": "a", "depth": 0, "level": 0, "deployment_id": stream_deployment, "routed": "a"}
+
+    response: Final = await core.recover_stream("fallback", "acompletion", request, origin, fresh(not_found))
+
+    (fallback,) = host.calls_to("acompletion")
+    assert fallback.kwargs["model"] == "openai/b"
+    assert fallback.kwargs["cache"] == fallback_cache
+    assert headers(response).get(_HEADER) == "ttl"

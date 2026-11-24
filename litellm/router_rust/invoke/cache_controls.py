@@ -46,7 +46,7 @@ def model_cache_controls(litellm_params: Mapping[str, object], request_cache: ob
 
 def cache_lock(litellm_params: Mapping[str, object]) -> Mapping[str, object] | None:
     """The deployment's ``cache`` and ``allowed_cache_controls`` when it sets the list, which its
-    fallbacks then follow in place of their own."""
+    fallbacks then follow on top of their own."""
     allowed: Final = litellm_params.get(ALLOWED_CACHE_CONTROLS_PARAM)
     if not isinstance(allowed, Sequence) or isinstance(allowed, str):
         return None
@@ -54,10 +54,27 @@ def cache_lock(litellm_params: Mapping[str, object]) -> Mapping[str, object] | N
 
 
 def with_cache_lock(litellm_params: Mapping[str, object], lock: Mapping[str, object] | None) -> Mapping[str, object]:
-    """A fallback deployment's params under the lock of the model the request asked for."""
+    """A fallback deployment's params under the lock of the model the request asked for: the lock's
+    controls over the fallback's own, which stay where the lock sets none, and only the request
+    controls both lists allow."""
     if lock is None:
         return litellm_params
-    return {**without(without(litellm_params, "cache"), ALLOWED_CACHE_CONTROLS_PARAM), **lock}
+    own: Final = _listed(litellm_params.get(ALLOWED_CACHE_CONTROLS_PARAM))
+    allowed: Final = [
+        control for control in _listed(lock.get(ALLOWED_CACHE_CONTROLS_PARAM)) or () if own is None or control in own
+    ]
+    controls: Final = {**_canonical(as_dict(litellm_params.get("cache"))), **_canonical(as_dict(lock.get("cache")))}
+    return {
+        **without(litellm_params, "cache"),
+        **({"cache": controls} if controls else {}),
+        ALLOWED_CACHE_CONTROLS_PARAM: allowed,
+    }
+
+
+def _listed(allowed: object) -> Sequence[object] | None:
+    if not isinstance(allowed, Sequence) or isinstance(allowed, str):
+        return None
+    return tuple(allowed)  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # a config list
 
 
 def _canonical(controls: Mapping[str, object]) -> Mapping[str, object]:
