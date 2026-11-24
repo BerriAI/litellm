@@ -1,9 +1,3 @@
-"""
-LiteLLM A2A Client class.
-
-Provides a class-based interface for A2A agent invocation.
-"""
-
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Final
 
@@ -99,7 +93,7 @@ class A2AClient:
 
     async def send_message_streaming(
         self, request: "SendStreamingMessageRequest"
-    ) -> AsyncIterator["SendStreamingMessageResponse | Mapping[str, object]"]:
+    ) -> AsyncIterator["SendStreamingMessageResponse | Mapping"]:
         """Send a streaming message to the A2A agent."""
         from litellm.a2a_protocol.main import asend_message_streaming
 
