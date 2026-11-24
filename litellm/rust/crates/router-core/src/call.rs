@@ -337,13 +337,12 @@ fn context_window_refusal(failed: &Failed) -> Option<Failed> {
     }
 }
 
-fn refused_or(refusal: Option<Failed>, failed: Failed) -> Failed {
-    match refusal {
-        Some(refusal) if !ends_call(&failed.error) && !blocked_by_guardrail(&failed.error) => {
-            refusal
-        }
-        _ => failed,
-    }
+fn raised_by_the_same_attempt(refusal: &Failed, failed: &Failed) -> bool {
+    let slot = |error: &Error| match error {
+        Error::Attempt { raised_at, .. } => *raised_at,
+        _ => None,
+    };
+    slot(&refusal.error) == slot(&failed.error) && refusal.deployment_id == failed.deployment_id
 }
 
 fn blocked_by_guardrail(error: &Error) -> bool {
@@ -1007,11 +1006,13 @@ impl<H: RouterHost> Call<'_, H> {
             return Err(failed);
         };
         let (num_retries, policy_applies) = unary_retry_budget(level, &first_failure);
-        let refusal = if policy_applies {
+        let mut refusal = if policy_applies {
             None
         } else {
             context_window_refusal(&failed)
         };
+        let refused_or =
+            |refusal: Option<Failed>, failed: Failed| self.refused_or(at.level, refusal, failed);
         drop(first_failure);
         let all = self
             .candidates(snapshot, op, request, &target.group, &counting)
@@ -1042,12 +1043,8 @@ impl<H: RouterHost> Call<'_, H> {
             }
             let untried = match refused_by {
                 Some(refused) if !policy_applies && failure.is_a("ContextWindowExceededError") => {
-                    let serving: Vec<String> =
-                        serving_the_refused_model(snapshot, refused, &healthy_deployments)
-                            .filter(|id| !inputs.skipped_ids.contains(id))
-                            .collect();
-                    inputs.skipped_ids.extend(serving);
-                    self.untried(level, &inputs).await
+                    let group = failed.routed.as_deref().unwrap_or(target.group.as_str());
+                    self.refuse(level, group, refused, &mut inputs).await
                 }
                 _ => 0,
             };
@@ -1107,14 +1104,15 @@ impl<H: RouterHost> Call<'_, H> {
             let delay = backoff.delay(|| self.rng.next_f64());
             self.host.sleep(delay).await;
             if matches!(step, RetryStep::Exhausted { .. }) {
+                let raised = refused_or(refusal, failed);
                 self.host.observe(&RouterEvent::RetriesExhausted {
                     model_group: target.group.clone(),
                     attempted: num_retries,
                     max: num_retries,
                     level: at.level,
-                    picked: failed.error.attempt().is_none(),
+                    picked: raised.error.attempt().is_none(),
                 });
-                break;
+                return Err(raised);
             }
             self.host.observe(&RouterEvent::Retry {
                 model_group: target.group.clone(),
@@ -1131,6 +1129,8 @@ impl<H: RouterHost> Call<'_, H> {
                 }
                 Err(next) => {
                     self.pick_failed(level, &next.error);
+                    refusal = refusal
+                        .or_else(|| context_window_refusal(&next).filter(|_| !policy_applies));
                     failed = next;
                 }
             }
@@ -1138,22 +1138,49 @@ impl<H: RouterHost> Call<'_, H> {
         Err(refused_or(refusal, failed))
     }
 
-    async fn untried(&self, level: &Level<'_>, inputs: &SelectInputs) -> usize {
+    fn refused_or(&self, level: u32, refusal: Option<Failed>, failed: Failed) -> Failed {
+        match refusal {
+            Some(refusal) if !ends_call(&failed.error) && !blocked_by_guardrail(&failed.error) => {
+                if !raised_by_the_same_attempt(&refusal, &failed) {
+                    self.host.observe(&RouterEvent::ContextWindowRaised {
+                        level,
+                        deployment_id: refusal.deployment_id.clone(),
+                        stream_origin: matches!(
+                            &*refusal.error,
+                            Error::Attempt {
+                                raised_at: None,
+                                ..
+                            }
+                        ),
+                    });
+                }
+                refusal
+            }
+            _ => failed,
+        }
+    }
+
+    async fn refuse(
+        &self,
+        level: &Level<'_>,
+        group: &str,
+        refused: &str,
+        inputs: &mut SelectInputs,
+    ) -> usize {
         let Level {
             snapshot,
             op,
             request,
-            target,
             ..
         } = level;
-        self.candidates(snapshot, op, request, &target.group, inputs)
-            .await
-            .map_or(0, |c| {
-                c.healthy
-                    .iter()
-                    .filter(|d| !inputs.skipped_ids.contains(&d.id))
-                    .count()
-            })
+        let healthy = match self.candidates(snapshot, op, request, group, inputs).await {
+            Ok(c) if snapshot.settings.enable_pre_call_checks && !c.kind.is_single() => c.healthy,
+            _ => return 0,
+        };
+        let serving: Vec<String> = serving_the_refused_model(snapshot, refused, &healthy).collect();
+        let untried = healthy.iter().filter(|d| !serving.contains(&d.id)).count();
+        inputs.refused_ids.extend(serving);
+        untried
     }
 
     /// The deployments `_async_get_healthy_deployments` counts as healthy for the level's group.

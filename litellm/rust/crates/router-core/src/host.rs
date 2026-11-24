@@ -597,6 +597,11 @@ pub enum RouterEvent {
         model: String,
         cause: RetryCause,
     },
+    ContextWindowRaised {
+        level: u32,
+        deployment_id: Option<String>,
+        stream_origin: bool,
+    },
     /// The first failure of a hop serving `model` read a request `num_retries` that raises
     /// ([`UncountedRetries::Raises`]): the hop ends with that error (the host raises it, from the
     /// failure `cause` names), and falls back as from any plain exception.

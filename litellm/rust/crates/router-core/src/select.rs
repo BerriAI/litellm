@@ -127,6 +127,7 @@ pub(crate) struct SelectInputs {
     pub failed_ids: Vec<String>,
     /// A weighted failover hop's `_excluded_deployment_ids`: never picked.
     pub excluded_ids: Arc<[String]>,
+    pub refused_ids: Vec<String>,
     /// Stop before the plugins, order and skip filters: the group less cooldowns and blocked
     /// deployments, which `_async_get_healthy_deployments` counts when deciding whether to retry.
     pub count_only: bool,
@@ -744,7 +745,9 @@ impl<H: RouterHost> Call<'_, H> {
         }
 
         healthy.retain(|d| {
-            !request.excluded_ids.contains(&d.id) && !inputs.excluded_ids.contains(&d.id)
+            !request.excluded_ids.contains(&d.id)
+                && !inputs.excluded_ids.contains(&d.id)
+                && !inputs.refused_ids.contains(&d.id)
         });
 
         if !inputs.skipped_ids.is_empty() || !request.retry_skipped_ids.is_empty() {

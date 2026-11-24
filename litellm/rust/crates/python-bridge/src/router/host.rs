@@ -1102,6 +1102,7 @@ impl RouterHost for PythonRouterHost {
                 | RouterEvent::RetryLogged { .. }
                 | RouterEvent::RetryPolicyRaised { .. }
                 | RouterEvent::RetryCountRaised { .. }
+                | RouterEvent::ContextWindowRaised { .. }
                 | RouterEvent::FallbackDone { .. }
                 | RouterEvent::Blocked { .. }
                 | RouterEvent::CooldownSet { .. }

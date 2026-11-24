@@ -1606,6 +1606,16 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
                 dict.set_item("model", model)?;
                 cause_items(&dict, cause)?;
             }
+            RouterEvent::ContextWindowRaised {
+                level,
+                deployment_id,
+                stream_origin,
+            } => {
+                dict.set_item("kind", "context_window_raised")?;
+                dict.set_item("level", level)?;
+                dict.set_item("deployment_id", deployment_id)?;
+                dict.set_item("stream_origin", stream_origin)?;
+            }
             RouterEvent::RetryCountRaised {
                 level,
                 model,

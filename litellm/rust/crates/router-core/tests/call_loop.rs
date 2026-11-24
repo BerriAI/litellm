@@ -428,6 +428,13 @@ fn config() -> RouterConfig {
     .unwrap()
 }
 
+fn pre_call_checked(config: RouterConfig) -> RouterConfig {
+    RouterConfig {
+        enable_pre_call_checks: true,
+        ..config
+    }
+}
+
 fn router(config: RouterConfig, dynamic: serde_json::Value, host: Arc<ScriptedHost>) -> Hosted {
     let dynamic: RouterDynamicConfig = serde_json::from_value(dynamic).unwrap();
     let router = Router::builder(config, dynamic)
@@ -1844,7 +1851,7 @@ async fn weighted_failover_serves_every_failure_but_a_context_window_error(
 async fn a_context_window_error_retries_on_a_deployment_that_has_not_refused(config: RouterConfig) {
     let host = Arc::new(ScriptedHost::failing("primary", vec![context_window()]));
     let router = router(
-        config,
+        pre_call_checked(config),
         json!({"num_retries": 2, "fallbacks": [{"primary": ["backup"]}]}),
         host.clone(),
     );
@@ -1864,13 +1871,129 @@ async fn a_context_window_error_retries_on_a_deployment_that_has_not_refused(con
 
 #[rstest]
 #[tokio::test]
+async fn a_context_window_error_is_not_retried_without_pre_call_checks(config: RouterConfig) {
+    let host = Arc::new(ScriptedHost::failing("primary", vec![context_window()]));
+    let router = router(config, json!({"num_retries": 2}), host.clone());
+    let refused = router.call(Op::from("acompletion"), request()).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt { failure, .. }) if failure.kind == FailureKind::ContextWindowExceeded)
+    );
+    assert_eq!((host.retries(), host.selected().len()), (0, 1));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_context_window_error_on_a_call_by_deployment_id_is_not_retried(config: RouterConfig) {
+    let host = refusing_once();
+    let router = router(
+        pre_call_checked(config),
+        json!({"num_retries": 2}),
+        host.clone(),
+    );
+    let by_id = RouterRequest {
+        model: "a1".to_owned(),
+        ..RouterRequest::default()
+    };
+    let refused = router.call(Op::from("acompletion"), by_id).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt { failure, .. }) if failure.kind == FailureKind::ContextWindowExceeded)
+    );
+    assert_eq!(host.selected(), ["a1"]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_retry_after_a_context_window_error_never_returns_to_the_refusing_deployment(
+    config: RouterConfig,
+) {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![context_window(), rate_limited()],
+    ));
+    let hosted = router(
+        pre_call_checked(config),
+        json!({"num_retries": 2}),
+        host.clone(),
+    );
+    let ended = hosted
+        .router
+        .call(&*host, Op::from("acompletion"), request())
+        .await
+        .unwrap_err();
+    let selected = host.selected();
+    assert!(
+        matches!(&ended.error, Error::Attempt { failure, .. } if failure.kind == FailureKind::ContextWindowExceeded)
+    );
+    assert_eq!(
+        (
+            selected.len(),
+            selected[0] == selected[1],
+            ended.raised.map(|raised| raised.failure)
+        ),
+        (2, false, Some(Raised(selected[0].clone())))
+    );
+    assert_eq!(
+        context_window_raised(&host),
+        [(Some(selected[0].clone()), false)]
+    );
+}
+
+fn context_window_raised(host: &ScriptedHost) -> Vec<(Option<String>, bool)> {
+    host.events
+        .lock()
+        .iter()
+        .filter_map(|event| match event {
+            RouterEvent::ContextWindowRaised {
+                deployment_id,
+                stream_origin,
+                ..
+            } => Some((deployment_id.clone(), *stream_origin)),
+            _ => None,
+        })
+        .collect()
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_pre_routed_context_window_error_retries_in_the_group_it_was_routed_to(
+    config: RouterConfig,
+) {
+    let host = Arc::new(ScriptedHost {
+        pre_routes: Some(("context", to_primary())),
+        first_failure: Mutex::new(Some(context_window())),
+        ..ScriptedHost::default()
+    });
+    let router = router(
+        pre_call_checked(config),
+        json!({"num_retries": 2}),
+        host.clone(),
+    );
+    let response = router
+        .call(
+            Op::from("acompletion"),
+            RouterRequest {
+                model: "context".to_owned(),
+                pre_routes: true,
+                ..RouterRequest::default()
+            },
+        )
+        .await
+        .unwrap();
+    let selected = host.selected();
+    assert_eq!(selected.len(), 2);
+    assert_ne!(selected[0], selected[1]);
+    assert_eq!(response.deployment_id, selected[1]);
+}
+
+#[rstest]
+#[tokio::test]
 async fn a_context_window_error_every_deployment_refused_falls_back(config: RouterConfig) {
     let host = Arc::new(ScriptedHost::failing(
         "primary",
         vec![context_window(), context_window()],
     ));
     let router = router(
-        config,
+        pre_call_checked(config),
         json!({"num_retries": 3, "fallbacks": [{"primary": ["backup"]}]}),
         host.clone(),
     );
@@ -1912,7 +2035,7 @@ async fn a_context_window_error_skips_every_deployment_serving_the_refused_model
         ..ScriptedHost::default()
     });
     let router = router(
-        same_model_group(second),
+        pre_call_checked(same_model_group(second)),
         json!({"num_retries": 3}),
         host.clone(),
     );
@@ -1938,12 +2061,17 @@ async fn a_context_window_error_is_not_retried_when_every_deployment_serves_that
     }))
     .unwrap();
     let host = Arc::new(ScriptedHost::failing("primary", vec![context_window()]));
-    let router = router(config, json!({"num_retries": 3}), host.clone());
+    let router = router(
+        pre_call_checked(config),
+        json!({"num_retries": 3}),
+        host.clone(),
+    );
     let refused = router.call(Op::from("acompletion"), request()).await;
     assert!(
         matches!(refused, Err(Error::Attempt { failure, .. }) if failure.kind == FailureKind::ContextWindowExceeded)
     );
     assert_eq!((host.retries(), host.selected().len()), (0, 1));
+    assert!(context_window_raised(&host).is_empty());
 }
 
 #[rstest]
@@ -1958,7 +2086,11 @@ async fn a_retry_policy_still_retries_a_context_window_error_on_the_same_model()
     }))
     .unwrap();
     let host = Arc::new(ScriptedHost::failing("primary", vec![context_window()]));
-    let router = router(config, json!({"num_retries": 0}), host.clone());
+    let router = router(
+        pre_call_checked(config),
+        json!({"num_retries": 0}),
+        host.clone(),
+    );
     let response = router
         .call(Op::from("acompletion"), request())
         .await
@@ -1975,7 +2107,11 @@ async fn a_context_window_error_no_deployment_raised_is_not_retried(config: Rout
         pick_failures: Mutex::new(VecDeque::from([context_window()])),
         ..ScriptedHost::default()
     });
-    let router = router(config, json!({"num_retries": 3}), host.clone());
+    let router = router(
+        pre_call_checked(config),
+        json!({"num_retries": 3}),
+        host.clone(),
+    );
     let refused = router.call(Op::from("acompletion"), tagged_request()).await;
     assert!(
         matches!(refused, Err(Error::Attempt { failure, .. }) if failure.kind == FailureKind::ContextWindowExceeded)
@@ -1994,7 +2130,11 @@ fn refusing_once() -> Arc<ScriptedHost> {
 #[tokio::test]
 async fn a_context_window_error_takes_the_next_order_tier_instead_of_the_refusing_one() {
     let host = refusing_once();
-    let router = router(tiers(true), json!({"num_retries": 2}), host.clone());
+    let router = router(
+        pre_call_checked(tiers(true)),
+        json!({"num_retries": 2}),
+        host.clone(),
+    );
     let response = router
         .call(Op::from("acompletion"), request())
         .await
@@ -2013,7 +2153,11 @@ async fn a_context_window_error_takes_the_next_order_tier_instead_of_the_refusin
 #[tokio::test]
 async fn a_context_window_error_on_a_pinned_deployment_is_not_retried(config: RouterConfig) {
     let host = refusing_once();
-    let router = router(config, json!({"num_retries": 2}), host.clone());
+    let router = router(
+        pre_call_checked(config),
+        json!({"num_retries": 2}),
+        host.clone(),
+    );
     let pinned = RouterRequest {
         pinned_deployment_id: Some("a1".to_owned()),
         ..request()
@@ -2036,7 +2180,11 @@ async fn a_context_window_error_skips_the_wildcard_deployments_serving_that_mode
     }))
     .unwrap();
     let host = refusing_once();
-    let router = router(config, json!({"num_retries": 2}), host.clone());
+    let router = router(
+        pre_call_checked(config),
+        json!({"num_retries": 2}),
+        host.clone(),
+    );
     let wildcard = RouterRequest {
         model: "openai/gpt-4o".to_owned(),
         ..RouterRequest::default()
@@ -2053,7 +2201,7 @@ async fn a_context_window_error_skips_the_wildcard_deployments_serving_that_mode
 async fn a_context_window_list_for_another_group_leaves_the_retry_in_place(config: RouterConfig) {
     let host = Arc::new(ScriptedHost::failing("primary", vec![context_window()]));
     let router = router(
-        config,
+        pre_call_checked(config),
         json!({"num_retries": 2, "context_window_fallbacks": [{"backup": ["primary"]}]}),
         host.clone(),
     );
@@ -2087,7 +2235,7 @@ async fn a_retry_that_fails_after_a_context_window_error_falls_back_on_that_erro
         vec![context_window(), provider_bad_request()],
     ));
     let router = router(
-        config,
+        pre_call_checked(config),
         json!({"num_retries": 2, "fallbacks": [{"primary": ["backup"]}]}),
         host.clone(),
     );
@@ -2111,7 +2259,7 @@ async fn a_guardrail_block_on_a_retry_after_a_context_window_error_ends_the_call
         vec![context_window(), guardrail_block()],
     ));
     let router = router(
-        config,
+        pre_call_checked(config),
         json!({"num_retries": 2, "fallbacks": [{"primary": ["backup"]}]}),
         host.clone(),
     );
@@ -2129,7 +2277,37 @@ async fn a_retry_that_fails_after_a_context_window_error_raises_that_error(confi
         "primary",
         vec![context_window(), server_error(), server_error()],
     ));
-    let router = router(config, json!({"num_retries": 2}), host.clone());
+    let router = router(
+        pre_call_checked(config),
+        json!({"num_retries": 2}),
+        host.clone(),
+    );
+    let refused = router.call(Op::from("acompletion"), request()).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt { failure, .. }) if failure.kind == FailureKind::ContextWindowExceeded)
+    );
+    let selected = host.selected();
+    assert_eq!(selected.len(), 3);
+    assert_eq!(
+        context_window_raised(&host),
+        [(Some(selected[0].clone()), false)]
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_context_window_error_on_a_later_retry_is_raised_over_the_last_failure(
+    config: RouterConfig,
+) {
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![server_error(), context_window(), server_error()],
+    ));
+    let router = router(
+        pre_call_checked(config),
+        json!({"num_retries": 2}),
+        host.clone(),
+    );
     let refused = router.call(Op::from("acompletion"), request()).await;
     assert!(
         matches!(refused, Err(Error::Attempt { failure, .. }) if failure.kind == FailureKind::ContextWindowExceeded)
@@ -2141,7 +2319,11 @@ async fn a_retry_that_fails_after_a_context_window_error_raises_that_error(confi
 #[tokio::test]
 async fn a_num_retries_that_raises_leaves_a_context_window_error_standing(config: RouterConfig) {
     let host = Arc::new(ScriptedHost::failing("primary", vec![context_window()]));
-    let router = router(config, json!({"num_retries": 2}), host.clone());
+    let router = router(
+        pre_call_checked(config),
+        json!({"num_retries": 2}),
+        host.clone(),
+    );
     let request = RouterRequest {
         uncounted_retries: Some(UncountedRetries::Raises),
         ..request()
@@ -2315,7 +2497,7 @@ async fn a_stream_retry_is_reported_before_its_attempt(config: RouterConfig) {
 #[tokio::test]
 async fn a_stream_context_window_error_retries_on_another_deployment(config: RouterConfig) {
     let host = Arc::new(ScriptedHost::default());
-    let router = router(config, json!({}), host.clone());
+    let router = router(pre_call_checked(config), json!({}), host.clone());
     let origin = origin_on("a1");
     let response = router
         .retry_stream(
@@ -2334,9 +2516,85 @@ async fn a_stream_context_window_error_retries_on_another_deployment(config: Rou
 
 #[rstest]
 #[tokio::test]
+async fn a_stream_context_window_error_is_not_retried_without_pre_call_checks(
+    config: RouterConfig,
+) {
+    let host = Arc::new(ScriptedHost::default());
+    let router = router(config, json!({}), host.clone());
+    let refused = router
+        .retry_stream(
+            Op::from("acompletion"),
+            stream_request(),
+            origin_on("a1"),
+            context_window(),
+        )
+        .await;
+    assert!(
+        matches!(refused, Err(Error::Attempt { failure, .. }) if failure.kind == FailureKind::ContextWindowExceeded)
+    );
+    assert!(host.selected().is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_stream_context_window_error_keeps_retrying_past_each_model_that_refuses() {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a1"}},
+            {"model_name": "primary", "litellm_params": {"model": "openai/b"}, "model_info": {"id": "a2"}},
+            {"model_name": "primary", "litellm_params": {"model": "openai/c"}, "model_info": {"id": "a3"}},
+        ]
+    }))
+    .unwrap();
+    let host = Arc::new(ScriptedHost::failing("primary", vec![context_window()]));
+    let router = router(pre_call_checked(config), json!({}), host.clone());
+    let response = router
+        .retry_stream(
+            Op::from("acompletion"),
+            stream_request(),
+            origin_on("a1"),
+            context_window(),
+        )
+        .await
+        .unwrap();
+    let selected = host.selected();
+    assert_eq!(selected.len(), 2);
+    assert!(!selected.contains(&"a1".to_owned()));
+    assert_ne!(selected[0], selected[1]);
+    assert_eq!(response.deployment_id, selected[1]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_pre_routed_stream_context_window_error_retries_in_the_group_it_was_routed_to(
+    config: RouterConfig,
+) {
+    let host = Arc::new(ScriptedHost {
+        pre_routes: Some(("context", to_primary())),
+        ..ScriptedHost::default()
+    });
+    let router = router(pre_call_checked(config), json!({}), host.clone());
+    let origin = origin(json!({"group": "context", "routed": "primary", "deployment_id": "a1"}));
+    let request = RouterRequest {
+        model: "context".to_owned(),
+        pre_routes: true,
+        ..stream_request()
+    };
+    let response = router
+        .retry_stream(Op::from("acompletion"), request, origin, context_window())
+        .await
+        .unwrap();
+    assert_eq!(
+        (response.deployment_id.as_str(), host.selected()),
+        ("a2", vec!["a2".to_owned()])
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn a_stream_context_window_error_in_an_order_tier_is_not_retried() {
     let host = Arc::new(ScriptedHost::default());
-    let router = router(tiers(true), json!({}), host.clone());
+    let router = router(pre_call_checked(tiers(true)), json!({}), host.clone());
     let origin = origin_on("p1");
     let refused = router
         .retry_stream(
@@ -2359,7 +2617,7 @@ async fn a_stream_guardrail_block_on_a_retry_after_a_context_window_error_ends_t
 ) {
     let host = Arc::new(ScriptedHost::failing("primary", vec![guardrail_block()]));
     let router = router(
-        config,
+        pre_call_checked(config),
         json!({"fallbacks": [{"primary": ["backup"]}]}),
         host.clone(),
     );
@@ -2386,7 +2644,7 @@ async fn a_stream_retry_that_fails_after_a_context_window_error_raises_that_erro
         "primary",
         vec![server_error(), server_error(), server_error()],
     ));
-    let router = router(config, json!({}), host.clone());
+    let router = router(pre_call_checked(config), json!({}), host.clone());
     let origin = origin_on("a1");
     let refused = router
         .retry_stream(
@@ -2400,6 +2658,10 @@ async fn a_stream_retry_that_fails_after_a_context_window_error_raises_that_erro
         matches!(refused, Err(Error::Attempt { failure, .. }) if failure.kind == FailureKind::ContextWindowExceeded)
     );
     assert_eq!(host.selected().len(), 3);
+    assert_eq!(
+        context_window_raised(&host),
+        [(Some("a1".to_owned()), true)]
+    );
 }
 
 #[rstest]

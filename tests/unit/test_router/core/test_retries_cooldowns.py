@@ -182,7 +182,7 @@ async def test_lone_deployment_retries_only_retryable_errors(
 
 @pytest.mark.parametrize(
     ("builder", "expected_calls"),
-    [(bad_request, 1), (context_window, 2), (content_policy, 1), (server_error, 3), (timeout, 3)],
+    [(bad_request, 1), (context_window, 1), (content_policy, 1), (server_error, 3), (timeout, 3)],
 )
 @pytest.mark.asyncio
 async def test_two_deployment_group_retries_only_retryable_errors(

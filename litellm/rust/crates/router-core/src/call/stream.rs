@@ -10,8 +10,8 @@ use std::sync::Arc;
 use serde::Deserialize;
 
 use super::{
-    Failed, FallbackChain, FallbackHop, Level, Lists, Target, Tried, counted, counting, ends_call,
-    group_members, refused_or, serving_the_refused_model,
+    Failed, FallbackChain, FallbackHop, Level, Lists, Target, Tried, context_window_refusal,
+    counted, counting, ends_call, group_members,
 };
 use crate::{
     Call, Router, RouterStateSnapshot,
@@ -397,17 +397,17 @@ impl<H: RouterHost> Call<'_, H> {
             ..SelectInputs::default()
         };
         let (budget, policy_applies) = stream_retry_budget(snapshot, request, origin, failure.kind);
-        let refusal = (!policy_applies && failure.is_a("ContextWindowExceededError"))
-            .then(|| origin.failed(failure.clone()));
+        let refuses =
+            |failure: &AttemptError| !policy_applies && failure.is_a("ContextWindowExceededError");
+        let mut refusal = refuses(&failure).then(|| origin.failed(failure.clone()));
+        let group = target.routed.as_deref().unwrap_or(target.group.as_str());
         let refused_by = failure
             .failed_deployment_id
             .as_deref()
             .or(origin.deployment_id.as_deref());
-        let untried = match refused_by {
+        let mut untried = match refused_by {
             Some(refused) if refusal.is_some() => {
-                inputs.skipped_ids =
-                    serving_the_refused_model(snapshot, refused, &healthy_deployments).collect();
-                self.untried(&level, &inputs).await
+                self.refuse(&level, group, refused, &mut inputs).await
             }
             _ => 0,
         };
@@ -460,24 +460,33 @@ impl<H: RouterHost> Call<'_, H> {
             let Error::Attempt { failure, .. } = &*failed.error else {
                 break;
             };
-            if let Some(id) = failure
+            let failed_on = failure
                 .failed_deployment_id
                 .as_ref()
-                .or(failed.deployment_id.as_ref())
+                .or(failed.deployment_id.as_ref());
+            if let Some(id) = failed_on
                 && !inputs.failed_ids.contains(id)
             {
                 inputs.failed_ids.push(id.clone());
             }
+            let refused = refuses(failure);
+            if refused {
+                refusal = refusal.or_else(|| context_window_refusal(&failed));
+                untried = match failed_on {
+                    Some(id) => self.refuse(&level, group, id, &mut inputs).await,
+                    None => 0,
+                };
+            }
             // `_stream_fallback_error_for_raised`: a status the pre-stream retry rule would not
             // retry ends the retries with that failure.
-            let stop = failure.status.is_some_and(|s| !should_retry_status(s));
+            let stop = !refused && failure.status.is_some_and(|s| !should_retry_status(s));
             newest = failed;
             if stop {
                 break;
             }
         }
         Err(Spent {
-            failed: refused_or(refusal, newest),
+            failed: self.refused_or(level.at.level, refusal, newest),
             committed_budget,
         })
     }
