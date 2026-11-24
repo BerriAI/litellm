@@ -71,10 +71,10 @@ class AmazonMistralConfig(AmazonInvokeConfig, BaseConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict[str, object],
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         for k, v in non_default_params.items():
             if k == "max_tokens":
                 optional_params["max_tokens"] = v
