@@ -62,6 +62,10 @@ def is_codex_user_agent(user_agent: str) -> bool:
     return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
 
 
+def is_github_copilot_chat_user_agent(user_agent: str) -> bool:
+    return user_agent.startswith("GitHubCopilotChat/")
+
+
 def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str:
     """Put the provider prefix back on a provider-stripped model."""
     if not custom_llm_provider or model.startswith(f"{custom_llm_provider}/"):
