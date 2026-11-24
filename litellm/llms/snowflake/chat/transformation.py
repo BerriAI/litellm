@@ -255,8 +255,8 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         api_base = self._get_api_base(api_base, optional_params)
@@ -266,11 +266,11 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -319,7 +319,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 )
         return anthropic_tools
 
-    def _extract_system_and_messages(self, messages: list[AllMessageValues]) -> tuple[list[dict] | None, list[dict]]:
+    def _extract_system_and_messages(
+        self, messages: list[AllMessageValues]
+    ) -> tuple[list[dict[str, object]] | None, list[dict[str, object]]]:
         """
         Split messages into system prompt and conversation turns for Anthropic format.
 
@@ -327,8 +329,8 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         - assistant messages with tool_calls → tool_use content blocks
         - tool role messages → user role with tool_result content blocks
         """
-        system_parts: Final[list[dict]] = []  # mutable-ok: JSON wire messages
-        conversation: Final[list[dict]] = []  # mutable-ok: JSON wire messages
+        system_parts: Final[list[dict[str, object]]] = []  # mutable-ok: JSON wire messages
+        conversation: Final[list[dict[str, object]]] = []  # mutable-ok: JSON wire messages
 
         for msg in messages:
             if isinstance(msg, dict):
@@ -426,9 +428,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         stream: Final[bool] = optional_params.pop("stream", False) or False
         extra_body: Final = optional_params.pop("extra_body", {})
 
@@ -457,9 +459,9 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         stream: bool,
-        extra_body: dict,
+        extra_body: Mapping[str, object],
     ) -> dict[str, object]:
         """OpenAI format for /chat/completions endpoint."""
         max_tokens: Final = optional_params.pop("max_tokens", None)
@@ -507,7 +509,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         stream: bool,
-        extra_body: dict,
+        extra_body: Mapping[str, object],
     ) -> dict[str, object]:
         """Anthropic Messages format for /messages endpoint."""
         passthrough_system: Final = optional_params.pop("system", None)
@@ -549,10 +551,10 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -569,7 +571,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
     ) -> ModelResponse:
         """Parse standard OpenAI chat completions response."""
@@ -596,7 +598,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
     ) -> ModelResponse:
         """Parse Anthropic Messages response into OpenAI format."""
@@ -692,7 +694,7 @@ class SnowflakeStreamingHandler(BaseModelResponseIterator):
             json_mode=json_mode,
         )
 
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
+    def chunk_parser(self, chunk: dict[str, object]) -> GenericStreamingChunk | ModelResponseStream:
         if "choices" in chunk:
             return self._parse_openai_chunk(chunk)
         return self._anthropic_parser.chunk_parser(chunk)

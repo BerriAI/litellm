@@ -1806,7 +1806,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         kwargs: dict[str, object],
         model: str | None = None,
         custom_llm_provider: str | None = None,
-        tools: list[dict] | None = None,
+        tools: Sequence[object] | None = None,
         api_base: str | None = None,
     ) -> tuple[list[dict], str | list | None]:
         """Extract cache_control_injection_points from kwargs and apply if present.
@@ -1929,7 +1929,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
         prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
