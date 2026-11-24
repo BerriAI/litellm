@@ -307,12 +307,14 @@ async def _ended_turn_over_limit(
     turn_limits: RealtimeTurnLimits | None,
     provider_event: Mapping[str, object],
     client_ws: RealtimeClientWebSocket,
+    ended_over_limit: asyncio.Event,
 ) -> bool:
     if turn_limits is None or provider_event.get("type") != "response.created":
         return False
     refusal: Final = await turn_limits.refusal()
     if refusal is None or not refusal.stops_started_turn:
         return False
+    ended_over_limit.set()
     if not turn_limits.turn_refused:
         with contextlib.suppress(Exception):
             await client_ws.send_text(refusal.event)
@@ -1066,8 +1068,7 @@ class BedrockRealtime(BaseAWSLLM):
         async for openai_message in events:
             if turn_limits is not None:
                 await turn_limits.charge(openai_message)
-            if await _ended_turn_over_limit(turn_limits, openai_message, client_ws):
-                signals.ended_over_limit.set()
+            if await _ended_turn_over_limit(turn_limits, openai_message, client_ws, signals.ended_over_limit):
                 async for usage_event in _refused_turn_usage(events, turn_limits):
                     yield usage_event
                 return

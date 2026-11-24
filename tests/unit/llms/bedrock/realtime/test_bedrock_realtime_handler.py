@@ -387,6 +387,17 @@ class UsageAfterInputClosesReceiver:
         return next(self._after, None)
 
 
+class ClientSideEndsDuringCloseWS(ConnectedClientWS):
+    def __init__(self, input_closed: asyncio.Event) -> None:
+        super().__init__([])
+        self._input_closed: Final = input_closed
+
+    async def close(self, code: int | None = None, reason: str | None = None) -> None:
+        await super().close(code, reason)
+        await self._input_closed.wait()
+        await asyncio.sleep(0.05)
+
+
 @dataclass(frozen=True, slots=True)
 class UsageAfterInputClosesStream:
     input_stream: SignallingInputStream
@@ -2550,8 +2561,11 @@ class TestBedrockRealtimeTurnLimits:
         assert client_ws.close_code == 1013
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "client_side_ends_during_close", [False, True], ids=["close_returns_at_once", "client_side_ends_during_close"]
+    )
     async def test_a_turn_bedrock_starts_over_the_limit_is_charged_when_its_usage_arrives_after_the_client_left(
-        self, stub_aws_models: None
+        self, stub_aws_models: None, client_side_ends_during_close: bool
     ) -> None:
         over_limit: Final = _ScriptedTurnLimiter(
             check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model=_NOVA_SONIC)
@@ -2571,7 +2585,11 @@ class TestBedrockRealtimeTurnLimits:
                 input_stream.closed_event,
             ),
         )
-        client_ws: Final = ConnectedClientWS([])
+        client_ws: Final = (
+            ClientSideEndsDuringCloseWS(input_stream.closed_event)
+            if client_side_ends_during_close
+            else ConnectedClientWS([])
+        )
 
         outcome: Final = await asyncio.wait_for(
             BedrockRealtime()._bridge(
