@@ -449,6 +449,12 @@ class TestWordFormBudgetDurations(unittest.TestCase):
         self.assertEqual(duration_in_seconds("weekly"), 604800)
         self.assertEqual(duration_in_seconds("monthly"), 2592000)
 
+    def test_duration_in_seconds_accepts_surrounding_whitespace(self):
+        self.assertEqual(duration_in_seconds("  30d  "), 2592000)
+        self.assertEqual(duration_in_seconds(" 1h \t"), 3600)
+        self.assertEqual(duration_in_seconds("\n7d\n"), 604800)
+        self.assertEqual(duration_in_seconds("  30s  "), 30)
+
     def test_invalid_duration_logs_warning_and_falls_back(self):
         base_time = datetime(2023, 5, 15, 15, 0, 0, tzinfo=timezone.utc)
         with patch.object(duration_parser.verbose_logger, "warning") as mock_warning:
