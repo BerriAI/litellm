@@ -6627,6 +6627,11 @@ def _gemini_batch_output_row() -> LiteLLM_ManagedFileTable:
     [
         ("user", "file"),
         ("user", "image"),
+        ("user", "video"),
+        ("system", "file"),
+        ("system", "image"),
+        ("assistant", "video"),
+        ("assistant-image-string", "image"),
         ("assistant", "file"),
         ("assistant", "image"),
         ("assistant-images", "image"),
@@ -6659,10 +6664,18 @@ async def test_chat_file_references_use_managed_file_access(
             "model": model,
             "input": [{"type": "function_call_output", "call_id": "call_1", "output": [output_part]}],
         }
+    elif role == "assistant-image-string":
+        request = {"model": model, "messages": [{"role": "assistant", "images": [{"image_url": uri}]}]}
     elif role == "assistant-images":
         request = {"model": model, "messages": [{"role": "assistant", "images": [{"image_url": image_url}]}]}
     else:
-        part: Final = {"type": "file", "file": file} if media == "file" else {"type": "image_url", "image_url": image_url}
+        part: Final = (
+            {"type": "file", "file": file}
+            if media == "file"
+            else {"type": "video_url", "video_url": {"url": uri, "format": "video/mp4"}}
+            if media == "video"
+            else {"type": "image_url", "image_url": image_url}
+        )
         request = {"model": model, "messages": [{"role": role, "content": [part]}]}
     if has_access:
         result: Final = await managed_files.async_pre_call_hook(caller, DualCache(), request, call_type)

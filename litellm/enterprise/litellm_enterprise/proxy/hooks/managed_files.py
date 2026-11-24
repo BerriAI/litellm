@@ -231,9 +231,9 @@ def _gemini_assistant_image_file_ids(value: object) -> Iterator[str]:
     for image in images:
         if (fields := as_str_mapping(image)) is None:
             continue
-        if (image_url := as_str_mapping(fields.get("image_url"))) is None:
-            continue
-        if isinstance((url := image_url.get("url")), str) and url.startswith(GEMINI_FILES_API_URI_PREFIXES):
+        raw_image_url = fields.get("image_url")
+        url = raw_image_url if isinstance(raw_image_url, str) else (as_str_mapping(raw_image_url) or {}).get("url")
+        if isinstance(url, str) and url.startswith(GEMINI_FILES_API_URI_PREFIXES):
             yield url
 
 
@@ -775,11 +775,7 @@ def _storage_metadata_of(file_object: OpenAIFileObject | None) -> Mapping[str, s
         "Mapping[str, object]", getattr(file_object, "_hidden_params", None) or {}
     )
     return MappingProxyType(
-        {
-            key: value
-            for key in ("storage_backend", "storage_url")
-            if isinstance(value := hidden_params.get(key), str)
-        }
+        {key: value for key in ("storage_backend", "storage_url") if isinstance(value := hidden_params.get(key), str)}
     )
 
 
@@ -994,7 +990,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         preserved_model_id: Final = (
             creating_model_id
             if creating_model_id is not None or create_if_missing
-            else await _stored_model_id(_writer_database(managed_database).litellm_managedobjecttable, unified_object_id)
+            else await _stored_model_id(
+                _writer_database(managed_database).litellm_managedobjecttable, unified_object_id
+            )
         )
         stored_object: Final = _with_model_id(_without_model_output(file_object), preserved_model_id)
         litellm_managed_object = LiteLLM_ManagedObjectTable(
@@ -1164,9 +1162,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             detail=f"Object not found: {unified_object_id}",
         )
 
-    async def enforce_batch_object_access(
-        self, object_id: str, user_api_key_dict: UserAPIKeyAuth
-    ) -> None:
+    async def enforce_batch_object_access(self, object_id: str, user_api_key_dict: UserAPIKeyAuth) -> None:
         """Deny access to a provider-format batch id owned by another caller.
 
         Ids with no ownership row (batches created before ownership tracking,
@@ -1190,9 +1186,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 detail=f"User {user_api_key_dict.user_id} does not have access to the object {object_id}",
             )
 
-    async def enforce_provider_file_access(
-        self, file_id: str, user_api_key_dict: UserAPIKeyAuth
-    ) -> None:
+    async def enforce_provider_file_access(self, file_id: str, user_api_key_dict: UserAPIKeyAuth) -> None:
         """Deny access to a provider-format file id owned by another caller.
 
         Ownership rows for provider-format ids are written when a managed
@@ -1239,16 +1233,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return
         if self.prisma_client is None:
             return
-        batch_row = await _managed_object_table(self.prisma_client).find_first(
-            where={"unified_object_id": response.id}
-        )
-        if batch_row is None or (
-            batch_row.created_by is None and batch_row.team_id is None
-        ):
+        batch_row = await _managed_object_table(self.prisma_client).find_first(where={"unified_object_id": response.id})
+        if batch_row is None or (batch_row.created_by is None and batch_row.team_id is None):
             return
-        owner_identity = UserAPIKeyAuth(
-            user_id=batch_row.created_by, team_id=batch_row.team_id
-        )
+        owner_identity = UserAPIKeyAuth(user_id=batch_row.created_by, team_id=batch_row.team_id)
         for file_id in provider_file_ids:
             model_name = decode_model_from_file_id(file_id)
             raw_file_id = canonical_provider_file_id(get_original_file_id(file_id))
@@ -1358,8 +1346,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             if raise_on_failure:
                 if isinstance(error, TimeoutError) and not str(error):
                     raise TimeoutError(
-                        "Provider file retrieve timed out "
-                        f"after {BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS} seconds"
+                        f"Provider file retrieve timed out after {BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS} seconds"
                     ) from error
                 raise
             return None, True
@@ -1751,11 +1738,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 },
             }
         )
-        return MappingProxyType(
-            dict(
-                _iter_provider_file_id_pairs(rows, unique_provider_file_ids)
-            )
-        )
+        return MappingProxyType(dict(_iter_provider_file_id_pairs(rows, unique_provider_file_ids)))
 
     async def get_user_created_file_ids(
         self, user_api_key_dict: UserAPIKeyAuth, model_object_ids: List[str]
@@ -1796,9 +1779,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     detail=f"User {user_api_key_dict.user_id} does not have access to the file {retrieve_file_id}",
                 )
         if retrieve_file_id:
-            await self.enforce_provider_file_access(
-                retrieve_file_id, user_api_key_dict
-            )
+            await self.enforce_provider_file_access(retrieve_file_id, user_api_key_dict)
         return False
 
     async def check_file_ids_access(
@@ -2057,6 +2038,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         for message in messages:
             if not isinstance((role := _keyed_get(message, "role")), str) or role not in (
                 "user",
+                "system",
+                "developer",
                 "assistant",
                 "tool",
                 "function",
@@ -2068,8 +2051,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 content, (str, Mapping)
             ):
                 continue
+            part_role = "user" if role in ("system", "developer") else role
             for part in content:
-                if (file_id := _chat_message_file_id(part, role)) is not None:
+                if (file_id := _chat_message_file_id(part, part_role)) is not None:
                     yield file_id
 
     def get_file_ids_from_responses_input(self, input: Union[str, List[Dict[str, object]]]) -> List[str]:
@@ -3169,4 +3153,6 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                                 verbose_logger.debug(
                                     f"Converted file {file_id} from storage backend to base64 with format {content_type}"
                                 )
+
+
 PROXY_LiteLLMManagedFiles = _PROXY_LiteLLMManagedFiles
