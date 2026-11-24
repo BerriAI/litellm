@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+fips = []
+
 [dependencies]
 base64.workspace = true
 http.workspace = true
