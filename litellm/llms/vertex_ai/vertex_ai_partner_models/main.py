@@ -16,7 +16,6 @@ from litellm.llms.vertex_ai.request_labels import (
     vertex_partner_labels_header,
     vertex_request_label_fields,
 )
-from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.utils import ModelResponse
 
@@ -113,7 +112,7 @@ class VertexAIPartnerModels(VertexBase):
     def completion(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: list,
         model_response: ModelResponse,
         print_verbose: Callable[..., object],
         encoding: "Tokenizer | None",
