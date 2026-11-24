@@ -300,10 +300,13 @@ def build_realtime_wss_url(api_base: str | None, *, default_url: str, path: str,
         parsed: Final = urlparse(api_base.strip())
         hostname: Final = parsed.hostname
         port: Final = parsed.port
-    except ValueError:
-        raise ValueError(error_message) from None
+    except ValueError as error:
+        raise ValueError(f"{error_message} ({error})") from None
     scheme: Final = "wss" if parsed.scheme == "https" else parsed.scheme
-    if scheme != "wss" or not hostname or parsed.username is not None or parsed.password is not None or parsed.fragment:
+    if not hostname:
+        raise ValueError(error_message)
+    has_credentials: Final = parsed.username is not None or parsed.password is not None
+    if scheme != "wss" or has_credentials or parsed.fragment:
         raise ValueError(error_message)
     host: Final = f"[{hostname}]" if ":" in hostname else hostname
     netloc: Final = f"{host}:{port}" if port is not None else host

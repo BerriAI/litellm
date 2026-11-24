@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import math
 import os
 import unicodedata
 from collections.abc import Callable, Iterator, Mapping
@@ -33,7 +34,7 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     uses_server_vad,
 )
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
-from litellm.llms.elevenlabs.common_utils import SCRIBE_REALTIME_MODEL, ElevenLabsException, normalize_model
+from litellm.llms.elevenlabs.common_utils import ElevenLabsException, normalize_model, supports_realtime
 from litellm.llms.elevenlabs.realtime.backend import (
     OPEN_TIMEOUT_SECONDS,
     ElevenLabsRealtimeBackend,
@@ -68,11 +69,11 @@ from litellm.types.realtime import (
 
 DEFAULT_ELEVENLABS_REALTIME_URL: Final = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
 MAX_AUDIO_CHUNK_BYTES: Final = 32_000
+MIN_COMMIT_AUDIO_SECONDS: Final = 0.3
 _REALTIME_PATH: Final = "/v1/speech-to-text/realtime"
 SUPPORTED_SAMPLE_RATES: Final = frozenset((8_000, 16_000, 22_050, 24_000, 44_100, 48_000))
 _DEFAULT_SAMPLE_RATE: Final = 24_000
 _BACKEND_NAME: Final = "ElevenLabs Scribe realtime"
-SCRIBE_REALTIME_KEYTERMS_PRICING_MODEL: Final = f"elevenlabs/{SCRIBE_REALTIME_MODEL}/keyterms"
 _KNOWN_SERVER_MESSAGE_TYPES: Final = frozenset(
     ("session_started", "partial_transcript", "committed_transcript", "warning", *get_args(ElevenLabsErrorType))
 )
@@ -84,6 +85,12 @@ _ERROR_STATUS_CODES: Final[Mapping[ElevenLabsErrorType, int]] = MappingProxyType
         "rate_limited": 429,
         "invalid_request": 400,
         "input_error": 400,
+        "commit_throttled": 429,
+        "unaccepted_terms": 403,
+        "queue_overflow": 429,
+        "session_time_limit_exceeded": 400,
+        "chunk_size_exceeded": 413,
+        "insufficient_audio_activity": 400,
     }
 )
 
@@ -121,6 +128,7 @@ def _option_query_items(options: ElevenLabsRealtimeOptions) -> Iterator[tuple[st
 
 @dataclass(frozen=True, slots=True)
 class ElevenLabsSessionConfig:
+    model: str
     sample_rate: int
     commit_strategy: ElevenLabsCommitStrategy
     language: str | None
@@ -136,14 +144,14 @@ class ElevenLabsSessionConfig:
     def openai_session(self, session_id: str) -> OpenAIRealtimeTranscriptionSession:
         return transcription_session(
             session_id=session_id,
-            model=SCRIBE_REALTIME_MODEL,
+            model=self.model,
             sample_rate=self.sample_rate,
             language=self.language,
             server_vad=self.commit_strategy == "vad",
         )
 
     def _query_items(self) -> Iterator[tuple[str, str]]:
-        yield "model_id", SCRIBE_REALTIME_MODEL
+        yield "model_id", self.model
         yield "audio_format", f"pcm_{self.sample_rate}"
         yield "commit_strategy", self.commit_strategy
         if self.language is not None:
@@ -151,9 +159,13 @@ class ElevenLabsSessionConfig:
         yield from _option_query_items(self.options)
 
 
-def default_session_config(options: ElevenLabsRealtimeOptions) -> ElevenLabsSessionConfig:
+def default_session_config(options: ElevenLabsRealtimeOptions, model: str) -> ElevenLabsSessionConfig:
     return ElevenLabsSessionConfig(
-        sample_rate=_DEFAULT_SAMPLE_RATE, commit_strategy="vad", language=None, options=options
+        model=normalize_model(model),
+        sample_rate=_DEFAULT_SAMPLE_RATE,
+        commit_strategy="vad",
+        language=None,
+        options=options,
     )
 
 
@@ -199,12 +211,13 @@ def _parse_sample_rate(audio_format: TranscriptionAudioFormat | None) -> int | S
 
 
 def parse_session_update(
-    payload: str, options: ElevenLabsRealtimeOptions, *, drop_params: bool = False
+    payload: str, options: ElevenLabsRealtimeOptions, expected_model: str, *, drop_params: bool = False
 ) -> ElevenLabsSessionConfig | SessionUpdateRejected:
+    model: Final = normalize_model(expected_model)
     update: Final = parse_transcription_session_update(payload, ElevenLabsProtocolError)
     if update.session_type not in (None, "transcription", "realtime"):
         return SessionUpdateRejected(f"{_BACKEND_NAME} supports transcription sessions only")
-    if update.model is not None and normalize_model(update.model) != SCRIBE_REALTIME_MODEL:
+    if update.model is not None and normalize_model(update.model) != model:
         return SessionUpdateRejected("realtime session model cannot be changed")
     if update.unsupported_transcription_keys:
         verbose_logger.warning(
@@ -219,6 +232,7 @@ def parse_session_update(
     if isinstance(language, SessionUpdateRejected):
         return language
     return ElevenLabsSessionConfig(
+        model=model,
         sample_rate=sample_rate,
         commit_strategy="vad" if server_vad else "manual",
         language=language,
@@ -280,7 +294,8 @@ def _streams_by_word(text: str) -> bool:
     return spaced and not (words and _is_wide(words[-1]))
 
 
-def _next_delta(emitted: str, stable: str) -> str:
+def _next_delta(emitted: str, text: str) -> str:
+    stable: Final = " ".join(text.split())
     if stable.startswith(emitted) or not _streams_by_word(stable):
         return stable[len(emitted) :]
     new_words: Final = " ".join(stable.split()[len(emitted.split()) :])
@@ -316,8 +331,8 @@ class ElevenLabsEventTransformer:
         self._unbilled_seconds: float = 0.0
         self._session_started: bool = False
         self._refusal: ElevenLabsException | None = None
-        self._uncommitted_audio: bool = False
-        self._discards_next_commit: bool = False
+        self._uncommitted_seconds: float = 0.0
+        self._pending_commit_discards: tuple[bool, ...] = ()
 
     @property
     def refusal(self) -> ElevenLabsException | None:
@@ -325,17 +340,17 @@ class ElevenLabsEventTransformer:
 
     def record_audio(self, seconds: float) -> None:
         self._unbilled_seconds += seconds
-        if seconds > 0:
-            self._uncommitted_audio = True
 
-    def commit_audio(self, *, discard: bool) -> bool:
-        if not self._uncommitted_audio:
-            return False
-        self._uncommitted_audio = False
-        if discard:
-            self._discards_next_commit = True
-            self._turn = None
-        return True
+    def queue_audio(self, seconds: float) -> None:
+        self._uncommitted_seconds += seconds
+
+    def commit_audio(self, *, discard: bool) -> float | None:
+        uncommitted: Final = self._uncommitted_seconds
+        if uncommitted <= 0:
+            return None
+        self._uncommitted_seconds = 0.0
+        self._pending_commit_discards = (*self._pending_commit_discards, discard)
+        return max(MIN_COMMIT_AUDIO_SECONDS - uncommitted, 0.0)
 
     def take_unbilled_usage(self) -> RealtimeInputAudioTranscriptionUsage | None:
         seconds: Final = self._unbilled_seconds
@@ -369,7 +384,7 @@ class ElevenLabsEventTransformer:
         return error_event(error.message, "invalid_request_error" if error.status_code < 500 else "server_error")
 
     def _partial(self, text: str) -> tuple[OpenAIRealtimeEvents, ...]:
-        if not text or self._discards_next_commit:
+        if not text or True in self._pending_commit_discards:
             return ()
         turn: Final = self._turn
         current: Final = turn if turn is not None else _Turn(item_id=self._new_item_id(), emitted="", previous=None)
@@ -383,8 +398,9 @@ class ElevenLabsEventTransformer:
     def _committed(self, text: str) -> tuple[OpenAIRealtimeEvents, ...]:
         turn: Final = self._turn
         self._turn = None
-        if self._discards_next_commit:
-            self._discards_next_commit = False
+        discarded: Final = self._pending_commit_discards[:1] == (True,)
+        self._pending_commit_discards = self._pending_commit_discards[1:]
+        if discarded:
             return ()
         if turn is None and not text:
             return ()
@@ -399,6 +415,10 @@ class ElevenLabsEventTransformer:
             speech_event("input_audio_buffer.speech_stopped", item_id),
             completed_event(item_id, text, self.take_unbilled_usage()),
         )
+
+
+def _silence(seconds: float, sample_rate: int) -> bytes:
+    return bytes(2 * math.ceil(seconds * sample_rate))
 
 
 def build_elevenlabs_realtime_url(api_base: str | None) -> str:
@@ -443,7 +463,7 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
         return {**headers, "xi-api-key": key}
 
     def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
-        if normalize_model(model) != SCRIBE_REALTIME_MODEL:
+        if not supports_realtime(model):
             raise ValueError(f"Unsupported ElevenLabs realtime model: {model}")
         return build_elevenlabs_realtime_url(api_base or get_secret_str("ELEVENLABS_API_BASE"))
 
@@ -460,7 +480,7 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
         session_configuration_request: str | None = None,
     ) -> OpenAIRealtimeTranscriptionSessionCreated:
         self._session_id = logging_session_id
-        return session_created_event(default_session_config(self._options), logging_session_id)
+        return session_created_event(default_session_config(self._options, model), logging_session_id)
 
     def transform_realtime_request(
         self,
@@ -471,7 +491,7 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
         request: Final = json_object(message, ElevenLabsProtocolError)
         match request.get("type"):
             case "session.update" | "transcription_session.update":
-                return self._configure(message)
+                return self._configure(message, model)
             case "input_audio_buffer.append":
                 return self._append_audio(request)
             case "input_audio_buffer.commit" | "input_audio_buffer.end":
@@ -491,7 +511,9 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
         return self._transformer.take_unbilled_usage()
 
     def transcription_addon_pricing_models(self) -> tuple[str, ...]:
-        return (SCRIBE_REALTIME_KEYTERMS_PRICING_MODEL,) if self._options.keyterms else ()
+        if self._config is None or not self._options.keyterms:
+            return ()
+        return (f"elevenlabs/{self._config.model}/keyterms",)
 
     def transform_realtime_response(
         self,
@@ -524,25 +546,27 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
         )
         return self._transformer.transform(reported, self._require_config())
 
-    def _configure(self, message: str) -> tuple[str, ...]:
+    def _configure(self, message: str, model: str) -> tuple[str, ...]:
         if self._config is not None:
             verbose_logger.debug("ElevenLabs realtime: ignoring session.update after the session was configured")
             return ()
         config: Final = session_config_or_raise(
-            parse_session_update(message, self._options, drop_params=self._drop_params)
+            parse_session_update(message, self._options, model, drop_params=self._drop_params)
         )
         self._config = config
         return (ElevenLabsRealtimeConfigure(query=config.query()).model_dump_json(),)
 
     def _commit(self, *, discard: bool) -> tuple[str, ...]:
-        self._require_config()
-        if not self._transformer.commit_audio(discard=discard):
+        config: Final = self._require_config()
+        padding_seconds: Final = self._transformer.commit_audio(discard=discard)
+        if padding_seconds is None:
             return ()
-        return (self._audio_chunk(b"", commit=True),)
+        return (self._audio_chunk(_silence(padding_seconds, config.sample_rate), commit=True),)
 
     def _append_audio(self, request: Mapping[str, JsonValue]) -> tuple[str, ...]:
-        self._require_config()
+        config: Final = self._require_config()
         audio: Final = decode_pcm16_append(request.get("audio"), error=ElevenLabsProtocolError)
+        self._transformer.queue_audio(len(audio) / (2 * config.sample_rate))
         return tuple(
             self._audio_chunk(audio[start : start + MAX_AUDIO_CHUNK_BYTES], commit=False)
             for start in range(0, len(audio), MAX_AUDIO_CHUNK_BYTES)
@@ -599,7 +623,7 @@ async def elevenlabs_realtime_health_check(
     config: Final = ElevenLabsRealtimeConfig()
     url: Final = config.get_complete_url(api_base, model)
     headers: Final = config.validate_environment({}, model, api_key)
-    backend: Final = await connect(f"{url}?{default_session_config(options).query()}", headers)
+    backend: Final = await connect(f"{url}?{default_session_config(options, model).query()}", headers)
     try:
         return await asyncio.wait_for(_session_start_outcome(backend), start_timeout)
     except asyncio.TimeoutError:

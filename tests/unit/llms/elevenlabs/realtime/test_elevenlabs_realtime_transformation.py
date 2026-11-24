@@ -2,6 +2,7 @@ import asyncio
 import base64
 import itertools
 import json
+import math
 from collections.abc import Callable, Mapping
 from types import TracebackType
 from typing import Final, get_args
@@ -17,7 +18,7 @@ from litellm.llms.elevenlabs.realtime.backend import ElevenLabsRealtimeBackend
 from litellm.llms.elevenlabs.realtime.transformation import (
     DEFAULT_ELEVENLABS_REALTIME_URL,
     MAX_AUDIO_CHUNK_BYTES,
-    SCRIBE_REALTIME_MODEL,
+    MIN_COMMIT_AUDIO_SECONDS,
     SUPPORTED_SAMPLE_RATES,
     ElevenLabsEventTransformer,
     ElevenLabsProtocolError,
@@ -41,6 +42,7 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 NO_OPTIONS: Final = ElevenLabsRealtimeOptions()
+SCRIBE_REALTIME_MODEL: Final = "scribe_v2_realtime"
 
 
 def _session_update(
@@ -77,7 +79,9 @@ def _query(config: ElevenLabsSessionConfig) -> dict[str, list[str]]:
 def _config(
     payload: str, options: ElevenLabsRealtimeOptions = NO_OPTIONS, *, drop_params: bool = False
 ) -> ElevenLabsSessionConfig:
-    return session_config_or_raise(parse_session_update(payload, options, drop_params=drop_params))
+    return session_config_or_raise(
+        parse_session_update(payload, options, SCRIBE_REALTIME_MODEL, drop_params=drop_params)
+    )
 
 
 @pytest.mark.parametrize("rate", sorted(SUPPORTED_SAMPLE_RATES))
@@ -98,7 +102,7 @@ def test_server_vad_selects_vad_and_null_turn_detection_selects_manual_commit():
 
 def test_semantic_vad_falls_back_to_vad_only_under_drop_params():
     with pytest.raises(ElevenLabsProtocolError, match="drop_params"):
-        parse_session_update(_session_update(turn_detection="semantic_vad"), NO_OPTIONS)
+        parse_session_update(_session_update(turn_detection="semantic_vad"), NO_OPTIONS, SCRIBE_REALTIME_MODEL)
 
     fallback: Final = _config(_session_update(turn_detection="semantic_vad"), drop_params=True)
     assert _query(fallback)["commit_strategy"] == ["vad"]
@@ -146,7 +150,7 @@ def test_invalid_language_is_rejected(language: str):
     ],
 )
 def test_session_rejects_unsupported_settings(update: str, message: str):
-    rejected: Final = parse_session_update(update, NO_OPTIONS)
+    rejected: Final = parse_session_update(update, NO_OPTIONS, SCRIBE_REALTIME_MODEL)
 
     assert isinstance(rejected, SessionUpdateRejected)
     assert message in rejected.reason
@@ -223,7 +227,7 @@ def test_session_created_event_reports_the_effective_transcription_session():
     assert audio_input["turn_detection"] is None
 
 
-DEFAULT_CONFIG: Final = default_session_config(NO_OPTIONS)
+DEFAULT_CONFIG: Final = default_session_config(NO_OPTIONS, SCRIBE_REALTIME_MODEL)
 
 
 def _item_ids() -> Callable[[], str]:
@@ -318,6 +322,26 @@ def test_a_revised_emitted_word_keeps_streaming_from_the_same_word_position_and_
         ("input_audio_buffer.speech_stopped", "item_0", None),
         ("conversation.item.input_audio_transcription.completed", "item_0", "Hello world tomorrow soon."),
     ]
+
+
+@pytest.mark.parametrize(
+    ("partials", "committed"),
+    [
+        (("Hello  world  foo", "Hello  world  foo 世界"), "Hello  world  foo 世界。"),
+        (("Hello world",), " Hello 世界。"),
+    ],
+    ids=["repeated_spaces", "leading_space"],
+)
+def test_deltas_add_up_to_the_transcript_when_its_spacing_differs_from_the_partials(
+    partials: tuple[str, ...], committed: str
+):
+    events: Final = _events(
+        ElevenLabsEventTransformer(new_item_id=_item_ids()),
+        *(_frame("partial_transcript", text=text) for text in partials),
+        _frame("committed_transcript", text=committed),
+    )
+
+    assert "".join(str(event["delta"]) for event in events if "delta" in event) == " ".join(committed.split())
 
 
 def test_case_and_punctuation_changes_in_emitted_words_allow_new_stable_words():
@@ -634,7 +658,9 @@ def test_clear_without_uncommitted_audio_sends_nothing_and_keeps_the_next_turn()
 
 @pytest.mark.parametrize(("options", "addon_count"), [(ElevenLabsRealtimeOptions(keyterms=("LiteLLM",)), 1), (NO_OPTIONS, 0)])
 def test_keyterms_add_a_priced_addon_model_to_the_session(options: ElevenLabsRealtimeOptions, addon_count: int):
-    addons: Final = ElevenLabsRealtimeConfig(options=options).transcription_addon_pricing_models()
+    config: Final = ElevenLabsRealtimeConfig(options=options)
+    config.transform_realtime_request(_session_update(), SCRIBE_REALTIME_MODEL)
+    addons: Final = config.transcription_addon_pricing_models()
 
     assert len(addons) == addon_count
     assert all((litellm.get_model_info(addon)["input_cost_per_second"] or 0) > 0 for addon in addons)
@@ -673,7 +699,7 @@ async def test_commit_and_end_commit_the_audio_sent_since_the_last_commit_once(e
     config, backend = await _audio_session()
     commit: Final = json.dumps({"type": event_type})
     before_audio: Final = config.transform_realtime_request(commit, SCRIBE_REALTIME_MODEL)
-    await _send_audio(config, backend, b"\x00\x00" * 2_400)
+    await _send_audio(config, backend, b"\x00\x00" * math.ceil(24_000 * MIN_COMMIT_AUDIO_SECONDS))
     after_audio: Final = config.transform_realtime_request(commit, SCRIBE_REALTIME_MODEL)
     repeated: Final = config.transform_realtime_request(commit, SCRIBE_REALTIME_MODEL)
 
@@ -682,6 +708,22 @@ async def test_commit_and_end_commit_the_audio_sent_since_the_last_commit_once(e
         {"message_type": "input_audio_chunk", "audio_base_64": "", "commit": True, "sample_rate": 24_000}
     ]
     assert repeated == ()
+
+
+@pytest.mark.parametrize("event_type", ["input_audio_buffer.commit", "input_audio_buffer.clear"])
+async def test_a_commit_after_too_little_audio_tops_it_up_with_silence_so_the_session_survives(event_type: str):
+    config, backend = await _audio_session()
+    sent_samples: Final = 2_400
+    await _send_audio(config, backend, b"\x01\x00" * sent_samples)
+    committed: Final = [
+        json.loads(message)
+        for message in config.transform_realtime_request(json.dumps({"type": event_type}), SCRIBE_REALTIME_MODEL)
+    ]
+    padding: Final = base64.b64decode(committed[0]["audio_base_64"])
+
+    assert [chunk["commit"] for chunk in committed] == [True]
+    assert set(padding) == {0}
+    assert (sent_samples + len(padding) // 2) / 24_000 >= MIN_COMMIT_AUDIO_SECONDS
 
 
 async def test_clear_discards_the_uncommitted_turn_and_bills_its_audio_with_the_next_one():
@@ -706,6 +748,55 @@ async def test_clear_discards_the_uncommitted_turn_and_bills_its_audio_with_the_
     assert kept[0]["item_id"] != abandoned[0]["item_id"]
     assert [event.get("delta") for event in kept if "delta" in event] == ["Hello", " there."]
     assert (kept[-1]["transcript"], kept[-1]["usage"]) == ("Hello there.", {"type": "duration", "seconds": 1.5})
+
+
+async def test_two_clears_before_their_transcripts_arrive_discard_both_and_keep_the_next_turn():
+    config, backend = await _audio_session()
+    clear: Final = json.dumps({"type": "input_audio_buffer.clear"})
+    await _send_audio(config, backend, b"\x00\x00" * 2_400)
+    first: Final = config.transform_realtime_request(clear, SCRIBE_REALTIME_MODEL)
+    await _send_audio(config, backend, b"\x00\x00" * 2_400)
+    second: Final = config.transform_realtime_request(clear, SCRIBE_REALTIME_MODEL)
+    discarded: Final = [
+        *_response(config, _frame("committed_transcript", text="First cleared.")),
+        *_response(config, _frame("partial_transcript", text="Second cleared text")),
+        *_response(config, _frame("committed_transcript", text="Second cleared text.")),
+    ]
+    await _send_audio(config, backend, b"\x00\x00" * 2_400)
+    kept: Final = _response(config, _frame("committed_transcript", text="Hello."))
+
+    assert (len(first), len(second)) == (1, 1)
+    assert discarded == []
+    assert kept[-1]["transcript"] == "Hello."
+
+
+async def test_a_clear_after_a_commit_discards_only_the_cleared_audio_transcript():
+    config, backend = await _audio_session()
+    await _send_audio(config, backend, b"\x00\x00" * 2_400)
+    config.transform_realtime_request(json.dumps({"type": "input_audio_buffer.commit"}), SCRIBE_REALTIME_MODEL)
+    await _send_audio(config, backend, b"\x00\x00" * 2_400)
+    config.transform_realtime_request(json.dumps({"type": "input_audio_buffer.clear"}), SCRIBE_REALTIME_MODEL)
+    committed: Final = _response(config, _frame("committed_transcript", text="Kept."))
+    cleared: Final = _response(config, _frame("committed_transcript", text="Cleared."))
+
+    assert committed[-1]["transcript"] == "Kept."
+    assert cleared == []
+
+
+def test_a_realtime_model_the_cost_map_lists_streams_under_its_own_id(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {"elevenlabs/scribe_v9_realtime": {"mode": "audio_transcription", "supported_endpoints": ["/v1/realtime"]}},
+    )
+    config: Final = ElevenLabsRealtimeConfig()
+
+    url: Final = config.get_complete_url(None, "elevenlabs/scribe_v9_realtime")
+    sent: Final = config.transform_realtime_request(_session_update(model="scribe_v9_realtime"), "scribe_v9_realtime")
+    query: Final = parse_qs(ElevenLabsRealtimeConfigure.model_validate_json(sent[0]).query)
+
+    assert url == DEFAULT_ELEVENLABS_REALTIME_URL
+    assert query["model_id"] == ["scribe_v9_realtime"]
 
 
 @pytest.mark.parametrize("rate", [16_000, 48_000])
@@ -758,6 +849,12 @@ _REFUSAL_STATUS_CODES: Final = {
     "rate_limited": 429,
     "invalid_request": 400,
     "input_error": 400,
+    "commit_throttled": 429,
+    "unaccepted_terms": 403,
+    "queue_overflow": 429,
+    "session_time_limit_exceeded": 400,
+    "chunk_size_exceeded": 413,
+    "insufficient_audio_activity": 400,
 }
 
 
@@ -954,7 +1051,10 @@ async def test_health_check_opens_a_default_session_without_audio_and_is_healthy
 
     assert healthy is True
     assert connect.calls == [
-        (f"{DEFAULT_ELEVENLABS_REALTIME_URL}?{default_session_config(options).query()}", {"xi-api-key": "secret"})
+        (
+            f"{DEFAULT_ELEVENLABS_REALTIME_URL}?{default_session_config(options, SCRIBE_REALTIME_MODEL).query()}",
+            {"xi-api-key": "secret"},
+        )
     ]
     assert (upstream.sent, upstream.closed) == ([], True)
 

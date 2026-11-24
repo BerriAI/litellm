@@ -9443,7 +9443,7 @@ def _live_logging_object(
     return cast(Logging, SimpleNamespace(model_call_details=model_call_details))
 
 
-_SCRIBE_SECONDS: Final = 90.0
+_SCRIBE_CLIP_SECONDS: Final = (60.0, 30.0)
 _SCRIBE_KEYTERMS_ADDON: Final = "elevenlabs/scribe_v2_realtime/keyterms"
 
 
@@ -9457,10 +9457,13 @@ def _scribe_session_cost(addon_models: tuple[str, ...]) -> float:
                     "audio": {"input": {"transcription": {"model": "scribe_v2_realtime"}}},
                 },
             },
-            {
-                "type": "conversation.item.input_audio_transcription.completed",
-                "usage": {"type": "duration", "seconds": _SCRIBE_SECONDS},
-            },
+            *(
+                {
+                    "type": "conversation.item.input_audio_transcription.completed",
+                    "usage": {"type": "duration", "seconds": seconds},
+                }
+                for seconds in _SCRIBE_CLIP_SECONDS
+            ),
         ),
         combined_usage_object=Usage(),
         custom_llm_provider="elevenlabs",
@@ -9477,7 +9480,9 @@ def test_realtime_transcription_addons_bill_their_rate_on_every_transcribed_seco
 
     assert addon_rate > 0
     assert base_cost > 0
-    assert _scribe_session_cost((_SCRIBE_KEYTERMS_ADDON,)) - base_cost == pytest.approx(_SCRIBE_SECONDS * addon_rate)
+    assert _scribe_session_cost((_SCRIBE_KEYTERMS_ADDON,)) - base_cost == pytest.approx(
+        sum(_SCRIBE_CLIP_SECONDS) * addon_rate
+    )
 
 
 def test_realtime_keeps_first_reported_session_model_for_pricing(_local_model_cost_map: None) -> None:

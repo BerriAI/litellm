@@ -780,18 +780,20 @@ def test_native_health_check_mode_is_messages_only_for_mantle_claude(
     (
         ("elevenlabs/scribe_v2_realtime", "scribe_v2_realtime", "realtime"),
         ("elevenlabs/scribe_v2_realtime", "elevenlabs/scribe_v2_realtime", "realtime"),
+        ("elevenlabs/scribe_v9_realtime", "scribe_v9_realtime", "realtime"),
         ("elevenlabs/scribe_v2", "scribe_v2", "audio_transcription"),
         ("elevenlabs/eleven_v3", "eleven_v3", "audio_speech"),
     ),
 )
-def test_elevenlabs_health_checks_use_the_websocket_only_for_the_realtime_scribe_model(
+def test_elevenlabs_health_checks_use_the_websocket_for_models_the_cost_map_lists_as_realtime(
     requested_model: str, model: str, expected: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
         litellm,
         "model_cost",
         {
-            "elevenlabs/scribe_v2_realtime": {"mode": "audio_transcription"},
+            "elevenlabs/scribe_v2_realtime": {"mode": "audio_transcription", "supported_endpoints": ["/v1/realtime"]},
+            "elevenlabs/scribe_v9_realtime": {"mode": "audio_transcription", "supported_endpoints": ["/v1/realtime"]},
             "elevenlabs/scribe_v2": {"mode": "audio_transcription"},
             "elevenlabs/eleven_v3": {"mode": "audio_speech"},
         },
