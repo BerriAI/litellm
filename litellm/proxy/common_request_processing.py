@@ -3461,7 +3461,7 @@ class ProxyBaseLLMRequestProcessing:
     async def _pre_call_with_fallbacks(
         self,
         request: Request,
-        general_settings: dict,
+        general_settings: dict[str, object],
         proxy_logging_obj: ProxyLogging,
         user_api_key_dict: UserAPIKeyAuth,
         version: str | None,
@@ -5196,7 +5196,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     async def _run_deferred_stream_guardrails(
-        captured_data: dict,
+        captured_data: dict[str, object],
         captured_user_api_key_dict: "UserAPIKeyAuth",
         captured_logging_obj: LiteLLMLoggingObj,
         assembled_response: Any,
