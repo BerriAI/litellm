@@ -143,7 +143,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def transform_streaming_response(
         self,
         model: str,
-        parsed_chunk: dict[str, object],
+        parsed_chunk: dict,
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIStreamingResponse:
         parsed_chunk = self._normalize_stream_item_id(parsed_chunk)
