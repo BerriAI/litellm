@@ -120,6 +120,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
             raise litellm.utils.UnsupportedParamsError(
                 message=unsupported_reasoning_effort_message("reasoning_effort", refused_effort, model),
                 status_code=400,
+                body={"param": "reasoning_effort", "code": "unsupported_value"},
             )
         if "max_tokens" in non_default_params:
             optional_params["max_completion_tokens"] = non_default_params.pop("max_tokens")
