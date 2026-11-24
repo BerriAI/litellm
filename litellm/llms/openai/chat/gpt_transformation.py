@@ -699,7 +699,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         Transform the overall request to be sent to the API.
 
@@ -743,7 +743,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
-    ) -> dict[str, object]:
+    ) -> dict:
         if not has_file_id_urls(messages, _PDF_URL_STARTS):
             return self.transform_request(model, messages, optional_params, litellm_params, headers)
         sent_messages: Final = self._with_provider_roles(
