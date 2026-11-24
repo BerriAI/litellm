@@ -23,6 +23,7 @@ from litellm.constants import (
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
+    REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
 from litellm.litellm_core_utils.core_helpers import (
@@ -3944,6 +3945,20 @@ def _first_live_model_rate(
     )
 
 
+_ADDON_PRICING_MODELS: Final = TypeAdapter(tuple[str, ...])
+
+
+def _transcription_addon_pricing_models(litellm_logging_obj: LitellmLoggingObject | None) -> tuple[str, ...]:
+    if litellm_logging_obj is None:
+        return ()
+    try:
+        return _ADDON_PRICING_MODELS.validate_python(
+            litellm_logging_obj.model_call_details.get(REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY, ())
+        )
+    except ValidationError:
+        return ()
+
+
 def _xai_metered_usage(litellm_logging_obj: LitellmLoggingObject | None) -> RealtimeMeteredUsage | None:
     if litellm_logging_obj is None:
         return None
@@ -4087,6 +4102,7 @@ def handle_realtime_stream_cost_calculation(
             custom_llm_provider=custom_llm_provider,
             litellm_model_name=litellm_model_name,
             custom_pricing_model=custom_pricing_model,
+            addon_pricing_models=_transcription_addon_pricing_models(litellm_logging_obj),
         )
         if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results)
         else 0.0
@@ -4241,6 +4257,7 @@ def handle_realtime_transcription_cost_calculation(
     custom_llm_provider: str,
     litellm_model_name: str,
     custom_pricing_model: str | None = None,
+    addon_pricing_models: Sequence[str] = (),
 ) -> float:
     """
     Cost for realtime transcription sessions (e.g. gpt-realtime-whisper).
@@ -4268,10 +4285,19 @@ def handle_realtime_transcription_cost_calculation(
     override_info: Final = (
         _cost_map_model_info(custom_pricing_model, custom_llm_provider) if custom_pricing_model is not None else None
     )
-    return sum(
+    base_cost: Final = sum(
         (_transcription_usage_cost(dict(usage), model_infos[model], override_info) for usage, model in clip_models),
         0.0,
     )
+    addon_cost: Final = sum(
+        (_clips_cost(clips, _cost_map_model_info(addon, custom_llm_provider)) for addon in addon_pricing_models),
+        0.0,
+    )
+    return base_cost + addon_cost
+
+
+def _clips_cost(clips: Sequence[tuple[Mapping[str, object], str | None]], model_info: ModelInfo | None) -> float:
+    return sum((_transcription_usage_cost(dict(usage), model_info) for usage, _ in clips), 0.0)
 
 
 _TRANSCRIPTION_SESSION_EVENT_TYPES: Final = frozenset(

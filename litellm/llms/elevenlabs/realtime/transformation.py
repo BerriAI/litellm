@@ -26,7 +26,6 @@ from litellm.llms.base_llm.realtime.transcription_protocol import (
     duration_usage,
     error_event,
     json_object,
-    normalize_transcript_word,
     parse_transcription_session_update,
     speech_event,
     transcription_session,
@@ -73,6 +72,7 @@ _REALTIME_PATH: Final = "/v1/speech-to-text/realtime"
 SUPPORTED_SAMPLE_RATES: Final = frozenset((8_000, 16_000, 22_050, 24_000, 44_100, 48_000))
 _DEFAULT_SAMPLE_RATE: Final = 24_000
 _BACKEND_NAME: Final = "ElevenLabs Scribe realtime"
+SCRIBE_REALTIME_KEYTERMS_PRICING_MODEL: Final = f"elevenlabs/{SCRIBE_REALTIME_MODEL}/keyterms"
 _KNOWN_SERVER_MESSAGE_TYPES: Final = frozenset(
     ("session_started", "partial_transcript", "committed_transcript", "warning", *get_args(ElevenLabsErrorType))
 )
@@ -248,15 +248,21 @@ def _new_item_id() -> str:
     return f"item_{uuid.uuid4().hex}"
 
 
-def _new_words(emitted: str, words: tuple[str, ...]) -> str:
-    emitted_words: Final = tuple(normalize_transcript_word(word) for word in emitted.split())
-    if len(words) > len(emitted_words) and emitted_words == tuple(
-        normalize_transcript_word(word) for word in words[: len(emitted_words)]
-    ):
-        new_words: Final = " ".join(words[len(emitted_words) :])
-        return f" {new_words}" if emitted else new_words
-    stable: Final = " ".join(words)
-    return stable[len(emitted) :] if stable.startswith(emitted) else ""
+def _is_wide(text: str) -> bool:
+    return any(unicodedata.east_asian_width(char) in ("W", "F") for char in text)
+
+
+def _streams_by_word(text: str) -> bool:
+    words: Final = text.split()
+    spaced: Final = text.isascii() or len(words) > 1
+    return spaced and not (words and _is_wide(words[-1]))
+
+
+def _next_delta(emitted: str, stable: str) -> str:
+    if stable.startswith(emitted) or not _streams_by_word(stable):
+        return stable[len(emitted) :]
+    new_words: Final = " ".join(stable.split()[len(emitted.split()) :])
+    return f" {new_words}" if new_words and emitted else new_words
 
 
 def _without_trailing_punctuation(text: str) -> str:
@@ -266,13 +272,12 @@ def _without_trailing_punctuation(text: str) -> str:
     return text[:end]
 
 
-def _new_text(emitted: str, previous: str | None, text: str) -> str:
-    if text.isascii() or any(char.isspace() for char in text):
-        return _new_words(emitted, tuple(text.split()[:-1]))
+def _stable_text(previous: str | None, text: str) -> str:
+    if _streams_by_word(text):
+        return " ".join(text.split()[:-1])
     if previous is None:
         return ""
-    stable: Final = _without_trailing_punctuation(os.path.commonprefix((previous, text))[: len(text) - 1])
-    return stable[len(emitted) :] if stable.startswith(emitted) else ""
+    return _without_trailing_punctuation(os.path.commonprefix((previous, text))[: len(text) - 1])
 
 
 @dataclass(frozen=True, slots=True)
@@ -289,6 +294,8 @@ class ElevenLabsEventTransformer:
         self._unbilled_seconds: float = 0.0
         self._session_started: bool = False
         self._refusal: ElevenLabsException | None = None
+        self._uncommitted_audio: bool = False
+        self._discards_next_commit: bool = False
 
     @property
     def refusal(self) -> ElevenLabsException | None:
@@ -296,6 +303,17 @@ class ElevenLabsEventTransformer:
 
     def record_audio(self, seconds: float) -> None:
         self._unbilled_seconds += seconds
+        if seconds > 0:
+            self._uncommitted_audio = True
+
+    def commit_audio(self, *, discard: bool) -> bool:
+        if not self._uncommitted_audio:
+            return False
+        self._uncommitted_audio = False
+        if discard:
+            self._discards_next_commit = True
+            self._turn = None
+        return True
 
     def take_unbilled_usage(self) -> RealtimeInputAudioTranscriptionUsage | None:
         seconds: Final = self._unbilled_seconds
@@ -326,31 +344,36 @@ class ElevenLabsEventTransformer:
     def _report(self, error: ElevenLabsException) -> OpenAIRealtimeEvents:
         if not self._session_started and self._refusal is None:
             self._refusal = error
-        return error_event(error.message)
+        return error_event(error.message, "invalid_request_error" if error.status_code < 500 else "server_error")
 
     def _partial(self, text: str) -> tuple[OpenAIRealtimeEvents, ...]:
-        if not text:
+        if not text or self._discards_next_commit:
             return ()
         turn: Final = self._turn
         current: Final = turn if turn is not None else _Turn(item_id=self._new_item_id(), emitted="", previous=None)
         started: Final[tuple[OpenAIRealtimeEvents, ...]] = (
             (speech_event("input_audio_buffer.speech_started", current.item_id),) if turn is None else ()
         )
-        delta: Final = _new_text(current.emitted, current.previous, text)
+        delta: Final = _next_delta(current.emitted, _stable_text(current.previous, text))
         self._turn = _Turn(item_id=current.item_id, emitted=current.emitted + delta, previous=text)
         return (*started, delta_event(current.item_id, delta)) if delta else started
 
     def _committed(self, text: str) -> tuple[OpenAIRealtimeEvents, ...]:
         turn: Final = self._turn
         self._turn = None
+        if self._discards_next_commit:
+            self._discards_next_commit = False
+            return ()
         if turn is None and not text:
             return ()
         item_id: Final = self._new_item_id() if turn is None else turn.item_id
         started: Final[tuple[OpenAIRealtimeEvents, ...]] = (
             (speech_event("input_audio_buffer.speech_started", item_id),) if turn is None else ()
         )
+        tail: Final = _next_delta("" if turn is None else turn.emitted, text)
         return (
             *started,
+            *((delta_event(item_id, tail),) if tail else ()),
             speech_event("input_audio_buffer.speech_stopped", item_id),
             completed_event(item_id, text, self.take_unbilled_usage()),
         )
@@ -430,7 +453,9 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
             case "input_audio_buffer.append":
                 return self._append_audio(request)
             case "input_audio_buffer.commit" | "input_audio_buffer.end":
-                return (self._audio_chunk(b"", commit=True),)
+                return self._commit(discard=False)
+            case "input_audio_buffer.clear":
+                return self._commit(discard=True)
             case event_type:
                 verbose_logger.debug("ElevenLabs realtime: dropping unsupported client event %s", event_type)
                 return ()
@@ -442,6 +467,9 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
         if self._transformer.refusal is not None:
             return None
         return self._transformer.take_unbilled_usage()
+
+    def transcription_addon_pricing_models(self) -> tuple[str, ...]:
+        return (SCRIBE_REALTIME_KEYTERMS_PRICING_MODEL,) if self._options.keyterms else ()
 
     def transform_realtime_response(
         self,
@@ -466,7 +494,7 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
 
     def _server_events(self, message: ElevenLabsServerMessageUnion) -> tuple[OpenAIRealtimeEvents, ...]:
         if isinstance(message, ElevenLabsSessionStarted):
-            verbose_logger.debug("ElevenLabs realtime session started: %s", message.session_id)
+            verbose_logger.info("ElevenLabs realtime session started: %s", message.session_id)
         reported: Final = (
             message.model_copy(update={"session_id": self._session_id})
             if isinstance(message, ElevenLabsSessionStarted) and self._session_id is not None
@@ -481,6 +509,12 @@ class ElevenLabsRealtimeConfig(BaseRealtimeConfig):
         config: Final = parse_session_update(message, self._options, drop_params=self._drop_params)
         self._config = config
         return (ElevenLabsRealtimeConfigure(query=config.query()).model_dump_json(),)
+
+    def _commit(self, *, discard: bool) -> tuple[str, ...]:
+        self._require_config()
+        if not self._transformer.commit_audio(discard=discard):
+            return ()
+        return (self._audio_chunk(b"", commit=True),)
 
     def _append_audio(self, request: Mapping[str, JsonValue]) -> tuple[str, ...]:
         self._require_config()

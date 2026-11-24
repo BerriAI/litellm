@@ -16,6 +16,7 @@ from litellm.constants import (
     BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY,
     REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
     REALTIME_METERED_USAGE_KEY,
+    REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
 )
@@ -30,6 +31,7 @@ from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTransc
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
 from litellm.llms.elevenlabs.common_utils import ElevenLabsException
 from litellm.llms.elevenlabs.realtime.transformation import ElevenLabsRealtimeConfig
+from litellm.types.llms.elevenlabs import ElevenLabsRealtimeOptions
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.llms.xai.realtime.usage_meter import XAIRealtimeUsageMeter
 
@@ -3859,6 +3861,7 @@ async def test_deferred_setup_caps_non_audio_buffered_messages(monkeypatch):
     client_ws.receive_text = AsyncMock(
         side_effect=[audio_msg] + [flood_msg] * (cap + 50) + [ConnectionClosed(None, None)]
     )
+    client_ws.send_text = AsyncMock()
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
     logging_obj: Final = _mock_logging()
@@ -3877,6 +3880,8 @@ async def test_deferred_setup_caps_non_audio_buffered_messages(monkeypatch):
     backend_ws.send.assert_not_called()
     assert len(streaming._pending_messages_until_setup) == cap
     assert streaming._pending_messages_byte_total <= RealTimeStreaming._MAX_BUFFERED_BYTES
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [(event["type"], event["error"]["code"]) for event in sent] == [("error", "session_not_configured")]
 
 
 @pytest.mark.asyncio
@@ -3890,6 +3895,7 @@ async def test_deferred_setup_caps_non_audio_buffered_bytes(monkeypatch):
 
     client_ws = MagicMock()
     client_ws.receive_text = AsyncMock(side_effect=[audio_msg, big_non_audio, ConnectionClosed(None, None)])
+    client_ws.send_text = AsyncMock()
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
     logging_obj: Final = _mock_logging()
@@ -4571,9 +4577,9 @@ async def test_deferred_setup_clear_drops_appends_when_buffered():
     clear_msg = json.dumps({"type": "input_audio_buffer.clear"})
     new_audio = json.dumps({"type": "input_audio_buffer.append", "audio": "new"})
 
-    streaming._buffer_pending_message_until_setup(old_audio)
-    streaming._buffer_pending_message_until_setup(clear_msg)
-    streaming._buffer_pending_message_until_setup(new_audio)
+    await streaming._buffer_pending_message_until_setup(old_audio)
+    await streaming._buffer_pending_message_until_setup(clear_msg)
+    await streaming._buffer_pending_message_until_setup(new_audio)
 
     assert streaming._pending_messages_until_setup == [new_audio]
 
@@ -5093,6 +5099,30 @@ async def test_an_elevenlabs_error_before_session_started_logs_a_failure_and_no_
     assert isinstance(failure, ElevenLabsException)
     assert (failure.status_code, failure.message) == (401, "ElevenLabs realtime transcription failed: auth_error")
     assert session.logging.logged_sessions == ()
+
+
+@pytest.mark.asyncio
+async def test_an_elevenlabs_keyterm_session_records_its_priced_addon_for_cost_tracking():
+    provider_config: Final = ElevenLabsRealtimeConfig(options=ElevenLabsRealtimeOptions(keyterms=("LiteLLM",)))
+    provider_config.transform_realtime_request(
+        json.dumps({"type": "transcription_session.update", "session": {"type": "transcription"}}),
+        "scribe_v2_realtime",
+    )
+    session: Final = _relay_session(
+        _client_ws_that_never_sends(),
+        _backend_ws_closing_with(
+            json.dumps({"message_type": "session_started", "session_id": "el_sess_1"}).encode(),
+            ConnectionClosed(Close(1000, ""), None),
+        ),
+        provider_config,
+    )
+
+    await session.run()
+
+    addons: Final = session.logging.model_call_details[REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY]
+    assert len(session.logging.logged_sessions) == 1
+    assert isinstance(addons, tuple) and len(addons) == 1
+    assert (litellm.get_model_info(addons[0])["input_cost_per_second"] or 0) > 0
 
 
 @pytest.mark.asyncio

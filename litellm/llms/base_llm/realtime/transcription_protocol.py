@@ -239,10 +239,10 @@ def transcription_session_created_event(
     return event
 
 
-def error_event(message: str) -> OpenAIRealtimeErrorEvent:
+def error_event(message: str, error_type: str = "server_error") -> OpenAIRealtimeErrorEvent:
     event: Final[OpenAIRealtimeErrorEvent] = {
         "type": "error",
-        "error": {"type": "server_error", "message": message},
+        "error": {"type": error_type, "message": message},
     }
     return event
 
