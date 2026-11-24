@@ -795,6 +795,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         base_model: Final = provider_kwargs.get("base_model")
         custom_llm_provider: Final = provider_kwargs.get("custom_llm_provider")
         target_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+        api_base: Final = provider_kwargs.get("api_base")
         drop_params: Final = drops_unsupported_params(provider_kwargs.get("drop_params"))
         strips_mcp_servers: Final = target_provider in ROUTES_WITHOUT_MCP_SERVERS
         request_tools: Final = (
@@ -812,7 +813,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         request_data: Final[dict[str, object]] = {
             "model": model,
             "messages": strip_unsignable_thinking_blocks_for_claude(
-                messages, model, base_model if isinstance(base_model, str) else None
+                messages,
+                model,
+                base_model if isinstance(base_model, str) else None,
+                custom_llm_provider=target_provider,
+                api_base=api_base if isinstance(api_base, str) else None,
             ),
             "max_tokens": max_tokens,
         }
@@ -848,7 +853,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if "output_config" in extra_kwargs:
             request_data["output_config"] = extra_kwargs["output_config"]
 
-        api_base: Final = provider_kwargs.get("api_base")
         (
             openai_request,
             tool_name_mapping,

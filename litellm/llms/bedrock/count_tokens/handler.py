@@ -57,7 +57,9 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             verbose_logger.debug("Retrieved AWS region: %s", aws_region_name)
 
             # Transform request to Bedrock format (supports both Converse and InvokeModel)
-            bedrock_request: Final = self.transform_anthropic_to_bedrock_count_tokens(request_data=request_data)
+            bedrock_request: Final = self.transform_anthropic_to_bedrock_count_tokens(
+                request_data=request_data, model=resolved_model
+            )
 
             verbose_logger.debug("Transformed request: %s", bedrock_request)
 

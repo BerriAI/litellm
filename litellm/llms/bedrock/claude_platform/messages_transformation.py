@@ -25,6 +25,9 @@ class BedrockClaudePlatformMessagesConfig(BedrockClaudePlatformMixin, AnthropicM
     def anthropic_api_version(self, headers: Mapping[str, object], api_base: str | None) -> str | None:
         return requested_api_version(headers)
 
+    def thinking_signature_rule_provider(self) -> str:
+        return "bedrock"
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict,
