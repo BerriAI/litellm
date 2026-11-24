@@ -67,6 +67,9 @@ pub struct CallState {
     /// When the pre-call hook handed the body back for routing, Python's `api_call_start_time`.
     api_call_start: Option<SystemTime>,
     end: Option<SystemTime>,
+    /// When the served stream's first event arrived, as a stream held before it was answered
+    /// read it.
+    first_event: Option<SystemTime>,
     request: Request,
     rate_limit_statuses: Option<Value>,
     response_headers: Map<String, Value>,
@@ -89,6 +92,7 @@ impl CallState {
             start: SystemTime::now(),
             api_call_start: None,
             end: None,
+            first_event: None,
             request: Request::Named {
                 model: None,
                 stream: false,
@@ -150,12 +154,27 @@ impl CallState {
     /// The body as the pre-call hook left it, back to the route, which calls the provider with it
     /// next.
     pub fn release(&mut self) -> Map<String, Value> {
-        self.api_call_start = Some(SystemTime::now());
         let named = self.request.named();
         match std::mem::replace(&mut self.request, named) {
             Request::Held(body) => body,
             Request::Named { .. } => Map::new(),
         }
+    }
+
+    /// The pre-call hook let the call on to the provider.
+    pub fn call_provider(&mut self) {
+        self.api_call_start = Some(SystemTime::now());
+    }
+
+    /// A held stream's first event arrived `at`.
+    pub fn see_first_event(&mut self, at: SystemTime) {
+        self.first_event = Some(at);
+    }
+
+    /// When the served stream's first event arrived, when the stream was held before it was
+    /// answered.
+    pub fn first_event(&self) -> Option<SystemTime> {
+        self.first_event
     }
 
     /// The request body while it is held, `None` once the route has it back.

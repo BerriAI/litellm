@@ -117,25 +117,26 @@ pub trait CallHooks: Send + Sync + 'static {
     fn failed(&self) -> impl Future<Output = ()> + Send;
 }
 
-/// A served call's answer with what the success log is told once it goes out, `None` for a
-/// stream, which tells its own end.
-pub(crate) struct Answer {
+/// A served call's response with the success log to send once it goes out, `None` for a
+/// stream, which sends its own when it ends.
+pub(crate) struct HookResponse {
     response: Response,
-    complete: Option<ServedCall>,
+    success_log: Option<ServedCall>,
 }
 
-/// What the hooks made of a served call before its answer is rendered.
-pub(crate) struct Told {
-    added: HeaderMap,
-    complete: Option<ServedCall>,
+/// What the post-call hooks leave for a served call's response: the headers the callbacks add,
+/// and the success log of a complete answer.
+pub(crate) struct PostCall {
+    headers: HeaderMap,
+    success_log: Option<ServedCall>,
 }
 
-impl Told {
+impl PostCall {
     /// `response` with the headers the callbacks add.
-    pub(crate) fn answer(self, response: impl IntoResponse) -> Answer {
-        Answer {
-            response: (self.added, response).into_response(),
-            complete: self.complete,
+    pub(crate) fn answer(self, response: impl IntoResponse) -> HookResponse {
+        HookResponse {
+            response: (self.headers, response).into_response(),
+            success_log: self.success_log,
         }
     }
 }
@@ -153,7 +154,7 @@ pub(crate) async fn around<H, F, Fut>(
 where
     H: Host,
     F: FnOnce(Arc<H::Hooks>, Map<String, Value>) -> Fut,
-    Fut: Future<Output = Result<Answer, Ended>>,
+    Fut: Future<Output = Result<HookResponse, Ended>>,
 {
     let hooks = Arc::new(gateway.host.hooks(identity));
     let served = match hooks.pre_call(body).await {
@@ -161,8 +162,11 @@ where
         Err(ended) => Err(ended.into()),
     };
     match served {
-        Ok(Answer { response, complete }) => {
-            if let Some(served) = complete {
+        Ok(HookResponse {
+            response,
+            success_log,
+        }) => {
+            if let Some(served) = success_log {
                 record::spawn_in_call(async move { hooks.succeeded(served).await });
             }
             Ok(response)
@@ -190,35 +194,35 @@ struct StreamSeen {
 
 impl StreamSeen {
     fn see(&self, block: &SseBlock, response_id: fn(&str) -> Option<String>) {
+        let Some(event) = block.event.as_ref() else {
+            return;
+        };
         let _ = self.first_event.get_or_init(SystemTime::now);
         if self.response_id.get().is_none()
-            && let Some(id) = block
-                .event
-                .as_ref()
-                .and_then(|event| response_id(&event.data))
+            && let Some(id) = response_id(&event.data)
         {
             let _ = self.response_id.set(id);
         }
     }
 }
 
-/// Tells the hooks about the `outcome` that served a call of route `E`, which `served` says
+/// Runs the post-call hooks on the `outcome` that served a call of route `E`, which `served` says
 /// served it. A complete answer tells what it counted, and a stream tells how it went once it
 /// ends, through the same `stream_outcome::watched` the router hears it from.
-pub(crate) async fn answered<E: Endpoint, K: CallHooks>(
+pub(crate) async fn post_call<E: Endpoint, K: CallHooks>(
     hooks: &Arc<K>,
     outcome: &mut E::Outcome,
     served: ServedBy,
-) -> Result<Told, Ended> {
+) -> Result<PostCall, Ended> {
     let ServedBy {
         model_group,
         deployment,
     } = served;
     let Some((chunks, read)) = E::held(outcome) else {
         hooks.post_call_success().await?;
-        return Ok(Told {
-            added: hooks.response_headers().await,
-            complete: Some(ServedCall {
+        return Ok(PostCall {
+            headers: hooks.response_headers().await,
+            success_log: Some(ServedCall {
                 model_group,
                 deployment,
                 response_id: E::response_id(outcome),
@@ -227,9 +231,9 @@ pub(crate) async fn answered<E: Endpoint, K: CallHooks>(
             }),
         });
     };
-    let told = Told {
-        added: hooks.response_headers().await,
-        complete: None,
+    let post_call = PostCall {
+        headers: hooks.response_headers().await,
+        success_log: None,
     };
     let hooks = hooks.clone();
     let usage: fn(Counts) -> Option<ChatCompletionsUsage> = E::usage;
@@ -262,7 +266,9 @@ pub(crate) async fn answered<E: Endpoint, K: CallHooks>(
                             deployment,
                             response_id: seen.response_id.get().cloned(),
                             usage: usage(counts),
-                            first_event: seen.first_event.get().copied(),
+                            first_event: record::read(record::CallState::first_event)
+                                .flatten()
+                                .or_else(|| seen.first_event.get().copied()),
                         };
                         hooks.succeeded(served).await;
                     }
@@ -271,5 +277,5 @@ pub(crate) async fn answered<E: Endpoint, K: CallHooks>(
             }
         },
     );
-    Ok(told)
+    Ok(post_call)
 }

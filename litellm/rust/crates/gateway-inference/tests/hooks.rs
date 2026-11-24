@@ -525,6 +525,7 @@ async fn the_success_log_is_told_who_called_which_deployment_answered_when_and_u
 
 /// A spend log row for an answer that names no id of its own is written under the call id the
 /// gateway's call id layer resolved, which the call's facts carry too.
+#[rstest]
 #[tokio::test]
 async fn an_answer_without_an_id_is_logged_under_the_call_id() {
     let upstream = answering(

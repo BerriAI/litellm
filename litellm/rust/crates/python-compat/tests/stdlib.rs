@@ -7,6 +7,7 @@ use litellm_python_compat::{
     unicode::isspace,
     urllib::quote,
 };
+use rstest::rstest;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -109,7 +110,7 @@ fn utc_fields_match_datetime() {
     }
 }
 
-#[test]
+#[rstest]
 fn a_clock_reading_has_the_fields_of_its_timestamp() {
     for row in fixtures().utc {
         let offset = std::time::Duration::from_secs(row.seconds.unsigned_abs());

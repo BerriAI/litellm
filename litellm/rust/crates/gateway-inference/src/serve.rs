@@ -107,8 +107,8 @@ where
             model_group: routed.model_group,
         };
         let mut outcome = routed.output.response;
-        let told = hooks::answered::<E, _>(&hooks, &mut outcome, served).await?;
-        Ok(told.answer((Extension(routing), E::render(outcome, reported)?)))
+        let post_call = hooks::post_call::<E, _>(&hooks, &mut outcome, served).await?;
+        Ok(post_call.answer((Extension(routing), E::render(outcome, reported)?)))
     };
     record::write(|entries| {
         entries.serve_as(E::CALL_TYPE);

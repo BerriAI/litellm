@@ -289,6 +289,9 @@ impl CallHooks for Call {
         let body = record::write(CallState::release)
             .or(unheld)
             .unwrap_or_default();
+        if ran.is_ok() {
+            record::write(CallState::call_provider);
+        }
         ran.map(|()| body)
     }
 
