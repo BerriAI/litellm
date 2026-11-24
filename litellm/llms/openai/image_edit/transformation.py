@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx._types import RequestFiles
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
@@ -25,21 +26,32 @@ else:
     LiteLLMLoggingObj = Any
 
 
+_UPLOAD_TUPLE: Final = TypeAdapter(tuple[object, ...])
+
+
 def _upload_file_name(upload: object, default_name: str) -> object:
     return upload.name if isinstance(upload, BufferedReader) else default_name
 
 
+def _as_upload_tuple(upload: object) -> tuple[object, ...] | None:
+    raw: Final[object] = upload
+    if not isinstance(upload, tuple):
+        return None
+    return _UPLOAD_TUPLE.validate_python(raw)
+
+
 def _build_upload_part(upload: object, default_name: str) -> tuple[object, ...]:
-    if isinstance(upload, tuple) and 2 <= len(upload) <= 4:
-        raw_name: Final = upload[0]
-        content: Final = upload[1]
-        resolved_name: Final = raw_name if raw_name is not None else _upload_file_name(content, default_name)
-        raw_type: Final = upload[2] if len(upload) >= 3 else None
-        resolved_type: Final = (
+    parts: Final = _as_upload_tuple(upload)
+    if parts is not None and 2 <= len(parts) <= 4:
+        raw_name: Final[object] = parts[0]
+        content: Final[object] = parts[1]
+        resolved_name: Final[object] = raw_name if raw_name is not None else _upload_file_name(content, default_name)
+        raw_type: Final[object] = parts[2] if len(parts) >= 3 else None
+        resolved_type: Final[object] = (
             raw_type if raw_type is not None else ImageEditRequestUtils.get_image_content_type(content)
         )
-        if len(upload) == 4:
-            return (resolved_name, content, resolved_type, upload[3])
+        if len(parts) == 4:
+            return (resolved_name, content, resolved_type, parts[3])
         return (resolved_name, content, resolved_type)
     image_content_type: Final = ImageEditRequestUtils.get_image_content_type(upload)
     return (_upload_file_name(upload, default_name), upload, image_content_type)
