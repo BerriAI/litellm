@@ -2918,6 +2918,9 @@ class PrometheusLogger(CustomLogger):
                 model_id=model_id,
                 api_provider=api_provider,
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
+                custom_metadata_labels=_custom_labels_of_an_answer_without_an_image(
+                    request_data.get("standard_logging_object"), isinstance(original_exception, IMAGE_ANSWER_ERRORS)
+                ),
             )
             _label_ctx: Final = PrometheusLabelFactoryContext(enum_values)
             PrometheusLogger._inc_labeled_counter(
@@ -2944,6 +2947,8 @@ class PrometheusLogger(CustomLogger):
     ) -> None:
         usage: Final = request_data.get("combined_usage_object")
         response_cost: Final = request_data.get("response_cost")
+        if request_data.get("no-log") is True and not litellm.global_disable_no_log_param:
+            return
         if request_data.get("call_type") not in IMAGE_CALL_TYPES or not isinstance(usage, litellm.Usage):
             return
         if not isinstance(response_cost, (int, float)) or response_cost <= 0:
@@ -3173,6 +3178,7 @@ class PrometheusLogger(CustomLogger):
                 )
                 label_model_group = _bounded_requested_model_label(model_group, router_originated=True)
 
+            refused_prompt: Final = isinstance(exception, IMAGE_ANSWER_ERRORS)
             enum_values: Final = UserAPIKeyLabelValues(
                 litellm_model_name=label_litellm_model_name,
                 model_id=label_model_id,
@@ -3190,13 +3196,15 @@ class PrometheusLogger(CustomLogger):
                 tags=standard_logging_payload.get("request_tags", []),
                 client_ip=client_ip,
                 user_agent=user_agent,
+                custom_metadata_labels=_custom_labels_of_an_answer_without_an_image(
+                    standard_logging_payload, refused_prompt
+                ),
             )
 
             """
             log these labels
             ["litellm_model_name", "model_id", "api_base", "api_provider"]
             """
-            refused_prompt: Final = isinstance(exception, IMAGE_ANSWER_ERRORS)
             # Only mark a deployment outage when one was actually picked.
             if deployment_selected:
                 self._set_deployment_state_after_failure(
@@ -5028,6 +5036,18 @@ def get_custom_labels_from_metadata(metadata: dict) -> dict[str, str]:
             result[original_key.replace(".", "_")] = value
 
     return result
+
+
+def _custom_labels_of_an_answer_without_an_image(
+    standard_logging_payload: object, answered_without_an_image: bool
+) -> Mapping[str, str]:
+    if not answered_without_an_image or not isinstance(standard_logging_payload, dict):
+        return {}
+    return get_custom_labels_from_metadata(
+        metadata=_get_combined_custom_metadata_from_standard_logging_payload(
+            standard_logging_payload=standard_logging_payload
+        )
+    )
 
 
 def _get_combined_custom_metadata_from_standard_logging_payload(
