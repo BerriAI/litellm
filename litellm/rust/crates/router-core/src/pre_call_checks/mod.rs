@@ -55,19 +55,20 @@ impl PreCallChecks {
         cache: &impl RouterCache,
         deployment: &Deployment,
         now: SystemTime,
-    ) -> Option<Error> {
+    ) -> Result<(), Error> {
         for check in self.0.iter() {
-            let refused = match check {
+            #[expect(
+                clippy::single_match,
+                reason = "one arm per check with an admit stage, as succeeded has"
+            )]
+            match check {
                 OptionalPreCallCheck::EnforceModelRateLimits => {
-                    enforce_model_rate_limits::admit(cache, deployment, now).await
+                    enforce_model_rate_limits::admit(cache, deployment, now).await?;
                 }
-                _ => None,
-            };
-            if refused.is_some() {
-                return refused;
+                _ => {}
             }
         }
-        None
+        Ok(())
     }
 
     /// `async_log_success_event` of each check.

@@ -1208,12 +1208,12 @@ impl<H: RouterHost> Call<'_, H> {
         // (`increment_deployment_usage_for_response`), its success or failure when the host reports
         // the stream's end.
         let checks = &self.core.config.pre_call_checks;
-        let refused = checks
+        let admitted = checks
             .admit(self.host.cache(), &deployment, self.core.clock.now())
             .await;
-        let ran = match refused {
-            Some(refusal) => Err(refusal),
-            None => self
+        let ran = match admitted {
+            Err(refusal) => Err(refusal),
+            Ok(()) => self
                 .host
                 .attempt(&attempt)
                 .await

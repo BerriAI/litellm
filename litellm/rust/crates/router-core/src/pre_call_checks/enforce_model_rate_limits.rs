@@ -4,7 +4,6 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use jiff::civil::Time;
-use litellm_python_compat::{json::from_json, pydantic::lax_float};
 use litellm_router_types::Spelled;
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -54,14 +53,6 @@ fn past_midnight(reset: Option<Time>) -> Duration {
     })
 }
 
-/// A limit as Python reads it off a config: a number, or text that spells one.
-fn number(limit: &Spelled<f64>) -> Option<f64> {
-    match limit {
-        Spelled::Value(value) => Some(*value),
-        Spelled::Text(text) => lax_float(&from_json(Value::String(text.clone()))),
-    }
-}
-
 /// A limit the deployment's own entry or its `model_info` declares under `key`.
 fn written(section: &Map<String, Value>, key: &str) -> Option<Spelled<f64>> {
     section
@@ -78,13 +69,13 @@ impl Limits {
                 .or_else(|| param.clone())
                 .or_else(|| written(&deployment.model_info.raw, key))
                 .as_ref()
-                .and_then(number)
+                .and_then(Spelled::lax)
         };
         Self {
             tpm: declared("tpm", &params.tpm),
             rpm: declared("rpm", &params.rpm),
-            tpd: params.tpd.as_ref().and_then(number),
-            rpd: params.rpd.as_ref().and_then(number),
+            tpd: params.tpd.as_ref().and_then(Spelled::lax),
+            rpd: params.rpd.as_ref().and_then(Spelled::lax),
             reset: past_midnight(params.daily_reset_time),
         }
     }
@@ -193,7 +184,7 @@ pub(crate) async fn admit(
     cache: &impl RouterCache,
     deployment: &Deployment,
     now: SystemTime,
-) -> Option<Error> {
+) -> Result<(), Error> {
     let Windows { tokens, requests } = Limits::of(deployment).windows(now);
     for window in &tokens {
         let Some(limit) = window.limit else {
@@ -203,7 +194,7 @@ pub(crate) async fn admit(
         if let Ok(Some(usage)) = used
             && usage >= limit
         {
-            return Some(window.refused(deployment, limit, usage));
+            return Err(window.refused(deployment, limit, usage));
         }
     }
     let limited: Vec<(&Window, f64)> = requests
@@ -211,7 +202,7 @@ pub(crate) async fn admit(
         .filter_map(|window| Some((window, window.limit?)))
         .collect();
     if limited.is_empty() {
-        return None;
+        return Ok(());
     }
     let charge = |amount: i64| -> Vec<(LimitCounter, i64, Duration)> {
         limited
@@ -219,23 +210,29 @@ pub(crate) async fn admit(
             .map(|(window, _)| (window.counter(deployment), amount, window.ttl))
             .collect()
     };
-    let counts = cache
+    let Some(counts) = cache
         .add_limit_usages(&charge(1))
         .await
         .ok()
         .flatten()
-        .filter(|counts| counts.len() == limited.len())?;
-    let over = limited
+        .filter(|counts| counts.len() == limited.len())
+    else {
+        return Ok(());
+    };
+    let Some(over) = limited
         .iter()
         .zip(&counts)
         .find_map(|((window, limit), count)| {
             let usage = count.trunc();
             (usage > *limit).then(|| window.refused(deployment, *limit, usage))
-        })?;
+        })
+    else {
+        return Ok(());
+    };
     if let Err(error) = cache.add_limit_usages(&charge(-1)).await {
         tracing::debug!(%error, "the model rate limit refund was not recorded");
     }
-    Some(over)
+    Err(over)
 }
 
 /// `ModelRateLimitingCheck.async_log_success_event`: a success's tokens count against the

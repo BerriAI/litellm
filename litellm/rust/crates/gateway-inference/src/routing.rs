@@ -452,13 +452,8 @@ pub(crate) fn streamed(body: &Map<String, Value>) -> bool {
 /// `resolve_llm_passthrough_timeout` over the settings the gateway reads: a streamed call's
 /// `stream_timeout` on the deployment, then the deployment's `timeout`, then the router's.
 pub(crate) fn timeout(attempt: &Attempt, streamed: bool) -> Option<Duration> {
-    let seconds = |written: &Option<Spelled<f64>>| {
-        let seconds = match written.as_ref()? {
-            Spelled::Value(seconds) => *seconds,
-            Spelled::Text(text) => text.trim().parse().ok()?,
-        };
-        Duration::try_from_secs_f64(seconds).ok()
-    };
+    let seconds =
+        |written: &Option<Spelled<f64>>| Duration::try_from_secs_f64(written.as_ref()?.lax()?).ok();
     let params = &attempt.deployment.params;
     streamed
         .then(|| seconds(&params.stream_timeout))
