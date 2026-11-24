@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 from urllib.parse import quote
 
 import httpx
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -22,6 +23,7 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
+    is_blank_content,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     MAX_VIDEO_DOWNLOAD_BYTES,
@@ -788,6 +790,21 @@ def _collect_tool_call_thought_signatures(
     return frozenset(signatures)
 
 
+def _is_blank_user_message(message: AllMessageValues) -> bool:
+    fields: Final = as_str_mapping(message)
+    return fields is not None and is_blank_content(fields.get("content"))
+
+
+def _gemini_blank_last_user_turn(
+    last_user_span: Sequence[AllMessageValues], contents: Sequence[ContentType]
+) -> ContentType | None:
+    if not last_user_span or not all(map(_is_blank_user_message, last_user_span)):
+        return None
+    if contents and contents[-1].get("role") == "user":
+        return None
+    return ContentType(role="user", parts=[PartType(text=" ")])
+
+
 @dataclass(frozen=True, slots=True)
 class _AssistantImageSource:
     url: str
@@ -1015,6 +1032,7 @@ def gemini_convert_messages_with_history(
     model: str | None = None,
     litellm_params: dict | None = None,
     custom_llm_provider: str | None = None,
+    ends_request: bool = True,
 ) -> list[ContentType]:
     """
     Converts given messages from OpenAI format to Gemini format
@@ -1191,7 +1209,13 @@ def gemini_convert_messages_with_history(
 
                 msg_i += 1
 
-            if user_content:
+            if (
+                ends_request
+                and msg_i == len(messages)
+                and (blank_user_turn := _gemini_blank_last_user_turn(messages[init_msg_i:], contents)) is not None
+            ):
+                contents.append(blank_user_turn)
+            elif user_content:
                 """
                 check that user_content has 'text' parameter.
                     - Known Vertex Error: Unable to submit request because it must have a text parameter.
@@ -1370,6 +1394,80 @@ def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
                 data_dict[k] = v
 
 
+class _CallerToolConfig(TypedDict, total=False):
+    toolConfig: ReadOnly[JsonValue]
+    tool_config: ReadOnly[JsonValue]
+
+
+_CALLER_TOOL_CONFIG: Final = TypeAdapter(_CallerToolConfig)
+
+
+def _without_search_tools_next_to_functions(tools: Tools) -> Tools:
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    kept: Final = VertexGeminiConfig.without_search_tools_next_to_functions(as_object_list(tools) or ())
+    return cast(Tools, list(kept))  # cast-ok: a subset of the caller's tools list
+
+
+def _caller_tool_config(extra_body: object) -> JsonValue | None:
+    extra_body_fields: Final = as_str_mapping(extra_body)
+    if extra_body_fields is None:
+        return None
+    try:
+        caller: Final = _CALLER_TOOL_CONFIG.validate_python(extra_body_fields)
+    except ValidationError:
+        return None
+    return caller.get("toolConfig", caller.get("tool_config"))
+
+
+_TOOL_FIELD_KEYS: Final = frozenset(
+    ("tools", "tool_choice", "include_server_side_tool_invocations", "includeServerSideToolInvocations")
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolFields:
+    tools: Tools | None
+    tool_config: ToolConfig | None
+
+
+def _settled_tool_fields(optional_params: Mapping[str, object]) -> _ToolFields:
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    drops_search_next_to_functions: Final = optional_params.get(
+        "includeServerSideToolInvocations"
+    ) is False or VertexGeminiConfig.caller_tool_config_keeps_the_old_search_drop(
+        _caller_tool_config(optional_params.get("extra_body"))
+    )
+    tools: Final = cast(Tools | None, optional_params.get("tools"))  # cast-ok: map_openai_params built these tools
+    tool_choice: Final = cast(ToolConfig | None, optional_params.get("tool_choice"))  # cast-ok: mapped params
+    flags_server_side_tools: Final = (
+        optional_params.get("include_server_side_tool_invocations") is True and not drops_search_next_to_functions
+    )
+    return _ToolFields(
+        tools=(
+            _without_search_tools_next_to_functions(tools)
+            if drops_search_next_to_functions and tools is not None
+            else tools
+        ),
+        tool_config=(
+            ToolConfig({**(tool_choice or ToolConfig()), "includeServerSideToolInvocations": True})
+            if flags_server_side_tools
+            else tool_choice
+        ),
+    )
+
+
+def _with_settled_tool_fields(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    fields: Final = _settled_tool_fields(optional_params)
+    rest: Final = {k: v for k, v in optional_params.items() if k not in _TOOL_FIELD_KEYS}
+    return {
+        **rest,
+        **({} if fields.tools is None else {"tools": fields.tools}),
+        **({} if fields.tool_config is None else {"tool_choice": fields.tool_config}),
+    }
+
+
 def _has_google_maps_tool(tools: object) -> bool:
     """Return True if any tool object in the list has a 'googleMaps' key."""
     if not isinstance(tools, list):
@@ -1463,7 +1561,9 @@ def transform_request_body(
             litellm_params.update({k: v})
             remove_keys.append(k)
 
-    optional_params = {k: v for k, v in optional_params.items() if k not in remove_keys}
+    tool_settings: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
+    tool_fields: Final = _settled_tool_fields(tool_settings)
+    optional_params = {k: v for k, v in optional_params.items() if k not in remove_keys and k not in _TOOL_FIELD_KEYS}
 
     try:
         if custom_llm_provider == "gemini":
@@ -1474,9 +1574,6 @@ def transform_request_body(
             content = litellm.VertexGeminiConfig().transform_messages(
                 messages=messages, model=model, litellm_params=litellm_params
             )
-        tools: Final[Tools | None] = optional_params.pop("tools", None)
-        tool_choice: Final[ToolConfig | None] = optional_params.pop("tool_choice", None)
-        include_server_side_tool_invocations: bool = optional_params.pop("include_server_side_tool_invocations", False)
         safety_settings: list[SafetSettingsConfig] | None = optional_params.pop("safety_settings", None)
         # Drop output_config as it's not supported by Vertex AI
         optional_params.pop("output_config", None)
@@ -1506,14 +1603,10 @@ def transform_request_body(
         if can_send_cache_incompatible_fields:
             if system_instructions is not None:
                 data["system_instruction"] = system_instructions
-            if tools is not None:
-                data["tools"] = tools
-            if tool_choice is not None:
-                data["toolConfig"] = tool_choice
-            if include_server_side_tool_invocations:
-                if "toolConfig" not in data:
-                    data["toolConfig"] = {}
-                data["toolConfig"]["includeServerSideToolInvocations"] = True
+            if tool_fields.tools is not None:
+                data["tools"] = tool_fields.tools
+            if tool_fields.tool_config is not None:
+                data["toolConfig"] = tool_fields.tool_config
         if safety_settings is not None:
             data["safetySettings"] = safety_settings
         if generation_config is not None and len(generation_config) > 0:
@@ -1567,20 +1660,22 @@ def sync_transform_request_body(
     context_caching_endpoints: Final = ContextCachingEndpoints()
     request_settings: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
 
+    caller_cache_name: Final = cast(str | None, optional_params.pop("cached_content", None))  # cast-ok: a cache name
+    tool_settings: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
     (
         messages,
         optional_params,
         cached_content,
     ) = context_caching_endpoints.check_and_create_cache(
         messages=messages,
-        optional_params=optional_params,
+        optional_params=dict(_with_settled_tool_fields(tool_settings)),
         api_key=gemini_api_key or "dummy",
         api_base=api_base,
         model=model,
         client=client,
         timeout=timeout,
         extra_headers=extra_headers,
-        cached_content=optional_params.pop("cached_content", None),
+        cached_content=caller_cache_name,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
         vertex_project=vertex_project,
@@ -1641,20 +1736,22 @@ async def async_transform_request_body(
     context_caching_endpoints: Final = ContextCachingEndpoints()
     request_settings: Final = cast(Mapping[str, object], litellm_params)  # cast-ok: untyped shared signature
 
+    caller_cache_name: Final = cast(str | None, optional_params.pop("cached_content", None))  # cast-ok: a cache name
+    tool_settings: Final = cast(Mapping[str, object], optional_params)  # cast-ok: untyped shared signature
     (
         messages,
         optional_params,
         cached_content,
     ) = await context_caching_endpoints.async_check_and_create_cache(
         messages=messages,
-        optional_params=optional_params,
+        optional_params=dict(_with_settled_tool_fields(tool_settings)),
         api_key=gemini_api_key or "dummy",
         api_base=api_base,
         model=model,
         client=client,
         timeout=timeout,
         extra_headers=extra_headers,
-        cached_content=optional_params.pop("cached_content", None),
+        cached_content=caller_cache_name,
         logging_obj=logging_obj,
         custom_llm_provider=custom_llm_provider,
         vertex_project=vertex_project,

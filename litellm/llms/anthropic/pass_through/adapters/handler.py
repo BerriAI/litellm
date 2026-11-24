@@ -104,12 +104,16 @@ def _provider_error_code(body: object) -> str | None:
     return code if isinstance(code, str) else None
 
 
+def _names_invalid_encrypted_content(error: litellm.BadRequestError) -> bool:
+    return (
+        error.code == "invalid_encrypted_content"
+        or _provider_error_code(error.body) == "invalid_encrypted_content"
+        or "invalid_encrypted_content" in str(error)
+    )
+
+
 def _logged_rejection_code(error: litellm.BadRequestError) -> str:
-    if error.code == "invalid_encrypted_content" or _provider_error_code(error.body) == "invalid_encrypted_content":
-        return "invalid_encrypted_content"
-    if "invalid_encrypted_content" in str(error):
-        return "invalid_encrypted_content"
-    return "could_not_be_verified"
+    return "invalid_encrypted_content" if _names_invalid_encrypted_content(error) else "could_not_be_verified"
 
 
 def _completion_text(completion_kwargs: _CompletionKwargs, key: str) -> str:
@@ -134,10 +138,7 @@ def _sends_encrypted_reasoning(completion_kwargs: _CompletionKwargs) -> bool:
 
 
 def _rejects_encrypted_reasoning(error: litellm.BadRequestError) -> bool:
-    error_message: Final = str(error)
-    return (
-        "invalid_encrypted_content" in error_message or _UNVERIFIED_ENCRYPTED_CONTENT.search(error_message) is not None
-    )
+    return _names_invalid_encrypted_content(error) or _UNVERIFIED_ENCRYPTED_CONTENT.search(str(error)) is not None
 
 
 def _is_rejected_reasoning(error: Exception) -> bool:
@@ -792,7 +793,21 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if openai_request is None:
             raise ValueError("Failed to translate request to OpenAI format")
 
-        completion_kwargs: Final[_CompletionKwargs] = {**openai_request}
+        from litellm.responses.bridge_check import empty_user_turn_for_model_turn_end
+
+        completion_kwargs: Final[_CompletionKwargs] = {
+            **openai_request,
+            "messages": [
+                *openai_request["messages"],
+                *empty_user_turn_for_model_turn_end(
+                    messages[-1] if messages else None,
+                    openai_request["messages"],
+                    model,
+                    target_provider,
+                    provider_kwargs,
+                ),
+            ],
+        }
 
         if stream:
             completion_kwargs["stream"] = stream
