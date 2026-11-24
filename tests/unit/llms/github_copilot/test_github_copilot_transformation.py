@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -15,6 +15,7 @@ from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
 from litellm.llms.github_copilot.common_utils import (
     GetAccessTokenError,
 )
+from litellm.types.llms.openai import AllMessageValues
 
 
 def test_github_copilot_config_get_openai_compatible_provider_info():
@@ -166,17 +167,19 @@ def test_transform_messages_disable_copilot_system_to_assistant(monkeypatch):
 
 
 @pytest.mark.parametrize(("keep_system", "role"), [(True, "system"), (False, "assistant")])
-def test_system_text_blocks_flatten_without_losing_cache_control(monkeypatch, keep_system, role):
+def test_system_text_blocks_flatten_without_losing_cache_control(
+    monkeypatch: pytest.MonkeyPatch, keep_system: bool, role: str
+) -> None:
     monkeypatch.setattr(litellm, "disable_copilot_system_to_assistant", keep_system)
-    block_marker = {"type": "ephemeral"}
-    message_marker = {"type": "ephemeral", "ttl": "1h"}
-    text = [
+    block_marker: Final = {"type": "ephemeral"}
+    message_marker: Final = {"type": "ephemeral", "ttl": "1h"}
+    text: Final = [
         {"type": "text", "text": "Keep the instruction.", "cache_control": block_marker},
         {"type": "text", "text": "Keep the order."},
     ]
-    mixed = [*text, {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}]
-    user = {"role": "user", "content": text}
-    messages = [
+    mixed: Final = [*text, {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}}]
+    user: Final = {"role": "user", "content": text}
+    messages: Final = [
         {"role": "system", "content": text, "name": "policy"},
         {"role": "system", "content": text, "cache_control": message_marker},
         {"role": "system", "content": mixed},
@@ -184,9 +187,11 @@ def test_system_text_blocks_flatten_without_losing_cache_control(monkeypatch, ke
         {"role": "system", "content": [{"type": "text", "text": ""}]},
         user,
     ]
-    original = json.loads(json.dumps(messages))
+    original: Final = json.loads(json.dumps(messages))
 
-    transformed = GithubCopilotConfig().transform_messages(messages, model="github_copilot/claude-sonnet-5.5")
+    transformed: Final = GithubCopilotConfig().transform_messages(
+        cast(list[AllMessageValues], messages), model="github_copilot/claude-sonnet-5.5"
+    )
 
     assert transformed == [
         {
