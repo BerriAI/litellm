@@ -23,6 +23,7 @@ from litellm import verbose_logger
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.router_utils.batch_utils import InMemoryFile
+from litellm.types.llms.anthropic import ANTHROPIC_UNRENDERED_BLOCK_TYPES
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
@@ -166,6 +167,22 @@ def extract_search_results_text(search_results: object) -> str:
     return texts
 
 
+def _rendered_block_text(block: object) -> str:
+    fields: Final = as_str_mapping(block)
+    if fields is None or fields.get("type") in ANTHROPIC_UNRENDERED_BLOCK_TYPES:
+        return ""
+    text: Final = fields.get("text")
+    return text if isinstance(text, str) else ""
+
+
+def _content_text(message: Mapping[str, object]) -> str:
+    content: Final = message.get("content")
+    if isinstance(content, str):
+        return content
+    blocks: Final = as_object_list(content)
+    return "" if blocks is None else "".join(map(_rendered_block_text, blocks))
+
+
 def convert_content_list_to_str(
     message: AllMessageValues | ChatCompletionResponseMessage,
 ) -> str:
@@ -175,19 +192,7 @@ def convert_content_list_to_str(
 
     Motivation: mistral api + azure ai don't support content as a list
     """
-    texts = ""
-    message_content: Final = message.get("content")
-    if message_content:
-        if message_content is not None and isinstance(message_content, list):
-            for c in message_content:
-                text_content = c.get("text")
-                if text_content:
-                    texts += text_content
-        elif message_content is not None and isinstance(message_content, str):
-            texts = message_content
-
-    texts += extract_search_results_text(message.get("search_results"))
-    return texts
+    return _content_text(message) + extract_search_results_text(message.get("search_results"))
 
 
 def get_str_from_messages(messages: list[AllMessageValues]) -> str:

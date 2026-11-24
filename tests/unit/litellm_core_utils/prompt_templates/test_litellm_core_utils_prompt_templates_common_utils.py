@@ -2283,6 +2283,21 @@ def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_w
     assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)
 
 
+def test_get_str_from_messages_leaves_out_the_text_of_an_echoed_fallback_block() -> None:
+    history: Final = [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Hello"}]},
+    ]
+    echoed: Final = [
+        history[0],
+        {
+            "role": "assistant",
+            "content": [{"type": "fallback", "text": "not rendered"}, {"type": "text", "text": "Hello"}],
+        },
+    ]
+    assert get_str_from_messages(echoed) == get_str_from_messages(history)
+
+
 def test_cache_control_is_replaced_by_an_explicit_prompt_cache_breakpoint_on_the_same_block() -> None:
     marked: Final = {"type": "text", "text": "rules", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
 
