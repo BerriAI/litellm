@@ -2353,6 +2353,36 @@ async def test_add_litellm_data_to_request_strips_callback_control_fields(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path, metadata_variable_name",
+    [("/v1/messages", "litellm_metadata"), ("/v1/chat/completions", "metadata")],
+)
+async def test_add_litellm_data_to_request_strips_agentic_loop_controls_from_client_metadata(
+    path, metadata_variable_name
+):
+    forged: Final = {"_agentic_loop_depth": 5, "max_agentic_loops": 9999, "trace_id": "kept"}
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "anthropic-claude",
+            "messages": [{"role": "user", "content": "hello"}],
+            "metadata": dict(forged),
+            "litellm_metadata": dict(forged),
+        },
+        request=_make_request_mock(path, {"Content-Type": "application/json"}),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    forwarded = {**updated.get("metadata", {}), **updated.get("litellm_metadata", {})}
+    assert updated[metadata_variable_name]["trace_id"] == "kept"
+    assert "_agentic_loop_depth" not in forwarded
+    assert "max_agentic_loops" not in forwarded
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("timeout_field", ["timeout", "request_timeout", "stream_timeout"])
 async def test_add_litellm_data_to_request_marks_body_timeout_as_client_side(timeout_field):
     """Router._get_timeout resolves the effective timeout from any of kwargs["timeout"],

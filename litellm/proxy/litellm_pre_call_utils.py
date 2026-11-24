@@ -666,6 +666,8 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
     "error_information",
     "_failover_excluded_ids",
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
+    "_agentic_loop_depth",
+    "max_agentic_loops",
 )
 
 

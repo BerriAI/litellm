@@ -577,7 +577,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         request: Request,
         async_client: httpx.AsyncClient,
         url: str,
-        headers: dict,
+        headers: Mapping[str, str],
         requested_query_params: dict | None = None,
         custom_body: dict[str, object] | None = None,
     ) -> httpx.Response:

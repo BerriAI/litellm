@@ -1747,14 +1747,14 @@ class VertexAIModelInfo(BaseLLMModelInfo):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         raise NotImplementedError("Vertex AI models are not supported yet")
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:

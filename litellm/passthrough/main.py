@@ -313,7 +313,7 @@ async def allm_passthrough_route(
     api_base: str | None = None,
     api_key: str | None = None,
     request_query_params: dict | None = None,
-    request_headers: Mapping[str, str] | None = None,
+    request_headers: Mapping[str, object] | None = None,
     content: RequestContent | None = None,
     data: Mapping[str, object] | None = None,
     files: RequestFiles | None = None,

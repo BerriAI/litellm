@@ -115,7 +115,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         messages: list[AllMessageValues],
         optional_params: dict[str, object],
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         _transformed_nova_request: Final = AmazonConverseConfig.transform_request(
             self,

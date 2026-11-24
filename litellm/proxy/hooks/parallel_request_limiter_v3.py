@@ -122,6 +122,7 @@ if TYPE_CHECKING:
         NativeParallelRequestLimiterState,
     )
     from litellm.types.agents import AgentResponse
+    from litellm.types.responses.streaming_websocket import ResponsesWsQuotaRefund
 
     Span = _Span
     InternalUsageCache = _InternalUsageCache
@@ -1184,7 +1185,7 @@ class ParallelRequestLimiterHook(CustomLogger):
         requested_model: str | None,
         estimated_input_tokens: int,
         estimated_output_tokens: int,
-    ) -> None:
+    ) -> "ResponsesWsQuotaRefund | None":
         """Reserve one WebSocket ``response.create`` frame's tokens against
         the caller's project ITPM/OTPM quota.
 
@@ -1193,11 +1194,12 @@ class ParallelRequestLimiterHook(CustomLogger):
         frames over its lifetime. Without this, a project caller could send
         unlimited high-token generations after a single minimal reservation.
         There is no per-frame post-call hook to reconcile against, so --
-        like the batch rate limiter -- this charges the estimate immediately
-        and never refunds it.
+        like the batch rate limiter -- this charges the estimate immediately.
+        The returned refund gives the charge back for a turn refused before it
+        reached the provider, and is a no-op once the charged window has rolled.
         """
         if user_api_key_dict is None:
-            return
+            return None
         scoped: Final = await run_scoped(
             self,
             user_api_key_dict,
@@ -1212,6 +1214,20 @@ class ParallelRequestLimiterHook(CustomLogger):
         response: Final = _native_reply(scoped.reply)
         if response["overall_code"] == "OVER_LIMIT":
             handle_rate_limit_error(self, response, scoped.descriptors, requested_model)
+        refund_operations: Final = _project_io_refund_operations(
+            scoped.descriptors,
+            response.get("reservation_windows", frozenset()),
+            estimated_input_tokens,
+            estimated_output_tokens,
+            self.window_size,
+        )
+        if not refund_operations:
+            return None
+
+        async def refund() -> None:
+            await increment_reservation_aware_tokens(self, refund_operations, user_api_key_dict.parent_otel_span)
+
+        return refund
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def enforce_token_limits_for_frame(
@@ -2375,6 +2391,33 @@ async def request_capacity(
         cleanup.result()
         if cancellation is not None:
             raise cancellation
+
+
+def _project_io_refund_operations(
+    descriptors: Sequence[RateLimitDescriptor],
+    reservation_windows: frozenset[ReservationWindowIdentity],
+    input_tokens: int,
+    output_tokens: int,
+    ttl: int,
+) -> tuple[WindowGuardedIncrement, ...]:
+    reserved: Final = MappingProxyType(
+        {
+            RateLimitScope(descriptor["key"], descriptor["value"]).counter("tokens"): (
+                input_tokens if descriptor["key"] == PROJECT_ITPM_DESCRIPTOR_KEY else output_tokens
+            )
+            for descriptor in descriptors
+            if descriptor["key"] in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
+        }
+    )
+    return tuple(
+        WindowGuardedIncrement(
+            increment=CounterIncrement(counter=counter, amount=-reserved[counter], ttl=ttl),
+            expected_window_start=window_start,
+            reservation_backend=backend,
+        )
+        for counter, window_start, backend in sorted(reservation_windows)
+        if reserved.get(counter)
+    )
 
 
 def _native_operation(operation: ReservationOperation) -> _NativeOp:

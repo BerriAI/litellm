@@ -472,7 +472,7 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
 
         def validate_environment(
             self,
-            headers: dict,
+            headers: dict[str, object],
             model: str,
             litellm_params: GenericLiteLLMParams | None,
         ) -> dict:
@@ -546,10 +546,10 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
             self,
             model: str,
             input: str | ResponseInputParam,
-            response_api_optional_request_params: dict,
+            response_api_optional_request_params: dict[str, object],
             litellm_params: GenericLiteLLMParams,
-            headers: dict,
-        ) -> dict:
+            headers: dict[str, object],
+        ) -> dict[str, object]:
             if provider.special_handling.get("force_store_false"):
                 response_api_optional_request_params["store"] = False
             return super().transform_responses_api_request(

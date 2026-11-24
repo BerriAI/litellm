@@ -14,7 +14,11 @@ import litellm
 from litellm._logging import CALLER_ERROR_LOG_EXTRA, verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.anthropic.common_utils import context_management_betas, context_management_with_edits
+from litellm.llms.anthropic.common_utils import (
+    context_management_betas,
+    context_management_with_edits,
+    without_unrendered_blocks,
+)
 from litellm.llms.anthropic.count_tokens.transformation import (
     ChatCountTranslationError,
     anthropic_count_fields,
@@ -280,6 +284,7 @@ class BedrockTokenCounter(BaseTokenCounter):
     ) -> TokenCountResponse | None:
         if not messages:
             return None
+        rendered_messages: Final = without_unrendered_blocks(messages)
 
         use_mantle: Final = model_to_use.startswith("bedrock_mantle/")
         counted_model: Final = model_to_use.removeprefix("bedrock_mantle/")
@@ -293,15 +298,15 @@ class BedrockTokenCounter(BaseTokenCounter):
             deployment_config
             if messages_format == "openai"
             and isinstance(deployment_config, litellm.AmazonConverseConfig)
-            and all(map(_has_role, messages))
+            and all(map(_has_role, rendered_messages))
             else None
         )
         counted_input: Final = (
-            messages
+            rendered_messages
             if converse_config is None
             else _converse_messages_as_sent(
                 converse_config,
-                messages,
+                rendered_messages,
                 tools,
                 chat_params,
                 _inference_capability_model(litellm_params, counted_model),
@@ -334,7 +339,7 @@ class BedrockTokenCounter(BaseTokenCounter):
             else await asyncify(messages_count_options)(
                 _claude_messages_translator(litellm_params),
                 counted_model,
-                _COUNTED_MESSAGES.validate_python(messages),
+                _COUNTED_MESSAGES.validate_python(rendered_messages),
                 count_options,
                 litellm_params,
             )

@@ -882,6 +882,9 @@ class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     TOOL_SEARCH_TOOL = "tool_search_tool"
 
 
+ANTHROPIC_UNRENDERED_BLOCK_TYPES: Final = frozenset({"fallback"})
+
+
 class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     """
     Known beta header values for Anthropic.

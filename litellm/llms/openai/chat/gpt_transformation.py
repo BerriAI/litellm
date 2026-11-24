@@ -742,7 +742,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         if not has_file_id_urls(messages, _PDF_URL_STARTS):
             return self.transform_request(model, messages, optional_params, litellm_params, headers)
@@ -1061,7 +1061,7 @@ class OpenAIUnknownModelConfig(OpenAIGPTConfig):
     """A model the openai provider does not recognize is typically a LiteLLM proxy alias, so
     forward reasoning_effort and let the server decide whether it is supported."""
 
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: inherited contract
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: inherited contract
         return super().get_supported_openai_params(model) + ["reasoning_effort"]
 
 
