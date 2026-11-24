@@ -269,7 +269,7 @@ def _model_info_findings(
         if number is None:
             if key not in RouterModelInfo.model_fields:
                 yield Finding("warning", (*info_path, key), f"unexpected value: expected a number, got {value!r}")
-        elif not math.isfinite(number):
+        elif isinstance(number, float) and not math.isfinite(number):
             yield Finding("warning", (*info_path, key), f"unexpected value: must be a finite number, got {value!r}")
         elif number < 0:
             yield Finding("warning", (*info_path, key), f"unexpected value: must not be negative, got {value!r}")

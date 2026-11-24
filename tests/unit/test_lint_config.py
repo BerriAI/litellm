@@ -264,6 +264,7 @@ def _model_entry(litellm_params: str, model_info: str = "") -> str:
                 "unexpected value: must not be negative, got '-1'"
             ],
         ),
+        ("{max_output_tokens: 1" + "0" * 400 + "}", []),
         (
             "{input_cost_per_token: .nan}",
             [
