@@ -3,6 +3,7 @@ import base64
 import contextvars
 import json
 import os
+import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -27,7 +28,7 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
 )
 from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
-from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
+from litellm.integrations.langfuse.trace_id import resolve_trace_id
 from litellm.integrations.langfuse.langfuse_otel_attributes import LangfuseLLMObsOTELAttributes
 from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME, OpenTelemetry, OpenTelemetryConfig
 from litellm.integrations.otel.model.destination import OtelDestination
@@ -1828,7 +1829,7 @@ def _trace_ids_of_calls(*calls: Mapping[str, object]) -> tuple[str, ...]:
 
     def log() -> None:
         for litellm_params in calls:
-            own_copy = {key: dict(value) if isinstance(value, dict) else value for key, value in litellm_params.items()}
+            own_copy: Final = {key: dict(value) if isinstance(value, dict) else value for key, value in litellm_params.items()}
             logger.log_success_event({**CHAT_KWARGS, "litellm_params": own_copy}, _chat_response("ok"), at, at)  # pyright: ignore[reportUnknownMemberType]  # the v1 logger hooks are untyped
 
     try:
@@ -1929,3 +1930,11 @@ def test_a_call_in_a_named_trace_derives_trace_input_and_output_unless_it_only_c
             ("langfuse.trace.input", "langfuse.trace.name", "langfuse.trace.output"),
             (),
         )
+
+
+def test_calls_are_logged_and_grouped_without_the_langfuse_sdk_installed() -> None:
+    named: Final = {"metadata": {"trace_id": "order-1234"}}
+    not_installed: Final = {name: None for name in sys.modules if name == "langfuse" or name.startswith("langfuse.")}
+    with patch.dict(sys.modules, {**not_installed, "langfuse": None, "litellm.integrations.langfuse.langfuse_sdk": None}):
+        assert _trace_ids_of_calls(named, named) == (resolve_trace_id("order-1234"),) * 2
+        assert len(set(_trace_ids_of_calls({}, {}))) == 2

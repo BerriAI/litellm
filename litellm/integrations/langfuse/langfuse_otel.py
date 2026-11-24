@@ -167,7 +167,7 @@ def _caller_trace_anchor(kwargs: Mapping[str, object]) -> tuple[trace.SpanContex
     The parent is never exported and its span id follows from the trace id, so every call of the trace is a sibling.
     A trace id the proxy copied from a session header is not one the caller named, so each of that session's calls
     keeps its own trace."""
-    from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
+    from litellm.integrations.langfuse.trace_id import resolve_trace_id
 
     litellm_params: Final = _as_gettable(kwargs.get("litellm_params"))
     if litellm_params is None:
