@@ -4,15 +4,17 @@ import os
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, Literal, Protocol, overload
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.proxy.management_helpers.audit_logs import with_audit_actor
 
 try:
     from prisma.errors import RecordNotFoundError
@@ -116,16 +118,19 @@ async def _emit_config_override_audit_log(
 
     task: Final = asyncio.create_task(
         create_audit_log_for_update(
-            request_data=LiteLLM_AuditLogs(
-                id=str(uuid.uuid4()),
-                updated_at=datetime.now(timezone.utc),
-                changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
-                changed_by_api_key=user_api_key_dict.api_key,
-                table_name=LitellmTableNames.CONFIG_OVERRIDES_TABLE_NAME,
-                object_id=object_id,
-                action=action,
-                updated_values=json.dumps({"config": _redact_config(after_config)}, default=str),
-                before_value=json.dumps({"config": _redact_config(before_config)}, default=str),
+            request_data=with_audit_actor(
+                LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.CONFIG_OVERRIDES_TABLE_NAME,
+                    object_id=object_id,
+                    action=action,
+                    updated_values=json.dumps({"config": _redact_config(after_config)}, default=str),
+                    before_value=json.dumps({"config": _redact_config(before_config)}, default=str),
+                ),
+                user_api_key_dict,
             )
         )
     )
@@ -209,6 +214,16 @@ class _JsonSchemaField(TypedDict, total=False):
     description: ReadOnly[str]
 
 
+class _ModelJsonSchema(Protocol):
+    @overload
+    def get(
+        self, key: Literal["properties"], default: Mapping[str, _JsonSchemaField]
+    ) -> Mapping[str, _JsonSchemaField]: ...
+
+    @overload
+    def get(self, key: Literal["description"], default: str) -> str: ...
+
+
 def _extract_field_type(field_info: _JsonSchemaField) -> str:
     """Extract the non-null type from a Pydantic v2 JSON schema field."""
     if "type" in field_info:
@@ -221,8 +236,8 @@ def _extract_field_type(field_info: _JsonSchemaField) -> str:
 
 def _build_field_schema(model_class: type[BaseModel]) -> dict[str, object]:
     """Build field_schema dict from a Pydantic model for UI rendering."""
-    schema: Final = TypeAdapter(model_class).json_schema(by_alias=True)
-    raw_properties: Final[Mapping[str, _JsonSchemaField]] = schema.get("properties", {})
+    schema: Final = require_attributes(TypeAdapter(model_class).json_schema(by_alias=True), _ModelJsonSchema, "get")
+    raw_properties: Final = schema.get("properties", {})
     properties: Final = {}
     for field_name, field_info in raw_properties.items():
         properties[field_name] = {

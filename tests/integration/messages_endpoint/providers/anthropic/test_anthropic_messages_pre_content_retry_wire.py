@@ -397,14 +397,14 @@ def test_retry_rejected_before_it_opens_counts_against_the_same_budget(gateway: 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=f"anthropic/{_MODEL}", api_base=wire.url, api_key=_API_KEY, num_retries=1)
         response: Final = gateway.request("POST", "/v1/messages", _body(model, prompt, "deployment"))
-        _assert_rejected_before_content(response, wire, status=500, attempts=2, error="error")
+        _assert_rejected_before_content(response, wire, status=529, attempts=2, error="overloaded_error")
         rows: Final = eventually(
             lambda: _request_rows(gateway, response.headers["x-litellm-call-id"]),
             lambda values: len(values) >= 1,
             seconds=70,
         )
         rejected: Final = gateway.request("POST", "/v1/messages", _body(model, prompt, "request", budget=0))
-        _assert_rejected_before_content(rejected, wire, status=500, attempts=1, error="error")
+        _assert_rejected_before_content(rejected, wire, status=529, attempts=1, error="overloaded_error")
         rejection_rows: Final = eventually(
             lambda: _request_rows(gateway, rejected.headers["x-litellm-call-id"]),
             lambda values: len(values) >= 1,
@@ -413,7 +413,7 @@ def test_retry_rejected_before_it_opens_counts_against_the_same_budget(gateway: 
         estimated_input: Final = rejection_rows[0]["prompt_tokens"]
         assert isinstance(estimated_input, int)
         assert rejection_rows == [{"status": "failure", "prompt_tokens": estimated_input, "completion_tokens": 0}]
-        assert rows == [{"status": "failure", "prompt_tokens": 5 + estimated_input, "completion_tokens": 1}], rows
+        assert rows == [{"status": "failure", "prompt_tokens": 5 + estimated_input, "completion_tokens": 0}], rows
 
 
 def test_non_stream_messages_rejected_with_500_is_retried_per_the_deployment_budget(gateway: Gateway) -> None:
@@ -557,7 +557,7 @@ def test_superseded_attempt_and_its_retry_each_log_their_own_usage(
         delivered: Final = eventually(
             _SinkReader(sink, model).delivered_usage, lambda values: len(values) >= 2, seconds=20
         )
-        assert sorted(delivered) == [("failure", 5, 1), ("success", 5, 3)], delivered
+        assert sorted(delivered) == [("failure", 5, 0), ("success", 5, 3)], delivered
 
 
 def test_every_dropped_attempt_logs_its_own_failure_and_the_request_row_still_bills_the_dropped_usage(
@@ -577,7 +577,7 @@ def test_every_dropped_attempt_logs_its_own_failure_and_the_request_row_still_bi
         delivered: Final = eventually(
             _SinkReader(sink, model).delivered_usage, lambda values: len(values) >= 2, seconds=20
         )
-        assert delivered == (("failure", 5, 1), ("failure", 5, 1)), delivered
+        assert delivered == (("failure", 5, 0), ("failure", 5, 0)), delivered
         rows: Final = eventually(
             lambda: _request_rows(candidate, response.headers["x-litellm-call-id"]),
             lambda values: len(values) >= 1,

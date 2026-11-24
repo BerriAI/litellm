@@ -24,6 +24,7 @@ from integration._support.client import (
 )
 from integration._support.database import read_rows
 from integration._support.mcp import (
+    JsonRpcFailure,
     McpPeer,
     ScriptedTool,
     mcp_peer,
@@ -41,7 +42,6 @@ from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from openai.types.responses.tool_param import Mcp
 from pydantic import JsonValue, TypeAdapter
-
 
 pytestmark: Final = [pytest.mark.xdist_group("mcp_llm_private_gateway"), pytest.mark.shares_worker_state]
 
@@ -589,7 +589,11 @@ def _upstream_model(surface: Surface) -> str:
     }[surface]
 
 
-PRICES: Final[Mapping[str, JsonValue]] = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "num_retries": 0}
+PRICES: Final[Mapping[str, JsonValue]] = {
+    "input_cost_per_token": 0.001,
+    "output_cost_per_token": 0.002,
+    "num_retries": 0,
+}
 
 
 @contextmanager
@@ -645,6 +649,95 @@ def test_auto_approved_gateway_tool_is_listed_executed_once_and_fed_back(gateway
         assert len(requests) == 2, requests
         assert all(rig.tool in names for names in requests), requests
         assert rig.final_text(response.json()) == ANSWER, response.text
+
+
+URL_ELICITATION: Final = {
+    "code": -32042,
+    "message": "This request requires more information.",
+    "data": {"elicitations": [{"mode": "url", "elicitationId": "el-1", "url": "https://consent.example.invalid/a"}]},
+}
+
+
+@contextmanager
+def _elicitation_rig(gateway: Gateway, surface: Surface, error: Mapping[str, JsonValue]) -> Iterator[Rig]:
+    alias: Final = "llm" + uuid.uuid4().hex[:8]
+
+    def plan(body: Mapping[str, JsonValue]) -> Turn:
+        return Turn(f"{alias}-add", json.dumps(ADD), _tool_result_text(body) or "")
+
+    with (
+        scripted_peer(ScriptedTool("add", lambda _: JsonRpcFailure(error))) as peer,
+        wire_server(_model_double(plan)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        server_id: Final = register_mcp(scenario, peer, alias)
+        model: Final = scenario.model(model=_upstream_model(surface), api_base=wire.url + "/v1")
+        peer.drain()
+        yield Rig(gateway, scenario, peer, wire, alias, server_id, model, surface)
+
+
+@pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
+def test_auto_executed_tool_asking_for_url_elicitation_still_hands_the_model_the_flattened_text_and_logs_a_success(
+    gateway: Gateway, surface: Surface
+) -> None:
+    with _elicitation_rig(gateway, surface, URL_ELICITATION) as rig:
+        key: Final = _granted_key(rig)
+        response: Final = rig.send(key, [AUTO])
+        assert response.status_code == 200, response.text
+        tool_rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT status FROM "LiteLLM_SpendLogs" WHERE api_key=%s AND call_type=%s',
+                (sha256(key.encode()).hexdigest(), "call_mcp_tool"),
+            ),
+            lambda found: len(found) >= 1,
+            seconds=70,
+            return_last_on_timeout=True,
+        )
+        assert (rig.final_text(response.json()), [row["status"] for row in tool_rows]) == (
+            "MCPError: This request requires more information.",
+            ["success"],
+        ), response.text
+        assert len(_peer_add_calls(rig.peer)) == 1
+
+
+@pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
+def test_auto_executed_tool_asking_for_url_elicitation_hands_the_model_text_masked_by_the_output_guardrail(
+    gateway: Gateway, surface: Surface
+) -> None:
+    email: Final = f"john.doe.{uuid.uuid4().hex[:8]}@example.com"
+    created: Final = gateway.client.post(
+        "/guardrails",
+        headers={"x-litellm-api-key": gateway.key},
+        json={
+            "guardrail": {
+                "guardrail_name": "llmelicit" + uuid.uuid4().hex[:8],
+                "litellm_params": {
+                    "guardrail": "litellm_content_filter",
+                    "mode": "post_mcp_call",
+                    "default_on": True,
+                    "blocked_words": [{"keyword": email, "action": "MASK"}],
+                },
+            }
+        },
+    )
+    assert created.status_code == 200, created.text
+    try:
+        with _elicitation_rig(
+            gateway, surface, {**URL_ELICITATION, "message": f"Authorize to continue for {email}."}
+        ) as rig:
+            key: Final = _granted_key(rig)
+            handed: Final = eventually(
+                lambda: rig.final_text(rig.send(key, [AUTO]).json()),
+                lambda text: email not in text,
+                seconds=40,
+                return_last_on_timeout=True,
+            )
+            assert handed == "MCPError: Authorize to continue for [KEYWORD_REDACTED].", handed
+    finally:
+        deleted: Final = gateway.client.delete(
+            f"/guardrails/{created.json()['guardrail_id']}", headers={"x-litellm-api-key": gateway.key}
+        )
+        assert deleted.status_code == 200, deleted.text
 
 
 @pytest.mark.parametrize("surface", ("chat", "responses", "messages"))
@@ -917,7 +1010,9 @@ def test_an_open_server_in_another_gateway_cannot_widen_this_gateways_tools(gate
             register_mcp(scenario, local, "open" + uuid.uuid4().hex[:8], allow_all_keys=True)
             listed, called = official_client_outcomes(shared, key, "/mcp", f"{foreign_alias}-add", ADD)
             assert set(listed.tools) == {
-                f"{foreign_alias}-add", f"{foreign_alias}-multiply", f"{foreign_alias}-fail"
+                f"{foreign_alias}-add",
+                f"{foreign_alias}-multiply",
+                f"{foreign_alias}-fail",
             }, listed.tools
             assert called.ok and called.text == str(ADD["a"] + ADD["b"]), called
             assert [call["body"]["params"]["name"] for call in _peer_add_calls(foreign)] == ["add"]
@@ -1528,6 +1623,7 @@ def test_streaming_responses_blocked_by_a_post_call_guardrail_bills_every_round_
         one_round_rows: Final = _model_rows(
             one_round.headers["x-litellm-call-id"], _logs_a_failure_billing(_price(FIRST_ROUND) + FIXED_MARGIN)
         )
+        assert _statuses(one_round_rows) == ["failure"], one_round_rows
         rig.wire.drain()
         response: Final = rig.send(key, [AUTO], stream=True, guardrails=[STREAM_BLOCK])
         assert STREAM_BLOCK_DETAIL in response.text, response.text

@@ -25,7 +25,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy
+from integration._support.process import OwnedState, owned_proxy
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import OpenAI, PermissionDeniedError
@@ -250,15 +250,20 @@ def test_stranger_cannot_read_download_or_delete_another_teams_managed_file(gate
         assert _drained_other_than_model_list_probes(wire) == ()
 
 
-def test_stranger_cannot_retrieve_or_cancel_another_teams_managed_batch(gateway: Gateway) -> None:
+@pytest.mark.timeout(180)
+def test_stranger_cannot_retrieve_or_cancel_another_teams_managed_batch(gateway: Gateway, tmp_path: Path) -> None:
     key: Final = "provider-key-" + uuid.uuid4().hex[:8]
-    with wire_server(_openai_backend()) as wire, gateway.scenario() as scenario:
+    with (
+        owned_proxy(gateway, tmp_path, {"PROXY_BATCH_POLLING_ENABLED": "false"}, state=OwnedState.PRIVATE) as candidate,
+        wire_server(_openai_backend()) as wire,
+        candidate.scenario() as scenario,
+    ):
         model: Final = scenario.model(model="openai/gpt-4o-mini", api_base=wire.url + "/v1", api_key=key)
-        _wait_until_every_worker_serves(gateway, model)
+        _wait_until_every_worker_serves(candidate, model)
         owner: Final = _member(scenario, model)
         stranger: Final = _member(scenario, model)
 
-        uploaded: Final = gateway.request_multipart(
+        uploaded: Final = candidate.request_multipart(
             "/v1/files",
             {"purpose": "batch", "target_model_names": model},
             {"file": (INPUT_FILENAME, _jsonl(model), "application/jsonl")},
@@ -266,7 +271,7 @@ def test_stranger_cannot_retrieve_or_cancel_another_teams_managed_batch(gateway:
         )
         assert uploaded.status_code == 200, uploaded.text
         managed_input: Final = string_value(_json(uploaded)["id"])
-        created: Final = gateway.request(
+        created: Final = candidate.request(
             "POST",
             "/v1/batches",
             {"input_file_id": managed_input, "endpoint": "/v1/chat/completions", "completion_window": "24h"},
@@ -277,13 +282,13 @@ def test_stranger_cannot_retrieve_or_cancel_another_teams_managed_batch(gateway:
         wire.drain()
 
         expected_message: Final = f"User {stranger.user} does not have access to the object {unified_batch}"
-        stranger_get: Final = gateway.request("GET", f"/v1/batches/{unified_batch}", key=stranger.key)
+        stranger_get: Final = candidate.request("GET", f"/v1/batches/{unified_batch}", key=stranger.key)
         assert _error_message(stranger_get, 403) == expected_message, stranger_get.text
-        stranger_cancel: Final = gateway.request("POST", f"/v1/batches/{unified_batch}/cancel", {}, key=stranger.key)
+        stranger_cancel: Final = candidate.request("POST", f"/v1/batches/{unified_batch}/cancel", {}, key=stranger.key)
         assert _error_message(stranger_cancel, 403) == expected_message, stranger_cancel.text
         assert _drained_other_than_model_list_probes(wire) == (), "stranger batch calls must not reach the provider"
 
-        owner_cancel: Final = gateway.request("POST", f"/v1/batches/{unified_batch}/cancel", {}, key=owner.key)
+        owner_cancel: Final = candidate.request("POST", f"/v1/batches/{unified_batch}/cancel", {}, key=owner.key)
         assert owner_cancel.status_code == 200, owner_cancel.text
         assert string_value(_json(owner_cancel)["id"]) == unified_batch, owner_cancel.text
         (cancel_request,) = _drained_other_than_model_list_probes(wire)

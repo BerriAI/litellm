@@ -1,16 +1,18 @@
+import contextlib
 import contextvars
 import copy
 import hashlib
+import json
 import os
 import secrets
 from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, cast, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, cast, get_args
 
 import httpx
-from pydantic import TypeAdapter
+from pydantic import BaseModel, TypeAdapter
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
@@ -20,7 +22,9 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
     redact_nested_match_and_regex_keys,
+    require_attributes,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.guardrails import (
     DEFAULT_GUARDRAIL_STREAM_SCOPE,
@@ -73,6 +77,7 @@ GUARDRAIL_SESSIONS_TARGET: Final = "guardrail_sessions"
 _PRE_CALL_EXECUTED_TOKEN: Final = secrets.token_hex(16)
 _PRE_CALL_RAISED_TOKEN: Final = secrets.token_hex(16)
 _DEPLOYMENT_HOOK_RAN_TOKEN: Final = secrets.token_hex(16)
+_POST_CALL_CHECKED_TOKEN: Final = secrets.token_hex(16)
 
 _GUARDRAIL_BLOCK_STATUS_CODES: Final = frozenset({400, 403, 422})
 
@@ -167,18 +172,28 @@ def _strict_guardrail_modes_enabled() -> bool:
     return True if parsed is None else parsed
 
 
-def get_session_id_from_request_data(request_data: dict[str, Any]) -> str | None:
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+class _PostCallSuccessHook(Protocol):
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: "UserAPIKeyAuth", response: LLMResponseTypes
+    ) -> object: ...
+
+
+def get_session_id_from_request_data(request_data: Mapping[str, object]) -> str | None:
     """Extract session_id from request data (litellm_session_id or metadata)."""
     session_id = request_data.get("litellm_session_id")
     if session_id:
         return str(session_id)
 
-    metadata: Final = request_data.get("metadata") or {}
+    metadata: Final = require_attributes(request_data.get("metadata") or {}, _SupportsGet, "get")
     session_id = metadata.get("session_id")
     if session_id:
         return str(session_id)
 
-    litellm_metadata: Final = request_data.get("litellm_metadata") or {}
+    litellm_metadata: Final = require_attributes(request_data.get("litellm_metadata") or {}, _SupportsGet, "get")
     session_id = litellm_metadata.get("session_id")
     if session_id:
         return str(session_id)
@@ -281,6 +296,95 @@ def _request_carries_marker(data: Mapping[str, object], marker: str | None) -> b
     return False
 
 
+def _record_guardrail_marker(
+    data: dict[str, object],  # mutable-ok: the request payload the marker is recorded on
+    marker: str | None,
+) -> None:
+    if marker is None:
+        return
+    for meta_key in ("metadata", "litellm_metadata"):
+        meta = data.get(meta_key)
+        if isinstance(meta, dict):
+            executed = meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
+            if isinstance(executed, list):
+                if marker not in executed:
+                    executed.append(marker)
+            else:
+                meta[PRE_CALL_EXECUTED_GUARDRAILS_KEY] = [marker]
+            return
+    data["metadata"] = {PRE_CALL_EXECUTED_GUARDRAILS_KEY: [marker]}
+
+
+_RESPONSE_METADATA_KEYS: Final = frozenset(
+    {
+        "id",
+        "created",
+        "created_at",
+        "model",
+        "usage",
+        "usage_info",
+        "system_fingerprint",
+        "_hidden_params",
+        "_response_ms",
+    }
+)
+
+
+def _response_fingerprint(response: object) -> str | None:
+    """Digest of everything but metadata set between layers, so an unknown field counts as content."""
+    try:
+        fields: Final[Mapping[str, object]] = (
+            response.model_dump(mode="json")
+            if isinstance(response, BaseModel)
+            else _REQUEST_FIELDS.validate_python(response)
+        )
+        content: Final = {key: value for key, value in fields.items() if key not in _RESPONSE_METADATA_KEYS}
+        if not content:
+            return None
+        return hashlib.sha256(
+            json.dumps(content, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        ).hexdigest()
+    except (TypeError, ValueError):
+        return None
+
+
+_RESPONSE_GUARDRAIL_CHECKS_KEY: Final = "guardrail_checks"
+
+
+def _str_keyed_dict(value: object) -> Mapping[str, object] | None:
+    if not isinstance(value, dict):
+        return None
+    return cast("Mapping[str, object]", value)  # cast-ok: response bodies and _hidden_params are keyed by field name
+
+
+def _response_hidden_params(response: object) -> Mapping[str, object] | None:
+    as_dict: Final = _str_keyed_dict(response)
+    return _str_keyed_dict(
+        as_dict.get("_hidden_params") if as_dict is not None else getattr(response, "_hidden_params", None)
+    )
+
+
+def _write_response_marker(response: object, marker: str | None) -> None:
+    """Record a check on the response itself, so it survives the router copying request metadata per hop."""
+    if marker is None:
+        return
+    hidden: Final = _response_hidden_params(response)
+    if not isinstance(hidden, dict):
+        return
+    hidden[_RESPONSE_GUARDRAIL_CHECKS_KEY] = tuple(
+        _str_collection(hidden.get(_RESPONSE_GUARDRAIL_CHECKS_KEY)) | {marker}
+    )
+
+
+def _response_carries_marker(response: object, marker: str | None) -> bool:
+    hidden: Final = _response_hidden_params(response)
+    return (
+        marker is not None
+        and hidden is not None
+        and marker in _str_collection(hidden.get(_RESPONSE_GUARDRAIL_CHECKS_KEY))
+    )
+
+
 _REQUEST_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -290,7 +394,12 @@ def _guardrails_listed_in(metadata: object) -> list[str | dict[str, DynamicGuard
     return metadata.get("guardrails") or []
 
 
+class GuardrailSetupError(Exception):
+    pass
+
+
 class CustomGuardrail(CustomLogger):
+    mcp_block_behavior: Literal["tool_result", "raise"] | None = None
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
     use_native_during_call_hook: ClassVar[bool] = False
 
@@ -300,6 +409,8 @@ class CustomGuardrail(CustomLogger):
     records_own_guardrail_information: ClassVar[bool] = False
     logging_only_scope: LoggingOnlyScope | None
     logging_only_continue_on_input_failure: bool
+    scan_tool_descriptions_as_text: bool | None = None
+    scan_tool_calls_as_text: bool | None = None
 
     stream_scope_default: GuardrailStreamScope = DEFAULT_GUARDRAIL_STREAM_SCOPE
     stream_scope_by_hook: tuple[tuple[str, GuardrailStreamScope], ...] = ()
@@ -772,7 +883,7 @@ class CustomGuardrail(CustomLogger):
 
         def _validate_event_hook_list_is_in_supported_event_hooks(
             event_hook: list[GuardrailEventHooks] | list[str],
-            supported_event_hooks: list[GuardrailEventHooks],
+            supported_event_hooks: Sequence[GuardrailEventHooks],
         ) -> None:
             for hook in event_hook:
                 if isinstance(hook, str):
@@ -787,7 +898,7 @@ class CustomGuardrail(CustomLogger):
         if isinstance(event_hook, list):
             _validate_event_hook_list_is_in_supported_event_hooks(event_hook, supported_event_hooks)
         elif isinstance(event_hook, Mode):
-            tag_values_flat: Final[list] = []
+            tag_values_flat: Final[list[str]] = []
             for v in event_hook.tags.values():
                 if isinstance(v, list):
                     tag_values_flat.extend(v)
@@ -802,7 +913,7 @@ class CustomGuardrail(CustomLogger):
                 raise ValueError(f"Event hook {event_hook} is not in the supported event hooks {supported_event_hooks}")
 
     @staticmethod
-    def _get_admin_metadata(data: dict) -> dict:
+    def _get_admin_metadata(data: Mapping[str, object]) -> dict:
         """Return merged admin-configured key and team metadata from the request data.
 
         The proxy may inject admin metadata (user_api_key_metadata,
@@ -823,7 +934,7 @@ class CustomGuardrail(CustomLogger):
             key_meta = meta.get("user_api_key_metadata") or key_meta
         return {**team_meta, **key_meta}
 
-    def get_disable_global_guardrail(self, data: dict) -> bool | None:
+    def get_disable_global_guardrail(self, data: Mapping[str, object]) -> bool | None:
         """
         Returns True if the global guardrail should be disabled.
 
@@ -832,7 +943,7 @@ class CustomGuardrail(CustomLogger):
         """
         return self._get_admin_metadata(data).get("disable_global_guardrails", False)
 
-    def get_opted_out_global_guardrails_from_metadata(self, data: dict) -> list[str]:
+    def get_opted_out_global_guardrails_from_metadata(self, data: Mapping[str, object]) -> list[str]:
         """
         Returns the list of global guardrail names the team/key has opted out of.
 
@@ -912,20 +1023,7 @@ class CustomGuardrail(CustomLogger):
         With ``raised``, records instead that the hook raised as a policy pipeline
         step the pipeline then moved past. The deployment-level hook still runs it.
         """
-        marker: Final = self._pre_call_marker(raised=raised)
-        if marker is None:
-            return
-        for meta_key in ("metadata", "litellm_metadata"):
-            meta = data.get(meta_key)
-            if isinstance(meta, dict):
-                executed = meta.get(PRE_CALL_EXECUTED_GUARDRAILS_KEY)
-                if isinstance(executed, list):
-                    if marker not in executed:
-                        executed.append(marker)
-                else:
-                    meta[PRE_CALL_EXECUTED_GUARDRAILS_KEY] = [marker]
-                return
-        data["metadata"] = {PRE_CALL_EXECUTED_GUARDRAILS_KEY: [marker]}
+        _record_guardrail_marker(data, self._pre_call_marker(raised=raised))
 
     def pre_call_hook_ran_or_raised(self, data: Mapping[str, object]) -> bool:
         """Whether this guardrail's ``async_pre_call_hook`` ran for this request, whatever it decided."""
@@ -1007,9 +1105,12 @@ class CustomGuardrail(CustomLogger):
             ) from e
         return unified_guardrail
 
+    def _post_call_success_hook_target(self) -> _PostCallSuccessHook:
+        return self._deployment_hook_target()
+
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: CallTypes | None
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         # should run guardrail
         litellm_guardrails: Final = kwargs.get("guardrails")
         if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
@@ -1089,24 +1190,25 @@ class CustomGuardrail(CustomLogger):
         enrich_http_exception_with_guardrail_context(result, self)
         raise result
 
+    def runs_post_call_deployment_hook(self, request_data: Mapping[str, object]) -> bool:
+        return (
+            isinstance(request_data.get("guardrails"), list)
+            and self.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is True
+        )
+
     async def async_post_call_success_deployment_hook(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         response: LLMResponseTypes,
         call_type: CallTypes | None,
-    ) -> LLMResponseTypes | None:
+    ) -> object:
         """
         Allow modifying / reviewing the response just after it's received from the deployment.
         """
-        # should run guardrail
-        litellm_guardrails: Final = request_data.get("guardrails")
-        if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
+        if not self.runs_post_call_deployment_hook(request_data):
             return None
 
-        if self.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.post_call) is not True:
-            return None
-
-        target: Final = self._deployment_hook_target()
+        target: Final = self._post_call_success_hook_target()
         try:
             if target is not self:
                 request_data["guardrail_to_apply"] = self  # rebind-ok: dispatch consumes this key
@@ -1118,14 +1220,25 @@ class CustomGuardrail(CustomLogger):
         finally:
             if target is not self:
                 request_data.pop("guardrail_to_apply", None)
-            self._record_deployment_hook_run(
-                cast("dict[str, object]", request_data)  # cast-ok: proxy request payloads are str-keyed
-            )
+            self._record_deployment_hook_run(request_data)
 
-        if not self._is_valid_response_type(result):
-            return None
+        returned: Final = result if self._is_valid_response_type(result) else None
+        if target is self:
+            return returned
+        checked: Final = returned if returned is not None else response
+        marker: Final = self._post_call_check_marker(checked)
+        _record_guardrail_marker(request_data, marker)
+        _write_response_marker(checked, marker)
+        return returned
 
-        return result
+    def _post_call_check_marker(self, response: object) -> str | None:
+        fingerprint: Final = _response_fingerprint(response)
+        return self._marker(f"{_POST_CALL_CHECKED_TOKEN}:{fingerprint}") if fingerprint is not None else None
+
+    def post_call_already_checked(self, data: Mapping[str, object], response: object) -> bool:
+        """Whether a deployment-level hook of this request already ran this guardrail on this exact response."""
+        marker: Final = self._post_call_check_marker(response)
+        return _request_carries_marker(data, marker) or _response_carries_marker(response, marker)
 
     async def async_logging_hook(
         self,
@@ -1227,12 +1340,19 @@ class CustomGuardrail(CustomLogger):
                 except Exception as e:  # noqa: BLE001  # one direction's scan failure must not drop the other direction's verdict
                     verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
             else:
-                await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
+                with contextlib.suppress(UnappliableRequestRewrite):
+                    await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
         if response is None or self.logging_only_scope == "input":
             return
         await output_translation.process_output_response(
             response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
         )
+
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
+        return False
+
+    def supports_scan_tool_calls_as_text(self) -> bool:
+        return False
 
     def supports_scan_only_tool_results(self) -> bool:
         """Whether this guardrail can scan tool-result content.
@@ -1242,6 +1362,12 @@ class CustomGuardrail(CustomLogger):
         ``scan_only_tool_results`` is rejected at initialization instead of
         silently scanning nothing on every request.
         """
+        return True
+
+    def scans_all_response_texts_in_one_call(self) -> bool:
+        return False
+
+    def scans_each_text_separately(self) -> bool:
         return True
 
     def structured_messages_cover_full_request(self) -> bool:
@@ -1769,7 +1895,7 @@ class CustomGuardrail(CustomLogger):
         return None
 
 
-def _append_slg_to_litellm_params(lp: object, entries: list) -> None:
+def _append_slg_to_litellm_params(lp: object, entries: Sequence[object]) -> None:
     """Merge guardrail entries into a single litellm_params dict."""
     if not isinstance(lp, dict):
         return
@@ -1798,7 +1924,7 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
     slg_info: Final = meta_src.get("standard_logging_guardrail_information")
     if not slg_info:
         return
-    entries: Final[list] = slg_info if isinstance(slg_info, list) else [slg_info]
+    entries: Final[list[object]] = slg_info if isinstance(slg_info, list) else [slg_info]
     mcd: Final = getattr(logging_obj, "model_call_details", None) or {}
     _append_slg_to_litellm_params(getattr(logging_obj, "litellm_params", None), entries)
     _append_slg_to_litellm_params(mcd.get("litellm_params"), entries)
@@ -1815,7 +1941,7 @@ def _original_inputs_for(
     kwargs: Mapping[str, object],
     request_data: Mapping[str, object],
     event_type: GuardrailEventHooks | None,
-) -> dict | None:  # mutable-ok: matches _process_response(original_inputs=) signature
+) -> dict[str, object] | None:  # mutable-ok: matches _process_response(original_inputs=) signature
     """Baseline the hook's return value is compared against to decide "allow" vs "mask".
 
     Hooks may edit their argument in place and return it, so the baseline is always a deep
@@ -1884,7 +2010,13 @@ def log_guardrail_information(func):
     async def async_wrapper(*args, **kwargs):
         start_time: Final = datetime.now()  # Move start_time inside the wrapper
         self: Final[CustomGuardrail] = args[0]
-        request_data: Final[dict] = kwargs.get("data") or kwargs.get("request_data") or {}
+        request_data: Final[dict] = (
+            kwargs["data"]
+            if kwargs.get("data") is not None
+            else kwargs["request_data"]
+            if kwargs.get("request_data") is not None
+            else {}
+        )
         event_type: Final = _infer_event_type_from_function_name(func.__name__)
 
         # Store original inputs for comparison (for apply_guardrail functions)
@@ -1924,7 +2056,13 @@ def log_guardrail_information(func):
     def sync_wrapper(*args, **kwargs):
         start_time: Final = datetime.now()  # Move start_time inside the wrapper
         self: Final[CustomGuardrail] = args[0]
-        request_data: Final[dict] = kwargs.get("data") or kwargs.get("request_data") or {}
+        request_data: Final[dict] = (
+            kwargs["data"]
+            if kwargs.get("data") is not None
+            else kwargs["request_data"]
+            if kwargs.get("request_data") is not None
+            else {}
+        )
         event_type: Final = _infer_event_type_from_function_name(func.__name__)
 
         # Store original inputs for comparison (for apply_guardrail functions)

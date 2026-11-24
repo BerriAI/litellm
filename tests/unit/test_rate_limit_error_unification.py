@@ -227,7 +227,7 @@ class TestProxyHookCategoryWiring:
             "litellm.proxy.hooks.parallel_request_limiter",
             "litellm.proxy.hooks.parallel_request_limiter_v3",
             "litellm.proxy.hooks.dynamic_rate_limiter",
-            "litellm.proxy.hooks.dynamic_rate_limiter_v3",
+            "litellm.proxy.hooks.model_capacity_native",
             "litellm.proxy.hooks.batch_rate_limiter",
             "litellm.proxy.hooks.max_budget_per_session_limiter",
             "litellm.proxy.hooks.max_iterations_limiter",
@@ -418,49 +418,6 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         assert e2.headers == {"retry-after": "30"}
         assert "set-cookie" not in (e2.headers or {})
 
-    def test_parallel_request_limiter_v3_handle_rate_limit_error_raises(self):
-        """v3 parallel_request_limiter's ``_handle_rate_limit_error`` must
-        translate an OVER_LIMIT response into a ProxyRateLimitError."""
-        from unittest.mock import MagicMock
-
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-            PROXY_MaxParallelRequestsHandler_v3,
-        )
-
-        handler = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=MagicMock())
-        # Minimal fabricated OVER_LIMIT response. The helper only reads a
-        # handful of fields off `status` and ignores everything else.
-        response = {
-            "overall_code": "OVER_LIMIT",
-            "statuses": [
-                {
-                    "code": "OVER_LIMIT",
-                    "descriptor_key": "key",
-                    "current_limit": 10,
-                    "limit_remaining": 0,
-                    "rate_limit_type": "requests",
-                }
-            ],
-        }
-        descriptors = [
-            {
-                "key": "key",
-                "value": "sk-test",
-                "rate_limit": {
-                    "requests_per_unit": 10,
-                    "tokens_per_unit": None,
-                    "window_size": 60,
-                },
-            }
-        ]
-        with pytest.raises(ProxyRateLimitError) as exc_info:
-            handler._handle_rate_limit_error(response, descriptors)
-        e = exc_info.value
-        assert e.status_code == 429
-        assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
-        # v3 helper attaches retry-after, rate_limit_type and reset_at.
-        assert e.headers is not None
-        assert {"retry-after", "rate_limit_type", "reset_at"}.issubset(e.headers.keys())
 
     @pytest.mark.asyncio
     async def test_max_iterations_limiter_raises_proxy_rate_limit_error(self):
@@ -753,77 +710,73 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         [
             "model_saturation_check",
             "priority_model",
-            "unknown_descriptor_for_fail_closed_fallback",
         ],
     )
     @pytest.mark.asyncio
-    async def test_dynamic_rate_limiter_v3_each_raise_branch(self, descriptor_key):
+    async def test_dynamic_rate_limiter_v3_each_raise_branch(
+        self, descriptor_key: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """
-        Drive each of the three raise branches in v3 dynamic_rate_limiter:
-        model_saturation_check, priority_model, and the fail-closed fallback
-        for an unrecognized descriptor_key. Mocks
-        ``atomic_check_and_increment_by_n`` so the v3 limiter's response
-        directly drives the raise-site selection.
+        Drive the model_saturation_check and priority_model raise branches of
+        the dynamic_rate_limiter_v3 callback at 99% saturation by holding the
+        counter each descriptor checks at its limit. The fail-closed branch for
+        an unrecognized descriptor_key is the Rust test
+        each_raise_branch_unknown_descriptor_for_fail_closed_fallback, since the
+        callback only checks descriptors it builds itself.
         """
-        from unittest.mock import AsyncMock, MagicMock
-
+        from litellm import DualCache, Router
         from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
-            PROXY_DynamicRateLimitHandlerV3,
+        from litellm.redis.stores.rate_limits import RateLimitScope
+        from tests.unit.proxy.hooks.native_capacity_handler import (
+            NativeDynamicRateLimitHandler,
+            saturation_reads,
+            seed_counter,
         )
 
-        # Bypass __init__ — we want to inject a stub v3_limiter without
-        # paying for the full handler setup.
-        handler = PROXY_DynamicRateLimitHandlerV3.__new__(
-            PROXY_DynamicRateLimitHandlerV3
-        )
-        v3_limiter = MagicMock()
-        v3_limiter.window_size = 60
-        v3_limiter.atomic_check_and_increment_by_n = AsyncMock(
-            return_value={
-                "overall_code": "OVER_LIMIT",
-                "statuses": [
+        monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
+        monkeypatch.setattr(litellm, "priority_reservation", {"default": 0.5})
+        handler = NativeDynamicRateLimitHandler(internal_usage_cache=DualCache())
+        handler.update_variables(
+            llm_router=Router(
+                model_list=[
                     {
-                        "code": "OVER_LIMIT",
-                        "descriptor_key": descriptor_key,
-                        "current_limit": 100,
-                        "limit_remaining": 0,
-                        "rate_limit_type": "requests",
+                        "model_name": "gpt-4",
+                        "litellm_params": {
+                            "model": "gpt-4",
+                            "api_key": "sk-test",
+                            "rpm": 100,
+                            "tpm": 1000,
+                        },
                     }
-                ],
-            }
+                ]
+            )
         )
-        handler.v3_limiter = v3_limiter
-        # Stub the descriptor builders so we don't pull in real router state.
-        handler._create_model_tracking_descriptor = MagicMock(  # type: ignore[method-assign]
-            return_value={
-                "key": descriptor_key,
-                "value": "v",
-                "rate_limit": {
-                    "requests_per_unit": 100,
-                    "tokens_per_unit": None,
-                    "window_size": 60,
-                },
-            }
-        )
-        handler._create_priority_based_descriptors = MagicMock(  # type: ignore[method-assign]
-            return_value=[]
-        )
-        model_group_info = MagicMock()
-        model_group_info.tpm = 1000
-        model_group_info.rpm = 100
-
-        with pytest.raises(ProxyRateLimitError) as exc_info:
-            await handler._check_rate_limits(
-                model="gpt-4",
-                model_group_info=model_group_info,
-                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test-v3"),
-                priority="default",
-                saturation=0.99,
+        held_at_limit = {
+            "model_saturation_check": (RateLimitScope("model_saturation_check", "gpt-4"), 100),
+            "priority_model": (RateLimitScope("priority_model", "gpt-4:default"), 50),
+        }
+        scope, limit = held_at_limit[descriptor_key]
+        seed_counter(handler, scope.counter("requests"), limit)
+        user_api_key_dict = UserAPIKeyAuth(api_key="sk-test-v3")
+        user_api_key_dict.metadata = {"priority": "default"}
+        with (
+            handler.saturation_redis().answering(saturation_reads(handler, "gpt-4", 0.99)),
+            pytest.raises(ProxyRateLimitError) as exc_info,
+        ):
+            await handler.async_pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                cache=DualCache(),
+                data={"model": "gpt-4"},
+                call_type="completion",
             )
         e = exc_info.value
         assert e.status_code == 429
         assert e.category == RateLimitErrorCategory.LITELLM_RATE_LIMIT
+        refusal = {
+            "model_saturation_check": "Model capacity reached",
+            "priority_model": "Priority-based rate limit exceeded",
+        }[descriptor_key]
+        assert f"'error': '{refusal}" in str(e.detail)
 
     @pytest.mark.asyncio
     async def test_max_budget_per_session_limiter_raises_proxy_rate_limit_error(
@@ -1162,107 +1115,7 @@ class TestProxyHooksWireTypeCorrectly:
         )
         assert e.rate_limit_type == "requests"
 
-    @pytest.mark.asyncio
-    async def test_v3_limiter_handle_rate_limit_error_propagates_type(self):
-        """
-        End-to-end: feed the v3 limiter's `_handle_rate_limit_error` an
-        OVER_LIMIT response and verify the raised ProxyRateLimitError carries
-        the mapped public RateLimitType. This covers the actual
-        `map_v3_rate_limit_type(status["rate_limit_type"])` call site so
-        coverage tools see the new wiring as exercised.
-        """
-        from unittest.mock import MagicMock
 
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-            PROXY_MaxParallelRequestsHandler_v3,
-        )
-
-        handler = PROXY_MaxParallelRequestsHandler_v3(
-            internal_usage_cache=MagicMock(),
-        )
-        # Minimal RateLimitResponse + descriptors shape that the handler
-        # reads. We only need one OVER_LIMIT status to drive the raise.
-        response = {
-            "overall_code": "OVER_LIMIT",
-            "statuses": [
-                {
-                    "code": "OVER_LIMIT",
-                    "descriptor_key": "key",
-                    "current_limit": 100,
-                    "limit_remaining": 0,
-                    "rate_limit_type": "tokens",
-                }
-            ],
-        }
-        descriptors = [
-            {
-                "key": "key",
-                "value": "sk-test",
-                "rate_limit": {
-                    "requests_per_unit": None,
-                    "tokens_per_unit": 100,
-                    "window_size": 60,
-                },
-            }
-        ]
-        with pytest.raises(ProxyRateLimitError) as exc_info:
-            handler._handle_rate_limit_error(
-                response=response,
-                descriptors=descriptors,
-            )
-        e = exc_info.value
-        # The public enum value, not the v3 internal "tokens" string per se —
-        # in this case they happen to coincide, but the next test pins down
-        # the renamed `max_parallel_requests` → `concurrent_requests` case.
-        assert e.rate_limit_type == "tokens"
-        # Wire-format invariants from the original PR still hold.
-        assert e.headers is not None
-        assert e.headers.get("rate_limit_type") == "tokens"
-        assert e.headers.get("retry-after") is not None
-
-    @pytest.mark.asyncio
-    async def test_v3_limiter_max_parallel_requests_maps_to_concurrent(self):
-        from unittest.mock import MagicMock
-
-        from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-            PROXY_MaxParallelRequestsHandler_v3,
-        )
-
-        handler = PROXY_MaxParallelRequestsHandler_v3(
-            internal_usage_cache=MagicMock(),
-        )
-        response = {
-            "overall_code": "OVER_LIMIT",
-            "statuses": [
-                {
-                    "code": "OVER_LIMIT",
-                    "descriptor_key": "key",
-                    "current_limit": 5,
-                    "limit_remaining": 0,
-                    # v3 internal jargon — must collapse to the public name.
-                    "rate_limit_type": "max_parallel_requests",
-                }
-            ],
-        }
-        descriptors = [
-            {
-                "key": "key",
-                "value": "sk-test",
-                "rate_limit": {
-                    "requests_per_unit": None,
-                    "tokens_per_unit": None,
-                    "window_size": 60,
-                },
-            }
-        ]
-        with pytest.raises(ProxyRateLimitError) as exc_info:
-            handler._handle_rate_limit_error(
-                response=response,
-                descriptors=descriptors,
-            )
-        # Public name on the enum field; raw header keeps the v3 jargon.
-        assert exc_info.value.rate_limit_type == "concurrent_requests"
-        assert exc_info.value.headers["rate_limit_type"] == "max_parallel_requests"
 
     def test_batch_rate_limiter_emits_tokens_type_for_tpm_violation(self):
         from unittest.mock import MagicMock

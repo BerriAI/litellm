@@ -16,9 +16,9 @@ import json
 import re
 import sys
 import time
-from collections.abc import AsyncGenerator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
 from datetime import datetime, timezone
-from itertools import accumulate, groupby
+from itertools import accumulate, chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, NamedTuple, Optional, Protocol, cast
 
@@ -33,7 +33,12 @@ from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.litellm_core_utils.core_helpers import redact_nested_match_and_regex_keys
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    decoded_json_object,
+    iter_items,
+    redact_nested_match_and_regex_keys,
+)
 from litellm.litellm_core_utils.litellm_logging import (
     get_masked_values,
 )
@@ -58,12 +63,14 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import serialize_http_exception_detail
 from litellm.proxy.common_utils.sse_keepalive import keepalive_ping_has_fired
 from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_chunks_as_scanned,
     anthropic_sse_chunks_from_response,
     anthropic_sse_error_frames,
     assemble_anthropic_sse_stream,
     is_raw_sse_stream,
     model_response_text,
 )
+from litellm.proxy.mcp_server.utils import MAX_STRUCTURED_CONTENT_SCAN_DEPTH, json_string_leaves
 from litellm.types.guardrails import (
     BedrockChecksConfigModel,
     BedrockGuardrailOutputScope,
@@ -100,9 +107,9 @@ from litellm.types.utils import (
     Choices,
     GuardrailStatus,
     GuardrailTracingDetail,
+    LLMResponseTypes,
     Message,
     ModelResponse,
-    ModelResponseStream,
     StreamingChoices,
     TextChoices,
 )
@@ -217,7 +224,7 @@ def _redact_pii_matches(response_json: dict) -> dict:
     return redacted if isinstance(redacted, dict) else response_json
 
 
-def _redact_assessment_match_fields(assessments: list[dict]) -> list[dict]:
+def _redact_assessment_match_fields(assessments: list[dict[str, object]]) -> list[dict[str, object]]:
     """
     Redact sensitive match-like fields from blocked assessment summaries.
 
@@ -227,6 +234,12 @@ def _redact_assessment_match_fields(assessments: list[dict]) -> list[dict]:
     """
     redacted: Final = redact_nested_match_and_regex_keys(assessments)
     return redacted if isinstance(redacted, list) else assessments
+
+
+def _redacted_payload(payload: object) -> object:
+    if isinstance(payload, (dict, list)):
+        return redact_nested_match_and_regex_keys(payload)
+    return payload
 
 
 _RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
@@ -246,12 +259,104 @@ def _without_image_bytes(content: Sequence[BedrockContentItem]) -> tuple[Bedrock
     )
 
 
+def bedrock_error_type(response: BedrockGuardrailResponse) -> str | None:
+    error_type: Final = str((response.get("Output") or {}).get("__type", ""))
+    return error_type if "Exception" in error_type else None
+
+
+def _apply_guardrail_status(response: BedrockGuardrailResponse, images_sent: int) -> GuardrailStatus:
+    if bedrock_error_type(response) is not None:
+        return "guardrail_failed_to_respond"
+    images: Final = (response.get("guardrailCoverage") or {}).get("images") or {}
+    return "not_run" if images.get("guarded", 0) < images_sent else "success"
+
+
 def _allowed_dynamic_body_params(params: Mapping[str, object]) -> Mapping[str, object]:
     return {key: value for key, value in params.items() if key not in _BEDROCK_DYNAMIC_BODY_DENYLIST}
 
 
+def _request_messages(
+    request_data: Mapping[str, object],
+) -> "list[AllMessageValues] | None":  # mutable-ok: the type make_bedrock_api_request takes
+    return cast(  # cast-ok: chat messages of the request body
+        "list[AllMessageValues] | None", request_data.get("messages")
+    )
+
+
+def _tool_call_field(value: object, name: str) -> object:
+    if isinstance(value, Mapping):
+        return cast("Mapping[str, object]", value).get(name)  # cast-ok: a tool call mapping is keyed by field name
+    return getattr(value, name, None)
+
+
+def _json_escapes_survive(text: str) -> bool:
+    return json.dumps(text, ensure_ascii=False)[1:-1] != text
+
+
+def _tool_call_arguments_as_text(arguments: object) -> str | None:
+    """Decoded text of tool-call arguments, or None when they nest too deep to scan.
+
+    Arguments are decoded first so JSON escapes cannot hide text from the guardrail;
+    a key or string value that still needs escaping is appended in its raw form.
+    A value a repeated key shadows is scanned too, since the arguments are forwarded as sent.
+    """
+    if not arguments:
+        return ""
+    shadowed: Final[list[object]] = []  # mutable-ok: filled by the JSON decoder hook below
+
+    def keep_shadowed_values(pairs: list[tuple[str, object]]) -> dict[str, object]:  # mutable-ok: json hook types
+        kept: Final = dict(pairs)
+        shadowed.extend(value for key, value in pairs if value is not kept[key])
+        return kept
+
+    try:
+        parsed: Final[object] = (
+            json.loads(arguments, object_pairs_hook=keep_shadowed_values) if isinstance(arguments, str) else arguments
+        )
+    except RecursionError:
+        return None
+    except ValueError:
+        return str(arguments)
+    if isinstance(parsed, str):
+        return parsed
+    decoded: Final[object] = [parsed, *shadowed] if shadowed else parsed
+    leaves: Final = json_string_leaves(decoded)
+    if leaves is None:
+        return None
+    key_parts: Final = chain.from_iterable(path for path, _ in leaves)
+    keys: Final = (part for part in key_parts if isinstance(part, str))
+    values: Final = (text for _, text in leaves)
+    escaped: Final = [text for text in dict.fromkeys(chain(keys, values)) if _json_escapes_survive(text)]
+    return "\n".join((json.dumps(decoded, ensure_ascii=False, default=str), *escaped))
+
+
+def _response_tool_calls(response: ModelResponse) -> list[object]:  # mutable-ok: built here for the scan
+    """Tool calls of every choice, the deprecated `function_call` included."""
+    messages: Final = [choice.message for choice in response.choices]
+    legacy_calls: Final = ({"function": message.function_call} for message in messages if message.function_call)
+    return [*chain.from_iterable(message.tool_calls or [] for message in messages), *legacy_calls]
+
+
+def _tool_call_as_text(tool_call: object) -> str | None:
+    """Name and decoded arguments of a tool call, or None when the arguments cannot be scanned."""
+    wrapped: Final = _tool_call_field(tool_call, "function") or _tool_call_field(tool_call, "custom")
+    source: Final = tool_call if wrapped is None else wrapped
+    name: Final = _tool_call_field(source, "name")
+    arguments: Final = next(
+        (value for key in ("arguments", "input") if (value := _tool_call_field(source, key)) is not None), None
+    )
+    arguments_text: Final = _tool_call_arguments_as_text(arguments)
+    if arguments_text is None:
+        return None
+    return "\n".join(part for part in (name if isinstance(name, str) else "", arguments_text) if part)
+
+
 def _overridden(guardrail: object, name: str) -> bool:
     return getattr(getattr(guardrail, name, None), "__func__", None) is not getattr(BedrockGuardrail, name)
+
+
+def overrides_bedrock_call(guardrail: object) -> bool:
+    return _overridden(guardrail, "apply_guardrail") or _overridden(guardrail, "make_bedrock_api_request")
 
 
 def _is_responses_api_route(request_route: str | None) -> bool:
@@ -604,8 +709,23 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def supports_scan_only_tool_results(self) -> bool:
         return self.experimental_use_latest_role_message_only is not True
 
+    def _supports_tool_text_scans(self) -> bool:
+        """The tool text scans run in apply_guardrail, which the native during_call hook never reaches."""
+        return self.experimental_use_latest_role_message_only is not True and not self._event_hook_is_event_type(
+            GuardrailEventHooks.during_call
+        )
+
+    def supports_scan_tool_descriptions_as_text(self) -> bool:
+        return self._supports_tool_text_scans()
+
+    def supports_scan_tool_calls_as_text(self) -> bool:
+        return self._supports_tool_text_scans()
+
     def supports_structured_messages(self) -> bool:
         return False
+
+    def scans_each_text_separately(self) -> bool:
+        return self.experimental_use_latest_role_message_only is not True
 
     def _prepare_guardrail_messages_for_role(
         self,
@@ -679,7 +799,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         texts: list[str],
         inputs: "GenericGuardrailAPIInputs",
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
     ) -> ApplyGuardrailMessageSelection:
         """
@@ -755,11 +875,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     def _merge_masked_texts(
         self,
-        masked_texts: list,
-        texts: list,
+        masked_texts: list[str],
+        texts: list[str],
         scanned_slice: tuple[int, int] | None,
         scanned_role_subset: bool,
-    ) -> list:
+    ) -> list[str]:
         """
         Reconcile the guardrail's masked output with the flat `texts` list.
 
@@ -857,11 +977,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _prepare_request(
         self,
         credentials,
-        data: dict,
-        optional_params: dict,
+        data: Mapping[str, object],
+        optional_params: object,
         aws_region_name: str,
         api_key: str | None = None,
-        extra_headers: dict | None = None,
+        extra_headers: dict[str, str] | None = None,
         request_path: str | None = None,
     ):
         headers = {"Content-Type": "application/json"}
@@ -924,7 +1044,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         source: Literal["INPUT", "OUTPUT"],
         messages: list[AllMessageValues] | None = None,
         response: litellm.ModelResponse | None = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
         logging_event_type: GuardrailEventHooks | None = None,
     ) -> BedrockGuardrailResponse:
         """Dispatch to the configured Bedrock guardrail API.
@@ -1065,6 +1185,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         merged_response: Final = self._merge_bedrock_guardrail_responses(responses)
         self._log_apply_guardrail_success(
             merged_response=merged_response,
+            images_sent=sum(1 for item in content if "image" in item),
             request_data=request_data,
             event_type=event_type,
             start_time=start_time,
@@ -1217,7 +1338,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         credentials: "Credentials | None",
         aws_region_name: str,
         api_key: str | None,
-        request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
+        request_data: dict[str, object] | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
         completed_chunk_usages: list[BedrockGuardrailUsage],  # mutable-ok: passed through to the single-call layer
@@ -1267,7 +1388,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         credentials: "Credentials | None",
         aws_region_name: str,
         api_key: str | None,
-        request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
+        request_data: dict[str, object] | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
         completed_chunk_usages: list[BedrockGuardrailUsage],  # mutable-ok: billed-chunk usage accumulator
@@ -1322,11 +1443,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
 
         if httpx_response.status_code == 200:
-            _json_response: Final = httpx_response.json()
+            _json_response: Final[BedrockGuardrailResponse] = httpx_response.json()
             # check if the response was flagged
             verbose_proxy_logger.debug(
                 "Bedrock AI response : %s",
-                redact_nested_match_and_regex_keys(_json_response),
+                _redacted_payload(_json_response),
             )
             bedrock_guardrail_response = BedrockGuardrailResponse(**_json_response)
             if self._should_raise_guardrail_blocked_exception(bedrock_guardrail_response):
@@ -1358,8 +1479,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _log_apply_guardrail_attempt(
         self,
         httpx_response: httpx.Response,
-        json_response: dict,  # mutable-ok: raw AWS JSON payload
-        request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
+        json_response: BedrockGuardrailResponse,
+        request_data: dict[str, object] | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
         aws_region_name: str | None,
@@ -1373,7 +1494,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         billed_usages: Final[tuple[BedrockGuardrailUsage, ...]] = tuple(completed_chunk_usages) + (
             (blocking_usage,) if isinstance(blocking_usage, dict) else ()
         )
-        logged_json_response: Final = (
+        logged_json_response: Final[BedrockGuardrailResponse] = (
             {
                 **json_response,
                 "usage": self._sum_usage_counters(billed_usages),
@@ -1387,7 +1508,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
             guardrail_json_response=logged_json_response,
-            request_data=request_data or {},
+            request_data=request_data if request_data is not None else {},
             guardrail_status=self._get_bedrock_guardrail_response_status(response=httpx_response),
             start_time=start_time.timestamp(),
             end_time=datetime.now(timezone.utc).timestamp(),
@@ -1399,6 +1520,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _log_apply_guardrail_success(
         self,
         merged_response: BedrockGuardrailResponse,
+        images_sent: int,
         request_data: dict[str, object] | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
@@ -1417,12 +1539,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
             guardrail_json_response=dict(merged_response),
-            request_data=request_data or {},
-            guardrail_status=(
-                "guardrail_failed_to_respond"
-                if "Exception" in str((merged_response.get("Output") or {}).get("__type", ""))
-                else "success"
-            ),
+            request_data=request_data if request_data is not None else {},
+            guardrail_status=_apply_guardrail_status(merged_response, images_sent),
             start_time=start_time.timestamp(),
             end_time=datetime.now(timezone.utc).timestamp(),
             duration=(datetime.now(timezone.utc) - start_time).total_seconds(),
@@ -1455,7 +1573,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
             guardrail_json_response=json_response,
-            request_data=request_data or {},
+            request_data=request_data if request_data is not None else {},
             guardrail_status="guardrail_failed_to_respond",
             start_time=start_time.timestamp(),
             end_time=datetime.now(timezone.utc).timestamp(),
@@ -1818,7 +1936,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def _sign_and_post(
         self,
         prepared_request: "AWSPreparedRequest",
-        request_data: dict | None,
+        request_data: dict[str, object] | None,
         event_type: GuardrailEventHooks,
         start_time: "datetime",
         log_transport_failure: bool = True,
@@ -1868,7 +1986,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                         self.add_standard_logging_guardrail_information_to_request_data(
                             guardrail_provider=self.guardrail_provider,
                             guardrail_json_response={"error": detail_message},
-                            request_data=request_data or {},
+                            request_data=request_data if request_data is not None else {},
                             guardrail_status="guardrail_failed_to_respond",
                             start_time=start_time.timestamp(),
                             end_time=datetime.now(timezone.utc).timestamp(),
@@ -1883,7 +2001,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider=self.guardrail_provider,
                 guardrail_json_response={"error": str(e)},
-                request_data=request_data or {},
+                request_data=request_data if request_data is not None else {},
                 guardrail_status="guardrail_failed_to_respond",
                 start_time=start_time.timestamp(),
                 end_time=datetime.now(timezone.utc).timestamp(),
@@ -2011,7 +2129,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider=self.guardrail_provider,
                 guardrail_json_response={"error": detail_message},
-                request_data=request_data or {},
+                request_data=request_data if request_data is not None else {},
                 guardrail_status="guardrail_failed_to_respond",
                 start_time=start_time.timestamp(),
                 end_time=datetime.now(timezone.utc).timestamp(),
@@ -2027,7 +2145,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             self.add_standard_logging_guardrail_information_to_request_data(
                 guardrail_provider=self.guardrail_provider,
                 guardrail_json_response={"error": str(e)},
-                request_data=request_data or {},
+                request_data=request_data if request_data is not None else {},
                 guardrail_status="guardrail_failed_to_respond",
                 start_time=start_time.timestamp(),
                 end_time=datetime.now(timezone.utc).timestamp(),
@@ -2045,7 +2163,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
             guardrail_json_response=self._sanitize_invoke_checks_response_for_logging(json_response),
-            request_data=request_data or {},
+            request_data=request_data if request_data is not None else {},
             guardrail_status=self._get_invoke_checks_status(bool(violations)),
             start_time=start_time.timestamp(),
             end_time=datetime.now(timezone.utc).timestamp(),
@@ -2071,42 +2189,38 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         label (category/type) and the numeric score are kept -- never offsets or
         matched text.
         """
-        results: Final[dict[str, Any]] = dict((response or {}).get("results") or {})
-        # (results key, score field, label field, threshold). PII uses
-        # confidenceScore/type; the other two use severityScore/category.
-        check_specs: Final = [
-            (
-                "contentFilter",
-                "severityScore",
-                "category",
-                self.content_filter_threshold,
-            ),
-            ("promptAttack", "severityScore", "category", self.prompt_attack_threshold),
-            (
-                "sensitiveInformation",
-                "confidenceScore",
-                "type",
-                self.pii_confidence_threshold,
-            ),
-        ]
+        results: Final = (response or {}).get("results") or {}
+        score_checks: Final = (
+            ("contentFilter", results.get("contentFilter"), self.content_filter_threshold),
+            ("promptAttack", results.get("promptAttack"), self.prompt_attack_threshold),
+        )
 
         configured_checks: Final = self.checks or {}
         violations: Final[list[BedrockChecksViolation]] = []
-        for check_key, score_field, label_field, threshold in check_specs:
+        for check_key, score_result, threshold in score_checks:
             if threshold is None or check_key not in configured_checks:
                 continue
-            check_result = results.get(check_key) or {}
-            if check_key == "sensitiveInformation" and check_result.get("truncated"):
-                violations.append({"check": check_key, "truncated": True})
-            for entry in check_result.get("results") or []:
-                score = entry.get(score_field)
+            for entry in (score_result or {}).get("results") or []:
+                score = entry.get("severityScore")
                 if isinstance(score, (int, float)) and float(score) >= threshold:
-                    violation: BedrockChecksViolation = (
+                    violations.append(
                         {"check": check_key, "category": entry.get("category"), "severityScore": float(score)}
-                        if score_field == "severityScore"
-                        else {"check": check_key, "type": entry.get("type"), "confidenceScore": float(score)}
                     )
-                    violations.append(violation)
+        pii_threshold: Final = self.pii_confidence_threshold
+        if pii_threshold is not None and "sensitiveInformation" in configured_checks:
+            pii_result: Final = results.get("sensitiveInformation") or {}
+            if pii_result.get("truncated"):
+                violations.append({"check": "sensitiveInformation", "truncated": True})
+            for pii_entry in pii_result.get("results") or []:
+                confidence = pii_entry.get("confidenceScore")
+                if isinstance(confidence, (int, float)) and float(confidence) >= pii_threshold:
+                    violations.append(
+                        {
+                            "check": "sensitiveInformation",
+                            "type": pii_entry.get("type"),
+                            "confidenceScore": float(confidence),
+                        }
+                    )
         return violations
 
     @staticmethod
@@ -2114,12 +2228,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         response: BedrockGuardrailChecksResponse,
     ) -> dict[str, object]:
         """Strip PII location offsets from a checks response before it is logged."""
-        sanitized: Final[dict[str, Any]] = copy.deepcopy(dict(response))
-        sensitive: Final = (sanitized.get("results") or {}).get("sensitiveInformation") or {}
-        for entry in sensitive.get("results") or []:
-            if isinstance(entry, dict):
+        sanitized: Final = copy.deepcopy(dict(response))
+        sensitive: Final = decoded_json_object(
+            decoded_json_object(sanitized.get("results") or {}).get("sensitiveInformation") or {}
+        )
+        for entry in iter_items(sensitive.get("results") or []):
+            if isinstance(pii_entry := as_str_mapping(entry), dict):
                 for key in _BEDROCK_CHECKS_PII_LOCATION_KEYS:
-                    entry.pop(key, None)
+                    pii_entry.pop(key, None)
         return sanitized
 
     @staticmethod
@@ -2165,7 +2281,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             },
         )
 
-    def _check_bedrock_response_for_exception(self, response) -> bool:
+    def _check_bedrock_response_for_exception(self, response: object) -> bool:
         """
         Return True if the Bedrock ApplyGuardrail response indicates an exception.
 
@@ -2213,7 +2329,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
             # Check if the guardrail would block content
             try:
-                _json_response: Final = response.json()
+                _json_response: Final[BedrockGuardrailResponse] = response.json()
                 bedrock_guardrail_response: Final = BedrockGuardrailResponse(**_json_response)
                 if self._should_raise_guardrail_blocked_exception(bedrock_guardrail_response):
                     return "guardrail_intervened"
@@ -2367,7 +2483,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Word policy
             word_policy = assessment.get("wordPolicy")
             if word_policy:
-                word_matches: list[dict] = []
+                word_matches: list[dict[str, object]] = []
                 for w in word_policy.get("customWords") or []:
                     if w.get("action") == "BLOCKED":
                         word_matches.append(
@@ -2393,7 +2509,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Sensitive information policy (PII)
             sensitive_info = assessment.get("sensitiveInformationPolicy")
             if sensitive_info:
-                pii_matches: list[dict] = []
+                pii_matches: list[dict[str, object]] = []
                 for p in sensitive_info.get("piiEntities") or []:
                     if p.get("action") == "BLOCKED":
                         pii_matches.append(
@@ -2567,7 +2683,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         call_type: CallTypesLiteral,
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
     ) -> None:
-        if _overridden(self, "apply_guardrail") or _overridden(self, "make_bedrock_api_request"):
+        if overrides_bedrock_call(self):
             return
         attachments: Final = find_request_attachments(
             data,
@@ -2591,23 +2707,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             await self._scan_document_texts(attachments.document_texts, request_data=data, event_type=event_type)
         if not images:
             return
-        bedrock_request_data: Final = {
-            "source": "INPUT",
-            **_allowed_dynamic_body_params(
-                self.get_guardrail_dynamic_request_body_params(request_data=data)  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # the base helper returns an untyped dict
-            ),
-        }
-        api_key: Final = data.get("api_key")
         try:
             for start in range(0, len(images), _BEDROCK_APPLY_GUARDRAIL_MAX_IMAGES):
-                await self._apply_guardrail_to_content(
-                    content=images[start : start + _BEDROCK_APPLY_GUARDRAIL_MAX_IMAGES],
-                    bedrock_request_data=bedrock_request_data,
-                    api_key=api_key if isinstance(api_key, str) else None,
+                await self.async_scan_images(
+                    images[start : start + _BEDROCK_APPLY_GUARDRAIL_MAX_IMAGES],
                     request_data=data,
+                    source="INPUT",
                     event_type=event_type,
-                    start_time=datetime.now(timezone.utc),
-                    allow_chunking=False,
                 )
         except (HTTPException, ModifyResponseException):
             raise
@@ -2616,6 +2722,29 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 raise
             verbose_proxy_logger.error("Bedrock Guardrail: Failed to scan attachments: %s", str(e))
             raise Exception(f"Bedrock guardrail failed: {e}") from e  # noqa: TRY002  # same error the text scan raises
+
+    async def async_scan_images(
+        self,
+        images: Sequence[BedrockContentItem],
+        request_data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
+        source: Literal["INPUT", "OUTPUT"],
+        event_type: GuardrailEventHooks,
+    ) -> BedrockGuardrailResponse:
+        api_key: Final = request_data.get("api_key")
+        return await self._apply_guardrail_to_content(
+            content=images,
+            bedrock_request_data={
+                "source": source,
+                **_allowed_dynamic_body_params(
+                    self.get_guardrail_dynamic_request_body_params(request_data=request_data)  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # the base helper returns an untyped dict
+                ),
+            },
+            api_key=api_key if isinstance(api_key, str) else None,
+            request_data=request_data,
+            event_type=event_type,
+            start_time=datetime.now(timezone.utc),
+            allow_chunking=False,
+        )
 
     async def _scan_document_texts(
         self,
@@ -2816,9 +2945,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         from litellm.proxy.common_utils.callback_utils import (
             add_guardrail_to_applied_guardrails_header,
@@ -2828,7 +2957,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if self.should_run_guardrail(data=data, event_type=GuardrailEventHooks.post_call) is not True:
             return
 
-        new_messages: Final[list[AllMessageValues] | None] = data.get("messages")
+        new_messages: Final = _request_messages(data)
         if new_messages is None:
             verbose_proxy_logger.warning("Bedrock AI: not running guardrail. No messages in data")
             return
@@ -2926,9 +3055,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
-        request_data: dict,
-    ) -> AsyncGenerator[ModelResponseStream, None]:
+        response: AsyncIterable[object],
+        request_data: dict[str, object],
+    ) -> AsyncGenerator[object, None]:
         """
         Process streaming response chunks.
 
@@ -2986,7 +3115,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
         # Collect all chunks to process them together
         started_at: Final = time.monotonic()
-        all_chunks: Final[list[ModelResponseStream]] = []
+        all_chunks: Final[list[object]] = []
         async for chunk in response:
             all_chunks.append(chunk)
 
@@ -3016,10 +3145,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # yield it as a normal stream, matching the shape a non-streaming block
             # produces.
             try:
+                await self._scan_tool_calls_as_text(
+                    tool_calls=_response_tool_calls(assembled_model_response),
+                    request_data=request_data,
+                    input_type="response",
+                )
                 output_guardrail_response = await self.make_bedrock_api_request(
                     source="OUTPUT",
                     response=assembled_model_response,
-                    messages=request_data.get("messages"),
+                    messages=_request_messages(request_data),
                     request_data=request_data,
                     logging_event_type=GuardrailEventHooks.post_call,
                 )
@@ -3085,7 +3219,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 for sse_chunk in (
                     anthropic_sse_chunks_from_response(assembled_model_response, all_chunks)
                     if model_response_text(assembled_model_response) != pre_guardrail_text
-                    else all_chunks
+                    else anthropic_sse_chunks_as_scanned(assembled_model_response, all_chunks)
                 ):
                     yield sse_chunk
                 return
@@ -3095,18 +3229,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             # Return the reconstructed stream
             async for chunk in mock_response:
                 yield chunk
-        elif raw_sse:
-            # Forwarding an unscannable stream would silently disable the guardrail, so fail closed.
-            # A raise cannot reach the client once a keepalive ping has flushed the headers, so the
-            # refusal travels as a frame, matching how a block is delivered above
-            for error_frame in anthropic_sse_error_frames(
-                f"{self.guardrail_name}: streamed response could not be assembled for scanning, blocking it"
-            ):
-                yield error_frame
-            return
         else:
-            for chunk in all_chunks:
-                yield chunk
+            for unassembled_chunk in (
+                # Forwarding an unscannable stream would silently disable the guardrail, so fail closed.
+                # A raise cannot reach the client once a keepalive ping has flushed the headers, so the
+                # refusal travels as a frame, matching how a block is delivered above
+                anthropic_sse_error_frames(
+                    f"{self.guardrail_name}: streamed response could not be assembled for scanning, blocking it"
+                )
+                if raw_sse
+                else all_chunks
+            ):
+                yield unassembled_chunk
 
     def _extract_masked_texts_from_response(self, bedrock_guardrail_response: BedrockGuardrailResponse) -> list[str]:
         """
@@ -3302,7 +3436,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         texts: list[str],
         inputs: "GenericGuardrailAPIInputs",
-        request_data: dict,
+        request_data: dict[str, object],
     ) -> Optional["GenericGuardrailAPIInputs"]:
         """Scan only the text segments not already seen earlier in this session.
 
@@ -3351,10 +3485,66 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         )
         return inputs
 
+    async def _scan_tool_calls_as_text(
+        self,
+        tool_calls: Sequence[object],
+        request_data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
+        input_type: Literal["request", "response"],
+    ) -> None:
+        """Scan tool-call names and arguments as text, raising when Bedrock blocks or masks them.
+
+        A mask also blocks: writing it into the arguments could leave them invalid JSON, and
+        forwarding the original arguments would let through what the policy masks.
+        """
+        if self.scan_tool_calls_as_text is not True or effective_scan_only_tool_results_for_guardrail(self):
+            return
+        scanned_texts: Final = [_tool_call_as_text(tool_call) for tool_call in tool_calls]
+        if None in scanned_texts:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Content blocked: tool call arguments exceed the maximum nesting depth of "
+                    f"{MAX_STRUCTURED_CONTENT_SCAN_DEPTH} and cannot be scanned by the configured guardrail"
+                },
+            )
+        tool_call_texts: Final = [text for text in scanned_texts if text]
+        if not tool_call_texts:
+            return
+        if input_type == "response":
+            output_scan: Final = await self.make_bedrock_api_request(
+                source="OUTPUT",
+                response=ModelResponse(
+                    choices=[
+                        Choices(index=idx, message=Message(role="assistant", content=text), finish_reason="stop")
+                        for idx, text in enumerate(tool_call_texts)
+                    ]
+                ),
+                messages=_request_messages(request_data),
+                request_data=request_data,
+                logging_event_type=GuardrailEventHooks.post_call,
+            )
+            self._raise_if_tool_call_scan_intervened(output_scan, request_data)
+            return
+        input_scan: Final = await self.make_bedrock_api_request(
+            source="INPUT",
+            messages=[ChatCompletionUserMessage(role="user", content=text) for text in tool_call_texts],
+            request_data=request_data,
+            logging_event_type=GuardrailEventHooks.pre_call,
+        )
+        self._raise_if_tool_call_scan_intervened(input_scan, request_data)
+
+    def _raise_if_tool_call_scan_intervened(
+        self,
+        scan: BedrockGuardrailResponse,
+        request_data: dict[str, object],  # mutable-ok: proxy request body dict
+    ) -> None:
+        if scan.get("action") == "GUARDRAIL_INTERVENED":
+            raise self._get_http_exception_for_blocked_guardrail(scan, request_data)
+
     async def apply_guardrail(
         self,
         inputs: "GenericGuardrailAPIInputs",
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> "GenericGuardrailAPIInputs":
@@ -3381,6 +3571,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         texts: Final = inputs.get("texts") or []
         try:
             verbose_proxy_logger.debug("Bedrock Guardrail: Applying guardrail to %s text(s)", len(texts))
+
+            await self._scan_tool_calls_as_text(
+                tool_calls=inputs.get("tool_calls") or [], request_data=request_data, input_type=input_type
+            )
 
             if input_type == "request":
                 incremental_result: Final = await self._apply_incremental_request_scan(
@@ -3435,7 +3629,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     bedrock_response = await self.make_bedrock_api_request(
                         source="OUTPUT",
                         response=synthetic_response,
-                        messages=request_data.get("messages"),
+                        messages=_request_messages(request_data),
                         request_data=request_data,
                         logging_event_type=_log_hook,
                     )

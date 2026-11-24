@@ -80,7 +80,9 @@ def _stream(message_id: str) -> bytes:
     )
 
 
-def _proxy_config(directory: Path, model: str, upstream_url: str) -> Path:
+def _proxy_config(
+    directory: Path, model: str, upstream_url: str, litellm_settings: dict[str, JsonValue] | None = None
+) -> Path:
     config: Final = directory / "streamed_usage_cost_config.yaml"
     config.write_text(
         json.dumps(
@@ -109,7 +111,9 @@ def _proxy_config(directory: Path, model: str, upstream_url: str) -> Path:
                     "proxy_batch_write_at": 1,
                     "proxy_batch_polling_interval": 1,
                 },
-                "litellm_settings": {"include_cost_in_streaming_usage": True},
+                "litellm_settings": {"include_cost_in_streaming_usage": True}
+                if litellm_settings is None
+                else litellm_settings,
                 "router_settings": {"disable_cooldowns": True},
             }
         )
@@ -176,3 +180,49 @@ def test_bedrock_messages_stream_usage_cost_matches_recorded_spend_with_custom_c
             "cost": pytest.approx(recorded_spend),
         }, (streamed_usage, rows, response.text)
         assert len(wire.drain()) == 1
+
+
+@pytest.mark.timeout(180)
+def test_messages_stream_header_opts_into_usage_cost_while_global_flag_is_off(gateway: Gateway, tmp_path: Path) -> None:
+    model: Final = f"{BEDROCK_MODEL}-{uuid.uuid4().hex}"
+    message_ids: Final = {"plain": f"msg_{uuid.uuid4().hex}", "opted in": f"msg_{uuid.uuid4().hex}"}
+
+    def respond(request: Request) -> Reply:
+        assert request.target == f"/model/{BEDROCK_MODEL}/invoke-with-response-stream", request.target
+        prompt: Final = json.loads(request.body)["messages"][0]["content"]
+        return Reply(content_type="application/vnd.amazon.eventstream", chunks=(_stream(message_ids[prompt]),))
+
+    def message_delta_usage(prompt: str, headers: dict[str, str]) -> dict[str, float]:
+        response: Final = candidate.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": OUTPUT_TOKENS,
+                "stream": True,
+            },
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+        message_delta: Final = next(event for event in _data_events(response.text) if event["type"] == "message_delta")
+        return STREAMED_USAGE.validate_python(message_delta["usage"])
+
+    with wire_server(respond) as wire:
+        config: Final = _proxy_config(tmp_path, model, wire.url, litellm_settings={})
+        with owned_proxy(gateway, tmp_path, {}, config=config) as candidate:
+            plain_usage: Final = message_delta_usage("plain", {})
+            opted_in_usage: Final = message_delta_usage(
+                "opted in", {"x-litellm-include-cost-in-streaming-usage": "true"}
+            )
+            rows: Final = eventually(
+                lambda: read_rows(
+                    'SELECT spend FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (message_ids["opted in"],)
+                ),
+                lambda values: len(values) == 1,
+                seconds=70,
+            )
+        assert "cost" not in plain_usage, plain_usage
+        assert opted_in_usage["cost"] == pytest.approx(float(str(rows[0]["spend"]))), (opted_in_usage, rows)
+        assert opted_in_usage["cost"] == pytest.approx(EXPECTED_SPEND), opted_in_usage
+        assert len(wire.drain()) == 2

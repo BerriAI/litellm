@@ -1,0 +1,76 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT g.access_group_name AS \"access_group_name!\",\n       g.spend AS \"spend!\",\n       b.max_budget,\n       b.budget_limits AS \"budget_limits?: RawJson\",\n       b.budget_id AS \"budget_id?\"\nFROM \"LiteLLM_ModelAccessGroupBudgetTable\" AS g\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b ON g.budget_id = b.budget_id\nWHERE g.access_group_name = ANY($1)\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "access_group_name!",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ModelAccessGroupBudgetTable\"",
+            "name": "access_group_name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "spend!",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ModelAccessGroupBudgetTable\"",
+            "name": "spend"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "max_budget",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "max_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "budget_limits?: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "budget_limits"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "budget_id?",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "budget_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "1c1d3a63f77fd6b1625b7d1317f65984a11c3d55f6045a8ef9c40d6fa6efdf82"
+}

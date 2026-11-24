@@ -353,9 +353,172 @@ def _shape_reply(identity: str, stream: bool) -> Reply:
             "/chat/completions",
             id="A5-responses-list-input",
         ),
+        pytest.param(
+            "json-object-two-blocks",
+            "/v1/chat/completions",
+            "databricks-meta-llama-3-3-70b-instruct",
+            {
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]}
+                ],
+                "response_format": {"type": "json_object"},
+            },
+            [{"role": "user", "content": "Reply in JSON"}],
+            False,
+            "/chat/completions",
+            id="A6-chat-json-object-two-blocks-joined",
+        ),
+        pytest.param(
+            "json-object-two-blocks-stream",
+            "/v1/chat/completions",
+            "databricks-qwen35-122b-a10b",
+            {
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]}
+                ],
+                "response_format": {"type": "json_object"},
+                "stream": True,
+            },
+            [{"role": "user", "content": "Reply in JSON"}],
+            False,
+            "/chat/completions",
+            id="A7-chat-stream-json-object-two-blocks-joined",
+        ),
+        pytest.param(
+            "json-object-history",
+            "/v1/chat/completions",
+            "databricks-meta-llama-3-3-70b-instruct",
+            {
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "Code: A"}, {"type": "text", "text": "BC"}]},
+                    {"role": "assistant", "content": "Got it."},
+                    {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]},
+                ],
+                "response_format": {"type": "json_object"},
+            },
+            [
+                {"role": "user", "content": [{"type": "text", "text": "Code: A"}, {"type": "text", "text": "BC"}]},
+                {"role": "assistant", "content": "Got it."},
+                {"role": "user", "content": "Reply in JSON"},
+            ],
+            False,
+            "/chat/completions",
+            id="A8-chat-json-object-earlier-turns-kept",
+        ),
+        pytest.param(
+            "json-object-trailing-system",
+            "/v1/chat/completions",
+            "databricks-meta-llama-3-3-70b-instruct",
+            {
+                "messages": [
+                    {"role": "user", "content": "Say hi"},
+                    {"role": "system", "content": [{"type": "text", "text": "Alpha"}, {"type": "text", "text": " rule."}]},
+                    {"role": "system", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]},
+                ],
+                "response_format": {"type": "json_object"},
+            },
+            [{"role": "user", "content": "Say hi"}, {"role": "system", "content": "Alpha rule.\n\nReply in JSON"}],
+            False,
+            "/chat/completions",
+            id="A8b-chat-json-object-trailing-system-keeps-break",
+        ),
+        pytest.param(
+            "json-object-drop-params-cache-control",
+            "/v1/chat/completions",
+            "databricks-meta-llama-3-3-70b-instruct",
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Reply"},
+                            {"type": "text", "text": " in JSON", "cache_control": {"type": "ephemeral"}},
+                        ],
+                    }
+                ],
+                "response_format": {"type": "json_object"},
+                "drop_params": True,
+            },
+            [{"role": "user", "content": "Reply in JSON"}],
+            False,
+            "/chat/completions",
+            id="A8c-chat-json-object-drop-params-drops-cache-control",
+        ),
+        pytest.param(
+            "json-object-trailing-thinking-turn",
+            "/v1/chat/completions",
+            "databricks-meta-llama-3-3-70b-instruct",
+            {
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "thinking_blocks": [{"type": "thinking", "thinking": "Plan.", "signature": "sig"}],
+                    },
+                ],
+                "response_format": {"type": "json_object"},
+            },
+            [{"role": "user", "content": "Reply in JSON"}],
+            False,
+            "/chat/completions",
+            id="A8d-chat-json-object-trailing-thinking-turn-dropped",
+        ),
+        pytest.param(
+            "json-object-external-endpoint",
+            "/v1/chat/completions",
+            "openai-gpt-external",
+            {
+                "messages": [
+                    {"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]}
+                ],
+                "response_format": {"type": "json_object"},
+            },
+            [{"role": "user", "content": [{"type": "text", "text": "Reply"}, {"type": "text", "text": " in JSON"}]}],
+            False,
+            "/chat/completions",
+            id="A8e-chat-json-object-external-endpoint-kept-as-sent",
+        ),
+        pytest.param(
+            "json-object-responses-two-parts",
+            "/v1/responses",
+            "databricks-qwen35-122b-a10b",
+            {
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Reply"}, {"type": "input_text", "text": " in JSON"}],
+                    }
+                ],
+                "text": {"format": {"type": "json_object"}},
+            },
+            [{"role": "user", "content": "Reply in JSON"}],
+            False,
+            "/chat/completions",
+            id="A9-responses-json-object-two-parts-joined",
+        ),
+        pytest.param(
+            "json-object-responses-trailing-reasoning",
+            "/v1/responses",
+            "databricks-qwen35-122b-a10b",
+            {
+                "input": [
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Reply"}, {"type": "input_text", "text": " in JSON"}],
+                    },
+                    {"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "Plan."}]},
+                ],
+                "text": {"format": {"type": "json_object"}},
+            },
+            [{"role": "user", "content": "Reply in JSON"}],
+            False,
+            "/chat/completions",
+            id="A9b-responses-json-object-trailing-reasoning-dropped",
+        ),
     ],
 )
-def test_databricks_non_claude_single_text_block_reaches_upstream_as_string(
+def test_databricks_non_claude_plain_text_content_reaches_upstream_as_string(
     gateway: Gateway,
     case: str,
     endpoint: str,
@@ -365,7 +528,7 @@ def test_databricks_non_claude_single_text_block_reaches_upstream_as_string(
     responses_mode: bool,
     upstream_path: str,
 ) -> None:
-    identity: Final = f"databricks-single-text-{case}-{uuid.uuid4().hex}"
+    identity: Final = f"databricks-plain-text-{case}-{uuid.uuid4().hex}"
     streaming: Final = request_body.get("stream") is True
 
     def respond(request: Request) -> Reply:
@@ -1453,7 +1616,7 @@ def test_databricks_non_string_text_block_is_rejected_before_reaching_upstream(g
         )
         received: Final = wire.drain()
     assert response.status_code == 400, response.text
-    assert "'int' object has no attribute 'strip'" in response.text
+    assert "A text content block needs a string 'text', got int" in response.text
     assert received == ()
 
 
