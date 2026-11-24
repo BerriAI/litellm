@@ -1062,6 +1062,23 @@ class _RefusedAfterBillingImageHandler(litellm.CustomLLM):
             message="refused after billing", llm_provider="image-regression", model=model
         )
 
+    async def aimage_edit(
+        self,
+        model: str,
+        image: object,
+        prompt: str | None,
+        model_response: ImageResponse,
+        api_key: str | None,
+        api_base: str | None,
+        optional_params: Mapping[str, object],
+        logging_obj: object,
+        timeout: object | None = None,
+        client: object | None = None,
+    ) -> ImageResponse:
+        return await self.aimage_generation(
+            model, prompt or "", model_response, api_key, api_base, optional_params, logging_obj
+        )
+
 
 def _router_retrying_refusals(retries: int) -> litellm.Router:
     return litellm.Router(
@@ -1095,8 +1112,14 @@ def test_a_refusal_served_on_retry_bills_both_attempts(monkeypatch: pytest.Monke
     assert capture.logged_usage == (16, 2240)
 
 
+@pytest.mark.parametrize(
+    "send",
+    (pytest.param(_send_generation, id="generations"), pytest.param(_send_edit, id="edits")),
+)
 @pytest.mark.parametrize("retries", (1, 2))
-def test_a_failure_spend_row_keeps_every_refused_retry(monkeypatch: pytest.MonkeyPatch, retries: int) -> None:
+def test_a_failure_spend_row_keeps_every_refused_retry(
+    monkeypatch: pytest.MonkeyPatch, retries: int, send: Callable[[TestClient], httpx.Response]
+) -> None:
     from litellm.proxy import proxy_server
 
     attempts: Final = retries + 1
@@ -1110,7 +1133,7 @@ def test_a_failure_spend_row_keeps_every_refused_retry(monkeypatch: pytest.Monke
 
     try:
         with TestClient(app, raise_server_exceptions=False) as client:
-            response: Final = _send_generation(client)
+            response: Final = send(client)
     finally:
         ProxyLogging._callback_capabilities_cache.clear()
 

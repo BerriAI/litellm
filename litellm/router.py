@@ -5843,12 +5843,19 @@ class Router:
             )
 
             custom_llm_provider: Final = provider_for_generic_call(data)
+            deployment_fields: Final[Mapping[str, object]] = (
+                deployment_fields_for_shared_logging(
+                    ATTEMPT_FIELDS.validate_python(data), ATTEMPT_FIELDS.validate_python(kwargs)
+                )
+                if handler_name == "aimage_edit"
+                else data
+            )
 
             response_kwargs: Final = {
                 **(
                     store_search_params(_LITELLM_PARAMS_ADAPTER.validate_python(data))
                     if original_generic_function in self._vector_store_search_handlers
-                    else data
+                    else deployment_fields
                 ),
                 "caching": self.cache_responses,
                 **kwargs,
