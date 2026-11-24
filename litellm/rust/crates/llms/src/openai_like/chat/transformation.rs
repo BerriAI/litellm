@@ -243,7 +243,8 @@ fn without_null_fields(message: ChatMessage) -> ChatMessage {
 
 /// `OpenAILikeChatConfig._sanitize_usage_obj`: a provider that reports a null
 /// `*_tokens` entry breaks OpenAI clients, so nulls become 0. Python scrubs
-/// every top-level usage key ending in `_tokens`, and its `Usage` reads a missing count as 0.
+/// every top-level usage key ending in `_tokens`, its `Usage` reads a missing count as 0,
+/// and the proxy drops every other null from the reply.
 fn sanitize_usage(usage: Map<String, Value>) -> Map<String, Value> {
     let missing_counts: Vec<&str> = USAGE_COUNTS
         .into_iter()
@@ -251,9 +252,10 @@ fn sanitize_usage(usage: Map<String, Value>) -> Map<String, Value> {
         .collect();
     usage
         .into_iter()
-        .map(|(key, value)| match value {
-            Value::Null if key.ends_with("_tokens") => (key, json!(0)),
-            value => (key, value),
+        .filter_map(|(key, value)| match value {
+            Value::Null if key.ends_with("_tokens") => Some((key, json!(0))),
+            Value::Null => None,
+            value => Some((key, value)),
         })
         .chain(
             missing_counts
@@ -303,8 +305,9 @@ fn host_usage(usage: Map<String, Value>) -> ChatCompletionsUsage {
 
 const DETAILS: [&str; 2] = ["prompt_tokens_details", "completion_tokens_details"];
 
-/// Python drops a null detail and reads a `*_tokens` detail the way it reads a top-level count,
-/// where it fails on a detail that does not parse and this drops only that detail.
+/// Python drops a null detail and a `cache_type` that is not a string, and reads a `*_tokens`
+/// detail the way it reads a top-level count, where it fails on a detail that does not parse and
+/// this drops only that detail.
 fn readable_details(details: Map<String, Value>) -> Map<String, Value> {
     details
         .into_iter()
@@ -314,6 +317,7 @@ fn readable_details(details: Map<String, Value>) -> Map<String, Value> {
                 Some((key, Value::Object(readable_details(nested))))
             }
             _ if key == "cache_creation_token_details" => None,
+            value if key == "cache_type" => value.is_string().then_some((key, value)),
             value if key.ends_with("_tokens") => {
                 whole_number(&value).map(|count| (key, json!(count)))
             }
@@ -904,6 +908,23 @@ mod tests {
         json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4, "completion_tokens_details": {}})
     )]
     fn reads_a_count_the_way_python_coerces_it(#[case] usage: Value, #[case] expected: Value) {
+        assert_eq!(usage_of(Some(usage)), expected);
+    }
+
+    #[rstest]
+    #[case::null_host_fields(
+        json!({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "cost": null, "server_tool_use": null}),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4})
+    )]
+    #[case::cache_type_that_is_not_a_string(
+        json!({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "prompt_tokens_details": {"cached_tokens": 1, "cache_type": 1}}),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4, "prompt_tokens_details": {"cached_tokens": 1}})
+    )]
+    #[case::cache_type_string(
+        json!({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4, "prompt_tokens_details": {"cached_tokens": 1, "cache_type": "ephemeral"}}),
+        json!({"completion_tokens": 1, "prompt_tokens": 3, "total_tokens": 4, "prompt_tokens_details": {"cached_tokens": 1, "cache_type": "ephemeral"}})
+    )]
+    fn drops_what_python_drops_from_host_usage(#[case] usage: Value, #[case] expected: Value) {
         assert_eq!(usage_of(Some(usage)), expected);
     }
 
