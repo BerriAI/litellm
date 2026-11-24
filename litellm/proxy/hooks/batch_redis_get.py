@@ -83,7 +83,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
             )
             verbose_proxy_logger.debug(traceback.format_exc())
 
-    async def async_get_cache(self, *args, **kwargs) -> object | None:
+    async def async_get_cache(self, *args: object, **kwargs) -> object | None:
         """
         - Check if the cache key is in-memory
 

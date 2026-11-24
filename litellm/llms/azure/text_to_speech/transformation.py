@@ -233,7 +233,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         optional_params: dict,
         voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: dict = {},
+        kwargs: dict[str, object] = {},
     ) -> tuple[str | None, dict]:
         """
         Map OpenAI parameters to Azure AVA TTS parameters

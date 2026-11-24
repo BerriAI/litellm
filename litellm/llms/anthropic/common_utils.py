@@ -59,6 +59,7 @@ from litellm.llms.anthropic.wif import (
     get_anthropic_wif_token,
     warn_if_static_credential_shadows_federation,
 )
+from litellm.llms.base_llm.auth.provider_oauth import oauth_credential_free_headers, provider_oauth_token
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
@@ -608,9 +609,11 @@ def _strip_bedrock_id_suffixes(model: str) -> str:
 
 _SERVER_OWNED_AUTH_HEADERS: Final = SpecialHeaders.litellm_credential_header_names()
 _WIF_ELIGIBILITY_ATTR: Final = "_workload_identity_eligible"
+_REQUEST_MAPPING: Final = TypeAdapter(dict[str, object])
+_HeaderValue = TypeVar("_HeaderValue")
 
 
-def without_caller_credential_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+def without_caller_credential_headers(headers: Mapping[str, _HeaderValue]) -> Mapping[str, _HeaderValue]:
     """``headers`` minus every header that authenticates the caller to litellm.
 
     The deployment's own credential is applied on top of the result, so a caller-supplied
@@ -1711,38 +1714,34 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         return headers
 
-    def validate_environment(
+    def _resolve_chat_auth(
         self,
-        headers: dict[str, str],
+        headers: dict[str, str],  # mutable-ok: the consumer OAuth tier updates the caller's headers
         model: str,
-        messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        api_key: str | None = None,
-        api_base: str | None = None,
-    ) -> dict:
-        params_mapping: Final = litellm_params if isinstance(litellm_params, dict) else None
-        if api_base is None and params_mapping is not None:
-            api_base = params_mapping.get("api_base")
-        use_bearer_for_custom_base: Final[bool] = bool(
-            params_mapping is not None and params_mapping.get("use_bearer_for_custom_base", False)
+        params_mapping: Mapping[str, object] | None,
+        api_key: str | None,
+        api_base: str | None,
+    ) -> tuple[Mapping[str, str], str | None, str | None, bool]:
+        allows_wif: Final = config_allows_workload_identity(self)
+        provider_token: Final = (
+            provider_oauth_token(params_mapping, api_base=api_base, provider="anthropic", model=model)
+            if params_mapping is not None and allows_wif
+            else None
         )
-        # Check for Anthropic OAuth token in headers
-        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
-        api_key = AnthropicModelInfo.get_api_key(api_key)
-        # Resolve auth_token from ANTHROPIC_AUTH_TOKEN if api_key is not set
-        auth_token: str | None = None
-        if api_key is None:
-            auth_token = AnthropicModelInfo.get_auth_token()
-        if (api_key is not None or auth_token is not None) and config_allows_workload_identity(self):
+        if provider_token is not None:
+            return oauth_credential_free_headers(headers), None, provider_token, False
+
+        _, oauth_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
+        configured_key: Final = AnthropicModelInfo.get_api_key(oauth_key)
+        auth_token: Final = AnthropicModelInfo.get_auth_token() if configured_key is None else None
+        if (configured_key is not None or auth_token is not None) and allows_wif:
             warn_if_static_credential_shadows_federation(params_mapping, model)
         wif_token: Final = (
             get_anthropic_wif_token(params_mapping, api_base, model)
-            if api_key is None and auth_token is None and config_allows_workload_identity(self)
+            if configured_key is None and auth_token is None and allows_wif
             else None
         )
-        wif_minted: Final = wif_token is not None
-        resolved_api_key: Final = wif_token if wif_token is not None else api_key
+        resolved_api_key: Final = wif_token if wif_token is not None else configured_key
         if resolved_api_key is None and auth_token is None:
             raise litellm.AuthenticationError(
                 message=(
@@ -1756,7 +1755,31 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 llm_provider="anthropic",
                 model=model,
             )
+        return headers, resolved_api_key, auth_token, wif_token is not None
 
+    def validate_environment(
+        self,
+        headers: dict[str, str],
+        model: str,
+        messages: list[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        api_key: str | None = None,
+        api_base: str | None = None,
+    ) -> dict:
+        params_mapping: Final = (
+            _REQUEST_MAPPING.validate_python(litellm_params) if isinstance(litellm_params, dict) else None
+        )
+        configured_base: Final = params_mapping.get("api_base") if params_mapping is not None else None
+        resolved_api_base: Final = (
+            configured_base if api_base is None and isinstance(configured_base, str) else api_base
+        )
+        use_bearer_for_custom_base: Final = bool(
+            params_mapping is not None and params_mapping.get("use_bearer_for_custom_base", False)
+        )
+        resolved_headers, resolved_api_key, auth_token, wif_minted = self._resolve_chat_auth(
+            headers, model, params_mapping, api_key, resolved_api_base
+        )
         tools: Final = optional_params.get("tools")
         prompt_caching_set: Final = self.is_cache_control_set(messages=messages)
         computer_tool_used: Final = self.is_computer_tool_used(tools=tools)
@@ -1771,8 +1794,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         effort_used = self.is_effort_used(optional_params=optional_params, model=model, custom_llm_provider="anthropic")
         code_execution_tool_used: Final = self.is_code_execution_tool_used(tools=tools)
         container_with_skills_used: Final = self.is_container_with_skills_used(optional_params=optional_params)
+        beta_header: Final = resolved_headers.get("anthropic-beta")
         user_anthropic_beta_headers: Final = self._get_user_anthropic_beta_headers(
-            anthropic_beta_header=headers.get("anthropic-beta")
+            anthropic_beta_header=beta_header if isinstance(beta_header, str) else None
         )
         anthropic_headers: Final = self.get_anthropic_headers(
             computer_tool_used=computer_tool_used,
@@ -1794,12 +1818,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             effort_used=effort_used,
             code_execution_tool_used=code_execution_tool_used,
             container_with_skills_used=container_with_skills_used,
-            api_base=api_base,
+            api_base=resolved_api_base,
             use_bearer_for_custom_base=use_bearer_for_custom_base,
             wif_minted=wif_minted,
         )
 
-        caller_headers: Final = without_caller_credential_headers(headers) if wif_minted else headers
+        caller_headers: Final = without_caller_credential_headers(resolved_headers) if wif_minted else resolved_headers
 
         return {**caller_headers, **anthropic_headers}
 

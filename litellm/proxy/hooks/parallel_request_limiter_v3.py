@@ -1390,7 +1390,7 @@ class ParallelRequestLimiterHook(CustomLogger):
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_logging_hook(
         self,
-        kwargs: dict,
+        kwargs: dict[str, object],
         result: object,
         call_type: str,
     ) -> tuple[dict, object]:
