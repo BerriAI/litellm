@@ -106,7 +106,7 @@ def _decoded_json(text: str) -> object:
 
 
 def _text_arguments(text: str, tree: object) -> _Arguments:
-    if isinstance(tree, _JsonObject) or as_object_list(tree) is not None:
+    if isinstance(tree, (_JsonObject, str)) or as_object_list(tree) is not None:
         return _JsonTextArguments(tree)
     return _RawTextArguments(text)
 

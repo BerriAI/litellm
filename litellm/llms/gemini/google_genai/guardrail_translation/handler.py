@@ -5,7 +5,8 @@ Extracts text from generateContent requests (systemInstruction.parts[].text
 and contents[].parts[].text) and responses (candidates[].content.parts[].text),
 applies the guardrail, and
 writes the guardrailed text back in place. A guardrail that opts into
-scan_tool_calls_as_text also gets every functionCall part as a tool call, and
+scan_tool_calls_as_text also gets every functionCall part as a tool call, with
+the values a streamed call sends in partialArgs joined per JSON path, and
 masked request arguments are written back into functionCall.args. Requests and
 responses may be dicts (wire format) or google-genai SDK objects; streaming
 chunks may additionally be raw SSE frames, which are scanned for detection (a
@@ -13,9 +14,9 @@ blocking guardrail raises) without rewriting the frames.
 """
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
+from itertools import chain, pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, TypeAlias
 
@@ -44,6 +45,12 @@ if TYPE_CHECKING:
 _EMPTY_REQUEST_DATA: Final[Mapping[str, object]] = MappingProxyType({})
 _DECODED_JSON: Final = TypeAdapter(object)
 _OBJECT_SEQUENCE: Final = TypeAdapter(tuple[object, ...])
+_PARTIAL_ARG_VALUE_FIELDS: Final = (
+    ("stringValue", "string_value"),
+    ("numberValue", "number_value"),
+    ("boolValue", "bool_value"),
+    ("nullValue", "null_value"),
+)
 
 
 def _field(container: object, name: str) -> object | None:
@@ -105,9 +112,13 @@ def _response_text_parts(response: object) -> tuple[object, ...]:
     return tuple(part for candidate in candidates for part in _content_text_parts(_field(candidate, "content")))
 
 
+def _camel_or_snake(container: object, camel_case: str, snake_case: str) -> object | None:
+    camel_value: Final = _field(container, camel_case)
+    return camel_value if camel_value is not None else _field(container, snake_case)
+
+
 def _function_call_in_part(part: object) -> object | None:
-    camel_case: Final = _field(part, "functionCall")
-    return camel_case if camel_case is not None else _field(part, "function_call")
+    return _camel_or_snake(part, "functionCall", "function_call")
 
 
 def _content_function_calls(content: object) -> tuple[object, ...]:
@@ -127,22 +138,66 @@ def _function_calls_in_response(response: object) -> tuple[object, ...]:
     return tuple(chain.from_iterable(_content_function_calls(_field(candidate, "content")) for candidate in candidates))
 
 
-def _tool_call(function_call: object, index: int) -> ChatCompletionToolCallChunk:
-    name: Final = _field(function_call, "name")
-    call_id: Final = _field(function_call, "id")
+def _continues(function_call: object) -> bool:
+    return _camel_or_snake(function_call, "willContinue", "will_continue") is True
+
+
+def _function_call_groups(function_calls: Sequence[object]) -> tuple[tuple[object, ...], ...]:
+    starts: Final = tuple(
+        index for index in range(len(function_calls)) if index == 0 or not _continues(function_calls[index - 1])
+    )
+    return tuple(tuple(function_calls[start:end]) for start, end in pairwise((*starts, len(function_calls))))
+
+
+def _partial_args(function_call: object) -> Sequence[object]:
+    return as_object_list(_camel_or_snake(function_call, "partialArgs", "partial_args")) or ()
+
+
+def _partial_arg_path(partial_arg: object) -> str:
+    path: Final = _camel_or_snake(partial_arg, "jsonPath", "json_path")
+    return path if isinstance(path, str) else ""
+
+
+def _partial_arg_text(partial_arg: object) -> str:
+    values: Final = (_camel_or_snake(partial_arg, camel, snake) for camel, snake in _PARTIAL_ARG_VALUE_FIELDS)
+    value: Final = next((value for value in values if value is not None), None)
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+
+
+def _partial_texts_at(partial_args: Sequence[object], path: str) -> Iterator[str]:
+    return (_partial_arg_text(partial_arg) for partial_arg in partial_args if _partial_arg_path(partial_arg) == path)
+
+
+def _partial_values_by_path(group: Sequence[object]) -> Mapping[str, str]:
+    partial_args: Final = tuple(chain.from_iterable(_partial_args(function_call) for function_call in group))
+    paths: Final = tuple(dict.fromkeys(_partial_arg_path(partial_arg) for partial_arg in partial_args))
+    return {path: "".join(_partial_texts_at(partial_args, path)) for path in paths}
+
+
+def _group_field(group: Sequence[object], name: str) -> str | None:
+    values: Final = (_field(function_call, name) for function_call in group)
+    return next((value for value in values if isinstance(value, str) and value), None)
+
+
+def _group_arguments(group: Sequence[object]) -> Mapping[str, object]:
+    args: Final = (as_str_mapping(_field(function_call, "args")) or {} for function_call in group)
+    return {**dict(chain.from_iterable(mapping.items() for mapping in args)), **_partial_values_by_path(group)}
+
+
+def _tool_call(group: Sequence[object], index: int) -> ChatCompletionToolCallChunk:
     return ChatCompletionToolCallChunk(
-        id=call_id if isinstance(call_id, str) else None,
+        id=_group_field(group, "id"),
         type="function",
         function={
-            "name": name if isinstance(name, str) else None,
-            "arguments": json.dumps(_field(function_call, "args") or {}, ensure_ascii=False, default=str),
+            "name": _group_field(group, "name"),
+            "arguments": json.dumps(_group_arguments(group), ensure_ascii=False, default=str),
         },
         index=index,
     )
 
 
-def _tool_calls_payload(function_calls: Sequence[object]) -> tuple[ChatCompletionToolCallChunk, ...]:
-    return tuple(_tool_call(function_call, index) for index, function_call in enumerate(function_calls))
+def _tool_calls_payload(groups: Sequence[Sequence[object]]) -> tuple[ChatCompletionToolCallChunk, ...]:
+    return tuple(_tool_call(group, index) for index, group in enumerate(groups))
 
 
 def _write_function_call_args(function_call: object, args: Mapping[str, object]) -> None:
@@ -160,8 +215,14 @@ def _guardrailed_args(returned_tool_call: object, guardrail_name: str | None) ->
     return parsed
 
 
+def _writable_function_call(group: Sequence[object], guardrail_name: str | None) -> object:
+    if len(group) != 1 or _partial_args(group[0]):
+        raise unappliable_request_rewrite(guardrail_name)
+    return group[0]
+
+
 def _write_back_function_calls(
-    function_calls: Sequence[object],
+    groups: Sequence[Sequence[object]],
     sent_tool_calls: Sequence[ChatCompletionToolCallChunk],
     returned_tool_calls: Sequence[object] | None,
     guardrail_name: str | None,
@@ -171,12 +232,14 @@ def _write_back_function_calls(
     if len(returned_tool_calls) != len(sent_tool_calls):
         raise unappliable_request_rewrite(guardrail_name)
     changed: Final = tuple(
-        (function_call, returned)
-        for function_call, sent, returned in zip(function_calls, sent_tool_calls, returned_tool_calls, strict=True)
+        (group, returned)
+        for group, sent, returned in zip(groups, sent_tool_calls, returned_tool_calls, strict=True)
         if stream_item_field(stream_item_field(returned, "function"), "arguments") != sent["function"].get("arguments")
     )
-    for function_call, returned in changed:
-        _write_function_call_args(function_call, _guardrailed_args(returned, guardrail_name))
+    for group, returned in changed:
+        _write_function_call_args(
+            _writable_function_call(group, guardrail_name), _guardrailed_args(returned, guardrail_name)
+        )
 
 
 def _part_texts(text_parts: Sequence[object]) -> tuple[str, ...]:
@@ -563,13 +626,15 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> object:
         text_parts: Final = _request_text_parts(data)
-        function_calls: Final = (
-            _request_function_calls(data) if effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply) else ()
+        call_groups: Final = (
+            _function_call_groups(_request_function_calls(data))
+            if effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply)
+            else ()
         )
-        if not text_parts and not function_calls:
+        if not text_parts and not call_groups:
             verbose_proxy_logger.debug("Google GenAI guardrail: no request text found, skipping")
             return data
-        tool_calls: Final = _tool_calls_payload(function_calls)
+        tool_calls: Final = _tool_calls_payload(call_groups)
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=_guardrail_inputs(_part_texts(text_parts), tool_calls, data.get("model")),
             request_data=data,
@@ -578,7 +643,7 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         )
         _write_back_texts(text_parts, guardrailed_inputs.get("texts"))
         _write_back_function_calls(
-            function_calls,
+            call_groups,
             tool_calls,
             as_object_list(stream_item_field(guardrailed_inputs, "tool_calls")) if tool_calls else None,
             guardrail_to_apply.guardrail_name,
@@ -594,12 +659,12 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         request_data: Mapping[str, object] | None = None,
     ) -> object:
         text_parts: Final = _response_text_parts(response)
-        function_calls: Final = (
-            _function_calls_in_response(response)
+        call_groups: Final = (
+            _function_call_groups(_function_calls_in_response(response))
             if effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply)
             else ()
         )
-        if not text_parts and not function_calls:
+        if not text_parts and not call_groups:
             verbose_proxy_logger.debug("Google GenAI guardrail: no response text found, skipping")
             return response
         guardrail_request_data: Final = self._merged_request_data(
@@ -610,7 +675,7 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         )
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=_guardrail_inputs(
-                _part_texts(text_parts), _tool_calls_payload(function_calls), guardrail_request_data.get("model")
+                _part_texts(text_parts), _tool_calls_payload(call_groups), guardrail_request_data.get("model")
             ),
             request_data=guardrail_request_data,
             input_type="response",
@@ -629,12 +694,12 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         stream_transform_sink: StreamTransformSink | None = None,
     ) -> object:
         accumulated_text: Final = _accumulated_stream_text(responses_so_far)
-        function_calls: Final = (
-            _accumulated_stream_function_calls(responses_so_far)
+        call_groups: Final = (
+            _function_call_groups(_accumulated_stream_function_calls(responses_so_far))
             if effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply)
             else ()
         )
-        if not accumulated_text and not function_calls:
+        if not accumulated_text and not call_groups:
             return responses_so_far
         guardrail_request_data: Final = self._merged_request_data(
             request_data=request_data,
@@ -644,7 +709,7 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         )
         _guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=_guardrail_inputs(
-                (accumulated_text,) if accumulated_text else (), _tool_calls_payload(function_calls), None
+                (accumulated_text,) if accumulated_text else (), _tool_calls_payload(call_groups), None
             ),
             request_data=guardrail_request_data,
             input_type="response",

@@ -4,7 +4,7 @@ Tests for the Google GenAI generateContent guardrail translation handler.
 
 import copy
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from types import SimpleNamespace
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
@@ -296,33 +296,37 @@ class _ToolCallGuardrail(CustomGuardrail):
 FUNCTION_CALL_PART: Final = {"functionCall": {"name": "send_payment", "args": {"card": "4111 1111", "amount": 12.5}}}
 
 
-async def _scan_request(guardrail: _ToolCallGuardrail) -> None:
+async def _scan_request(guardrail: _ToolCallGuardrail, part: Mapping[str, object] = FUNCTION_CALL_PART) -> None:
     await GoogleGenAIGenerateContentHandler().process_input_messages(
-        data={"model": "gemini-2.5-flash", "contents": [{"role": "model", "parts": [FUNCTION_CALL_PART]}]},
+        data={"model": "gemini-2.5-flash", "contents": [{"role": "model", "parts": [part]}]},
         guardrail_to_apply=guardrail,
     )
 
 
-async def _scan_response(guardrail: _ToolCallGuardrail) -> None:
+async def _scan_response(guardrail: _ToolCallGuardrail, part: Mapping[str, object] = FUNCTION_CALL_PART) -> None:
     await GoogleGenAIGenerateContentHandler().process_output_response(
-        response={"candidates": [{"content": {"role": "model", "parts": [FUNCTION_CALL_PART]}}]},
+        response={"candidates": [{"content": {"role": "model", "parts": [part]}}]},
         guardrail_to_apply=guardrail,
     )
 
 
-async def _scan_sse_stream(guardrail: _ToolCallGuardrail) -> None:
-    frame: Final = "data: " + json.dumps({"candidates": [{"content": {"parts": [FUNCTION_CALL_PART]}}]}) + "\r\n\r\n"
+async def _scan_sse_stream(guardrail: _ToolCallGuardrail, part: Mapping[str, object] = FUNCTION_CALL_PART) -> None:
+    frame: Final = "data: " + json.dumps({"candidates": [{"content": {"parts": [part]}}]}) + "\r\n\r\n"
     await GoogleGenAIGenerateContentHandler().process_output_streaming_response(
         responses_so_far=[frame[:20], frame[20:].encode("utf-8")], guardrail_to_apply=guardrail
     )
 
 
-async def _scan_object_stream(guardrail: _ToolCallGuardrail) -> None:
-    part: Final = SimpleNamespace(
-        text=None, function_call=SimpleNamespace(name="send_payment", args={"card": "4111 1111", "amount": 12.5})
+async def _scan_object_stream(
+    guardrail: _ToolCallGuardrail, part: Mapping[str, object] = FUNCTION_CALL_PART
+) -> None:
+    function_call: Final = part.get("functionCall")
+    sdk_part: Final = SimpleNamespace(
+        text=part.get("text"),
+        function_call=SimpleNamespace(**function_call) if isinstance(function_call, dict) else None,
     )
     await GoogleGenAIGenerateContentHandler().process_output_streaming_response(
-        responses_so_far=[SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[part]))])],
+        responses_so_far=[SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[sdk_part]))])],
         guardrail_to_apply=guardrail,
     )
 
@@ -348,6 +352,20 @@ async def test_function_call_parts_reach_the_guardrail_as_tool_calls_when_opted_
     (tool_call,) = inputs["tool_calls"]
     assert tool_call["function"]["name"] == "send_payment"
     assert json.loads(tool_call["function"]["arguments"]) == {"card": "4111 1111", "amount": 12.5}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scan", SCANS)
+async def test_text_without_function_calls_reaches_an_opted_in_guardrail(
+    scan: Callable[[_ToolCallGuardrail, Mapping[str, object]], Awaitable[None]],
+) -> None:
+    guardrail: Final = _ToolCallGuardrail()
+
+    await scan(guardrail, {"text": "Pay the invoice"})
+
+    (inputs,) = guardrail.seen
+    assert inputs["texts"] == ["Pay the invoice"]
+    assert not inputs.get("tool_calls")
 
 
 @pytest.mark.asyncio
@@ -407,3 +425,71 @@ async def test_function_call_rewrite_the_request_cannot_carry_is_rejected(
         )
 
     assert data["contents"][0]["parts"][0] == FUNCTION_CALL_PART
+
+
+STREAMED_FUNCTION_CALL_PARTS: Final = (
+    {"functionCall": {"name": "send_payment", "willContinue": True}},
+    {
+        "functionCall": {
+            "partialArgs": [{"jsonPath": "$.card", "stringValue": "4111 ", "willContinue": True}],
+            "willContinue": True,
+        }
+    },
+    {"functionCall": {"partialArgs": [{"jsonPath": "$.card", "stringValue": "1111"}]}},
+    {"functionCall": {"name": "search", "args": {"query": "invoices"}}},
+)
+SNAKE_CASE_FIELDS: Final = {"functionCall": "function_call", "partialArgs": "partial_args", "willContinue": "will_continue"}
+
+
+def _sse_frames(parts: Sequence[object]) -> list[object]:
+    return ["data: " + json.dumps({"candidates": [{"content": {"parts": [part]}}]}) + "\r\n\r\n" for part in parts]
+
+
+def _sdk_value(value: object) -> object:
+    if isinstance(value, dict):
+        return SimpleNamespace(
+            **{SNAKE_CASE_FIELDS.get(key, key): item if key == "args" else _sdk_value(item) for key, item in value.items()}
+        )
+    if isinstance(value, list):
+        return [_sdk_value(item) for item in value]
+    return value
+
+
+def _sdk_chunks(parts: Sequence[object]) -> list[object]:
+    return [
+        SimpleNamespace(candidates=[SimpleNamespace(content=SimpleNamespace(parts=[_sdk_value({"text": None, **part})]))])
+        for part in parts
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("chunks", [_sse_frames, _sdk_chunks], ids=["sse-stream", "object-stream"])
+async def test_streamed_partial_function_call_args_reach_the_guardrail_whole(
+    chunks: Callable[[Sequence[object]], list[object]],
+) -> None:
+    guardrail: Final = _ToolCallGuardrail()
+
+    await GoogleGenAIGenerateContentHandler().process_output_streaming_response(
+        responses_so_far=chunks(STREAMED_FUNCTION_CALL_PARTS), guardrail_to_apply=guardrail
+    )
+
+    (inputs,) = guardrail.seen
+    assert [(call["function"]["name"], call["function"]["arguments"]) for call in inputs["tool_calls"]] == [
+        ("send_payment", json.dumps({"$.card": "4111 1111"})),
+        ("search", json.dumps({"query": "invoices"})),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_masked_partial_function_call_args_in_the_request_are_rejected() -> None:
+    data: Final = {
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "model", "parts": copy.deepcopy(list(STREAMED_FUNCTION_CALL_PARTS))}],
+    }
+
+    with pytest.raises(UnappliableRequestRewrite):
+        await GoogleGenAIGenerateContentHandler().process_input_messages(
+            data=data, guardrail_to_apply=_ToolCallGuardrail(rewrite=_masking_card_numbers)
+        )
+
+    assert data["contents"][0]["parts"] == list(STREAMED_FUNCTION_CALL_PARTS)

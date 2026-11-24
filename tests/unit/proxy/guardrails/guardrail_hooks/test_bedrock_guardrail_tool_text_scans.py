@@ -43,6 +43,7 @@ BLOCK: Final = {
     "outputs": [{"text": "Blocked"}],
     "assessments": [{"topicPolicy": {"topics": [{"name": "Leak", "type": "DENY", "action": "BLOCKED"}]}}],
 }
+EMBEDDED_ERROR: Final = {"Output": {"__type": "com.amazon.coral.service#UnknownOperationException"}}
 MASK: Final = {
     "action": "GUARDRAIL_INTERVENED",
     "outputs": [{"text": "{CREDIT_DEBIT_CARD_NUMBER}"}],
@@ -341,6 +342,11 @@ async def test_unmasked_tool_calls_stay_untouched_beside_a_masked_one() -> None:
         ),
         pytest.param(_function_tool_call(NUMERIC_CARD), _function_tool_call(MASKED_CARD), id="freeform-json-number"),
         pytest.param(
+            _function_tool_call(f'"pay \\u0034{NUMERIC_CARD[1:]} now"'),
+            _function_tool_call(json.dumps(f"pay {MASKED_CARD} now")),
+            id="escaped-json-string",
+        ),
+        pytest.param(
             ChatCompletionMessageToolCall(
                 id="call_1", type="function", function=Function(name="send_payment", arguments=f'["{NUMERIC_CARD}"]')
             ),
@@ -568,8 +574,14 @@ async def test_message_text_spelling_out_a_tool_call_does_not_mark_the_tool_call
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bedrock_params", [{"masked": CARD}, {"blocked": CARD}], ids=["masked", "blocked"])
-async def test_tool_call_the_policy_intervened_on_is_scanned_again_next_turn(bedrock_params: Mapping[str, str]) -> None:
+@pytest.mark.parametrize(
+    "bedrock_params",
+    [{"masked": CARD}, {"blocked": CARD}, {"answer": EMBEDDED_ERROR}],
+    ids=["masked", "blocked", "embedded-error"],
+)
+async def test_tool_call_without_a_clean_verdict_is_scanned_again_next_turn(
+    bedrock_params: Mapping[str, object],
+) -> None:
     bedrock: Final = _Bedrock(**bedrock_params)
     guardrail: Final = _guardrail(scan_tool_calls=True, bedrock=bedrock, only_scan_new_messages=True)
     session_id: Final = str(uuid.uuid4())
@@ -808,10 +820,11 @@ async def _scanned_history_tool_call(arguments: object) -> str:
 
 
 @pytest.mark.asyncio
-async def test_json_escaped_tool_call_arguments_are_scanned_decoded() -> None:
+@pytest.mark.parametrize("template", ['{{"note": "{}"}}', '"{}"'], ids=["object", "string-root"])
+async def test_json_escaped_tool_call_arguments_are_scanned_decoded(template: str) -> None:
     escaped: Final = "".join(f"\\u{ord(char):04x}" for char in SECRET)
 
-    assert SECRET in await _scanned_history_tool_call(f'{{"note": "{escaped}"}}')
+    assert SECRET in await _scanned_history_tool_call(template.format(escaped))
 
 
 @pytest.mark.asyncio

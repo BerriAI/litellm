@@ -209,7 +209,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
-            guardrailed_tool_calls: Final = guardrailed_inputs.get("tool_calls", [])
+            returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
+            guardrailed_tool_calls: Final = returned_tool_calls or []
             guardrailed_tools: Final = guardrailed_inputs.get("tools")
             if guardrailed_tools is not None:
                 data["tools"] = (
@@ -251,8 +252,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 has_server_or_legacy_calls: Final = bool(server_tool_call_tasks or legacy_function_call_tasks)
                 if (
                     has_server_or_legacy_calls
-                    and guardrailed_tool_calls
-                    and len(guardrailed_tool_calls) != len(tool_calls_with_server_calls)
+                    and returned_tool_calls is not None
+                    and len(returned_tool_calls) != len(tool_calls_with_server_calls)
                 ):
                     raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
                 if guardrailed_tool_calls:

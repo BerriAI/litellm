@@ -3562,7 +3562,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             to_scan, maskable_positions(to_scan), request_data, "request"
         )
         if response.get("action") != "GUARDRAIL_INTERVENED":
-            await self.mark_texts_scanned(texts=keys, request_data=request_data, cache=cache, cache_scope="tool_calls")
+            if bedrock_error_type(response) is None:
+                await self.mark_texts_scanned(
+                    texts=keys, request_data=request_data, cache=cache, cache_scope="tool_calls"
+                )
             return tool_calls
         masked: Final = MappingProxyType(
             dict(

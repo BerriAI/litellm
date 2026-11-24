@@ -2570,6 +2570,7 @@ class _LegacyFunctionCallRewriter(CustomGuardrail):
             [{"type": "function", "function": {"name": "send_payment", "arguments": "{}"}}] * 2, id="call-count-changed"
         ),
         pytest.param([{"type": "function", "function": "send_payment(card=<masked>)"}], id="function-not-an-object"),
+        pytest.param([], id="call-dropped"),
     ],
 )
 async def test_legacy_function_call_rewrite_the_request_cannot_carry_is_rejected(
