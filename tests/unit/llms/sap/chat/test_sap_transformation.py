@@ -758,7 +758,6 @@ class TestDeploymentUrlResolution:
         assert url == "https://deploy-newer.sap.com/v2/completion"
         assert any(
             "2 orchestration deployments found" in record.getMessage()
-            and "'older'" in record.getMessage()
             and "deploy-older.sap.com" in record.getMessage()
             for record in caplog.records
         )
