@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Final, Literal, cast
 from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.exceptions import ModelNotMappedError
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix, is_bedrock_arn
 from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_BATCH_PREFIX,
@@ -32,6 +33,7 @@ from litellm.types.utils import LiteLLMBatch, LlmProviders, Usage
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
     CommonBatchFilesUtils,
+    get_cached_model_info,
     merge_bedrock_aws_request_params,
     resolve_s3_bucket_owner,
     resolve_s3_encryption_key_id,
@@ -80,6 +82,21 @@ def _validate_bedrock_tags(raw_tags: object) -> list[BedrockTag]:
             "Invalid 'bedrock_tags' value. Expected a list of {'key': <str>, 'value': <str>} dicts, "
             f"e.g. [{{'key': 'team', 'value': 'genai'}}]. Got: {raw_tags!r}"
         ) from e
+
+
+def openai_endpoint_for_bedrock_job_model(
+    model_id: str | None,
+) -> Literal["/v1/chat/completions", "/v1/embeddings"]:
+    if not model_id:
+        return "/v1/chat/completions"
+    try:
+        model_info: Final = get_cached_model_info()(model=model_id, custom_llm_provider="bedrock")
+    except ModelNotMappedError:
+        return "/v1/chat/completions"
+    is_embedding_model: Final = (
+        model_info.get("mode") == "embedding" or model_info.get("output_vector_size") is not None
+    )
+    return "/v1/embeddings" if is_embedding_model else "/v1/chat/completions"
 
 
 def titan_embedding_usage_from_batch_output(model_output: Mapping[str, object]) -> Usage | None:
@@ -639,7 +656,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         return LiteLLMBatch(
             id=job_arn,
             object="batch",
-            endpoint="/v1/chat/completions",
+            endpoint=openai_endpoint_for_bedrock_job_model(response_data.get("modelId")),
             errors=errors,
             input_file_id=input_file_id,
             completion_window="24h",
