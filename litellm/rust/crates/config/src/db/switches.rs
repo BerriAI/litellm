@@ -2,7 +2,7 @@
 //! loads when it does.
 
 use litellm_env::Lookup;
-use litellm_python_compat::flags::lower_is_true;
+use litellm_python_compat::flags::{lower_is_true, str_to_bool};
 
 use crate::{GeneralSettings, Value, db::settings::SettingsRows};
 
@@ -10,6 +10,36 @@ use crate::{GeneralSettings, Value, db::settings::SettingsRows};
 pub const STORE_MODEL_IN_DB: &str = "STORE_MODEL_IN_DB";
 const STORE_MODEL_IN_DB_KEY: &str = "store_model_in_db";
 const SUPPORTED_DB_OBJECTS: &str = "supported_db_objects";
+const FIPS_MODE: &str = "fips_mode";
+
+/// `general_settings.fips_mode` as `fips_mode_setting` in `litellm/proxy/common_utils/fips.py`
+/// reads it: off when the key is absent, a bool as written, text through `str_to_bool`, and
+/// anything else, an empty key or an unset `os.environ/` reference included, not a boolean, which
+/// makes the proxy refuse to start. Only the config file sets it: it is no `ConfigGeneralSettings`
+/// field, so the stored `general_settings` row cannot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FipsMode {
+    Off,
+    On,
+    NotABoolean,
+}
+
+impl FipsMode {
+    /// The mode `general` sets, read after its `os.environ/` references are resolved.
+    pub fn of(general: &GeneralSettings) -> Self {
+        let setting = match general.additional_fields.get(FIPS_MODE) {
+            None => Some(false),
+            Some(Value::Bool(on)) => Some(*on),
+            Some(Value::String(text)) => str_to_bool(text),
+            Some(_) => None,
+        };
+        match setting {
+            Some(false) => Self::Off,
+            Some(true) => Self::On,
+            None => Self::NotABoolean,
+        }
+    }
+}
 
 /// Whether the proxy layers the database over the config file, as it decides at startup in
 /// `initialize_scheduled_background_jobs`: on when the config file's `general_settings.store_model_in_db` is
@@ -116,7 +146,7 @@ impl SupportedDbObjects {
 mod tests {
     use rstest::rstest;
 
-    use super::{DbObject, STORE_MODEL_IN_DB, SupportedDbObjects, store_model_in_db};
+    use super::{DbObject, FipsMode, STORE_MODEL_IN_DB, SupportedDbObjects, store_model_in_db};
     use crate::{Config, db::settings::SettingsRows};
 
     fn rows(json: &str) -> SettingsRows {
@@ -202,5 +232,33 @@ mod tests {
             SupportedDbObjects::of(&config.general_settings).loads(object),
             expected
         );
+    }
+
+    #[rstest]
+    #[case::absent("{}", FipsMode::Off)]
+    #[case::true_bool("{fips_mode: true}", FipsMode::On)]
+    #[case::false_bool("{fips_mode: false}", FipsMode::Off)]
+    #[case::text_any_case_padded("{fips_mode: ' TRUE '}", FipsMode::On)]
+    #[case::false_text("{fips_mode: 'False'}", FipsMode::Off)]
+    #[case::other_text("{fips_mode: 'yes'}", FipsMode::NotABoolean)]
+    #[case::empty_key("{fips_mode: null}", FipsMode::NotABoolean)]
+    #[case::number("{fips_mode: 1}", FipsMode::NotABoolean)]
+    fn fips_mode_reads_as_python_reads_it(#[case] general: &str, #[case] expected: FipsMode) {
+        let general: crate::GeneralSettings = serde_yaml_ng::from_str(general).unwrap();
+
+        assert_eq!(FipsMode::of(&general), expected);
+    }
+
+    #[rstest]
+    fn a_stored_row_cannot_set_fips_mode() {
+        let rows: crate::db::settings::SettingsRows =
+            serde_json::from_str(r#"{"general_settings": {"fips_mode": true}}"#).unwrap();
+        let overlaid = crate::db::settings::overlay(
+            serde_yaml_ng::from_str("general_settings: {}").unwrap(),
+            &rows,
+        );
+        let config = crate::Config::from_value(overlaid.document).unwrap();
+
+        assert_eq!(FipsMode::of(&config.general_settings), FipsMode::Off);
     }
 }
