@@ -481,6 +481,31 @@ mod tests {
         assert!(shape(true).is_ok());
     }
 
+    #[test]
+    fn a_non_string_user_text_is_named_before_a_non_string_system_text() {
+        let shaped = shape_anthropic_messages_request(
+            request(json!({"model": "m", "system": [
+                {"type": "text", "text": "be terse"},
+                {"type": "text", "text": null}
+            ], "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "hi"},
+                {"type": "text", "text": null}
+            ]}]})),
+            MessagesShapeOptions {
+                reasoning_auto_summary: false,
+                presanitized: false,
+                drops_unsupported_params: false,
+            },
+        );
+        let Err(Error::InvalidRequest(detail)) = shaped else {
+            panic!("a non-string user text must be a request error without drop_params");
+        };
+        assert_eq!(
+            detail.to_string(),
+            "messages.0.content.1.text: Input should be a valid string"
+        );
+    }
+
     #[rstest]
     fn a_non_string_tool_result_text_is_forwarded_as_sent_without_drop_params(
         #[values(false, true)] presanitized: bool,
