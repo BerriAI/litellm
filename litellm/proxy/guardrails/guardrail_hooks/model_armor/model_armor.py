@@ -995,7 +995,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 request_data=request_data,
             )
 
-            blocked: Final = self._should_block_content(armor_response, allow_sanitization=self.mask_response_content)
+            blocked: Final = (
+                self._blocks_unmaskable_response(armor_response)
+                if isinstance(response, ResponsesAPIResponse)
+                else self._should_block_content(armor_response, allow_sanitization=self.mask_response_content)
+            )
             self._log_post_call_armor_response(data, armor_response, blocked=blocked)
 
             # Add guardrail to applied_guardrails BEFORE potential blocking
@@ -1120,17 +1124,19 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         armor_response: Final = await self.make_model_armor_request(
             content=message_text, source="model_response", request_data=request_data
         )
-        sanitized: Final = self._get_sanitized_content(armor_response)
-        blocked: Final = self._should_block_content(armor_response, allow_sanitization=self.mask_response_content) or (
-            not sanitized and self._has_deidentify_match(armor_response)
-        )
+        blocked: Final = self._blocks_unmaskable_response(armor_response)
         self._log_post_call_armor_response(request_data, armor_response, blocked=blocked)
         if blocked:
             raise HTTPException(
                 status_code=400,
                 detail=self._build_block_error_detail("Response blocked by Model Armor", armor_response),
             )
-        return sanitized
+        return self._get_sanitized_content(armor_response)
+
+    def _blocks_unmaskable_response(self, armor_response: _ModelArmorResponse) -> bool:
+        return self._should_block_content(armor_response, allow_sanitization=self.mask_response_content) or (
+            not self._get_sanitized_content(armor_response) and self._has_deidentify_match(armor_response)
+        )
 
     @staticmethod
     def _responses_message_text(response: ResponsesAPIResponse) -> str:

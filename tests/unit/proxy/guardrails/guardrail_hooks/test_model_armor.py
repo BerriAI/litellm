@@ -6292,6 +6292,13 @@ def _armor_redaction(text: str) -> dict[str, object]:
     }
 
 
+def _armor_match_without_a_rewrite() -> dict[str, object]:
+    return {
+        "filterMatchState": "MATCH_FOUND",
+        "filterResults": {"sdp": {"sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND"}}}},
+    }
+
+
 def _armor_block() -> dict[str, object]:
     return {
         "filterMatchState": "MATCH_FOUND",
@@ -6592,12 +6599,21 @@ async def test_post_call_masking_blocks_and_logs_responses_text_that_only_its_ow
 
 
 @pytest.mark.asyncio
+async def test_post_call_masking_blocks_responses_text_whose_first_scan_matches_without_a_rewrite():
+    guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=True)
+    post: Final = AsyncMock(return_value=_armor_http_response(_armor_match_without_a_rewrite()))
+
+    with patch.object(guardrail.async_handler, "post", post), pytest.raises(HTTPException) as blocked:
+        await guardrail.async_post_call_success_hook(
+            data=dict(_POST_CALL_REQUEST), user_api_key_dict=UserAPIKeyAuth(), response=_responses_refusal_response()
+        )
+
+    assert blocked.value.status_code == 400
+
+
+@pytest.mark.asyncio
 async def test_post_call_masking_blocks_responses_text_whose_rescan_matches_without_a_rewrite():
     guardrail: Final = _model_armor_post_call_guardrail(mask_response_content=True)
-    unrewritten_match: Final = {
-        "filterMatchState": "MATCH_FOUND",
-        "filterResults": {"sdp": {"sdpFilterResult": {"deidentifyResult": {"matchState": "MATCH_FOUND"}}}},
-    }
 
     async def redact_the_card_then_match_without_a_rewrite(
         json: dict[str, dict[str, str]], **kwargs: object
@@ -6605,7 +6621,7 @@ async def test_post_call_masking_blocks_responses_text_whose_rescan_matches_with
         scanned: Final = json["modelResponseData"]["text"]
         if "4111" in scanned:
             return _armor_http_response(_armor_redaction(scanned.replace("4111", "[REDACTED]")))
-        return _armor_http_response(unrewritten_match)
+        return _armor_http_response(_armor_match_without_a_rewrite())
 
     response: Final = _responses_body_with_a_card_tool_call("your card is on file")
     with (
