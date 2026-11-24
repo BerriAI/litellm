@@ -41,9 +41,7 @@ def initialize_guardrail(
         event_hook=_normalize_event_hook(litellm_params.mode),
         default_on=litellm_params.default_on is True,
     )
-    litellm.logging_callback_manager.add_litellm_callback(  # pyright: ignore[reportUnknownMemberType]  # callback union is partially untyped
-        callback
-    )
+    litellm.logging_callback_manager.add_litellm_callback(callback)
     return callback
 
 
