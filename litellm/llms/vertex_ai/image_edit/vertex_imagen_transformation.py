@@ -9,11 +9,10 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 import httpx
 from httpx._types import RequestFiles
 from pydantic import ConfigDict, TypeAdapter
-from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
-from litellm.litellm_core_utils.core_helpers import has_attributes
+from litellm.litellm_core_utils.core_helpers import has_attributes, require_get
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, map_vertex_image_size
@@ -34,10 +33,7 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 _JSON_CONTAINER: Final[TypeAdapter[Mapping[str, object] | str | Sequence[object]]] = TypeAdapter(
     Mapping[str, object] | str | Sequence[object], config=ConfigDict(hide_input_in_errors=True)
 )
-
-
-class _VertexImagenPredictResponse(TypedDict, total=False):
-    predictions: ReadOnly[Sequence[object]]
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class _SupportsRead(Protocol):
@@ -121,7 +117,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         api_base: str | None = None,
     ) -> dict:
         headers = headers or {}
@@ -144,7 +140,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the complete URL for Vertex AI Imagen predict API
@@ -171,10 +167,10 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: Mapping[str, object],
     ) -> tuple[dict[str, object], RequestFiles | None]:
         # Prepare reference images in the correct Imagen format
         if image is None:
@@ -228,7 +224,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
     ) -> ImageResponse:
         model_response: Final = ImageResponse()
         try:
-            response_json: Final[_VertexImagenPredictResponse] = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as exc:
             raise self.get_error_class(
                 error_message=f"Error transforming image edit response: {exc}",
@@ -236,7 +232,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
                 headers=raw_response.headers,
             )
 
-        predictions: Final = _JSON_CONTAINER.validate_python(response_json.get("predictions", []))
+        predictions: Final = _JSON_CONTAINER.validate_python(require_get(response_json).get("predictions", []))
         data_list: Final[list[ImageObject]] = []
 
         for raw_prediction in predictions:
@@ -257,13 +253,13 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
 
     def _prepare_reference_images(
         self,
-        image: FileTypes | list[FileTypes],
+        image: FileTypes | Sequence[FileTypes | None],
         image_edit_optional_request_params: Mapping[str, object],
     ) -> list[dict[str, object]]:
         """
         Prepare reference images in the correct Imagen API format
         """
-        images: list[FileTypes]
+        images: Sequence[object]
         if isinstance(image, list):
             images = image
         else:

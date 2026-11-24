@@ -14,7 +14,7 @@ where routing to a consistent deployment is still beneficial.
 
 import hashlib
 from collections.abc import Callable, Mapping, Sequence
-from typing import Final, cast
+from typing import Final, TypeVar, cast
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -42,6 +42,8 @@ from litellm.redis.stores.router_session_pins import (
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes
+
+_DeploymentT = TypeVar("_DeploymentT", bound=Mapping[str, object])
 
 
 class DeploymentAffinityCacheValue(TypedDict, closed=True):
@@ -203,7 +205,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return remainder
 
     @staticmethod
-    def _get_model_map_key_from_deployment(deployment: dict) -> str | None:
+    def _get_model_map_key_from_deployment(deployment: Mapping[str, object]) -> str | None:
         """
         Derive a stable model-map key from a router deployment dict.
 
@@ -238,7 +240,7 @@ class DeploymentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _get_stable_model_map_key_from_deployments(
-        healthy_deployments: list[dict],
+        healthy_deployments: Sequence[Mapping[str, object]],
     ) -> str | None:
         """
         Only use model-map key scoping when it is stable across the deployment set.
@@ -379,7 +381,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return self._pinned_model_id(winner)
 
     @staticmethod
-    def _find_deployment_by_model_id(healthy_deployments: list[dict], model_id: str) -> dict | None:
+    def _find_deployment_by_model_id(healthy_deployments: Sequence[_DeploymentT], model_id: str) -> _DeploymentT | None:
         for deployment in healthy_deployments:
             model_info = deployment.get("model_info")
             if not isinstance(model_info, dict):

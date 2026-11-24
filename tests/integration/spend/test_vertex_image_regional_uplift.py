@@ -51,8 +51,8 @@ _CONFIG_MODEL: Final = "vertex-image-chaos"
 _BURST: Final = 30
 
 
-def _image_body(*, images: int, usage: bool) -> bytes:
-    parts: Final = [{"inlineData": {"mimeType": "image/png", "data": _PNG_B64}} for _ in range(images)]
+def _image_body(*, usage: bool) -> bytes:
+    parts: Final = [{"inlineData": {"mimeType": "image/png", "data": _PNG_B64}}]
     usage_metadata: Final = {
         "promptTokenCount": 12,
         "candidatesTokenCount": 1290,
@@ -75,13 +75,13 @@ _CHAT_BODY: Final = json.dumps(
 ).encode()
 
 
-def _scripted(*, images: int = 1, usage: bool = True, delay: float = 0) -> Callable[[Request], Reply]:
+def _scripted(*, usage: bool = True, delay: float = 0) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         assert (request.method, request.target) == ("POST", _IMAGE_TARGET), (request.method, request.target)
         assert _PROMPT in request.body.decode(), request.body
         if delay:
             time.sleep(delay)
-        return Reply(body=_image_body(images=images, usage=usage))
+        return Reply(body=_image_body(usage=usage))
 
     return respond
 
@@ -171,13 +171,18 @@ def _assert_images(response: httpx.Response, call_id: str, expected: float, *, i
     assert _spend(call_id) == pytest.approx(expected)
 
 
-def _assert_one_upstream_image_call(wire: Wire, *, prompt: str = _PROMPT) -> None:
-    received: Final = wire.drain()
-    assert len(received) == 1, [request.target for request in received]
-    body: Final = _JSON_OBJECT.validate_json(received[0].body)
+def _assert_image_request(request: Request, prompt: str) -> None:
+    body: Final = _JSON_OBJECT.validate_json(request.body)
     contents: Final = body["contents"]
     assert isinstance(contents, list) and prompt in json.dumps(contents), body
     assert "IMAGE" in json.dumps(body["generationConfig"]), body
+
+
+def _assert_upstream_image_calls(wire: Wire, *, calls: int = 1, prompt: str = _PROMPT) -> None:
+    received: Final = wire.drain()
+    assert len(received) == calls, [request.target for request in received]
+    for request in received:
+        _assert_image_request(request, prompt)
 
 
 def _generate(
@@ -230,11 +235,11 @@ def test_image_generation_bills_the_deployment_location(
     images: int,
     expected: float,
 ) -> None:
-    with wire_server(_scripted(images=images, usage=usage)) as wire, gateway.scenario() as scenario:
+    with wire_server(_scripted(usage=usage)) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(gateway, scenario, wire, location=location, multiplier=multiplier)
         call_id, response = _generate(gateway, model, extra={"n": images})
         _assert_images(response, call_id, expected, images=images)
-        _assert_one_upstream_image_call(wire)
+        _assert_upstream_image_calls(wire, calls=images)
 
 
 @pytest.mark.parametrize(
@@ -270,7 +275,7 @@ def test_openai_sdk_image_generation_bills_the_regional_uplift(gateway: Gateway)
         assert image.b64_json == _PNG_B64
         assert float(raw.headers["x-litellm-response-cost"]) == pytest.approx(_REGIONAL_TOKEN_COST), raw.headers
         assert _spend(call_id) == pytest.approx(_REGIONAL_TOKEN_COST)
-        _assert_one_upstream_image_call(wire)
+        _assert_upstream_image_calls(wire)
 
 
 async def test_async_openai_sdk_image_generation_keeps_global_flat(gateway: Gateway) -> None:
@@ -288,7 +293,7 @@ async def test_async_openai_sdk_image_generation_keeps_global_flat(gateway: Gate
         assert image.b64_json == _PNG_B64
         assert float(raw.headers["x-litellm-response-cost"]) == pytest.approx(_GLOBAL_TOKEN_COST), raw.headers
         assert await asyncio.to_thread(_spend, call_id) == pytest.approx(_GLOBAL_TOKEN_COST)
-        _assert_one_upstream_image_call(wire)
+        _assert_upstream_image_calls(wire)
 
 
 def test_openai_sdk_image_edit_bills_the_regional_uplift(gateway: Gateway) -> None:
@@ -391,7 +396,7 @@ def test_request_body_location_overrides_the_deployment(
         )
         call_id, response = _generate(gateway, model, extra=extra)
         _assert_images(response, call_id, expected)
-        _assert_one_upstream_image_call(wire)
+        _assert_upstream_image_calls(wire)
         control_id, control = _generate(gateway, model)
         _assert_images(
             control, control_id, _GLOBAL_TOKEN_COST if deployment_location == "global" else _REGIONAL_TOKEN_COST
@@ -403,7 +408,7 @@ def test_stream_flag_on_image_generation_prices_the_regional_uplift(gateway: Gat
         model: Final = _deployment(gateway, scenario, wire, location={"vertex_location": _REGION})
         _, response = _generate(gateway, model, extra={"stream": True})
         _assert_image_response(response, _REGIONAL_TOKEN_COST)
-        _assert_one_upstream_image_call(wire)
+        _assert_upstream_image_calls(wire)
 
 
 def test_openai_style_image_deployment_is_untouched(gateway: Gateway) -> None:

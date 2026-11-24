@@ -67,10 +67,9 @@ impl<'a> RoutePolicy<'a> {
 
     /// What a team has to allow for this target, which identity's team selection reads.
     pub(crate) fn team_eligibility(&self, target: &Target<'a>) -> TeamEligibility<'a> {
-        let route_listed = self.jwt.team_routes().permits(target.route);
         TeamEligibility {
-            route_listed,
-            route_allowed: target.auth_enforced_pass_through || route_listed,
+            route_allowed: target.auth_enforced_pass_through
+                || self.jwt.team_routes().permits(target.route),
             passthrough: PassthroughRequest {
                 route: target.route,
                 auth_enforced: target.auth_enforced_pass_through,

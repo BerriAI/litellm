@@ -29,18 +29,16 @@ pub(super) async fn presented<H: AuthHost>(
     })
 }
 
-/// A key the caller already holds names the end user before the request does.
+/// The end user the credential names is read before the request's.
 pub(super) async fn resolved<H: AuthHost>(
     host: &H,
     hash: KeyHash,
     key: Keyed<KeyRow<H>>,
+    credential_end_user: Option<&str>,
     requested_end_user: Option<&str>,
     settings: &KeySettings,
 ) -> Result<Lookup<H>, Refused<H::Rows>> {
-    let named = key
-        .record
-        .end_user_id
-        .as_deref()
+    let named = credential_end_user
         .filter(|end_user_id| !end_user_id.is_empty())
         .or(requested_end_user);
     let end_user = request_end_user(host, None, named, settings)
@@ -78,7 +76,7 @@ async fn found_key<H: AuthHost>(
     settings: &KeySettings,
     hash: &KeyHash,
 ) -> Result<Option<Keyed<KeyRow<H>>>, Error> {
-    match host.cached_key(hash).await.ok().flatten() {
+    match Error::absent_unless_declined(host.cached_key(hash).await)? {
         None if !token.is_virtual_key() && settings.ui_login => host.ui_key(token).await,
         cached => Ok(cached),
     }
@@ -107,7 +105,7 @@ async fn cached_team_values<H: AuthHost>(
     else {
         return Ok(key);
     };
-    let Some(team) = host.cached_team(team_id).await.ok().flatten() else {
+    let Some(team) = Error::absent_unless_declined(host.cached_team(team_id).await)? else {
         return Ok(key);
     };
     match (team.refreshed_at, key.record.last_refreshed_at) {
@@ -142,7 +140,11 @@ pub(super) fn gate<K>(
         return Gate::MasterKey;
     }
     if !settings.has_db {
-        return Gate::Denied(KeyDenial::NoDb);
+        return Gate::Denied(if settings.db_configured {
+            KeyDenial::NoDb
+        } else {
+            KeyDenial::NoDbConfigured
+        });
     }
     match (key, presented) {
         (Some(key), _) => Gate::Held(key),

@@ -78,7 +78,7 @@ def test_streaming_tool_call_finish_reason_is_tool_calls():
     assert response1 is not None
     assert len(response1.choices) == 1
     assert response1.choices[0].delta.tool_calls is not None
-    assert response1.choices[0].finish_reason == "tool_calls"
+    assert response1.choices[0].finish_reason is None
     assert iterator.has_seen_tool_calls is True
 
     # Process chunk 2 (final chunk)

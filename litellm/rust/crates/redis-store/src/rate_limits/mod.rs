@@ -234,6 +234,35 @@ impl RateLimits {
         true
     }
 
+    pub fn guarded_increment_post_call(
+        self: &Arc<Self>,
+        request: &RequestRedis,
+        increment: GuardedIncrement,
+        failed: String,
+    ) -> bool {
+        let Some(batch) = self.batch(Send::PostCall(request)) else {
+            return false;
+        };
+        let declared = scripts::guarded_increment(&batch, &increment);
+        let store = Arc::clone(self);
+        request.spawn(async move {
+            let Err(error) = declared.settled().await else {
+                return;
+            };
+            crate::failure_log::redis_failure!(&error, failed);
+            if increment.amount.as_f64() > 0.0 {
+                store
+                    .increment(&Increment {
+                        counter: increment.counter,
+                        amount: increment.amount,
+                        ttl: increment.ttl,
+                    })
+                    .await;
+            }
+        });
+        true
+    }
+
     /// `PARALLEL_RELEASE_SCRIPT` on the request's post-call batch; the caller has already freed
     /// the slot in memory. `false` without Redis.
     pub fn parallel_release_post_call(

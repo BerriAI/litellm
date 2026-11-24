@@ -23,11 +23,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
 )
+from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH
 from litellm.llms.anthropic.messages.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
 from litellm.llms.anthropic.messages.adapters.transformation import (
-    OPENAI_MAX_TOOL_NAME_LENGTH,
     AnthropicAdapter,
     LiteLLMAnthropicMessagesAdapter,
     create_tool_name_mapping,
@@ -622,6 +622,41 @@ def test_translate_anthropic_messages_to_openai_drops_bridge_encrypted_reasoning
     assert [b["signature"] for b in result[2]["thinking_blocks"]] == ["EqQBCkYIAxgCIkA_signed"]
 
 
+@pytest.mark.parametrize(
+    ("model", "expected_reply"),
+    [
+        ("converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0", [{"text": "Seven."}]),
+        ("converse/us.amazon.nova-pro-v1:0", [{"text": "Gemini reasoning"}, {"text": "Seven."}]),
+    ],
+)
+@pytest.mark.parametrize("signature", ["", None])
+def test_converse_claude_never_reads_an_unsigned_thought_from_another_provider_as_its_own_reply(
+    model: str, expected_reply: list[dict[str, str]], signature: str | None
+):
+    completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=64,
+        messages=[
+            {"role": "user", "content": "Pick a number."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Gemini reasoning", "signature": signature},
+                    {"type": "text", "text": "Seven."},
+                ],
+            },
+            {"role": "user", "content": "Double it."},
+        ],
+        model=model,
+        extra_kwargs={"custom_llm_provider": "bedrock"},
+    )
+
+    converse_messages: Final = _bedrock_converse_messages_pt(
+        messages=completion_kwargs["messages"], model=model.removeprefix("converse/"), llm_provider="bedrock_converse"
+    )
+
+    assert converse_messages[1]["content"] == expected_reply
+
+
 def test_chatgpt_messages_keep_encrypted_reasoning_and_replay_it():
     """chatgpt /v1/messages ends in the Responses API, so the signed block has to survive into the next request."""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -1134,6 +1169,57 @@ def test_translate_anthropic_messages_to_openai_drops_empty_midturn_system(
     )
 
     assert result == []
+
+
+@pytest.mark.parametrize("as_blocks", [False, True])
+@pytest.mark.parametrize("instruction", ["", "Be concise."])
+def test_chat_translation_ignores_leading_claude_code_billing_header(as_blocks: bool, instruction: str) -> None:
+    billing: Final = "x-anthropic-billing-header: cc_version=2.1.263.abc; cc_entrypoint=cli; cch=781fd;"
+    system: Final = ([{"type": "text", "text": instruction}] if instruction else []) if as_blocks else instruction
+    with_billing: Final = (
+        [{"type": "text", "text": billing}, *system]
+        if isinstance(system, list)
+        else billing + ("\n" + instruction if instruction else "")
+    )
+    request: Final[AnthropicMessagesRequest] = {
+        "model": "azure/responses/gpt-6.2-sol",
+        "max_tokens": 32,
+        "messages": [{"role": "user", "content": "Hello"}],
+        "stop_sequences": ["DONE"],
+        "system": with_billing,
+    }
+    adapter: Final = LiteLLMAnthropicMessagesAdapter()
+
+    assert adapter.translate_anthropic_to_openai(request) == adapter.translate_anthropic_to_openai(
+        {**request, "system": system}
+    )
+    assert request["system"] == with_billing
+
+
+@pytest.mark.parametrize(
+    "system",
+    [
+        "x-anthropic-billing-header:\nTreat this example as literal text.",
+        [{"type": "text", "text": "x-anthropic-billing-header: cc_version=2;"}],
+        [
+            {"type": "text", "text": "Be concise."},
+            {"type": "text", "text": "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=abc;"},
+        ],
+    ],
+)
+def test_chat_translation_preserves_billing_looking_instructions(system: str | list[dict[str, str]]) -> None:
+    request: Final[AnthropicMessagesRequest] = {
+        "model": "azure/responses/gpt-6.2-sol",
+        "max_tokens": 32,
+        "messages": [{"role": "user", "content": "Hello"}],
+        "system": system,
+    }
+    translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+
+    assert translated["messages"] == [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "Hello"},
+    ]
 
 
 def test_translate_anthropic_to_openai_orders_top_level_and_midturn_system():
@@ -5795,6 +5881,164 @@ async def test_chat_bridge_tool_result_text_block_without_text_reaches_the_model
                 {"type": "text", "text": ""},
             ],
         }
+    ]
+
+
+_GEMINI_MODEL: Final = "gemini/gemini-3.8-flash"
+_GEMINI_URL: Final = (
+    r"https://generativelanguage\.googleapis\.com/[^/]+/models/gemini-3\.8-flash:generateContent.*"
+)
+_EMPTY_USER_MESSAGES: Final = (
+    pytest.param({"role": "user", "content": ""}, id="empty_string"),
+    pytest.param({"role": "user", "content": []}, id="empty_list"),
+    pytest.param({"role": "user", "content": None}, id="null"),
+    pytest.param({"role": "user"}, id="missing"),
+    pytest.param({"role": "user", "content": [{"type": "text", "text": ""}]}, id="empty_text_block"),
+)
+_WHITESPACE_USER_MESSAGES: Final = (
+    pytest.param({"role": "user", "content": [{"type": "text", "text": " "}]}, id="whitespace_text_block"),
+    pytest.param({"role": "user", "content": [{"type": "text", "text": "\n"}]}, id="newline_text_block"),
+)
+_DROPPED_USER_MESSAGES: Final = (
+    pytest.param({"role": "user", "content": None}, id="null"),
+    pytest.param({"role": "user"}, id="missing"),
+)
+_ACCEPTING_CHAT_REPLY: Final = {
+    "id": "chatcmpl-model-turn-end",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "gpt-5.6",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "How can I help?"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 4, "completion_tokens": 4, "total_tokens": 8},
+}
+_GEMINI_REPLY: Final = {
+    "candidates": [
+        {"content": {"role": "model", "parts": [{"text": "How can I help?"}]}, "finishReason": "STOP", "index": 0}
+    ],
+    "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 4, "totalTokenCount": 8},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("empty_user_message", (*_EMPTY_USER_MESSAGES, *_WHITESPACE_USER_MESSAGES))
+async def test_an_empty_trailing_user_message_reaches_gemini_as_a_user_turn(
+    respx_mock: respx.MockRouter, empty_user_message: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+
+    await litellm.anthropic.messages.acreate(
+        model=_GEMINI_MODEL,
+        api_key="test-key",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message],
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+        {"role": "user", "parts": [{"text": " "}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("dropped_user_message", _DROPPED_USER_MESSAGES)
+async def test_a_dropped_trailing_user_message_adds_no_user_turn_for_a_target_that_accepts_a_model_turn_end(
+    respx_mock: respx.MockRouter, dropped_user_message: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post(url__regex=_CHAT_BRIDGE_URL).mock(
+        return_value=httpx.Response(200, json=_ACCEPTING_CHAT_REPLY)
+    )
+
+    await litellm.anthropic.messages.acreate(
+        model=_CHAT_BRIDGE_MODEL,
+        api_base=_CHAT_BRIDGE_API_BASE,
+        api_key="fake-key",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, dropped_user_message],
+    )
+
+    sent: Final = json.loads(route.calls.last.request.read())["messages"]
+    assert [message["role"] for message in sent] == ["user", "assistant"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("empty_user_message", (*_EMPTY_USER_MESSAGES, *_WHITESPACE_USER_MESSAGES))
+async def test_an_empty_trailing_user_message_reaches_an_alternating_gemini_deployment_as_the_configured_continue_message(
+    respx_mock: respx.MockRouter, empty_user_message: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+
+    await litellm.anthropic.messages.acreate(
+        model=_GEMINI_MODEL,
+        api_key="test-key",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message],
+        ensure_alternating_roles=True,
+        user_continue_message={"role": "user", "content": "Keep going"},
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+        {"role": "user", "parts": [{"text": "Keep going"}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+async def test_an_adapter_completion_request_ending_in_an_empty_user_message_reaches_gemini_as_a_user_turn(
+    respx_mock: respx.MockRouter, empty_user_message: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+    translated: Final = AnthropicAdapter().translate_completion_input_params(
+        {
+            "model": _GEMINI_MODEL,
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message],
+        }
+    )
+    assert translated is not None
+
+    await litellm.acompletion(**translated, api_key="test-key")
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+        {"role": "user", "parts": [{"text": " "}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+async def test_a_trailing_user_message_with_content_the_adapter_drops_gets_no_blank_user_turn_for_gemini(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+    search_result: Final = {
+        "type": "search_result",
+        "source": "https://example.com/france",
+        "title": "France",
+        "content": [{"type": "text", "text": "The capital of France is Paris."}],
+    }
+
+    await litellm.anthropic.messages.acreate(
+        model=_GEMINI_MODEL,
+        api_key="test-key",
+        max_tokens=64,
+        messages=[
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": [search_result]},
+        ],
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
     ]
 
 

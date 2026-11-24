@@ -10,7 +10,7 @@ use litellm_callbacks::{
 use litellm_callbacks_parallel_request_limiter::{
     Backend, CapSettings, Ctx, Descriptor, Engine, EnqueuedReservation, EnqueuedScope,
     EstimateRequest, IoReservation, LimiterState, Op, Outcome, ParallelRequestLimiter, PolicyFacts,
-    REQUEST_KEYS, Response, Scoped, ScopedInputs, Settings, SlotAcquisition, Stash,
+    REQUEST_KEYS, Response, Scoped, ScopedInputs, Settings, SlotAcquisition, SocketClose, Stash,
     TokenRateLimitType, Unverifiable, WindowIdentity, input_and_output_tokens, process_monotonic,
     tokens_for_request,
 };
@@ -43,7 +43,7 @@ pub(crate) struct NativeParallelRequestLimiter {
 #[pyclass(frozen, name = "NativeParallelRequestLimiterState")]
 pub(crate) struct NativeParallelRequestLimiterState(Arc<LimiterState>);
 
-fn limiter_async<'py, T, F>(py: Python<'py>, operation: F) -> PyResult<Bound<'py, PyAny>>
+pub(crate) fn limiter_async<'py, T, F>(py: Python<'py>, operation: F) -> PyResult<Bound<'py, PyAny>>
 where
     T: for<'a> IntoPyObject<'a> + Send + 'static,
     F: Future<Output = PyResult<T>> + Send + 'static,
@@ -58,7 +58,7 @@ where
     )
 }
 
-fn limiter_admission<'py, T, F>(
+pub(crate) fn limiter_admission<'py, T, F>(
     py: Python<'py>,
     in_memory: bool,
     operation: F,
@@ -107,7 +107,7 @@ fn encoded<T: serde::Serialize>(py: Python<'_>, value: &T) -> PyResult<Py<PyAny>
     to_py(py, &value)
 }
 
-fn python_clock(now: Py<PyAny>) -> litellm_callbacks_parallel_request_limiter::Now {
+pub(crate) fn python_clock(now: Py<PyAny>) -> litellm_callbacks_parallel_request_limiter::Now {
     Arc::new(move || {
         Python::attach(|py| {
             now.call0(py)
@@ -117,7 +117,7 @@ fn python_clock(now: Py<PyAny>) -> litellm_callbacks_parallel_request_limiter::N
     })
 }
 
-fn system_now() -> f64 {
+pub(crate) fn system_now() -> f64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs_f64())
@@ -935,6 +935,30 @@ impl NativeParallelRequestLimiter {
         let limiter = Arc::clone(&self.limiter);
         limiter_async(py, async move {
             limiter.release_on_disconnect(&state).await;
+            Ok(())
+        })
+    }
+
+    fn leave_reservation_to_socket_close(
+        &self,
+        state: PyRef<'_, NativeParallelRequestLimiterState>,
+    ) {
+        self.limiter.leave_reservation_to_socket_close(&state.0);
+    }
+
+    fn close_socket<'py>(
+        &self,
+        py: Python<'py>,
+        state: PyRef<'py, NativeParallelRequestLimiterState>,
+        close: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let close: SocketClose = close
+            .parse()
+            .map_err(|_| PyValueError::new_err(format!("{close} is not a known socket close")))?;
+        let state = Arc::clone(&state.0);
+        let limiter = Arc::clone(&self.limiter);
+        limiter_async(py, async move {
+            limiter.close_socket(&state, close).await;
             Ok(())
         })
     }

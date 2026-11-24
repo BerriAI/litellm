@@ -232,6 +232,8 @@ pub fn aggregate_only(usage: Option<&UsageObject>) -> i64 {
 
 /// `resolve_reconciled_usage` of a usage object: its prompt, completion and cache-read counts,
 /// cache reads still inside the prompt, or None when it reports neither prompt nor completion.
+/// A dict in Anthropic's own shape reports `input_tokens` without its cache reads and cache
+/// writes, so its prompt is the sum of the three.
 pub fn reconciled(usage: Option<&UsageObject>) -> Option<Usage> {
     let (prompt_tokens, completion_tokens, cached_tokens) = match usage? {
         UsageObject::Chat { members } => (
@@ -252,17 +254,33 @@ pub fn reconciled(usage: Option<&UsageObject>) -> Option<Usage> {
                 Some(Value::Object(details)) => details.get("cached_tokens"),
                 _ => None,
             };
-            (
-                count(either(
-                    members.get("prompt_tokens"),
-                    members.get("input_tokens"),
-                )),
-                count(either(
-                    members.get("completion_tokens"),
-                    members.get("output_tokens"),
-                )),
-                count(either(detailed, members.get("cache_read_input_tokens"))),
-            )
+            let completion_tokens = count(either(
+                members.get("completion_tokens"),
+                members.get("output_tokens"),
+            ));
+            let cache_reads = count(members.get("cache_read_input_tokens"));
+            let cache_writes = count(members.get("cache_creation_input_tokens"));
+            let anthropic_shaped = !truthy(members.get("prompt_tokens"))
+                && detailed.is_none()
+                && (cache_reads != 0 || cache_writes != 0);
+            if anthropic_shaped {
+                (
+                    count(members.get("input_tokens"))
+                        .saturating_add(cache_writes)
+                        .saturating_add(cache_reads),
+                    completion_tokens,
+                    cache_reads,
+                )
+            } else {
+                (
+                    count(either(
+                        members.get("prompt_tokens"),
+                        members.get("input_tokens"),
+                    )),
+                    completion_tokens,
+                    count(either(detailed, members.get("cache_read_input_tokens"))),
+                )
+            }
         }
         UsageObject::Other => return None,
     };
@@ -373,6 +391,8 @@ impl LoggedCall {
         let metadata = &self.metadata;
         let member = |name: &str| text(metadata.get(name));
         TargetFacts {
+            app_id: member("user_api_key_app_id"),
+            app_group_id: member("user_api_key_app_group_id"),
             user_api_key_hash: member("user_api_key_hash"),
             user_api_key_user_id: member("user_api_key_user_id"),
             user_api_key_team_id: member("user_api_key_team_id"),
@@ -570,6 +590,48 @@ mod tests {
                 completion_tokens: 4,
                 cached_tokens: 3,
             })
+        );
+    }
+
+    #[rstest]
+    #[case::anthropic_shape_adds_cache_writes_and_reads_to_the_prompt(
+        json!({
+            "input_tokens": 40, "output_tokens": 25,
+            "cache_creation_input_tokens": 60, "cache_read_input_tokens": 900,
+        }),
+        (1000, 25, 900, 100)
+    )]
+    #[case::anthropic_shape_with_cache_writes_only(
+        json!({"input_tokens": 40, "output_tokens": 25, "cache_creation_input_tokens": 60}),
+        (100, 25, 0, 100)
+    )]
+    #[case::prompt_tokens_already_hold_the_cache_reads(
+        json!({"prompt_tokens": 100, "completion_tokens": 25, "cache_read_input_tokens": 30}),
+        (100, 25, 30, 70)
+    )]
+    #[case::input_tokens_details_already_hold_the_cache_reads(
+        json!({
+            "input_tokens": 100, "output_tokens": 25,
+            "input_tokens_details": {"cached_tokens": 30}, "cache_creation_input_tokens": 60,
+        }),
+        (100, 25, 30, 70)
+    )]
+    fn a_plain_dict_reconciles_its_billable_input(
+        #[case] usage: Value,
+        #[case] expected: (i64, i64, i64, i64),
+    ) {
+        let resolved = reconciled(Some(&UsageObject::Mapping {
+            members: members(usage),
+            nested: None,
+        }));
+        assert_eq!(
+            resolved.map(|usage| (
+                usage.prompt_tokens,
+                usage.completion_tokens,
+                usage.cached_tokens,
+                usage.billable_input_tokens(),
+            )),
+            Some(expected)
         );
     }
 

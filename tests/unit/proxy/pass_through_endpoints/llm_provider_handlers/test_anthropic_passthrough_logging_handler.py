@@ -1,21 +1,134 @@
 import asyncio
 import json
 from datetime import datetime
+from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import httpx
 import pytest
+from fastapi import Request
 from pydantic import ValidationError
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.messages.stream_assembly import extract_sse_data
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import _upstream_headers_for_anthropic_route
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
+
+
+@pytest.mark.parametrize("overage", (False, True, None))
+@pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("stream", (False, True))
+@pytest.mark.parametrize("credential_header", ("authorization", "x-api-key"))
+@pytest.mark.parametrize("client_oauth,operator_oauth", ((True, False), (False, False), (True, True), (False, True)))
+def test_oauth_passthrough_prices_only_subscription_overage(
+    monkeypatch: pytest.MonkeyPatch,
+    overage: bool | None,
+    metadata_key: str,
+    stream: bool,
+    credential_header: str,
+    client_oauth: bool,
+    operator_oauth: bool,
+):
+    model: Final = "claude-subscription-passthrough-test"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "litellm_provider": "anthropic", "mode": "chat"},
+    )
+    logger: Final = LiteLLMLoggingObj(
+        model=model,
+        messages=[],
+        stream=stream,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="subscription",
+        function_id="subscription",
+    )
+    client_token: Final = "sk-ant-oat-client" if client_oauth else "sk-ant-api03-client"
+    client_credential: Final = f"Bearer {client_token}" if credential_header == "authorization" else client_token
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/anthropic/v1/messages",
+            "query_string": b"",
+            "headers": [
+                (credential_header.encode(), client_credential.encode()),
+                (b"x-litellm-api-key", b"sk-virtual"),
+            ],
+        }
+    )
+    authenticated: Final = UserAPIKeyAuth(api_key="sk-virtual")
+    headers_forwarded: Final = _upstream_headers_for_anthropic_route(
+        request,
+        authenticated,
+        {"authorization": "Bearer sk-ant-oat-operator"} if operator_oauth else None,
+    )
+    assert headers_forwarded["authorization" if operator_oauth else credential_header] == (
+        "Bearer sk-ant-oat-operator" if operator_oauth else client_credential
+    )
+    kwargs: Final = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=authenticated,
+        logging_obj=logger,
+        litellm_call_id="subscription",
+        passthrough_logging_payload=PassthroughStandardLoggingPayload(url="https://api.anthropic.com/v1/messages"),
+        _parsed_body={
+            "model": model,
+            metadata_key: {
+                "used_client_oauth_token": True,
+                "claude_subscription_usage": {"is_overage": False},
+            },
+        },
+    )
+    assert kwargs["litellm_params"]["metadata"]["used_client_oauth_token"] is (client_oauth and not operator_oauth)
+    assert "claude_subscription_usage" not in kwargs["litellm_params"]["metadata"]
+    logger.update_environment_variables(
+        model=model,
+        optional_params={},
+        custom_llm_provider="anthropic",
+        litellm_params=kwargs["litellm_params"],
+    )
+    body: Final = {
+        "id": "msg_subscription",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": "hello"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 100, "output_tokens": 10},
+    }
+    headers: Final = (
+        {}
+        if overage is None
+        else {
+            "anthropic-ratelimit-unified-status": "allowed",
+            "anthropic-ratelimit-unified-overage-in-use": "true" if overage else "false",
+        }
+    )
+    result: Final = AnthropicPassthroughLoggingHandler.anthropic_passthrough_handler(
+        httpx_response=httpx.Response(200, json=body, headers=headers),
+        response_body=body,
+        logging_obj=logger,
+        url_route="/anthropic/v1/messages",
+        result="",
+        start_time=datetime(2025, 1, 1),
+        end_time=datetime(2025, 1, 1),
+        cache_hit=False,
+    )
+    covered: Final = overage is False and client_oauth and not operator_oauth
+    assert result["kwargs"]["response_cost"] == pytest.approx(0.0 if covered else 100 * 0.01 + 10 * 0.02)
+    assert logger.model_call_details["response_cost"] == result["kwargs"]["response_cost"]
 
 
 async def _drain_tasks():
@@ -2521,6 +2634,49 @@ class TestRecordPartialUsageForFailure:
         assert usage.prompt_tokens == 52
         assert logging_obj.model_call_details["response_cost"] == 0.0
 
+    @pytest.mark.parametrize("events_before_failure", [1, 3], ids=["after-message-start", "after-content"])
+    def test_upstream_error_frame_stashes_the_same_usage_as_a_dropped_connection(self, events_before_failure: int):
+        received: Final = self._interrupted_chunks()[:events_before_failure]
+        error_frame: Final = self._sse(
+            "error", {"type": "error", "error": {"type": "api_error", "message": "upstream"}}
+        )
+        dropped: Final = self._make_logging_obj()
+        errored: Final = self._make_logging_obj()
+
+        for logging_obj, chunks in ((dropped, received), (errored, [*received, error_frame])):
+            AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure(
+                litellm_logging_obj=logging_obj,
+                request_body={"model": "claude-sonnet-5", "stream": True},
+                all_chunks=chunks,
+            )
+
+        assert (
+            errored.model_call_details["combined_usage_object"] == dropped.model_call_details["combined_usage_object"]
+        )
+        assert errored.model_call_details["response_cost"] == dropped.model_call_details["response_cost"]
+
+    @pytest.mark.parametrize("events_before_failure", [1, 3], ids=["after-message-start", "after-content"])
+    def test_upstream_error_frame_split_into_lines_logs_the_same_usage_as_a_dropped_connection(
+        self, events_before_failure: int
+    ):
+        received: Final = self._interrupted_chunks()[:events_before_failure]
+        error_frame: Final = self._sse(
+            "error", {"type": "error", "error": {"type": "api_error", "message": "upstream"}}
+        )
+        dropped, errored = (
+            AnthropicPassthroughLoggingHandler._build_streaming_response_for_logging(
+                litellm_logging_obj=self._make_logging_obj(),
+                request_body={"model": "claude-sonnet-5", "stream": True},
+                all_chunks=[line for line in chain.from_iterable(chunk.splitlines() for chunk in chunks) if line],
+                model="claude-sonnet-5",
+            )
+            for chunks in (received, [*received, error_frame])
+        )
+
+        assert dropped is not None
+        assert errored is not None
+        assert errored.usage == dropped.usage
+
     def test_leaves_logging_obj_untouched_when_nothing_streamed(self):
         logging_obj = self._make_logging_obj()
 
@@ -2553,6 +2709,68 @@ def test_stream_was_interrupted_skips_data_lines_that_are_not_json_objects(
     assert AnthropicPassthroughLoggingHandler._stream_was_interrupted(all_chunks) is interrupted
 
 
+_UNDECODABLE_DATA_LINES: Final = (
+    "data: " + "[" * 100_000 + "]" * 100_000 + "\n\n",
+    "data: " + '{"a": ' * 100_000 + "1" + "}" * 100_000 + "\n\n",
+)
+
+
+@pytest.mark.parametrize("position", ["before_message_start", "after_message_stop"])
+@pytest.mark.parametrize("undecodable_line", _UNDECODABLE_DATA_LINES, ids=["deep-array", "deep-object"])
+def test_streamed_messages_are_logged_when_an_undecodable_data_line_surrounds_the_stream(
+    position: str, undecodable_line: str
+) -> None:
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_undecodable_line",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [],
+                "usage": {"input_tokens": 12, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Sunny."}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}},
+        {"type": "message_stop"},
+    )
+    stream: Final = [f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events]
+    all_chunks: Final = (
+        [undecodable_line, *stream] if position == "before_message_start" else [*stream, undecodable_line]
+    )
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="claude-haiku-5-5",
+        messages=[{"role": "user", "content": "Weather?"}],
+        stream=True,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="undecodable-line-call",
+        function_id="1",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    handled: Final = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/anthropic/v1/messages",
+        request_body={"model": "claude-haiku-5-5", "stream": True},
+        endpoint_type="messages",
+        start_time=datetime.now(),
+        all_chunks=all_chunks,
+        end_time=datetime.now(),
+    )
+
+    assert handled["result"].id == "msg_undecodable_line"
+    assert handled["result"].choices[0].message.content == "Sunny."
+    assert (handled["result"].usage.prompt_tokens, handled["result"].usage.completion_tokens) == (12, 3)
+    assert handled["kwargs"]["response_cost"] > 0
+
 
 def test_stream_was_interrupted_reads_a_message_delta_whose_json_holds_unicode_line_separators() -> None:
     message_delta: Final = {
@@ -2579,6 +2797,7 @@ def test_extract_model_reads_a_message_start_whose_json_holds_unicode_line_separ
     chunk: Final = f"event: message_start\ndata: {json.dumps(message_start, ensure_ascii=False)}\n\n"
 
     assert AnthropicPassthroughLoggingHandler._extract_model_from_anthropic_chunks([chunk]) == "claude-sonnet-5"
+
 
 @pytest.mark.asyncio
 async def test_anthropic_passthrough_handler(mock_httpx_response, mock_response, mock_logging_obj):
@@ -3170,3 +3389,30 @@ def test_a_stream_naming_a_dated_snapshot_is_billed_at_the_resolved_deployment_p
 
     assert result["result"].usage.prompt_tokens > 0
     assert result["kwargs"]["response_cost"] == pytest.approx(_deployment_price_of(result["result"].usage))
+
+
+def test_a_stream_the_rust_route_priced_is_billed_at_that_price_without_pricing_it_again(
+    monkeypatch: pytest.MonkeyPatch, all_chunks: list[str]
+) -> None:
+    logging_obj: Final = _deployment_priced_logging_obj(monkeypatch, stream=True)
+    logging_obj.optional_params = {}
+    logging_obj.record_route_cost(0.0421)
+
+    def repriced(*_args: object, **_kwargs: object) -> float:
+        raise AssertionError("a route-priced stream was priced again")
+
+    monkeypatch.setattr(litellm, "completion_cost", repriced)
+    monkeypatch.setattr(litellm, "response_cost_calculator", repriced)
+    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(  # pyright: ignore[reportUnknownMemberType]  # the handler leaves its passthrough logging object untyped
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-4-5", "stream": True, "messages": []},
+        endpoint_type=MagicMock(),
+        start_time=datetime(2025, 1, 1),
+        all_chunks=all_chunks,
+        end_time=datetime(2025, 1, 1),
+    )
+
+    assert result["kwargs"]["response_cost"] == 0.0421, result["kwargs"]
+    assert logging_obj.model_call_details["response_cost"] == 0.0421

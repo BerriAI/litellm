@@ -43,11 +43,10 @@ class StepReading:
     gateway_added_p50: float | None = None
     time_to_first_token_p99: float | None = None
     cpu_seconds_per_request: float | None = None
+    cpu_seconds_per_request_coverage: float | None = None
     redis_latency_mean_seconds: float | None = None
-    postgres_peak_connections: int | None = None
     """The hold verdict reads the first six. The rest say what the pod was doing on that step: CPU per request
-    from the pod sampler, Redis latency from the gateway's `/metrics`, connections from `pg_stat_activity`,
-    all cut to the step's window, so a latency jump can be told apart as CPU, waiting or neither."""
+    from the pod sampler and Redis latency from the gateway's `/metrics`, both cut to the step's window."""
 
     @property
     def held(self) -> bool:
@@ -82,11 +81,8 @@ def _step_properties(step: StepReading) -> Iterator[tuple[str, float]]:
         ("gateway_added_p50", step.gateway_added_p50),
         ("time_to_first_token_p99", step.time_to_first_token_p99),
         ("cpu_seconds_per_request", step.cpu_seconds_per_request),
+        ("cpu_seconds_per_request_coverage", step.cpu_seconds_per_request_coverage),
         ("redis_latency_mean_seconds", step.redis_latency_mean_seconds),
-        (
-            "postgres_peak_connections",
-            None if step.postgres_peak_connections is None else float(step.postgres_peak_connections),
-        ),
     )
     return ((f"{prefix}_{name}", value) for name, value in readings if value is not None)
 
@@ -97,7 +93,7 @@ def render_steps(steps: Iterable[StepReading]) -> tuple[str, ...]:
         return ()
     header: Final = (
         f"  steps: {'rps':>6} {'planned':>8} {'completed rps':>14} {'gateway added p50':>18} {'p99':>8}"
-        f" {'ttft p99':>9} {'unexpected':>11} {'cpu s/req':>10} {'redis mean':>11} {'pg conns':>9}"
+        f" {'ttft p99':>9} {'unexpected':>11} {'cpu s/req':>10} {'coverage':>10} {'redis mean':>11}"
     )
     return (header, *(_step_line(step) for step in rows))
 
@@ -107,10 +103,10 @@ def _seconds(value: float | None) -> str:
 
 
 def _step_line(step: StepReading) -> str:
-    conns: Final = "n/a" if step.postgres_peak_connections is None else str(step.postgres_peak_connections)
     return (
         f"         {step.rps:6.1f} {step.planned:8d} {step.completed_rps:14.2f} {_seconds(step.gateway_added_p50):>18}"
         f" {_seconds(step.gateway_added_p99):>8} {_seconds(step.time_to_first_token_p99):>9} {step.unexpected:11d}"
-        f" {_seconds(step.cpu_seconds_per_request):>10} {_seconds(step.redis_latency_mean_seconds):>11} {conns:>9}"
+        f" {_seconds(step.cpu_seconds_per_request):>10} {_seconds(step.cpu_seconds_per_request_coverage):>10}"
+        f" {_seconds(step.redis_latency_mean_seconds):>11}"
         f"  {'held' if step.held else 'broke'}"
     )

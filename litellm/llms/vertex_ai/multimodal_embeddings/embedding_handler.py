@@ -16,6 +16,7 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexAIError,
     VertexLLM,
 )
+from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.utils import EmbeddingResponse
 
 from .transformation import VertexAIMultimodalEmbeddingConfig
@@ -36,21 +37,21 @@ class VertexMultimodalEmbedding(VertexLLM):
         self,
         model: str,
         input: list | str,
-        print_verbose,
+        print_verbose: object,
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         api_base: str | None = None,
-        headers: dict = {},
-        encoding=None,
-        vertex_project=None,
-        vertex_location=None,
-        vertex_credentials=None,
+        headers: dict[str, str] = {},
+        encoding: object = None,
+        vertex_project: str | None = None,
+        vertex_location: str | None = None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
         aembedding: bool | None = False,
-        timeout=300,
+        timeout: float | httpx.Timeout | None = 300,
         client=None,
     ) -> EmbeddingResponse:
         _auth_header, vertex_project = self._ensure_access_token(
@@ -147,13 +148,13 @@ class VertexMultimodalEmbedding(VertexLLM):
         self,
         model: str,
         api_base: str,
-        optional_params: dict,
-        litellm_params: dict,
-        data: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        data: dict[str, object],
         model_response: EmbeddingResponse,
         timeout: float | httpx.Timeout | None,
         logging_obj: LiteLLMLoggingObj,
-        headers={},
+        headers: dict[str, str] = {},
         client: AsyncHTTPHandler | None = None,
         api_key: str | None = None,
     ) -> EmbeddingResponse:

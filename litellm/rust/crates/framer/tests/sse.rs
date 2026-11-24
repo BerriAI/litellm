@@ -8,7 +8,7 @@ use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_framer::{
     SseError, frames,
-    sse::{SseCodec, SseEvent},
+    sse::{SseBlock, SseCodec, SseEvent, blocks, decode_all},
 };
 use proptest::prelude::*;
 use rstest::rstest;
@@ -64,6 +64,108 @@ proptest! {
         let wire = if bom { [&b"\xEF\xBB\xBF"[..], &body].concat() } else { body };
         let decoded = runtime().block_on(collect(cut_at(&wire, cuts))).unwrap();
         prop_assert_eq!(decoded, events);
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Reset;
+
+fn line() -> impl Strategy<Value = &'static [u8]> {
+    prop_oneof![
+        3 => Just(&b""[..]),
+        3 => Just(&b"data: a"[..]),
+        1 => Just(&b"data"[..]),
+        1 => Just(&b"event: e"[..]),
+        1 => Just(&b"id: 1"[..]),
+        1 => Just(&b": note"[..]),
+        1 => Just(&b"data: \xff"[..]),
+        1 => Just(&b"\xEF\xBB\xBFdata: b"[..]),
+    ]
+}
+
+/// Lines a provider could send, each ended by any terminator, behind a BOM or not, and cut off
+/// inside the last one.
+fn wire() -> impl Strategy<Value = Vec<u8>> {
+    (
+        any::<bool>(),
+        proptest::collection::vec((line(), terminators()), 0..12),
+        line(),
+    )
+        .prop_map(|(bom, lines, tail)| {
+            let bom = if bom { &b"\xEF\xBB\xBF"[..] } else { &[] };
+            let lines = lines
+                .into_iter()
+                .flat_map(|(line, terminator)| [line, terminator]);
+            std::iter::once(bom)
+                .chain(lines)
+                .chain(std::iter::once(tail))
+                .collect::<Vec<_>>()
+                .concat()
+        })
+}
+
+fn cuts() -> impl Strategy<Value = Vec<usize>> {
+    proptest::collection::vec(0_usize..128, 0..6)
+}
+
+/// `pieces` with a failed chunk after each piece `failures` names.
+fn failing(pieces: Vec<Bytes>, failures: &[usize]) -> Vec<Result<Bytes, Reset>> {
+    pieces
+        .into_iter()
+        .enumerate()
+        .flat_map(|(index, piece)| {
+            let failed = failures.contains(&index).then_some(Err(Reset));
+            std::iter::once(Ok(piece)).chain(failed)
+        })
+        .collect()
+}
+
+/// What a stream carried in the order it carried it: each stretch of bytes between two failures
+/// as one, however it was cut.
+fn runs(read: impl IntoIterator<Item = Result<Bytes, Reset>>) -> Vec<Result<Vec<u8>, Reset>> {
+    read.into_iter().fold(Vec::new(), |mut runs, item| {
+        match (runs.last_mut(), item) {
+            (Some(Ok(run)), Ok(bytes)) => run.extend_from_slice(&bytes),
+            (_, Ok(bytes)) if bytes.is_empty() => {}
+            (_, item) => runs.push(item.map(|bytes| bytes.to_vec())),
+        }
+        runs
+    })
+}
+
+fn read_blocks(chunks: Vec<Result<Bytes, Reset>>) -> Vec<Result<SseBlock, Reset>> {
+    runtime().block_on(blocks(stream::iter(chunks)).collect())
+}
+
+proptest! {
+    #[test]
+    fn blocks_hand_out_every_byte_and_every_failure_in_the_order_read(
+        wire in wire(),
+        cuts in cuts(),
+        failures in proptest::collection::vec(0_usize..6, 0..3),
+    ) {
+        let chunks = failing(cut_at(&wire, cuts), &failures);
+        let read = read_blocks(chunks.clone())
+            .into_iter()
+            .map(|block| block.map(|block| block.bytes));
+        prop_assert_eq!(runs(read), runs(chunks));
+    }
+
+    #[test]
+    fn blocks_are_the_same_however_the_wire_is_cut_and_carry_the_events_a_reader_decodes(
+        wire in wire(),
+        cuts in cuts(),
+    ) {
+        let whole = read_blocks(vec![Ok(Bytes::copy_from_slice(&wire))]);
+        let cut = read_blocks(cut_at(&wire, cuts).into_iter().map(Ok).collect());
+        prop_assert_eq!(&cut, &whole);
+        if let Ok(decoded) = decode_all(&wire) {
+            let carried: Vec<SseEvent> = whole
+                .into_iter()
+                .filter_map(|block| block.unwrap().event)
+                .collect();
+            prop_assert_eq!(carried, decoded);
+        }
     }
 }
 

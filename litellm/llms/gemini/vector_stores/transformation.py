@@ -103,7 +103,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         self.model_info = GeminiModelInfo()
         self._cached_api_key: str | None = None
 
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         """Gemini uses x-goog-api-key header for authentication."""
         return {}
 
@@ -135,7 +135,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
 
         return headers
 
-    def get_complete_url(self, api_base: str | None, litellm_params: dict) -> str:
+    def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         """
         Get the complete base URL for Gemini API.
 
@@ -161,7 +161,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: Mapping[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform search request to Gemini's generateContent format.
 
@@ -191,7 +191,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
             # Convert to Gemini filter syntax if it's a dict
             if isinstance(metadata_filter, dict):
                 # Simple conversion - may need more sophisticated mapping
-                filter_parts: Final = []
+                filter_parts: Final[list[str]] = []
                 for key, value in metadata_filter.items():
                     if isinstance(value, str):
                         filter_parts.append(f'{key} = "{value}"')
@@ -317,7 +317,7 @@ class GeminiVectorStoreConfig(BaseVectorStoreConfig):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform create request to Gemini's fileSearchStores format.
         """

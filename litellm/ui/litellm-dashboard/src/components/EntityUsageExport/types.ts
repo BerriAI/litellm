@@ -3,15 +3,17 @@ import type { Team } from "@/components/key_team_helpers/key_list";
 import type { DailyActivityEntity, ExportFormat, ExportType } from "@/components/UsagePage/dailyActivityApi";
 
 export type { ExportFormat, ExportType };
+export type UsageExportFormat = ExportFormat | "pdf";
 export type EntityType = DailyActivityEntity;
 
 export interface EntityUsageExportModalProps {
   isOpen: boolean;
   onClose: () => void;
   entityType: EntityType;
-  onExport: (exportType: ExportType, format: ExportFormat) => Promise<Blob>;
+  onExport: (exportType: ExportType, format: ExportFormat, includeMetadata: boolean) => Promise<Blob>;
   dateRange: DateRangePickerValue;
   selectedFilters?: readonly string[];
   customTitle?: string;
   teams?: Team[];
+  canIncludeMetadata: boolean;
 }
