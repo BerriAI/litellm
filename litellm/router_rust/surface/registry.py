@@ -131,6 +131,7 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     LlmProviders,
     LlmProvidersSet,
+    chatgpt_subscription_login_litellm_params,
     shared_backend_model_info,
 )
 from litellm.utils import (
@@ -2256,7 +2257,11 @@ class HostRegistry(HostModelInfo):
             credential_values: Final = CredentialAccessor.get_credential_values(credential_name)
             if not credential_values:
                 verbose_router_logger.warning("Credential '%s' not found in credential_list", credential_name)
-            resolved.update(credential_values)
+            resolved.update(
+                (key, value)
+                for key, value in credential_values.items()
+                if key not in chatgpt_subscription_login_litellm_params
+            )
             _ = resolved.pop("litellm_credential_name", None)
         model: Final = deployment.litellm_params.model
         resolved["model"] = model

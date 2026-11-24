@@ -1,4 +1,5 @@
 import asyncio
+import json
 import time
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
@@ -35,7 +36,7 @@ from litellm.proxy.health_endpoints._health_endpoints import (
     test_model_connection as probe_model_connection,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import CredentialItem, StandardLoggingPayload
 
 
 @pytest.fixture
@@ -1455,6 +1456,73 @@ def test_split_by_model_ids_passes_anything_without_a_listed_model_id_to_the_rou
     assert routing == ("healthy", deployment)
     assert routing[1] is deployment
     assert children == (child,)
+
+
+
+def _chatgpt_codex_stream(model: str) -> str:
+    response: Final = {
+        "id": "resp_probe",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": model,
+        "output": [
+            {
+                "id": "msg_probe",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    return "data: " + json.dumps({"type": "response.completed", "response": response}) + "\n\n"
+
+
+def _team_a_chatgpt_login(access_token: str, owner_info: Mapping[str, str]) -> CredentialItem:
+    return CredentialItem(
+        credential_name="team-a-chatgpt",
+        credential_values={
+            "chatgpt_access_token": access_token,
+            "chatgpt_refresh_token": "team-a-refresh-token",
+            "chatgpt_account_id": "acct-team-a",
+            "chatgpt_expires_at": "4102444800",
+        },
+        credential_info={"custom_llm_provider": "chatgpt", **owner_info},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("owner_info", "healthy"),
+    [({"chatgpt_owner_team_id": "team-a"}, True), ({}, False)],
+    ids=["team-owned", "unowned"],
+)
+async def test_background_health_check_of_a_deployment_naming_a_chatgpt_login_runs_as_its_owner(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, owner_info: Mapping[str, str], healthy: bool
+) -> None:
+    login_token: Final = "team-a-login-access-token"
+    monkeypatch.setenv("CHATGPT_AUTH_FILE", str(tmp_path / "missing-host-auth.json"))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "credential_list", [_team_a_chatgpt_login(login_token, owner_info)])
+    deployment: Final = {
+        "model_name": "team-a-codex",
+        "litellm_params": {"model": "chatgpt/gpt-6.1-sol", "litellm_credential_name": "team-a-chatgpt"},
+        "model_info": {"id": "team-a-codex-id", "mode": "responses"},
+    }
+
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post("https://chatgpt.com/backend-api/codex/responses").respond(
+            200, text=_chatgpt_codex_stream("gpt-6.1-sol"), headers={"content-type": "text/event-stream"}
+        )
+        healthy_endpoints, unhealthy_endpoints, _ = await perform_health_check(model_list=[deployment])
+        sent: Final = [call.request.headers["Authorization"] for call in upstream.calls]
+
+    assert [endpoint["model_id"] for endpoint in healthy_endpoints] == (["team-a-codex-id"] if healthy else [])
+    assert [endpoint["model_id"] for endpoint in unhealthy_endpoints] == ([] if healthy else ["team-a-codex-id"])
+    assert sent == ([f"Bearer {login_token}"] if healthy else [])
+    assert "device" not in json.dumps(unhealthy_endpoints, default=str).lower()
 
 
 if __name__ == "__main__":

@@ -305,6 +305,7 @@ from litellm.types.utils import (
     StreamingChoices,
     TranscriptionResponse,
     Usage,
+    chatgpt_subscription_login_litellm_params,
     credential_api_key_secret_reference,
     is_litellm_owned_kwarg,
 )
@@ -875,7 +876,9 @@ def _stored_credential_values(kwargs: Mapping[str, object]) -> Mapping[str, obje
         {
             key: value
             for key, value in credential_api_key_secret_reference(credential.credential_values).items()
-            if key not in kwargs and key != "github_copilot_app_private_key"
+            if key not in kwargs
+            and key not in chatgpt_subscription_login_litellm_params
+            and key != "github_copilot_app_private_key"
         }
     )
 
@@ -2519,6 +2522,9 @@ def client(original_function):
             from litellm.llms.github_copilot.per_user_auth import attach_github_copilot_user_session
 
             attach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
+            from litellm.llms.chatgpt.subscription_login import attach_chatgpt_subscription_login
+
+            attach_chatgpt_subscription_login(kwargs, model)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
             kwargs["litellm_logging_obj"] = logging_obj
             LLMCachingHandler: Final = _get_cached_llm_caching_handler()
             _llm_caching_handler: Final[LLMCachingHandler] = LLMCachingHandler(
@@ -2826,6 +2832,9 @@ def client(original_function):
             from litellm.llms.github_copilot.per_user_auth import aattach_github_copilot_user_session
 
             await aattach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
+            from litellm.llms.chatgpt.subscription_login import aattach_chatgpt_subscription_login
+
+            await aattach_chatgpt_subscription_login(kwargs, model)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
             logging_obj.llm_caching_handler = _llm_caching_handler
             # [OPTIONAL] CHECK BUDGET
             if litellm.max_budget:

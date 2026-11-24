@@ -139,6 +139,11 @@ POST /credentials/{credential_name}/user_connection/start
 POST /credentials/{credential_name}/user_connection/poll
 DELETE /credentials/{credential_name}/user_connection
 
+# ChatGPT subscription sign-in, a device flow a human approves in the browser;
+# the login it saves is the credential's state, which /credentials already covers
+POST /credentials/{credential_name}/chatgpt_login/start
+POST /credentials/{credential_name}/chatgpt_login/poll
+
 # Known gaps awaiting a resource or data source; remove the entry when it lands
 GET /credentials                                  # known gap: plural credentials data source
 GET /cache/settings                               # known gap: cache settings resource

@@ -124,6 +124,12 @@ from litellm.proxy.common_utils.timezone_utils import (
     keeps_budget_reset,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
+from litellm.proxy.credential_endpoints.chatgpt_subscription_logins import (
+    CredentialInfoLookup,
+    owner_has_chatgpt_login,
+    primary_credential_rows,
+    repoint_chatgpt_logins_to_key,
+)
 from litellm.proxy.db.master_key_migration import reencrypt_stored_values
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
@@ -651,8 +657,8 @@ def _env_vars_param_value(param: _EnvVarsParam) -> Mapping[str, str] | None:
     return param.param_value
 
 
-async def _check_custom_key_allowed(custom_key_value: str | None) -> None:
-    """Raise 403 if custom API keys are disabled and a custom key was provided."""
+async def _check_custom_key_allowed(custom_key_value: str | None, credential_rows: CredentialInfoLookup | None) -> None:
+    """Raise 403 if custom API keys are disabled, and 409 if the value is a deleted key's that owns a ChatGPT login."""
     if custom_key_value is None:
         return
 
@@ -664,6 +670,14 @@ async def _check_custom_key_allowed(custom_key_value: str | None) -> None:
         raise HTTPException(
             status_code=403,
             detail={"error": "Custom API key values are disabled by your administrator. Keys must be auto-generated."},
+        )
+    if await owner_has_chatgpt_login(credential_rows, None, hash_token(custom_key_value)):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "This key value belonged to a deleted key that still owns a ChatGPT subscription login. "
+                "Delete that login under LLM Credentials, or use a different key value."
+            },
         )
 
 
@@ -1941,7 +1955,7 @@ async def _common_key_generation_helper(
     _validate_key_alias_format(key_alias=data_json.get("key_alias", None))
 
     # Reject custom key values if disabled by admin
-    await _check_custom_key_allowed(data.key)
+    await _check_custom_key_allowed(data.key, primary_credential_rows(prisma_client))
 
     # Validate user-provided key format
     if data.key is not None and not data.key.startswith("sk-"):
@@ -6606,7 +6620,9 @@ async def check_encryption_endpoint(
 async def get_new_token(data: RegenerateKeyRequest | None) -> str:
     if data and data.new_key is not None:
         # Reject custom key values if disabled by admin
-        await _check_custom_key_allowed(data.new_key)
+        from litellm.proxy.proxy_server import prisma_client
+
+        await _check_custom_key_allowed(data.new_key, primary_credential_rows(prisma_client))
         if not data.new_key.startswith("sk-"):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -6871,6 +6887,9 @@ async def _execute_virtual_key_regeneration(
         existing_key_row=key_in_db,
         previous_key_token=hashed_api_key,
         new_key_token=new_token_hash,
+    )
+    await repoint_chatgpt_logins_to_key(
+        CredentialsRepository(prisma_client), previous_key_hash=hashed_api_key, new_key_hash=new_token_hash
     )
 
     # After credential invalidation, so a failure here can never keep the old key alive.

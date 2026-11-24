@@ -125,3 +125,35 @@ class UserConnectionDeleteResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     status: str
+
+
+class ChatGPTLoginStartRequest(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    owner_team_id: str | None = None
+    owner_key_hash: str | None = None
+    display_name: str | None = None
+
+
+class ChatGPTLoginFlowHandle(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    credential_name: str
+    device_auth_id: str = Field(repr=False)
+    user_code: str = Field(repr=False)
+    owner_team_id: str | None = None
+    owner_key_hash: str | None = None
+    display_name: str | None = None
+    interval: int
+    expires_at: float
+
+
+ChatGPTLoginPollStatus: TypeAlias = Literal["pending", "connected"]
+
+
+class ChatGPTLoginPollResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: ChatGPTLoginPollStatus
+    interval: int | None = None
+    account_id: str | None = None

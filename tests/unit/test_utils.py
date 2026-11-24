@@ -8175,6 +8175,136 @@ def test_load_credentials_from_list_fills_kwargs_from_the_loaded_credential_with
     assert _credential_warnings(caplog) == []
 
 
+_CHATGPT_SUBSCRIPTION_LOGIN_VALUES: Final[Mapping[str, str]] = {
+    "chatgpt_access_token": "access-team-a-example",
+    "chatgpt_refresh_token": "refresh-team-a-example",
+    "chatgpt_id_token": "id-team-a-example",
+    "chatgpt_account_id": "acct-team-a",
+    "chatgpt_expires_at": "4102444800",
+}
+
+
+def _chatgpt_subscription_credential(**extra_values: str) -> CredentialItem:
+    return CredentialItem(
+        credential_name="team-a-chatgpt",
+        credential_values={**_CHATGPT_SUBSCRIPTION_LOGIN_VALUES, **extra_values},
+        credential_info={"custom_llm_provider": "chatgpt", "chatgpt_owner_team_id": "team-a"},
+    )
+
+
+def _team_b_chatgpt_subscription_credential() -> CredentialItem:
+    return CredentialItem(
+        credential_name="team-b-chatgpt",
+        credential_values={**_CHATGPT_SUBSCRIPTION_LOGIN_VALUES, "chatgpt_access_token": "access-team-b-example"},
+        credential_info={"custom_llm_provider": "chatgpt", "chatgpt_owner_team_id": "team-b"},
+    )
+
+
+def test_load_credentials_from_list_never_merges_chatgpt_subscription_login_values_into_kwargs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.utils import load_credentials_from_list, with_named_credential
+
+    monkeypatch.setattr(litellm, "credential_list", [_chatgpt_subscription_credential(api_version="2026-01-01")])
+    request_kwargs: Final[dict[str, object]] = {
+        "litellm_credential_name": "team-a-chatgpt",
+        "model": "chatgpt/gpt-5.5",
+    }
+    load_credentials_from_list(request_kwargs)
+
+    assert request_kwargs == {
+        "litellm_credential_name": "team-a-chatgpt",
+        "model": "chatgpt/gpt-5.5",
+        "api_version": "2026-01-01",
+    }
+    assert with_named_credential({"litellm_credential_name": "team-a-chatgpt"}) == {
+        "litellm_credential_name": "team-a-chatgpt",
+        "api_version": "2026-01-01",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "secret_fields",
+    [
+        pytest.param(None, id="no_secret_fields"),
+        pytest.param({"raw_headers": {}}, id="no_owner"),
+        pytest.param({"chatgpt_subscription_owner": {"chatgpt_owner_team_id": "team-b"}}, id="owner_of_another_login"),
+        pytest.param({"chatgpt_subscription_owner": {"chatgpt_owner_key_hash": "hash-b"}}, id="another_owner"),
+    ],
+)
+async def test_acompletion_on_a_chatgpt_subscription_the_caller_does_not_own_is_a_401(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, secret_fields: dict[str, object] | None
+) -> None:
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        litellm, "credential_list", [_chatgpt_subscription_credential(), _team_b_chatgpt_subscription_credential()]
+    )
+    with pytest.raises(litellm.CallerCredentialAuthenticationError) as raised:
+        await litellm.acompletion(
+            model="chatgpt/gpt-5.5",
+            messages=[{"role": "user", "content": "hi"}],
+            litellm_credential_name="team-a-chatgpt",
+            mock_response="owned",
+            **({} if secret_fields is None else {"secret_fields": secret_fields}),
+        )
+
+    assert raised.value.status_code == 401
+    assert "team-a-chatgpt" in str(raised.value)
+    assert not any(token in str(raised.value) for token in _CHATGPT_SUBSCRIPTION_LOGIN_VALUES.values())
+    assert "access-team-b-example" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("through_router", [False, True], ids=["direct", "through_router"])
+async def test_acompletion_on_a_chatgpt_subscription_the_caller_owns_returns_the_response_with_no_host_login(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, through_router: bool
+) -> None:
+    from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
+
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setattr(litellm, "credential_list", [_chatgpt_subscription_credential()])
+    request: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "mock_response": "owned",
+        "secret_fields": {"chatgpt_subscription_owner": RedactedDict({"chatgpt_owner_team_id": "team-a"})},
+    }
+    deployment: Final = {"model": "chatgpt/gpt-5.5", "litellm_credential_name": "team-a-chatgpt"}
+    router: Final = litellm.Router(model_list=[{"model_name": "team-a-gpt", "litellm_params": deployment}])
+    response: Final = await (
+        router.acompletion(model="team-a-gpt", **request)
+        if through_router
+        else litellm.acompletion(**deployment, **request)
+    )
+
+    assert response.choices[0].message.content == "owned"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("through_router", [False, True], ids=["direct", "through_router"])
+async def test_aresponses_on_a_chatgpt_subscription_the_caller_owns_returns_the_response_with_no_host_login(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, through_router: bool
+) -> None:
+    from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
+
+    monkeypatch.setenv("CHATGPT_TOKEN_DIR", str(tmp_path))
+    monkeypatch.setattr(litellm, "credential_list", [_chatgpt_subscription_credential()])
+    request: Final = {
+        "input": "hi",
+        "mock_response": "owned",
+        "secret_fields": {"chatgpt_subscription_owner": RedactedDict({"chatgpt_owner_team_id": "team-a"})},
+    }
+    deployment: Final = {"model": "chatgpt/gpt-5.5", "litellm_credential_name": "team-a-chatgpt"}
+    router: Final = litellm.Router(model_list=[{"model_name": "team-a-gpt", "litellm_params": deployment}])
+    response: Final = await (
+        router.aresponses(model="team-a-gpt", **request)
+        if through_router
+        else litellm.aresponses(**deployment, **request)
+    )
+
+    assert response.output[0].content[0].text == "owned"
+
+
 @pytest.mark.asyncio
 async def test_a_call_by_credential_name_leaves_its_headers_intact_for_later_uploads(
     monkeypatch: pytest.MonkeyPatch,
@@ -10672,7 +10802,9 @@ def test_validate_environment_takes_any_together_ai_key_name_for_bare_and_prefix
 def test_validate_environment_keeps_the_wandb_key_check_for_bare_ids_wandb_shares_with_together_ai(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    shared_bare_ids: Final = tuple(sorted(model for model in litellm.wandb_models if not _resolves_to_a_provider(model)))
+    shared_bare_ids: Final = tuple(
+        sorted(model for model in litellm.wandb_models if not _resolves_to_a_provider(model))
+    )
     monkeypatch.setattr(
         litellm,
         "together_ai_models",
@@ -11946,7 +12078,8 @@ def test_check_valid_key_never_counts_a_global_fallback_answer_as_a_valid_key(
 
     with respx.mock(assert_all_called=False) as upstream:
         _ = upstream.post("https://api.openai.com/v1/chat/completions").respond(
-            401, json={"error": {"message": "Invalid API key", "type": "invalid_request_error", "code": "invalid_api_key"}}
+            401,
+            json={"error": {"message": "Invalid API key", "type": "invalid_request_error", "code": "invalid_api_key"}},
         )
         fallback_route: Final = upstream.post("https://api.anthropic.com/v1/messages").respond(
             200,

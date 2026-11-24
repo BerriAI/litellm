@@ -57,6 +57,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_enforced_params,
     _match_and_track_policies,
     _promoted_trace_control_fields,
+    _record_chatgpt_subscription_owner_for_request,
     _resolve_credential_from_model_config,
     _resolve_provider_from_deployment,
     _update_model_if_key_alias_exists,
@@ -75,6 +76,7 @@ from litellm.proxy.pricing_currency import ReferenceRateLookup
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.caching import LiteLLMCacheType
 from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES, PROMPT_MANAGEMENT_APPLIED_FIELD
+from litellm.types.proxy.litellm_pre_call_utils import RedactedDict
 from litellm.types.utils import CredentialItem
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -11844,6 +11846,167 @@ class TestResolveUserProviderCredentials:
         )
 
 
+class _RecordingCredentialsTable:
+    def __init__(self) -> None:
+        self.reads: list[object] = []
+
+    async def find_unique(self, where: object) -> None:
+        self.reads.append(where)
+
+
+class TestRecordChatGPTSubscriptionOwner:
+    """``_record_chatgpt_subscription_owner_for_request`` records who the caller is inside secret_fields, where no
+    log or body snapshot shows it. It hands no ChatGPT login token to the request, so callbacks and guardrails never
+    see one, and it never reads the database or the token endpoint before the call."""
+
+    _LOGIN_NAMES: Final = ("login-team-a", "login-team-b", "login-key-k")
+    _FRESH_EXPIRES_AT: Final = "4102444800"
+    _STALE_EXPIRES_AT: Final = "1000000000"
+
+    @staticmethod
+    def _access_token(name: str) -> str:
+        return f"eyJhbGciOiJSUzI1NiJ9.{name}-subscription-access.c2lnbmF0dXJl"
+
+    def _login(self, name: str, expires_at: str, **owner: str) -> CredentialItem:
+        return CredentialItem(
+            credential_name=name,
+            credential_values={
+                "chatgpt_access_token": self._access_token(name),
+                "chatgpt_refresh_token": f"rt-{name}-refresh",
+                "chatgpt_account_id": f"acct-{name}",
+                "chatgpt_expires_at": expires_at,
+            },
+            credential_info={"custom_llm_provider": "chatgpt", **owner},
+        )
+
+    def _serve_logins(self, monkeypatch) -> None:
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                self._login("login-team-a", self._FRESH_EXPIRES_AT, chatgpt_owner_team_id="team-a"),
+                self._login("login-team-b", self._FRESH_EXPIRES_AT, chatgpt_owner_team_id="team-b"),
+                self._login("login-key-k", self._FRESH_EXPIRES_AT, chatgpt_owner_key_hash="hash-k"),
+            ],
+        )
+
+    @staticmethod
+    def _request() -> Request:
+        request = MagicMock(spec=Request)
+        request.url = MagicMock()
+        request.url.__str__.return_value = "http://localhost/v1/responses"
+        request.method = "POST"
+        request.query_params = {}
+        request.headers = {"Content-Type": "application/json", "Authorization": "Bearer sk-caller"}
+        request.client = MagicMock()
+        request.client.host = "127.0.0.1"
+        return request
+
+    def _assert_no_token_in(self, text: str) -> None:
+        for name in self._LOGIN_NAMES:
+            assert self._access_token(name) not in text
+            assert f"rt-{name}-refresh" not in text
+
+    @pytest.mark.parametrize(
+        ("team_id", "key_hash", "added"),
+        [
+            (
+                "team-a",
+                "hash-unbound",
+                {
+                    "chatgpt_subscription_owner": {
+                        "chatgpt_owner_team_id": "team-a",
+                        "chatgpt_owner_key_hash": "hash-unbound",
+                    }
+                },
+            ),
+            (None, "hash-k", {"chatgpt_subscription_owner": {"chatgpt_owner_key_hash": "hash-k"}}),
+            (
+                "team-b",
+                "hash-k",
+                {"chatgpt_subscription_owner": {"chatgpt_owner_team_id": "team-b", "chatgpt_owner_key_hash": "hash-k"}},
+            ),
+            (
+                "team-unbound",
+                "hash-unbound",
+                {
+                    "chatgpt_subscription_owner": {
+                        "chatgpt_owner_team_id": "team-unbound",
+                        "chatgpt_owner_key_hash": "hash-unbound",
+                    }
+                },
+            ),
+            (None, None, {}),
+        ],
+        ids=["by-team", "by-key", "by-team-and-key", "unbound", "no-owner"],
+    )
+    def test_secret_fields_carry_only_who_the_caller_is(self, monkeypatch, team_id, key_hash, added):
+        self._serve_logins(monkeypatch)
+        data = {"model": "chatgpt-seat", "secret_fields": {"raw_headers": {}}}
+
+        _record_chatgpt_subscription_owner_for_request(data=data, team_id=team_id, key_hash=key_hash)
+
+        assert data["secret_fields"] == {"raw_headers": {}, **added}
+        owner = data["secret_fields"].get("chatgpt_subscription_owner", RedactedDict())
+        assert isinstance(owner, RedactedDict)
+        for shown in (str(data), repr(data)):
+            assert all(value not in shown for value in owner.values())
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("model", ["chatgpt-seat", "gpt-4o"], ids=["chatgpt-model", "other-model"])
+    async def test_a_request_from_a_login_owner_carries_its_owner_ids_and_no_login_token(self, monkeypatch, model):
+        self._serve_logins(monkeypatch)
+
+        updated = await add_litellm_data_to_request(
+            data={"model": model, "input": "hello"},
+            request=self._request(),
+            user_api_key_dict=UserAPIKeyAuth(token="hash-k", team_id="team-b", user_id="user-1", metadata={}),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+        assert updated["secret_fields"]["chatgpt_subscription_owner"] == {
+            "chatgpt_owner_team_id": "team-b",
+            "chatgpt_owner_key_hash": "hash-k",
+        }
+        self._assert_no_token_in(json.dumps(updated["secret_fields"], default=str))
+        self._assert_no_token_in(json.dumps(updated, default=str))
+
+    @pytest.mark.asyncio
+    async def test_a_caller_owning_a_stale_login_reaches_no_database_or_token_endpoint_before_its_call(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                self._login("login-team-a", self._STALE_EXPIRES_AT, chatgpt_owner_team_id="team-a"),
+                self._login("login-team-b", self._FRESH_EXPIRES_AT, chatgpt_owner_team_id="team-b"),
+            ],
+        )
+        credentials_table = _RecordingCredentialsTable()
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.prisma_client",
+            SimpleNamespace(db=SimpleNamespace(litellm_credentialstable=credentials_table)),
+        )
+
+        updated = await add_litellm_data_to_request(
+            data={"model": "gpt-4o", "input": "hello"},
+            request=self._request(),
+            user_api_key_dict=UserAPIKeyAuth(token="hash-unbound", team_id="team-a", user_id="user-1", metadata={}),
+            proxy_config=MagicMock(),
+            general_settings={},
+            version="test-version",
+        )
+
+        assert credentials_table.reads == []
+        assert updated["secret_fields"]["chatgpt_subscription_owner"] == {
+            "chatgpt_owner_team_id": "team-a",
+            "chatgpt_owner_key_hash": "hash-unbound",
+        }
+
+
 def _per_user_env(monkeypatch, credential_names=("copilot-cred",)):
 
     monkeypatch.setattr(
@@ -12311,7 +12474,10 @@ def test_pre_call_served_model_applies_aliases_in_request_preparation_order(
 def test_request_served_model_ignores_a_malformed_alias_like_request_preparation_does(
     token_fields: dict[str, object], expected: str
 ) -> None:
-    from litellm.proxy.litellm_pre_call_utils import _update_model_if_key_alias_exists, _update_model_if_team_alias_exists
+    from litellm.proxy.litellm_pre_call_utils import (
+        _update_model_if_key_alias_exists,
+        _update_model_if_team_alias_exists,
+    )
     from litellm.proxy.litellm_pre_call_utils import request_served_model
 
     valid_token: Final = UserAPIKeyAuth(**token_fields)

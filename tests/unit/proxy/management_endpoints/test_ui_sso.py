@@ -812,6 +812,7 @@ async def test_default_team_params(team_params):
     mock_prisma.db.litellm_teamtable.create = AsyncMock()
     _wire_team_create_tx(mock_prisma)
     mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_prisma.db.litellm_credentialstable.count = AsyncMock(return_value=0)
     mock_prisma.get_data = AsyncMock(return_value=None)
     mock_prisma.jsonify_team_object = MagicMock(side_effect=mock_jsonify_team_object)
 
@@ -861,6 +862,7 @@ async def test_default_team_params_organization_id_reaches_sso_created_team(team
     mock_prisma.db.litellm_teamtable.create = AsyncMock()
     _wire_team_create_tx(mock_prisma)
     mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_prisma.db.litellm_credentialstable.count = AsyncMock(return_value=0)
     mock_prisma.get_data = AsyncMock(return_value=None)
     mock_prisma.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
 
@@ -909,6 +911,7 @@ async def test_create_team_without_default_params():
     mock_prisma.db.litellm_teamtable.create = AsyncMock()
     _wire_team_create_tx(mock_prisma)
     mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_prisma.db.litellm_credentialstable.count = AsyncMock(return_value=0)
     mock_prisma.get_data = AsyncMock(return_value=None)
     mock_prisma.jsonify_team_object = MagicMock(side_effect=mock_jsonify_team_object)
 

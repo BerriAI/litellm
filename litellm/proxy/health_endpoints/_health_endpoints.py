@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.clientside_credential_handler import (
 )
 from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
+from litellm.llms.chatgpt.subscription_login import chatgpt_login_probe_params
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     AlertType,
@@ -203,6 +204,18 @@ def _admin_api_key_from_request(
     marked: Final = admin_api_key_secret_reference({**call_params, "api_key": request_litellm_params.get("api_key")})
     api_key: Final = marked.get("api_key")
     return MappingProxyType({"api_key": api_key} if isinstance(api_key, AdminApiKeySecretReference) else {})
+
+
+def _chatgpt_login_probers(
+    user_api_key_dict: UserAPIKeyAuth, model_info: Mapping[str, object]
+) -> tuple[tuple[str | None, str | None], ...] | None:
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return None
+    deployment_team_id: Final = model_info.get("team_id")
+    return (
+        (user_api_key_dict.team_id, user_api_key_dict.token),
+        *(((deployment_team_id, None),) if isinstance(deployment_team_id, str) else ()),
+    )
 
 
 def _config_base_for_health_check(
@@ -2760,14 +2773,19 @@ async def test_model_connection(
         raw_headers: Final[dict[str, str]] = TypeAdapter(dict[str, str]).validate_python(
             http_parsing_utils.safe_get_request_headers(request)
         )
-        health_check_params: Final = {
-            **_OBJECT_MAPPING.validate_python(litellm_params),
-            **_admin_api_key_from_request(
-                _OBJECT_MAPPING.validate_python(request_litellm_params),
-                _OBJECT_MAPPING.validate_python(litellm_params),
-            ),
-            "secret_fields": SecretFields(raw_headers=RedactedDict(raw_headers)),
-        }
+        health_check_params: Final = dict(
+            chatgpt_login_probe_params(
+                {
+                    **_OBJECT_MAPPING.validate_python(litellm_params),
+                    **_admin_api_key_from_request(
+                        _OBJECT_MAPPING.validate_python(request_litellm_params),
+                        _OBJECT_MAPPING.validate_python(litellm_params),
+                    ),
+                    "secret_fields": SecretFields(raw_headers=RedactedDict(raw_headers)),
+                },
+                _chatgpt_login_probers(user_api_key_dict, _OBJECT_MAPPING.validate_python(resolved_model_info or {})),
+            )
+        )
 
         result: Final = await run_with_timeout(
             litellm.ahealth_check(

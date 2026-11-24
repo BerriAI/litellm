@@ -685,6 +685,36 @@ async def test_new_team_rejects_a_duration_that_never_advances(
 
 
 @pytest.mark.asyncio
+async def test_new_team_refuses_a_deleted_teams_id_that_still_owns_a_chatgpt_login(
+    mock_db_client, mock_admin_auth, monkeypatch
+):
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    monkeypatch.setattr(litellm, "credential_list", [])
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.db = MagicMock()
+    mock_team_create = AsyncMock()
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = mock_team_create
+    mock_db_client.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_credentialstable.count = AsyncMock(return_value=1)
+    _wire_team_create_tx(mock_db_client)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await new_team(
+            data=NewTeamRequest(team_id="deleted-team", team_alias="recreated"),
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert str(exc_info.value.code) == "409"
+    mock_team_create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["budget_duration", "team_member_budget_duration"])
 async def test_update_team_rejects_a_duration_that_never_advances(
     mock_db_client, mock_admin_auth, field
@@ -11455,6 +11485,7 @@ async def test_new_team_with_router_settings(mock_db_client, mock_admin_auth):
     mock_db_client.db.litellm_teamtable.create = mock_team_create
     _wire_team_create_tx(mock_db_client)
     mock_db_client.db.litellm_teamtable.count = mock_team_count
+    mock_db_client.db.litellm_credentialstable.count = AsyncMock(return_value=0)
     mock_db_client.db.litellm_teamtable.update = AsyncMock(
         return_value=team_create_result
     )
@@ -15691,6 +15722,7 @@ async def test_new_team_created_audit_event_carries_the_final_roster(monkeypatch
 
     mock_prisma = MagicMock()
     mock_prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+    mock_prisma.db.litellm_credentialstable.count = AsyncMock(return_value=0)
     mock_prisma.jsonify_team_object = lambda db_data: db_data
     mock_prisma.get_data = AsyncMock(return_value=None)
     mock_prisma.update_data = AsyncMock()
@@ -16988,6 +17020,7 @@ async def test_new_team_and_delete_team_both_drive_the_mirror(
     ):
         prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
         prisma.db.litellm_teamtable.count = AsyncMock(return_value=0)
+        prisma.db.litellm_credentialstable.count = AsyncMock(return_value=0)
         prisma.db.tx = fake_db.tx
         prisma.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
         prisma.get_data = AsyncMock(return_value=None)

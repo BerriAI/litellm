@@ -447,6 +447,7 @@ _POSTGRES_OPERATION_BY_CALL_TYPE: Final[Mapping[str, PostgresOperation]] = Mappi
         "insert_spend_logs": PostgresOperation("insert", None),
         "migrate_config_credentials": PostgresOperation("update", None),
         "migrate_sso_credentials": PostgresOperation("update", None),
+        "save_chatgpt_login": PostgresOperation("update", "LiteLLM_CredentialsTable"),
         "backfill_mcp_oauth_issuer": PostgresOperation("update", None),
         "auto_register_jwt_mapping": PostgresOperation("insert", None),
         "delete_orphaned_jwt_key": PostgresOperation("delete", None),

@@ -6263,3 +6263,69 @@ async def test_unsaved_chatgpt_account_probe_requires_proxy_admin(
                 await call
             assert error.value.code == "403"
             assert len(upstream.calls) == 0
+
+
+def _chatgpt_codex_reply(model: str) -> str:
+    response: Final = {
+        "id": "resp_probe",
+        "object": "response",
+        "created_at": 1700000000,
+        "status": "completed",
+        "model": model,
+        "output": [
+            {
+                "id": "msg_probe",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+            }
+        ],
+        "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+    }
+    return "data: " + json.dumps({"type": "response.completed", "response": response}) + "\n\n"
+
+
+@pytest.mark.asyncio
+async def test_test_connect_on_a_deployment_naming_a_team_owned_chatgpt_login_runs_as_that_team(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from starlette.requests import Request
+    from litellm.proxy import proxy_server
+
+    login_token: Final = "team-a-login-access-token"
+    monkeypatch.setenv("CHATGPT_AUTH_FILE", str(tmp_path / "missing-host-auth.json"))
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="team-a-chatgpt",
+                credential_values={
+                    "chatgpt_access_token": login_token,
+                    "chatgpt_refresh_token": "team-a-refresh-token",
+                    "chatgpt_account_id": "acct-team-a",
+                    "chatgpt_expires_at": "4102444800",
+                },
+                credential_info={"custom_llm_provider": "chatgpt", "chatgpt_owner_team_id": "team-a"},
+            )
+        ],
+    )
+    with respx.mock(assert_all_called=False) as upstream:
+        upstream.post("https://chatgpt.com/backend-api/codex/responses").respond(
+            200, text=_chatgpt_codex_reply("gpt-6.1-sol"), headers={"content-type": "text/event-stream"}
+        )
+        result: Final = await health_test_model_connection(
+            request=Request({"type": "http", "headers": []}),
+            mode="responses",
+            litellm_params={"model": "chatgpt/gpt-6.1-sol", "litellm_credential_name": "team-a-chatgpt"},
+            model_info={},
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, token="admin-key-hash"),
+        )
+
+        assert result["status"] == "success", result
+        assert upstream.calls.last.request.headers["Authorization"] == f"Bearer {login_token}"

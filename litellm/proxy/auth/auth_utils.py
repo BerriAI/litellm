@@ -66,6 +66,7 @@ from litellm.types.utils import (
     OIDC_SECRET_REFERENCE_PREFIX,
     CustomPricingLiteLLMParams,
     LlmProviders,
+    chatgpt_subscription_login_secret_params,
     oauth_token_exchange_litellm_params,
 )
 from litellm.types.videos.main import DecodedVideoId
@@ -349,6 +350,12 @@ def reject_federated_credential_reference(body: Mapping[str, object]) -> None:
     wif_fields: Final = server_owned_wif_fields_present(
         _CREDENTIAL_VALUES.validate_python(CredentialAccessor.get_credential_values(named))
     )
+    if any(field in chatgpt_subscription_login_secret_params for field in wif_fields):
+        raise ValueError(
+            f"Rejected Request: litellm_credential_name={named!r} names a ChatGPT subscription login, which a "
+            "request body cannot choose. A proxy admin attaches it to a deployment, and only its owner team or key "
+            "can use it."
+        )
     if wif_fields:
         raise ValueError(
             f"Rejected Request: litellm_credential_name={named!r} names a credential configured for "

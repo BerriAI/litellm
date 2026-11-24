@@ -13,6 +13,7 @@ import {
   CredentialItem,
   credentialUpdateCall,
 } from "@/components/networking";
+import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { Button } from "@/components/ui/button";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { stripMaskedSecrets } from "@/utils/maskedSecretUtils";
@@ -73,6 +74,13 @@ export default function CredentialsPanel() {
     }
   };
 
+  const handleChatGPTSignedIn = () => {
+    toast.success(t("modelAdd.credentialsPanel.chatgptSignedIn"));
+    setIsAddModalOpen(false);
+    setIsUpdateModalOpen(false);
+    void refetchCredentials();
+  };
+
   const handleDeleteCredential = async () => {
     if (!accessToken || !credentialToDelete) {
       return;
@@ -130,6 +138,7 @@ export default function CredentialsPanel() {
         <CredentialModal
           mode="add"
           onSubmit={handleAddCredential}
+          onSignedIn={handleChatGPTSignedIn}
           open={isAddModalOpen}
           onCancel={() => setIsAddModalOpen(false)}
         />
@@ -140,6 +149,7 @@ export default function CredentialsPanel() {
           open={isUpdateModalOpen}
           existingCredential={selectedCredential}
           onSubmit={handleUpdateCredential}
+          onSignedIn={handleChatGPTSignedIn}
           onCancel={() => setIsUpdateModalOpen(false)}
         />
       )}
@@ -155,7 +165,7 @@ export default function CredentialsPanel() {
           { label: t("modelAdd.credentialsPanel.credentialName"), value: credentialToDelete?.credential_name },
           {
             label: t("modelAdd.credentialsPanel.provider"),
-            value: credentialToDelete?.credential_info?.custom_llm_provider || "-",
+            value: getProviderLogoAndName(credentialToDelete?.credential_info?.custom_llm_provider ?? "").displayName,
           },
         ]}
         confirmLoading={isCredentialDeleting}

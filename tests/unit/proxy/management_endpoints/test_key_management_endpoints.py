@@ -785,6 +785,7 @@ async def test_generate_key_debug_log_never_contains_raw_token(monkeypatch, capl
     mock_prisma_client = AsyncMock()
     mock_prisma_client.jsonify_object = lambda data: data
     mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_credentialstable.count = AsyncMock(return_value=0)
 
     async def _insert_data_side_effect(*args, **kwargs):
         if kwargs.get("table_name") == "user":
@@ -1686,6 +1687,7 @@ async def test_generate_key_fn_rejects_short_custom_key(monkeypatch, short_key):
     mock_prisma_client.db.litellm_verificationtoken = MagicMock()
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_credentialstable.count = AsyncMock(return_value=0)
 
     from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles, ProxyException
     from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -1719,6 +1721,7 @@ async def test_generate_key_fn_accepts_custom_key_at_minimum_length(monkeypatch)
     )
     mock_prisma_client.insert_data = mock_insert_data
     mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_credentialstable.count = AsyncMock(return_value=0)
     mock_prisma_client.db.litellm_verificationtoken = MagicMock()
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
     mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
@@ -1758,7 +1761,7 @@ async def test_check_custom_key_allowed_when_disabled(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_custom_api_keys": True})
 
     with pytest.raises(HTTPException) as exc_info:
-        await _check_custom_key_allowed("sk-custom-key-123")
+        await _check_custom_key_allowed("sk-custom-key-123", None)
 
     assert exc_info.value.status_code == 403
     assert "disabled" in str(exc_info.value.detail).lower()
@@ -1774,7 +1777,7 @@ async def test_check_custom_key_allowed_when_enabled(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_custom_api_keys": False})
 
     # Should not raise
-    await _check_custom_key_allowed("sk-custom-key-123")
+    await _check_custom_key_allowed("sk-custom-key-123", None)
 
 
 @pytest.mark.asyncio
@@ -1787,7 +1790,58 @@ async def test_check_custom_key_allowed_when_unset(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
 
     # Should not raise
-    await _check_custom_key_allowed("sk-custom-key-123")
+    await _check_custom_key_allowed("sk-custom-key-123", None)
+
+
+@pytest.mark.asyncio
+async def test_a_deleted_keys_value_that_still_owns_a_chatgpt_login_cannot_be_reused(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import _check_custom_key_allowed
+
+    deleted_key: Final = "sk-deleted-key-123456"
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="deleted-key-login",
+                credential_values={"chatgpt_refresh_token": "refresh-deleted-key-login"},
+                credential_info={"custom_llm_provider": "chatgpt", "chatgpt_owner_key_hash": hash_token(deleted_key)},
+            )
+        ],
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        await _check_custom_key_allowed(deleted_key, None)
+
+    assert refused.value.status_code == 409
+    await _check_custom_key_allowed("sk-another-key-123456", None)
+
+
+class _StoredLoginOwners:
+    def __init__(self, owner_key_hashes: frozenset[str]) -> None:
+        self.owner_key_hashes: Final = owner_key_hashes
+
+    async def has_info_value(self, info_key: str, value: str) -> bool:
+        from litellm.llms.chatgpt.subscription_login import CHATGPT_OWNER_KEY_HASH_KEY
+
+        return info_key == CHATGPT_OWNER_KEY_HASH_KEY and value in self.owner_key_hashes
+
+
+@pytest.mark.asyncio
+async def test_a_deleted_keys_value_is_refused_when_only_the_database_has_its_chatgpt_login(monkeypatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import _check_custom_key_allowed
+
+    deleted_key: Final = "sk-deleted-key-123456"
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr(litellm, "credential_list", [])
+    stored: Final = _StoredLoginOwners(frozenset({hash_token(deleted_key)}))
+
+    with pytest.raises(HTTPException) as refused:
+        await _check_custom_key_allowed(deleted_key, stored)
+
+    assert refused.value.status_code == 409
+    await _check_custom_key_allowed("sk-another-key-123456", stored)
 
 
 @pytest.mark.asyncio
@@ -1805,7 +1859,7 @@ async def test_check_custom_key_allowed_honours_the_config_file(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
 
     with pytest.raises(HTTPException) as exc_info:
-        await _check_custom_key_allowed("sk-custom-key-123456")
+        await _check_custom_key_allowed("sk-custom-key-123456", None)
 
     assert exc_info.value.status_code == 403
 
@@ -1839,7 +1893,7 @@ async def test_check_custom_key_allowed_coerces_a_non_bool_config_value(monkeypa
 
     rejected = False
     try:
-        await _check_custom_key_allowed("sk-custom-key-123456")
+        await _check_custom_key_allowed("sk-custom-key-123456", None)
     except HTTPException as e:
         rejected = e.status_code == 403
 
@@ -1866,7 +1920,7 @@ async def test_check_custom_key_allowed_config_file_beats_the_stored_ui_row(monk
     apply_runtime_general_settings_flags({"disable_custom_api_keys": False})
 
     with pytest.raises(HTTPException) as exc_info:
-        await _check_custom_key_allowed("sk-custom-key-123456")
+        await _check_custom_key_allowed("sk-custom-key-123456", None)
 
     assert exc_info.value.status_code == 403
 
@@ -1888,12 +1942,12 @@ async def test_check_custom_key_allowed_picks_up_a_ui_write_without_the_serving_
     general_settings.load_yaml({})
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
 
-    await _check_custom_key_allowed("sk-custom-key-123456")
+    await _check_custom_key_allowed("sk-custom-key-123456", None)
 
     apply_runtime_general_settings_flags({"disable_custom_api_keys": True})
 
     with pytest.raises(HTTPException) as exc_info:
-        await _check_custom_key_allowed("sk-custom-key-123456")
+        await _check_custom_key_allowed("sk-custom-key-123456", None)
 
     assert exc_info.value.status_code == 403
 
@@ -1908,7 +1962,7 @@ async def test_check_custom_key_allowed_none_key_always_passes(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"disable_custom_api_keys": True})
 
     # Should not raise — None means auto-generate
-    await _check_custom_key_allowed(None)
+    await _check_custom_key_allowed(None, None)
 
 
 @pytest.mark.asyncio
@@ -14111,6 +14165,85 @@ async def test_execute_virtual_key_regeneration_rejects_when_custom_key_update_h
     assert len(received_data) == 1
     assert received_data[0].key == "abc123"
     assert received_data[0].duration == "3000d"
+
+
+def _chatgpt_login_owned_by_key(credential_name: str, key_hash: str) -> CredentialItem:
+    return CredentialItem(
+        credential_name=credential_name,
+        credential_values={"chatgpt_access_token": f"at-{credential_name}", "chatgpt_refresh_token": "rt"},
+        credential_info={"custom_llm_provider": "chatgpt", "chatgpt_owner_key_hash": key_hash},
+    )
+
+
+class _CredentialInfoRows:
+    def __init__(self, *credentials: CredentialItem) -> None:
+        self.info: dict[str, dict[str, object]] = {
+            credential.credential_name: dict(credential.credential_info) for credential in credentials
+        }
+
+    async def execute_raw(self, query: str, info_key: str, previous_value: str, new_value: str) -> int:
+        assert '"LiteLLM_CredentialsTable"' in query
+        matching: Final = [name for name, info in self.info.items() if info.get(info_key) == previous_value]
+        for name in matching:
+            self.info[name] = {**self.info[name], info_key: new_value}
+        return len(matching)
+
+
+@pytest.mark.asyncio
+async def test_regenerating_a_key_moves_the_chatgpt_logins_it_owns_to_the_new_key(monkeypatch):
+    from litellm.proxy.credential_endpoints.chatgpt_subscription_logins import owned_chatgpt_subscription_logins
+    from litellm.proxy.management_endpoints.key_management_endpoints import _execute_virtual_key_regeneration
+
+    owned_by_old_key: Final = _chatgpt_login_owned_by_key("login-old-key", "abc123")
+    owned_by_other_key: Final = _chatgpt_login_owned_by_key("login-other-key", "other-key-hash")
+    monkeypatch.setattr(litellm, "credential_list", [owned_by_old_key, owned_by_other_key])
+    rows: Final = _CredentialInfoRows(owned_by_old_key, owned_by_other_key)
+    mock_prisma_client = _make_regenerate_mock_prisma()
+    mock_prisma_client.db.execute_raw = rows.execute_raw
+
+    with (
+        patch(  # test-quality-ok: deterministic new key so the new hash is known
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_new_token",
+            new_callable=AsyncMock,
+            return_value="sk-newtoken1234ab12",
+        ),
+        patch(  # test-quality-ok: grace-period path is outside the login repoint
+            "litellm.proxy.management_endpoints.key_management_endpoints._insert_deprecated_key",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: cache eviction is outside the login repoint
+            "litellm.proxy.management_endpoints.key_management_endpoints.delete_cache_key_object",
+            new_callable=AsyncMock,
+        ),
+        patch(  # test-quality-ok: rotation callback is outside the login repoint
+            "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_rotated_hook",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=_make_regenerate_existing_key(),
+            hashed_api_key="abc123",
+            key="abc123",
+            data=RegenerateKeyRequest(),
+            user_api_key_dict=_make_regenerate_user_api_key_dict(),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    new_key_hash: Final = hash_token("sk-newtoken1234ab12")
+    assert rows.info == {
+        "login-old-key": {"custom_llm_provider": "chatgpt", "chatgpt_owner_key_hash": new_key_hash},
+        "login-other-key": dict(owned_by_other_key.credential_info),
+    }
+    assert [login.credential_name for login in owned_chatgpt_subscription_logins(None, new_key_hash)] == [
+        "login-old-key"
+    ]
+    assert owned_chatgpt_subscription_logins(None, "abc123") == ()
+    assert [login.credential_name for login in owned_chatgpt_subscription_logins(None, "other-key-hash")] == [
+        "login-other-key"
+    ]
 
 
 @pytest.mark.asyncio

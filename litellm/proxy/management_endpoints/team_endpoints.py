@@ -152,6 +152,10 @@ from litellm.proxy.common_utils.timezone_utils import (
     keeps_budget_reset,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.credential_endpoints.chatgpt_subscription_logins import (
+    owner_has_chatgpt_login,
+    primary_credential_rows,
+)
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.guardrails.guardrail_helpers import validate_guardrail_names
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
@@ -1995,6 +1999,14 @@ async def new_team(
                 raise HTTPException(
                     status_code=400,
                     detail={"error": f"Team id = {data.team_id} already exists. Please use a different team id."},
+                )
+            if await owner_has_chatgpt_login(primary_credential_rows(prisma_client), data.team_id, None):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": f"Team id = {data.team_id} belonged to a deleted team that still owns a ChatGPT "
+                        "subscription login. Delete that login under LLM Credentials, or use a different team id."
+                    },
                 )
 
         if data.organization_id is None:

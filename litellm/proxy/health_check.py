@@ -32,6 +32,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.litellm_core_utils.health_check_helpers import native_health_check_mode
 from litellm.litellm_core_utils.routing_common_utils import deployment_model_id_pin, is_model_capability_field
+from litellm.llms.chatgpt.subscription_login import chatgpt_login_probe_params
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     StrategyRouterDependency,
     classify_strategy_router_model,
@@ -701,8 +702,14 @@ async def _run_model_health_check(model: dict):
         model_info, litellm_params
     )
     timeout: Final = model_info.get("health_check_timeout") or HEALTH_CHECK_TIMEOUT_SECONDS
-    probe_params: Final = (
-        {**litellm_params, "model_info": {"mode": model_info["mode"]}} if "mode" in model_info else litellm_params
+    probe_params: Final = dict(
+        chatgpt_login_probe_params(
+            _PROBE_PARAMS_ADAPTER.validate_python(
+                {**litellm_params, "model_info": {"mode": model_info["mode"]}}
+                if "mode" in model_info
+                else litellm_params
+            )
+        )
     )
 
     return await run_with_timeout(

@@ -163,6 +163,7 @@ from litellm.llms.bedrock.common_utils import (
     without_bedrock_route_prefix,
 )
 from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
+from litellm.llms.chatgpt.subscription_login import aattach_chatgpt_subscription_login
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_reasoning_transformation import (
@@ -989,6 +990,7 @@ async def acompletion(
                 "str | None", request_kwargs.get("api_base")
             )
             or base_url,
+            api_key=api_key,
             litellm_params=_supplemental_provider_params(
                 _REQUEST_KWARGS_ADAPTER.validate_python({**kwargs, "extra_headers": extra_headers}), model
             ).params,
@@ -9921,6 +9923,7 @@ async def ahealth_check(
         requested_model: Final = OPTIONAL_STR.validate_python(model_params.get("model", None))
         if requested_model is None:
             raise Exception("model not set")
+        await aattach_chatgpt_subscription_login(model_params, requested_model)  # pyright: ignore[reportUnknownArgumentType]  # model_params is the untyped health check dict
 
         custom_llm_provider_from_params: Final = model_params.get("custom_llm_provider", None)
         api_base_from_params: Final = model_params.get("api_base", None)

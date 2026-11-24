@@ -19592,7 +19592,9 @@
       "needHelp": "Need Help?",
       "cancel": "Cancel",
       "updateSubmit": "Update Credential",
-      "addSubmit": "Add Credential"
+      "addSubmit": "Add Credential",
+      "chatgptSignInSubmit": "Sign in with ChatGPT",
+      "chatgptSignInAgainSubmit": "Sign in again"
     },
     "userConnectionsPanel": {
       "disconnected": "GitHub Copilot disconnected",
@@ -19651,7 +19653,30 @@
       "deleteMessage": "Are you sure you want to delete this credential? This action cannot be undone and may break existing integrations.",
       "deleteInformationTitle": "Credential Information",
       "credentialName": "Credential Name",
-      "provider": "Provider"
+      "provider": "Provider",
+      "chatgptSignedIn": "Signed in with ChatGPT"
+    },
+    "chatgptSignIn": {
+      "owner": "Owner:",
+      "ownerHint": "Only the team or virtual key you pick can use this ChatGPT subscription.",
+      "ownerTeam": "Team",
+      "ownerKey": "Virtual key",
+      "team": "Team:",
+      "teamRequired": "Pick the team that owns this login",
+      "keyId": "Key ID:",
+      "keyIdRequired": "Enter the ID of the key that owns this login",
+      "keyIdPlaceholder": "The Key ID shown on the Virtual Keys page",
+      "title": "Sign in with ChatGPT",
+      "credential": "Credential: {{credentialName}}",
+      "requestingCode": "Requesting a sign-in code from ChatGPT...",
+      "enterCode": "Open <verification>{{verificationUri}}</verification> and enter this code:",
+      "copyCode": "Copy code",
+      "codeCopied": "Code copied",
+      "waiting": "Waiting for you to finish signing in on ChatGPT...",
+      "startAgain": "Start again",
+      "close": "Close",
+      "codeExpired": "The sign-in code expired before it was used. Start again to get a new code.",
+      "failed": "Something went wrong while signing in to ChatGPT."
     },
     "federationFields": {
       "storedValue": "Stored: {{value}}",

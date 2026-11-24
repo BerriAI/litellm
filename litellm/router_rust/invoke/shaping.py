@@ -582,6 +582,9 @@ def update_kwargs_with_deployment(
             model=str(deployment_model_name),
             llm_provider="",
         )
+    from litellm.llms.chatgpt.subscription_login import reject_chatgpt_credential_override
+
+    reject_chatgpt_credential_override(deployment_params, kwargs, str(deployment_params.get("model") or ""))
 
     kwargs["model_info"] = (  # rebind-ok: the request kwargs are shaped in place, as the Python router shapes them
         model_info
