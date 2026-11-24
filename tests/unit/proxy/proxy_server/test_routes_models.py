@@ -312,6 +312,56 @@ def test_anthropic_display_name_resolved_via_internal_team_key(client, auth_as, 
     assert (entry["id"], entry["display_name"]) == ("gpt-4-team", "Team GPT")
 
 
+@pytest.fixture
+def router_with_model_descriptions(monkeypatch: pytest.MonkeyPatch) -> Router:
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost})
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "described",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-test"},
+                "model_info": {"description": "A configured model description"},
+            },
+            {"model_name": "undescribed", "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-test"}},
+            {
+                "model_name": "model_name_team-1_sonnet",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-test"},
+                "model_info": {
+                    "team_id": "team-1",
+                    "team_public_model_name": "team-sonnet",
+                    "description": "A team model description",
+                },
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    return router
+
+
+@pytest.mark.usefixtures("router_with_model_descriptions")
+@pytest.mark.parametrize("params", [{}, {"scope": "expand"}], ids=["default", "expanded"])
+def test_anthropic_format_only_includes_configured_descriptions(client, auth_as, params):
+    with auth_as():
+        response = client.get("/v1/models", params=params, headers={"anthropic-version": "2023-06-01"})
+
+    assert response.status_code == 200
+    rows = {row["id"]: row for row in response.json()["data"]}
+    assert rows["described"].get("description") == "A configured model description"
+    assert "description" not in rows["undescribed"]
+
+
+@pytest.mark.usefixtures("router_with_model_descriptions")
+def test_anthropic_description_uses_internal_team_lookup_id(client, auth_as):
+    with auth_as(team_id="team-1", team_models=["model_name_team-1_sonnet"]):
+        response = client.get("/v1/models", headers={"anthropic-version": "2023-06-01"})
+
+    assert response.status_code == 200
+    (row,) = response.json()["data"]
+    assert (row["id"], row.get("description")) == ("team-sonnet", "A team model description")
+
+
 @pytest.mark.parametrize("path", ["/v1/models", "/models"])
 def test_get_models_invalid_scope_returns_400(client, auth_as, patched_models, path):
     """Pins: ``GET /v1/models``, ``GET /models`` (error path: invalid scope)."""
