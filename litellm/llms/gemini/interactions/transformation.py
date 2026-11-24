@@ -9,8 +9,10 @@ Per OpenAPI spec (https://ai.google.dev/static/api/interactions.openapi.json):
 Requests use Api-Revision 2026-05-20 (`steps` schema).
 """
 
+import re
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias
+from urllib.parse import urlsplit
 
 import httpx
 from typing_extensions import ReadOnly, TypedDict
@@ -112,6 +114,9 @@ def _cancel_body(response: _CancelPayloadSource) -> _CancelPayload:
     return response.json()
 
 
+_API_VERSION_SUFFIX: Final = re.compile(r"/v1(?:alpha|beta)\d*/?$")
+
+
 class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
     """
     Configuration for Google AI Studio Interactions API.
@@ -168,7 +173,10 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
 
     def _collection_url(self, api_base: str | None) -> str:
         resolved_base: Final = GeminiModelInfo.get_api_base(api_base).removesuffix("?alt=sse")
-        return ensure_api_route(resolved_base, f"{self.api_version}/interactions")
+        has_api_version: Final = _API_VERSION_SUFFIX.search(urlsplit(resolved_base).path) is not None
+        return ensure_api_route(
+            resolved_base, "interactions" if has_api_version else f"{self.api_version}/interactions"
+        )
 
     def get_complete_url(
         self,

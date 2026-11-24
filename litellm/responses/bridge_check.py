@@ -376,7 +376,7 @@ def _is_interactions_eligible_target(
 ) -> bool:
     if custom_llm_provider not in _INTERACTIONS_ELIGIBLE_PROVIDERS:
         return False
-    if custom_llm_provider == "vertex_ai":
+    if custom_llm_provider in ("vertex_ai", "vertex_ai_beta"):
         return get_vertex_ai_model_route(model=model, litellm_params=litellm_params) == VertexAIModelRoute.GEMINI
     return True
 

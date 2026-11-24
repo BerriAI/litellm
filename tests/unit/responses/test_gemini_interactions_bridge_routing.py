@@ -754,3 +754,40 @@ def test_gemini_4_stream_asked_to_be_replayed_makes_one_complete_interactions_re
     assert text == "ANSWER"
     assert [(req.url.path, req.url.query) for req in captured] == [("/v1beta/interactions", b"")]
     assert "stream" not in json.loads(captured[0].content)
+
+
+def test_non_gemini_vertex_beta_model_is_never_sent_to_the_gemini_interactions_bridge(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", True)
+
+    assert should_route_to_interactions_api(model="gemini-4-neon", custom_llm_provider="vertex_ai_beta") is True
+    assert should_route_to_interactions_api(model="claude-opus-4-7", custom_llm_provider="vertex_ai_beta") is False
+    assert (
+        should_route_to_interactions_api(
+            model="claude-opus-4-7", custom_llm_provider="vertex_ai_beta", optional_params={"use_interactions": True}
+        )
+        is False
+    )
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    ("https://gateway.example", "https://gateway.example/v1beta", "https://gateway.example/v1beta/"),
+)
+def test_gemini_4_completion_reaches_one_interactions_path_whether_or_not_the_api_base_names_the_version(
+    monkeypatch: pytest.MonkeyPatch, api_base: str
+) -> None:
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
+    captured: Final[list[httpx.Request]] = []  # mutable-ok: transport spy
+
+    with httpx.Client(transport=_answering_either_gemini_route(captured)) as raw_client:
+        litellm.completion(  # pyright: ignore[reportUnknownMemberType]  # completion is untyped upstream
+            model="gemini/gemini-4-neon",
+            messages=[{"role": "user", "content": "answer"}],
+            api_key="unit-gemini-key",
+            api_base=api_base,
+            client=HTTPHandler(client=raw_client),
+        )
+
+    assert [str(req.url) for req in captured] == ["https://gateway.example/v1beta/interactions"]

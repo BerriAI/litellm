@@ -10,6 +10,7 @@ from typing import Final, TypeAlias
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
+from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     parse_allowed_tools_tool_choice,
@@ -75,7 +76,9 @@ class InteractionsPreparedRequest:
 
 
 def _default_media_fetcher(url: str, format_hint: str | None) -> tuple[str, str]:
-    fetched: Final = convert_to_anthropic_image_obj(url, format=format_hint)
+    fetched: Final = convert_to_anthropic_image_obj(
+        url, format=format_hint, max_bytes=int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
+    )
     return fetched["media_type"], fetched["data"]
 
 

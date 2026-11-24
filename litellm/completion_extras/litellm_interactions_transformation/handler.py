@@ -464,7 +464,7 @@ def _mark_initial_prompt_tokens(result: ModelResponse, hops: Sequence[JsonMappin
 
 
 _VERTEX_MODEL_PATH: Final = re.compile(
-    r"/v1(?:beta1)?/projects/[^/]+/locations/[^/]+/(?:publishers/[^/]+/)?models/[^/]+/?$"
+    r"/v1(?:beta1)?/projects/[^/]+/locations/[^/]+/(?:publishers/[^/]+/)?models/[^/?]+/?(?:\?.*)?$"
 )
 
 

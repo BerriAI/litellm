@@ -37,6 +37,30 @@ def _api_base_without_login(provider: str) -> str | None:
     return None
 
 
+def _chat_goes_to_interactions(
+    model: str,
+    custom_llm_provider: str,
+    request_params: object,
+    litellm_params: object,
+    deployment_model_info: object,
+) -> bool:
+    from litellm.responses.bridge_check import should_route_to_interactions_api, str_keyed_mapping
+
+    fields: Final = str_keyed_mapping(request_params) or {}
+    tier: Final = fields.get("service_tier")
+    return should_route_to_interactions_api(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        optional_params=request_params,
+        litellm_params=litellm_params,
+        deployment_model_info=deployment_model_info,
+        candidate_count=fields.get("n"),
+        asks_for_logprobs=fields.get("logprobs") is True or fields.get("top_logprobs") is not None,
+        tools=fields.get("tools"),
+        service_tier=tier if isinstance(tier, str) else None,
+    )
+
+
 def _provider_default_api_base(
     model: str,
     custom_llm_provider: str | None,
@@ -48,16 +72,9 @@ def _provider_default_api_base(
     if custom_llm_provider == "gemini":
         from litellm.litellm_core_utils.url_utils import ensure_api_route
         from litellm.llms.gemini.common_utils import GeminiModelInfo
-        from litellm.responses.bridge_check import should_route_to_interactions_api
 
         gemini_base: Final = GeminiModelInfo.get_api_base().removesuffix("?alt=sse")
-        if should_route_to_interactions_api(
-            model=model,
-            custom_llm_provider=custom_llm_provider,
-            optional_params=extra_params,
-            litellm_params=litellm_params,
-            deployment_model_info=deployment_model_info,
-        ):
+        if _chat_goes_to_interactions(model, custom_llm_provider, extra_params, litellm_params, deployment_model_info):
             suffix: Final = "?alt=sse" if stream else ""
             return f"{ensure_api_route(gemini_base, 'v1beta/interactions')}{suffix}"
         action: Final = "streamGenerateContent" if stream else "generateContent"
@@ -151,16 +168,14 @@ def get_api_base(model: str, optional_params: object) -> str | None:
 
     if vertex_project is not None and "claude" not in model:
         from litellm.llms.vertex_ai.common_utils import get_vertex_base_url, validate_vertex_location
-        from litellm.responses.bridge_check import should_route_to_interactions_api
 
-        if should_route_to_interactions_api(
-            model=model,
-            custom_llm_provider=custom_llm_provider or "vertex_ai",
-            optional_params=extra_params,
-            litellm_params=litellm_params_map,
-            deployment_model_info=deployment_model_info,
+        if _chat_goes_to_interactions(
+            model, custom_llm_provider or "vertex_ai", extra_params, litellm_params_map, deployment_model_info
         ):
-            effective_location: Final = validate_vertex_location(vertex_location or "global")
+            try:
+                effective_location: Final = validate_vertex_location(vertex_location or "global")
+            except ValueError:
+                return None
             vertex_host: Final = get_vertex_base_url(effective_location)
             sse_suffix: Final = "?alt=sse" if stream else ""
             return f"{vertex_host}/v1beta1/projects/{vertex_project}/locations/{effective_location}/interactions{sse_suffix}"

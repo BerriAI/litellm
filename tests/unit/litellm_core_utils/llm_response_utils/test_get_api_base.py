@@ -1,4 +1,3 @@
-import json
 from collections.abc import Mapping
 from typing import Final
 
@@ -17,9 +16,9 @@ from litellm.llms.chatgpt.common_utils import CHATGPT_API_BASE
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE
 from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
-from litellm.types.router import GenericLiteLLMParams
 from litellm.llms.vertex_ai.interactions.transformation import VertexAIInteractionsConfig
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse
 
 
@@ -326,3 +325,26 @@ def test_get_api_base_roundtrips_idempotently_into_completion_for_gemini_and_ver
             assert isinstance(v_resp, ModelResponse)
 
     assert seen_urls == [gemini_base, vertex_base]
+
+
+@pytest.mark.parametrize(
+    "request_fields",
+    (
+        {"n": 2},
+        {"logprobs": True},
+        {"service_tier": "flex"},
+        {"tools": [{"type": "file_search", "file_search_store_names": ["fileSearchStores/team"]}]},
+    ),
+    ids=("two_candidates", "logprobs", "service_tier", "file_search_tool"),
+)
+def test_gemini_4_request_kept_on_generate_content_is_not_reported_as_an_interactions_call(
+    monkeypatch: pytest.MonkeyPatch, request_fields: dict[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
+
+    assert litellm.get_api_base(model="gemini/gemini-4-neon", optional_params={}) == (
+        "https://generativelanguage.googleapis.com/v1beta/interactions"
+    )
+    assert litellm.get_api_base(model="gemini/gemini-4-neon", optional_params=request_fields) == (
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-4-neon:generateContent"
+    )

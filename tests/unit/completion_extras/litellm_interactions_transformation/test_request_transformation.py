@@ -10,6 +10,7 @@ import litellm
 from litellm.completion_extras.litellm_interactions_transformation import (
     transform_chat_to_interactions_request,
 )
+from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.prompt_templates.factory import encode_tool_call_id_with_signature
 from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
@@ -732,6 +733,28 @@ def test_remote_image_is_sent_as_bare_base64_with_its_detected_mime_type(monkeyp
     )
 
     assert prepared.input_steps[0]["content"] == [{"type": "image", "mime_type": "image/webp", "data": "ZmFrZQ=="}]
+
+
+def test_remote_image_download_is_capped_at_the_configured_image_size_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    download_caps: Final[list[int | None]] = []  # mutable-ok: download spy
+
+    def fake_download(url: str, max_bytes: int | None = None) -> str:
+        download_caps.append(max_bytes)
+        return "data:image/webp;base64,ZmFrZQ=="
+
+    monkeypatch.setattr("litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64", fake_download)
+
+    transform_chat_to_interactions_request(
+        model="gemini-4-neon",
+        messages=[
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.com/cat"}}]}
+        ],
+        optional_params={},
+        litellm_params={},
+        custom_llm_provider="gemini",
+    )
+
+    assert download_caps == [int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)]
 
 
 @pytest.mark.parametrize("unsupported", ({"background": True}, {"safety_settings": [{"category": "c"}]}))
