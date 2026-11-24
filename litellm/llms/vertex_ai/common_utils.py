@@ -732,7 +732,7 @@ def check_text_in_content(parts: list[PartType]) -> bool:
 _check_text_in_content = check_text_in_content
 
 
-def _fix_enum_empty_strings(schema, depth=0):
+def _fix_enum_empty_strings(schema, depth: int = 0):
     """Fix empty strings in enum values by replacing them with None. Gemini doesn't accept empty strings in enums."""
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema.")
@@ -868,7 +868,7 @@ def with_enums_that_fit(
     )
 
 
-def _fix_enum_types(schema, depth=0, send_integer_enums: bool = False):
+def _fix_enum_types(schema: object, depth: int = 0, send_integer_enums: bool = False):
     """Make `enum` fields acceptable to Gemini / Vertex.
 
     Gemini / Vertex APIs only accept string enum values. With `send_integer_enums`,
@@ -1299,7 +1299,7 @@ def _filter_anyof_fields(schema_dict: dict[str, object]) -> dict[str, object]:
     return schema_dict
 
 
-def process_items(schema, depth=0):
+def process_items(schema: object, depth: int = 0):
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(
             f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
@@ -1356,7 +1356,9 @@ def set_schema_property_ordering(schema: dict[str, object], depth: int = 0) -> d
     return schema
 
 
-def filter_schema_fields(schema_dict: dict[str, object], valid_fields: set[str], processed=None) -> dict[str, object]:
+def filter_schema_fields(
+    schema_dict: dict[str, object], valid_fields: set[str], processed: set[int] | None = None
+) -> dict[str, object]:
     """
     Recursively filter a schema dictionary to keep only valid fields.
     """
@@ -1395,7 +1397,7 @@ def filter_schema_fields(schema_dict: dict[str, object], valid_fields: set[str],
     return result
 
 
-def convert_anyof_null_to_nullable(schema, depth=0):
+def convert_anyof_null_to_nullable(schema, depth: int = 0):
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         raise ValueError(
             f"Max depth of {DEFAULT_MAX_RECURSE_DEPTH} exceeded while processing schema. Please check the schema for excessive nesting."
@@ -1495,7 +1497,7 @@ def convert_vertex_datetime_to_openai_datetime(vertex_datetime: str) -> int:
 _convert_vertex_datetime_to_openai_datetime = convert_vertex_datetime_to_openai_datetime
 
 
-def _convert_schema_types(schema, depth=0):
+def _convert_schema_types(schema: object, depth: int = 0):
     """
     Convert type arrays and lowercase types for Vertex AI compatibility.
 

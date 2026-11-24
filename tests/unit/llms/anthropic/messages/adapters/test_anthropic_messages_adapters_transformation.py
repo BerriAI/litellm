@@ -5851,6 +5851,164 @@ async def test_chat_bridge_tool_result_text_block_without_text_reaches_the_model
     ]
 
 
+_GEMINI_MODEL: Final = "gemini/gemini-3.8-flash"
+_GEMINI_URL: Final = (
+    r"https://generativelanguage\.googleapis\.com/[^/]+/models/gemini-3\.8-flash:generateContent.*"
+)
+_EMPTY_USER_MESSAGES: Final = (
+    pytest.param({"role": "user", "content": ""}, id="empty_string"),
+    pytest.param({"role": "user", "content": []}, id="empty_list"),
+    pytest.param({"role": "user", "content": None}, id="null"),
+    pytest.param({"role": "user"}, id="missing"),
+    pytest.param({"role": "user", "content": [{"type": "text", "text": ""}]}, id="empty_text_block"),
+)
+_WHITESPACE_USER_MESSAGES: Final = (
+    pytest.param({"role": "user", "content": [{"type": "text", "text": " "}]}, id="whitespace_text_block"),
+    pytest.param({"role": "user", "content": [{"type": "text", "text": "\n"}]}, id="newline_text_block"),
+)
+_DROPPED_USER_MESSAGES: Final = (
+    pytest.param({"role": "user", "content": None}, id="null"),
+    pytest.param({"role": "user"}, id="missing"),
+)
+_ACCEPTING_CHAT_REPLY: Final = {
+    "id": "chatcmpl-model-turn-end",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "gpt-5.6",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "How can I help?"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 4, "completion_tokens": 4, "total_tokens": 8},
+}
+_GEMINI_REPLY: Final = {
+    "candidates": [
+        {"content": {"role": "model", "parts": [{"text": "How can I help?"}]}, "finishReason": "STOP", "index": 0}
+    ],
+    "usageMetadata": {"promptTokenCount": 4, "candidatesTokenCount": 4, "totalTokenCount": 8},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("empty_user_message", (*_EMPTY_USER_MESSAGES, *_WHITESPACE_USER_MESSAGES))
+async def test_an_empty_trailing_user_message_reaches_gemini_as_a_user_turn(
+    respx_mock: respx.MockRouter, empty_user_message: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+
+    await litellm.anthropic.messages.acreate(
+        model=_GEMINI_MODEL,
+        api_key="test-key",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message],
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+        {"role": "user", "parts": [{"text": " "}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("dropped_user_message", _DROPPED_USER_MESSAGES)
+async def test_a_dropped_trailing_user_message_adds_no_user_turn_for_a_target_that_accepts_a_model_turn_end(
+    respx_mock: respx.MockRouter, dropped_user_message: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post(url__regex=_CHAT_BRIDGE_URL).mock(
+        return_value=httpx.Response(200, json=_ACCEPTING_CHAT_REPLY)
+    )
+
+    await litellm.anthropic.messages.acreate(
+        model=_CHAT_BRIDGE_MODEL,
+        api_base=_CHAT_BRIDGE_API_BASE,
+        api_key="fake-key",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, dropped_user_message],
+    )
+
+    sent: Final = json.loads(route.calls.last.request.read())["messages"]
+    assert [message["role"] for message in sent] == ["user", "assistant"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("empty_user_message", (*_EMPTY_USER_MESSAGES, *_WHITESPACE_USER_MESSAGES))
+async def test_an_empty_trailing_user_message_reaches_an_alternating_gemini_deployment_as_the_configured_continue_message(
+    respx_mock: respx.MockRouter, empty_user_message: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+
+    await litellm.anthropic.messages.acreate(
+        model=_GEMINI_MODEL,
+        api_key="test-key",
+        max_tokens=64,
+        messages=[{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message],
+        ensure_alternating_roles=True,
+        user_continue_message={"role": "user", "content": "Keep going"},
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+        {"role": "user", "parts": [{"text": "Keep going"}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+async def test_an_adapter_completion_request_ending_in_an_empty_user_message_reaches_gemini_as_a_user_turn(
+    respx_mock: respx.MockRouter, empty_user_message: dict[str, object]
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+    translated: Final = AnthropicAdapter().translate_completion_input_params(
+        {
+            "model": _GEMINI_MODEL,
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message],
+        }
+    )
+    assert translated is not None
+
+    await litellm.acompletion(**translated, api_key="test-key")
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+        {"role": "user", "parts": [{"text": " "}]},
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+async def test_a_trailing_user_message_with_content_the_adapter_drops_gets_no_blank_user_turn_for_gemini(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+    search_result: Final = {
+        "type": "search_result",
+        "source": "https://example.com/france",
+        "title": "France",
+        "content": [{"type": "text", "text": "The capital of France is Paris."}],
+    }
+
+    await litellm.anthropic.messages.acreate(
+        model=_GEMINI_MODEL,
+        api_key="test-key",
+        max_tokens=64,
+        messages=[
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "user", "content": [search_result]},
+        ],
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+    ]
+
+
 _RETRY_API_BASE: Final = "https://encrypted-retry.openai.azure.com"
 _RETRY_URL: Final = r".*encrypted-retry\.openai\.azure\.com/openai/.*responses.*"
 _RETRY_TOOLS: Final = [{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}]

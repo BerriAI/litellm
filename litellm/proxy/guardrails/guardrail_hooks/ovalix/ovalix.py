@@ -47,7 +47,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.ovalix import OvalixGuardrailConfigModel
 
 
 BLOCKED_BY_OVALIX_FALLBACK_MESSAGE: Final = "This message was blocked by Ovalix"
@@ -500,7 +500,7 @@ class OvalixGuardrail(CustomGuardrail):
         return content if isinstance(content, str) else None
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["OvalixGuardrailConfigModel"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.ovalix import (
             OvalixGuardrailConfigModel,
         )
