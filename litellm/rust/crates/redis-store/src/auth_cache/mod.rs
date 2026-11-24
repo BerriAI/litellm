@@ -2,7 +2,7 @@ mod keys;
 mod local;
 mod types;
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use self::local::LocalValue;
 use litellm_python_compat::{Value, json};
@@ -38,6 +38,35 @@ const GENERATION_LABEL: &str = "auth_cache_generation";
 /// Longer than any load a lease covers. A generation that expired reads like one never written.
 const GENERATION_TTL: Duration = Duration::from_secs(600);
 
+const MAX_LOCAL_GENERATIONS: usize = 4096;
+
+#[derive(Default)]
+struct LocalGenerations {
+    counter: u64,
+    epoch: u64,
+    keys: HashMap<String, u64>,
+}
+
+impl LocalGenerations {
+    fn get(&self, key: &str) -> u64 {
+        self.keys.get(key).copied().unwrap_or(self.epoch)
+    }
+
+    fn reset(&mut self) {
+        self.counter = self.counter.wrapping_add(1);
+        self.epoch = self.counter;
+        self.keys.clear();
+    }
+
+    fn invalidate(&mut self, key: &str) {
+        if self.keys.len() >= MAX_LOCAL_GENERATIONS && !self.keys.contains_key(key) {
+            self.reset();
+        }
+        self.counter = self.counter.wrapping_add(1);
+        self.keys.insert(key.to_owned(), self.counter);
+    }
+}
+
 /// The proxy's auth object cache with `enable_redis_auth_cache` on: `UserApiKeyCache`'s two
 /// `DualCache` partitions, so churn in management objects cannot evict user-key objects, in front of
 /// one Redis shared by every pod. Writes and reads name an [`AuthObject`], which picks the partition;
@@ -48,6 +77,7 @@ pub struct AuthCache {
     objects: DualCache<LocalValue>,
     redis: Arc<RemoteSlot>,
     settings: Mutex<Settings>,
+    local_generations: Mutex<LocalGenerations>,
 }
 
 impl AuthCache {
@@ -63,6 +93,7 @@ impl AuthCache {
             objects: partition(),
             redis,
             settings: Mutex::new(settings),
+            local_generations: Mutex::default(),
         }
     }
 
@@ -190,13 +221,37 @@ impl AuthCache {
 
     /// Drops this pod's copy of a wire key from both partitions, as an eviction broadcast does.
     pub fn delete_local(&self, key: &str) -> Result<(), Error> {
+        let mut generations = self.local_generations.lock();
+        generations.invalidate(key);
         self.key_objects.memory().delete(key)?;
         Ok(self.objects.memory().delete(key)?)
     }
 
     pub fn flush_local(&self) -> Result<(), Error> {
+        let mut generations = self.local_generations.lock();
+        generations.reset();
         self.key_objects.memory().flush()?;
         Ok(self.objects.memory().flush()?)
+    }
+
+    /// The memory generation includes invalidations delivered directly by the Rust subscriber.
+    pub fn local_generation(&self, object: &AuthObject) -> u64 {
+        self.local_generations.lock().get(&object.key())
+    }
+
+    pub fn set_local_if_current(
+        &self,
+        generation: u64,
+        object: &AuthObject,
+        value: Value,
+        ttl: Option<Duration>,
+    ) -> Result<bool, Error> {
+        let generations = self.local_generations.lock();
+        if generations.get(&object.key()) != generation {
+            return Ok(false);
+        }
+        self.set_local(object, value, ttl)?;
+        Ok(true)
     }
 
     /// Entries held by the management-object and the user-key partitions.
@@ -214,6 +269,19 @@ impl AuthCache {
         request: Option<&RequestRedis>,
         object: &AuthObject,
     ) -> Result<Option<Value>, Error> {
+        if matches!(object, AuthObject::User(_)) {
+            if let Some(value) = self.get_local(object)? {
+                return Ok(Some(value));
+            }
+            let generation = self.local_generation(object);
+            if let Some(value) = self.objects.read_remote(request, &object.key()).await {
+                let value = value.into_value();
+                if self.set_local_if_current(generation, object, value.clone(), None)? {
+                    return Ok(Some(value));
+                }
+            }
+            return Ok(None);
+        }
         Ok(self
             .partition(object)
             .get(request, &object.key(), None)
@@ -266,15 +334,14 @@ impl AuthCache {
     /// `DualCache.async_delete_cache_pre_call` of a wire key: both partitions now and the `DEL` on
     /// the batch `send` picks, in one script with the write that voids the key's leases.
     pub fn declare_delete(&self, send: Send<'_>, key: &str) -> Result<Pending<()>, Error> {
+        self.delete_local(key)?;
         let Some((client, generation)) = self
             .redis
             .client()
             .and_then(|client| Some((client, client.sibling_key(key, GENERATION_LABEL)?)))
         else {
-            self.key_objects.memory().delete(key)?;
             return self.objects.declare_delete(send, key);
         };
-        self.delete_local(key)?;
         if let Some(misses) = send.misses(client) {
             misses.note([key.to_owned()]);
         }
@@ -544,4 +611,36 @@ fn is_user_key_cache_key(key: &str) -> bool {
         && key
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::same_key(Some("user"), false)]
+    #[case::other_key(Some("other"), true)]
+    #[case::flush(None, false)]
+    fn a_local_fill_survives_only_unrelated_evictions(
+        #[case] evicted: Option<&str>,
+        #[case] restored: bool,
+    ) {
+        let cache = AuthCache::new(None, Settings::default());
+        let user = AuthObject::User("user".to_owned());
+        let generation = cache.local_generation(&user);
+        match evicted {
+            Some(key) => cache.delete_local(key).unwrap(),
+            None => cache.flush_local().unwrap(),
+        }
+
+        let value = Value::Str("user snapshot".to_owned());
+        assert_eq!(
+            cache
+                .set_local_if_current(generation, &user, value.clone(), None)
+                .unwrap(),
+            restored,
+        );
+        assert_eq!(cache.get_local(&user).unwrap(), restored.then_some(value));
+    }
 }

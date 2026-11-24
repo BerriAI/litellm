@@ -19,7 +19,7 @@ import traceback
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Final, Literal, Protocol, cast, overload
+from typing import Annotated, Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -1193,6 +1193,8 @@ async def user_info(
 async def _check_user_info_v2_access(
     user_api_key_dict: UserAPIKeyAuth,
     target_user_id: str,
+    *,
+    read_after_write: bool = False,
 ) -> "prisma_models.LiteLLM_UserTable | None":
     """
     Check if the caller is allowed to access the target user's info.
@@ -1216,7 +1218,7 @@ async def _check_user_info_v2_access(
     # Helper: fetch the target user row (reused across branches). object_permission is included so
     # callers can read the user's MCP/vector-store entitlements without a second round trip.
     async def _fetch_target_user():
-        return await UserRepository(prisma_client, use_writer=True).table.find_unique(
+        return await UserRepository(prisma_client, use_writer=read_after_write).table.find_unique(
             where={"user_id": target_user_id}, include={"object_permission": True}
         )
 
@@ -1285,6 +1287,9 @@ async def user_info_v2(
     request: Request,
     user_id: str | None = fastapi.Query(default=None, description="User ID in the request parameters"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    read_after_write: Annotated[
+        bool, fastapi.Query(description="Read the target user from the writer after saving changes")
+    ] = False,
 ):
     """
     Lightweight endpoint to get user info. Returns only the user object — no keys, no teams objects.
@@ -1341,6 +1346,7 @@ async def user_info_v2(
         user_row: Final = await _check_user_info_v2_access(
             user_api_key_dict=user_api_key_dict,
             target_user_id=user_id,
+            read_after_write=read_after_write,
         )
 
         if user_row is None:

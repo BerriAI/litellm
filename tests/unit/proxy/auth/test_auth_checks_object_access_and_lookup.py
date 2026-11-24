@@ -1505,16 +1505,13 @@ def test_get_cli_jwt_auth_token_no_fallback_when_budget_provided(
     assert json.loads(decrypted).get("max_budget") is None
 
 
-def _no_user_yet() -> tuple[MagicMock, MagicMock]:
+def _no_user_yet() -> tuple[MagicMock, UserApiKeyCache]:
     """A Prisma double with no user row, and an empty cache."""
     prisma_client: Final = MagicMock()
     prisma_client.db = AsyncMock()
     prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
-    cache: Final = MagicMock()
-    cache.async_get_cache = AsyncMock(return_value=None)
-    cache.async_set_cache = AsyncMock()
-    return prisma_client, cache
+    return prisma_client, UserApiKeyCache()
 
 
 @pytest.mark.asyncio
@@ -1727,9 +1724,7 @@ async def test_get_user_object_upsert_that_loses_to_a_concurrent_sign_in_returns
 ):
     monkeypatch.setattr(litellm, "default_internal_user_params", {"teams": ["default-team"]})
     rust_auth_stores.user.writer = {"racing_user": {"user_id": "racing_user", "user_role": "proxy_admin"}}
-    cache: Final = MagicMock()
-    cache.async_get_cache = AsyncMock(return_value=None)
-    cache.async_set_cache = AsyncMock()
+    cache: Final = UserApiKeyCache()
 
     with patch(
         "litellm.proxy.management_endpoints.internal_user_endpoints.add_new_user_to_default_team",
@@ -1748,13 +1743,11 @@ async def test_get_user_object_upsert_that_loses_to_a_concurrent_sign_in_returns
     mock_add_to_team.assert_not_awaited()
 
 
-def _user_read_raising(stores: RustAuthStores, error: Exception) -> tuple[MagicMock, MagicMock]:
+def _user_read_raising(stores: RustAuthStores, error: Exception) -> tuple[MagicMock, UserApiKeyCache]:
     prisma_client = MagicMock()
+    prisma_client.read_db = prisma_client.writer_db
     stores.user.error = error
-    cache = MagicMock()
-    cache.async_get_cache = AsyncMock(return_value=None)
-    cache.async_set_cache = AsyncMock()
-    return prisma_client, cache
+    return prisma_client, UserApiKeyCache()
 
 
 @pytest.mark.asyncio
@@ -5754,7 +5747,8 @@ async def test_team_max_budget_check_dispatches_team_alert_from_the_shared_spend
 @pytest.mark.parametrize("send_percentage_alerts", [False, True])
 @pytest.mark.asyncio
 async def test_team_max_budget_check_still_rejects_over_budget_after_dispatching_the_alert(
-    send_percentage_alerts: bool, monkeypatch: pytest.MonkeyPatch,
+    send_percentage_alerts: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     team_object: Final = LiteLLM_TeamTable(
         team_id="team-1",

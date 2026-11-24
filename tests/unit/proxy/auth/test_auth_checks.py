@@ -14,6 +14,7 @@ load_dotenv()
 from collections import UserDict
 from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
+from datetime import datetime, timezone
 from functools import reduce
 from types import SimpleNamespace
 from typing import Final, Literal
@@ -2186,6 +2187,69 @@ async def test_get_user_object_cache_miss_reads_the_rust_store_which_reports_its
     assert result is not None and result.user_id == user_id
     assert [sign_in["user_id"] for sign_in, _ in rust_auth_stores.user.sign_ins] == [user_id]
     assert await _db_service_call_types(db_success_hook) == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("claim_subject", [None, "linked-subject"])
+async def test_user_budget_replica_fallback_preserves_base_cap_without_caching_temporary_fields(
+    rust_auth_stores: RustAuthStores, claim_subject: str | None,
+) -> None:
+    user_id: Final = f"replica-user-{uuid.uuid4()}"
+    row: Final = LiteLLM_UserTable(
+        user_id=user_id,
+        sso_user_id=claim_subject,
+        user_email="linked@example.com",
+        max_budget=10,
+        temp_budget_increase=3,
+        temp_budget_expiry=datetime(9999, 1, 1, tzinfo=timezone.utc),
+    )
+    lookup_id: Final = claim_subject or user_id
+    rust_auth_stores.user.rows = {lookup_id: row.model_dump()}
+    rust_auth_stores.user.writer = {lookup_id: ConnectionRefusedError()}
+    cache: Final = UserApiKeyCache()
+    prisma: Final = MagicMock()
+
+    replica_user: Final = await get_user_object(
+        lookup_id,
+        prisma,
+        cache,
+        user_id_upsert=claim_subject is not None,
+        sso_user_id=claim_subject,
+        user_email=row.user_email if claim_subject is not None else None,
+    )
+
+    assert replica_user is not None
+    assert (replica_user.user_id, replica_user.effective_max_budget()) == (user_id, 10)
+    assert await cache.async_get_cache(key=AuthObject.user(lookup_id), model_type=LiteLLM_UserTable) is None
+
+    rust_auth_stores.user.writer = {user_id: row.model_dump()}
+    writer_user: Final = await get_user_object(user_id, prisma, cache, user_id_upsert=False)
+
+    assert writer_user is not None
+    assert writer_user.effective_max_budget() == 13
+
+
+@pytest.mark.asyncio
+async def test_linked_subject_uses_the_current_canonical_user_budget(rust_auth_stores: RustAuthStores) -> None:
+    user_id: Final = f"canonical-{uuid.uuid4()}"
+    subject: Final = f"subject-{uuid.uuid4()}"
+    cached_alias: Final = LiteLLM_UserTable(
+        user_id=user_id,
+        sso_user_id=subject,
+        max_budget=10,
+        temp_budget_increase=3,
+        temp_budget_expiry=datetime(9999, 1, 1, tzinfo=timezone.utc),
+    )
+    cache: Final = UserApiKeyCache()
+    await cache.async_set_cache(key=AuthObject.user(subject), value=cached_alias, model_type=LiteLLM_UserTable)
+    canonical: Final = cached_alias.model_copy(update={"temp_budget_increase": None, "temp_budget_expiry": None})
+    rust_auth_stores.user.writer = {user_id: canonical.model_dump(), subject: canonical.model_dump()}
+
+    user: Final = await get_user_object(subject, MagicMock(), cache, user_id_upsert=False, sso_user_id=subject)
+
+    assert user is not None
+    assert (user.user_id, user.effective_max_budget()) == (user_id, 10)
+    assert await cache.async_get_cache(key=AuthObject.user(user_id), model_type=LiteLLM_UserTable) == canonical
 
 
 @pytest.mark.parametrize("entry_first", [True, False])

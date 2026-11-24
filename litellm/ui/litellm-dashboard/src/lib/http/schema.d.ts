@@ -94920,6 +94920,8 @@ export interface operations {
             query?: {
                 /** @description User ID in the request parameters */
                 user_id?: string | null;
+                /** @description Read the target user from the writer after saving changes */
+                read_after_write?: boolean;
             };
             header?: never;
             path?: never;

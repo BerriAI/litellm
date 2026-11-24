@@ -4314,6 +4314,7 @@ def _add_spend_to_locally_cached_object(
     if model_type is LiteLLM_TeamTableCachedObj:
         cache.add_local_team_spend(key, response_cost)
         return
+    generation: Final = cache.store.local_generation(key) if model_type is LiteLLM_UserTable else None
     current: Final = cache.get_cache(key=key, local_only=True, model_type=model_type)
     if current is None:
         return
@@ -4323,6 +4324,7 @@ def _add_spend_to_locally_cached_object(
         local_only=True,
         model_type=model_type,
         ttl=get_management_object_ttl(cache),
+        local_generation=generation,
     )
 
 

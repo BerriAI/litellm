@@ -3698,9 +3698,11 @@ async def _run_checks_for_cached_user(db_user: LiteLLM_UserTable, token: UserAPI
     request._url = URL(url="/chat/completions")
     key_cache = UserApiKeyCache()
     key_cache.set_cache(key=AuthObject.user(db_user.user_id), value=db_user)
+    prisma_client = prisma_with_empty_config()
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=db_user)
     attrs = {
         **_proxy_attrs_for_centralized_checks(),
-        "prisma_client": prisma_with_empty_config(),
+        "prisma_client": prisma_client,
         "user_api_key_cache": key_cache,
         "spend_counter_cache": DualCache(),
         "proxy_logging_obj": ProxyLogging(user_api_key_cache=key_cache),
@@ -3742,20 +3744,50 @@ async def test_centralized_common_checks_enforce_personal_budget_on_proxy_admin_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("expiry", [None, datetime(2000, 1, 1, tzinfo=timezone.utc)])
+@pytest.mark.parametrize("legacy_fallback_cap", [None, 15.0])
+async def test_named_admin_keeps_its_existing_base_cap_with_stored_rollover_credit(
+    expiry: datetime | None, legacy_fallback_cap: float | None
+) -> None:
+    db_user: Final = LiteLLM_UserTable(
+        user_id="admin-with-rollover",
+        spend=12.0,
+        max_budget=10.0,
+        budget_duration="30d",
+        rollover_max_budget=15.0,
+        rollover_credit=5.0,
+        temp_budget_increase=3.0 if expiry is not None else None,
+        temp_budget_expiry=expiry,
+    )
+    token: Final = UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id=db_user.user_id,
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_max_budget=legacy_fallback_cap,
+    )
+    with pytest.raises(litellm.BudgetExceededError) as rejected:
+        await _run_checks_for_cached_user(db_user, token)
+    assert (rejected.value.max_budget, rejected.value.current_cost) == (10.0, 12.0)
+    assert token.effective_user_max_budget() == legacy_fallback_cap
+
+
+@pytest.mark.asyncio
 async def test_centralized_common_checks_apply_temporary_personal_budget_to_named_admin() -> None:
     db_user: Final = LiteLLM_UserTable(
         user_id="admin-with-temporary-budget",
-        spend=25.0,
+        spend=12.0,
         max_budget=10.0,
-        budget_duration="monthly",
+        budget_duration="30d",
         rollover_max_budget=15.0,
-        rollover_credit=3.0,
-        temp_budget_increase=30.0,
+        rollover_credit=5.0,
+        temp_budget_increase=3.0,
         temp_budget_expiry=datetime(9999, 1, 1, tzinfo=timezone.utc),
     )
-    token: Final = UserAPIKeyAuth(api_key="sk-test", user_id=db_user.user_id, user_role=LitellmUserRoles.PROXY_ADMIN)
+    token: Final = UserAPIKeyAuth(
+        api_key="sk-test", user_id=db_user.user_id, user_role=LitellmUserRoles.PROXY_ADMIN, user_max_budget=15
+    )
     await _run_checks_for_cached_user(db_user, token)
-    assert token.effective_user_max_budget() == 43.0
+    assert token.effective_user_max_budget() == 18.0
 
 
 @pytest.mark.asyncio

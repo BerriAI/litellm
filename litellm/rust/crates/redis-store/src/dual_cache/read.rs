@@ -18,13 +18,17 @@ impl<V: Clone + FromValue, R> DualCache<V, R> {
         if let Some(value) = self.memory.get(key)? {
             return Ok(Some(value));
         }
+        self.backfill(key, self.read_remote(request, key).await, ttl)
+    }
+
+    pub(crate) async fn read_remote(&self, request: Option<&RequestRedis>, key: &str) -> Option<V> {
         let Some(client) = self.redis.client() else {
-            return Ok(None);
+            return None;
         };
         if request.is_some_and(|request| request.misses(client).contains(key)) {
-            return Ok(None);
+            return None;
         }
-        let value = client
+        client
             .send(commands::get::<Vec<u8>>(key))
             .await
             .map_err(Error::from)
@@ -32,8 +36,7 @@ impl<V: Clone + FromValue, R> DualCache<V, R> {
             .unwrap_or_else(|error| {
                 redis_failure!(&error, "LiteLLM Cache: exception in async_get_cache");
                 None
-            });
-        self.backfill(key, value, ttl)
+            })
     }
 }
 

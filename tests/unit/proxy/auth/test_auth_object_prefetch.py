@@ -1,6 +1,7 @@
 """Counts the Redis round trips and DB queries auth object reads cost per cache regime, and checks that the
 per-object getters still enforce on their own when the prefetch cannot help."""
 
+from collections.abc import Sequence
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -26,7 +27,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.rust_bridge._native import NativeRedisStoreError
 from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
-from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
+from tests.unit.redis.stores.auth_cache_double import DeclaredOp, FakeAuthCache, shared_cache
 
 USER_ID = "prefetch-user"
 TEAM_ID = "prefetch-team"
@@ -131,7 +132,7 @@ def test_refs_from_token_only_names_membership_when_both_ids_present():
 
 
 @pytest.mark.asyncio
-async def test_cold_regime_is_one_mget_one_query_and_the_getters_never_touch_io_again():
+async def test_cold_regime_uses_one_database_query_and_the_getters_never_touch_io_again():
     redis = FakeAuthCache()
     prisma = _prisma()
     cache = _cache(redis)
@@ -155,12 +156,12 @@ async def test_cold_regime_is_one_mget_one_query_and_the_getters_never_touch_io_
             f"SET {TEAM_ID}_{USER_ID} ttl=5",
             f"SET org_id:{ORG_ID} ttl=5",
             f"SET org_id:{ORG_ID}:with_budget ttl=5",
-            f"SET {USER_ID} ttl=60",
             f"SET team_id:{TEAM_ID} ttl=60",
             f"SET team_membership:{USER_ID}:{TEAM_ID} ttl=None",
         ]
     )
-    assert _round_trips(redis) == 2, "one MGET, one pipeline"
+    assert _round_trips(redis) == 4, "one MGET, one pipeline, and a leased user write"
+    assert ("SET_LEASED", USER_ID, 60) in redis.commands
 
     before = (_round_trips(redis), prisma.db.query_first.await_count)
     user, team, membership, org = await _read_all_through_getters(cache, prisma)
@@ -285,6 +286,44 @@ async def test_absent_rows_are_not_cached_as_present():
 
     assert _writes(redis) == []
     assert cache.get_local(AuthObject.team(TEAM_ID)) is None
+
+
+@pytest.mark.asyncio
+async def test_user_eviction_during_redis_prefetch_leaves_the_user_uncached():
+    key = AuthObject.user(USER_ID)
+    old_user = ALL_ROWS["user_row"]
+
+    class EvictingRedis(FakeAuthCache):
+        def get_many(self, keys: Sequence[AuthObject], send: object) -> DeclaredOp:
+            result = super().get_many(keys, send)
+
+            def answer() -> object:
+                rows = result.answer()
+                self.delete_local(key.key)
+                return rows
+
+            return DeclaredOp(send, answer)
+
+    cache, _ = shared_cache(EvictingRedis(redis={key.key: old_user}))
+    await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=None)
+
+    assert cache.get_local(key) is None
+
+
+@pytest.mark.asyncio
+async def test_user_eviction_during_database_fill_leaves_the_user_uncached():
+    cache = UserApiKeyCache()
+    prisma = _prisma()
+    key = AuthObject.user(USER_ID)
+
+    async def load_rows(*_args: object) -> dict[str, object]:
+        await cache.async_delete_cache(key.key)
+        return ALL_ROWS
+
+    prisma.db.query_first.side_effect = load_rows
+    await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
+
+    assert await cache.async_get_cache(key=key, model_type=LiteLLM_UserTable) is None
 
 
 @pytest.mark.asyncio

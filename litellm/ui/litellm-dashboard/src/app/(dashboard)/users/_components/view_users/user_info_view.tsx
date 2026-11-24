@@ -356,7 +356,7 @@ export default function UserInfoView({
 
       // Update local state with new values
       if (shouldRefreshBudget(userData, formValues)) {
-        setUserData(await userGetInfoV2(accessToken, userData.user_id));
+        setUserData(await userGetInfoV2(accessToken, userData.user_id, true));
       } else {
         const editedUser = {
           ...userData,

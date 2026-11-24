@@ -3126,7 +3126,6 @@ async def email_belongs_to_another_user(prisma_client: PrismaClient, user_email:
 @with_service_target(AUTH_OBJECTS_TARGET)
 async def _backfill_null_user_email(
     prisma_client: PrismaClient | None,
-    user_api_key_cache: UserApiKeyCache,
     user_row: LiteLLM_UserTable,
     user_email: str | None,
 ) -> LiteLLM_UserTable:
@@ -3143,14 +3142,7 @@ async def _backfill_null_user_email(
     )
     if stored_email is None:
         return user_row
-    updated_row: Final = user_row.model_copy(update={"user_email": stored_email})
-    await user_api_key_cache.async_set_cache(
-        key=AuthObject.user(user_row.user_id),
-        value=updated_row,
-        model_type=LiteLLM_UserTable,
-        ttl=get_management_object_ttl(user_api_key_cache),
-    )
-    return updated_row
+    return user_row.model_copy(update={"user_email": stored_email})
 
 
 @log_db_metrics
@@ -3176,19 +3168,45 @@ async def get_user_object(
     if user_id is None:
         return None
 
-    # check if in cache
+    cache_key: Final = AuthObject.user(user_id)
     if not check_db_only:
         cached_user_obj: Final = await user_api_key_cache.async_get_cache(
-            key=AuthObject.user(user_id),
+            key=cache_key,
             model_type=LiteLLM_UserTable,
         )
-        if cached_user_obj is not None:
-            return await _backfill_null_user_email(
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                user_row=cached_user_obj,
-                user_email=user_email,
-            )
+        if (
+            cached_user_obj is not None
+            and cached_user_obj.user_id != user_id
+            and (sso_user_id is not None or user_email is not None)
+        ):
+            # An identity alias can locate the user. Budget edits evict the canonical row.
+            try:
+                return await get_user_object(
+                    cached_user_obj.user_id,
+                    prisma_client,
+                    user_api_key_cache,
+                    user_id_upsert=False,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except UserNotFoundError:
+                pass
+        if cached_user_obj is not None and cached_user_obj.user_id == user_id:
+            if user_email is None or cached_user_obj.user_email is not None:
+                return cached_user_obj
+            email_lease: Final = await user_api_key_cache.lease(cache_key)
+            current_user: Final = await user_api_key_cache.async_get_cache(key=cache_key, model_type=LiteLLM_UserTable)
+            if current_user is not None and current_user.user_id == user_id:
+                updated_user: Final = await _backfill_null_user_email(
+                    prisma_client=prisma_client,
+                    user_row=current_user,
+                    user_email=user_email,
+                )
+                if updated_user is not current_user:
+                    _ = await user_api_key_cache.async_set_leased(
+                        email_lease, updated_user, get_management_object_ttl(user_api_key_cache)
+                    )
+                return updated_user
     # else, check db
     if prisma_client is None:
         raise Exception("No db connected")
@@ -3199,19 +3217,42 @@ async def get_user_object(
             last_db_access_time=last_db_access_time,
             db_cache_expiry=db_cache_expiry,
         )
+        lease: Final = await user_api_key_cache.lease(cache_key) if should_check_db or user_id_upsert else None
 
         if should_check_db:
-            _response = await bounded_db_lookup(
-                UserRepository(prisma_client).resolve_for_auth(
-                    user_id,
-                    sso_user_id=sso_user_id,
-                    user_email=user_email,
-                    email_verified=email_verified,
-                    links_any_user=_email_fallback_links_any_user(),
-                    use_writer=True,
-                ),
-                name="user",
-            )
+            repository: Final = UserRepository(prisma_client)
+            links_any_user: Final = _email_fallback_links_any_user()
+
+            async def resolve_user(*, use_writer: bool) -> LiteLLM_UserTable | None:
+                return await bounded_db_lookup(
+                    repository.resolve_for_auth(
+                        user_id,
+                        sso_user_id=sso_user_id,
+                        user_email=user_email if use_writer or links_any_user or sso_user_id is None else None,
+                        email_verified=email_verified,
+                        links_any_user=links_any_user,
+                        use_writer=use_writer,
+                    ),
+                    name="user",
+                )
+
+            try:
+                _response = await resolve_user(use_writer=True)
+            except Exception as error:
+                if (
+                    check_db_only
+                    or prisma_client.read_db is prisma_client.writer_db
+                    or not PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(error)
+                ):
+                    raise
+                try:
+                    replica_user = await resolve_user(use_writer=False)
+                except Exception:  # noqa: BLE001  # preserve the original writer outage if the replica fails
+                    replica_user = None
+                if replica_user is None:
+                    raise
+                # An outage read can recover the permanent cap, but might predate a cleared allowance.
+                return replica_user.model_copy(update={"temp_budget_increase": None, "temp_budget_expiry": None})
         else:
             _response = None
 
@@ -3271,26 +3312,17 @@ async def get_user_object(
 
         _response = await _backfill_null_user_email(
             prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
             user_row=_response,
             user_email=user_email,
         )
-        response_dict: Final = _response.model_dump()
-
-        # save the user object to cache
-        await user_api_key_cache.async_set_cache(
-            key=AuthObject.user(user_id),
-            value=_response,
-            model_type=LiteLLM_UserTable,
-            ttl=get_management_object_ttl(user_api_key_cache),
-        )
-
-        # save to db access time
-        _update_last_db_access_time(
-            key=db_access_time_key,
-            value=response_dict,
-            last_db_access_time=last_db_access_time,
-        )
+        if lease is not None and await user_api_key_cache.async_set_leased(
+            lease, _response, get_management_object_ttl(user_api_key_cache)
+        ):
+            _update_last_db_access_time(
+                key=db_access_time_key,
+                value=_response.model_dump(),
+                last_db_access_time=last_db_access_time,
+            )
 
         return _response
     except UserNotFoundError:

@@ -582,6 +582,23 @@ impl NativeAuthCache {
         self.0.delete_local(key).map_err(kind_error)
     }
 
+    fn local_generation(&self, key: PyRef<'_, PyAuthObject>) -> u64 {
+        self.0.local_generation(&key.0)
+    }
+
+    #[pyo3(signature = (generation, key, value, ttl_seconds))]
+    fn set_local_if_current(
+        &self,
+        generation: u64,
+        key: PyRef<'_, PyAuthObject>,
+        value: PyValue,
+        ttl_seconds: Option<f64>,
+    ) -> PyResult<bool> {
+        self.0
+            .set_local_if_current(generation, &key.0, value.0, ttl(ttl_seconds)?)
+            .map_err(kind_error)
+    }
+
     fn flush_local(&self) -> PyResult<()> {
         self.0.flush_local().map_err(kind_error)
     }

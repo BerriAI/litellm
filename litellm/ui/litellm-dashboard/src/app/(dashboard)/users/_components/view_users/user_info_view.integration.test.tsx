@@ -126,35 +126,61 @@ describe("UserInfoView add-to-team form", () => {
     mockListMCPTools.mockResolvedValue({ tools: [] });
   });
 
-  it("restores the effective budget when a temporary increase expires on the open details page", async () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(new Date("2030-01-01T12:00:00Z"));
-      const userWithTemporaryBudget = {
-        ...MOCK_USER_DATA_NO_TEAMS,
-        max_budget: 100,
-        rollover_credit: 5,
-        temp_budget_increase: 25,
-        temp_budget_expiry: "2030-01-01T12:01:00Z",
-        effective_max_budget: 130,
-      };
-      mockUserGetInfoV2.mockResolvedValue(userWithTemporaryBudget);
+  it.each([
+    ["internal_user", "$130.0000", "$105.0000", 130],
+    ["proxy_admin", "$125.0000", "$105.0000", 125],
+  ])(
+    "restores the %s budget when a temporary increase expires on the open details page",
+    async (role, active, expired, cap) => {
+      vi.useFakeTimers();
+      try {
+        vi.setSystemTime(new Date("2030-01-01T12:00:00Z"));
+        const userWithTemporaryBudget = {
+          ...MOCK_USER_DATA_NO_TEAMS,
+          user_role: role,
+          max_budget: 100,
+          rollover_credit: 5,
+          temp_budget_increase: 25,
+          temp_budget_expiry: "2030-01-01T12:01:00Z",
+          effective_max_budget: cap,
+        };
+        mockUserGetInfoV2.mockResolvedValue(userWithTemporaryBudget);
 
-      await act(async () => {
-        render(<UserInfoView {...defaultProps} initialTab={1} />);
-      });
-      expect(screen.getByText(/\+\$25.*Active/)).toBeInTheDocument();
-      expect(screen.getByText("2030-01-01 12:01:00")).toBeInTheDocument();
-      expect(screen.getByText("$130.0000")).toBeInTheDocument();
+        await act(async () => {
+          render(<UserInfoView {...defaultProps} initialTab={1} />);
+        });
+        expect(screen.getByText(/\+\$25.*Active/)).toBeInTheDocument();
+        expect(screen.getByText("2030-01-01 12:01:00")).toBeInTheDocument();
+        expect(screen.getByText(active)).toBeInTheDocument();
 
-      await act(() => vi.advanceTimersByTimeAsync(60_000));
+        await act(() => vi.advanceTimersByTimeAsync(60_000));
 
-      expect(screen.getByText(/\+\$25.*Expired/)).toBeInTheDocument();
-      expect(screen.getByText("$105.0000")).toBeInTheDocument();
-      expect(screen.queryByText("$130.0000")).not.toBeInTheDocument();
-    } finally {
-      vi.useRealTimers();
-    }
+        expect(screen.getByText(/\+\$25.*Expired/)).toBeInTheDocument();
+        expect(screen.getByText(expired)).toBeInTheDocument();
+        expect(screen.queryByText(active)).not.toBeInTheDocument();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("shows the committed effective budget after an edit when the replica is behind", async () => {
+    const replica = {
+      ...MOCK_USER_DATA_NO_TEAMS,
+      temp_budget_increase: 25,
+      temp_budget_expiry: "9999-01-01T12:01:00Z",
+      effective_max_budget: 125,
+    };
+    mockUserGetInfoV2.mockImplementation(async (_token, _user, readAfterWrite) =>
+      readAfterWrite ? { ...replica, max_budget: 42.57, effective_max_budget: 67.57 } : replica,
+    );
+    render(<UserInfoView {...defaultProps} initialTab={1} startInEditMode />);
+
+    const budget = await screen.findByRole("spinbutton", { name: /max budget/i });
+    fireEvent.change(budget, { target: { value: "42.57" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(await screen.findByText("$67.5700")).toBeInTheDocument();
   });
 
   it("shows the new base budget immediately after saving a base-budget edit", async () => {

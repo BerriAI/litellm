@@ -24,7 +24,7 @@ from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth import jwt as proxy_jwt
-from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
 from litellm.proxy.auth.host.facts import (
     AliasMissing,
     EndUserRow,
@@ -124,6 +124,43 @@ async def test_a_role_change_is_stored_and_the_stored_user_is_cached_and_returne
     assert rust_auth_stores.user.rows["u1"]["user_role"] == "proxy_admin"
     assert (updated.user_role, updated.user_email) == ("proxy_admin", "stored@example.com")
     assert cached == updated
+
+
+@pytest.mark.asyncio
+async def test_an_in_flight_role_sync_does_not_cache_a_cleared_budget(
+    rust_auth_stores: RustAuthStores, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    user_id: Final = "role-sync-user"
+    key: Final = AuthObject.user(user_id)
+    granted: Final = LiteLLM_UserTable(
+        user_id=user_id,
+        max_budget=10,
+        temp_budget_increase=3,
+        temp_budget_expiry=datetime(9999, 1, 1, tzinfo=timezone.utc),
+    )
+    rust_auth_stores.user.rows[user_id] = granted.model_dump()
+    cache: Final = UserApiKeyCache()
+    prisma: Final = MagicMock(spec=PrismaClient)
+    set_role: Final = rust_auth_stores.user.set_role
+
+    async def finish_after_clear(user_id: str, user_role: str) -> str | None:
+        old_row: Final = await set_role(user_id, user_role)
+        rust_auth_stores.user.rows[user_id] = {
+            **granted.model_dump(),
+            "user_role": user_role,
+            "temp_budget_increase": None,
+            "temp_budget_expiry": None,
+        }
+        await cache.async_delete_cache(key.key)
+        return old_row
+
+    monkeypatch.setattr(rust_auth_stores.user, "set_role", finish_after_clear)
+
+    await _host(cache=cache, prisma_client=prisma).set_user_role(granted, "proxy_admin")
+    observed: Final = await get_user_object(user_id, prisma, cache, user_id_upsert=False)
+
+    assert observed is not None
+    assert (observed.user_role, observed.effective_max_budget()) == ("proxy_admin", 10)
 
 
 @pytest.mark.asyncio

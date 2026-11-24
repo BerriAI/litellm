@@ -231,6 +231,8 @@ async def _fill_from_redis(
     """On the request's native pipeline when one is open; a failed read is a miss, as a failed MGET was."""
     if not entries:
         return
+    user_entry: Final = next((entry for entry in entries if entry.row == "user_row"), None)
+    generation: Final = cache.store.local_generation(user_entry.cache_key) if user_entry is not None else None
     before_read()
     try:
         with service_target(AUTH_OBJECTS_TARGET):
@@ -240,9 +242,11 @@ async def _fill_from_redis(
         return
     for entry, value in ((entry, found.get(entry.cache_key)) for entry in entries):
         if value is not None:
-            cache.store.set_local(
-                entry.cache_key, value, cache.default_in_memory_ttl if entry.ttl is None else entry.ttl
-            )
+            ttl: Final = cache.default_in_memory_ttl if entry.ttl is None else entry.ttl
+            if entry is user_entry and generation is not None:
+                _ = cache.store.set_local_if_current(generation, entry.cache_key, value, ttl)
+            else:
+                cache.store.set_local(entry.cache_key, value, ttl)
 
 
 def _validate_row(
@@ -296,12 +300,19 @@ async def _fill_from_db(
     model_for: Final[Mapping[_RowKind, type[BaseModel]]] = MappingProxyType(
         {entry.row: entry.model_type for entry in entries}
     )
+    user_entry: Final = next((entry for entry in entries if entry.row == "user_row"), None)
+    user_lease: Final = await cache.lease(user_entry.cache_key) if user_entry is not None else None
     rows: Final = await _fetch_rows(refs, frozenset(model_for), prisma_client)
     refreshed_at: Final = time.time()
     objects: Final[Mapping[_RowKind, BaseModel | None]] = MappingProxyType(
         {row: _validate_row(rows.get(row), model_type, row, refreshed_at) for row, model_type in model_for.items()}
     )
-    writes: Final = tuple((entry, value) for entry in entries if (value := objects[entry.row]) is not None)
+    user: Final = objects.get("user_row")
+    if user_lease is not None and user_entry is not None and user is not None:
+        _ = await cache.async_set_leased(user_lease, user, user_entry.ttl)
+    writes: Final = tuple(
+        (entry, value) for entry in entries if entry.row != "user_row" and (value := objects[entry.row]) is not None
+    )
     if writes:
         await _write_back(writes, cache)
 

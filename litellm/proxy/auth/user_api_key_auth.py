@@ -2804,20 +2804,13 @@ async def run_centralized_common_checks(
     # username/password login) keeps the row's personal budget (max_budget,
     # and user_email for budget alerts) so common_checks enforces it; every
     # other field keeps its default.
+    budget_row: Final = user_object if user_api_key_auth_obj.user_id != litellm_proxy_admin_name else None
     if user_api_key_auth_obj.user_role == LitellmUserRoles.PROXY_ADMIN:
-        budget_row: Final = (
-            user_object
-            if isinstance(user_object, LiteLLM_UserTable) and user_api_key_auth_obj.user_id != litellm_proxy_admin_name
-            else None
-        )
         user_object = LiteLLM_UserTable(
             user_id=user_api_key_auth_obj.user_id or litellm_proxy_admin_name,
             user_role=LitellmUserRoles.PROXY_ADMIN,
             spend=user_object.spend if user_object is not None else 0.0,
             max_budget=budget_row.max_budget if budget_row is not None else None,
-            budget_duration=budget_row.budget_duration if budget_row is not None else None,
-            rollover_max_budget=budget_row.rollover_max_budget if budget_row is not None else None,
-            rollover_credit=budget_row.rollover_credit if budget_row is not None else None,
             temp_budget_increase=budget_row.temp_budget_increase if budget_row is not None else None,
             temp_budget_expiry=budget_row.temp_budget_expiry if budget_row is not None else None,
             budget_limits=budget_row.budget_limits if budget_row is not None else None,
@@ -2827,8 +2820,7 @@ async def run_centralized_common_checks(
             ),
         )
 
-    if user_object is not None:
-        user_api_key_auth_obj.carry_temporary_user_budget(user_object)
+    user_api_key_auth_obj.carry_temporary_user_budget(user_object if budget_row is not None else None)
 
     if project_object is not None:
         user_api_key_auth_obj.project_metadata = project_object.metadata

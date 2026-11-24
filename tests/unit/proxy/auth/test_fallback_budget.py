@@ -123,7 +123,7 @@ async def test_paid_target_refused_when_over_user_budget():
 async def test_paid_target_loses_temporary_user_budget_at_expiry() -> None:
     expiry: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
     user: Final = LiteLLM_UserTable(user_id="u1", max_budget=10, temp_budget_increase=20, temp_budget_expiry=expiry)
-    token: Final = UserAPIKeyAuth(user_id="u1", user_spend=15, user_max_budget=30)
+    token: Final = UserAPIKeyAuth(user_id="u1", user_spend=15, user_max_budget=10)
     token.carry_temporary_user_budget(user)
     router: Final = _router()
     with time_machine.travel(expiry - timedelta(seconds=1), tick=False):
