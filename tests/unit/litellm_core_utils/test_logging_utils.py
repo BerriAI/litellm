@@ -31,9 +31,16 @@ from litellm import(
 )
 from litellm.constants import BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS, LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.llms.anthropic import (
+    AnthropicContentParamSource,
+    AnthropicMessagesDocumentParam,
+    AnthropicMessagesImageParam,
+    AnthropicMessagesTextParam,
+    AnthropicMessagesUserMessageParam,
+)
 from litellm.types.llms.openai import AllMessageValues
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from typing import Final
+from typing import Final, Literal
 
 
 class TestSetDurationInModelCallDetails:
@@ -216,7 +223,9 @@ class TestTruncateBase64InMessages:
     @pytest.mark.parametrize(
         ("block_type", "media_type"), [("image", "image/png"), ("document", "application/pdf")]
     )
-    def test_anthropic_base64_source_data_is_replaced_by_a_size_placeholder(self, block_type: str, media_type: str):
+    def test_anthropic_base64_source_data_is_replaced_by_a_size_placeholder(
+        self, block_type: Literal["image", "document"], media_type: str
+    ):
         payload: Final = "M" * 4_000
         messages: Final = _anthropic_source_messages(payload, block_type, media_type)
 
@@ -254,15 +263,19 @@ class TestTruncateBase64InMessages:
         ]
 
 
-def _anthropic_source_messages(payload: str, block_type: str, media_type: str) -> list:
+def _anthropic_source_messages(
+    payload: str, block_type: Literal["image", "document"], media_type: str
+) -> list[AnthropicMessagesUserMessageParam]:
+    source: Final = AnthropicContentParamSource(type="base64", media_type=media_type, data=payload)
+    block: Final = (
+        AnthropicMessagesImageParam(type="image", source=source)
+        if block_type == "image"
+        else AnthropicMessagesDocumentParam(type="document", source=source)
+    )
     return [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "describe"},
-                {"type": block_type, "source": {"type": "base64", "media_type": media_type, "data": payload}},
-            ],
-        }
+        AnthropicMessagesUserMessageParam(
+            role="user", content=[AnthropicMessagesTextParam(type="text", text="describe"), block]
+        )
     ]
 
 
