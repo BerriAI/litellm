@@ -249,14 +249,15 @@ def _text_blocks(container: object, text_type: str) -> tuple[tuple[object, str],
     return tuple((block, text) for block, text in blocks if isinstance(text, str) and text)
 
 
-def _native_output_text_blocks(response: object) -> tuple[tuple[object, str], ...]:
-    """Assistant text blocks of a Responses API or Anthropic Messages response, which carry no ``choices``."""
+def _native_output_text_blocks(response: object) -> tuple[tuple[object, str], ...] | None:
+    """Assistant text blocks of a Responses API or Anthropic Messages response, which carry no ``choices``.
+    None when ``response`` is neither, so a native reply with no text is still told apart from a chat one."""
     if isinstance(response, ResponsesAPIResponse):
         output: Final = stream_item_items(response, "output")
         return tuple(chain.from_iterable(_text_blocks(item, "output_text") for item in output))
     if stream_item_field(response, "type") == "message":
         return _text_blocks(response, "text")
-    return ()
+    return None
 
 
 def _write_block_text(block: object, text: object) -> None:
@@ -810,7 +811,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                 response_messages.append({"role": role, "content": content})
                 choice_indices.append(i)
         native_text_blocks: Final = _native_output_text_blocks(response)
-        response_messages.extend({"role": "assistant", "content": text} for _, text in native_text_blocks)
+        response_messages.extend({"role": "assistant", "content": text} for _, text in native_text_blocks or ())
 
         # Use a copy of original_messages so _mask_pii_in_messages does not mutate data["messages"]
         post_call_messages: Final = list(copy.deepcopy(original_messages)) + response_messages
@@ -836,14 +837,14 @@ class LakeraAIGuardrail(CustomGuardrail):
                 )
                 assistant_messages: Final = masked_messages[len(original_messages) :]
                 native_masked: Final = assistant_messages[len(choice_indices) :]
-                for (block, _), masked in zip(native_text_blocks, native_masked, strict=True):
+                for (block, _), masked in zip(native_text_blocks or (), native_masked, strict=True):
                     _write_block_text(block, stream_item_field(masked, "content"))
                 for idx, msg in enumerate(assistant_messages):
                     if idx < len(choice_indices):
                         choice_idx = choice_indices[idx]
                         response_dict["choices"][choice_idx]["message"]["content"] = msg.get("content", "")
                 add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
-                if native_text_blocks:
+                if native_text_blocks is not None:
                     return response
                 return ModelResponse(**_RESPONSE_FIELDS.validate_python(response_dict))
 

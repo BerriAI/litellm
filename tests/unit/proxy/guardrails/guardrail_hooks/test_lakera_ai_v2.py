@@ -2580,6 +2580,16 @@ class TestPostCallNativeResponseShapes:
         assert result is response
         assert _served_texts(result) == ("Here you go.", "Card [MASKED CREDIT_CARD] is on file.")
 
+    async def test_mask_keeps_a_tool_call_only_responses_reply_when_pii_is_in_the_prompt(self):
+        call: Final = {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "lookup", "arguments": "{}"}
+        response = ResponsesAPIResponse(id="resp_1", created_at=1, output=[call])
+        prompt: Final = f"Card {_CARD} please."
+
+        result, client = await _post_call("mask", _card_verdict(0), {"model": "m", "input": prompt}, response)
+
+        assert result is response
+        assert client.posts[0]["json"]["messages"] == [{"role": "user", "content": prompt}]
+
     async def test_nothing_to_inspect_skips_lakera_and_returns_the_response(self):
         response = _responses_reply()
 
