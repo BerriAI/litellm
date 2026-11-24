@@ -826,6 +826,9 @@ class ANTHROPIC_HOSTED_TOOLS(str, Enum):
     TOOL_SEARCH_TOOL = "tool_search_tool"
 
 
+ANTHROPIC_UNRENDERED_BLOCK_TYPES: Final = frozenset({"fallback"})
+
+
 class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     """
     Known beta header values for Anthropic.
@@ -843,6 +846,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     PER_TURN_CONTROL_2026_07_01 = "per-turn-control-2026-07-01"
     DANGEROUS_TOOL_USE_2026_09_03 = "dangerous-tool-use-2026-09-03"
     MCP_CLIENT_2025_04_04 = "mcp-client-2025-04-04"
+    SERVER_SIDE_FALLBACK_2026_06_01 = "server-side-fallback-2026-06-01"
 
 
 # Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)

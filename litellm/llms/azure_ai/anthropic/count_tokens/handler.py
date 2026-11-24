@@ -85,6 +85,7 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
                 **self.get_required_headers(
                     api_key=api_key,
                     litellm_params=litellm_params,
+                    messages=messages,
                 ),
                 **extra_headers,
             }

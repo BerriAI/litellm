@@ -48139,6 +48139,47 @@
         "mode": "rerank",
         "output_cost_per_token": 0.0
     },
+    "nvidia_nim/mistralai/mistral-large-4-1t-a52b": {
+        "litellm_provider": "nvidia_nim",
+        "max_output_tokens": 262144,
+        "mode": "chat",
+        "source": "https://build.nvidia.com/mistralai/mistral-large-4-1t-a52b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_logprobs": false,
+        "supports_tool_choice": true
+    },
+    "nvidia_nim/moonshotai/kimi-k3.1-pro": {
+        "litellm_provider": "nvidia_nim",
+        "mode": "chat",
+        "source": "https://integrate.api.nvidia.com/v1/models",
+        "supports_logprobs": false
+    },
+    "nvidia_nim/nvidia/nemotron-3.5-bolt-e4b": {
+        "litellm_provider": "nvidia_nim",
+        "max_output_tokens": 65536,
+        "mode": "chat",
+        "source": "https://build.nvidia.com/nvidia/nemotron-3.5-bolt-e4b.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_logprobs": false,
+        "supports_response_schema": true,
+        "supports_tool_choice": true
+    },
+    "nvidia_nim/poolside/laguna-xs-2.1": {
+        "litellm_provider": "nvidia_nim",
+        "max_output_tokens": 16384,
+        "mode": "chat",
+        "source": "https://build.nvidia.com/poolside/laguna-xs-2.1.md",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_logprobs": false
+    },
     "sagemaker/meta-textgeneration-llama-2-13b": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "sagemaker",

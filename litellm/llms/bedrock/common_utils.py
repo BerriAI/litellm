@@ -15,7 +15,11 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import (
+    ReadOnly,
+    TypedDict,
+    TypeIs,  # noqa: TID251  # narrows the caller's tools without copying them
+)
 
 if TYPE_CHECKING:
     from botocore.eventstream import EventStreamMessage
@@ -505,6 +509,15 @@ def strip_unsupported_bedrock_invoke_output_config_keys(
         request_body["output_config"] = {"format": preserved_format}  # rebind-ok: out-param
 
 
+_TOOL_ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
+
+
+def _is_str_keyed_dict(
+    value: object,
+) -> TypeIs[dict[str, object]]:  # guard-ok: JSON tool objects  # mutable-ok: fallbacks reuse tools edited in place
+    return isinstance(value, dict)
+
+
 def normalize_custom_field_on_tools(request_body: dict) -> None:
     """
     Drop the ``custom`` field from each tool, first hoisting a boolean
@@ -609,17 +622,19 @@ def normalize_tool_input_schema_types_for_bedrock_invoke(request_body: dict) -> 
 
 def ensure_bedrock_anthropic_messages_tool_names(request_body: dict) -> None:
     """
-    Bedrock Invoke (Anthropic Messages) requires each tool to include ``name``.
+    Bedrock Invoke (Anthropic Messages) requires each custom tool to include ``name``.
     Some clients send only ``input_schema``; Bedrock then errors with
     ``tools.0.custom.name: Field required``.
 
-    In-place: set ``name`` to ``litellm_unnamed_tool_{index}`` when missing or blank.
+    In-place: set ``name`` to ``litellm_unnamed_tool_{index}`` on a custom tool whose name
+    is missing or blank. Typed tools pass through as sent, since a toolset entry refuses
+    any name and a dated tool accepts only its fixed one.
     """
     tools: Final = request_body.get("tools")
     if not tools or not isinstance(tools, list):
         return
-    for i, tool in enumerate(tools):
-        if not isinstance(tool, dict):
+    for i, tool in enumerate(_TOOL_ITEMS_ADAPTER.validate_python(tools)):
+        if not _is_str_keyed_dict(tool) or tool.get("type") not in (None, "custom"):
             continue
         name = tool.get("name")
         if name is None or (isinstance(name, str) and not name.strip()):

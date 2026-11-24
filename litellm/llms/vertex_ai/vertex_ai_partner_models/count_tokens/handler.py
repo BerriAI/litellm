@@ -14,13 +14,16 @@ from pydantic import JsonValue, TypeAdapter
 
 from litellm.llms.anthropic.common_utils import (
     anthropic_message_objects,
+    carries_fallback_block,
     is_claude_model_target,
     json_message_without_provider_specific_fields,
     strip_unsigned_thinking_from_anthropic_messages,
+    validated_object_list,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 
 _COUNT_TOKENS_PUBLISHERS: Final = (
     ("claude", "anthropic"),
@@ -34,6 +37,14 @@ _JSON_LIST: Final = TypeAdapter(list[JsonValue])
 
 def count_tokens_publisher(model: str) -> str | None:
     return next((publisher for marker, publisher in _COUNT_TOKENS_PUBLISHERS if marker in model), None)
+
+
+def count_tokens_headers(access_token: str, request_data: Mapping[str, object]) -> Mapping[str, str]:
+    authorization: Final = {"Authorization": f"Bearer {access_token}"}
+    messages: Final = validated_object_list(request_data.get("messages")) or ()
+    if not carries_fallback_block(messages):
+        return authorization
+    return {**authorization, "anthropic-beta": ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value}
 
 
 def count_tokens_request_body(request_data: Mapping[str, object], model: str) -> Mapping[str, object]:
@@ -191,7 +202,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         )
 
         # Prepare headers
-        headers: Final = {"Authorization": f"Bearer {access_token}", **extra_headers}
+        headers: Final = {**count_tokens_headers(access_token, request_data), **extra_headers}
 
         # Get async HTTP client
         from litellm import LlmProviders
@@ -202,7 +213,7 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         # Note: Partner models (especially Claude) accept Anthropic Messages API format directly
         response: Final = await async_client.post(
             endpoint_url,
-            headers=headers,
+            headers=dict(headers),
             json=dict(count_tokens_request_body(request_data, model)),
             timeout=30.0,
         )
