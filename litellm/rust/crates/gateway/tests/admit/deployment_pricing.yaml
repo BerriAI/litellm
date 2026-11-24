@@ -1,0 +1,82 @@
+# A deployment that prices its calls itself. Python writes its prices into the cost map under the
+# deployment's id, and the native app builds no such row, so its group goes to Python. Making a
+# deployment's own prices native turns its case here to `expect: rust`.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: claude-priced-in-params
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        input_cost_per_token: 0.000001
+        output_cost_per_token: 0.000005
+    - model_name: claude-priced-in-model-info
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+      model_info:
+        input_cost_per_token: 0.000001
+    - model_name: claude-priced-as-another-model
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+      model_info:
+        base_model: claude-sonnet-5-5
+    - model_name: claude-priced-as-another-model-in-params
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        base_model: claude-sonnet-5-5
+    - model_name: claude-backed
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  router_settings:
+    fallbacks:
+      - claude-backed: [claude-priced-in-params]
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: priced from the cost map
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: its own token prices in litellm_params
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-priced-in-params, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.input_cost_per_token
+
+  - name: its own token price in model_info
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-priced-in-model-info, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.model_info.input_cost_per_token
+
+  - name: another model's prices by model_info.base_model
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-priced-as-another-model, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.model_info.base_model
+
+  - name: another model's prices by litellm_params.base_model
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-priced-as-another-model-in-params, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.base_model
+
+  - name: a group that falls back to one with its own prices
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-backed, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: 'router_settings fallback to claude-priced-in-params: model_list.litellm_params.input_cost_per_token'
