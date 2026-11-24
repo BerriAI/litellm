@@ -19,6 +19,7 @@ from dataclasses import asdict, dataclass, replace
 from types import MappingProxyType
 from typing import (
     Final,
+    NoReturn,
     TypeAlias,
     TypeVar,
     cast,  # noqa: TID251  # narrows native payloads to public TypedDicts
@@ -69,6 +70,7 @@ from litellm.llms.anthropic.common_utils import (
     anthropic_pass_through_api_base,
     strip_provider_specific_fields_from_anthropic_messages,
 )
+from litellm.llms.anthropic.messages.deferred_tools import unknown_deferred_tools_refusal
 from litellm.llms.anthropic.messages.native import handler
 from litellm.llms.anthropic.messages.native import utils as native_utils
 from litellm.llms.anthropic.messages.native.handler import (
@@ -305,6 +307,21 @@ def _refuse_unsupported_thread(request: Mapping[str, object], asynchronous: bool
     if refusal is None:
         return
     _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
+    _raise_provider_refusal(refusal, request, provider)
+
+
+def _refuse_unknown_deferred_tools(request: Mapping[str, object], asynchronous: bool) -> None:
+    """Python's handler refuses an unknown model_info.deferred_tools, or ignores it under drop_params."""
+    refusal: Final = unknown_deferred_tools_refusal(
+        request.get("model_info"), drops_unsupported_params(request.get("drop_params"))
+    )
+    if refusal is None:
+        return
+    _flag_messages_call(request.get("litellm_logging_obj"), asynchronous)
+    _raise_provider_refusal(AnthropicError(status_code=400, message=refusal), request, _messages_config(request)[0])
+
+
+def _raise_provider_refusal(refusal: AnthropicError, request: Mapping[str, object], provider: str) -> NoReturn:
     try:
         raise refusal
     except AnthropicError as provider_error:
@@ -1502,6 +1519,7 @@ def settings(
     if call_settings.mock_response is None and not call_settings.mcp_gateway:
         _refuse_unsupported_thread(request, asynchronous)
         _refuse_unsupported_diagnostics(request, asynchronous)
+        _refuse_unknown_deferred_tools(request, asynchronous)
     return asdict(call_settings)
 
 
