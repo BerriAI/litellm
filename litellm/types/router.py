@@ -1270,7 +1270,7 @@ class RouterRateLimitError(ValueError):
         model: str,
         cooldown_time: float,
         enable_pre_call_checks: bool,
-        cooldown_list: list,
+        cooldown_list: Sequence[object],
         model_ids: Sequence[str] = (),
         cooldown_deployments: Sequence[CooldownDeploymentInfo] | None = None,
     ) -> None:
@@ -1554,7 +1554,7 @@ class AdaptiveRouterWeights(LiteLLMBaseModel):
 
     @field_validator("cost")
     @classmethod
-    def _weights_sum_to_one(cls, v, info):
+    def _weights_sum_to_one(cls, v: float, info):
         q: Final = info.data.get("quality", 0.7)
         if abs(q + v - 1.0) > 0.001:
             raise ValueError(f"weights must sum to 1.0, got quality={q} + cost={v} = {q + v}")

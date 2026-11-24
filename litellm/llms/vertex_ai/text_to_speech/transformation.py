@@ -298,7 +298,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         voice: str | dict[str, object] | None,
         model: str | None = None,
         drop_params: bool = False,
-    ) -> tuple[str | None, dict | None]:
+    ) -> tuple[str | None, dict[str, object] | None]:
         """
         Map voice to Vertex AI format.
 
@@ -339,12 +339,10 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
         else:
             language_code = self.DEFAULT_LANGUAGE_CODE
 
-        voice_dict: Final = {
+        return voice_str, {
             "languageCode": language_code,
             "name": mapped_voice_name,
         }
-
-        return voice_str, voice_dict
 
     @staticmethod
     def _is_gemini_tts_model(model: str) -> bool:
@@ -1026,7 +1024,7 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
 
     def get_supported_openai_params(
         self, model: str
-    ) -> list:  # mutable-ok: inherited provider interface returns a concrete parameter list
+    ) -> list[str]:  # mutable-ok: inherited provider interface returns a concrete parameter list
         return ["response_format"]
 
     def map_openai_params(

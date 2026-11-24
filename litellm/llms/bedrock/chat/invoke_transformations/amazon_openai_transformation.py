@@ -135,7 +135,7 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform the request to OpenAI Chat Completions format for Bedrock imported models.
 

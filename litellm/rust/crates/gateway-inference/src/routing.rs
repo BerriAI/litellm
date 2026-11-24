@@ -27,7 +27,7 @@ use crate::{
     Error, Gateway,
     error::{Ended, NoDeployments},
     headers::Routing,
-    hooks::{CallHooks, CallType},
+    hooks::CallHooks,
     stream_event::Read,
     stream_hold::{self, Cause, Chunks, Held},
     stream_outcome,
@@ -55,8 +55,8 @@ pub trait Host: Send + Sync + Sized + 'static {
         identity: &'a Authenticated<Self::Rows>,
     ) -> impl Iterator<Item = Layer<'a>>;
 
-    /// The callback hooks of one call `identity` makes on the `call_type` route.
-    fn hooks(&self, identity: &Authenticated<Self::Rows>, call_type: CallType) -> Self::Hooks;
+    /// The callback hooks of one call `identity` makes, which read and write the call's record.
+    fn hooks(&self, identity: &Authenticated<Self::Rows>) -> Self::Hooks;
 
     /// router-core's host for one call that runs `route` on each attempt for `identity`.
     fn router_host<'a, A: RouteAttempt>(

@@ -91,16 +91,17 @@ describe("Settings", () => {
     expect(await screen.findByRole("tab", { name: "Alerting Types" })).toHaveAttribute("aria-selected", "true");
   });
 
-  it("opens callback creation from the page controls only on the callbacks tab", async () => {
+  it("opens callback creation from inside the Logging Callbacks tab only", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Settings {...defaultProps} />);
 
-    const controls = screen.getByRole("group", { name: "Page controls" });
-    await user.click(within(controls).getByRole("button", { name: "Add Callback" }));
+    const panel = screen.getByRole("tabpanel", { name: "Logging Callbacks" });
+    expect(within(panel).getByRole("heading", { name: "Active Logging Callbacks" })).toBeInTheDocument();
+    await user.click(within(panel).getByRole("button", { name: "Add Callback" }));
     expect(screen.getByRole("dialog", { name: "Add Logging Callback" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     await user.click(screen.getByRole("tab", { name: "Alerting Types" }));
-    expect(screen.queryByRole("group", { name: "Page controls" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add Callback" })).not.toBeInTheDocument();
   });
 
   it("should display additional settings tabs", async () => {

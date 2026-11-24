@@ -546,6 +546,51 @@ def test_a_group_with_no_team_does_not_hold_back_a_deactivation(gateway: Gateway
         assert not _has_team_member(gateway, team, user_name), _team_members(gateway, team)
 
 
+def test_patch_remove_on_groups_with_no_value_removes_the_user_from_every_team(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        teams: Final = (scenario.team(models=[model]), scenario.team(models=[model]))
+        user_name: Final = f"scim-remove-groups-{uuid.uuid4().hex}@example.com"
+        created: Final = _scim_request(
+            gateway,
+            "POST",
+            "/scim/v2/Users",
+            {
+                "schemas": [SCIM_CORE_USER_SCHEMA],
+                "userName": user_name,
+                "emails": [{"value": user_name, "primary": True}],
+                "groups": [{"value": team} for team in teams],
+            },
+        )
+        scenario.cleanups.callback(_delete_user_if_present, gateway, user_name)
+        assert created.status_code == 201, created.text
+        key: Final = _key_with_cleanup(scenario, user_id=user_name, team_id=teams[0], models=[model])
+        _assert_serving(gateway, model, key)
+
+        removed: Final = _scim_request(
+            gateway,
+            "PATCH",
+            f"/scim/v2/Users/{user_name}",
+            {
+                "schemas": [SCIM_PATCH_OP_SCHEMA],
+                "Operations": [{"op": "remove", "path": "groups"}],
+            },
+        )
+
+        assert removed.status_code == 200, removed.text
+        assert not ScimUserResponse.model_validate(removed.json()).groups, removed.text
+        readback: Final = _scim_request(gateway, "GET", f"/scim/v2/Users/{user_name}")
+        assert not ScimUserResponse.model_validate(readback.json()).groups, readback.text
+        assert not any(_has_team_member(gateway, team, user_name) for team in teams)
+        refused: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": "SCIM removed every group"}]},
+            key=key,
+        )
+        assert refused.status_code == 401, refused.text
+
+
 def test_scim_create_persists_external_id_as_the_sso_user_id(gateway: Gateway) -> None:
     pytest.skip(
         "BUG: POST /scim/v2/Users drops externalId, so the 201 resource and GET readback return externalId null and "

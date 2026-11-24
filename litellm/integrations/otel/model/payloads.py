@@ -343,7 +343,7 @@ class ServiceSpanData:
     # from ``async_service_*_hook(event_metadata=...)``. The mapper owns how
     # these are namespaced: the canonical vocabulary uses ``litellm.metadata.*``
     # keys, the semconv-ai / Traceloop vocabulary uses the bare key names.
-    event_metadata: Mapping[str, MetadataScalar] = field(default_factory=dict)
+    event_metadata: Mapping[str, MetadataScalar] = field(default_factory=dict[str, MetadataScalar])
 
     @classmethod
     def from_payload(

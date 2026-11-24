@@ -769,6 +769,7 @@ LOGGING_WORKER_CONCURRENCY: Final = get_env_int("LOGGING_WORKER_CONCURRENCY", 10
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = get_env_int("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000)
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = get_env_float("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0)
 LOGGING_WORKER_TIMEOUT_SUMMARY_WINDOW_SECONDS: Final = 5.0
+WEBSOCKET_TURN_LOGGING_WAIT_SECONDS: Final = 5.0
 LOGGING_WORKER_CLEAR_PERCENTAGE: Final = get_env_int(
     "LOGGING_WORKER_CLEAR_PERCENTAGE", 50
 )  # Percentage of queue to clear (default: 50%)
@@ -1752,6 +1753,7 @@ SESSION_ID_GENERATED_METADATA_KEY: Final = "litellm_session_id_generated"
 SESSION_SPEND_TOTAL_TTL_SECONDS: Final = 3600
 SESSION_ID_OMITTED_METADATA_KEY: Final = "litellm_session_id_omitted"
 CALLER_SESSION_ID_METADATA_KEY: Final = "litellm_caller_session_id"
+SESSION_ID_INHERITED_METADATA_KEY: Final = "litellm_session_id_inherited"
 PREVIOUS_RESPONSE_IDS_METADATA_KEY: Final = "litellm_previous_response_ids"
 COMPLEXITY_ROUTER_CHILD_SESSION_ID_METADATA_KEY: Final = "_complexity_router_child_session_id"
 LITELLM_TRUNCATED_PAYLOAD_FIELD: Final = "litellm_truncated"
@@ -2285,6 +2287,62 @@ HTTP_FRAMING_HEADERS: Final[frozenset[str]] = frozenset(
         "cookie",
         "proxy-authenticate",
         "proxy-authorization",
+    }
+)
+
+CREDENTIAL_HEADER_NAMES: Final[frozenset[str]] = frozenset(
+    {
+        "api-key",
+        "authorization",
+        "cookie",
+        "ocp-apim-subscription-key",
+        "proxy-authorization",
+        "set-cookie",
+        "x-amz-security-token",
+        "x-api-key",
+        "x-goog-api-key",
+        "x-litellm-api-key",
+        "x-mcp-auth",
+    }
+)
+
+PROVIDER_ERROR_BODY_ATTRIBUTE: Final = "provider_error_body"
+CREDENTIAL_FIELD_NAME_FRAGMENTS: Final[tuple[str, ...]] = (
+    "accesskey",
+    "accesstoken",
+    "apikey",
+    "authtoken",
+    "bearer",
+    "clientsecret",
+    "credential",
+    "idtoken",
+    "passphrase",
+    "passwd",
+    "password",
+    "privatekey",
+    "refreshtoken",
+    "secret",
+    "sessiontoken",
+    "signingkey",
+)
+CREDENTIAL_FIELD_NAME_WORDS: Final[frozenset[str]] = frozenset(
+    {"auth", "authorization", "cookie", "pass", "pwd", "session", "sig", "signature", "token"}
+)
+QUANTITY_FIELD_NAME_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "count",
+        "expires",
+        "expiry",
+        "length",
+        "limit",
+        "max",
+        "min",
+        "remaining",
+        "total",
+        "ttl",
+        "type",
+        "usage",
+        "used",
     }
 )
 

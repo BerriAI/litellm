@@ -11,6 +11,7 @@ mod in_flight;
 mod panic;
 mod rate_limit;
 mod request_log;
+mod request_volume;
 pub mod root_path;
 pub mod security_headers;
 
@@ -23,7 +24,7 @@ use axum::{
 };
 use litellm_license::Entitlements;
 
-use crate::callbacks::parallel_request_limiter::KeyLimiter;
+use crate::{callbacks::parallel_request_limiter::KeyLimiter, gateway_requests::GatewayRequests};
 use tower::ServiceBuilder;
 
 pub use in_flight::InFlight;
@@ -40,12 +41,15 @@ pub struct Settings {
 /// Outermost first, in the order of the proxy's FastAPI middleware, with the panic handler where
 /// Starlette answers an unhandled exception, outside every middleware. Python caps a body only through its size limit middleware,
 /// so axum's own 2 MB extractor default is lifted and a router that sets its own keeps it. Every
-/// middleware and route inside reads the license as `Extension<Arc<Entitlements>>`.
+/// middleware and route inside reads the license as `Extension<Arc<Entitlements>>`. The request
+/// volume middleware counts into `requests`, and is left out when there is none, as without a
+/// database.
 pub fn global(
     router: Router,
     settings: &Settings,
     entitlements: Arc<Entitlements>,
     in_flight: &InFlight,
+    requests: Option<Arc<GatewayRequests>>,
 ) -> Router {
     let size_limits = Arc::new(body_limit::SizeLimits::new(&settings.body_limit));
     let admission = settings.admission_control.map(|settings| {
@@ -66,6 +70,9 @@ pub fn global(
             .layer(DefaultBodyLimit::disable())
             .layer(security_headers::layer(&settings.security_headers))
             .layer(in_flight::layer(in_flight))
+            .option_layer(
+                requests.map(|requests| from_fn_with_state(requests, request_volume::count)),
+            )
             .layer(cors::layer(&settings.cors))
             .layer(from_fn_with_state(
                 Arc::new(decompression::Decompression::new(
@@ -121,6 +128,7 @@ mod tests {
             },
             premium(),
             &InFlight::new(),
+            None,
         )
     }
 
@@ -183,6 +191,7 @@ mod tests {
             &Settings::default(),
             premium(),
             &InFlight::new(),
+            None,
         );
         let request = Request::post("/v1/messages").body(Body::empty()).unwrap();
         assert_eq!(
@@ -211,6 +220,7 @@ mod tests {
             },
             premium(),
             &InFlight::new(),
+            None,
         );
         let request = || Request::post("/v1/messages").body(Body::empty()).unwrap();
         let _unfinished = app.clone().oneshot(request()).await.unwrap();
@@ -225,6 +235,37 @@ mod tests {
                 }})
             )
         );
+    }
+
+    #[rstest]
+    #[case::served(0, "llm /v1/messages 200: 1 ok 0 failed")]
+    #[case::refused_by_the_size_limit_outside_it(2 * 1024 * 1024, "")]
+    #[tokio::test]
+    async fn the_request_volume_counts_what_the_size_limit_lets_through(
+        #[case] content_length: usize,
+        #[case] expected: &str,
+    ) {
+        let requests = Arc::new(GatewayRequests::new());
+        let app = global(
+            Router::new().route("/v1/messages", post(|_: Bytes| async { "ok" })),
+            &Settings {
+                body_limit: body_limit::Settings {
+                    max_request_size_mb: Some(1.0),
+                },
+                ..Settings::default()
+            },
+            premium(),
+            &InFlight::new(),
+            Some(requests.clone()),
+        );
+        let request = Request::post("/v1/messages")
+            .header(header::CONTENT_LENGTH, content_length)
+            .body(Body::empty())
+            .unwrap();
+
+        app.oneshot(request).await.unwrap();
+
+        assert_eq!(requests.summary(), expected);
     }
 
     #[rstest]
