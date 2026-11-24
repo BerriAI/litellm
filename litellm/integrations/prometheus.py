@@ -3207,7 +3207,15 @@ class PrometheusLogger(CustomLogger):
                     api_provider=llm_provider or "",
                 )
             _deployment_label_ctx: Final = PrometheusLabelFactoryContext(enum_values)
-            if exception is not None and not refused_prompt:
+            if refused_prompt:
+                PrometheusLogger._inc_labeled_counter(
+                    self,
+                    self.litellm_deployment_success_responses,
+                    "litellm_deployment_success_responses",
+                    enum_values,
+                    label_context=_deployment_label_ctx,
+                )
+            elif exception is not None:
                 PrometheusLogger._inc_labeled_counter(
                     self,
                     self.litellm_deployment_failure_responses,

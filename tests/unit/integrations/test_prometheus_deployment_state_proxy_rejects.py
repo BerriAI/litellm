@@ -103,6 +103,7 @@ def test_failure_after_routing_still_marks_deployment_partial_outage(failure: Ex
 
     assert _model_id_values(logger.litellm_deployment_state) == {"dep-1"}
     assert _model_id_values(logger.litellm_deployment_failure_responses) == {"dep-1"}
+    assert logger.litellm_deployment_success_responses._metrics == {}
 
 
 def test_malformed_field_rejection_after_routing_leaves_deployment_healthy() -> None:
@@ -145,4 +146,5 @@ def test_image_prompt_answered_without_an_image_leaves_deployment_healthy(refusa
         sample.labels["model_id"]: sample.value for sample in logger.litellm_deployment_state.collect()[0].samples
     } == {"dep-1": 0.0}
     assert logger.litellm_deployment_failure_responses._metrics == {}
+    assert _model_id_values(logger.litellm_deployment_success_responses) == {"dep-1"}
     assert _model_id_values(logger.litellm_deployment_total_requests) == {"dep-1"}
