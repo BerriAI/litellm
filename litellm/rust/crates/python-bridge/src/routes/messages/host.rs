@@ -813,6 +813,8 @@ impl MessagesPythonHost {
             Some(base_model) => Some(base_model),
             None => non_empty_string(argument("base_model")?),
         };
+        let base_model: Option<String> =
+            argument("base_model")?.and_then(|value| value.extract().ok());
         let capabilities = match &mantle {
             Some(_) => super::model_catalog::route_capabilities(
                 py,
@@ -833,6 +835,7 @@ impl MessagesPythonHost {
                         super::model_catalog::bedrock_capabilities(
                             py,
                             &model,
+                            base_model.as_deref(),
                             argument("model_info")?,
                         )?,
                         &requested,
@@ -865,7 +868,7 @@ impl MessagesPythonHost {
                 unencodable_request_header,
                 module_api_key: azure.as_ref().and_then(|azure| azure.api_key.clone()),
                 global_drop_params: global_drop_params(py)?,
-                base_model: argument("base_model")?.and_then(|value| value.extract().ok()),
+                base_model,
                 ..settings.settings
             },
         };

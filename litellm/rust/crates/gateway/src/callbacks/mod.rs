@@ -1,7 +1,8 @@
 //! The callbacks the gateway runs itself around an inference call, the native counterpart of
 //! the proxy's `custom_logger_v2` dispatcher. [`Callbacks`] holds them in the order Python runs
 //! them, and the [`Call`] of one request runs each hook the route tells it over them in that
-//! order. [`Point`] names each hook the gateway runs and how it ends, and a hook it does not run
+//! order, reading and patching the call's record (`litellm_gateway_inference::record`) by contract field
+//! through [`fields`]. [`Point`] names each hook the gateway runs and how it ends, and a hook it does not run
 //! yet is never told.
 
 mod fields;
@@ -17,12 +18,13 @@ use litellm_callbacks::{
 };
 use litellm_error::{Report, Source};
 use litellm_gateway_auth::Authenticated;
-use litellm_gateway_inference::{CallHooks, CallType, HookError, Refusal, ServedCall};
-use parking_lot::Mutex;
+use litellm_gateway_inference::{
+    CallHooks, HookError, Refusal, ServedCall,
+    record::{self, Entries},
+};
 use serde_json::{Map, Value};
 use strum::VariantArray;
 
-use self::fields::Known;
 use crate::host::NativeRows;
 
 /// A hook the gateway runs for a call.
@@ -89,6 +91,8 @@ enum Cause {
     Callback(#[from] CallbackError),
     #[error(transparent)]
     Violation(#[from] Violation),
+    #[error("no call record is in scope")]
+    NoRecord,
 }
 
 type FromCaller = Box<dyn Fn(&Authenticated<NativeRows>) -> RequestState + Send + Sync>;
@@ -157,11 +161,7 @@ impl Callbacks {
         Ok(Self { callbacks })
     }
 
-    pub(crate) fn begin(
-        self: &Arc<Self>,
-        identity: &Authenticated<NativeRows>,
-        call_type: CallType,
-    ) -> Call {
+    pub(crate) fn begin(self: &Arc<Self>, identity: &Authenticated<NativeRows>) -> Call {
         Call {
             states: self
                 .callbacks
@@ -172,18 +172,16 @@ impl Callbacks {
                 })
                 .collect(),
             callbacks: self.clone(),
-            known: Mutex::new(Known::of(call_type)),
         }
     }
 }
 
-/// The hooks of one request: each callback's own state for it, and what is known of the call so
-/// far, which one callback's patch changes for the callbacks after it.
+/// The hooks of one request and each callback's own state for it. What is known of the call is
+/// its record, which one callback's patch changes for the callbacks after it.
 pub struct Call {
     callbacks: Arc<Callbacks>,
     /// By each callback's place in `callbacks`.
     states: Vec<Option<RequestState>>,
-    known: Mutex<Known>,
 }
 
 /// The exception Python raises for `abort`: its `ProxyRateLimitError` for a limiter's refusal,
@@ -253,7 +251,8 @@ impl Call {
         state: Option<&RequestState>,
     ) -> Result<Option<Abort>, Cause> {
         let hook = subscription.hook;
-        let input = self.known.lock().input(hook, subscription.reads);
+        let input = record::read(|entries| fields::input(entries, hook, subscription.reads))
+            .ok_or(Cause::NoRecord)?;
         let Some(verdict) = callback.handle(&input, state).await? else {
             return Ok(None);
         };
@@ -261,12 +260,13 @@ impl Call {
         match verdict {
             Verdict::Abort(abort) => Ok(Some(abort)),
             Verdict::Patch(patch) => {
-                let mut known = self.known.lock();
-                for op in patch.ops {
-                    if let Err(error) = known.write(op) {
-                        tracing::error!(callback = %name, ?hook, %error, "the patch was not applied");
+                record::write(|entries| {
+                    for op in patch.ops {
+                        if let Err(error) = fields::write(entries, op) {
+                            tracing::error!(callback = %name, ?hook, %error, "the patch was not applied");
+                        }
                     }
-                }
+                });
                 Ok(None)
             }
         }
@@ -275,9 +275,16 @@ impl Call {
 
 impl CallHooks for Call {
     async fn pre_call(&self, body: Map<String, Value>) -> Result<Map<String, Value>, HookError> {
-        self.known.lock().hold(body);
+        let mut unheld = Some(body);
+        record::write(|entries| {
+            if let Some(body) = unheld.take() {
+                entries.hold(body);
+            }
+        });
         let ran = self.run(Point::PreCall).await;
-        let body = self.known.lock().release();
+        let body = record::write(Entries::release)
+            .or(unheld)
+            .unwrap_or_default();
         ran.map(|()| body)
     }
 
@@ -287,21 +294,23 @@ impl CallHooks for Call {
 
     async fn response_headers(&self) -> HeaderMap {
         let _ = self.run(Point::ResponseHeaders).await;
-        self.known
-            .lock()
-            .response_headers()
-            .iter()
-            .filter_map(|(name, value)| header(name, value))
-            .collect()
+        record::read(|entries| {
+            entries
+                .response_headers()
+                .iter()
+                .filter_map(|(name, value)| header(name, value))
+                .collect()
+        })
+        .unwrap_or_default()
     }
 
     async fn succeeded(&self, served: ServedCall) {
-        self.known.lock().serve(served);
+        record::write(|entries| entries.serve(served));
         let _ = self.run(Point::AttemptEnded).await;
     }
 
     async fn failed(&self) {
-        self.known.lock().fail();
+        record::write(Entries::fail);
         let _ = self.run(Point::PostCallFailure).await;
         let _ = self.run(Point::AttemptEnded).await;
     }
@@ -315,12 +324,18 @@ mod tests {
     use litellm_callbacks::{
         Callback, Field, FieldSet, HookInput, HookOutput, Manifest, Patch, Selection,
     };
+    use parking_lot::Mutex;
     use rstest::rstest;
     use serde_json::json;
 
     use super::*;
 
     type Log = Arc<Mutex<Vec<String>>>;
+
+    /// Runs `hooks` as one call, with its own record.
+    async fn in_call<T>(hooks: impl std::future::Future<Output = T>) -> T {
+        record::scope(record::CallRecord::new(), hooks).await
+    }
     type Answer = fn(&HookInput) -> HookOutput;
 
     /// A callback that writes `<name>:<what it read of the limit statuses>` to the log all the
@@ -435,8 +450,7 @@ mod tests {
 
     async fn call(callbacks: Vec<Arc<Scripted>>) -> Call {
         let callbacks = callbacks.into_iter().map(registered).collect();
-        Arc::new(Callbacks::new(callbacks).unwrap())
-            .begin(&crate::test_support::master(), CallType::AnthropicMessages)
+        Arc::new(Callbacks::new(callbacks).unwrap()).begin(&crate::test_support::master())
     }
 
     fn body() -> Map<String, Value> {
@@ -470,8 +484,12 @@ mod tests {
             scripted("after", &log, &[pre_call(), ended()], silent),
         ])
         .await;
-        let admitted = call.pre_call(body()).await;
-        call.succeeded(served()).await;
+        let admitted = in_call(async {
+            let admitted = call.pre_call(body()).await;
+            call.succeeded(served()).await;
+            admitted
+        })
+        .await;
 
         assert_eq!(
             (admitted.map_err(told), log.lock().clone()),
@@ -520,7 +538,7 @@ mod tests {
             scripted("second", &log, &[pre_call()], silent),
         ])
         .await;
-        let refused = call.pre_call(body()).await;
+        let refused = in_call(call.pre_call(body())).await;
 
         assert_eq!(
             (refused.map_err(told), log.lock().clone()),
@@ -543,7 +561,7 @@ mod tests {
         ])
         .await;
 
-        call.failed().await;
+        in_call(call.failed()).await;
 
         assert_eq!(
             log.lock().clone(),
@@ -568,14 +586,8 @@ mod tests {
             .unwrap(),
         );
         let caller = crate::test_support::master();
-        callbacks
-            .begin(&caller, CallType::AnthropicMessages)
-            .failed()
-            .await;
-        callbacks
-            .begin(&caller, CallType::AnthropicMessages)
-            .failed()
-            .await;
+        in_call(callbacks.begin(&caller).failed()).await;
+        in_call(callbacks.begin(&caller).failed()).await;
 
         assert_eq!(
             log.lock().clone(),
@@ -597,10 +609,7 @@ mod tests {
         let caller = crate::test_support::master();
         let started_at = 7;
 
-        callbacks
-            .begin(&caller, CallType::AnthropicMessages)
-            .failed()
-            .await;
+        in_call(callbacks.begin(&caller).failed()).await;
 
         assert_eq!(
             log.lock().clone(),

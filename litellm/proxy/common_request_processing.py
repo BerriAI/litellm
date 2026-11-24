@@ -160,6 +160,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     openai_error_param,
     openai_error_type,
+    redacted_provider_specific_fields,
     relayed_provider_specific_fields,
 )
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
@@ -1019,7 +1020,7 @@ def proxy_exception_from_route_error(exc: Exception) -> ProxyException:
         param=openai_error_param(exc),
         code=error_status,
         openai_code=carried_code if isinstance(carried_code, str) else None,
-        provider_specific_fields=provider_fields if isinstance(provider_fields, dict) else None,
+        provider_specific_fields=redacted_provider_specific_fields(provider_fields),
     )
 
 
@@ -1629,6 +1630,7 @@ def _anthropic_late_failure_frames(exc: Exception) -> tuple[str, ...]:
         anthropic_error_sse_frame(
             status_code=error_status_code(answered, status.HTTP_500_INTERNAL_SERVER_ERROR),
             raw_message=answered.message,
+            provider_specific_fields=relayed_provider_specific_fields(exc),
         ),
     )
 
@@ -5481,9 +5483,7 @@ class ProxyBaseLLMRequestProcessing:
         redacted_client_message: Final = redact_internal_details_from_client_message(
             strip_bug_report_notice(client_message) if isinstance(client_message, str) else error_msg
         )
-        provider_specific_fields: Final = getattr(
-            failure, "provider_specific_fields", None
-        ) or relayed_provider_specific_fields(failure)
+        provider_specific_fields: Final = relayed_provider_specific_fields(failure)
         if self.route_type in _OPENAI_OVERLOAD_ROUTE_TYPES and is_provider_overload(failure):
             raise OverloadedProxyException(
                 message=redacted_client_message,
@@ -5774,6 +5774,7 @@ class ProxyBaseLLMRequestProcessing:
                 type=openai_error_type(failure, stream_error_status),
                 param=openai_error_param(failure),
                 code=stream_error_status,
+                provider_specific_fields=relayed_provider_specific_fields(failure),
             )
             stream_completed = True
             error_frame: Final = serialize_error(proxy_exception)
@@ -5827,6 +5828,7 @@ class ProxyBaseLLMRequestProcessing:
             serialize_error=lambda proxy_exc: anthropic_error_sse_frame(
                 status_code=error_status_code(proxy_exc, status.HTTP_500_INTERNAL_SERVER_ERROR),
                 raw_message=proxy_exc.message,
+                provider_specific_fields=proxy_exc.provider_specific_fields,
             ),
             request=request,
             flush_tail=None if restamper is None else restamper.flush,

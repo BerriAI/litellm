@@ -48,6 +48,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     litellm_call_id_headers,
     openai_error_param,
     openai_error_type,
+    relayed_provider_specific_fields,
     with_litellm_call_id,
 )
 from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
@@ -292,6 +293,7 @@ async def anthropic_response(
                 param=openai_error_param(answered),
                 code=error_status_code(answered, 500),
                 headers=headers,
+                provider_specific_fields=relayed_provider_specific_fields(answered),
             ),
             request,
         )

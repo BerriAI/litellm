@@ -28,6 +28,7 @@ const BEDROCK_NATIVE_OUTPUT: &str = "supports_bedrock_native_structured_output";
 const NATIVE_OUTPUT_BY_DEFAULT: &str = "supports_bedrock_native_structured_output_by_default";
 const OUTPUT_CONFIG: &str = "supports_output_config";
 const PER_TURN_CONTROL: &str = "supports_per_turn_control";
+const SERVER_SIDE_FALLBACK: &str = "supports_server_side_fallback";
 const PROMPT_CACHE_TTL_PRICE: &str = "cache_creation_input_token_cost_above_1hr";
 const BACKSTOP_PREFIXES: [&str; 4] = [
     "bedrock/converse/",
@@ -109,7 +110,7 @@ pub fn anthropic_model_capabilities(
     MessagesModelCapabilities {
         bedrock: if provider == BEDROCK {
             with_invoke_flags(
-                bedrock_model_capabilities(catalog, requested, declared),
+                bedrock_model_capabilities(catalog, requested, base_model, declared),
                 &capabilities,
             )
         } else {
@@ -201,6 +202,7 @@ pub fn with_base_model_user_profile_id(
 pub fn bedrock_model_capabilities(
     catalog: &Catalog,
     model: &str,
+    base_model: Option<&str>,
     declared: &dyn Fn(&str) -> Option<bool>,
 ) -> BedrockCapabilities {
     let model = bedrock_model(model);
@@ -226,6 +228,15 @@ pub fn bedrock_model_capabilities(
         supports_tool_search: probe.supports("supports_tool_search"),
         supports_per_turn_control: declared(PER_TURN_CONTROL)
             .unwrap_or_else(|| probe.supports(PER_TURN_CONTROL)),
+        supports_server_side_fallback: declared(SERVER_SIDE_FALLBACK).unwrap_or_else(|| {
+            match base_model.map(strip_bedrock_routing_prefix) {
+                Some(base) if is_bedrock_application_inference_profile_arn(model) => {
+                    Probe::new(catalog, base, base, BEDROCK, &|_| None)
+                        .supports(SERVER_SIDE_FALLBACK)
+                }
+                _ => probe.supports(SERVER_SIDE_FALLBACK),
+            }
+        }),
         native_output: NativeOutputSupport {
             enabled: declared(NATIVE_OUTPUT)
                 .unwrap_or_else(|| declared(BEDROCK_NATIVE_OUTPUT) != Some(false) && mapped),
@@ -798,7 +809,7 @@ mod tests {
         #[case] expected: Expected,
     ) {
         assert_eq!(
-            projected(bedrock_model_capabilities(&bundled, model, &|_| None)),
+            projected(bedrock_model_capabilities(&bundled, model, None, &|_| None)),
             expected
         );
     }
@@ -832,7 +843,80 @@ mod tests {
         };
 
         assert_eq!(
-            projected(bedrock_model_capabilities(&bundled, model, &lookup)),
+            projected(bedrock_model_capabilities(&bundled, model, None, &lookup)),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::haiku_4_5("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", &[], true)]
+    #[case::sonnet_4_5_invoke("bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0", &[], true)]
+    #[case::opus_4_8("bedrock/global.anthropic.claude-opus-4-8", &[], true)]
+    #[case::opus_4_1("bedrock/us.anthropic.claude-opus-4-1-20250805-v1:0", &[], false)]
+    #[case::opus_4_1_invoke("bedrock/invoke/anthropic.claude-opus-4-1-20250805-v1:0", &[], false)]
+    #[case::declared_off(
+        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        &[("supports_server_side_fallback", false)],
+        false
+    )]
+    #[case::declared_on(
+        "bedrock/us.anthropic.claude-opus-4-1-20250805-v1:0",
+        &[("supports_server_side_fallback", true)],
+        true
+    )]
+    fn server_side_fallback_reads_the_deployment_flag_then_the_catalog(
+        bundled: Catalog,
+        #[case] model: &str,
+        #[case] declared: &[(&str, bool)],
+        #[case] expected: bool,
+    ) {
+        let lookup = |capability: &str| {
+            declared
+                .iter()
+                .find(|(name, _)| *name == capability)
+                .map(|(_, supported)| *supported)
+        };
+
+        assert_eq!(
+            bedrock_model_capabilities(&bundled, model, None, &lookup)
+                .supports_server_side_fallback,
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::haiku_4_5_base(Some("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"), true)]
+    #[case::opus_4_1_base(Some("anthropic.claude-opus-4-1-20250805-v1:0"), false)]
+    #[case::no_base(None, false)]
+    fn server_side_fallback_reads_base_model_for_an_application_inference_profile(
+        bundled: Catalog,
+        #[case] base_model: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        let profile =
+            "bedrock/arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/abc123";
+
+        assert_eq!(
+            messages_route_capabilities(&bundled, profile, None, base_model, &|_| None)
+                .bedrock
+                .supports_server_side_fallback,
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle("bedrock_mantle/anthropic.claude-haiku-4-5", true)]
+    #[case::amazon_mantle("bedrock/mantle/anthropic.claude-haiku-4-5", true)]
+    #[case::mantle_opus_4_1("bedrock_mantle/anthropic.claude-opus-4-1", false)]
+    fn mantle_routes_resolve_server_side_fallback_for_the_invoke_helpers(
+        bundled: Catalog,
+        #[case] model: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            messages_route_capabilities(&bundled, model, None, None, &|_| None)
+                .bedrock
+                .supports_server_side_fallback,
             expected
         );
     }

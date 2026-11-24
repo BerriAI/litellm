@@ -4485,6 +4485,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 | ResponsesAPIResponse
                 | InteractionsAPIResponse
                 | TranscriptionResponse
+                | ImageResponse
                 | None
             ) = None
             if "complete_streaming_response" in self.model_call_details and not for_async_request:
@@ -6303,11 +6304,12 @@ class Logging(LiteLLMLoggingBaseClass):
         | ResponsesAPIResponse
         | InteractionsAPIResponse
         | TranscriptionResponse
+        | ImageResponse
         | None
     ):
         if self.stream is not True:
             return None
-        if isinstance(result, (ModelResponse, TextCompletionResponse, TranscriptionResponse)):
+        if isinstance(result, (ModelResponse, TextCompletionResponse, TranscriptionResponse, ImageResponse)):
             return result
         elif isinstance(
             result,

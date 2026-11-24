@@ -10617,7 +10617,7 @@ def _make_keepalive_resolver(request_data: Mapping[str, object]) -> Callable[[ob
     return _resolve
 
 
-def _transcription_sse_error_frame(client_error: Exception) -> str:
+def openai_sse_error_frame(client_error: Exception) -> str:
     status_code: Final = error_status_code(client_error, 500)
     error_returned: Final = json.dumps(
         {
@@ -10902,7 +10902,9 @@ async def async_data_generator(
                 if isinstance(client_error, HTTPException)
                 else route_failure_proxy_exception(
                     client_error,
-                    str(attribute_of(client_error, "message", client_error)),
+                    redact_internal_details_from_client_message(
+                        str(attribute_of(client_error, "message", client_error))
+                    ),
                     status.HTTP_500_INTERNAL_SERVER_ERROR,
                 ).to_dict()
             },
@@ -14099,7 +14101,7 @@ async def audio_transcriptions(
                             else data
                         ),
                     )
-                    yield _transcription_sse_error_frame(stream_error if replacement is None else replacement)
+                    yield openai_sse_error_frame(stream_error if replacement is None else replacement)
                     yield TRANSCRIPTION_STREAM_DONE_FRAME
                 finally:
                     with anyio.CancelScope(shield=True):
@@ -20616,6 +20618,7 @@ async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
         llm_router=llm_router,
         request_type="key",
         actor=None,
+        key_writer=None,
         **{
             "user_role": user_obj.user_role,
             "duration": LITELLM_UI_SESSION_DURATION,
