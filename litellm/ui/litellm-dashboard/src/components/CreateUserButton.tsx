@@ -15,6 +15,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 import { ChevronRight, CircleHelp, Info, UserPlus } from "lucide-react";
 import React, { useEffect, useState } from "react";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import { useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
 import TeamDropdown from "./common_components/team_dropdown";
@@ -168,6 +169,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   isEmbedded = false,
 }) => {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const queryClient = useQueryClient();
   const [uiSettings, setUISettings] = useState<UISettings | null>(null);
   const defaultValues = isEmbedded ? EMBEDDED_DEFAULTS : STANDALONE_DEFAULTS;
@@ -197,8 +199,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           availableModels.push(model.id);
         }
         setUserModels(availableModels);
-        const uiSettingsResponse = await getProxyUISettings(accessToken);
-        setUISettings(uiSettingsResponse);
+        if (!controlPlane) setUISettings(await getProxyUISettings(accessToken));
       } catch (error) {
         console.error("Error fetching model data:", error);
       }
@@ -215,13 +216,15 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
   };
 
   const handleCreate = async (formValues: CreateUserFormValues) => {
-    if (formValues.supply_user_id && !formValues.user_id?.trim()) {
-      form.setError("user_id", { message: "Enter a User ID" }, { shouldFocus: true });
-      return;
-    }
-    if (formValues.supply_user_id && formValues.user_id?.includes("\u0000")) {
-      form.setError("user_id", { message: "User ID must not contain NUL characters" }, { shouldFocus: true });
-      return;
+    if (formValues.supply_user_id) {
+      if (!formValues.user_id?.trim()) {
+        form.setError("user_id", { message: "Enter a User ID" }, { shouldFocus: true });
+        return;
+      }
+      if (formValues.user_id.includes("\u0000")) {
+        form.setError("user_id", { message: "User ID must not contain NUL characters" }, { shouldFocus: true });
+        return;
+      }
     }
     try {
       toast.info(t("users.createUser.toasts.makingApiCall"));
@@ -240,15 +243,17 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
         return;
       }
 
-      if (!uiSettings?.SSO_ENABLED) {
-        invitationCreateCall(accessToken, user_id).then((data) => {
-          data.has_user_setup_sso = false;
-          setInvitationLinkData(data);
+      if (!controlPlane) {
+        if (uiSettings?.SSO_ENABLED) {
+          setInvitationLinkData(buildSsoInvitationLink(user_id, userID));
           setIsInvitationLinkModalVisible(true);
-        });
-      } else {
-        setInvitationLinkData(buildSsoInvitationLink(user_id, userID));
-        setIsInvitationLinkModalVisible(true);
+        } else {
+          invitationCreateCall(accessToken, user_id).then((data) => {
+            data.has_user_setup_sso = false;
+            setInvitationLinkData(data);
+            setIsInvitationLinkModalVisible(true);
+          });
+        }
       }
 
       toast.success(t("users.createUser.toasts.created"));
@@ -373,7 +378,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     return (
       <TooltipProvider>
         <form onSubmit={form.handleSubmit(handleCreate)}>
-          <EmailInvitationsNotice />
+          {!controlPlane && <EmailInvitationsNotice />}
           <FieldGroup>
             {userEmailField}
             {userIdField}
@@ -403,7 +408,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
           </DialogHeader>
           <div className="flex flex-col gap-3">
             <p className="mb-1 text-sm text-foreground">{t("users.createUser.subtitle")}</p>
-            <EmailInvitationsNotice />
+            {!controlPlane && <EmailInvitationsNotice />}
           </div>
           <TooltipProvider>
             <form onSubmit={form.handleSubmit(handleCreate)}>

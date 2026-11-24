@@ -28,6 +28,11 @@ const state = vi.hoisted(() => ({
   accessGroups: [] as { access_group_id: string; access_group_name: string }[],
   projects: [] as { project_id: string; project_alias: string; team_id?: string | null; models?: string[] }[],
   lensServiceError: false,
+  controlPlane: false,
+}));
+
+vi.mock("@/contexts/ControlPlaneContext", () => ({
+  useControlPlane: () => (state.controlPlane ? {} : null),
 }));
 
 vi.mock("@/lib/toast", () => ({
@@ -248,6 +253,7 @@ describe("CreateKey", () => {
     state.projects = [];
     state.accessGroups = [];
     state.lensServiceError = false;
+    state.controlPlane = false;
     vi.mocked(keyCreateCall).mockClear().mockResolvedValue({ key: "sk-created", soft_budget: null });
     vi.mocked(keyCreateServiceAccountCall)
       .mockClear()
@@ -275,6 +281,19 @@ describe("CreateKey", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("disables service account creation and does not fetch Lens status through the control plane", async () => {
+    state.controlPlane = true;
+    await openModal();
+
+    expect(screen.getByRole("radio", { name: "Service Account" })).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("button", { name: /^create key$/i })).toBeEnabled();
+    expect(screen.queryByRole("switch", { name: "Lens" })).not.toBeInTheDocument();
+    const requestedUrls = vi
+      .mocked(fetch)
+      .mock.calls.map(([input]) => (input instanceof Request ? input.url : String(input)));
+    expect(requestedUrls).not.toEqual(expect.arrayContaining([expect.stringContaining("/lens/service")]));
   });
 
   describe("Lens tracing", () => {

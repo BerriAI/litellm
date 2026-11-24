@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { gatewayDailyActivityCall } from "@/components/networking";
 import { toDailyData } from "@/components/UsagePage/dailyActivityApi";
@@ -28,6 +29,7 @@ export interface HomeUsage {
 
 /** Last HOME_USAGE_DAYS of the signed-in user's view of usage: deployment-wide for admins, their own otherwise. */
 export function useHomeUsage(): HomeUsage {
+  const controlPlane = useControlPlane();
   const { accessToken, userRole, userId } = useAuthorized();
   const { data: currentUser } = useCurrentUser();
   const isAdmin = all_admin_roles.includes(userRole || "");
@@ -53,7 +55,7 @@ export function useHomeUsage(): HomeUsage {
 
   const [gateway, setGateway] = useState<GatewayActivity | null>(null);
   useEffect(() => {
-    if (!isAdmin || !accessToken) return;
+    if (controlPlane || !isAdmin || !accessToken) return;
     let cancelled = false;
     gatewayDailyActivityCall(accessToken, range.startTime, range.endTime)
       .then((activity: GatewayActivity) => {
@@ -66,7 +68,7 @@ export function useHomeUsage(): HomeUsage {
     return () => {
       cancelled = true;
     };
-  }, [isAdmin, accessToken, range, attempt]);
+  }, [controlPlane, isAdmin, accessToken, range, attempt]);
 
   const results = useMemo(() => toDailyData(data), [data]);
   const totals = useMemo(

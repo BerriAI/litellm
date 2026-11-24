@@ -8,6 +8,8 @@ import React, { useEffect, useState } from "react";
 import BlockedReasonTooltip from "./BlockedReasonTooltip";
 import { useSwitchyardOption } from "./SwitchyardRouterForm";
 import { useTranslation } from "react-i18next";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { ControlPlaneActionTooltip } from "@/components/ControlPlaneShared";
 import { useQuery } from "@tanstack/react-query";
 import { useWatch } from "react-hook-form";
 import { z } from "zod";
@@ -179,6 +181,8 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   teams = null,
 }) => {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
+  const unavailableReason = controlPlane ? t("controlPlane.actionUnavailable") : null;
   const requiresTeamScope = createScope === "team-required";
   const form = useZodForm(autoRouterSchema(requiresTeamScope), { defaultValues: EMPTY_FORM_VALUES });
   const watchedName = useWatch({ control: form.control, name: "auto_router_name" });
@@ -186,11 +190,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const watchedTeamId = useWatch({ control: form.control, name: "team_id" });
   const actor = { userRole, userID: userId ?? null, isViewOnly: false };
   const isMemberManaged =
-    requiresTeamScope &&
-    !canModifyModel(actor, teams, {
-      teamId: watchedTeamId,
-      isDbModel: true,
-    });
+    requiresTeamScope && !canModifyModel(actor, teams, { teamId: watchedTeamId, isDbModel: true });
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
 
   const [advancedConfig, setComplexityRouterConfig] = useState<ComplexityRouterConfigValue>({
@@ -781,29 +781,31 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                   <TooltipContent>{t("addModel.addAutoRouterTab.helpTooltip")}</TooltipContent>
                 </Tooltip>
                 <div className="flex flex-wrap gap-2">
-                  <BlockedReasonTooltip reason={submitBlockedReason}>
+                  <BlockedReasonTooltip reason={unavailableReason ?? submitBlockedReason}>
                     <Button
                       type="button"
                       variant="outline"
                       data-testid="auto-router-test-routing-btn"
                       hidden={switchyard.selected}
-                      disabled={submitBlockedReason !== null || isSubmitting}
+                      disabled={Boolean(controlPlane) || submitBlockedReason !== null || isSubmitting}
                       onClick={() => setIsRoutingTestVisible(true)}
                     >
                       {t("addModel.addAutoRouterTab.testRouting")}
                     </Button>
                   </BlockedReasonTooltip>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    data-testid="auto-router-test-connect-btn"
-                    hidden={switchyard.selected}
-                    onClick={handleTestConnection}
-                    disabled={isTestingConnection}
-                  >
-                    {isTestingConnection && <UiLoadingSpinner className="size-4" />}
-                    {t("addModel.addAutoRouterTab.testConnection")}
-                  </Button>
+                  <ControlPlaneActionTooltip reason={unavailableReason ?? undefined}>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      data-testid="auto-router-test-connect-btn"
+                      hidden={switchyard.selected}
+                      onClick={handleTestConnection}
+                      disabled={isTestingConnection || Boolean(controlPlane)}
+                    >
+                      {isTestingConnection && <UiLoadingSpinner className="size-4" />}
+                      {t("addModel.addAutoRouterTab.testConnection")}
+                    </Button>
+                  </ControlPlaneActionTooltip>
                   <BlockedReasonTooltip reason={switchyard.selected ? null : saveBlockedReason}>
                     <Button
                       type="button"

@@ -18,7 +18,6 @@ import { fileURLToPath } from "node:url";
 
 const dashboardDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(dashboardDir, "..", "..", "..");
-const outPath = join(dashboardDir, "src", "lib", "http", "schema.d.ts");
 const specDir = mkdtempSync(join(tmpdir(), "litellm-openapi-"));
 const specPath = join(specDir, "openapi.json");
 
@@ -31,33 +30,55 @@ const python = (process.env.LITELLM_PYTHON ?? "python3").split(" ");
 // depending on the interpreter — enough to make this output non-reproducible
 // across CI and contributors. inspect.cleandoc normalizes every description to one
 // canonical form regardless of interpreter, so the generated file is stable.
-const dumpSpec = [
-  "import inspect, json, sys",
-  "from litellm.proxy.proxy_server import app",
-  "from fastapi.routing import APIRoute",
-  "for route in app.routes:",
-  "    if isinstance(route, APIRoute):",
-  "        route.include_in_schema = True",
-  "app.openapi_schema = None",
-  "def normalize(node):",
-  "    if isinstance(node, dict):",
-  "        return {k: inspect.cleandoc(v) if k == 'description' and isinstance(v, str) else normalize(v) for k, v in node.items()}",
-  "    if isinstance(node, list):",
-  "        return [normalize(v) for v in node]",
-  "    return node",
-  "with open(sys.argv[1], 'w') as f: json.dump(normalize(app.openapi()), f, sort_keys=True)",
-].join("\n");
+const dumpSpec = (appImports) =>
+  [
+    "import inspect, json, sys",
+    ...appImports,
+    "from fastapi.routing import APIRoute",
+    "for route in app.routes:",
+    "    if isinstance(route, APIRoute):",
+    "        route.include_in_schema = True",
+    "app.openapi_schema = None",
+    "def normalize(node):",
+    "    if isinstance(node, dict):",
+    "        return {k: inspect.cleandoc(v) if k == 'description' and isinstance(v, str) else normalize(v) for k, v in node.items()}",
+    "    if isinstance(node, list):",
+    "        return [normalize(v) for v in node]",
+    "    return node",
+    "with open(sys.argv[1], 'w') as f: json.dump(normalize(app.openapi()), f, sort_keys=True)",
+  ].join("\n");
+
+const specs = [
+  ["schema.d.ts", ["from litellm.proxy.proxy_server import app"]],
+  [
+    "controlPlaneSchema.d.ts",
+    [
+      "from pydantic import SecretStr",
+      "from litellm.proxy.control_plane.app import create_app",
+      "from litellm.proxy.control_plane.container import build_container",
+      "from litellm.proxy.control_plane.settings import ControlPlaneSettings",
+      "class SchemaLicense:",
+      "    def is_premium(self): return True",
+      "settings = ControlPlaneSettings.model_construct(master_key=SecretStr('offline-openapi-schema'))",
+      "app = create_app(build_container(settings), SchemaLicense())",
+    ],
+  ],
+];
 
 try {
-  execFileSync(python[0], [...python.slice(1), "-c", dumpSpec, specPath], {
-    cwd: repoRoot,
-    stdio: "inherit",
-  });
+  for (const [filename, appImports] of specs) {
+    execFileSync(python[0], [...python.slice(1), "-c", dumpSpec(appImports), specPath], {
+      cwd: repoRoot,
+      env: { ...process.env, PYTHONHASHSEED: "0" },
+      stdio: "inherit",
+    });
 
-  execFileSync(join(dashboardDir, "node_modules", ".bin", "openapi-typescript"), [specPath, "-o", outPath], {
-    cwd: dashboardDir,
-    stdio: "inherit",
-  });
+    execFileSync(
+      join(dashboardDir, "node_modules", ".bin", "openapi-typescript"),
+      [specPath, "-o", join(dashboardDir, "src", "lib", "http", filename)],
+      { cwd: dashboardDir, stdio: "inherit" },
+    );
+  }
 } finally {
   rmSync(specDir, { recursive: true, force: true });
 }

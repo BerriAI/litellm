@@ -1,3 +1,5 @@
+import { proxyFetch as fetch } from "@/lib/http/controlPlaneProxy";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import { useQuery, useMutation, UseMutationResult, useQueryClient } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import useAuthorized from "../useAuthorized";
@@ -150,6 +152,7 @@ export const deleteProxyConfigFieldCall = async (
  * @returns React Query result with the config list data
  */
 export const useProxyConfig = (configType: ConfigType) => {
+  const controlPlane = useControlPlane();
   const { accessToken } = useAuthorized();
   return useQuery<ProxyConfigResponse>({
     queryKey: proxyConfigKeys.list({
@@ -158,7 +161,7 @@ export const useProxyConfig = (configType: ConfigType) => {
       },
     }),
     queryFn: async () => await getProxyConfigCall(accessToken!, configType),
-    enabled: Boolean(accessToken),
+    enabled: !controlPlane && Boolean(accessToken),
   });
 };
 

@@ -1,3 +1,5 @@
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { ControlPlaneActionTooltip } from "@/components/ControlPlaneShared";
 import { OnChangeFn, PaginationState, RowSelectionState } from "@tanstack/react-table";
 import type { TFunction } from "i18next";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
@@ -162,6 +164,7 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
   rowCount,
 }) => {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const [modelHealthStatuses, setModelHealthStatuses] = useState<{ [key: string]: HealthStatus }>({});
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
   const [errorModalVisible, setErrorModalVisible] = useState(false);
@@ -512,17 +515,19 @@ const HealthCheckComponent: React.FC<HealthCheckComponentProps> = ({
                 {t("modelDashboard.healthCheckComponent.clearSelection")}
               </Button>
             )}
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={runAllHealthChecks}
-              disabled={anyCheckRunning}
-              data-testid="run-health-checks"
-            >
-              {isPartialSelection
-                ? t("modelDashboard.healthCheckComponent.runSelectedChecks")
-                : t("modelDashboard.healthCheckComponent.runAllChecks")}
-            </Button>
+            <ControlPlaneActionTooltip reason={controlPlane ? t("controlPlane.actionUnavailable") : undefined}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={runAllHealthChecks}
+                disabled={anyCheckRunning || Boolean(controlPlane)}
+                data-testid="run-health-checks"
+              >
+                {isPartialSelection
+                  ? t("modelDashboard.healthCheckComponent.runSelectedChecks")
+                  : t("modelDashboard.healthCheckComponent.runAllChecks")}
+              </Button>
+            </ControlPlaneActionTooltip>
           </div>
         </div>
       </div>

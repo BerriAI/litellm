@@ -1,4 +1,6 @@
 import { parseAsString, useQueryState } from "nuqs";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { ControlPlaneActionTooltip } from "@/components/ControlPlaneShared";
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { TabsContent } from "@/components/ui/tabs";
@@ -36,6 +38,7 @@ interface GuardrailsResponse {
 
 const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole }) => {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const [activeTab, setActiveTab] = useState("guardrails");
   const [guardrailsList, setGuardrailsList] = useState<Guardrail[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
@@ -140,9 +143,11 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
                 <>
                   <PageTabsTrigger value="garden">{t("guardrails.panel.tabs.garden")}</PageTabsTrigger>
                   <PageTabsTrigger value="guardrails">{t("guardrails.panel.tabs.guardrails")}</PageTabsTrigger>
-                  <PageTabsTrigger value="playground" disabled={!accessToken}>
-                    {t("guardrails.panel.tabs.playground")}
-                  </PageTabsTrigger>
+                  <ControlPlaneActionTooltip reason={controlPlane ? t("controlPlane.actionUnavailable") : undefined}>
+                    <PageTabsTrigger value="playground" disabled={!accessToken || Boolean(controlPlane)}>
+                      {t("guardrails.panel.tabs.playground")}
+                    </PageTabsTrigger>
+                  </ControlPlaneActionTooltip>
                 </>
               )}
               <PageTabsTrigger value="submitted">{t("guardrails.panel.tabs.submitted")}</PageTabsTrigger>
@@ -199,14 +204,16 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
               />
             </TabsContent>
 
-            <TabsContent value="playground" keepMounted>
-              <GuardrailTestPlayground
-                guardrailsList={guardrailsList}
-                isLoading={isLoading}
-                accessToken={accessToken}
-                onClose={() => {}}
-              />
-            </TabsContent>
+            {!controlPlane && (
+              <TabsContent value="playground" keepMounted>
+                <GuardrailTestPlayground
+                  guardrailsList={guardrailsList}
+                  isLoading={isLoading}
+                  accessToken={accessToken}
+                  onClose={() => {}}
+                />
+              </TabsContent>
+            )}
           </>
         )}
 

@@ -1,3 +1,5 @@
+import { proxyFetch } from "./controlPlaneProxy";
+
 /**
  * The single HTTP client for the dashboard. This is the only file allowed to
  * call fetch() directly (enforced by the no-restricted-syntax lint rule and its
@@ -150,7 +152,7 @@ const appendQuery = (url: string, query: QueryParams | undefined): string => {
 
 export function createApiClient(config: ApiClientConfig): ApiClient {
   const { getBaseUrl, getAuthHeaderName, onError, fetchImpl } = config;
-  const doFetch: typeof fetch = (input, init) => (fetchImpl ?? fetch)(input, init);
+  const doFetch: typeof fetch = (input, init) => (fetchImpl ?? proxyFetch)(input, init);
 
   async function fetchChecked(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<Response> {
     const { accessToken, body, rawBody, query, headers: extraHeaders, signal, credentials, redirect } = options;

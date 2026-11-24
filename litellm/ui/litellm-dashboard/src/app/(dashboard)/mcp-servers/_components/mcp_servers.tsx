@@ -1,4 +1,6 @@
-import { isAdminRole, isProxyAdminRole, isProxyAdminTierRole } from "@/utils/roles";
+import { isAdminRole, isProxyAdminTierRole } from "@/utils/roles";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { ControlPlaneActionTooltip } from "@/components/ControlPlaneShared";
 import { PageContent } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import type { ParseKeys } from "i18next";
@@ -27,12 +29,9 @@ import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers"
 import { useMCPServerHealth } from "@/app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
 import { toast } from "@/lib/toast";
 import { deleteMCPServer } from "@/components/networking";
-import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
-import { MCPGatewaySessionsTab } from "./MCPGatewaySessionsTab";
-import { MCPToolsetsTab } from "./MCPToolsetsTab";
+import { MCPManagementTabPanels } from "./MCPManagementTabPanels";
 import CreateMCPServer from "./CreateMCPServer";
 import ImportMCPServers from "./ImportMCPServers";
-import MCPConnect from "./mcp_connect";
 import MCPServerCard from "./MCPServerCard";
 import { useMcpStdioEnabled } from "./StdioAvailability";
 import { MCPServerView } from "./mcp_server_view";
@@ -43,9 +42,6 @@ import type {
   MCPUserEnvVarsStatus,
   Team,
 } from "@/components/mcp_tools/types";
-import MCPSemanticFilterSettings from "@/components/Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings";
-import MCPToolSearchSettings from "@/components/Settings/AdminSettings/MCPToolSearchSettings/MCPToolSearchSettings";
-import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "@/components/mcp_tools/ByokCredentialModal";
 import { getSecureItem } from "@/utils/secureStorage";
@@ -179,6 +175,8 @@ function DeleteServerDialog({
 
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, isViewOnly = false }) => {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
+  const writeDenied = Boolean(controlPlane && !controlPlane.canWrite);
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
 
   // Fetch health status for all servers
@@ -239,7 +237,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
   const { data: envVarStatuses, refetch: refetchEnvVarStatus } = useQuery<MCPUserEnvVarsStatus[]>({
     queryKey: ["mcpUserEnvVarStatus"],
     queryFn: () => listMCPUserEnvVarStatus(accessToken!),
-    enabled: !!accessToken,
+    enabled: !controlPlane && !!accessToken,
   });
 
   // Per-server list of per-user fields this user still needs to fill in.
@@ -265,7 +263,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
     () => (deepLinkServerId ? serversWithHealth.find((s) => s.server_id === deepLinkServerId) ?? null : null),
     [deepLinkServerId, serversWithHealth],
   );
-  const activeEnvVarsServer = envVarsModalServer ?? deepLinkServer;
+  const activeEnvVarsServer = controlPlane ? null : envVarsModalServer ?? deepLinkServer;
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -483,6 +481,118 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
     return <div className="p-6 text-center text-muted-foreground">{t("mcpServers.servers.missingAuth")}</div>;
   }
 
+  const renderHeader = () => (
+    <PageHeader>
+      <PageHeaderTitle>
+        <Server />
+        {t("mcpServers.servers.header.title")}
+        {filteredServers.length > 0 && <Badge variant="secondary">{filteredServers.length}</Badge>}
+      </PageHeaderTitle>
+      <PageHeaderDescription>{t("mcpServers.servers.header.subtitle")}</PageHeaderDescription>
+      <PageHeaderControls className="flex-wrap">
+        {controlPlane ? (
+          <ControlPlaneActionTooltip reason={t("controlPlane.actionUnavailable")}>
+            <Button variant="outline" disabled>
+              <Plug />
+              {t("mcpServers.servers.header.myConnections")}
+            </Button>
+          </ControlPlaneActionTooltip>
+        ) : (
+          <Link href={uiHref("connect")} className={cn(buttonVariants({ variant: "outline" }), "shrink-0")}>
+            <Plug />
+            {t("mcpServers.servers.header.myConnections")}
+          </Link>
+        )}
+        {isAdminRole(userRole) || controlPlane ? (
+          <>
+            <ControlPlaneActionTooltip
+              reason={writeDenied ? t("controlPlane.requiresScope", { scope: "proxy:write" }) : undefined}
+            >
+              <Button
+                className="shrink-0"
+                variant="secondary"
+                disabled={writeDenied}
+                onClick={() => setImportVisible(true)}
+              >
+                {t("mcpServers.servers.header.importFromJson")}
+              </Button>
+            </ControlPlaneActionTooltip>
+            <ControlPlaneActionTooltip
+              reason={writeDenied ? t("controlPlane.requiresScope", { scope: "proxy:write" }) : undefined}
+            >
+              <Button
+                className="shrink-0"
+                disabled={writeDenied}
+                onClick={() => (controlPlane ? setModalVisible(true) : setDiscoveryVisible(true))}
+              >
+                {t("mcpServers.servers.header.addServer")}
+              </Button>
+            </ControlPlaneActionTooltip>
+          </>
+        ) : (
+          <Button
+            className="shrink-0"
+            onClick={() => {
+              setPrefillData(null);
+              setModalVisible(true);
+            }}
+            variant="secondary"
+          >
+            {t("mcpServers.servers.header.submitServer")}
+          </Button>
+        )}
+      </PageHeaderControls>
+    </PageHeader>
+  );
+
+  const renderTabList = () => (
+    <TabsList variant="line" className="h-auto w-full justify-start overflow-x-auto rounded-none border-b p-0">
+      <TabsTrigger value="servers" className="flex-none rounded-none px-4 py-2">
+        {t("mcpServers.servers.tabs.allServers")}
+      </TabsTrigger>
+      <TabsTrigger
+        value="toolsets"
+        className="flex-none rounded-none px-4 py-2"
+        disabled={Boolean(controlPlane)}
+        title={controlPlane ? t("controlPlane.actionUnavailable") : undefined}
+      >
+        {t("mcpServers.servers.tabs.toolsets")}
+      </TabsTrigger>
+      <TabsTrigger
+        value="connect"
+        className="flex-none rounded-none px-4 py-2"
+        disabled={Boolean(controlPlane)}
+        title={controlPlane ? t("controlPlane.actionUnavailable") : undefined}
+      >
+        {t("mcpServers.servers.tabs.connect")}
+      </TabsTrigger>
+      {isAdminRole(userRole) && !controlPlane && (
+        <>
+          <TabsTrigger value="semantic-filter" className="flex-none rounded-none px-4 py-2">
+            {t("mcpServers.servers.tabs.semanticFilter")}
+          </TabsTrigger>
+
+          <TabsTrigger value="tool-search" className="flex-none rounded-none px-4 py-2">
+            {t("mcpServers.servers.tabs.toolSearch")}
+          </TabsTrigger>
+
+          <TabsTrigger value="network-settings" className="flex-none rounded-none px-4 py-2">
+            {t("mcpServers.servers.tabs.networkSettings")}
+          </TabsTrigger>
+
+          <TabsTrigger value="submitted" className="flex-none rounded-none px-4 py-2">
+            {t("mcpServers.servers.tabs.submitted")}
+          </TabsTrigger>
+        </>
+      )}
+      {isProxyAdminTierRole(userRole) && !controlPlane && (
+        <TabsTrigger value="connections" className="flex-none rounded-none px-4 py-2">
+          {t("mcpServers.servers.tabs.liveConnections")}
+        </TabsTrigger>
+      )}
+    </TabsList>
+  );
+
   return (
     <TooltipProvider>
       <PageContent>
@@ -504,47 +614,17 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
           existingServers={mcpServers}
           prefillData={prefillData}
           stdioEnabled={stdioEnabled}
-          onBackToDiscovery={() => {
-            setModalVisible(false);
-            setPrefillData(null);
-            setDiscoveryVisible(true);
-          }}
-        />
-        <PageHeader>
-          <PageHeaderTitle>
-            <Server />
-            {t("mcpServers.servers.header.title")}
-            {filteredServers.length > 0 && <Badge variant="secondary">{filteredServers.length}</Badge>}
-          </PageHeaderTitle>
-          <PageHeaderDescription>{t("mcpServers.servers.header.subtitle")}</PageHeaderDescription>
-          <PageHeaderControls className="flex-wrap">
-            <Link href={uiHref("connect")} className={cn(buttonVariants({ variant: "outline" }), "shrink-0")}>
-              <Plug />
-              {t("mcpServers.servers.header.myConnections")}
-            </Link>
-            {isAdminRole(userRole) ? (
-              <>
-                <Button className="shrink-0" variant="secondary" onClick={() => setImportVisible(true)}>
-                  {t("mcpServers.servers.header.importFromJson")}
-                </Button>
-                <Button className="shrink-0" onClick={() => setDiscoveryVisible(true)}>
-                  {t("mcpServers.servers.header.addServer")}
-                </Button>
-              </>
-            ) : (
-              <Button
-                className="shrink-0"
-                onClick={() => {
+          onBackToDiscovery={
+            controlPlane
+              ? undefined
+              : () => {
+                  setModalVisible(false);
                   setPrefillData(null);
-                  setModalVisible(true);
-                }}
-                variant="secondary"
-              >
-                {t("mcpServers.servers.header.submitServer")}
-              </Button>
-            )}
-          </PageHeaderControls>
-        </PageHeader>
+                  setDiscoveryVisible(true);
+                }
+          }
+        />
+        {renderHeader()}
         <ImportMCPServers
           accessToken={accessToken}
           open={isImportVisible}
@@ -567,41 +647,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
           accessToken={accessToken}
         />
         <Tabs defaultValue="servers" className="w-full gap-6">
-          <TabsList variant="line" className="h-auto w-full justify-start overflow-x-auto rounded-none border-b p-0">
-            <TabsTrigger value="servers" className="flex-none rounded-none px-4 py-2">
-              {t("mcpServers.servers.tabs.allServers")}
-            </TabsTrigger>
-            <TabsTrigger value="toolsets" className="flex-none rounded-none px-4 py-2">
-              {t("mcpServers.servers.tabs.toolsets")}
-            </TabsTrigger>
-            <TabsTrigger value="connect" className="flex-none rounded-none px-4 py-2">
-              {t("mcpServers.servers.tabs.connect")}
-            </TabsTrigger>
-            {isAdminRole(userRole) && (
-              <>
-                <TabsTrigger value="semantic-filter" className="flex-none rounded-none px-4 py-2">
-                  {t("mcpServers.servers.tabs.semanticFilter")}
-                </TabsTrigger>
-
-                <TabsTrigger value="tool-search" className="flex-none rounded-none px-4 py-2">
-                  {t("mcpServers.servers.tabs.toolSearch")}
-                </TabsTrigger>
-
-                <TabsTrigger value="network-settings" className="flex-none rounded-none px-4 py-2">
-                  {t("mcpServers.servers.tabs.networkSettings")}
-                </TabsTrigger>
-
-                <TabsTrigger value="submitted" className="flex-none rounded-none px-4 py-2">
-                  {t("mcpServers.servers.tabs.submitted")}
-                </TabsTrigger>
-              </>
-            )}
-            {isProxyAdminTierRole(userRole) && (
-              <TabsTrigger value="connections" className="flex-none rounded-none px-4 py-2">
-                {t("mcpServers.servers.tabs.liveConnections")}
-              </TabsTrigger>
-            )}
-          </TabsList>
+          {renderTabList()}
           <TabsContent value="servers" keepMounted>
             {selectedServerId ? (
               <MCPServerView
@@ -760,9 +806,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                           onRecheckHealth={
                             recheckServerHealth ? () => recheckServerHealth(server.server_id) : undefined
                           }
-                          onByokConnect={server.is_byok ? () => setByokModalServer(server) : undefined}
+                          onByokConnect={!controlPlane && server.is_byok ? () => setByokModalServer(server) : undefined}
                           onOpenFillFields={() => setEnvVarsModalServer(server)}
-                          onDelete={isAdminRole(userRole) ? () => handleDelete(server.server_id) : undefined}
+                          onDelete={
+                            isAdminRole(userRole) && !isViewOnly ? () => handleDelete(server.server_id) : undefined
+                          }
                           stdioEnabled={stdioEnabled}
                         />
                       ))}
@@ -772,38 +820,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
               </div>
             )}
           </TabsContent>
-          <TabsContent value="toolsets" keepMounted>
-            <MCPToolsetsTab accessToken={accessToken} userRole={userRole} />
-          </TabsContent>
-          <TabsContent value="connect" keepMounted>
-            <MCPConnect />
-          </TabsContent>
-          {isAdminRole(userRole) && (
-            <>
-              <TabsContent value="semantic-filter" keepMounted>
-                <MCPSemanticFilterSettings accessToken={accessToken} />
-              </TabsContent>
-
-              <TabsContent value="tool-search" keepMounted>
-                <MCPToolSearchSettings accessToken={accessToken} />
-              </TabsContent>
-
-              <TabsContent value="network-settings" keepMounted>
-                <MCPNetworkSettings accessToken={accessToken} />
-              </TabsContent>
-
-              <TabsContent value="submitted" keepMounted>
-                <MCPSubmissionsTab accessToken={accessToken} />
-              </TabsContent>
-            </>
-          )}
-          {isProxyAdminTierRole(userRole) && (
-            <TabsContent value="connections">
-              <MCPGatewaySessionsTab
-                accessToken={accessToken}
-                canTerminate={isProxyAdminRole(userRole) && !isViewOnly}
-              />
-            </TabsContent>
+          {!controlPlane && (
+            <MCPManagementTabPanels accessToken={accessToken} userRole={userRole} isViewOnly={isViewOnly} />
           )}
         </Tabs>
 

@@ -1,4 +1,5 @@
 import { organizationKeys, useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import { useUserModels } from "@/app/(dashboard)/hooks/models/useModels";
 import OrganizationFilters, { FilterState } from "@/app/(dashboard)/organizations/OrganizationFilters";
 import { useQueryClient } from "@tanstack/react-query";
@@ -33,6 +34,7 @@ const ORGANIZATION_DETAIL_URL_KEYS = { tab: ORGANIZATION_TAB_URL_KEY };
 
 const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, accessToken, premiumUser }) => {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const [{ org: selectedOrgId }, setOrganizationDetail] = useQueryStates(ORGANIZATION_DETAIL_STATE, {
     history: "push",
     urlKeys: ORGANIZATION_DETAIL_URL_KEYS,
@@ -148,7 +150,7 @@ const OrganizationsPanel: React.FC<OrganizationsPanelProps> = ({ userRole, acces
             organizationId={selectedOrgId}
             onClose={() => void setOrganizationDetail(null)}
             accessToken={accessToken}
-            is_org_admin={true}
+            is_org_admin={!controlPlane || controlPlane.canWrite}
             is_proxy_admin={userRole === "Admin"}
             userModels={userModels}
           />

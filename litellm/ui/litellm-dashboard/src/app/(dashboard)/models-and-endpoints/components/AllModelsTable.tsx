@@ -9,6 +9,8 @@ import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ModelData } from "@/components/model_dashboard/types";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { ControlPlaneActionTooltip } from "@/components/ControlPlaneShared";
 import {
   DataTable,
   DataTableFilterDrawer,
@@ -147,6 +149,7 @@ export function AllModelsTable({
   credentialLabels,
 }: AllModelsTableProps) {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const columns = useMemo(() => {
@@ -296,16 +299,19 @@ export function AllModelsTable({
 
             <ToolbarSeparator className="mx-0.5" />
 
-            <Button
-              variant="outline"
-              size="icon-sm"
-              aria-label={t("modelsAndEndpoints.allModelsTable.modelSettings")}
-              title={t("modelsAndEndpoints.allModelsTable.modelSettings")}
-              data-testid="models-settings-trigger"
-              onClick={onOpenModelSettings}
-            >
-              <Settings />
-            </Button>
+            <ControlPlaneActionTooltip reason={controlPlane ? t("controlPlane.actionUnavailable") : undefined}>
+              <Button
+                variant="outline"
+                size="icon-sm"
+                aria-label={t("modelsAndEndpoints.allModelsTable.modelSettings")}
+                title={controlPlane ? undefined : t("modelsAndEndpoints.allModelsTable.modelSettings")}
+                disabled={Boolean(controlPlane)}
+                data-testid="models-settings-trigger"
+                onClick={onOpenModelSettings}
+              >
+                <Settings />
+              </Button>
+            </ControlPlaneActionTooltip>
           </DataTableToolbar>
           <DataTableFilterDrawer
             table={table}

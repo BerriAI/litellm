@@ -53,6 +53,7 @@ import BudgetDurationDropdown, {
   NEVER_RESETS_BUDGET_DURATION,
 } from "./common_components/budget_duration_dropdown";
 import { Organization, getDefaultTeamSettings, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import NumericalInput from "./shared/numerical_input";
 import { ModelMaxBudget, ModelMaxBudgetField } from "./key_team_helpers/ModelMaxBudgetEditor";
 import { modelMaxBudgetUpdate } from "./key_team_helpers/modelMaxBudgetPayload";
@@ -285,7 +286,8 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
   const [isTeamDeleting, setIsTeamDeleting] = useState(false);
   // Add this state near the other useState declarations
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
-  const canViewPolicies = useCan("viewPolicies");
+  const controlPlane = useControlPlane();
+  const canViewPolicies = useCan("viewPolicies") && !controlPlane;
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [lensPolicy, setLensPolicy] = useState<LensPolicy>(null);

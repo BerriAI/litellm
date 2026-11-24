@@ -32,6 +32,8 @@ import AccessGroupBudgetsPanel from "@/app/(dashboard)/models-and-endpoints/pane
 import PriceDataPanel from "@/app/(dashboard)/models-and-endpoints/panels/PriceDataPanel";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ControlPlaneActionTooltip } from "@/components/ControlPlaneShared";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 
 const MODEL_TAB_SLUGS = [
   "add",
@@ -94,6 +96,7 @@ const renderPanel = (key: string) => {
 
 export default function ModelsAndEndpointsPage() {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const { accessToken, userRole, userId: userID, premiumUser, isViewOnly } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: uiSettings } = useUISettings();
@@ -140,7 +143,9 @@ export default function ModelsAndEndpointsPage() {
   );
 
   const visibleKeys: readonly string[] = visibleSlugs.map((slug) => slug || BASE_TAB_KEY);
-  const activeKey = visibleKeys.includes(requestedTab) ? requestedTab : BASE_TAB_KEY;
+  const isUnsupported = (key: string) =>
+    Boolean(controlPlane && ["pass-through", "retry-settings", "model-group-alias", "price-data"].includes(key));
+  const activeKey = visibleKeys.includes(requestedTab) && !isUnsupported(requestedTab) ? requestedTab : BASE_TAB_KEY;
 
   const handleTabChange = (key: string) => {
     const next = TAB_KEYS.find((tabKey) => tabKey === key);
@@ -220,10 +225,16 @@ export default function ModelsAndEndpointsPage() {
               <TabsList variant="line" className="w-max justify-start">
                 {visibleSlugs.map((slug) => {
                   const key = slug || BASE_TAB_KEY;
+                  const blocked = isUnsupported(key);
                   return (
-                    <TabsTrigger key={key} value={key} className="flex-none">
-                      {tabLabel(slug)}
-                    </TabsTrigger>
+                    <ControlPlaneActionTooltip
+                      key={key}
+                      reason={blocked ? t("controlPlane.actionUnavailable") : undefined}
+                    >
+                      <TabsTrigger value={key} className="flex-none" disabled={blocked}>
+                        {tabLabel(slug)}
+                      </TabsTrigger>
+                    </ControlPlaneActionTooltip>
                   );
                 })}
               </TabsList>
@@ -246,6 +257,7 @@ export default function ModelsAndEndpointsPage() {
           </div>
           {visibleSlugs.map((slug) => {
             const key = slug || BASE_TAB_KEY;
+            if (isUnsupported(key)) return null;
             return (
               <TabsContent key={key} value={key}>
                 {renderPanel(key)}

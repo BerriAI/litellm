@@ -1,5 +1,6 @@
 import { keepPreviousData, queryOptions, skipToken, useQuery } from "@tanstack/react-query";
 import { formatDate, subscriptionUsageCall } from "@/components/networking";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import type { SubscriptionUsageResponse } from "../components/SubscriptionCost/types";
 
 export interface SubscriptionUsageOptions {
@@ -35,8 +36,9 @@ const subscriptionUsageQuery = (request: UsageRequest | null) => {
 };
 
 export function useSubscriptionUsage({ accessToken, startTime, endTime, enabled }: SubscriptionUsageOptions): Result {
+  const controlPlane = useControlPlane();
   const range = startTime && endTime ? { startTime, endTime } : null;
-  const request = enabled && accessToken && range ? { accessToken, ...range } : null;
+  const request = !controlPlane && enabled && accessToken && range ? { accessToken, ...range } : null;
   const query = useQuery(subscriptionUsageQuery(request));
   return {
     data: request && query.data ? query.data : null,

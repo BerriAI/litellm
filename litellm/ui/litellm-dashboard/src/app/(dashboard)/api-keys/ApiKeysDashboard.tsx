@@ -7,6 +7,9 @@ import CreateKey, { type CreateKeyPrefillData } from "@/components/organisms/cre
 import { VirtualKeysTable } from "@/components/VirtualKeysPage/VirtualKeysTable";
 import { parseAsArrayOf, parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { ScopedButton } from "@/components/ControlPlaneShared";
 
 const CREATE_KEY_URL_PARAMS = {
   create: parseAsBoolean.withDefault(false),
@@ -18,6 +21,8 @@ const CREATE_KEY_URL_PARAMS = {
 };
 
 export default function ApiKeysDashboard() {
+  const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const { userId: userID, userRole, accessToken, isViewOnly } = useAuthorized();
   const [{ create, owned_by, team_id, key_alias, models, key_type }] = useQueryStates(CREATE_KEY_URL_PARAMS);
 
@@ -65,7 +70,13 @@ export default function ApiKeysDashboard() {
   return (
     <VirtualKeysTable
       headerActions={
-        isViewOnly ? undefined : (
+        isViewOnly ? (
+          controlPlane && (
+            <ScopedButton reason={t("controlPlane.requiresScope", { scope: "proxy:write" })}>
+              {t("controlPlane.createKey")}
+            </ScopedButton>
+          )
+        ) : (
           <CreateKey
             team={null}
             teams={teams}

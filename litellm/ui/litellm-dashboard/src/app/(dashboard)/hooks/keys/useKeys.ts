@@ -11,6 +11,7 @@ import { createQueryKeys } from "../common/queryKeysFactory";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { proxyFetch as fetch } from "@/lib/http/controlPlaneProxy";
 
 export const keyKeys = createQueryKeys("keys");
 

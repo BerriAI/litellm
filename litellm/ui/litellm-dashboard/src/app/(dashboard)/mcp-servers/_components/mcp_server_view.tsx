@@ -11,6 +11,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MCPServer, TRANSPORT, handleTransport, handleAuth } from "@/components/mcp_tools/types";
 // TODO: Move Tools viewer from index file
 import { MCPToolsViewer } from ".";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { ControlPlaneActionTooltip } from "@/components/ControlPlaneShared";
 import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
 import { MCPServerUserCredentialsPanel } from "./MCPServerUserCredentialsPanel";
 import { getSecureItem } from "@/utils/secureStorage";
@@ -71,6 +73,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   // Open the editing Settings tab on first render when returning from the edit OAuth
   // redirect, so the "token fetched" feedback shows where the user left off (Settings=2).
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const queryClient = useQueryClient();
   const canEdit = isProxyAdmin && !isViewOnly && !mcpServer.is_config;
   const returningFromEditOAuth = isReturningFromEditOAuth(canEdit, mcpServer.server_id);
@@ -78,10 +81,11 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   const [showFullUrl, setShowFullUrl] = useState(false);
   const networkAccess = getMCPNetworkAccess(mcpServer, t);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialTabIndex);
+  const initialAvailableTab = controlPlane && [1, 3].includes(initialTabIndex) ? 0 : initialTabIndex;
+  const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialAvailableTab);
   const editFormShowsStdioBanner = selectedTabIndex === 2 && editing && canEdit;
   const showStdioBanner = mcpServer.transport === TRANSPORT.STDIO && !stdioEnabled && !editFormShowsStdioBanner;
-  const canViewUserCredentials = userRole !== null && isProxyAdminTierRole(userRole);
+  const canViewUserCredentials = !controlPlane && userRole !== null && isProxyAdminTierRole(userRole);
   const canRevokeUserCredentials = userRole !== null && isProxyAdminRole(userRole) && !isViewOnly;
 
   const handleSuccess = (updated: MCPServer) => {
@@ -160,9 +164,11 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
           <TabsTrigger value="0" className="flex-none rounded-none px-4 py-2">
             {t("mcpServers.serverView.tabs.overview")}
           </TabsTrigger>
-          <TabsTrigger value="1" className="flex-none rounded-none px-4 py-2">
-            {t("mcpServers.serverView.tabs.tools")}
-          </TabsTrigger>
+          <ControlPlaneActionTooltip reason={controlPlane ? t("controlPlane.actionUnavailable") : undefined}>
+            <TabsTrigger value="1" className="flex-none rounded-none px-4 py-2" disabled={Boolean(controlPlane)}>
+              {t("mcpServers.serverView.tabs.tools")}
+            </TabsTrigger>
+          </ControlPlaneActionTooltip>
           {isProxyAdmin && (
             <TabsTrigger value="2" className="flex-none rounded-none px-4 py-2">
               {t("mcpServers.serverView.tabs.settings")}
@@ -233,21 +239,23 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
         </TabsContent>
 
         {/* Tool Panel */}
-        <TabsContent value="1" keepMounted>
-          <MCPToolsViewer
-            serverId={mcpServer.server_id}
-            accessToken={accessToken}
-            auth_type={mcpServer.auth_type}
-            oauth2_flow={mcpServer.oauth2_flow}
-            delegate_auth_to_upstream={mcpServer.delegate_auth_to_upstream}
-            dcr_bridge={mcpServer.dcr_bridge}
-            tokenUrl={mcpServer.token_url}
-            userRole={userRole}
-            userID={userID}
-            serverAlias={mcpServer.alias}
-            extraHeaders={mcpServer.extra_headers}
-          />
-        </TabsContent>
+        {!controlPlane && (
+          <TabsContent value="1" keepMounted>
+            <MCPToolsViewer
+              serverId={mcpServer.server_id}
+              accessToken={accessToken}
+              auth_type={mcpServer.auth_type}
+              oauth2_flow={mcpServer.oauth2_flow}
+              delegate_auth_to_upstream={mcpServer.delegate_auth_to_upstream}
+              dcr_bridge={mcpServer.dcr_bridge}
+              tokenUrl={mcpServer.token_url}
+              userRole={userRole}
+              userID={userID}
+              serverAlias={mcpServer.alias}
+              extraHeaders={mcpServer.extra_headers}
+            />
+          </TabsContent>
+        )}
 
         {/* Settings Panel */}
         <TabsContent value="2" keepMounted>

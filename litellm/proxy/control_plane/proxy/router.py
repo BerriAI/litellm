@@ -71,7 +71,7 @@ async def _forward(
     audit: AuditLog,
 ) -> Response:
     method: Final = _METHOD.validate_python(request.method)
-    decision: Final = decide(path)
+    decision: Final = decide(path, is_read=method in READ_METHODS)
     if isinstance(decision, Denied):
         audit.record(
             principal.subject,

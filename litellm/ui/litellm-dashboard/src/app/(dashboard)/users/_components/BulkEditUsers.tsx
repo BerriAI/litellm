@@ -4,6 +4,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { userBulkUpdateUserCall, teamBulkMemberAddCall, Member } from "@/components/networking";
 import { UserEditView } from "./user_edit_view";
 import { toast } from "@/lib/toast";
+import { captureProxySession } from "@/lib/http/controlPlaneProxy";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import NumericalInput from "@/components/shared/numerical_input";
@@ -96,6 +97,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
       return;
     }
 
+    const isSameSession = captureProxySession();
     setLoading(true);
     try {
       const userIds = selectedUsers.map((user) => user.user_id);
@@ -150,6 +152,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
         const teamResults: any[] = [];
 
         for (const teamId of selectedTeams) {
+          if (!isSameSession()) return;
           try {
             // Create member objects for bulk add
             let members: Member[] | null = null;
@@ -203,6 +206,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
         }
       }
 
+      if (!isSameSession()) return;
       if (successMessages.length > 0) {
         toast.success(successMessages.join(". "));
       }

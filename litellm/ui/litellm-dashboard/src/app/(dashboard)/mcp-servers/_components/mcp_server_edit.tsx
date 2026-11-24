@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SimpleTooltip } from "@/components/ui/tooltip";
@@ -110,6 +111,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   stdioEnabled = true,
 }) => {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const initialStaticHeaders = React.useMemo(() => {
     if (!mcpServer.static_headers) {
       return [];
@@ -469,7 +471,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     setTools([]);
     setToolsError(null);
     setIsLoadingTools(false);
-    if (!accessToken || !mcpServer.server_id) return;
+    if (controlPlane || !accessToken || !mcpServer.server_id) return;
     if (toolPreview.kind === "incomplete") {
       setToolsError(toolPreview.message ?? t("mcpServers.serverEdit.tools.incompleteSettings"));
       return;
@@ -484,7 +486,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       clearTimeout(timer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mcpServer, accessToken, userID, oauthTokenResponse?.access_token, toolPreviewKey]);
+  }, [mcpServer, accessToken, controlPlane, userID, oauthTokenResponse?.access_token, toolPreviewKey]);
 
   // Invalidate a token authorized in this edit session once any mint-relevant field diverges from the
   // identity it was minted against (url, auth_type, oauth_flow_type, client creds/scopes, or the

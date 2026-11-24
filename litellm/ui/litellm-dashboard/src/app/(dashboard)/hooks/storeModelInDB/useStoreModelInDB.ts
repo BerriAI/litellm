@@ -1,6 +1,7 @@
 import { useMutation, UseMutationResult } from "@tanstack/react-query";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import useAuthorized from "../useAuthorized";
+import { proxyFetch as fetch } from "@/lib/http/controlPlaneProxy";
 
 export interface StoreModelInDBParams {
   store_model_in_db: unknown;

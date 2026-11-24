@@ -88,6 +88,25 @@ def test_safe_health_routes_are_allowed(path: str) -> None:
     assert decide(path) == Allowed(path)
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/public/providers/fields",
+        "/public/litellm_model_cost_map",
+        "/public/autorouter_presets",
+        "/public/complexity_router/scorer_defaults",
+    ],
+)
+def test_model_catalog_read_routes_are_read_only(path: str) -> None:
+    assert decide(path, is_read=True) == Allowed(path)
+    assert isinstance(decide(path, is_read=False), Denied)
+
+
+@pytest.mark.parametrize("path", ["/public/providers", "/public/providers/fields/extra", "/public/model_hub/info"])
+def test_other_public_routes_are_not_proxied(path: str) -> None:
+    assert isinstance(decide(path, is_read=True), Denied)
+
+
 @pytest.mark.parametrize("version", ["", "/v1", "/v2", "/v12"])
 @pytest.mark.parametrize("route", ["/key/service-account/generate", "/guardrails/apply_guardrail"])
 @pytest.mark.parametrize("suffix", ["", "/", "/child"])

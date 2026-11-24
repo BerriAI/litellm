@@ -1,3 +1,4 @@
+import { proxyFetch as fetch } from "@/lib/http/controlPlaneProxy";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useQuery, UseQueryResult } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";

@@ -5,6 +5,7 @@ import { listMCPTools } from "../networking";
 import { MCPTool } from "../mcp_tools/types";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPAccessGroups } from "../../app/(dashboard)/hooks/mcpServers/useMCPAccessGroups";
 import { useMCPToolsets } from "../../app/(dashboard)/hooks/mcpServers/useMCPToolsets";
@@ -446,4 +447,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   );
 };
 
-export default MCPToolPermissions;
+export default function MCPToolPermissionsEditor(props: MCPToolPermissionsProps) {
+  if (useControlPlane()) return null;
+  return <MCPToolPermissions {...props} />;
+}

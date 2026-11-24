@@ -457,7 +457,7 @@ jobs:
             exit 0
           fi
           files="$(git diff --name-only "$base" HEAD)"
-          if grep -Ev '^litellm/(ui|vscode-extension|rust|proxy-extras|packaging|cli|scripts|runtime)/' <<< "$files" | grep -E '^(litellm/|enterprise/|(pyproject\.toml|uv\.lock)$|\.github/workflows/test-linting\.yml$)' >/dev/null || grep -Eq '^litellm/ui/litellm-dashboard/(src/lib/http/schema\.d\.ts|scripts/gen-api-types\.mjs|package(-lock)?\.json)$' <<< "$files"; then
+          if grep -Ev '^litellm/(ui|vscode-extension|rust|proxy-extras|packaging|cli|scripts|runtime)/' <<< "$files" | grep -E '^(litellm/|enterprise/|(pyproject\.toml|uv\.lock)$|\.github/workflows/test-linting\.yml$)' >/dev/null || grep -Eq '^litellm/ui/litellm-dashboard/(src/lib/http/(schema|controlPlaneSchema)\.d\.ts|scripts/gen-api-types\.mjs|package(-lock)?\.json)$' <<< "$files"; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "No litellm, enterprise, dependency or generator changes in this pull request, nothing to verify."
@@ -544,16 +544,16 @@ jobs:
       - name: Fail if types are stale
         if: steps.changes.outputs.relevant == 'true'
         run: |
-          if ! git diff --exit-code -- litellm/ui/litellm-dashboard/src/lib/http/schema.d.ts; then
-            echo "::error file=litellm/ui/litellm-dashboard/src/lib/http/schema.d.ts::Generated API types are out of sync with the proxy OpenAPI spec."
+          if ! git diff --exit-code -- litellm/ui/litellm-dashboard/src/lib/http/{schema,controlPlaneSchema}.d.ts; then
+            echo "::error::Generated dashboard API types are out of sync with the OpenAPI specs."
             echo ""
             echo "A backend route or model changed without regenerating the dashboard types."
             echo "To fix, run from litellm/ui/litellm-dashboard:"
             echo "  npm run gen:api"
-            echo "then commit the updated src/lib/http/schema.d.ts."
+            echo "then commit the updated API declarations in src/lib/http/."
             exit 1
           fi
-          echo "schema.d.ts is in sync with the proxy OpenAPI spec."
+          echo "Dashboard API declarations are in sync with the OpenAPI specs."
   code-quality:
     name: code-quality
     permissions:

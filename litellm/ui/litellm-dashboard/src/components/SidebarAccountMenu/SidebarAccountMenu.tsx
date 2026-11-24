@@ -1,5 +1,6 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import { useDisableBlogPosts } from "@/app/(dashboard)/hooks/useDisableBlogPosts";
 import { useDisableBouncingIcon } from "@/app/(dashboard)/hooks/useDisableBouncingIcon";
 import { useDisableLiteAdmin } from "@/app/(dashboard)/hooks/useDisableLiteAdmin";
@@ -88,6 +89,12 @@ interface SidebarAccountMenuProps {
   collapsed?: boolean;
 }
 
+function useDeploymentVersion(accessToken: string | null) {
+  const controlPlane = useControlPlane();
+  const { data } = useHealthReadinessDetails(controlPlane ? null : accessToken);
+  return controlPlane ? controlPlane.version : data?.litellm_version;
+}
+
 const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, collapsed = false }) => {
   const {
     userId,
@@ -103,8 +110,7 @@ const SidebarAccountMenu: React.FC<SidebarAccountMenuProps> = ({ onLogout, colla
   const { t } = useTranslation();
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
-  const { data: healthData } = useHealthReadinessDetails(accessToken);
-  const version = healthData?.litellm_version;
+  const version = useDeploymentVersion(accessToken);
   const disableShowPrompts = useDisableShowPrompts();
   const disableBlogPosts = useDisableBlogPosts();
   const disableBouncingIcon = useDisableBouncingIcon();

@@ -2,6 +2,7 @@ import type { TFunction } from "i18next";
 import React, { useState } from "react";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
 import { useTranslation } from "react-i18next";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import { ChevronDown, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
@@ -120,6 +121,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   stdioEnabled = true,
 }) => {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const form = useForm<MountedFormValues>({ mode: "onChange", defaultValues: CREATE_DEFAULTS });
   const registry = useMountRegistry();
   const [isLoading, setIsLoading] = useState(false);
@@ -166,7 +168,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     accessToken,
     oauthAccessToken,
     formValues,
-    enabled: true,
+    enabled: !controlPlane,
   });
 
   const authSectionMounted = transportType !== "stdio" && transportType !== "";
@@ -982,41 +984,45 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 </div>
 
                 {/* Connection Status Section */}
-                <div className="mt-8 pt-6 border-t border-border">
-                  <MCPConnectionStatus
-                    formValues={formValues}
-                    tools={tools}
-                    isLoadingTools={isLoadingTools}
-                    toolsError={toolsError}
-                    toolsErrorStatus={toolsErrorStatus}
-                    toolsErrorStackTrace={toolsErrorStackTrace}
-                    canFetchTools={canFetchTools}
-                    fetchTools={fetchTools}
-                  />
-                </div>
+                {!controlPlane && (
+                  <div className="mt-8 pt-6 border-t border-border">
+                    <MCPConnectionStatus
+                      formValues={formValues}
+                      tools={tools}
+                      isLoadingTools={isLoadingTools}
+                      toolsError={toolsError}
+                      toolsErrorStatus={toolsErrorStatus}
+                      toolsErrorStackTrace={toolsErrorStackTrace}
+                      canFetchTools={canFetchTools}
+                      fetchTools={fetchTools}
+                    />
+                  </div>
+                )}
 
                 {/* Tool Configuration Section */}
-                <div className="mt-6">
-                  <MCPToolConfiguration
-                    accessToken={accessToken}
-                    formValues={formValues}
-                    allowedTools={allowedTools}
-                    existingAllowedTools={null}
-                    onAllowedToolsChange={setAllowedTools}
-                    hasToolAllowlistInteraction={hasToolAllowlistInteraction}
-                    onToolAllowlistInteraction={() => setHasToolAllowlistInteraction(true)}
-                    toolNameToDisplayName={toolNameToDisplayName}
-                    toolNameToDescription={toolNameToDescription}
-                    onToolNameToDisplayNameChange={setToolNameToDisplayName}
-                    onToolNameToDescriptionChange={setToolNameToDescription}
-                    keyTools={keyTools}
-                    externalTools={tools}
-                    externalIsLoading={isLoadingTools}
-                    externalError={toolsError}
-                    externalErrorStatus={toolsErrorStatus}
-                    externalCanFetch={canFetchTools}
-                  />
-                </div>
+                {!controlPlane && (
+                  <div className="mt-6">
+                    <MCPToolConfiguration
+                      accessToken={accessToken}
+                      formValues={formValues}
+                      allowedTools={allowedTools}
+                      existingAllowedTools={null}
+                      onAllowedToolsChange={setAllowedTools}
+                      hasToolAllowlistInteraction={hasToolAllowlistInteraction}
+                      onToolAllowlistInteraction={() => setHasToolAllowlistInteraction(true)}
+                      toolNameToDisplayName={toolNameToDisplayName}
+                      toolNameToDescription={toolNameToDescription}
+                      onToolNameToDisplayNameChange={setToolNameToDisplayName}
+                      onToolNameToDescriptionChange={setToolNameToDescription}
+                      keyTools={keyTools}
+                      externalTools={tools}
+                      externalIsLoading={isLoadingTools}
+                      externalError={toolsError}
+                      externalErrorStatus={toolsErrorStatus}
+                      externalCanFetch={canFetchTools}
+                    />
+                  </div>
+                )}
 
                 {/* Cost Configuration Section */}
                 <div className="mt-6">

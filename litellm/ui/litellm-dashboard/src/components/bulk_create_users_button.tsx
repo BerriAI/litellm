@@ -1,4 +1,6 @@
 import { availableRoleDisplayLabel } from "@/utils/roles";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { captureProxySession } from "@/lib/http/controlPlaneProxy";
 import React, { useState, useEffect } from "react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -61,6 +63,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
   onUsersCreated,
 }) => {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [parsedData, setParsedData] = useState<UserData[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -85,12 +88,12 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
       }
     };
 
-    fetchUISettings();
+    if (!controlPlane) fetchUISettings();
 
     // Set base URL
     const base = new URL("/", window.location.href);
     setBaseUrl(base.toString());
-  }, [accessToken]);
+  }, [accessToken, controlPlane]);
 
   const downloadTemplate = () => {
     const template = [
@@ -319,6 +322,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
   };
 
   const handleBulkCreate = async () => {
+    const isSameSession = captureProxySession();
     setIsProcessing(true);
     const updatedData = parsedData.map((user) => ({ ...user, status: "pending" }));
     setParsedData(updatedData);
@@ -326,6 +330,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
     let anySuccessful = false;
 
     for (let index = 0; index < updatedData.length; index++) {
+      if (!isSameSession()) break;
       const user = updatedData[index];
       try {
         // Create a clean user object with only non-empty values
@@ -383,44 +388,21 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
           anySuccessful = true;
           const user_id = response.data?.user_id || response.user_id;
 
-          // Create invitation link for the user
           try {
-            if (!uiSettings?.SSO_ENABLED) {
-              // Regular invitation flow
+            let invitationUrl: string | undefined;
+            if (!controlPlane && !uiSettings?.SSO_ENABLED) {
               const invitationData = await invitationCreateCall(accessToken, user_id);
-              const invitationUrl = getUiPageUrl(
+              invitationUrl = getUiPageUrl(
                 new URL(`/ui/onboarding?invitation_id=${invitationData.id}`, baseUrl).toString(),
               );
-
-              setParsedData((current) =>
-                current.map((u, i) =>
-                  i === index
-                    ? {
-                        ...u,
-                        status: "success",
-                        key: response.key || response.user_id,
-                        invitation_link: invitationUrl,
-                      }
-                    : u,
-                ),
-              );
-            } else {
-              // SSO flow - just use the base URL
-              const invitationUrl = new URL("/ui", baseUrl).toString();
-
-              setParsedData((current) =>
-                current.map((u, i) =>
-                  i === index
-                    ? {
-                        ...u,
-                        status: "success",
-                        key: response.key || response.user_id,
-                        invitation_link: invitationUrl,
-                      }
-                    : u,
-                ),
-              );
-            }
+            } else if (!controlPlane) invitationUrl = new URL("/ui", baseUrl).toString();
+            setParsedData((current) =>
+              current.map((u, i) =>
+                i === index
+                  ? { ...u, status: "success", key: response.key || response.user_id, invitation_link: invitationUrl }
+                  : u,
+              ),
+            );
           } catch (inviteError) {
             console.error("Error creating invitation:", inviteError);
             setParsedData((current) =>
@@ -454,8 +436,8 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
     setIsProcessing(false);
 
     // Call the callback if any users were successfully created
-    if (anySuccessful && onUsersCreated) {
-      onUsersCreated();
+    if (anySuccessful && isSameSession()) {
+      onUsersCreated?.();
     }
   };
 

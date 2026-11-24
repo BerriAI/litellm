@@ -158,7 +158,15 @@ const noLiteralStringOptions = {
 
 const eslintConfig = [
   {
-    ignores: [".next/**", "out/**", "build/**", "coverage/**", "next-env.d.ts", "src/lib/http/schema.d.ts"],
+    ignores: [
+      ".next/**",
+      "out/**",
+      "build/**",
+      "coverage/**",
+      "next-env.d.ts",
+      "src/lib/http/schema.d.ts",
+      "src/lib/http/controlPlaneSchema.d.ts",
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

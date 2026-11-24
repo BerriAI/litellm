@@ -1,4 +1,5 @@
 import { useQuery, UseQueryResult } from "@tanstack/react-query";
+import { proxyFetch as fetch } from "@/lib/http/controlPlaneProxy";
 import { deriveErrorMessage, getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 

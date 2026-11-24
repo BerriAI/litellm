@@ -1,3 +1,4 @@
+import { proxyFetch as fetch } from "@/lib/http/controlPlaneProxy";
 import { CloudZeroSettings } from "@/components/CloudZeroCostTracking/types";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";

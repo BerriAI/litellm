@@ -12,6 +12,8 @@ import WorkerDropdown from "@/components/Navbar/WorkerDropdown/WorkerDropdown";
 import { useWorker } from "@/hooks/useWorker";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { useTranslation } from "react-i18next";
 
 export function DashboardHeader({
   accessToken,
@@ -29,9 +31,13 @@ export function DashboardHeader({
   deploymentHealthLink?: ReactNode;
 }) {
   const term = useTerminology();
+  const { t } = useTranslation();
+  const controlPlane = useControlPlane();
   const { title } = getBreadcrumb(usePathname());
   const { isControlPlane, selectedWorker } = useWorker();
-  const showWorkerSelector = workspace === "gateway" && isControlPlane && selectedWorker !== null;
+  const isGatewayWorkspace = workspace === "gateway";
+  const hasSelectedWorker = isControlPlane && selectedWorker !== null;
+  const showWorkerSelector = !controlPlane && isGatewayWorkspace && hasSelectedWorker;
   const handleWorkerSwitch = (workerId: string) => {
     clearTokenCookies();
     clearStoredReturnUrl();
@@ -46,10 +52,24 @@ export function DashboardHeader({
           {navigationTrigger}
           <h1 className="truncate text-sm font-medium">{pageTitle ?? term(title)}</h1>
         </div>
-        {workspace === "gateway" && (
-          <CommandPaletteTrigger className="hidden w-56 @min-[640px]:flex @min-[1000px]:w-80" />
-        )}
+        {isGatewayWorkspace && <CommandPaletteTrigger className="hidden w-56 @min-[640px]:flex @min-[1000px]:w-80" />}
         <div className="flex shrink-0 items-center justify-end gap-1">
+          {controlPlane && (
+            <select
+              aria-label={t("controlPlane.dataplane")}
+              className="h-9 max-w-40 rounded-md border border-input bg-background px-2 text-sm sm:max-w-56"
+              value={controlPlane.selected ?? ""}
+              disabled={!controlPlane.options.length}
+              onChange={(event) => controlPlane.select(event.target.value)}
+            >
+              {!controlPlane.options.length && <option value="">{t("controlPlane.noDataplanesAvailable")}</option>}
+              {controlPlane.options.map(({ id, label }) => (
+                <option key={id} value={id}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          )}
           {workspace === "gateway" && <CommandPaletteTrigger mobile className="size-9 @min-[640px]:hidden" />}
           {showWorkerSelector && (
             <>
@@ -66,7 +86,10 @@ export function DashboardHeader({
           />
           <ThemeToggle />
           {deploymentHealth}
-          <NotificationsBell accessToken={accessToken} deploymentHealthLink={deploymentHealthLink} />
+          <NotificationsBell
+            accessToken={controlPlane ? null : accessToken}
+            deploymentHealthLink={deploymentHealthLink}
+          />
         </div>
       </div>
     </header>

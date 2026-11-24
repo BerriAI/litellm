@@ -23,6 +23,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { ControlPlaneActionTooltip } from "@/components/ControlPlaneShared";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
@@ -148,6 +150,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   const { data: agentsResponse } = useAgents();
   const { data: currentUser } = useCurrentUser();
   const isAdmin = hasProxyWideSpendView(userRole);
+  const controlPlane = useControlPlane();
+  const canViewErrors = isAdmin && !controlPlane;
   const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
   const isOrgAdmin = useIsOrgAdmin();
   const canViewAgentUsage = hasCapability(userRole, "viewAgentUsage");
@@ -161,7 +165,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const selectedUsageView = usageViewFromParams(urlParams);
-  const selectedTab = usageTabFromParams(urlParams, isAdmin);
+  const selectedTab = usageTabFromParams(urlParams, canViewErrors);
   const usageView = allowedViews.includes(selectedUsageView) ? selectedUsageView : DEFAULT_USAGE_VIEW;
 
   const selectedClient = CLIENT_USAGE_VIEWS.includes(usageView) ? urlParams.client : null;
@@ -310,8 +314,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   // Gateway request counts (SGR). Admin-only: the source table is
   // deployment-wide, so a non-admin must not see it.
   const gatewayRequest = useMemo(
-    () => (accessToken && startTime && endTime ? { accessToken, startTime, endTime } : null),
-    [accessToken, startTime, endTime],
+    () => (!controlPlane && accessToken && startTime && endTime ? { accessToken, startTime, endTime } : null),
+    [controlPlane, accessToken, startTime, endTime],
   );
   const gatewayFetchIdRef = useRef(0);
   useEffect(() => {
@@ -542,9 +546,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                         {t("usage.pageView.tabs.endpointActivity")}
                       </TabsTrigger>
                       {isAdmin && (
-                        <TabsTrigger value="errors" className="flex-none px-3">
-                          {t("usage.pageView.tabs.errors")}
-                        </TabsTrigger>
+                        <ControlPlaneActionTooltip
+                          reason={controlPlane ? t("controlPlane.actionUnavailable") : undefined}
+                        >
+                          <TabsTrigger value="errors" className="flex-none px-3" disabled={!canViewErrors}>
+                            {t("usage.pageView.tabs.errors")}
+                          </TabsTrigger>
+                        </ControlPlaneActionTooltip>
                       )}
                     </TabsList>
                     <div className="flex items-center gap-2">
@@ -683,7 +691,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                   <TabsContent value="endpoints" keepMounted>
                     <EndpointUsage userSpendData={userSpendData} />
                   </TabsContent>
-                  {isAdmin && (
+                  {canViewErrors && (
                     <TabsContent value="errors">
                       <ErrorsTab
                         activity={requestErrorActivity}

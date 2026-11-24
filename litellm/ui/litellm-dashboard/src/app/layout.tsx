@@ -5,12 +5,12 @@ import "./globals.css";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { ThemeProvider } from "next-themes";
 
-import { AuthProvider } from "@/contexts/AuthContext";
 import ReactQueryProvider from "@/contexts/ReactQueryProvider";
 import HotkeysProvider from "@/contexts/HotkeysProvider";
 import { TerminologyProvider } from "@/contexts/TerminologyContext";
 import { Toaster } from "@/components/ui/sonner";
 import I18nProvider from "@/i18n/I18nProvider";
+import DashboardMode from "@/components/DashboardMode";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -34,11 +34,11 @@ export default function RootLayout({
           <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
             <NuqsAdapter>
               <ReactQueryProvider>
-                <TerminologyProvider>
-                  <HotkeysProvider>
-                    <AuthProvider>{children}</AuthProvider>
-                  </HotkeysProvider>
-                </TerminologyProvider>
+                <DashboardMode>
+                  <TerminologyProvider>
+                    <HotkeysProvider>{children}</HotkeysProvider>
+                  </TerminologyProvider>
+                </DashboardMode>
                 <Toaster />
               </ReactQueryProvider>
             </NuqsAdapter>

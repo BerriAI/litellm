@@ -12,6 +12,7 @@ import { teamMemberBudgetQueryKey } from "@/app/(dashboard)/hooks/teams/useTeamM
 import { useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import UserSearchModal from "@/components/common_components/user_search_modal";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import {
   getPoliciesList,
   getPolicyInfoWithGuardrails,
@@ -685,7 +686,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const { data: guardrailsData, isLoading: isGuardrailsLoading } = useGuardrails();
   const globalGuardrailNames = guardrailsData?.globalGuardrailNames ?? new Set<string>();
-  const canViewPolicies = useCan("viewPolicies");
+  const controlPlane = useControlPlane();
+  const canViewPolicies = useCan("viewPolicies") && !controlPlane;
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const storedTeamPolicies: unknown = teamData?.team_info?.metadata?.policies;
   const legacyTeamPolicies = teamData?.team_info?.policies;
@@ -881,7 +883,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   // Fetch resolved guardrails for all policies
   useEffect(() => {
     const fetchPolicyGuardrails = async () => {
-      if (!accessToken || teamPolicies.length === 0) {
+      if (controlPlane || !accessToken || teamPolicies.length === 0) {
         return;
       }
 
@@ -909,7 +911,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     };
 
     fetchPolicyGuardrails();
-  }, [accessToken, teamPolicies]);
+  }, [accessToken, controlPlane, teamPolicies]);
 
   const handleMemberCreate = async (values: any) => {
     try {

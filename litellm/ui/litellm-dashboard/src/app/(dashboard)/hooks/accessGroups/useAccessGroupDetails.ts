@@ -1,3 +1,4 @@
+import { proxyFetch as fetch } from "@/lib/http/controlPlaneProxy";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import { all_admin_roles } from "@/utils/roles";

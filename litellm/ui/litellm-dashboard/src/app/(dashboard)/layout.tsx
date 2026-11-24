@@ -35,6 +35,9 @@ import { CommandPaletteProvider } from "@/components/CommandPalette/CommandPalet
 import { recordUiEvent } from "@/lib/telemetry/uiEvents";
 import TelemetryEnvBanner from "@/app/(dashboard)/telemetry/_components/TelemetryEnvBanner";
 import { GatewayLensNavigationProvider } from "@/components/lens/GatewayLensNavigation";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
+import { controlPlanePageReason, controlPlanePages } from "@/lib/controlPlaneNavigation";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ?? "" });
 
@@ -42,6 +45,8 @@ const pluginApiClient = createApiClient({ getBaseUrl: () => getProxyBaseUrl() ??
 // which means plugin data refreshes on login/logout without stale cookie reads.
 function PluginModeProviderWithAuth({ children }: { children: React.ReactNode }) {
   const { accessToken } = useAuth();
+  const controlPlane = useControlPlane();
+  if (controlPlane) return children;
   return <PluginModeProvider accessToken={accessToken}>{children}</PluginModeProvider>;
 }
 
@@ -171,19 +176,40 @@ function CloseMobileSidebarOnNavigation({ navigationKey }: { navigationKey: stri
 }
 const CUSTOMER_PORTAL_SEGMENTS = new Set(["customers", "apps", "app-groups"]);
 
-function DashboardShell({ children }: { children: React.ReactNode }) {
-  const { accessToken } = useAuth();
+function useDashboardPluginMode(routeSegment: string, isControlPlane: boolean) {
   const { mode, setMode } = usePluginMode();
-  const pathname = usePathname();
-  const routeSegment = routeSegmentForPathname(pathname);
   const isPortalRoute = CUSTOMER_PORTAL_SEGMENTS.has(routeSegment);
   useEffect(() => {
+    if (isControlPlane) return;
     if (isPortalRoute && mode !== "customer-portal") setMode("customer-portal");
     if (!isPortalRoute && mode === "customer-portal") setMode("ai-gateway");
-  }, [isPortalRoute, mode, setMode]);
+  }, [isControlPlane, isPortalRoute, mode, setMode]);
+  return mode;
+}
+
+function DashboardShell({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation();
+  const { accessToken } = useAuth();
+  const controlPlane = useControlPlane();
+  const pathname = usePathname();
+  const routeSegment = routeSegmentForPathname(pathname);
+  const mode = useDashboardPluginMode(routeSegment, Boolean(controlPlane));
+  const segment = routeSegment === "control-plane" ? pathname.split("/").filter(Boolean).at(-1) ?? "" : routeSegment;
+  const unavailable = controlPlane && controlPlanePageReason(segment, controlPlane, t);
+  const nativeTitle =
+    routeSegment === "control-plane" && Object.hasOwn(controlPlanePages, segment)
+      ? t(controlPlanePages[segment].label)
+      : undefined;
+  const visibleContent = unavailable ? (
+    <Alert className="m-4 w-auto">
+      <AlertDescription>{unavailable}</AlertDescription>
+    </Alert>
+  ) : (
+    children
+  );
   useEffect(() => {
-    void recordUiEvent({ page: routeSegment || "home", action: "view" });
-  }, [routeSegment]);
+    if (!controlPlane) void recordUiEvent({ page: routeSegment || "home", action: "view" });
+  }, [controlPlane, routeSegment]);
   const searchParams = useSearchParams();
   const navigationKey = `${pathname}?${searchParams.toString()}`;
   const [deploymentHealthHandle] = useState(createDeploymentHealthHandle);
@@ -194,7 +220,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const sidebarCollapsed = sidebarOverride?.segment === routeSegment ? sidebarOverride.collapsed : isFullBleed;
   const setSidebarOpen = (open: boolean) => setSidebarOverride({ segment: routeSegment, collapsed: !open });
 
-  const isGateway = mode === "ai-gateway" || mode === "customer-portal";
+  const isGateway = Boolean(controlPlane) || mode === "ai-gateway" || mode === "customer-portal";
 
   // Non-gateway (agent control plane) mode keeps the original full-width Navbar,
   // which carries the account menu; the redesigned sidebar + header shell is
@@ -236,13 +262,18 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
           <SidebarInset className="min-w-0 overflow-hidden">
             <DashboardHeader
               accessToken={accessToken}
+              title={controlPlane ? nativeTitle : undefined}
               navigationTrigger={<SidebarTrigger className="size-11 md:hidden" />}
-              deploymentHealth={<DeploymentHealthIcon handle={deploymentHealthHandle} />}
-              deploymentHealthLink={<DeploymentHealthLink handle={deploymentHealthHandle} />}
+              deploymentHealth={!controlPlane && <DeploymentHealthIcon handle={deploymentHealthHandle} />}
+              deploymentHealthLink={!controlPlane && <DeploymentHealthLink handle={deploymentHealthHandle} />}
             />
-            <DeploymentHealthBanner handle={deploymentHealthHandle} />
-            <DeploymentHealthPanel handle={deploymentHealthHandle} />
-            <UserBanner accessToken={accessToken} />
+            {!controlPlane && (
+              <>
+                <DeploymentHealthBanner handle={deploymentHealthHandle} />
+                <DeploymentHealthPanel handle={deploymentHealthHandle} />
+                <UserBanner accessToken={accessToken} />
+              </>
+            )}
             <div
               className={
                 routeSegment === "aria"
@@ -250,11 +281,11 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
                   : "min-h-0 min-w-0 flex-1 overflow-y-auto"
               }
             >
-              <TelemetryEnvBanner />
+              {!controlPlane && <TelemetryEnvBanner />}
               {pageFrame === undefined ? (
-                children
+                visibleContent
               ) : (
-                <Page className={PAGE_FRAME_CLASS_NAMES[pageFrame]}>{children}</Page>
+                <Page className={PAGE_FRAME_CLASS_NAMES[pageFrame]}>{visibleContent}</Page>
               )}
             </div>
           </SidebarInset>

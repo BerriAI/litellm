@@ -12,6 +12,7 @@ import { createSelectionColumn, DataTableSortHeader } from "@/components/shared/
 import { CellTooltip, DateCell, IdentityCell, MoneyCell, StatusBadge } from "@/components/shared/table_cells";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
+import { useControlPlane } from "@/contexts/ControlPlaneContext";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -37,6 +38,9 @@ interface UserRowActionsProps {
 
 function UserRowActions({ user, canViewUserUsage, onUserClick, onDeleteUser, onResetPassword }: UserRowActionsProps) {
   const { t } = useTranslation();
+  const controlPlane = useControlPlane();
+  const writeDenied = Boolean(controlPlane && !controlPlane.canWrite);
+  const writeHint = writeDenied ? t("controlPlane.requiresScope", { scope: "proxy:write" }) : undefined;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -47,11 +51,21 @@ function UserRowActions({ user, canViewUserUsage, onUserClick, onDeleteUser, onR
         <MoreHorizontal className="size-4" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-48">
-        <DropdownMenuItem onClick={() => onUserClick(user.user_id, true)} data-testid="user-action-edit">
+        <DropdownMenuItem
+          disabled={writeDenied}
+          title={writeHint}
+          onClick={() => onUserClick(user.user_id, true)}
+          data-testid="user-action-edit"
+        >
           <Pencil />
           {t("users.table.rowActions.edit")}
         </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => onResetPassword(user.user_id)} data-testid="user-action-reset-password">
+        <DropdownMenuItem
+          disabled={Boolean(controlPlane)}
+          title={controlPlane ? t("controlPlane.actionUnavailable") : undefined}
+          onClick={() => onResetPassword(user.user_id)}
+          data-testid="user-action-reset-password"
+        >
           <KeyRound />
           {t("users.table.rowActions.resetPassword")}
         </DropdownMenuItem>
@@ -72,7 +86,13 @@ function UserRowActions({ user, canViewUserUsage, onUserClick, onDeleteUser, onR
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
-        <DropdownMenuItem variant="destructive" onClick={() => onDeleteUser(user)} data-testid="user-action-delete">
+        <DropdownMenuItem
+          variant="destructive"
+          disabled={writeDenied}
+          title={writeHint}
+          onClick={() => onDeleteUser(user)}
+          data-testid="user-action-delete"
+        >
           <Trash2 />
           {t("users.table.rowActions.delete")}
         </DropdownMenuItem>
