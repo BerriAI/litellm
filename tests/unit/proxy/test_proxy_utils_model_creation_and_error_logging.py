@@ -311,6 +311,16 @@ async def test_proxy_only_error_log_builds_payload_when_logging_object_has_malfo
             {"input": "PROMPT-CANARY", "turn_off_message_logging": False},
             [{"role": "user", "content": "PROMPT-CANARY"}],
         ),
+        (
+            "/v1/responses",
+            {"input": "PROMPT-CANARY", "turn_off_message_logging": "false"},
+            [{"role": "user", "content": "PROMPT-CANARY"}],
+        ),
+        (
+            "/v1/completions",
+            {"prompt": "PROMPT-CANARY", "turn_off_message_logging": "True"},
+            [{"role": "user", "content": "default-message-value"}],
+        ),
     ],
     ids=[
         "responses_text",
@@ -332,6 +342,8 @@ async def test_proxy_only_error_log_builds_payload_when_logging_object_has_malfo
         "completions_with_redaction_header_in_metadata",
         "embeddings_with_redaction_header_on_the_request",
         "responses_with_redaction_flag_off",
+        "responses_with_redaction_flag_off_as_text",
+        "completions_with_redaction_flag_as_text",
     ],
 )
 async def test_proxy_only_error_log_keeps_the_prompt_as_the_logged_messages(
