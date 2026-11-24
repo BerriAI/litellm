@@ -144,7 +144,7 @@ def is_chat_latest_name(model: str) -> bool:
 
 
 def is_openai_chat_latest_model(model: str) -> bool:
-    return is_chat_latest_name(model) and OpenAIGPTConfig.is_openai_catalog_model(model)
+    return is_chat_latest_name(model) and OpenAIGPTConfig.is_openai_catalog_model(model.removeprefix("openai/"))
 
 
 def is_gpt_reasoning_series_name(model: str) -> bool:

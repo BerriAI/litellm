@@ -265,7 +265,7 @@ def _resolved_upstream(params: Mapping[str, object], group: str, host: "PythonHo
 
 
 def _deployment_base_model(deployment: Mapping[str, object], params: Mapping[str, object]) -> str | None:
-    base_model: Final = as_dict(deployment.get("model_info")).get("base_model") or params.get("base_model")
+    base_model: Final = params.get("base_model") or as_dict(deployment.get("model_info")).get("base_model")
     return base_model if isinstance(base_model, str) else None
 
 

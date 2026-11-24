@@ -100,6 +100,7 @@ def test_gpt5_unsupported_params_drop(config: OpenAIConfig):
     ("custom_llm_provider", "model"),
     [
         ("openai", "chat-latest"),
+        ("openai", "openai/chat-latest"),
         ("azure", "chat-latest"),
         ("azure", "gpt-chat-latest"),
         ("azure", "gpt-chat-latest-gs"),
