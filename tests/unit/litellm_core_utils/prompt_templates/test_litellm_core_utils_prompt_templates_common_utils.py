@@ -941,6 +941,21 @@ def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_w
     assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)
 
 
+def test_get_str_from_messages_leaves_out_the_text_of_an_echoed_fallback_block() -> None:
+    history: Final = [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Hello"}]},
+    ]
+    echoed: Final = [
+        history[0],
+        {
+            "role": "assistant",
+            "content": [{"type": "fallback", "text": "not rendered"}, {"type": "text", "text": "Hello"}],
+        },
+    ]
+    assert get_str_from_messages(echoed) == get_str_from_messages(history)
+
+
 def test_strip_litellm_response_only_fields_drops_nested_tool_call_provider_fields() -> None:
     message: Final = {
         "role": "assistant",
