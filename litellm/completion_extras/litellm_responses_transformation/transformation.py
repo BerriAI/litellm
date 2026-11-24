@@ -917,10 +917,11 @@ def _input_file_from_file_value(file_value: object) -> dict[str, object]:
 
 
 def _incomplete_reason_from_response_payload(response_payload: object) -> str | None:
-    if not isinstance(response_payload, Mapping):
+    payload: Final = as_str_mapping(response_payload)
+    if payload is None:
         return None
-    incomplete_details: Final = response_payload.get("incomplete_details")
-    if not isinstance(incomplete_details, Mapping):
+    incomplete_details: Final = as_str_mapping(payload.get("incomplete_details"))
+    if incomplete_details is None:
         return None
     reason: Final = incomplete_details.get("reason")
     return reason if isinstance(reason, str) else None

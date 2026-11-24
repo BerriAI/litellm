@@ -211,7 +211,7 @@ class PredibaseConfig(BaseConfig):
 
         if best_of_value > 1:
             if "details" in completion_response and "best_of_sequences" in completion_response["details"]:
-                choices_list: Final = []
+                choices_list: Final[list[Choices]] = []
                 for idx, item in enumerate(completion_response["details"]["best_of_sequences"]):
                     sum_logprob = 0
                     for token in item["tokens"]:
