@@ -18,7 +18,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.anthropic.count_tokens.transformation import (
     ChatCountTranslationError,
-    counted_chat_tool_choice,
+    counted_openai_tool_choice,
     counted_tool_choice,
 )
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
@@ -71,7 +71,7 @@ def _responses_tool_choice(
                         LiteLLMAnthropicToResponsesAPIAdapter.translate_tool_choice_to_responses_api(anthropic_choice)
                     )
         case "openai":
-            match counted_chat_tool_choice(chat_params.get("tool_choice") if tools else None, drops_params):
+            match counted_openai_tool_choice(chat_params.get("tool_choice") if tools else None, drops_params):
                 case ChatCountTranslationError() | None as unsent:
                     return unsent
                 case chat_choice:

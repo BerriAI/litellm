@@ -513,10 +513,11 @@ async def test_anthropic_format_counts_the_tool_choice_messages_inference_sends(
     [
         ("required", "required"),
         ({"type": "function", "function": {"name": "get_weather"}}, {"type": "function", "name": "get_weather"}),
+        ({"type": "function", "name": "get_weather"}, {"type": "function", "name": "get_weather"}),
     ],
-    ids=["required", "named_function"],
+    ids=["required", "named_function", "responses_named_function"],
 )
-async def test_openai_format_counts_the_chat_tool_choice_in_the_responses_shape(
+async def test_openai_format_counts_a_chat_or_responses_tool_choice_in_the_responses_shape(
     monkeypatch: pytest.MonkeyPatch, tool_choice: JsonValue, counted_tool_choice: JsonValue
 ) -> None:
     sent: Final = await _sent_count_body(

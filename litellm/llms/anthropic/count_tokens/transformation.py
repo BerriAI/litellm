@@ -15,10 +15,12 @@ from typing import (
     Final,
     Protocol,
     TypeAlias,
+    TypeVar,
     cast,  # noqa: TID251  # caller chat messages go to chat inference translation as-is
 )
 
 from openai.types.chat import ChatCompletionToolChoiceOptionParam
+from openai.types.responses.response_create_params import ToolChoice as ResponsesToolChoice
 from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -65,6 +67,10 @@ _ANTHROPIC_TOOL_CHOICE: Final[TypeAdapter[AnthropicMessagesToolChoice | None]] =
 _CHAT_TOOL_CHOICE: Final[TypeAdapter[ChatCompletionToolChoiceOptionParam | None]] = TypeAdapter(
     ChatCompletionToolChoiceOptionParam | None
 )
+_OPENAI_TOOL_CHOICE: Final[TypeAdapter[ChatCompletionToolChoiceOptionParam | ResponsesToolChoice | None]] = TypeAdapter(
+    ChatCompletionToolChoiceOptionParam | ResponsesToolChoice | None
+)
+_AcceptedChoiceT = TypeVar("_AcceptedChoiceT")
 COUNT_TOKEN_OPTION_NAMES: Final = ("thinking", "tool_choice", "output_config")
 _PLAIN_MESSAGE_KEYS: Final = frozenset({"role", "content"})
 _CHAT_ROLES_WITHOUT_CONTENT: Final = frozenset({"user", "assistant"})
@@ -169,12 +175,22 @@ def counted_tool_choice(
         return _invalid_tool_choice(e, drops_params)
 
 
-def counted_chat_tool_choice(tool_choice: JsonValue, drops_params: bool) -> JsonValue | ChatCountTranslationError:
+def _counted_choice_of(
+    accepted: TypeAdapter[_AcceptedChoiceT], tool_choice: JsonValue, drops_params: bool
+) -> JsonValue | ChatCountTranslationError:
     try:
-        _ = _CHAT_TOOL_CHOICE.validate_python(tool_choice)
+        _ = accepted.validate_python(tool_choice)
     except ValidationError as e:
         return _invalid_tool_choice(e, drops_params)
     return tool_choice
+
+
+def counted_chat_tool_choice(tool_choice: JsonValue, drops_params: bool) -> JsonValue | ChatCountTranslationError:
+    return _counted_choice_of(_CHAT_TOOL_CHOICE, tool_choice, drops_params)
+
+
+def counted_openai_tool_choice(tool_choice: JsonValue, drops_params: bool) -> JsonValue | ChatCountTranslationError:
+    return _counted_choice_of(_OPENAI_TOOL_CHOICE, tool_choice, drops_params)
 
 
 @with_config(ConfigDict(extra="ignore"))
