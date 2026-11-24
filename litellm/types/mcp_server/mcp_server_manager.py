@@ -336,6 +336,10 @@ class MCPServer(LiteLLMBaseModel):
         return self.__repr__()
 
     @property
+    def uses_auth_profile(self) -> bool:
+        return self.auth_profile_id is not None
+
+    @property
     def effective_authorization_url(self) -> str | None:
         return self.authorization_url or self.configured_authorization_url
 

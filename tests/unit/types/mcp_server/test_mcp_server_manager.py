@@ -110,3 +110,9 @@ def test_rejecting_profiles_beside_the_unreadable_marker_never_echoes_a_secret()
         _server(additional_auth=_PROFILES, auth_profiles_unreadable=True)
     rendered: Final = f"{rejected.value}{rejected.value.errors()}{rejected.value.json()}"
     assert not any(secret in rendered for secret in (*_SECRETS, "example-token"))
+
+
+@pytest.mark.parametrize(("profile_id", "uses_profile"), ((None, False), ("build", True)))
+def test_a_server_uses_a_profile_once_its_auth_profile_id_is_set(profile_id: str | None, uses_profile: bool) -> None:
+    assert _server(auth_profile_id=profile_id).uses_auth_profile is uses_profile
+    assert _with_profiles().uses_auth_profile is False
