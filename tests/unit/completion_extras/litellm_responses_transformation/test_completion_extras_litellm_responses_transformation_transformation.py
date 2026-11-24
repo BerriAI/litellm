@@ -5605,14 +5605,15 @@ def test_transform_response_incomplete_content_filter_maps_finish_reason():
     assert result.choices[0].message.content == ""
 
 
-def test_transform_response_completed_reasoning_only_returns_empty_stop_choice():
-    handler = LiteLLMResponsesTransformationHandler()
-    raw_response = _make_incomplete_responses_api_response(None, [_make_reasoning_only_output_item()], status="completed")
+def test_transform_response_completed_reasoning_only_returns_empty_stop_choice() -> None:
+    raw_response: Final = _make_incomplete_responses_api_response(
+        None, [_make_reasoning_only_output_item()], status="completed"
+    )
 
-    result = _call_transform_response(handler, raw_response)
+    result: Final = _call_transform_response(LiteLLMResponsesTransformationHandler(), raw_response)
 
     assert len(result.choices) == 1
-    choice = result.choices[0]
+    choice: Final = result.choices[0]
     assert choice.finish_reason == "stop"
     assert choice.index == 0
     assert choice.message.role == "assistant"
