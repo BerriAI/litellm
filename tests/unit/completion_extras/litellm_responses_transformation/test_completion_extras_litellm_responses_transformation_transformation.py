@@ -13,12 +13,14 @@ import httpx
 import pytest
 import respx
 from openai.types.responses import (
+    ResponseCodeInterpreterToolCall,
+    ResponseFileSearchToolCall,
     ResponseFunctionToolCall,
     ResponseFunctionWebSearch,
     ResponseOutputMessage,
     ResponseOutputText,
 )
-from openai.types.responses.response_output_item import McpApprovalRequest, McpListTools
+from openai.types.responses.response_output_item import McpApprovalRequest, McpCall, McpListTools
 from openai.types.responses.response_reasoning_item import (
     ResponseReasoningItem,
     Summary,
@@ -4934,6 +4936,24 @@ def _make_mcp_list_tools_output_item() -> McpListTools:
     return McpListTools.model_validate({"id": "mcpl_1", "server_label": "docs", "tools": [], "type": "mcp_list_tools"})
 
 
+def _make_file_search_output_item() -> ResponseFileSearchToolCall:
+    return ResponseFileSearchToolCall.model_validate(
+        {"id": "fs_1", "queries": ["weather"], "status": "completed", "type": "file_search_call"}
+    )
+
+
+def _make_mcp_call_output_item() -> McpCall:
+    return McpCall.model_validate(
+        {"id": "mcp_1", "arguments": "{}", "name": "search", "server_label": "docs", "type": "mcp_call", "output": "[]"}
+    )
+
+
+def _make_code_interpreter_output_item() -> ResponseCodeInterpreterToolCall:
+    return ResponseCodeInterpreterToolCall.model_validate(
+        {"id": "ci_1", "code": "print(1)", "container_id": "cntr_1", "status": "completed", "type": "code_interpreter_call"}
+    )
+
+
 def _make_mcp_approval_request_output_item() -> McpApprovalRequest:
     return McpApprovalRequest.model_validate(
         {"id": "mcpr_1", "arguments": "{}", "name": "search", "server_label": "docs", "type": "mcp_approval_request"}
@@ -4946,10 +4966,20 @@ def _make_mcp_approval_request_output_item() -> McpApprovalRequest:
         lambda: [_make_reasoning_only_output_item(), _make_web_search_output_item()],
         lambda: [_make_web_search_output_item(), _make_reasoning_only_output_item()],
         lambda: [_make_mcp_list_tools_output_item(), _make_reasoning_only_output_item()],
+        lambda: [_make_file_search_output_item(), _make_reasoning_only_output_item()],
+        lambda: [_make_reasoning_only_output_item(), _make_mcp_call_output_item()],
+        lambda: [_make_reasoning_only_output_item(), _make_code_interpreter_output_item()],
     ],
-    ids=["reasoning_then_web_search", "web_search_then_reasoning", "mcp_list_tools_then_reasoning"],
+    ids=[
+        "reasoning_then_web_search",
+        "web_search_then_reasoning",
+        "mcp_list_tools_then_reasoning",
+        "file_search_then_reasoning",
+        "reasoning_then_mcp_call",
+        "reasoning_then_code_interpreter",
+    ],
 )
-def test_transform_response_completed_reasoning_with_hosted_lookups_returns_empty_stop_choice(
+def test_transform_response_completed_reasoning_with_hosted_tool_calls_returns_empty_stop_choice(
     make_output: "Callable[[], List[ResponseOutputItem]]",
 ) -> None:
     raw_response: Final = _make_incomplete_responses_api_response(None, make_output(), status="completed")
