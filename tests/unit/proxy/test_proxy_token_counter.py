@@ -3597,6 +3597,17 @@ async def test_anthropic_count_tokens_on_a_claude_deployment_sends_the_messages_
     assert sent != history
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ("", " \n"), ids=("empty", "blank"))
+async def test_anthropic_count_tokens_counts_a_request_with_only_blank_user_text_as_sent(
+    monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    messages: Final[list[dict[str, JsonValue]]] = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+
+    assert await _messages_sent_to_anthropic_count(monkeypatch, {"messages": messages}, {}) == messages
+
+
 _EMPTIED_MESSAGES_ERROR: Final = "messages: no message has content left after dropping empty or non-string text blocks"
 
 
@@ -3613,12 +3624,11 @@ def _non_string_text_error(field: str) -> str:
             {"drop_params": True},
             _EMPTIED_MESSAGES_ERROR,
         ),
-        ([{"role": "user", "content": [{"type": "text", "text": ""}]}], {}, _EMPTIED_MESSAGES_ERROR),
         (_prompt_beside({"type": "text", "text": None}), {}, _non_string_text_error("messages.0.content.1.text")),
         (_prompt_beside({"type": "text", "text": 5}), {}, _non_string_text_error("messages.0.content.1.text")),
         (_BLANK_BEFORE_NULL_PROMPT, {}, _non_string_text_error("messages.0.content.1.text")),
     ),
-    ids=("only-null-dropped", "only-empty-string", "null-beside-text", "number-beside-text", "blank-before-null"),
+    ids=("only-null-dropped", "null-beside-text", "number-beside-text", "blank-before-null"),
 )
 @pytest.mark.parametrize(
     "model",

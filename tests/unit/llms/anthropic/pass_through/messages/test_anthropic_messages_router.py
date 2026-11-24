@@ -766,9 +766,6 @@ _REJECTED_REQUESTS: Final = (
         id="only-null-dropped",
     ),
     pytest.param(
-        [{"role": "user", "content": [{"type": "text", "text": ""}]}], {}, _EMPTIED_MESSAGES_ERROR, id="only-empty-string"
-    ),
-    pytest.param(
         [
             {"role": "user", "content": [{"type": "text", "text": 5}]},
             {"role": "user", "content": [{"type": "text", "text": " "}, {"type": "text", "text": None}]},
