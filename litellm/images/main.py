@@ -772,9 +772,10 @@ def _passthrough_edit_params(
 ) -> Mapping[str, object]:
     dropped: Final = frozenset(additional_drop_params or ())
     unmapped_excluded: Final = _DROP_PARAM_KWARGS | _IMAGE_EDIT_OPENAI_PARAMS | frozenset(mapped_params) | dropped
+    body_fields: Final = {} if "extra_body" in dropped else (extra_body or {})
     return {
         **{key: value for key, value in non_default_params.items() if key not in unmapped_excluded},
-        **{key: value for key, value in (extra_body or {}).items() if key not in dropped | EXTRA_BODY_ROUTING_KEYS},
+        **{key: value for key, value in body_fields.items() if key not in dropped | EXTRA_BODY_ROUTING_KEYS},
     }
 
 
