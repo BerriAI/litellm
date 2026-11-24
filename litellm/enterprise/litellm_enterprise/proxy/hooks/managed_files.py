@@ -1983,7 +1983,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         messages: Optional[List[AllMessageValues]],
         request_kwargs: Optional[Dict] = None,
         parent_otel_span: Optional[Span] = None,
-    ) -> List[Dict]:
+    ) -> List[dict[str, object]]:
         if request_kwargs is None:
             return healthy_deployments
 
@@ -2011,7 +2011,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
     async def async_pre_call_deployment_hook(
         self, kwargs: dict[str, object], call_type: Optional[CallTypes]
-    ) -> Optional[dict]:
+    ) -> Optional[dict[str, object]]:
         """
         Allow modifying the request just before it's sent to the deployment.
         """

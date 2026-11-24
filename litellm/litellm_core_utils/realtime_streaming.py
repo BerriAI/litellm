@@ -2411,7 +2411,7 @@ class RealTimeStreaming:
         }
 
     @staticmethod
-    def _translate_event_to_beta(event: dict) -> dict | None:
+    def _translate_event_to_beta(event: dict) -> dict[str, object] | None:
         """Translate a single GA event dict to its beta equivalent.
 
         Returns None when the event must be dropped (the GA-only

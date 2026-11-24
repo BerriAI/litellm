@@ -7461,7 +7461,7 @@ def _get_model_info_from_generalization(
     model: str,
     potential_model_names: PotentialModelNamesAndCustomLLMProvider,
     custom_llm_provider: str | None,
-) -> tuple[str, dict] | None:
+) -> tuple[str, dict[str, object]] | None:
     """Resolve an unmapped model via the declarative capability generalization rules.
 
     Tries the same name candidates as the exact lookups, in the same order, and
@@ -9345,7 +9345,7 @@ def process_system_message(system_message: object, max_tokens: float, model: str
     return system_message_event, max_tokens - system_message_tokens
 
 
-def process_messages(messages, max_tokens: float, model: str | None):
+def process_messages(messages: list[AllMessageValues], max_tokens: float, model: str | None):
     # Process messages from older to more recent
     messages = messages[::-1]
     final_messages = []
@@ -9392,7 +9392,7 @@ def attempt_message_addition(final_messages, message, available_tokens: float, m
     return final_messages
 
 
-def can_add_message(message, messages, max_tokens: float, model: str | None):
+def can_add_message(message, messages: list[AllMessageValues], max_tokens: float, model: str | None):
     if get_token_count(messages + [message], model) <= max_tokens:
         return True
     return False
@@ -10160,7 +10160,7 @@ from litellm.types.llms.openai import (
 )
 
 
-def convert_to_dict(message: BaseModel | dict) -> dict:
+def convert_to_dict(message: BaseModel | dict) -> dict[str, object]:
     """
     Converts a message to a dictionary if it's a Pydantic model.
 
@@ -10224,7 +10224,7 @@ def validate_and_fix_openai_messages(
     return validate_chat_completion_user_messages(messages=new_messages, model=model, request_kwargs=request_kwargs)
 
 
-def validate_and_fix_openai_tools(tools: list | None) -> list[dict] | None:
+def validate_and_fix_openai_tools(tools: list | None) -> list[dict[str, object]] | None:
     """
     Ensure tools is List[dict] and not List[BaseModel]
     """
@@ -10330,7 +10330,7 @@ def validate_chat_completion_tool_choice(
     tool_choice: dict | str | None,
     model: str = "",
     drop_params: bool = False,
-) -> dict | str | None:
+) -> dict[str, object] | str | None:
     """
     Confirm the tool choice is passed in the OpenAI format.
 
@@ -12669,7 +12669,7 @@ def return_raw_request(endpoint: CallTypes, kwargs: Mapping[str, object]) -> Raw
         )
 
 
-def jsonify_tools(tools: Sequence[object]) -> list[dict]:
+def jsonify_tools(tools: Sequence[object]) -> list[dict[str, object]]:
     """
     Fixes https://github.com/BerriAI/litellm/issues/9321
 

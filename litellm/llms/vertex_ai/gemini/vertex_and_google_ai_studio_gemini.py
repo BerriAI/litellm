@@ -1523,7 +1523,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return cleaned_config, retrieval_config
 
-    def get_tool_value(self, tool: dict, tool_name: str) -> dict | None:
+    def get_tool_value(self, tool: dict, tool_name: str) -> dict[str, object] | None:
         """
         Helper function to get tool value handling both camelCase and underscore_case variants
 

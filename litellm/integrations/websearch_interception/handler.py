@@ -1488,7 +1488,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
 
     @staticmethod
-    def _normalize_responses_input(messages: str | list[dict]) -> list[dict]:
+    def _normalize_responses_input(messages: str | list[dict]) -> list[dict[str, object]]:
         if isinstance(messages, str):
             return [{"role": "user", "content": messages}]
         if isinstance(messages, list):

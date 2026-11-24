@@ -8138,7 +8138,7 @@ class ProxyConfig:
 
     def decrypt_and_set_db_env_variables(
         self, environment_variables: dict, return_original_value: bool = False
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Decrypts a dictionary of environment variables and then sets them in the environment
 
@@ -8203,7 +8203,7 @@ class ProxyConfig:
     _encrypt_env_variables_for_db = encrypt_env_variables_for_db
 
     @staticmethod
-    def _parse_router_settings_value(value: object) -> dict | None:
+    def _parse_router_settings_value(value: object) -> dict[str, object] | None:
         """
         Parse a router_settings value that may be a dict or a JSON/YAML string.
 
@@ -8243,7 +8243,7 @@ class ProxyConfig:
         user_api_key_dict: Optional["UserAPIKeyAuth"],
         prisma_client: PrismaClient | None,
         proxy_logging_obj: Optional["ProxyLogging"] = None,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Get router_settings in priority order: Key > Team
 
@@ -16978,7 +16978,7 @@ async def _check_if_model_is_user_added(
     models: list[dict],
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient | None,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """
     Check if model is in db
 
@@ -17270,7 +17270,7 @@ def get_direct_access_models(
     return tuple(model_id for model_id in user_model_ids if model_id in key_model_ids)
 
 
-def _filter_models_to_user_accessible(all_models: list[dict]) -> list[dict]:
+def _filter_models_to_user_accessible(all_models: list[dict]) -> list[dict[str, object]]:
     """Keep only deployments the caller can use via direct access or team membership."""
     return [
         _model
@@ -17285,7 +17285,7 @@ async def _populate_team_access_on_models(
     prisma_client: PrismaClient,
     llm_router: Router,
     all_models: list[dict],
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """
     Populate `model_info.access_via_team_ids` and `model_info.direct_access`
     without filtering the model list.
@@ -17343,7 +17343,7 @@ async def get_all_team_and_direct_access_models(
     prisma_client: PrismaClient,
     llm_router: Router,
     all_models: list[dict],
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """
     Get all models across all teams user is in.
     """
@@ -19057,7 +19057,7 @@ async def _get_v1_model_info_allowed_model_names_with_access_groups(
 def _filter_v1_model_info_deployments(
     all_models: list[dict[str, object]],
     allowed_model_names: Collection[str] | None,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     if allowed_model_names is None:
         return all_models
     return [model for model in all_models if _deployment_matches_allowed_model_names(model, allowed_model_names)]
@@ -20582,7 +20582,7 @@ async def onboarding(invite_link: str, request: Request):
     }
 
 
-def _get_onboarding_claims_from_request(request: Request) -> dict:
+def _get_onboarding_claims_from_request(request: Request) -> dict[str, object]:
     global master_key, general_settings
 
     if master_key is None:

@@ -164,7 +164,7 @@ def map_system_message_pt(messages: list) -> list:
 
 
 # alpaca prompt template - for models like mythomax, etc.
-def alpaca_pt(messages):
+def alpaca_pt(messages: list[AllMessageValues]):
     prompt: Final = custom_prompt(
         role_dict={
             "system": {
@@ -185,7 +185,7 @@ def alpaca_pt(messages):
 
 
 # Llama2 prompt template
-def llama_2_chat_pt(messages):
+def llama_2_chat_pt(messages: list[AllMessageValues]):
     prompt: Final = custom_prompt(
         role_dict={
             "system": {
@@ -4501,7 +4501,7 @@ def azure_text_pt(messages: Sequence[Mapping[str, object]]):
 
 
 ###### AZURE AI #######
-def stringify_json_tool_call_content(messages: list) -> list:
+def stringify_json_tool_call_content(messages: list[AllMessageValues]) -> list:
     """
 
     - Check 'content' in tool role -> convert to dict (if not) -> stringify

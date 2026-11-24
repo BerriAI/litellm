@@ -707,7 +707,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         anthropic_messages_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         No transformation is needed for Anthropic messages
 
