@@ -3001,7 +3001,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             model_response,
             standard_optional_params,
             cumulative_tool_call_index,
-            keeps_requested_audio_format=keeps_requested_audio_format,
+            keeps_requested_audio_format,
         )
 
     def transform_response(
