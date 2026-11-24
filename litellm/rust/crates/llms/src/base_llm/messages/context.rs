@@ -75,6 +75,8 @@ pub struct BedrockCapabilities {
     #[serde(default)]
     pub supports_per_turn_control: bool,
     #[serde(default)]
+    pub supports_server_side_fallback: bool,
+    #[serde(default)]
     pub native_output: NativeOutputSupport,
 }
 

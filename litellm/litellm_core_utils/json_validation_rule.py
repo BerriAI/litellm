@@ -106,7 +106,7 @@ def normalize_tool_schema(tool: Mapping[str, object]) -> Mapping[str, object]:
     return normalized_tool
 
 
-def validate_schema(schema: dict, response: str):
+def validate_schema(schema: Mapping[str, object], response: str):
     """
     Validate if the returned json response follows the schema.
 

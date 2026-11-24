@@ -2218,23 +2218,20 @@ def test_token_counter_with_tool_reference_block():
 
 def test_count_content_list_rejects_unknown_type():
     """
-    An unrecognized content block type must raise, and the error message must
-    enumerate the supported types (including `tool_reference`). This pins the
-    catch-all contract so a future block type isn't silently dropped.
+    An unrecognized content block type must raise, naming the type, so a
+    future block type isn't silently dropped.
     """
     from litellm.litellm_core_utils.token_counter import _count_content_list
 
-    with pytest.raises(ValueError, match='Error getting number of tokens from content list: Invalid') as exc_info:
+    with pytest.raises(
+        ValueError, match=r"^The token counter can't count content blocks of type totally_unknown_block$"
+    ):
         _count_content_list(
             count_function=len,
             content_list=[{"type": "totally_unknown_block"}],
             use_default_image_token_count=False,
             default_token_count=None,
         )
-
-    message = str(exc_info.value)
-    assert "Invalid content item type: totally_unknown_block" in message
-    assert "tool_reference" in message
 
 
 _CLAUDE: Final = "anthropic/claude-sonnet-5-5"
@@ -2354,7 +2351,7 @@ def test_counting_tool_changes_leaves_the_messages_unchanged() -> None:
     ids=["unknown_target_type", "definition_not_an_object", "missing_target"],
 )
 def test_tool_change_with_an_unrecognized_target_stays_unsupported(tool_change: dict[str, object]) -> None:
-    with pytest.raises(UnsupportedContentTypeError, match="Invalid tool change target type"):
+    with pytest.raises(UnsupportedContentTypeError, match=r"^The token counter can't count tool changes whose target"):
         _count_content_list(len, [tool_change], False, None)
 
 
@@ -2686,7 +2683,10 @@ def test_malformed_server_tool_block_is_unsupported_content(block: Mapping[str, 
 
     content: Final = [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [block]}] if nested else [block]
 
-    with pytest.raises(UnsupportedContentTypeError):
+    with pytest.raises(
+        UnsupportedContentTypeError,
+        match=rf"^The token counter can't read the content field of a {block['type']} block: ",
+    ):
         _count_content_list(len, content, False, None)
     assert _count_content_list(len, content, False, 7) == 7
 
@@ -2728,7 +2728,7 @@ def test_unknown_content_type_remains_a_value_error_with_an_optional_fallback(co
     unknown: Final = {"type": "future_block"}
     content: Final = [{"type": container, "tool_use_id": "toolu_1", "content": [unknown]}] if container else [unknown]
 
-    with pytest.raises(ValueError, match="Invalid content item type: future_block"):
+    with pytest.raises(ValueError, match=r"^The token counter can't count content blocks of type future_block$"):
         _count_content_list(len, content, False, None)
     assert _count_content_list(len, content, False, 7) == 7
 

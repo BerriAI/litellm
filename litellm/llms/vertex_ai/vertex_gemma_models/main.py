@@ -19,15 +19,19 @@ The API expects a custom endpoint URL format:
 https://{ENDPOINT_NUMBER}.{location}-{REGION_NUMBER}.prediction.vertexai.goog/v1/projects/{PROJECT_ID}/locations/{location}/endpoints/{ENDPOINT_ID}:predict
 """
 
-from collections.abc import Callable
-from typing import Final
+from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import ModelResponse
 
 from ..common_utils import VertexAIError, get_vertex_base_model_name
 from ..vertex_llm_base import VertexBase
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
 class VertexAIGemmaModels(VertexBase):
@@ -39,21 +43,21 @@ class VertexAIGemmaModels(VertexBase):
         model: str,
         messages: list,
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         encoding,
-        logging_obj,
+        logging_obj: "LiteLLMLoggingObj",
         api_base: str | None,
         optional_params: dict,
         custom_prompt_dict: dict,
-        headers: dict | None,
+        headers: Mapping[str, object] | None,
         timeout: float | httpx.Timeout,
         litellm_params: dict,
         vertex_project=None,
-        vertex_location=None,
+        vertex_location: object = None,
         vertex_credentials=None,
-        logger_fn=None,
+        logger_fn: Callable[..., object] | None = None,
         acompletion: bool = False,
-        client=None,
+        client: HTTPHandler | AsyncHTTPHandler | httpx.Client | httpx.AsyncClient | None = None,
     ):
         """
         Handles calling Vertex AI Gemma Models
