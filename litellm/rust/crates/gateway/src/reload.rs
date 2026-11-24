@@ -34,6 +34,7 @@ use litellm_config::{
     db::{
         models::DbModel,
         settings::{Section, SettingsRows, UiSettings},
+        switches::store_model_in_db,
     },
 };
 use litellm_config_load::Document;
@@ -128,6 +129,7 @@ impl Source {
     pub(crate) fn new(
         document: Document,
         key: Option<AtRestKey>,
+        switched_on: bool,
         secrets: Arc<Secrets>,
         database: Database,
         pools: Pools,
@@ -139,6 +141,8 @@ impl Source {
                 document,
                 booted,
                 key,
+                switched_on,
+                off: false,
                 secrets,
                 served,
             },
@@ -285,6 +289,11 @@ pub(crate) struct Reading {
     /// What the parts the process keeps were built from, see [`restart_only`].
     booted: Document,
     key: Option<AtRestKey>,
+    /// Whether the file or `STORE_MODEL_IN_DB` turns `store_model_in_db` on, without the stored
+    /// `general_settings` row.
+    switched_on: bool,
+    /// Whether a read found `store_model_in_db` off after boot could not tell, which ends reading.
+    off: bool,
     secrets: Arc<Secrets>,
     /// `None` until a read loads, so while boot could not read the stored config.
     served: Option<Fetched>,
@@ -300,6 +309,9 @@ pub(crate) enum Reloaded {
     /// The config the rows describe could not be built, so the current one is kept.
     Unbuilt,
     Swapped,
+    /// Boot could not tell whether `store_model_in_db` is on, and a read found it off. The native
+    /// app serves the file with only the UI settings, as the proxy does, and nothing is read again.
+    Off,
 }
 
 impl Reading {
@@ -314,9 +326,19 @@ impl Reading {
         R: Fn(Config, StoredConfig, Arc<Served>) -> F,
         F: Future<Output = Result<Served, Error>>,
     {
+        if self.off {
+            return Reloaded::Off;
+        }
         let Some(fetched) = self.read(rows).await else {
             return Reloaded::Unread;
         };
+        let no_variables = |_: &str| None::<String>;
+        if self.served.is_none()
+            && !self.switched_on
+            && !store_model_in_db(None, &no_variables, &fetched.settings)
+        {
+            return self.off(fetched.settings.ui_settings, live, rebuild).await;
+        }
         self.warn_restart_only(&fetched.settings);
         let changes = Changes::between(self.served.as_ref(), &fetched);
         if self.served.is_some() && changes.is_empty() {
@@ -363,6 +385,51 @@ impl Reading {
             );
         }
         differ
+    }
+
+    /// Swaps `live` to the file with only `ui_settings` layered in and stops reading, for a
+    /// `store_model_in_db` boot found off once it could read the settings. Python decided the same
+    /// at startup from its own read, so it serves no stored model and never reloads.
+    async fn off<R, F>(&mut self, ui_settings: UiSettings, live: &Live, rebuild: &R) -> Reloaded
+    where
+        R: Fn(Config, StoredConfig, Arc<Served>) -> F,
+        F: Future<Output = Result<Served, Error>>,
+    {
+        tracing::info!(
+            "store_model_in_db is off, so the gateway serves the config file with only the UI settings and stops reading the stored config"
+        );
+        let config = match stored::ui_settings_only(
+            self.document.clone(),
+            ui_settings,
+            &*self.secrets,
+        )
+        .await
+        {
+            Ok(config) => config,
+            Err(error) => {
+                tracing::warn!(
+                    error = %Report::new(&error),
+                    "the config with the stored UI settings layered in does not load, so python answers every request"
+                );
+                return Reloaded::Unbuilt;
+            }
+        };
+        match live
+            .swap(|current| rebuild(config, StoredConfig::Unused, current))
+            .await
+        {
+            Ok(_) => {
+                self.off = true;
+                Reloaded::Off
+            }
+            Err(error) => {
+                tracing::warn!(
+                    error = %Report::new(&error),
+                    "could not build the native app from the config file, so python answers every request"
+                );
+                Reloaded::Unbuilt
+            }
+        }
     }
 
     /// The stored config `rows` hold now, `None` when it cannot be read. When only the settings
@@ -674,6 +741,8 @@ mod tests {
             booted: booted_document(&document, served.as_ref()),
             document,
             key: None,
+            switched_on: true,
+            off: false,
             secrets: Arc::new(secrets(&[])),
             served,
         };
@@ -885,6 +954,22 @@ mod tests {
             (Reloaded::Swapped, Some("model"), Reloaded::Swapped)
         );
         assert_eq!(refused_for(&live, "a").await, None);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_read_that_finds_store_model_in_db_off_after_boot_could_not_tell_serves_no_stored_model()
+     {
+        let (live, mut reading) = booted(&Rows::default()).await;
+        reading.switched_on = false;
+        let rows = serving(&[("a", "key-1")]);
+
+        let first = reading.reload(&rows, &live, &rebuild).await;
+        let second = reading.reload(&rows, &live, &rebuild).await;
+
+        assert_eq!((first, second), (Reloaded::Off, Reloaded::Off));
+        assert_eq!(api_key(&live, "a"), None);
+        assert_eq!(refused_for(&live, "file").await, None);
     }
 
     #[rstest]
