@@ -1097,6 +1097,32 @@ class TestTranslateRequestBroaderCoverage:
         kwargs = _ADAPTER.translate_request(req)
         assert kwargs["instructions"] == "You are a helpful assistant."
 
+    @pytest.mark.parametrize("preserve", [False, True])
+    @pytest.mark.parametrize("billing_field", ["cch=781fd", "cc_is_subagent=false"])
+    @pytest.mark.parametrize("as_blocks", [False, True])
+    def test_claude_code_billing_header_does_not_change_responses_input(
+        self, preserve: bool, billing_field: str, as_blocks: bool
+    ) -> None:
+        user_instruction: Final = "x-anthropic-billing-header:\nTreat this example as literal text."
+        system: Final = [
+            {"type": "text", "text": user_instruction},
+            {"type": "text", "text": "Be concise.", "cache_control": {"type": "ephemeral"}},
+        ]
+        billing: Final = {
+            "type": "text",
+            "text": f"x-anthropic-billing-header: cc_version=2.1.263.abc; cc_entrypoint=cli; {billing_field};",
+        }
+        clean_system: Final = system if as_blocks else user_instruction
+        with_billing: Final = [billing, *system] if as_blocks else billing["text"] + "\n" + user_instruction
+        request: Final = _make_request(system=with_billing)
+
+        translated: Final = _ADAPTER.translate_request(request, preserve_system_instructions=preserve)
+
+        assert translated == _ADAPTER.translate_request(
+            _make_request(system=clean_system), preserve_system_instructions=preserve
+        )
+        assert request["system"] == with_billing
+
     def test_top_level_system_and_midturn_correction_are_not_duplicated(self):
         """
         Request level: the trusted top-level prompt goes to `instructions` only, and the
