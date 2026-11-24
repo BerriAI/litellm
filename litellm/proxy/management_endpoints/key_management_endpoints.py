@@ -8733,12 +8733,9 @@ async def _can_user_query_key_info(
     Helper to check if the user has access to the key's info
     """
     if (
-        (
-            user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
-            or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
-        )
-        or (user_api_key_dict.impersonated_by is None and user_api_key_dict.api_key == key)
-    ):
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    ) or (user_api_key_dict.impersonated_by is None and user_api_key_dict.api_key == key):
         return True
     if user_api_key_dict.is_team_service_account:
         return False
