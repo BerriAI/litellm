@@ -17,6 +17,8 @@ use super::{
 use crate::StoredConfig;
 
 const STORE_MODEL_IN_DB: &str = "store_model_in_db";
+/// The `LiteLLM_UISettings` row, named when it could not be read.
+const UI_SETTINGS: &str = "ui_settings";
 /// The `general_settings` keys the config types do not name that the native app honors.
 const HONORED_GENERAL_SETTINGS: [&str; 2] = ["supported_db_objects", "encryption_algorithm"];
 
@@ -37,8 +39,14 @@ const LAYERED: [&str; 12] = [
 ];
 
 pub(super) fn settings(admit: &Admit, _: &Parts) -> Option<Reason> {
-    if admit.stored == StoredConfig::Unread {
-        return Some(Reason::new(Refused::DbConfigNotLoaded, STORE_MODEL_IN_DB));
+    match admit.stored {
+        StoredConfig::Unread => {
+            return Some(Reason::new(Refused::DbConfigNotLoaded, STORE_MODEL_IN_DB));
+        }
+        StoredConfig::UiSettingsUnread => {
+            return Some(Reason::new(Refused::DbConfigNotLoaded, UI_SETTINGS));
+        }
+        StoredConfig::Unused | StoredConfig::Loaded => {}
     }
     unhonored(&admit.config, &admit.environment)
         .chain(stored_objects(admit))

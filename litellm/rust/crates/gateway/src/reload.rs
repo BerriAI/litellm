@@ -862,6 +862,32 @@ mod tests {
     }
 
     #[rstest]
+    #[tokio::test]
+    async fn a_model_blocked_through_the_api_goes_to_python_after_the_next_read_and_back_once_unblocked()
+     {
+        let (live, mut reading) = booted(&serving(&[("a", "key-1")])).await;
+        let blocked = Rows {
+            models: Some(vec![litellm_repositories::ProxyModel {
+                blocked: true,
+                ..model("a", &params("key-1"))
+            }]),
+            ..serving(&[])
+        };
+
+        let block = reading.reload(&blocked, &live, &rebuild).await;
+        let refused_while_blocked = refused_for(&live, "a").await;
+        let unblock = reading
+            .reload(&serving(&[("a", "key-1")]), &live, &rebuild)
+            .await;
+
+        assert_eq!(
+            (block, refused_while_blocked, unblock),
+            (Reloaded::Swapped, Some("model"), Reloaded::Swapped)
+        );
+        assert_eq!(refused_for(&live, "a").await, None);
+    }
+
+    #[rstest]
     #[case::the_models_cannot_be_read(Rows { models: None, ..serving(&[]) })]
     #[case::the_credentials_cannot_be_read(Rows { credentials: None, ..serving(&[]) })]
     #[tokio::test]
