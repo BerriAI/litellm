@@ -2996,3 +2996,19 @@ def abbreviate_api_key(api_key: str) -> str:
     if len(api_key) < MINIMUM_CUSTOM_KEY_LENGTH:
         return "sk-..."
     return f"sk-...{api_key[-4:]}"
+
+
+_MODELS_COUNTING_CACHED_TOKENS: Final[TypeAdapter[Mapping[str, bool]]] = TypeAdapter(Mapping[str, bool])
+
+
+def team_models_counting_cached_tokens(team_metadata: object) -> Mapping[str, bool]:
+    """The team's ``model_tpm_limit_counts_cached_tokens`` setting, empty when unset or malformed."""
+    setting: Final = (
+        team_metadata.get("model_tpm_limit_counts_cached_tokens") if isinstance(team_metadata, Mapping) else None
+    )
+    if setting is None:
+        return MappingProxyType({})
+    try:
+        return _MODELS_COUNTING_CACHED_TOKENS.validate_python(setting, strict=True)
+    except ValidationError:
+        return MappingProxyType({})
