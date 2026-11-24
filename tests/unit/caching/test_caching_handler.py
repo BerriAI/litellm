@@ -45,7 +45,7 @@ from litellm.types.utils import (
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 from collections import Counter, OrderedDict, UserDict
-from collections.abc import Awaitable, Callable, Iterator, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from datetime import timedelta, datetime
 from typing import Final, cast
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
@@ -2917,7 +2917,7 @@ class _LengthEmbedder(CustomLLM):
         super().__init__()
         self.provider_calls: tuple[object, ...] = ()
 
-    def _respond(self, model: str, input: object) -> EmbeddingResponse:
+    def _respond(self, model: str, input: Sequence[object]) -> EmbeddingResponse:
         self.provider_calls = (*self.provider_calls, input)
         items: Final = input if isinstance(input, list) else [input]
         return EmbeddingResponse(
@@ -2928,10 +2928,34 @@ class _LengthEmbedder(CustomLLM):
             ],
         )
 
-    def embedding(self, model, input, model_response, **kwargs) -> EmbeddingResponse:
+    def embedding(
+        self,
+        model: str,
+        input: Sequence[object],
+        model_response: EmbeddingResponse,
+        print_verbose: Callable[[object], object],
+        logging_obj: LiteLLMLogging,
+        optional_params: Mapping[str, object],
+        api_key: str | None = None,
+        api_base: str | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> EmbeddingResponse:
         return self._respond(model, input)
 
-    async def aembedding(self, model, input, model_response, **kwargs) -> EmbeddingResponse:
+    async def aembedding(
+        self,
+        model: str,
+        input: Sequence[object],
+        model_response: EmbeddingResponse,
+        print_verbose: Callable[[object], object],
+        logging_obj: LiteLLMLogging,
+        optional_params: Mapping[str, object],
+        api_key: str | None = None,
+        api_base: str | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> EmbeddingResponse:
         return self._respond(model, input)
 
 
@@ -2952,7 +2976,9 @@ class _SuccessRecorder(CustomLogger):
         super().__init__()
         self.cache_hits: Final[list[object]] = []
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    def log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
         self.cache_hits.append(kwargs.get("cache_hit"))
 
 
@@ -3078,6 +3104,28 @@ async def test_sync_embedding_serves_the_entry_a_batch_aembedding_stored_like_ae
         prompt_tokens,
         expected_details,
     )
+
+
+@pytest.mark.asyncio
+async def test_sync_embedding_per_input_hit_carries_the_metadata_of_a_full_response_hit(
+    length_embedder: _LengthEmbedder,
+) -> None:
+    await litellm.aembedding(model=_EMBEDDER_MODEL, input=["aa", "bbbb"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    litellm.embedding(model=_EMBEDDER_MODEL, input="x")
+
+    per_input_hit: Final = litellm.embedding(model=_EMBEDDER_MODEL, input="bbbb", litellm_call_id="per-input-hit")
+    full_response_hit: Final = litellm.embedding(model=_EMBEDDER_MODEL, input="x", litellm_call_id="full-response-hit")
+
+    assert len(length_embedder.provider_calls) == 2, length_embedder.provider_calls
+    assert set(per_input_hit._hidden_params) == set(full_response_hit._hidden_params)
+    assert (per_input_hit._hidden_params["litellm_call_id"], full_response_hit._hidden_params["litellm_call_id"]) == (
+        "per-input-hit",
+        "full-response-hit",
+    )
+    assert per_input_hit._hidden_params["litellm_model_name"] == _EMBEDDER_MODEL
+    assert per_input_hit._hidden_params["cache_hit"] is True
+    assert (per_input_hit._response_ms is None, full_response_hit._response_ms is None) == (False, False)
 
 
 @pytest.mark.asyncio
@@ -3236,7 +3284,7 @@ class _FixedEntryCache(InMemoryCache):
         super().__init__()
         self.entry: Final = entry
 
-    def get_cache(self, key, **kwargs: object) -> object:
+    def get_cache(self, key: str, **kwargs: object) -> object:
         return self.entry
 
 

@@ -687,24 +687,25 @@ class LLMCachingHandler:
                     per_input_entry: Final = call_type == CallTypes.embedding.value and _is_per_input_embedding_entry(
                         cached_result
                     )
-                    converted_result: Final = (
+                    expanded_entry: Final = (
                         _per_input_embedding_response(
                             cached=cached_result, request_input=new_kwargs.get("input"), fallback_model=model
                         )
                         if per_input_entry
-                        else self._convert_cached_result_to_model_response(
-                            cached_result=cached_result,
-                            call_type=call_type,
-                            kwargs=kwargs,
-                            logging_obj=logging_obj,
-                            model=model,
-                            custom_llm_provider=kwargs.get("custom_llm_provider", None),
-                            args=args,
-                        )
+                        else None
                     )
-                    if per_input_entry and converted_result is None:
+                    if per_input_entry and expanded_entry is None:
                         verbose_logger.debug("LiteLLM Cache: unusable per-input embedding entry, treating it as a miss")
                         return CachingHandlerResponse(cached_result=None)
+                    converted_result: Final = self._convert_cached_result_to_model_response(
+                        cached_result=cached_result if expanded_entry is None else expanded_entry,
+                        call_type=call_type,
+                        kwargs=kwargs,
+                        logging_obj=logging_obj,
+                        model=model,
+                        custom_llm_provider=kwargs.get("custom_llm_provider", None),
+                        args=args,
+                    )
 
                     # LOG SUCCESS
                     cache_hit: Final = True
