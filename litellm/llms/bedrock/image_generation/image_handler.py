@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -49,7 +50,7 @@ class BedrockImagePreparedRequest(LiteLLMBaseModel):
     endpoint_url: str
     prepped: AWSPreparedRequest | BearerPreparedRequest
     body: bytes
-    data: dict
+    data: dict[str, object]
 
 
 BedrockImageConfigClass = (
@@ -322,7 +323,7 @@ class BedrockImageGeneration(BaseAWSLLM):
         logging_obj: LitellmLogging,
         prompt: str,
         response: httpx.Response,
-        data: dict,
+        data: Mapping[str, object],
     ) -> ImageResponse:
         """
         Transforms the Image Generation response from Bedrock to OpenAI format
