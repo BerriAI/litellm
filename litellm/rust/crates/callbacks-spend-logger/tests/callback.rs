@@ -15,7 +15,7 @@ use litellm_callbacks::{
     BudgetReservation, Callback, Field, FieldSet, FieldValues, Hook, HookInput, HostRequest,
     PatchOp, ReservationEntry, Verdict, hosted,
 };
-use litellm_callbacks_budgets::Budgets;
+use litellm_callbacks_budgets::{Budgets, CounterStep, charge_counters};
 use litellm_callbacks_spend_logger::{SpendLogCallback, SpendLogParts};
 use litellm_coroutine::CoroutineState;
 use litellm_redaction::TokenRedactor;
@@ -213,8 +213,9 @@ async fn run_on(
     redis: Option<RequestRedis>,
 ) -> Ran {
     let callback = Arc::clone(&harness.callback);
+    let batch = redis.clone();
     let mut body =
-        hosted(|host| async move { callback.handle_with(&input, host, redis.as_ref()).await });
+        hosted(|host| async move { callback.handle_with(&input, host, batch.as_ref()).await });
     let mut calls = Vec::new();
     loop {
         match body.resume().await.unwrap() {
@@ -242,29 +243,11 @@ async fn run_on(
                 request,
                 reply,
             }) => {
-                let answer = match call {
-                    "accounting_context" => json!({
-                        "windows": [],
-                        "savings": request["built"].is_object().then(|| json!({"compression": 0.0, "prompt_caching": 0.0})),
-                        "model_access_groups": [],
-                        "customer_windows": [],
-                        "committed_tracked": [],
-                        "customer_entities": [],
-                        "chains_through_db": chains,
-                    }),
-                    "increment_search_free_tier" => json!(SEARCH_COUNTER_TOTAL_AFTER),
-                    "enrich_key_identity" => {
-                        json!({"user_id": "enriched-user", "team_alias": "enriched-team"})
-                    }
-                    "budget_windows" => nulls(&request, "entities"),
-                    "stored_spend" => nulls(&request, "counters"),
-                    "cached_spend" => {
-                        Json::Array(vec![
-                            json!(0.0);
-                            request["sources"].as_array().map_or(0, Vec::len)
-                        ])
-                    }
-                    _ => Json::Null,
+                let answer = if call == "charge_failure_counters" {
+                    charge_as_the_proxy(&harness.counters, redis.as_ref(), &request).await;
+                    Json::Null
+                } else {
+                    answer(call, &request, chains)
                 };
                 calls.push((call.to_owned(), request));
                 reply.send(Ok(answer));
@@ -274,6 +257,68 @@ async fn run_on(
 }
 
 const SEARCH_COUNTER_TOTAL_AFTER: f64 = 6.0;
+
+/// The proxy's answer to a host call, with nothing cached or stored.
+fn answer(call: &str, request: &Json, chains: bool) -> Json {
+    match call {
+        "accounting_context" => json!({
+            "windows": [],
+            "savings": request["built"].is_object().then(|| json!({"compression": 0.0, "prompt_caching": 0.0})),
+            "model_access_groups": [],
+            "customer_windows": [],
+            "committed_tracked": [],
+            "customer_entities": [],
+            "chains_through_db": chains,
+        }),
+        "increment_search_free_tier" => json!(SEARCH_COUNTER_TOTAL_AFTER),
+        "enrich_key_identity" => {
+            json!({"user_id": "enriched-user", "team_alias": "enriched-team"})
+        }
+        "budget_windows" => nulls(request, "entities"),
+        "stored_spend" => nulls(request, "counters"),
+        "cached_spend" => Json::Array(vec![
+            json!(0.0);
+            request["sources"].as_array().map_or(0, Vec::len)
+        ]),
+        _ => Json::Null,
+    }
+}
+
+/// `charge_failure_counters` as the proxy runs it: each step through the counter step on the
+/// request's post-call batch, with the proxy answering its host calls, then the batch flushed.
+async fn charge_as_the_proxy(
+    counters: &Arc<SpendCounters>,
+    redis: Option<&RequestRedis>,
+    request: &Json,
+) {
+    let steps: Vec<CounterStep> = serde_json::from_value(request["steps"].clone()).unwrap();
+    for step in steps {
+        let store = Arc::clone(counters);
+        let batch = redis.cloned();
+        let mut body = hosted(|host| async move {
+            charge_counters(&store, &host, batch.as_ref(), &step, None)
+                .await
+                .error
+                .map(|error| error.to_string())
+        });
+        loop {
+            match body.resume().await.unwrap() {
+                CoroutineState::Complete(error) => {
+                    assert_eq!(error, None);
+                    break;
+                }
+                CoroutineState::Yielded(HostRequest {
+                    call,
+                    request,
+                    reply,
+                }) => reply.send(Ok(answer(call, &request, false))),
+            }
+        }
+    }
+    if let Some(redis) = redis {
+        redis.flush_post().await;
+    }
+}
 
 fn success(config: &Json, row: Json) -> Json {
     json!({
@@ -1296,7 +1341,7 @@ async fn a_success_charge_waits_on_the_requests_post_call_batch_which_tracks_it(
 #[case::a_billed_failure_row(json!({"failure_row_response_cost": 0.25}))]
 #[case::a_completed_cost(json!({"cost_finalized": true, "failure_row_response_cost": 0.25}))]
 #[tokio::test]
-async fn a_failure_charge_is_sent_on_the_requests_post_call_batch_by_the_hook_itself(
+async fn a_failure_charge_is_sent_on_the_requests_post_call_batch(
     golden: (Json, Json),
     #[case] cost: Json,
 ) {
