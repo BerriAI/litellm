@@ -7,7 +7,8 @@ import pytest
 from litellm.llms.anthropic.messages.deferred_tool_emulation import DeferredToolEmulation
 from litellm.llms.anthropic.messages.utils import anthropic_sse_frame
 
-_EMULATION: Final = DeferredToolEmulation(deferred={})
+_GREP_TOOL: Final = {"name": "Grep", "input_schema": {"type": "object"}, "defer_loading": True}
+_EMULATION: Final = DeferredToolEmulation(deferred={"Grep": _GREP_TOOL})
 
 
 def _dispatcher_stream_frames(dispatcher_input: str) -> tuple[bytes, ...]:
@@ -56,8 +57,13 @@ async def test_a_stream_restores_a_dispatcher_call_split_across_chunks() -> None
 
 
 @pytest.mark.asyncio
-async def test_a_stream_keeps_a_dispatcher_call_it_cannot_read_as_sent() -> None:
-    frames: Final = _dispatcher_stream_frames(json.dumps({"input": {"pattern": "TODO"}}))
+@pytest.mark.parametrize(
+    "dispatcher_input",
+    [{"input": {"pattern": "TODO"}}, {"name": "Bash", "input": {"command": "ls"}}],
+    ids=["no_tool_name", "tool_the_request_did_not_defer"],
+)
+async def test_a_stream_keeps_a_dispatcher_call_it_cannot_restore_as_sent(dispatcher_input: dict[str, object]) -> None:
+    frames: Final = _dispatcher_stream_frames(json.dumps(dispatcher_input))
 
     assert await _restored_stream(frames) == b"".join(frames)
 
@@ -79,3 +85,13 @@ def test_a_response_restores_the_loaded_tool_call(dispatcher_input: dict[str, ob
         {"type": "text", "text": "Searching"},
         {"type": "tool_use", "id": "toolu_1", "name": "Grep", "input": {"pattern": "TODO"}},
     ]
+
+
+def test_a_response_keeps_a_dispatcher_call_to_a_tool_the_request_did_not_defer() -> None:
+    response: Final = {
+        "content": [
+            {"type": "tool_use", "id": "toolu_1", "name": "CallLoadedTool", "input": {"name": "Bash", "input": {}}},
+        ]
+    }
+
+    assert _EMULATION.restored(response) == response

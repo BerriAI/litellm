@@ -1,6 +1,6 @@
 import inspect
 import json
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Container, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, TypeVar, cast  # noqa: TID251  # see cast-ok markers
 
@@ -37,29 +37,29 @@ class DispatchedCall:
     input: Mapping[str, object]
 
 
-def dispatched_call(dispatcher_input: object) -> DispatchedCall | None:
+def dispatched_call(dispatcher_input: object, catalog: Container[str]) -> DispatchedCall | None:
     arguments: Final = as_str_mapping(dispatcher_input) or {}
     name: Final = arguments.get("name")
     raw_input: Final = arguments.get("input", {})
     tool_input: Final = loads_json_object(raw_input) if isinstance(raw_input, str) else as_str_mapping(raw_input)
-    if not isinstance(name, str) or tool_input is None:
+    if not isinstance(name, str) or name not in catalog or tool_input is None:
         return None
     return DispatchedCall(name=name, input=tool_input)
 
 
-def _restored_block(block: object) -> object:
+def _restored_block(block: object, catalog: Container[str]) -> object:
     tool_use: Final = as_str_mapping(block)
     if tool_use is None or tool_use.get("type") != "tool_use" or tool_use.get("name") != DISPATCHER_NAME:
         return block
-    call: Final = dispatched_call(tool_use.get("input"))
+    call: Final = dispatched_call(tool_use.get("input"), catalog)
     return block if call is None else {**tool_use, "name": call.name, "input": call.input}
 
 
-def restored_response(response: Mapping[str, object]) -> Mapping[str, object]:
+def restored_response(response: Mapping[str, object], catalog: Container[str]) -> Mapping[str, object]:
     content: Final = as_object_list(response.get("content"))
     if content is None:
         return response
-    return {**response, "content": [_restored_block(block) for block in content]}
+    return {**response, "content": [_restored_block(block, catalog) for block in content]}
 
 
 def _partial_json(event: Mapping[str, object]) -> str:
@@ -77,7 +77,8 @@ def _opens_dispatcher_block(event: Mapping[str, object]) -> bool:
 
 
 class DispatcherBlockRestorer:
-    def __init__(self) -> None:
+    def __init__(self, catalog: Container[str]) -> None:
+        self._catalog: Final = catalog
         self._start: Mapping[str, object] | None = None
         self._held: tuple[bytes, ...] = ()
         self._partial_json: str = ""
@@ -110,7 +111,7 @@ class DispatcherBlockRestorer:
     def _restored(self, start: Mapping[str, object], stop_frame: bytes) -> tuple[bytes, ...]:
         block: Final = as_str_mapping(start.get("content_block")) or {}
         call: Final = dispatched_call(
-            loads_json_object(self._partial_json) if self._partial_json else block.get("input")
+            loads_json_object(self._partial_json) if self._partial_json else block.get("input"), self._catalog
         )
         if call is None:
             return self._held
@@ -127,8 +128,8 @@ class DispatcherBlockRestorer:
         )
 
 
-async def _restored_async_frames(stream: AsyncIterator[bytes]) -> AsyncGenerator[bytes, None]:
-    restorer: Final = DispatcherBlockRestorer()
+async def _restored_async_frames(stream: AsyncIterator[bytes], catalog: Container[str]) -> AsyncGenerator[bytes, None]:
+    restorer: Final = DispatcherBlockRestorer(catalog)
     async for frame in sse_frames(stream):
         if not isinstance(frame, (bytes, bytearray)):  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes
             yield frame
@@ -139,17 +140,17 @@ async def _restored_async_frames(stream: AsyncIterator[bytes]) -> AsyncGenerator
         yield held
 
 
-def _restored_sync_frames(stream: Iterator[bytes]) -> Iterator[bytes]:
-    restorer: Final = DispatcherBlockRestorer()
+def _restored_sync_frames(stream: Iterator[bytes], catalog: Container[str]) -> Iterator[bytes]:
+    restorer: Final = DispatcherBlockRestorer(catalog)
     for frame in stream:
         yield from restorer.frames(frame)
     yield from restorer.rest()
 
 
 class DispatcherRestoringStream:
-    def __init__(self, stream: AsyncIterator[bytes]) -> None:
+    def __init__(self, stream: AsyncIterator[bytes], catalog: Container[str]) -> None:
         self._stream: Final = stream
-        self._frames: Final = _restored_async_frames(stream)
+        self._frames: Final = _restored_async_frames(stream, catalog)
 
     def __getattr__(self, name: str) -> object:
         return getattr(self._stream, name)  # pyright: ignore[reportAny]  # forwards whatever the wrapped stream exposes
@@ -218,11 +219,13 @@ class DeferredToolEmulation:
         if inspect.isawaitable(result):
             return self._restored_later(result)
         if isinstance(result, Mapping):
-            return restored_response(cast(Mapping[str, object], result))  # cast-ok: a bridged Messages response
+            response: Final = cast(Mapping[str, object], result)  # cast-ok: a bridged Messages response
+            return restored_response(response, self.deferred)
         if isinstance(result, AsyncIterator):
-            return DispatcherRestoringStream(cast(AsyncIterator[bytes], result))  # cast-ok: a bridged SSE stream
+            stream: Final = cast(AsyncIterator[bytes], result)  # cast-ok: a bridged SSE stream
+            return DispatcherRestoringStream(stream, self.deferred)
         if isinstance(result, Iterator):
-            return _restored_sync_frames(cast(Iterator[bytes], result))  # cast-ok: a bridged SSE stream
+            return _restored_sync_frames(cast(Iterator[bytes], result), self.deferred)  # cast-ok: a bridged SSE stream
         return result
 
     async def _restored_later(self, pending: Awaitable[object]) -> object:

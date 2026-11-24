@@ -71,7 +71,6 @@ from litellm.types.utils import CallTypes, LlmProviders, LlmProvidersSet
 from litellm.utils import ProviderConfigManager, client
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler, request_safeguards_evaluator
-from ..deferred_tool_emulation import deferred_tool_emulation
 from ..deferred_tools import UnknownDeferredTools, deferred_tools_setting, unknown_deferred_tools_message
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
 from ..safeguards import (
@@ -933,6 +932,8 @@ def anthropic_messages_handler(
         )
         request_messages: Final = cast("list[dict[str, object]]", messages)  # cast-ok: the handler takes untyped dicts
         request_tools: Final = cast("list[dict[str, object]] | None", tools)  # cast-ok: the handler takes untyped dicts
+        from ..deferred_tool_emulation import deferred_tool_emulation
+
         emulation: Final = deferred_tool_emulation(deployment_model_info, request_tools)
         bridged_messages: Final = request_messages if emulation is None else list(emulation.messages(request_messages))
         bridged_tools: Final = (
