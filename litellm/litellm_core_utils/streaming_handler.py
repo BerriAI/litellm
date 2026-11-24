@@ -1998,7 +1998,9 @@ class CustomStreamWrapper:
                                 if delta.function_call.arguments is None:
                                     delta.function_call.arguments = ""
                             elif delta.tool_calls is not None:
-                                self._indexless_tool_calls.assign(delta.tool_calls)
+                                self._indexless_tool_calls.assign(
+                                    delta.tool_calls, getattr(upstream_chunk.choices[0], "index", 0)
+                                )
                                 if isinstance(delta.tool_calls, list):
                                     for t in delta.tool_calls:
                                         if hasattr(t, "functions") and hasattr(
