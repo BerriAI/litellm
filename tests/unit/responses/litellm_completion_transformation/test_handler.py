@@ -27,7 +27,7 @@ import pytest
 import respx
 
 import litellm
-from litellm.constants import PREVIOUS_RESPONSE_IDS_METADATA_KEY
+from litellm.constants import PREVIOUS_RESPONSE_IDS_METADATA_KEY, RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.tool_fields import BRIDGED_TOOL_NAMES_KWARG, BridgedToolNames, qualified_member_name
@@ -632,6 +632,28 @@ async def test_a_refused_follow_up_is_neither_retried_nor_sent_to_a_fallback(fal
             await router.aresponses(model="bridged", input="Double it", previous_response_id=_TURN_ONE_ID)
 
     assert not getattr(refused.value, "num_retries", None)
+
+
+class _CountedLookups:
+    def __init__(self) -> None:
+        self.lookups = 0
+
+    async def query_raw(self, query: str, request_ids: Sequence[str]) -> list[dict[str, object]]:
+        self.lookups += 1
+        return []
+
+
+@pytest.mark.asyncio
+async def test_a_refused_sdk_follow_up_is_not_rerun_for_num_retries():
+    spend_logs: Final = _CountedLookups()
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=spend_logs)):
+        with pytest.raises(litellm.BadRequestError, match="not found"):
+            await _bridged_follow_up(
+                True, _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD), proxy_fields={"num_retries": 2}
+            )
+
+    assert spend_logs.lookups == RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS
 
 
 @pytest.mark.asyncio

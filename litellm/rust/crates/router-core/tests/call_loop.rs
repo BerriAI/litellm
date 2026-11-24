@@ -1867,6 +1867,25 @@ async fn an_unresolvable_follow_up_is_neither_retried_nor_falls_back(
 }
 
 #[rstest]
+#[tokio::test]
+async fn an_unresolvable_follow_up_on_a_fallback_ends_the_call_before_the_next_target() {
+    let host = Arc::new(ScriptedHost::scripted(vec![
+        ("primary", vec![server_error()]),
+        ("backup", vec![unresolvable_follow_up()]),
+    ]));
+    let router = router(
+        tiers(false),
+        json!({"num_retries": 0, "fallbacks": [{"primary": ["backup", "context"]}]}),
+        host.clone(),
+    );
+    let refused = router.call(Op::from("acompletion"), request()).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt { failure: failed, .. }) if failed.is_a("UnresolvablePreviousResponseError"))
+    );
+    assert_eq!(host.selected(), ["p1", "b1"]);
+}
+
+#[rstest]
 #[case::agentic_followup(agentic_followup())]
 #[case::over_every_tpm_limit(over_every_tpm_limit())]
 #[tokio::test]
