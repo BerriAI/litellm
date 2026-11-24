@@ -43,14 +43,14 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, str],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         if api_key is None:
             api_key = get_secret_str("INFINITY_API_KEY")
 
@@ -77,7 +77,7 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -137,5 +137,7 @@ class InfinityEmbeddingConfig(BaseEmbeddingConfig):
         model_response.usage = usage
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return InfinityError(message=error_message, status_code=status_code, headers=headers)

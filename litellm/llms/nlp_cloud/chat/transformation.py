@@ -1,6 +1,6 @@
 import json
 import time
-from collections.abc import Mapping, Sized
+from collections.abc import Mapping, Sequence, Sized
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -88,7 +88,7 @@ class NLPCloudConfig(BaseConfig):
         end_sequence: str | None = None,
         remove_end_sequence: bool | None = None,
         remove_input: bool | None = None,
-        bad_words: list | None = None,
+        bad_words: Sequence[object] | None = None,
         temperature: float | None = None,
         top_p: float | None = None,
         top_k: int | None = None,
@@ -110,11 +110,11 @@ class NLPCloudConfig(BaseConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         headers = {
             "accept": "application/json",
             "content-type": "application/json",
@@ -123,7 +123,7 @@ class NLPCloudConfig(BaseConfig):
             headers["Authorization"] = f"Token {api_key}"
         return headers
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "max_tokens",
             "stream",
@@ -137,7 +137,7 @@ class NLPCloudConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -168,10 +168,10 @@ class NLPCloudConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         text: Final = " ".join(convert_content_list_to_str(message) for message in messages)
 
         data: Final = {
@@ -187,10 +187,10 @@ class NLPCloudConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

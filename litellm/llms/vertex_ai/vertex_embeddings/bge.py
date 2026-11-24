@@ -10,7 +10,7 @@ Model name handling:
 - This module focuses on request/response transformation only
 """
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final, cast  # noqa: TID251  # extra_body carries raw fields the TypedDict lacks
 
 from litellm.llms.base_llm.embedding.transformation import split_extra_body
@@ -59,7 +59,7 @@ class VertexBGEConfig:
         return model_lower.startswith("bge/") or "bge" in model_lower
 
     @staticmethod
-    def transform_request(input: list | str, optional_params: dict, model: str) -> VertexEmbeddingRequest:
+    def transform_request(input: Sequence[str] | str, optional_params: dict, model: str) -> VertexEmbeddingRequest:
         """
         Transforms an OpenAI request to a Vertex BGE embedding request.
 

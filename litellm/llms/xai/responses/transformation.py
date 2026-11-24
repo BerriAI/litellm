@@ -196,7 +196,9 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return params
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, object], model: str, litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         """
         Validate environment and set up headers for XAI API.
 
@@ -276,7 +278,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def transform_streaming_response(
         self,
         model: str,
-        parsed_chunk: dict,  # mutable-ok: overrides the base class signature
+        parsed_chunk: dict[str, object],  # mutable-ok: overrides the base class signature
         logging_obj: LiteLLMLoggingObj,
     ) -> ResponsesAPIStreamingResponse:
         event: Final = super().transform_streaming_response(

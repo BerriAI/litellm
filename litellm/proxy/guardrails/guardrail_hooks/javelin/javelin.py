@@ -24,7 +24,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.javelin import (
 from litellm.types.utils import CallTypesLiteral, GuardrailStatus
 
 if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.javelin import JavelinGuardrailConfigModel
 
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -299,7 +299,7 @@ class JavelinGuardrail(CustomGuardrail):
         return data
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["JavelinGuardrailConfigModel"] | None:
         """
         Get the config model for the Javelin guardrail.
         """

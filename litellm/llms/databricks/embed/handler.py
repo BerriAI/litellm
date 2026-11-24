@@ -5,6 +5,7 @@ Calling logic for Databricks embeddings
 import os
 from typing import Final
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.utils import EmbeddingResponse
 
 from ...openai_like.embedding.handler import OpenAILikeEmbeddingHandler
@@ -22,8 +23,8 @@ class DatabricksEmbeddingHandler(OpenAILikeEmbeddingHandler, DatabricksBase):
         api_base: str | None,
         optional_params: dict,
         model_response: EmbeddingResponse | None = None,
-        client=None,
-        aembedding=None,
+        client: AsyncHTTPHandler | HTTPHandler | None = None,
+        aembedding: bool | None = None,
         custom_endpoint: bool | None = None,
         headers: dict | None = None,
         drop_params: bool = False,

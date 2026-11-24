@@ -246,7 +246,7 @@ async def _hash_password_in_dict(
         data["last_breach_check_at"] = None
 
 
-def _strip_password_from_response(response) -> None:
+def _strip_password_from_response(response: object) -> None:
     """Strip password from API response (handles dicts, nested dicts, and Prisma models)."""
     if isinstance(response, dict):
         response.pop("password", None)

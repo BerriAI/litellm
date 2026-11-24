@@ -1,5 +1,6 @@
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -97,7 +98,7 @@ class BaseSecretManager(ABC):
         recovery_window_in_days: int | None = 7,
         optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
+    ) -> Mapping[str, object]:
         """
         Async function to delete a secret from the secret manager
 

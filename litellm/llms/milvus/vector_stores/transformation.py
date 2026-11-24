@@ -57,7 +57,9 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
     def __init__(self):
         super().__init__()
 
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, str], litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, str]:
         api_key: str | None = None
         if litellm_params is not None:
             api_key = litellm_params.api_key or get_secret_str("MILVUS_API_KEY")
@@ -97,8 +99,8 @@ class MilvusVectorStoreConfig(BaseQueryEmbeddingVectorStoreConfig):
         }
 
     def map_openai_params(
-        self, non_default_params: Mapping[str, object], optional_params: dict, drop_params: bool
-    ) -> dict:
+        self, non_default_params: Mapping[str, object], optional_params: dict[str, object], drop_params: bool
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param in MILVUS_OPTIONAL_PARAMS:
                 optional_params[param] = value
