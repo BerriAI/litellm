@@ -544,9 +544,46 @@ def test_bridged_gemini_translates_openai_allowed_tools_tool_choice_while_unbrid
         ("gemini-4-neon", "gemini", {"deployment_model_info": {"mode": "chat"}}, False),
         ("gemini-4-neon", "gemini", {"skip_bridge": True}, False),
         ("gemini-4-neon", "gemini", {"optional_params": {"safety_settings": [{"category": "c"}]}}, False),
-        ("gemini-4-neon", "gemini", {"optional_params": {"extra_body": {"safetySettings": []}}}, False),
+        (
+            "gemini-4-neon",
+            "gemini",
+            {
+                "optional_params": {
+                    "extra_body": {
+                        "safetySettings": [
+                            {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_ONLY_HIGH"}
+                        ]
+                    }
+                }
+            },
+            False,
+        ),
+        (
+            "gemini-4-neon",
+            "gemini",
+            {
+                "optional_params": {
+                    "safety_settings": [
+                        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "HARM_BLOCK_THRESHOLD_UNSPECIFIED"}
+                    ]
+                }
+            },
+            False,
+        ),
+        (
+            "gemini-4-neon",
+            "gemini",
+            {
+                "optional_params": {
+                    "safety_settings": [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"}]
+                }
+            },
+            True,
+        ),
+        ("gemini-4-neon", "gemini", {"optional_params": {"top_k": 40}}, True),
+        ("gemini-4-neon", "gemini", {"asks_for_penalty": True}, False),
+        ("gemini-4-neon", "gemini", {"optional_params": {"video_metadata": {"fps": 1}}}, False),
         ("gemini-4-neon", "gemini", {"optional_params": {"extra_body": {"generationConfig": {}}}}, False),
-        ("gemini-4-neon", "gemini", {"candidate_count": 2}, False),
         ("gemini-4-neon", "gemini", {"optional_params": {"cached_content": "cachedContents/abc"}}, False),
         ("gemini-4-neon", "gemini", {"optional_params": {"previous_interaction_id": "v1_other_keys_turn"}}, False),
         ("gemini-4-neon", "gemini", {"optional_params": {"environment": "env_other_keys_sandbox"}}, False),
@@ -578,7 +615,6 @@ def test_bridged_gemini_translates_openai_allowed_tools_tool_choice_while_unbrid
             {"optional_params": {"extra_body": {"cachedContent": "cachedContents/abc"}}},
             False,
         ),
-        ("gemini-4-neon", "gemini", {"asks_for_logprobs": True}, False),
     ),
 )
 def test_gemini_4_and_newer_route_to_interactions_by_default_and_older_models_do_not(
@@ -706,9 +742,11 @@ def _answering_either_gemini_route(captured: list[httpx.Request]) -> httpx.MockT
     (
         {"tools": [{"type": "file_search", "file_search_store_names": ["fileSearchStores/team"]}]},
         {"service_tier": "flex"},
-        {"top_k": 40},
+        {"presence_penalty": 0.5},
+        {"frequency_penalty": 0.5},
+        {"safety_settings": [{"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_ONLY_HIGH"}]},
     ),
-    ids=("file_search_tool", "service_tier", "top_k"),
+    ids=("file_search_tool", "service_tier", "presence_penalty", "frequency_penalty", "unmapped_safety_category"),
 )
 def test_gemini_4_completion_with_a_field_interactions_cannot_carry_is_sent_to_generate_content(
     monkeypatch: pytest.MonkeyPatch, request_fields: Mapping[str, object]
@@ -727,6 +765,59 @@ def test_gemini_4_completion_with_a_field_interactions_cannot_carry_is_sent_to_g
         )
 
     assert [req.url.path.rsplit(":", 1)[-1] for req in captured] == ["generateContent"]
+
+
+@pytest.mark.parametrize(
+    ("provider_model", "request_fields", "expected_extra"),
+    (
+        ("gemini/gemini-4-neon", {"n": 2}, {}),
+        ("gemini/gemini-4-neon", {"top_k": 40}, {}),
+        ("gemini/gemini-4-neon", {"logprobs": True, "top_logprobs": 2}, {}),
+        (
+            "gemini/gemini-4-neon",
+            {
+                "safety_settings": [
+                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"},
+                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE", "method": "SEVERITY"},
+                ]
+            },
+            {
+                "safety_settings": [
+                    {"type": "dangerous_content", "threshold": "block_only_high"},
+                    {"type": "harassment", "threshold": "off", "method": "severity"},
+                ]
+            },
+        ),
+    ),
+    ids=("n", "top_k", "logprobs", "safety_settings"),
+)
+def test_gemini_4_completion_reaches_interactions_without_the_fields_it_has_no_place_for_and_with_translated_safety(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_model: str,
+    request_fields: Mapping[str, object],
+    expected_extra: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "route_all_chat_gemini_to_interactions", False)
+    monkeypatch.setattr(litellm, "drop_params", False)
+    captured: Final[list[httpx.Request]] = []  # mutable-ok: transport spy
+
+    with httpx.Client(transport=_answering_either_gemini_route(captured)) as raw_client:
+        response: Final = litellm.completion(  # pyright: ignore[reportUnknownMemberType]  # completion is untyped upstream
+            model=provider_model,
+            messages=[{"role": "user", "content": "answer"}],
+            api_key="unit-gemini-key",
+            api_base="https://generativelanguage.googleapis.com",
+            client=HTTPHandler(client=raw_client),
+            **request_fields,
+        )
+
+    assert [req.url.path.rsplit("/", 1)[-1] for req in captured] == ["interactions"]
+    assert json.loads(captured[0].content) == {
+        "model": "gemini-4-neon",
+        "input": [{"type": "user_input", "content": [{"type": "text", "text": "answer"}]}],
+        **expected_extra,
+    }
+    assert len(response.choices) == 1
 
 
 def test_gemini_4_stream_asked_to_be_replayed_makes_one_complete_interactions_request(

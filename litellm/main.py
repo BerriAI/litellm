@@ -6230,8 +6230,7 @@ def completion(
             litellm_params=kwargs,  # pyright: ignore[reportUnknownArgumentType]  # untyped kwargs
             deployment_model_info=model_info,  # pyright: ignore[reportUnknownArgumentType]  # untyped model_info
             skip_bridge=skip_interactions_api_bridge,  # pyright: ignore[reportUnknownArgumentType]  # untyped skip flag
-            candidate_count=n,
-            asks_for_logprobs=logprobs is True or top_logprobs is not None,
+            asks_for_penalty=bool(frequency_penalty) or bool(presence_penalty),
             tools=tools,  # pyright: ignore[reportUnknownArgumentType]  # untyped tools local
             service_tier=service_tier,
         )

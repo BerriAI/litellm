@@ -54,8 +54,7 @@ def _chat_goes_to_interactions(
         optional_params=request_params,
         litellm_params=litellm_params,
         deployment_model_info=deployment_model_info,
-        candidate_count=fields.get("n"),
-        asks_for_logprobs=fields.get("logprobs") is True or fields.get("top_logprobs") is not None,
+        asks_for_penalty=bool(fields.get("frequency_penalty")) or bool(fields.get("presence_penalty")),
         tools=fields.get("tools"),
         service_tier=tier if isinstance(tier, str) else None,
     )

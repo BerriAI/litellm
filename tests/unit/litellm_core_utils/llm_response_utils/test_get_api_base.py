@@ -330,12 +330,12 @@ def test_get_api_base_roundtrips_idempotently_into_completion_for_gemini_and_ver
 @pytest.mark.parametrize(
     "request_fields",
     (
-        {"n": 2},
-        {"logprobs": True},
+        {"presence_penalty": 0.5},
+        {"safety_settings": [{"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"}]},
         {"service_tier": "flex"},
         {"tools": [{"type": "file_search", "file_search_store_names": ["fileSearchStores/team"]}]},
     ),
-    ids=("two_candidates", "logprobs", "service_tier", "file_search_tool"),
+    ids=("penalty", "unmapped_safety_category", "service_tier", "file_search_tool"),
 )
 def test_gemini_4_request_kept_on_generate_content_is_not_reported_as_an_interactions_call(
     monkeypatch: pytest.MonkeyPatch, request_fields: dict[str, object]

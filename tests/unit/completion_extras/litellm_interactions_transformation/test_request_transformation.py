@@ -301,8 +301,6 @@ def test_ai_studio_fetches_remote_image_while_vertex_preserves_uri() -> None:
     (
         {"cached_content": "cachedContents/abc"},
         {"video_metadata": {"start_offset": "1s"}},
-        {"logprobs": True},
-        {"n": 2},
         {"frequency_penalty": 0.5},
     ),
 )

@@ -27,7 +27,8 @@ from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
     VertexGeminiConfig,
 )
-from litellm.responses.bridge_check import has_global_safety_settings
+from litellm._logging import verbose_logger
+from litellm.responses.bridge_check import interactions_safety_settings, requested_safety_settings
 
 MediaFetcher: TypeAlias = Callable[[str, str | None], tuple[str, str]]
 JsonMapping: TypeAlias = Mapping[str, JsonValue]
@@ -177,6 +178,10 @@ def _validate_sampling_param(
         VertexGeminiConfig.reject_unsupported_sampling_param(model, sampling_key, drop_params)
 
 
+def _asks_for_several_candidates(candidate_count: object) -> bool:
+    return isinstance(candidate_count, int) and not isinstance(candidate_count, bool) and candidate_count > 1
+
+
 def _validate_request_params(
     params: JsonMapping,
     model: str,
@@ -222,13 +227,9 @@ def _validate_request_params(
             model=model,
             llm_provider=custom_llm_provider,
         )
-    if (
-        params.get("safety_settings") is not None
-        or params.get("safetySettings") is not None
-        or has_global_safety_settings()
-    ):
+    if interactions_safety_settings(requested_safety_settings(params), custom_llm_provider) is None:
         raise litellm.BadRequestError(
-            message="'safety_settings' cannot be sent to the Gemini Interactions API. "
+            message="These 'safety_settings' have no equivalent on the Gemini Interactions API. "
             "Send this request with use_interactions=false.",
             model=model,
             llm_provider=custom_llm_provider,
@@ -240,20 +241,20 @@ def _validate_request_params(
             drop_params,
             custom_llm_provider=custom_llm_provider,
         )
-    if params.get("logprobs") is True or params.get("top_logprobs") is not None:
-        _reject_or_drop(
-            model,
-            "'logprobs' is not supported by the Gemini Interactions API.",
-            drop_params,
-            custom_llm_provider=custom_llm_provider,
+    dropped: Final = tuple(
+        name
+        for name, is_set in (
+            ("logprobs", params.get("logprobs") is True or params.get("top_logprobs") is not None),
+            ("n", _asks_for_several_candidates(params.get("n"))),
+            ("top_k", params.get("top_k") is not None or params.get("topK") is not None),
         )
-    candidate_count: Final = params.get("n")
-    if isinstance(candidate_count, int) and not isinstance(candidate_count, bool) and candidate_count > 1:
-        _reject_or_drop(
+        if is_set
+    )
+    if dropped:
+        verbose_logger.warning(
+            "The Gemini Interactions API has no equivalent for %s, so %s is sent without it.",
+            ", ".join(dropped),
             model,
-            "Multiple candidate completions ('n > 1') are not supported by the Gemini Interactions API.",
-            drop_params,
-            custom_llm_provider=custom_llm_provider,
         )
     freq_penalty: Final = params.get("frequency_penalty")
     pres_penalty: Final = params.get("presence_penalty")
@@ -320,6 +321,11 @@ def _convert_image_part(
     }
 
 
+def _file_content_type(mime_type: str) -> str:
+    family: Final = mime_type.split("/", 1)[0]
+    return family if family in ("image", "audio", "video") else "document"
+
+
 def _convert_file_part(
     part: JsonMapping,
     model: str,
@@ -339,13 +345,15 @@ def _convert_file_part(
     if isinstance(file_data, str) and file_data:
         if file_data.startswith("data:"):
             mime_type, b64_data = _parse_data_uri(file_data, mime_hint)
-            return {"type": "document", "mime_type": mime_type, "data": b64_data}
-        return {"type": "document", "mime_type": mime_hint, "data": file_data}
+            return {"type": _file_content_type(mime_type), "mime_type": mime_type, "data": b64_data}
+        return {"type": _file_content_type(mime_hint), "mime_type": mime_hint, "data": file_data}
     if isinstance(file_id, str) and file_id:
+        if _file_content_type(mime_hint) == "video":
+            return {"type": "video", "uri": file_id}
         if _needs_remote_fetch(file_id, custom_llm_provider):
             fetched_mime, fetched_data = media_fetcher(file_id, mime_hint)
-            return {"type": "document", "mime_type": fetched_mime, "data": fetched_data}
-        return {"type": "document", "uri": file_id, "mime_type": mime_hint}
+            return {"type": _file_content_type(fetched_mime), "mime_type": fetched_mime, "data": fetched_data}
+        return {"type": _file_content_type(mime_hint), "uri": file_id, "mime_type": mime_hint}
     raise litellm.BadRequestError(
         message="Content block with type='file' requires 'file_data' or 'file_id'.",
         model=model,
@@ -1089,6 +1097,9 @@ def transform_chat_to_interactions_request(
         model=model,
         model_info=litellm_params.get("model_info"),
     )
+    safety_settings: Final = interactions_safety_settings(
+        requested_safety_settings(normalized_params), custom_llm_provider
+    )
     explicit_store: Final = normalized_params.get("store")
     passthrough_entries: Final = {
         **(
@@ -1113,6 +1124,7 @@ def transform_chat_to_interactions_request(
         **({"tools": tools} if tools is not None else {}),
         **({"response_format": response_format} if response_format is not None else {}),
         **({"generation_config": generation_config} if generation_config is not None else {}),
+        **({"safety_settings": [dict(setting) for setting in safety_settings]} if safety_settings else {}),
         **({"stream": True} if stream else {}),
         **passthrough_entries,
     }

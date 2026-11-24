@@ -637,20 +637,16 @@ def _is_interactions_eligible_target(
     return True
 
 
-_ONE_CANDIDATE: Final = (None, 1)
 _GENERATE_CONTENT_ONLY_KEYS: Final = frozenset(
     {
         "generationConfig",
         "generation_config",
-        "safety_settings",
-        "safetySettings",
         "cached_content",
         "cachedContent",
         "previous_interaction_id",
         "environment",
         "service_tier",
-        "top_k",
-        "topK",
+        "video_metadata",
     }
 )
 _VERTEX_LOCATION_KEYS: Final = ("vertex_location", "vertex_ai_location")
@@ -706,8 +702,61 @@ def _catalog_row(model: str, custom_llm_provider: str) -> Mapping[str, object] |
         return None
 
 
-def has_global_safety_settings() -> bool:
-    return litellm.vertex_ai_safety_settings is not None  # pyright: ignore[reportUnknownMemberType]  # module global is an untyped dict
+_INTERACTIONS_HARM_TYPES: Final = frozenset(
+    {"hate_speech", "dangerous_content", "harassment", "sexually_explicit", "jailbreak"}
+)
+_INTERACTIONS_HARM_THRESHOLDS: Final = frozenset(
+    {"block_low_and_above", "block_medium_and_above", "block_only_high", "block_none", "off"}
+)
+_INTERACTIONS_HARM_METHODS: Final = frozenset({"severity", "probability"})
+_SAFETY_SETTING_KEYS: Final = ("safety_settings", "safetySettings")
+
+
+def _interactions_safety_setting(setting: object, custom_llm_provider: str) -> Mapping[str, str] | None:
+    fields: Final = str_keyed_mapping(setting) or {}
+    category: Final = fields.get("category")
+    raw_threshold: Final = fields.get("threshold")
+    raw_method: Final = fields.get("method")
+    if not isinstance(category, str) or not isinstance(raw_threshold, str):
+        return None
+    harm_type: Final = category.lower().removeprefix("harm_category_")
+    lowered: Final = raw_threshold.lower()
+    threshold: Final = "off" if lowered == "block_none" and custom_llm_provider == "gemini" else lowered
+    method: Final = raw_method.lower() if isinstance(raw_method, str) else None
+    if (
+        harm_type not in _INTERACTIONS_HARM_TYPES
+        or threshold not in _INTERACTIONS_HARM_THRESHOLDS
+        or (method is not None and method not in _INTERACTIONS_HARM_METHODS)
+    ):
+        return None
+    return {"type": harm_type, "threshold": threshold, **({"method": method} if method is not None else {})}
+
+
+def requested_safety_settings(*param_sources: Mapping[str, object] | None) -> object:
+    global_settings: Final[object] = litellm.vertex_ai_safety_settings  # pyright: ignore[reportUnknownMemberType]  # module global is an untyped dict
+    if global_settings is not None:
+        return global_settings
+    sources: Final = tuple(source or {} for source in param_sources)
+    extra_bodies: Final = (str_keyed_mapping(source.get("extra_body")) or {} for source in sources)
+    return next(
+        (
+            params[key]
+            for params in (*sources, *extra_bodies)
+            for key in _SAFETY_SETTING_KEYS
+            if params.get(key) is not None
+        ),
+        None,
+    )
+
+
+def interactions_safety_settings(requested: object, custom_llm_provider: str) -> Sequence[Mapping[str, str]] | None:
+    if requested is None:
+        return ()
+    entries: Final = as_object_list(requested)
+    if entries is None:
+        return None
+    translated: Final = tuple(_interactions_safety_setting(entry, custom_llm_provider) for entry in entries)
+    return None if any(setting is None for setting in translated) else tuple(filter(None, translated))
 
 
 def should_route_to_interactions_api(
@@ -718,8 +767,7 @@ def should_route_to_interactions_api(
     litellm_params: object = None,
     deployment_model_info: object = None,
     skip_bridge: object = False,
-    candidate_count: object = None,
-    asks_for_logprobs: bool = False,
+    asks_for_penalty: bool = False,
     tools: object = None,
     service_tier: str | None = None,
 ) -> bool:
@@ -752,9 +800,11 @@ def should_route_to_interactions_api(
         return True
     return (
         _is_gemini_4_or_newer(model)
-        and not has_global_safety_settings()
-        and candidate_count in _ONE_CANDIDATE
-        and not asks_for_logprobs
+        and interactions_safety_settings(
+            requested_safety_settings(str_keyed_mapping(optional_params), llm_map), custom_llm_provider
+        )
+        is not None
+        and not asks_for_penalty
         and service_tier is None
         and not _names_a_file_search_store(tools)
         and not _needs_generate_content(str_keyed_mapping(optional_params), llm_map)

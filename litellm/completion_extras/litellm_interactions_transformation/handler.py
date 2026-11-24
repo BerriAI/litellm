@@ -641,7 +641,14 @@ class InteractionsToCompletionBridgeHandler:
             headers=validated_headers,
             body=resumable_body(
                 with_default_output_budget(
-                    {str(k): v for k, v in raw_body.items()},
+                    {
+                        **{str(k): v for k, v in raw_body.items()},
+                        **{
+                            key: prepared.optional_params[key]
+                            for key in ("safety_settings",)
+                            if key in prepared.optional_params
+                        },
+                    },
                     partial(
                         text_chat_model_max_output_tokens,
                         model,
