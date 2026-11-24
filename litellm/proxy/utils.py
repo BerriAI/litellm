@@ -1373,7 +1373,7 @@ def _estimated_input_cost(
     return next((cost for cost in candidate_costs if cost is not None), 0.0)
 
 
-_EMPTY_LIFT: Final = MappingProxyType({})
+_EMPTY_LIFT: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _served_image_call_type(litellm_logging_obj: object) -> str | None:
@@ -1600,7 +1600,28 @@ def _proxy_only_error_log_fields(
     )
 
 
-def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed: bool = False) -> Mapping[str, object]:
+def _attribution_to_the_attempt_that_answered_without_an_image(
+    request_data: Mapping[str, object], standard_logging_object: object, logged_exception: object
+) -> Mapping[str, object]:
+    logged: Final = _as_str_mapping(standard_logging_object)
+    answered_id: Final = logged.get("model_id")
+    answered_group: Final = logged.get("model_group")
+    metadata: Final = _as_str_mapping(request_data.get("metadata"))
+    model_info: Final = _as_str_mapping(metadata.get("model_info"))
+    if not isinstance(logged_exception, IMAGE_ANSWER_ERRORS):
+        return _EMPTY_LIFT
+    if not isinstance(answered_id, str) or not isinstance(answered_group, str):
+        return _EMPTY_LIFT
+    if answered_id == model_info.get("id"):
+        return _EMPTY_LIFT
+    return MappingProxyType(
+        {"metadata": {**metadata, "model_group": answered_group, "model_info": {**model_info, "id": answered_id}}}
+    )
+
+
+def _failure_fields_to_lift(
+    request_data: Mapping[str, object], provider_billed: bool = False, answered_without_an_image: bool = False
+) -> Mapping[str, object]:
     """Failure-path callbacks run after ``litellm_logging_obj`` is popped from
     request_data (it is not serialisable), so the caller merges these fields
     onto request_data first: the request start and first-handoff instants for
@@ -1656,7 +1677,14 @@ def _failure_fields_to_lift(request_data: Mapping[str, object], provider_billed:
             else None,
         ),
     )
-    return MappingProxyType({key: value for key, value in _entries if value is not None})
+    _attribution: Final = (
+        _attribution_to_the_attempt_that_answered_without_an_image(
+            request_data, _model_call_details.get("standard_logging_object"), _model_call_details.get("exception")
+        )
+        if answered_without_an_image
+        else _EMPTY_LIFT
+    )
+    return MappingProxyType({**{key: value for key, value in _entries if value is not None}, **_attribution})
 
 
 @dataclass(frozen=True)
@@ -3899,7 +3927,9 @@ class ProxyLogging:
 
         request_data.update(
             await offload_token_count(_failure_fields_to_lift)(
-                request_data, provider_billed=_provider_billed_the_failure(original_exception)
+                request_data,
+                provider_billed=_provider_billed_the_failure(original_exception),
+                answered_without_an_image=isinstance(original_exception, IMAGE_ANSWER_ERRORS),
             )
         )
 

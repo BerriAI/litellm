@@ -919,6 +919,34 @@ async def test_failure_hook_counts_no_spend_for_a_no_log_image_failure(
 
 
 @pytest.mark.asyncio
+async def test_a_billed_fallback_refusal_labels_its_spend_with_the_fallback_group() -> None:
+    from litellm.integrations.prometheus import PrometheusLogger
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    _clear_prometheus_registry()
+    try:
+        await PrometheusLogger().async_post_call_failure_hook(
+            request_data=_billed_image_failure(
+                {
+                    "model": "gemini/image-model",
+                    "model_id": "dep-backup",
+                    "model_group": "backup",
+                    "custom_llm_provider": "gemini",
+                },
+                model="primary",
+            ),
+            original_exception=_image_refusal(),
+            user_api_key_dict=UserAPIKeyAuth(token="metric-test-token"),
+        )
+        assert {
+            metric_name: [sample.labels.get("requested_model") for sample in _collected_samples(metric_name)]
+            for metric_name in ("litellm_spend_metric_total", "litellm_total_tokens_metric_total")
+        } == {"litellm_spend_metric_total": ["backup"], "litellm_total_tokens_metric_total": ["backup"]}
+    finally:
+        _clear_prometheus_registry()
+
+
+@pytest.mark.asyncio
 async def test_failure_hook_labels_a_cli_session_with_the_per_user_alias_not_the_login_token():
     from litellm.integrations.prometheus import PrometheusLogger
     from litellm.proxy._types import UserAPIKeyAuth

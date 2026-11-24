@@ -2956,11 +2956,13 @@ class PrometheusLogger(CustomLogger):
         logged: Final = _logged_fields(request_data.get("standard_logging_object"))
         billed_model: Final = logged.get("model")
         provider: Final = logged.get("custom_llm_provider")
+        billed_group: Final = logged.get("model_group")
         billed_values: Final = replace(
             enum_values,
             model=billed_model.removeprefix(f"{provider}/" if isinstance(provider, str) else "")
             if isinstance(billed_model, str)
             else None,
+            requested_model=billed_group if isinstance(billed_group, str) else enum_values.requested_model,
         )
         label_context: Final = PrometheusLabelFactoryContext(billed_values)
 
