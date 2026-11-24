@@ -74,8 +74,8 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         input: str,
-        voice: str | dict | None,
-        optional_params: dict,
+        voice: str | Mapping[str, object] | None,
+        optional_params: dict[str, object],
         litellm_params_dict: dict,
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout,
@@ -197,11 +197,11 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate RunwayML environment and set up authentication headers
         """

@@ -27,7 +27,7 @@ from litellm.utils import (
 )
 
 from .gpt_reasoning_transformation import (
-    get_effort_level,  # pyright: ignore[reportUnknownVariableType]  # its signature takes the bare reasoning_effort dict
+    get_effort_level,
     refused_reasoning_effort_warning,
     unsupported_reasoning_effort_message,
 )
@@ -57,13 +57,13 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         """
         return messages
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the supported OpenAI params for the given model
 
         """
 
-        all_openai_params: Final = super().get_supported_openai_params(model=model)
+        all_openai_params: Final[list[str]] = super().get_supported_openai_params(model=model)
         non_supported_params: Final = [
             "logprobs",
             "top_p",
@@ -77,7 +77,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         all_openai_params.extend(o_series_only_param)
 
         try:
-            model, custom_llm_provider, api_base, api_key = get_llm_provider(model=model)
+            model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         except Exception:
             verbose_logger.debug(
                 "Unable to infer model provider for model=%s, defaulting to openai for o1 supported param check", model
@@ -112,7 +112,7 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         declared_reasoning_efforts: Collection[str] | None = None,
     ):
         requested_effort: Final = get_effort_level(
-            non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+            non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # the request params arrive as a bare dict
         )
         if (
             requested_effort is not None

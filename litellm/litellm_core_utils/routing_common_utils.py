@@ -369,7 +369,9 @@ def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
     return hashlib.sha256(json.dumps(sensitive_params.model_dump()).encode()).hexdigest()
 
 
-def add_model_file_id_mappings(healthy_deployments: list[dict] | dict, responses: list["OpenAIFileObject"]) -> dict:
+def add_model_file_id_mappings(
+    healthy_deployments: list[dict] | dict, responses: list["OpenAIFileObject"]
+) -> dict[str, str]:
     """
     Create a mapping of model id to file id
     {
@@ -444,7 +446,7 @@ def filter_team_based_models(
         if matches_requested_model:
             return healthy_deployments
 
-    ids_to_remove: Final = set()
+    ids_to_remove: Final[set[object]] = set()
     if isinstance(healthy_deployments, dict):
         # A deployment asked for by id is filtered like any other: another team's is not served.
         return [] if _owner_team(healthy_deployments) not in (None, request_team_id) else healthy_deployments  # pyright: ignore[reportUnknownArgumentType, reportUnknownVariableType]  # the legacy untyped deployment dict
@@ -519,7 +521,7 @@ def is_web_search_request(request_kwargs: Mapping[str, object]) -> bool:
 
 def filter_web_search_deployments(
     healthy_deployments: list[dict] | dict,
-    request_kwargs: dict | None = None,
+    request_kwargs: Mapping[str, object] | None = None,
 ) -> list[dict] | dict:
     """
     If the request is websearch, filter out deployments that don't support web search

@@ -62,7 +62,7 @@ class ResponsesToCompletionBridgeHandler:
     @staticmethod
     def _coerce_response_object(
         response_obj: object,
-        hidden_params: dict | None,
+        hidden_params: Mapping[object, object] | None,
     ) -> "ResponsesAPIResponse":
         if isinstance(response_obj, ResponsesAPIResponse):
             response = response_obj
