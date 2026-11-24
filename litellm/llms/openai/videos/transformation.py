@@ -180,7 +180,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         video_create_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, object],
     ) -> tuple[dict, RequestFiles, str]:
         """
         Transform the video creation request for OpenAI API.
@@ -490,7 +490,9 @@ class OpenAIVideoConfig(BaseVideoConfig):
 
         return video_obj
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         from ...base_llm.chat.transformation import BaseLLMException
 
         raise BaseLLMException(

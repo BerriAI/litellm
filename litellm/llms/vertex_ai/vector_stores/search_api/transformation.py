@@ -318,7 +318,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             "write": [],
         }
 
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(self, headers: dict[str, object], litellm_params: GenericLiteLLMParams | None) -> dict:
         """
         Validate and set up authentication for Vertex AI RAG API
         """

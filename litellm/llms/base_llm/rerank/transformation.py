@@ -34,7 +34,7 @@ class BaseRerankConfig(ABC):
         self,
         model: str,
         optional_rerank_params: dict,
-        headers: dict,
+        headers: dict[str, object],
         litellm_params: dict | None = None,
     ) -> dict:
         return {}

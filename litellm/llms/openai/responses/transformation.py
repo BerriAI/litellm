@@ -1466,7 +1466,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         response_api_optional_request_params: dict,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> tuple[str, dict[str, object]]:
         """
         Transform the compact response API request into a URL and data

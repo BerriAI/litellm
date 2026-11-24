@@ -88,7 +88,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: dict[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return AnthropicError(
             status_code=status_code,

@@ -3633,7 +3633,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     ) -> LitellmMessage | None:
         return cls._convert_tool_response_to_message(tool_calls, response_format_schema)
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return AnthropicError(
             status_code=status_code,
             message=error_message,

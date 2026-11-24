@@ -9342,7 +9342,7 @@ def speech(
     speed: int | None = None,
     instructions: str | None = None,
     client=None,
-    headers: dict | None = None,
+    headers: dict[str, object] | None = None,
     custom_llm_provider: str | None = None,
     aspeech: bool | None = None,
     base_url: str | None = None,

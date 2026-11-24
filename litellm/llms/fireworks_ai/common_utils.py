@@ -108,7 +108,9 @@ class FireworksAIMixin:
     Common Base Config functions across Fireworks AI Endpoints
     """
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return FireworksAIException(
             status_code=status_code,
             message=error_message,
@@ -120,7 +122,7 @@ class FireworksAIMixin:
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,

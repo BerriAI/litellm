@@ -34,7 +34,7 @@ class AzureModelRouterConfig(AzureAIStudioConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         """
         Transform request for Model Router.
