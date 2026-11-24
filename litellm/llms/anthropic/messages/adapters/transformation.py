@@ -45,9 +45,7 @@ def _optional_attr(source: object, name: str) -> object:
 
 
 def _as_string_mapping(value: object) -> Mapping[str, object] | None:
-    if isinstance(value, Mapping):
-        return value
-    return None
+    return as_str_mapping(value)
 
 
 def _thought_signature(provider_specific_fields: object) -> str | None:

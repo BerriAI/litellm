@@ -58,6 +58,7 @@ from litellm.proxy.guardrails._content_utils import (
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
+from litellm.types.utils import LLMResponseTypes
 
 
 class LassoResponse(TypedDict):
@@ -185,7 +186,7 @@ class LassoGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,  # Deprecated, use global_cache instead (kept to align with CustomGuardrail interface)
-        data: dict,
+        data: dict[str, object],
         call_type: Literal[
             "completion",
             "text_completion",
@@ -198,7 +199,7 @@ class LassoGuardrail(CustomGuardrail):
             "mcp_call",
             "anthropic_messages",
         ],
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """
         Runs before the LLM API call to validate and potentially modify input.
         Uses 'PROMPT' messageType as this is input to the model.
@@ -217,7 +218,7 @@ class LassoGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "completion",
@@ -245,9 +246,9 @@ class LassoGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         """
         Runs after the LLM API call to validate the response.
@@ -380,7 +381,7 @@ class LassoGuardrail(CustomGuardrail):
         data: dict,
         cache: DualCache,
         message_type: Literal["PROMPT", "COMPLETION"] = "PROMPT",
-    ):
+    ) -> dict[str, object]:
         """
         Run the Lasso guardrail with the specified message type.
 
@@ -452,7 +453,7 @@ class LassoGuardrail(CustomGuardrail):
         message_type: Literal["PROMPT", "COMPLETION"],
         messages: Sequence[Mapping[str, object]],
         messages_count: int,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Handle masking with classifix endpoint.
 
         ``messages_count`` is the number of inspected items derived from
@@ -591,7 +592,7 @@ class LassoGuardrail(CustomGuardrail):
         masked_tool_use: Mapping[object, Mapping[str, object]],
     ) -> list[object]:
         """Replace tool_call arguments with masked values returned by Lasso."""
-        updated: Final = []
+        updated: Final = list[object]()
         for call in iter_items(tool_calls):
             call_id = self._get_field(call, "id")
             if call_id and call_id in masked_tool_use:
@@ -803,7 +804,7 @@ class LassoGuardrail(CustomGuardrail):
         tools_data: Final[list[dict[str, object]]] = data.get("tools") or []
         if tools_data:
             get: Final = self._get_field
-            tool_definitions: Final = []
+            tool_definitions: Final = list[dict[str, object]]()
             for tool in tools_data:
                 func = get(tool, "function")
                 if not func:
@@ -916,7 +917,7 @@ class LassoGuardrail(CustomGuardrail):
             >>> guardrail._check_for_blocking_actions(response)
             ['jailbreak']
         """
-        blocking_violations: Final = []
+        blocking_violations: Final = list[str]()
         findings: Final = response.get("findings", {})
 
         for deputy_name, deputy_findings in findings.items():
@@ -929,9 +930,9 @@ class LassoGuardrail(CustomGuardrail):
 
         return blocking_violations
 
-    def _parse_violated_deputies(self, response: LassoResponse) -> list[str]:
+    def _parse_violated_deputies(self, response: LassoResponse) -> Sequence[str]:
         """Parse the response to extract violated deputies."""
-        violated_deputies: Final = []
+        violated_deputies: Final = list[str]()
         if "deputies" in response:
             for deputy, is_violated in response["deputies"].items():
                 if is_violated:

@@ -27,6 +27,7 @@ from litellm.constants import (
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
 from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
@@ -913,8 +914,8 @@ def is_caller_timeout_408(
     failure logger has stamped the current API call's end time."""
     if cast_exception_status_to_int(exception_status) != 408:
         return False
-    litellm_params: Final = model_call_details.get("litellm_params")
-    if not isinstance(litellm_params, Mapping) or not litellm_params.get("client_side_timeout"):
+    litellm_params: Final = as_str_mapping(model_call_details.get("litellm_params"))
+    if litellm_params is None or not litellm_params.get("client_side_timeout"):
         return False
     timeout: Final = litellm_params.get("timeout")
     started: Final = model_call_details.get("api_call_start_time") or model_call_details.get("start_time")
