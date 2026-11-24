@@ -3591,6 +3591,26 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
         assert self._logged_action(data) == expected_action
 
     @pytest.mark.asyncio
+    async def test_pre_call_hook_returning_the_request_without_a_content_key_logs_a_masking_action(self):
+        class ToolStrippingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_pre_call_hook(
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: object,
+                data: dict[str, object],
+                call_type: str,
+            ) -> dict[str, object]:
+                return {key: value for key, value in data.items() if key != "tools"}
+
+        data: Final = {**self._request(), "tools": [{"type": "function", "function": {"name": "delete_db"}}]}
+        await ToolStrippingGuardrail(guardrail_name="g").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="acompletion"
+        )
+
+        assert self._logged_action(data) == "mask"
+
+    @pytest.mark.asyncio
     async def test_pre_call_hook_removing_legacy_functions_in_place_logs_mask(self):
         class FunctionStrippingGuardrail(CustomGuardrail):
             @log_guardrail_information

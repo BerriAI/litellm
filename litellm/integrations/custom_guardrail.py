@@ -1771,16 +1771,16 @@ class CustomGuardrail(CustomLogger):
     def _returned_a_changed_value(
         response: object, original_inputs: Mapping[str, object] | None, event_type: GuardrailEventHooks | None
     ) -> bool:
-        """True when a content key the hook returned holds a value it did not hold before the hook
-        ran. A key the hook left out of what it returned is not a change."""
+        """True when the hook's return value changed the content. A pre_call hook returns the whole
+        request, so a content key it removed is a change. ``apply_guardrail`` may return only some
+        of its inputs, so only the keys it returned are compared."""
         returned: Final = as_str_mapping(response)
         if original_inputs is None or returned is None:
             return False
+        if event_type == GuardrailEventHooks.pre_call:
+            return any(original_inputs.get(key) != returned.get(key) for key in _PRE_CALL_CONTENT_KEYS)
         return any(
-            original_inputs.get(key) != value
-            for key, value in returned.items()
-            if key not in _STREAM_CONTROL_KEYS
-            and (event_type != GuardrailEventHooks.pre_call or key in _PRE_CALL_CONTENT_KEYS)
+            original_inputs.get(key) != value for key, value in returned.items() if key not in _STREAM_CONTROL_KEYS
         )
 
     def _summary_and_change(
