@@ -228,10 +228,14 @@ def _rounding(value: object) -> ReasoningEffortRounding | None:
             return None
 
 
+def configured_reasoning_effort_rounding() -> ReasoningEffortRounding:
+    return _rounding(litellm.reasoning_effort_rounding) or "up"
+
+
 def _deployment_rounding(deployment_model_info: object) -> ReasoningEffortRounding:
     own_info: Final = as_str_mapping(deployment_model_info)
     own: Final = _rounding(own_info.get(_ROUNDING_KEY)) if own_info is not None else None
-    return own or _rounding(litellm.reasoning_effort_rounding) or "up"
+    return own or configured_reasoning_effort_rounding()
 
 
 def _requested_level(requested: RequestedReasoningEffort) -> str | None:

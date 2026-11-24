@@ -1,11 +1,15 @@
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.factory import response_schema_prompt
-from litellm.litellm_core_utils.reasoning_effort_capability import declared_reasoning_efforts_for_model
+from litellm.litellm_core_utils.reasoning_effort_capability import (
+    configured_reasoning_effort_rounding,
+    declared_reasoning_efforts_for_model,
+)
 from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam, ChatCompletionUserMessage
@@ -38,13 +42,28 @@ def _requested_level(requested: object) -> object:
     return _json_field(requested, "effort") if _is_json_object(requested) else requested
 
 
+def _weakest_declared(declared: Sequence[str]) -> str:
+    return nearest_declared_reasoning_effort("minimal", declared, "up")
+
+
+def _declared_effort(level: str, declared: Sequence[str], drop_params: bool) -> str | None:
+    rounded: Final = nearest_declared_reasoning_effort(level, declared, configured_reasoning_effort_rounding())
+    if rounded in declared or not drop_params:
+        return rounded
+    return _weakest_declared(declared) if level == "none" else None
+
+
 def _accepted_effort(model: str, requested: object, drop_params: bool) -> object:
     level: Final = _requested_level(requested)
     declared: Final = declared_reasoning_efforts_for_model(model, "zai")
     if not isinstance(level, str) or declared is None:
         return level
-    accepted: Final = nearest_declared_reasoning_effort(level, declared)
-    return None if drop_params and accepted not in declared else accepted
+    accepted: Final = _declared_effort(level, declared, drop_params)
+    if accepted is not None and accepted != level:
+        verbose_logger.debug(
+            "zai: %s takes reasoning_effort %s, sending %s in place of %s", model, declared, accepted, level
+        )
+    return accepted
 
 
 def _schema_without_native_support(model: str, response_format: object) -> Mapping[str, object] | None:
