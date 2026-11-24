@@ -39290,6 +39290,16 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Oauth Client Credentials */
+            oauth_client_credentials?: boolean | null;
+            /** Oauth Client Id */
+            oauth_client_id?: string | null;
+            /** Oauth Client Secret */
+            oauth_client_secret?: string | null;
+            /** Oauth Scope */
+            oauth_scope?: string | null;
+            /** Oauth Token Url */
+            oauth_token_url?: string | null;
             /** Ocr Cost Per Credit */
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
@@ -56782,6 +56792,16 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Oauth Client Credentials */
+            oauth_client_credentials?: boolean | null;
+            /** Oauth Client Id */
+            oauth_client_id?: string | null;
+            /** Oauth Client Secret */
+            oauth_client_secret?: string | null;
+            /** Oauth Scope */
+            oauth_scope?: string | null;
+            /** Oauth Token Url */
+            oauth_token_url?: string | null;
             /** Ocr Cost Per Credit */
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */

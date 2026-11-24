@@ -4579,6 +4579,13 @@ oauth_token_exchange_litellm_params: Final = (
     "token_exchange_profile",
     "token_exchange_scope",
 )
+provider_oauth_litellm_params: Final = (
+    "oauth_client_credentials",
+    "oauth_token_url",
+    "oauth_client_id",
+    "oauth_client_secret",
+    "oauth_scope",
+)
 github_copilot_oauth_litellm_params: Final = (
     "github_copilot_auth_type",
     "github_copilot_host",
@@ -4695,10 +4702,14 @@ server_owned_wif_litellm_params: Final = (
     + openai_wif_litellm_params
     + oauth_token_exchange_litellm_params
     + github_copilot_oauth_litellm_params
+    + provider_oauth_litellm_params
     + ("chatgpt_auth_file",)
 )
 secret_bearing_wif_litellm_params: Final = tuple(
-    sorted(WIF_SECRET_BEARING_KEYS | {"github_copilot_app_private_key_ref", "github_copilot_app_private_key"})
+    sorted(
+        WIF_SECRET_BEARING_KEYS
+        | {"github_copilot_app_private_key_ref", "github_copilot_app_private_key", "oauth_client_secret"}
+    )
 )
 
 all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it

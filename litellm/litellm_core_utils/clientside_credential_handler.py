@@ -104,6 +104,12 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: Mapping[str
     from litellm.llms.github_copilot.app_auth import app_config
 
     app_params: Final = cast("dict[str, object]", litellm_params)  # cast-ok: the existing request boundary is untyped
+    if app_params.get("oauth_client_credentials") is True and is_clientside_credential(request_kwargs):
+        raise BadRequestError(
+            message="OAuth client credentials deployments do not accept client-side credential or endpoint overrides.",
+            llm_provider=None,
+            model=None,
+        )
     if app_config(app_params) is not None and is_clientside_credential(request_kwargs):
         raise BadRequestError(
             message="GitHub App deployments do not accept client-side credential or endpoint overrides.",

@@ -140,6 +140,11 @@ class ProviderConnection:
     token_exchange_profile: str | None = None
     token_exchange_scope: str | None = None
     token_exchange_audience: str | None = None
+    oauth_client_credentials: bool | None = None
+    oauth_token_url: str | None = None
+    oauth_client_id: str | None = None
+    oauth_client_secret: str | None = None
+    oauth_scope: str | None = None
     fireworks_forward_user_id: bool | None = None
 
 
