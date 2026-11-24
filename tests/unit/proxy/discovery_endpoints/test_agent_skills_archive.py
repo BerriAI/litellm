@@ -1,13 +1,17 @@
 import hashlib
 import io
 import stat
+import struct
 import zipfile
 from typing import Final
 
 import pytest
 
+import litellm.proxy.discovery_endpoints.agent_skills_archive as agent_skills_archive
 from litellm.proxy.discovery_endpoints.agent_skills_archive import (
+    MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES,
     MAX_ARCHIVE_ENTRIES,
+    MAX_ARCHIVE_TOTAL_ENTRIES,
     agent_skill_frontmatter,
     build_agent_skill_archive,
     build_skill_archive,
@@ -110,6 +114,44 @@ def test_an_upload_over_the_entry_cap_is_not_installable():
     }
 
     assert build_skill_archive(zip_bytes(files)) is None
+
+
+def test_metadata_entry_budget_rejects_before_zipfile_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    content: Final = struct.pack(
+        "<4sHHHHIIH", b"PK\x05\x06", 0, 0, MAX_ARCHIVE_TOTAL_ENTRIES + 1, MAX_ARCHIVE_TOTAL_ENTRIES + 1, 0, 0, 0
+    )
+
+    def fail_zipfile_open(*args: object, **kwargs: object) -> None:
+        pytest.fail("Entry metadata budget should reject archive before opening ZipFile")
+
+    monkeypatch.setattr(agent_skills_archive.zipfile, "ZipFile", fail_zipfile_open)
+    assert build_agent_skill_archive(content) is None
+
+
+def test_metadata_directory_budget_rejects_before_zipfile_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    content: Final = struct.pack(
+        "<4sHHHHIIH", b"PK\x05\x06", 0, 0, 1, 1, MAX_ARCHIVE_CENTRAL_DIRECTORY_BYTES + 1, 0, 0
+    )
+
+    def fail_zipfile_open(*args: object, **kwargs: object) -> None:
+        pytest.fail("Central-directory budget should reject archive before opening ZipFile")
+
+    monkeypatch.setattr(agent_skills_archive.zipfile, "ZipFile", fail_zipfile_open)
+    assert build_skill_archive(content) is None
+
+
+def test_understated_eocd_entry_count_cannot_bypass_the_total_entry_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    files: Final = {"pdf-summarizer/SKILL.md": MANIFEST} | {
+        f"pdf-summarizer/f{index}": b"" for index in range(MAX_ARCHIVE_TOTAL_ENTRIES)
+    }
+    content: Final = bytearray(zip_bytes(files))
+    eocd_offset: Final = content.rfind(b"PK\x05\x06")
+    struct.pack_into("<HH", content, eocd_offset + 8, 1, 1)
+    # Isolate the total-entry budget from the per-skill entry cap.
+    monkeypatch.setattr(agent_skills_archive, "MAX_ARCHIVE_ENTRIES", MAX_ARCHIVE_TOTAL_ENTRIES * 2)
+
+    assert agent_skills_archive.within_archive_metadata_budget(bytes(content))
+    assert build_agent_skill_archive(bytes(content), skill_path="pdf-summarizer") is None
 
 
 def test_discovery_keeps_its_permission_and_finder_metadata_policy() -> None:
