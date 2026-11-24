@@ -1,7 +1,7 @@
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import lru_cache, partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_type_hints
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Protocol, cast, get_type_hints
 
 import httpx
 from openai.types.responses import ResponseReasoningItem
@@ -40,6 +40,7 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
 )
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
+from litellm.llms.base_llm.chat.transformation import BaseLLMException, RelayOnlyBodyLLMException
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     is_gpt_reasoning_series_name,
@@ -79,6 +80,25 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_ERROR_BODY: Final = TypeAdapter(dict[str, object])
+
+
+def _decoded_error_body(
+    error_message: str,
+) -> dict[str, object] | None:  # mutable-ok: BaseLLMException.body is a dict
+    try:
+        return _ERROR_BODY.validate_json(error_message)
+    except ValidationError:
+        return None
+
+
+def _nested_error_object(
+    decoded: Mapping[str, object] | None,
+) -> dict[str, object] | None:  # mutable-ok: BaseLLMException.body is a dict
+    nested: Final = decoded.get("error") if decoded is not None else None
+    return _ERROR_BODY.validate_python(nested) if isinstance(nested, dict) else None
+
 
 _NO_TOOL_UPDATE: Final[Mapping[str, object]] = MappingProxyType({})
 _MODEL_FAMILIES_REJECTING_TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("gpt-4", "gpt-3.5", "chatgpt-4o", "o1", "o3", "o4")
@@ -372,6 +392,8 @@ def list_input_items_query_params(
 
 
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
+    error_exception_class: ClassVar[type[BaseLLMException]] = BaseLLMException
+
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.OPENAI
@@ -1404,6 +1426,24 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         response.hidden_params["headers"] = raw_response_headers
 
         return response
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: inherited contract
+    ) -> BaseLLMException:
+        decoded: Final = _decoded_error_body(error_message)
+        nested: Final = _nested_error_object(decoded)
+        exception_class: Final = (
+            RelayOnlyBodyLLMException if decoded is not None and nested is None else self.error_exception_class
+        )
+        raise exception_class(
+            status_code=status_code,
+            message=error_message,
+            headers=headers,
+            body=decoded if nested is None else nested,
+        )
 
     #########################################################
     ########## COMPACT RESPONSE API TRANSFORMATION ##########

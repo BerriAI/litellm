@@ -6095,6 +6095,10 @@ def _raise_user_unique_conflict(error: "UniqueViolationError", user_id: object, 
     ) from error
 
 
+class KeyWriter(Protocol):
+    async def __call__(self, data: Mapping[str, object]) -> "prisma_models.LiteLLM_VerificationToken": ...
+
+
 class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
@@ -6821,6 +6825,7 @@ class PrismaClient:
         table_name: Literal["user", "key", "config", "spend", "team", "user_notification"],
         *,
         allow_existing_user: bool = True,
+        key_writer: KeyWriter | None = None,
     ):
         """
         Add a key to the database. If it already exists, do nothing.
@@ -6843,15 +6848,19 @@ class PrismaClient:
                 if db_data.get("budget_limits") is None:
                     db_data.pop("budget_limits", None)
                 print_verbose("PrismaClient: Before upsert into litellm_verificationtoken")
-                new_verification_token: Final = await VerificationTokenRepository(self).table.upsert(
-                    where={
-                        "token": hashed_token,
-                    },
-                    data={
-                        "create": {**db_data},
-                        "update": {},  # don't do anything if it already exists
-                    },
-                    include={"litellm_budget_table": True},
+                new_verification_token: Final = (
+                    await key_writer(db_data)
+                    if key_writer is not None
+                    else await VerificationTokenRepository(self).table.upsert(
+                        where={
+                            "token": hashed_token,
+                        },
+                        data={
+                            "create": {**db_data},
+                            "update": {},  # don't do anything if it already exists
+                        },
+                        include={"litellm_budget_table": True},
+                    )
                 )
                 verbose_proxy_logger.info("Data Inserted into Keys Table")
                 return new_verification_token
