@@ -1,5 +1,7 @@
+import os
 from collections.abc import Mapping
 from io import BufferedReader
+from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -32,7 +34,15 @@ _UPLOAD_LIST: Final = TypeAdapter(list[object])
 
 
 def _upload_file_name(upload: object, default_name: str) -> object:
-    return upload.name if isinstance(upload, BufferedReader) else default_name
+    if isinstance(upload, os.PathLike):
+        return Path(upload).name
+    if isinstance(upload, BufferedReader) and isinstance(upload.name, str):
+        return Path(upload.name).name
+    return default_name
+
+
+def _upload_content(upload: object) -> object:
+    return Path(upload).read_bytes() if isinstance(upload, os.PathLike) else upload
 
 
 def _as_upload_tuple(upload: object) -> tuple[object, ...] | None:
@@ -54,8 +64,8 @@ def _build_upload_part(upload: object, default_name: str) -> tuple[object, ...]:
     parts: Final = _as_upload_tuple(upload)
     if parts is not None and 2 <= len(parts) <= 4:
         raw_name: Final[object] = parts[0]
-        content: Final[object] = parts[1]
-        resolved_name: Final[object] = raw_name if raw_name is not None else _upload_file_name(content, default_name)
+        content: Final[object] = _upload_content(parts[1])
+        resolved_name: Final[object] = raw_name if raw_name is not None else _upload_file_name(parts[1], default_name)
         raw_type: Final[object] = parts[2] if len(parts) >= 3 else None
         resolved_type: Final[object] = (
             raw_type if raw_type is not None else ImageEditRequestUtils.get_image_content_type(content)
@@ -63,8 +73,9 @@ def _build_upload_part(upload: object, default_name: str) -> tuple[object, ...]:
         if len(parts) == 4:
             return (resolved_name, content, resolved_type, parts[3])
         return (resolved_name, content, resolved_type)
-    image_content_type: Final = ImageEditRequestUtils.get_image_content_type(upload)
-    return (_upload_file_name(upload, default_name), upload, image_content_type)
+    upload_content: Final = _upload_content(upload)
+    image_content_type: Final = ImageEditRequestUtils.get_image_content_type(upload_content)
+    return (_upload_file_name(upload, default_name), upload_content, image_content_type)
 
 
 class OpenAIImageEditConfig(BaseImageEditConfig):
@@ -148,14 +159,14 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
             ("mask", _first_upload(request_dict.get("mask"))),
             ("markup", _first_upload(request_dict.get("markup"))),
         )
-        json_reference_field: Final = next(
-            (field_name for field_name, upload in single_file_uploads if isinstance(upload, Mapping)), None
+        not_a_file_field: Final = next(
+            (field_name for field_name, upload in single_file_uploads if isinstance(upload, (Mapping, str))), None
         )
-        if json_reference_field is not None:
+        if not_a_file_field is not None:
             raise litellm.BadRequestError(
                 message=(
-                    f"'{json_reference_field}' must be an uploaded image file. "
-                    "A JSON image reference cannot be sent in a multipart image edit."
+                    f"'{not_a_file_field}' must be an uploaded image file, such as bytes, an open file or a "
+                    "pathlib.Path. A JSON image reference or a string cannot be sent in a multipart image edit."
                 ),
                 model=model,
                 llm_provider=litellm_params.custom_llm_provider or "openai",
