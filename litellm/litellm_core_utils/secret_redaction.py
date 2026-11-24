@@ -78,6 +78,9 @@ def _build_secret_patterns() -> "re.Pattern[str]":
         r"database_connection_string|"
         r"huggingface_token|jwt_secret)"
         r"""['\"]?\s*[:=]\s*['\"]?(?:(?:Bearer|Basic)\s+)?[^\s,'\"})\]{}>]+""",
+        # A quoted authorization key (a Responses MCP tool's credential), except a value litellm already masked
+        r"""authorization['\"]\s*[:=]\s*['\"]?(?!(?:(?:Bearer|Basic)\s+)?[^\s,'\"})\]{}>]*\*{3})"""
+        r"""(?:(?:Bearer|Basic)\s+)?[^\s,'\"})\]{}>]+""",
         # Raw JWTs (without Bearer prefix)
         r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*",
         # Azure SAS tokens in URLs. The delimiter is a lookbehind, like the

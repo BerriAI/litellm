@@ -333,6 +333,27 @@ def _rewritten_blocks(content: object, rewrite: BlockRewrite) -> Sequence[Mappin
         return ()
 
 
+def _content_blocks(content: object) -> Sequence[Mapping[str, object]]:
+    if isinstance(content, str):
+        return ({"type": "text", "text": content},)
+    try:
+        return _BLOCK_LIST.validate_python(content)
+    except ValidationError:
+        return ()
+
+
+def _with_automatic_cache_mark(
+    messages: AnthropicRequestMessages, cache_control: object
+) -> Sequence[Mapping[str, object]]:
+    """Anthropic's top-level ``cache_control`` caches the conversation up to its last block, so it becomes that
+    block's own mark and maps like any client mark."""
+    blocks: Final = _content_blocks(messages[-1].get("content")) if messages else ()
+    if cache_control is None or not blocks or "cache_control" in blocks[-1]:
+        return messages
+    marked_content: Final = (*blocks[:-1], {**blocks[-1], "cache_control": cache_control})
+    return (*messages[:-1], {**messages[-1], "content": marked_content})
+
+
 def _reasoning_for_target(
     reasoning: object,
     *,
@@ -511,7 +532,7 @@ def _build_responses_kwargs(
                 **message,
                 "content": list(_rewritten_blocks(message.get("content"), block_rewrite)) or message.get("content"),
             }
-            for message in messages
+            for message in _with_automatic_cache_mark(messages, forwarded_kwargs.get("cache_control"))
         ]
         if block_rewrite
         else messages
@@ -546,6 +567,11 @@ def _build_responses_kwargs(
         )
     if top_p is not None:
         request_data["top_p"] = top_p
+    if top_k is not None and "top_k" not in explicitly_dropped:
+        request_data["top_k"] = top_k
+    inference_geo: Final = forwarded_kwargs.get("inference_geo")
+    if isinstance(inference_geo, str) and "inference_geo" not in explicitly_dropped:
+        request_data["inference_geo"] = inference_geo
     if output_format:
         request_data["output_format"] = output_format
     if speed is not None and "speed" not in explicitly_dropped:
@@ -603,7 +629,7 @@ def _build_responses_kwargs(
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
     excluded: Final = (
         CONVERTED_STREAM_KEYS
-        | {"anthropic_messages", "mcp_servers"}
+        | {"anthropic_messages", "mcp_servers", "cache_control", "inference_geo"}
         | (frozenset({"reasoning_effort"}) if client_effort_dropped else frozenset())
     )
     for key, value in forwarded_kwargs.items():
@@ -627,7 +653,7 @@ def _build_responses_kwargs(
         responses_kwargs["prompt_cache_key"] = explicit_prompt_cache_key
 
     explicit_service_tier: Final = forwarded_kwargs.get("service_tier")
-    if explicit_service_tier is not None:
+    if explicit_service_tier not in (None, "auto"):
         responses_kwargs["service_tier"] = explicit_service_tier
 
     deployment_include: Final = forwarded_kwargs.get("include")
