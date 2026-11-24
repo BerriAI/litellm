@@ -42,7 +42,10 @@ def _parsed_config(object_key: str, file_contents: str) -> object | None:
     except yaml.YAMLError as e:
         verbose_proxy_logger.error("Config object %s is not valid YAML: %s", object_key, e)
         return None
-    return MappingProxyType({}) if parsed is None else parsed
+    if parsed is None:
+        empty: Final[Mapping[str, object]] = MappingProxyType({})
+        return empty
+    return parsed
 
 
 def s3_object_reader(bucket_name: str) -> SyncBucketObjectReader:

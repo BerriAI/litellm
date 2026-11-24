@@ -554,6 +554,23 @@ def default_azure_api_version(api_base: str | None, env_api_version: str | None)
     return env_api_version or litellm.AZURE_DEFAULT_API_VERSION
 
 
+def _sha256_hexdigest_if_str(value: object) -> str | None:
+    return hashlib.sha256(value.encode()).hexdigest() if isinstance(value, str) else None
+
+
+def _azure_ad_token_provider_cache_identity(litellm_params: Mapping[str, object]) -> str:
+    _ad_provider: Final = litellm_params.get("azure_ad_token_provider")
+    return (
+        f"provider_id={id(_ad_provider) if callable(_ad_provider) else None}"
+        f"|tenant_id={litellm_params.get('tenant_id')}"
+        f"|client_id={litellm_params.get('client_id')}"
+        f"|client_secret={_sha256_hexdigest_if_str(litellm_params.get('client_secret'))}"
+        f"|azure_username={litellm_params.get('azure_username')}"
+        f"|azure_password={_sha256_hexdigest_if_str(litellm_params.get('azure_password'))}"
+        f"|azure_scope={litellm_params.get('azure_scope')}"
+    )
+
+
 def select_azure_base_url_or_endpoint(azure_client_params: dict):
     azure_endpoint: Final = azure_client_params.get("azure_endpoint", None)
     if azure_endpoint is not None:
@@ -761,22 +778,8 @@ class BaseAzureLLM(BaseOpenAILLM):
         client_initialization_params: Final[dict[str, object]] = locals()
         client_initialization_params["is_async"] = _is_async
         _lp: Final = litellm_params or {}
-        _ad_provider: Final = _lp.get("azure_ad_token_provider")
-        _ad_token: Final = _lp.get("azure_ad_token")
-        _client_secret: Final = _lp.get("client_secret")
-        _azure_password: Final = _lp.get("azure_password")
-        client_initialization_params["azure_ad_token"] = (
-            hashlib.sha256(_ad_token.encode()).hexdigest() if isinstance(_ad_token, str) else None
-        )
-        client_initialization_params["azure_ad_token_provider"] = (
-            f"provider_id={id(_ad_provider) if callable(_ad_provider) else None}"
-            f"|tenant_id={_lp.get('tenant_id')}"
-            f"|client_id={_lp.get('client_id')}"
-            f"|client_secret={hashlib.sha256(_client_secret.encode()).hexdigest() if isinstance(_client_secret, str) else None}"
-            f"|azure_username={_lp.get('azure_username')}"
-            f"|azure_password={hashlib.sha256(_azure_password.encode()).hexdigest() if isinstance(_azure_password, str) else None}"
-            f"|azure_scope={_lp.get('azure_scope')}"
-        )
+        client_initialization_params["azure_ad_token"] = _sha256_hexdigest_if_str(_lp.get("azure_ad_token"))
+        client_initialization_params["azure_ad_token_provider"] = _azure_ad_token_provider_cache_identity(_lp)
         if client is not None:
             if (
                 api_version is not None
