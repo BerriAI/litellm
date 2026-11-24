@@ -46,6 +46,8 @@ pub struct ModelInfo {
     pub access_groups: Vec<String>,
     pub blocked: bool,
     pub cooldown_time: Option<f64>,
+    /// `model_info.base_model`: the model whose limits and costs the deployment reports.
+    pub base_model: Option<String>,
     pub allowed_fails: Option<u32>,
     /// `model_info.allowed_fails_policy` when it is a dict, read as Python reads it: field name
     /// to allowed fails, values as given.
@@ -72,6 +74,7 @@ impl ModelInfo {
                 .unwrap_or_default(),
             blocked: raw.get("blocked").and_then(Value::as_bool) == Some(true),
             cooldown_time: raw.get("cooldown_time").and_then(Value::as_f64),
+            base_model: text("base_model"),
             allowed_fails: raw
                 .get("allowed_fails")
                 .and_then(Value::as_u64)
@@ -212,6 +215,12 @@ impl Deployment {
     /// string, as `Value::as_f64` reads none.
     pub(crate) fn params_cooldown_time(&self) -> Option<f64> {
         self.raw_params.get("cooldown_time").and_then(Value::as_f64)
+    }
+
+    /// `litellm_params.base_model` when it is text. `LitellmParams` names no `base_model`, so a
+    /// value of another type is kept as written and read as unset, as pricing reads it.
+    pub fn params_base_model(&self) -> Option<&str> {
+        self.raw_params.get("base_model").and_then(Value::as_str)
     }
 
     /// The deployment's own `litellm_params.num_retries`, written as a count or as its digits.

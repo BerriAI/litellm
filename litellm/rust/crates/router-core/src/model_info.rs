@@ -15,6 +15,7 @@ use serde_json::{Map, Number, Value};
 use crate::{
     error::Error,
     host::{LogLevel, ModelInfoLookup, RegistryHost},
+    registry::Deployment,
 };
 
 /// The key the host wraps a value it cannot spell as JSON in.
@@ -25,22 +26,59 @@ pub fn is_opaque(value: &Value) -> bool {
     matches!(value, Value::Object(map) if map.len() == 1 && map.contains_key(OPAQUE_KEY))
 }
 
+/// `deserialize_with` for a `base_model` Python may hold as another type, which reads as unset.
+fn text_or_unset<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    #[derive(serde::Deserialize)]
+    #[serde(untagged)]
+    enum Sent {
+        Text(String),
+        Other(serde::de::IgnoredAny),
+    }
+    Ok(match serde::Deserialize::deserialize(deserializer)? {
+        Some(Sent::Text(name)) => Some(name),
+        Some(Sent::Other(_)) | None => None,
+    })
+}
+
 /// One `get_router_model_info` query, as the host reads it off the deployment.
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 #[serde(default)]
 pub struct RouterModelInfoQuery {
     /// `model_info.id`.
     pub deployment_id: Value,
-    /// `model_info.base_model`, then `litellm_params.base_model`: the first that is not `None`
-    /// names the model whose limits and costs the deployment reports.
-    pub model_info_base_model: Value,
-    pub params_base_model: Value,
+    /// `model_info.base_model`, then `litellm_params.base_model`: the first that is set names the
+    /// model whose limits and costs the deployment reports. A value that is not text is unset, as
+    /// pricing reads it.
+    #[serde(deserialize_with = "text_or_unset")]
+    pub model_info_base_model: Option<String>,
+    #[serde(deserialize_with = "text_or_unset")]
+    pub params_base_model: Option<String>,
     /// The validated `litellm_params.model`.
     pub params_model: String,
     /// `base_model` among the validated params' extra fields.
-    pub extra_base_model: Value,
+    #[serde(deserialize_with = "text_or_unset")]
+    pub extra_base_model: Option<String>,
     /// The name the caller asked for, which a wildcard deployment matches.
     pub received_model_name: String,
+}
+
+impl RouterModelInfoQuery {
+    /// The query for `deployment` under the name `received_model_name`, as the Python host reads
+    /// it off the deployment's dict. `LitellmParams` names no `base_model`, so the params' and
+    /// their extra fields' `base_model` are the same value.
+    pub fn of(deployment: &Deployment, received_model_name: &str) -> Self {
+        let params_base_model = deployment.params_base_model().map(str::to_owned);
+        Self {
+            deployment_id: Value::String(deployment.id.clone()),
+            model_info_base_model: deployment.model_info.base_model.clone(),
+            params_base_model: params_base_model.clone(),
+            params_model: deployment.params.model.clone(),
+            extra_base_model: params_base_model,
+            received_model_name: received_model_name.to_owned(),
+        }
+    }
 }
 
 /// A merged model info, and the keys whose values are the deployment's own (the last layer).
@@ -48,6 +86,13 @@ pub struct RouterModelInfoQuery {
 pub struct MergedModelInfo {
     pub info: Map<String, Value>,
     pub user_keys: Vec<String>,
+}
+
+impl MergedModelInfo {
+    /// The context window `_deployment_max_input_tokens` reads: a whole number, else none.
+    pub fn max_input_tokens(&self) -> Option<i64> {
+        self.info.get("max_input_tokens").and_then(Value::as_i64)
+    }
 }
 
 pub(crate) fn raised(exception: &'static str, detail: impl Into<String>) -> Error {
@@ -257,12 +302,10 @@ pub async fn router_model_info(
     host: &impl RegistryHost,
     query: &RouterModelInfoQuery,
 ) -> Result<Option<MergedModelInfo>, Error> {
-    let base_model = if query.model_info_base_model.is_null() {
-        query.params_base_model.clone()
-    } else {
-        query.model_info_base_model.clone()
-    };
-    let mut model = base_model.clone();
+    let base_model = query
+        .model_info_base_model
+        .as_ref()
+        .or(query.params_base_model.as_ref());
 
     let (resolved_model, provider) = match lookup(
         host,
@@ -281,7 +324,7 @@ pub async fn router_model_info(
         _ => return Err(malformed("provider")),
     };
 
-    if provider == "azure" && base_model.is_null() {
+    let model = if provider == "azure" && base_model.is_none() {
         // Router init registers every deployment name into the cost map as a zeroed stub, so
         // membership alone cannot tell a resolvable name apart; it needs usable limits or costs.
         let fallback_key = if resolved_model.starts_with("azure/") {
@@ -315,39 +358,30 @@ pub async fn router_model_info(
             )
             .await?;
         }
-    } else if provider != "azure" {
-        model = Value::String(resolved_model.clone());
-        if resolved_model.contains('*') {
-            // Only a wildcard deployment asks which model its pattern routed the name to.
-            if let Value::Array(routed) = lookup(
-                host,
-                ModelInfoLookup::PatternModels {
-                    name: query.received_model_name.clone(),
-                },
-            )
-            .await?
-                && let Some(routed) = routed
-                    .iter()
-                    .find(|routed| routed.get("id").unwrap_or(&Value::Null) == &query.deployment_id)
-            {
-                model = routed.get("model").cloned().unwrap_or(Value::Null);
-            }
+        None
+    } else if provider == "azure" {
+        base_model.cloned()
+    } else if resolved_model.contains('*') {
+        // Only a wildcard deployment asks which model its pattern routed the name to.
+        match lookup(
+            host,
+            ModelInfoLookup::PatternModels {
+                name: query.received_model_name.clone(),
+            },
+        )
+        .await?
+        {
+            Value::Array(routed) => routed
+                .iter()
+                .find(|routed| routed.get("id").unwrap_or(&Value::Null) == &query.deployment_id)
+                .and_then(|routed| routed.get("model")?.as_str().map(str::to_owned)),
+            _ => None,
         }
-    }
-
-    if model.is_null() {
-        // An azure deployment without a base_model is looked up by its own model.
-        model = Value::String(resolved_model);
-    }
-    let Value::String(model) = model else {
-        return Err(raised(
-            "AttributeError",
-            format!(
-                "'{}' object has no attribute 'startswith'",
-                crate::group_info::type_name(&model)
-            ),
-        ));
+    } else {
+        None
     };
+    // A deployment that names no other model is looked up by its own.
+    let model = model.unwrap_or(resolved_model);
     let model_info_name = if model.starts_with(&format!("{provider}/")) {
         model
     } else {
@@ -366,7 +400,7 @@ pub async fn router_model_info(
     let declared = user_model_info
         .get("base_model")
         .and_then(declared_base_model)
-        .or_else(|| declared_base_model(&query.extra_base_model));
+        .or(query.extra_base_model.as_deref());
     let widened = base_model_widened_window(host, &row, declared, &provider).await?;
     let discovered = discovered(host, query.deployment_id.clone()).await?;
 
@@ -657,6 +691,165 @@ mod tests {
             json!({"key": "gpt-4o", "max_input_tokens": 100, "input_cost_per_token": 2.0, "id": "d"})
         );
         assert_eq!(merged.user_keys, vec!["id", "input_cost_per_token"]);
+    }
+
+    fn azure_catalog() -> Catalog {
+        Catalog {
+            rows: BTreeMap::from([
+                (
+                    "azure/gpt-4o".to_owned(),
+                    json!({"key": "gpt-4o", "max_input_tokens": 128}),
+                ),
+                (
+                    "azure/params-model".to_owned(),
+                    json!({"key": "params-model", "max_input_tokens": 64}),
+                ),
+                (
+                    "azure/my-deploy".to_owned(),
+                    json!({"key": "my-deploy", "max_input_tokens": 8}),
+                ),
+            ]),
+            provider: ("my-deploy".to_owned(), "azure".to_owned()),
+            user_model_info: json!({}),
+            ..Catalog::default()
+        }
+    }
+
+    async fn azure_key(query: Value) -> Result<Option<String>, String> {
+        let query: RouterModelInfoQuery = serde_json::from_value(query).unwrap();
+        let merged = router_model_info(&azure_catalog(), &query).await;
+        match merged {
+            Ok(merged) => Ok(merged.map(|merged| merged.info["key"].as_str().unwrap().to_owned())),
+            Err(Error::ModelInfo { exception, detail }) => Err(format!("{exception}: {detail}")),
+            Err(other) => Err(other.to_string()),
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::the_model_infos_base_model(
+        json!({"model_info_base_model": "gpt-4o", "params_base_model": "params-model"}),
+        Ok(Some("gpt-4o".to_owned()))
+    )]
+    #[case::then_the_params_base_model(
+        json!({"model_info_base_model": null, "params_base_model": "params-model"}),
+        Ok(Some("params-model".to_owned()))
+    )]
+    #[case::else_the_deployments_own_model(json!({}), Ok(Some("my-deploy".to_owned())))]
+    #[case::a_base_model_that_is_no_name_is_unset(
+        json!({"params_base_model": 7}),
+        Ok(Some("my-deploy".to_owned()))
+    )]
+    #[case::an_opaque_base_model_is_unset(
+        json!({"params_base_model": {"__litellm_python_value__": 1}}),
+        Ok(Some("my-deploy".to_owned()))
+    )]
+    #[case::the_next_base_model_when_one_is_no_name(
+        json!({"model_info_base_model": [1], "params_base_model": "params-model"}),
+        Ok(Some("params-model".to_owned()))
+    )]
+    #[tokio::test]
+    async fn an_azure_deployment_reports_the_model_its_base_model_names(
+        #[case] query: Value,
+        #[case] expected: Result<Option<String>, String>,
+    ) {
+        let query = json!({"params_model": "azure/my-deploy", "received_model_name": "g"})
+            .as_object()
+            .unwrap()
+            .clone()
+            .into_iter()
+            .chain(query.as_object().unwrap().clone())
+            .collect();
+
+        assert_eq!(azure_key(Value::Object(query)).await, expected);
+    }
+
+    fn deployment(params: Value, info: Value) -> Deployment {
+        let spec = json!({"model_name": "g", "litellm_params": params, "model_info": info});
+        Deployment::from_spec(serde_json::from_value(spec).unwrap()).unwrap()
+    }
+
+    #[rstest::rstest]
+    #[case::the_model_infos(json!({"base_model": "gpt-4o"}), json!({}), Some("gpt-4o"), None)]
+    #[case::the_params(json!({}), json!({"base_model": "params-model"}), None, Some("params-model"))]
+    #[case::a_none(json!({"base_model": null}), json!({"base_model": null}), None, None)]
+    fn a_native_query_names_the_deployments_base_models(
+        #[case] info: Value,
+        #[case] params: Value,
+        #[case] model_info_base_model: Option<&str>,
+        #[case] params_base_model: Option<&str>,
+    ) {
+        let params = json!({"model": "azure/my-deploy"})
+            .as_object()
+            .unwrap()
+            .clone()
+            .into_iter()
+            .chain(params.as_object().unwrap().clone())
+            .collect();
+        let deployment = deployment(Value::Object(params), info);
+        let named = |name: Option<&str>| name.map(str::to_owned);
+
+        let query = RouterModelInfoQuery::of(&deployment, "asked");
+
+        assert_eq!(
+            (
+                query.deployment_id,
+                query.model_info_base_model,
+                query.params_base_model,
+                query.extra_base_model,
+                query.params_model,
+                query.received_model_name,
+            ),
+            (
+                Value::String(deployment.id.clone()),
+                named(model_info_base_model),
+                named(params_base_model),
+                named(params_base_model),
+                "azure/my-deploy".to_owned(),
+                "asked".to_owned(),
+            )
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::text(json!({"base_model": "gpt-4o"}), json!({"base_model": "params-model"}), Some("gpt-4o"), Some("params-model"))]
+    #[case::other_types(json!({"base_model": 7}), json!({"base_model": ["x"]}), None, None)]
+    fn a_deployment_reads_only_a_text_base_model(
+        #[case] info: Value,
+        #[case] params: Value,
+        #[case] model_info_base_model: Option<&str>,
+        #[case] params_base_model: Option<&str>,
+    ) {
+        let params = json!({"model": "azure/my-deploy"})
+            .as_object()
+            .unwrap()
+            .clone()
+            .into_iter()
+            .chain(params.as_object().unwrap().clone())
+            .collect();
+        let deployment = deployment(Value::Object(params), info);
+
+        assert_eq!(
+            (
+                deployment.model_info.base_model.as_deref(),
+                deployment.params_base_model()
+            ),
+            (model_info_base_model, params_base_model)
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::a_whole_number(json!(4096), Some(4096))]
+    #[case::a_float(json!(4096.0), None)]
+    #[case::text(json!("4096"), None)]
+    #[case::a_flag(json!(true), None)]
+    #[case::none(json!(null), None)]
+    fn the_context_window_is_a_whole_number(#[case] sent: Value, #[case] window: Option<i64>) {
+        let merged = MergedModelInfo {
+            info: Map::from_iter([("max_input_tokens".to_owned(), sent)]),
+            user_keys: Vec::new(),
+        };
+
+        assert_eq!(merged.max_input_tokens(), window);
     }
 
     #[tokio::test]
