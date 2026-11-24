@@ -4442,7 +4442,7 @@ def _wire_dump(chunk: ModelResponseStream) -> dict[str, object]:
     return chunk.model_dump(exclude_none=True, exclude_unset=True)
 
 
-def _usage_test_logging(caller_stream_options: dict[str, bool] | None, stream_usage_injected: bool) -> Logging:
+def _usage_test_logging(caller_stream_options: dict[str, bool] | None, stream_usage_stripped: bool) -> Logging:
     logging_obj: Final = Logging(
         model="azure/gpt-4o",
         messages=[{"role": "user", "content": "hi"}],
@@ -4451,7 +4451,7 @@ def _usage_test_logging(caller_stream_options: dict[str, bool] | None, stream_us
         start_time=time.time(),
         litellm_call_id="12345",
         function_id="1245",
-        kwargs={"_litellm_strip_stream_usage": True} if stream_usage_injected else {},
+        kwargs={"_litellm_strip_stream_usage": True} if stream_usage_stripped else {},
     )
     logging_obj.update_environment_variables(
         litellm_params={}, optional_params={}, model="azure/gpt-4o", stream_options=caller_stream_options
@@ -4492,7 +4492,7 @@ def _azure_stream_chunks() -> tuple[ChatCompletionChunk, ...]:
 
 
 @pytest.mark.parametrize(
-    ("caller_stream_options", "stream_usage_injected", "wrapper_stream_options", "prompt_filter_frame"),
+    ("caller_stream_options", "stream_usage_stripped", "wrapper_stream_options", "prompt_filter_frame"),
     [
         (None, False, None, 0),
         ({"include_usage": True}, False, {"include_usage": True}, 0),
@@ -4506,7 +4506,7 @@ def _azure_stream_chunks() -> tuple[ChatCompletionChunk, ...]:
 async def test_azure_stream_passes_on_prompt_filter_results_and_finish_content_filter_results(
     sync_mode: bool,
     caller_stream_options: dict[str, bool] | None,
-    stream_usage_injected: bool,
+    stream_usage_stripped: bool,
     wrapper_stream_options: dict[str, bool] | None,
     prompt_filter_frame: int,
 ) -> None:
@@ -4514,7 +4514,7 @@ async def test_azure_stream_passes_on_prompt_filter_results_and_finish_content_f
         completion_stream=iter(_azure_stream_chunks()),
         model="gpt-4o",
         custom_llm_provider="azure",
-        logging_obj=_usage_test_logging(caller_stream_options, stream_usage_injected),
+        logging_obj=_usage_test_logging(caller_stream_options, stream_usage_stripped),
         stream_options=wrapper_stream_options,
     )
 

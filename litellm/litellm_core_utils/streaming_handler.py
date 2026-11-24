@@ -362,7 +362,7 @@ class CustomStreamWrapper:
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
         self.caller_requested_stream_usage: Final = (
             as_str_mapping(getattr(logging_obj, "stream_options", None)) or {}
-        ).get("include_usage") is True and getattr(logging_obj, "stream_usage_injected", False) is not True
+        ).get("include_usage") is True and getattr(logging_obj, "stream_usage_stripped", False) is not True
         self.tool_call = False
         self.chunks: list = []  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self._repeated_messages_count = 1
