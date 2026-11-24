@@ -135,3 +135,47 @@ def test_sync_text_completion_sends_the_merged_cache_controls(
     (call,) = host.calls_to("text_completion")
     assert call.kwargs["cache"] == sent_cache
     assert "allowed_cache_controls" not in call.kwargs
+
+
+def test_sync_text_completion_reports_the_ignored_cache_controls() -> None:
+    response: Final = RustCore.build(
+        build_router_config(
+            {"model_list": [_deployment("a", cache=_OFF, allowed_cache_controls=[])], "num_retries": 0}
+        ),
+        ScriptedHost(),
+    ).text_completion(model="a", prompt="hi", cache={"ttl": 600, "no-store": False})
+
+    assert headers(response)[_HEADER] == "ttl,no-store"
+
+
+class _RenderedPrompt:
+    def get_chat_completion_prompt(self, **_: object) -> tuple[str, object, Mapping[str, object]]:  # kwargs-ok: stub
+        return "openai/rendered", [{"role": "user", "content": "hi"}], {}
+
+
+@pytest.mark.asyncio
+async def test_a_prompt_managed_model_sends_the_merged_cache_controls_and_reports_ignored_ones() -> None:
+    host: Final = ScriptedHost()
+    core: Final = rust_core(
+        host,
+        model_list=[
+            {
+                "model_name": "a",
+                "litellm_params": {
+                    "model": "langfuse/a",
+                    "prompt_id": "p",
+                    "cache": _OFF,
+                    "allowed_cache_controls": [],
+                },
+                "model_info": {"id": "a"},
+            }
+        ],
+        num_retries=0,
+    )
+
+    response: Final = await complete(core, cache={"ttl": 600, "no-store": False}, litellm_logging_obj=_RenderedPrompt())
+
+    (call,) = host.calls_to("acompletion")
+    assert call.kwargs["cache"] == _OFF
+    assert "allowed_cache_controls" not in call.kwargs
+    assert headers(response)[_HEADER] == "ttl,no-store"

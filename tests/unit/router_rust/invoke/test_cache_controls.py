@@ -1,6 +1,10 @@
 import pytest
 
-from litellm.router_rust.invoke.cache_controls import ModelCacheControls, model_cache_controls
+from litellm.router_rust.invoke.cache_controls import (
+    ModelCacheControls,
+    model_cache_controls,
+    with_model_cache_controls,
+)
 from litellm.types.utils import is_litellm_owned_kwarg
 
 _OFF = {"no-cache": True, "no-store": True}
@@ -93,3 +97,15 @@ def test_model_cache_controls_merge_per_control(
 
 def test_allowed_cache_controls_is_not_sent_to_the_provider() -> None:
     assert is_litellm_owned_kwarg("allowed_cache_controls")
+
+
+def test_a_null_list_leaves_the_model_cache_controls_and_the_request_as_they_are() -> None:
+    request = {"model": "a"}
+
+    params, merged, ignored = with_model_cache_controls(
+        {"model": "openai/a", "cache": {"no-store": True}, "allowed_cache_controls": None}, request
+    )
+
+    assert params == {"model": "openai/a", "cache": {"no-store": True}}
+    assert merged is request
+    assert ignored == ()

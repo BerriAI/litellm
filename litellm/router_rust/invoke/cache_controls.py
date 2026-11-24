@@ -4,6 +4,8 @@ import dataclasses
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+from litellm.litellm_core_utils.add_retry_fallback_headers import ensure_response_additional_headers
+from litellm.litellm_core_utils.core_helpers import without
 from litellm.router_rust.invoke.shaping import as_dict
 from litellm.types.utils import SupportedCacheControls
 
@@ -43,5 +45,22 @@ def model_cache_controls(litellm_params: Mapping[str, object], request_cache: ob
 
 
 def _canonical(controls: Mapping[str, object]) -> Mapping[str, object]:
-    """``s-max-age`` under its ``s-maxage`` name, so the two spellings are one control when merged."""
     return {_CONTROL_NAMES.get(control, control): value for control, value in controls.items()}
+
+
+def with_model_cache_controls(
+    litellm_params: Mapping[str, object], request: Mapping[str, object]
+) -> tuple[Mapping[str, object], Mapping[str, object], tuple[str, ...]]:
+    """The deployment's params and the request, each carrying the merged ``cache``, and the ignored controls.
+    An empty merge leaves ``cache`` out of both, so the router's default params still apply."""
+    cache: Final = model_cache_controls(litellm_params, request.get("cache"))
+    params: Final = without(litellm_params, ALLOWED_CACHE_CONTROLS_PARAM)
+    if cache.controls is None:
+        return params, request, ()
+    controls: Final = {"cache": cache.controls} if cache.controls else {}
+    return {**without(params, "cache"), **controls}, {**without(request, "cache"), **controls}, cache.ignored
+
+
+def report_ignored_cache_controls(response: object, ignored: Sequence[str]) -> None:
+    if ignored:
+        ensure_response_additional_headers(response)[IGNORED_CACHE_CONTROLS_HEADER] = ",".join(ignored)

@@ -34,7 +34,7 @@ from litellm.litellm_core_utils.routing_common_utils import without_router_only_
 from litellm.responses.input_items_query import INPUT_ITEMS_QUERY_KEYS
 from litellm.responses.retrieve_stream_query import without_retrieve_stream_defaults
 from litellm.router_api import RoutingContext
-from litellm.router_rust.invoke.cache_controls import ALLOWED_CACHE_CONTROLS_PARAM, model_cache_controls
+from litellm.router_rust.invoke.cache_controls import report_ignored_cache_controls, with_model_cache_controls
 from litellm.router_rust.invoke.shaping import (
     ROUTER_CLIENTS_TARGET,
     STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
@@ -907,24 +907,17 @@ def attempt_call(
     requested: str,
     fallback_model_group: str | None = None,
 ) -> AttemptCall:
-    """``_attempt_call`` with the deployment's cache controls and the request's merged per control."""
-    params: Final = as_dict(deployment.get("litellm_params"))
-    cache: Final = model_cache_controls(params, request.get("cache"))
-    if cache.controls is None and ALLOWED_CACHE_CONTROLS_PARAM not in params:
-        return _attempt_call(
-            core, plan, request, deployment, group=group, requested=requested, fallback_model_group=fallback_model_group
-        )
-    controls: Final = {"cache": cache.controls} if cache.controls else {}
+    params, merged_request, ignored = with_model_cache_controls(as_dict(deployment.get("litellm_params")), request)
     call: Final = _attempt_call(
         core,
         plan,
-        {**without(request, "cache"), **controls},
-        {**deployment, "litellm_params": {**without(params, ALLOWED_CACHE_CONTROLS_PARAM, "cache"), **controls}},
+        merged_request,
+        {**deployment, "litellm_params": params},
         group=group,
         requested=requested,
         fallback_model_group=fallback_model_group,
     )
-    return dataclasses.replace(call, ignored_cache_controls=cache.ignored)
+    return dataclasses.replace(call, ignored_cache_controls=ignored) if ignored else call
 
 
 def _attempt_call(
@@ -2279,25 +2272,23 @@ class RustEndpoints:
                 specific_deployment=kwargs.pop("specific_deployment", None),  # pyright: ignore[reportArgumentType]  # the request's value, as given
                 request_kwargs=kwargs,
             )
-        params: Final = as_dict(deployment.get("litellm_params"))
-        cache: Final = model_cache_controls(params, kwargs.get("cache"))
-        data: Final = without(params, ALLOWED_CACHE_CONTROLS_PARAM)
-        if cache.controls is not None or ALLOWED_CACHE_CONTROLS_PARAM in params:
-            _ = data.pop("cache", None)
-            _ = kwargs.pop("cache", None)
-            if cache.controls:
-                kwargs["cache"] = cache.controls
+        data, merged, ignored = with_model_cache_controls(as_dict(deployment.get("litellm_params")), kwargs)
+        call_kwargs: Final = dict(merged)
         for key, value in self._core.resolved.default_litellm_params.items():
-            if key not in kwargs:
-                kwargs[key] = value
+            if key not in call_kwargs:
+                call_kwargs[key] = value
             elif key == "metadata":
-                metadata_bucket(kwargs, key).update(
-                    metadata_defaults_under_request(defaults=as_dict(value), request_metadata=as_dict(kwargs[key]))
+                metadata_bucket(call_kwargs, key).update(
+                    metadata_defaults_under_request(defaults=as_dict(value), request_metadata=as_dict(call_kwargs[key]))
                 )
         pinned: Final = deployment_model_id_pin(data)
         if pinned is not None:
-            kwargs["model_id"] = pinned
-        return self._invoke("text_completion")(**{**data, "prompt": prompt, "caching": self._cache_responses, **kwargs})
+            call_kwargs["model_id"] = pinned
+        response: Final = self._invoke("text_completion")(
+            **{**data, "prompt": prompt, "caching": self._cache_responses, **call_kwargs}
+        )
+        report_ignored_cache_controls(response, ignored)
+        return response
 
     async def aadapter_completion(
         self,
