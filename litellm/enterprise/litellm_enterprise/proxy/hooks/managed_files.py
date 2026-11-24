@@ -9,8 +9,8 @@ import time
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from functools import reduce
-from itertools import accumulate, chain, repeat, starmap, takewhile
+from functools import partial, reduce
+from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -302,18 +302,20 @@ _PROXY_ADDED_REQUEST_FIELDS: Final = frozenset(
 )
 
 
-def _child_entries(path: tuple[str | int, ...], node: object) -> Iterator[tuple[tuple[str | int, ...], object]]:
-    fields: Final = as_str_mapping(node)
-    entries: Final[Iterable[tuple[str | int, object]]] = (
-        fields.items() if fields is not None else enumerate(as_object_list(node) or ())
-    )
-    return (((*path, key), child) for key, child in entries)
+def _child_values(value: object) -> Sequence[object]:
+    fields: Final = as_str_mapping(value)
+    if fields is not None:
+        return tuple(fields.values())
+    return as_object_list(value) or ()
 
 
-def _next_body_level(
-    level: tuple[tuple[tuple[str | int, ...], object], ...], _: None
-) -> tuple[tuple[tuple[str | int, ...], object], ...]:
-    return tuple(chain.from_iterable(starmap(_child_entries, level)))
+def _next_body_level(level: tuple[object, ...], _: None) -> tuple[object, ...]:
+    return tuple(chain.from_iterable(map(_child_values, level)))
+
+
+def _body_levels(request_body: Mapping[str, object]) -> tuple[tuple[object, ...], ...]:
+    caller_fields: Final = tuple(value for key, value in request_body.items() if key not in _PROXY_ADDED_REQUEST_FIELDS)
+    return tuple(takewhile(bool, accumulate(repeat(None), _next_body_level, initial=caller_fields)))
 
 
 def _own_file_id(value: object) -> str | None:
@@ -322,38 +324,43 @@ def _own_file_id(value: object) -> str | None:
     return file_id if isinstance(file_id, str) and file_id else None
 
 
-def _file_id_locations(request_body: Mapping[str, object]) -> Iterator[tuple[tuple[str | int, ...], str]]:
-    caller_fields: Final = tuple(
-        ((key,), value) for key, value in request_body.items() if key not in _PROXY_ADDED_REQUEST_FIELDS
-    )
-    levels: Final = accumulate(repeat(None), _next_body_level, initial=caller_fields)
-    nodes: Final = chain.from_iterable(takewhile(bool, levels))
-    return ((path, file_id) for path, node in nodes if (file_id := _own_file_id(node)) is not None)
-
-
 def _nested_file_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(file_id for _, file_id in _file_id_locations(request_body)))
+    nodes: Final = chain.from_iterable(_body_levels(request_body))
+    return tuple(dict.fromkeys(filter(None, map(_own_file_id, nodes))))
 
 
-def _child_at(node: object, key: str | int) -> object:
-    return (as_object_list(node) or ())[key] if isinstance(key, int) else (as_str_mapping(node) or {})[key]
+def _swapped_file_id(node: object, provider_file_ids: Mapping[str, str]) -> str | None:
+    file_id: Final = _own_file_id(node)
+    return provider_file_ids.get(file_id) if file_id is not None else None
 
 
-def _with_child(child: object, parent_and_key: tuple[object, str | int]) -> object:
-    parent, key = parent_and_key
-    if isinstance(key, int):
-        items: Final = as_object_list(parent) or ()
-        return [*items[:key], child, *items[key + 1 :]]
-    return {**(as_str_mapping(parent) or {}), key: child}
+def _with_rebuilt_children(
+    node: object, rebuilt_below: Mapping[int, object], provider_file_ids: Mapping[str, str]
+) -> object:
+    fields: Final = as_str_mapping(node)
+    if fields is None:
+        return [rebuilt_below.get(id(item), item) for item in as_object_list(node) or ()]
+    children: Final = {key: rebuilt_below.get(id(child), child) for key, child in fields.items()}
+    provider_file_id: Final = _swapped_file_id(node, provider_file_ids)
+    return children if provider_file_id is None else {**children, "file_id": provider_file_id}
 
 
-def _with_value_at(root: object, path: tuple[str | int, ...], value: object) -> object:
-    ancestors: Final = tuple(accumulate(path[:-1], _child_at, initial=root))
-    return reduce(_with_child, reversed(tuple(zip(ancestors, path))), value)
+def _changes_below(node: object, rebuilt_below: Mapping[int, object], provider_file_ids: Mapping[str, str]) -> bool:
+    return _swapped_file_id(node, provider_file_ids) is not None or any(
+        id(child) in rebuilt_below for child in _child_values(node)
+    )
 
 
-def _with_swap(body: object, swap: tuple[tuple[str | int, ...], str]) -> object:
-    return _with_value_at(body, *swap)
+def _rebuilt_level(
+    rebuilt_below: Mapping[int, object], level: tuple[object, ...], provider_file_ids: Mapping[str, str]
+) -> Mapping[int, object]:
+    return MappingProxyType(
+        {
+            id(node): _with_rebuilt_children(node, rebuilt_below, provider_file_ids)
+            for node in level
+            if _changes_below(node, rebuilt_below, provider_file_ids)
+        }
+    )
 
 
 def _deployment_model_id(kwargs: Mapping[str, object]) -> str | None:
@@ -378,14 +385,14 @@ def _with_deployment_file_ids(kwargs: dict[str, object]) -> dict[str, object]:
     }
     if not provider_file_ids:
         return kwargs
-    swaps: Final = (
-        ((*path, "file_id"), provider_file_ids[file_id])
-        for path, file_id in _file_id_locations(kwargs)
-        if file_id in provider_file_ids
+    no_rebuilds: Final[Mapping[int, object]] = MappingProxyType({})
+    rebuilt_fields: Final = reduce(
+        partial(_rebuilt_level, provider_file_ids=provider_file_ids), reversed(_body_levels(kwargs)), no_rebuilds
     )
-    unswapped: Final[object] = kwargs
-    swapped: Final = reduce(_with_swap, swaps, unswapped)
-    return dict(as_str_mapping(swapped) or kwargs)
+    return {
+        key: value if key in _PROXY_ADDED_REQUEST_FIELDS else rebuilt_fields.get(id(value), value)
+        for key, value in kwargs.items()
+    }
 
 
 def _is_object_iterable(value: object) -> TypeIs[Iterable[object]]:
@@ -2004,7 +2011,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     data.update(stored_s3_bucket_kwargs(provider_file_id))
         elif call_type == CallTypes.aimage_edit.value or call_type == CallTypes.image_edit.value:
             image_edit_file_ids: Final = _nested_file_ids(data)
-            await self.check_file_ids_access(image_edit_file_ids, user_api_key_dict)
+            for image_edit_file_id in image_edit_file_ids:
+                await self.check_managed_file_id_access({"file_id": image_edit_file_id}, user_api_key_dict)
             if image_edit_file_ids:
                 data["model_file_id_mapping"] = await self.get_model_file_id_mapping(
                     image_edit_file_ids, user_api_key_dict.parent_otel_span

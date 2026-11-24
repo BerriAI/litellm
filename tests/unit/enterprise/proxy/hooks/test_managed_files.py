@@ -7044,3 +7044,43 @@ async def test_team_b_cannot_edit_an_image_from_team_a_managed_file_by_its_litel
         )
 
     assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"images": [{"file_id": "file-a"}]},
+        {"mask": {"file_id": "file-a"}},
+        {"extra_body": {"markup": {"file_id": "file-a"}}},
+    ],
+    ids=["images", "mask", "extra_body"],
+)
+async def test_team_b_cannot_edit_an_image_from_team_a_managed_file_by_its_openai_file_id(
+    body: Mapping[str, object],
+) -> None:
+    _, row = _owned_managed_file(_TREE_IMAGE_UUID, {"model-a": "file-a"})
+    managed_files, _ = _managed_files_with_fake_prisma(row)
+    other_team: Final = UserAPIKeyAuth(user_id="user_b", team_id="team_b", parent_otel_span=MagicMock())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _image_edit_sent_to_deployment(managed_files, other_team, body, "model-a")
+
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_image_edit_swaps_many_repeats_of_one_file_id_without_stalling_the_worker() -> None:
+    unified_file_id, row = _owned_managed_file(_TREE_IMAGE_UUID, {"model-a": "file-a"})
+    managed_files, _ = _managed_files_with_fake_prisma(row)
+    owner: Final = UserAPIKeyAuth(user_id="user_a", team_id="team_a", parent_otel_span=MagicMock())
+    repeats: Final = 50_000
+    started: Final = time.perf_counter()
+
+    sent: Final = await _image_edit_sent_to_deployment(
+        managed_files, owner, {"extra_body": {"images": [{"file_id": unified_file_id} for _ in range(repeats)]}}, "model-a"
+    )
+
+    elapsed: Final = time.perf_counter() - started
+    assert sent["extra_body"] == {"images": [{"file_id": "file-a"}] * repeats}
+    assert elapsed < 2, f"swapping {repeats} references took {elapsed:.1f}s"
