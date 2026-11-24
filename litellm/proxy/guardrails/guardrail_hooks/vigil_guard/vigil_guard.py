@@ -12,6 +12,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import dict_from_pairs, iter_items
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -331,13 +332,11 @@ class VigilGuardGuardrail(CustomGuardrail):
         return pairs
 
     @staticmethod
-    def _set_tool_call_arguments(tool_calls: Any, index: int, arguments: str) -> list[Any]:
-        updated: Final = list(tool_calls)
-        tool_call: Final = dict(updated[index])
-        function: Final = dict(tool_call.get("function") or {})
-        function["arguments"] = arguments
-        tool_call["function"] = function
-        updated[index] = tool_call
+    def _set_tool_call_arguments(tool_calls: Sequence[object] | None, index: int, arguments: str) -> list[Any]:
+        updated: Final = list(iter_items(tool_calls))
+        tool_call: Final = dict_from_pairs(updated[index])
+        function: Final = dict_from_pairs(tool_call.get("function") or {})
+        updated[index] = {**tool_call, "function": {**function, "arguments": arguments}}
         return updated
 
     async def _analyze(self, text: str, source: str, metadata: Mapping[str, _MetadataValue]) -> Mapping[str, object]:
@@ -416,9 +415,9 @@ class VigilGuardGuardrail(CustomGuardrail):
         return original
 
     def _collect_metadata(
-        self, request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]
+        self, request_data: dict[str, object], logging_obj: Optional["LiteLLMLoggingObj"]
     ) -> Mapping[str, _MetadataValue]:
-        sources: Final[list[dict]] = []
+        sources: Final[list[dict[str, object]]] = []
         if isinstance(request_data, dict):
             sources.append(request_data)
             for nested_key in ("metadata", "litellm_metadata"):
@@ -462,7 +461,7 @@ class VigilGuardGuardrail(CustomGuardrail):
         return None
 
     @staticmethod
-    def _extract_call_id(request_data: dict, logging_obj: Optional["LiteLLMLoggingObj"]) -> str | None:
+    def _extract_call_id(request_data: dict[str, object], logging_obj: Optional["LiteLLMLoggingObj"]) -> str | None:
         if logging_obj is not None:
             call_id = getattr(logging_obj, "litellm_call_id", None)
             if isinstance(call_id, str) and call_id:

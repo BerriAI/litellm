@@ -55,6 +55,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
 )
+from litellm.litellm_core_utils.attempt_settlement import release_in_background
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -415,7 +416,7 @@ class PTUShareExceededError(HTTPException):
         )
 
 
-_FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG: Final = TypeAdapter(bool | None)
+_FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG: Final[TypeAdapter[bool | None]] = TypeAdapter(bool | None)
 
 
 def fail_closed_rate_limit_enforcement_enabled(general_settings: Mapping[str, object]) -> bool:
@@ -503,6 +504,10 @@ class WindowGuardedIncrement:
 
 
 ReservationOperation: TypeAlias = CounterIncrement | WindowGuardedIncrement
+
+ResponsesWebSocketClose: TypeAlias = Literal[
+    "refused_at_open", "relay_failed", "turns_finished", "turn_unfinished", "settled_by_its_log"
+]
 
 
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
@@ -883,9 +888,10 @@ def request_identity(data: Mapping[str, object]) -> str | None:
 
 
 def _call_id_from_callback_kwargs(kwargs: object) -> str | None:
-    if not isinstance(kwargs, dict):
+    callback_kwargs: Final = as_str_mapping(kwargs)
+    if not isinstance(kwargs, dict) or callback_kwargs is None:
         return None
-    call_id: Final = kwargs.get("litellm_call_id")
+    call_id: Final = callback_kwargs.get("litellm_call_id")
     return call_id if isinstance(call_id, str) else None
 
 
@@ -1033,10 +1039,11 @@ def _get_explicit_output_cap(data: object, call_type: str | None) -> int | None:
             if parsed is not None
         )
         return max(google_cap_values, default=None)
-    if not isinstance(data, dict):
+    request: Final = as_str_mapping(data)
+    if not isinstance(data, dict) or request is None:
         return None
     if call_type in RESPONSES_API_CALL_TYPES:
-        responses_cap: Final = _parse_output_cap_value(data.get("max_output_tokens"))
+        responses_cap: Final = _parse_output_cap_value(request.get("max_output_tokens"))
         if responses_cap is None:
             return None
         return max(RESPONSES_API_MIN_OUTPUT_TOKENS, responses_cap)
@@ -1048,7 +1055,7 @@ def _get_explicit_output_cap(data: object, call_type: str | None) -> int | None:
         else ("max_tokens", "max_completion_tokens", "max_output_tokens")
     )
     output_cap_values: Final = tuple(
-        parsed for field in fields for parsed in (_parse_output_cap_value(data.get(field)),) if parsed is not None
+        parsed for field in fields for parsed in (_parse_output_cap_value(request.get(field)),) if parsed is not None
     )
     return max(output_cap_values, default=None)
 
@@ -1065,9 +1072,10 @@ def _is_embedding_request(data: object, call_type: str | None) -> bool:
         return False
     if call_type:
         return False
-    if not isinstance(data, dict):
+    request: Final = as_str_mapping(data)
+    if not isinstance(data, dict) or request is None:
         return False
-    return data.get("input") is not None
+    return request.get("input") is not None
 
 
 def _merge_ratelimit_statuses_into_additional_headers(
@@ -1091,10 +1099,11 @@ def _translate_google_genai_native_request(
     data: object,
     call_type: str | None,
 ) -> Mapping[str, object] | None:
-    if not isinstance(data, dict) or call_type not in GOOGLE_GENAI_NATIVE_CALL_TYPES:
+    request: Final = as_str_mapping(data)
+    if not isinstance(data, dict) or request is None or call_type not in GOOGLE_GENAI_NATIVE_CALL_TYPES:
         return None
-    model: Final = data.get("model")
-    return generate_content_body_to_completion(body=data, model=model if isinstance(model, str) else "")
+    model: Final = request.get("model")
+    return generate_content_body_to_completion(body=request, model=model if isinstance(model, str) else "")
 
 
 def _has_explicit_output_cap(data: object, call_type: str | None) -> bool:
@@ -1236,7 +1245,9 @@ class ParallelRequestLimiterHook(CustomLogger):
             handle_rate_limit_error(self, response, scoped.descriptors, requested_model)
 
     @with_service_target(RATE_LIMITS_TARGET)
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_success_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         """
         Settle the request's TPM usage and release its parallel slot in the native limiter, which reads the
         usage, the charged scopes and the slot reuse off the callback's kwargs and response itself.
@@ -1287,7 +1298,9 @@ class ParallelRequestLimiterHook(CustomLogger):
         return kwargs, result
 
     @with_service_target(RATE_LIMITS_TARGET)
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_failure_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         """
         On failure: release max_parallel_requests and refund the upfront TPM reservation, in the native
         limiter, only against the scopes the reservation actually charged. A failed stream whose partial
@@ -1313,6 +1326,46 @@ class ParallelRequestLimiterHook(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit failure event: %s", e)
 
+    def leave_reservation_to_socket_close(self) -> None:
+        """Leave this WebSocket's admission reservation to its close, so the failure callbacks of the socket's own
+        call only free its slot."""
+        native_state: Final = _native_state(self, get_request_stash())
+        if native_state is not None:
+            self.native_companion.leave_reservation_to_socket_close(native_state)
+
+    @with_service_target(RATE_LIMITS_TARGET)
+    async def async_release_responses_websocket_admission(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        close: ResponsesWebSocketClose,
+        turns_logged: Callable[[], Awaitable[bool]] | None = None,
+    ) -> None:
+        """Free the slot a Responses WebSocket took at admission once it closes, and settle its token reservations by
+        how it closed. A socket whose turns all finished settles in the background once ``turns_logged`` says their
+        charges are in, and keeps its reservation when they are not."""
+        native_state: Final = _native_state(self, get_request_stash())
+        if native_state is None:
+            return
+        try:
+            if close != "turns_finished":
+                await self.native_companion.close_socket(native_state, close)
+                return
+            await self.native_companion.release_on_disconnect(native_state)
+            _ = release_in_background(self._close_finished_responses_websocket(native_state, turns_logged))
+        except Exception as e:  # noqa: BLE001  # a failed release logs instead of failing the socket's close
+            _log_responses_websocket_release_error(e)
+
+    async def _close_finished_responses_websocket(
+        self,
+        native_state: "NativeParallelRequestLimiterState",
+        turns_logged: Callable[[], Awaitable[bool]] | None,
+    ) -> None:
+        try:
+            logged: Final = turns_logged is None or await turns_logged()
+            await self.native_companion.close_socket(native_state, "turns_finished" if logged else "turn_unfinished")
+        except Exception as e:  # noqa: BLE001  # a background refund has no caller to raise to, so it logs its failure
+            _log_responses_websocket_release_error(e)
+
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_release_max_parallel_requests_on_disconnect(
         self,
@@ -1334,7 +1387,9 @@ class ParallelRequestLimiterHook(CustomLogger):
             await self.native_companion.release_on_disconnect(native_state)
 
     @with_service_target(RATE_LIMITS_TARGET)
-    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response) -> None:
+    async def async_post_call_success_hook(
+        self, data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> None:
         """
         Release completed-request slots and update rate limit headers in the response.
         """
@@ -1366,6 +1421,10 @@ class ParallelRequestLimiterHook(CustomLogger):
             await self.native_companion.log_post_call_failure(native_state, request_data, token_rate_limit_type())
         except Exception as e:
             verbose_proxy_logger.exception("Error releasing TPM reservation on post-call failure: %s", e)
+
+
+def _log_responses_websocket_release_error(error: Exception) -> None:
+    verbose_proxy_logger.error("Error releasing a closed Responses WebSocket's admission: %s", error, exc_info=error)
 
 
 PROXY_MaxParallelRequestsHandler_v3 = ParallelRequestLimiterHook
@@ -1897,10 +1956,12 @@ def _estimate_audio_block_tokens(block: object) -> int:
     When no payload is present (reference-only block or missing ``data``),
     falls back to ``DEFAULT_AUDIO_TOKEN_ESTIMATE``.
     """
-    if not isinstance(block, dict):
+    audio_block: Final = as_str_mapping(block)
+    if not isinstance(block, dict) or audio_block is None:
         return DEFAULT_AUDIO_TOKEN_ESTIMATE
-    input_audio: Final = block.get("input_audio")
-    b64_data: Final = input_audio.get("data") if isinstance(input_audio, dict) else None
+    input_audio: Final = audio_block.get("input_audio")
+    audio_payload: Final = as_str_mapping(input_audio)
+    b64_data: Final = audio_payload.get("data") if isinstance(input_audio, dict) and audio_payload is not None else None
     if b64_data and isinstance(b64_data, str):
         decoded_bytes: Final = len(b64_data) * 3 // 4
         return max(decoded_bytes // _AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
@@ -2031,15 +2092,15 @@ def estimate_precise_input_tokens(
     """
     from litellm import token_counter
 
-    if not isinstance(data, dict):
+    request: Final = as_str_mapping(data)
+    if not isinstance(data, dict) or request is None:
         return 0
     is_responses_request: Final = call_type in RESPONSES_API_CALL_TYPES
     translated_request: Final = (
-        None if is_responses_request else _translate_google_genai_native_request(data, call_type)
+        None if is_responses_request else _translate_google_genai_native_request(request, call_type)
     )
-    is_embedding_request: Final = _is_embedding_request(data, call_type)
-    request: Final = as_str_mapping(data)
-    raw_embedding_input: Final = request.get("input") if is_embedding_request and request is not None else None
+    is_embedding_request: Final = _is_embedding_request(request, call_type)
+    raw_embedding_input: Final = request.get("input") if is_embedding_request else None
     pretokenized_input_tokens: Final = (
         _count_pretokenized_embedding_input(raw_embedding_input) if is_embedding_request else None
     )
@@ -2056,10 +2117,10 @@ def estimate_precise_input_tokens(
         else (None, 0)
     )
 
-    prompt: Final = data.get("prompt")
-    fallback_text: Final = prompt if prompt is not None else data.get("input")
+    prompt: Final = request.get("prompt")
+    fallback_text: Final = prompt if prompt is not None else request.get("input")
     selected_inputs: Final[tuple[object | None, object | None, object | None, object | None]] = (
-        (_responses_input_to_chat_messages(data), None, data.get("tools"), data.get("tool_choice"))
+        (_responses_input_to_chat_messages(request), None, request.get("tools"), request.get("tool_choice"))
         if is_responses_request
         else (
             translated_request.get("messages"),
@@ -2068,15 +2129,15 @@ def estimate_precise_input_tokens(
             translated_request.get("tool_choice"),
         )
         if translated_request is not None
-        else (None, embedding_text, data.get("tools"), data.get("tool_choice"))
+        else (None, embedding_text, request.get("tools"), request.get("tool_choice"))
         if is_embedding_request
-        else (None, _rerank_input_to_text(data), data.get("tools"), data.get("tool_choice"))
+        else (None, _rerank_input_to_text(request), request.get("tools"), request.get("tool_choice"))
         if call_type in RERANK_API_CALL_TYPES
-        else (None, prompt, data.get("tools"), data.get("tool_choice"))
+        else (None, prompt, request.get("tools"), request.get("tool_choice"))
         if call_type in TEXT_COMPLETION_API_CALL_TYPES
         else (None, _extraction_input_text(_REQUEST_RATE_LIMIT_DATA.validate_python(data)), None, None)
         if call_type in EXTRACTION_API_CALL_TYPES
-        else (data.get("messages"), fallback_text, data.get("tools"), data.get("tool_choice"))
+        else (request.get("messages"), fallback_text, request.get("tools"), request.get("tool_choice"))
     )
     messages, selected_text, countable_tools, countable_tool_choice = selected_inputs
 
@@ -2109,7 +2170,7 @@ def estimate_precise_input_tokens(
         if call_type in RERANK_API_CALL_TYPES and isinstance(selected_text, str):
             return max(0, len(selected_text) // DEFAULT_CHARS_PER_TOKEN)
         estimated_input_tokens, _ = estimate_input_and_output_tokens(
-            data=data,
+            data=request,
             call_type=call_type,
             include_media=is_embedding_request,
             team_id=team_id,
@@ -2504,7 +2565,7 @@ def estimate_input_and_output_tokens(
     if not isinstance(data, dict) or request_data is None:
         return 0, 0
     request_model: Final = request_data.get("model")
-    translated_data: Final = _translate_google_genai_native_request(data, call_type)
+    translated_data: Final = _translate_google_genai_native_request(request_data, call_type)
     estimable_data: Final = translated_data if translated_data is not None else request_data
     selected_fields: Final[tuple[object | None, object | None, object | None]] = (
         (None, None, estimable_data.get("input"))
@@ -2574,8 +2635,10 @@ def estimate_input_and_output_tokens(
         max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
     ) + media_tokens
 
-    explicit_max_tokens: Final = _get_explicit_output_cap(data, call_type)
-    generates_no_output: Final = _is_embedding_request(data, call_type) or call_type in EXTRACTION_API_CALL_TYPES
+    explicit_max_tokens: Final = _get_explicit_output_cap(request_data, call_type)
+    generates_no_output: Final = (
+        _is_embedding_request(request_data, call_type) or call_type in EXTRACTION_API_CALL_TYPES
+    )
 
     base_output_floor: Final = no_max_tokens_output_floor(min_configured_tpm_limit)
     output_floor: Final = (
@@ -2594,7 +2657,7 @@ def estimate_input_and_output_tokens(
         else max(estimated_input_tokens, output_floor)
     )
 
-    return estimated_input_tokens, max_tokens_estimate * get_output_candidate_count(data, call_type)
+    return estimated_input_tokens, max_tokens_estimate * get_output_candidate_count(request_data, call_type)
 
 
 def estimate_tokens_for_request(

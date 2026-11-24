@@ -55,6 +55,7 @@ dc: Final = DualCache()
 
 
 from litellm.constants import (
+    DEFAULT_MAX_RECURSE_DEPTH,
     GUARDRAIL_SCANNED_MESSAGES_CACHE_TTL_SECONDS,
     LOGS_GUARDRAIL_INFORMATION_MARKER,
     PRE_CALL_EXECUTED_GUARDRAILS_KEY,
@@ -330,8 +331,27 @@ _RESPONSE_METADATA_KEYS: Final = frozenset(
 )
 
 
+_TOKEN_DATA_KEYS: Final = frozenset({"token_ids", "logprobs"})
+_TOKEN_DATA_HOLDERS: Final = frozenset({"choices", "output"})
+_RESPONSE_ITEMS: Final = TypeAdapter(list[object])
+
+
+def _without_token_data(value: object, depth: int = 0) -> object:
+    match value:
+        case list() if depth < DEFAULT_MAX_RECURSE_DEPTH:
+            return [_without_token_data(item, depth + 1) for item in _RESPONSE_ITEMS.validate_python(value)]
+        case dict() if depth < DEFAULT_MAX_RECURSE_DEPTH:
+            return {
+                key: _without_token_data(item, depth + 1)
+                for key, item in _REQUEST_FIELDS.validate_python(value).items()
+                if key not in _TOKEN_DATA_KEYS
+            }
+        case _:
+            return value
+
+
 def _response_fingerprint(response: object) -> str | None:
-    """Digest of everything but metadata set between layers, so an unknown field counts as content."""
+    """Digest of everything but layer metadata and token data a rewrite drops, so an unknown field counts as content."""
     try:
         fields: Final[Mapping[str, object]] = (
             response.model_dump(mode="json")
@@ -341,8 +361,11 @@ def _response_fingerprint(response: object) -> str | None:
         content: Final = {key: value for key, value in fields.items() if key not in _RESPONSE_METADATA_KEYS}
         if not content:
             return None
+        hashed: Final = {
+            key: _without_token_data(value) if key in _TOKEN_DATA_HOLDERS else value for key, value in content.items()
+        }
         return hashlib.sha256(
-            json.dumps(content, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+            json.dumps(hashed, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
         ).hexdigest()
     except (TypeError, ValueError):
         return None

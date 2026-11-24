@@ -21,6 +21,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.types.llms.vertex_ai import (
+    VERTEX_CREDENTIALS_TYPES,
     GeminiEmbeddingInput,
     VertexAIBatchEmbeddingsRequestBody,
     VertexAIBatchEmbeddingsResponseObject,
@@ -160,17 +161,17 @@ class GoogleBatchEmbeddings(VertexLLM):
         self,
         model: str,
         input: GeminiEmbeddingInput,
-        print_verbose,
+        print_verbose: object,
         model_response: EmbeddingResponse,
         custom_llm_provider: Literal["gemini", "vertex_ai"],
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj",
         api_key: str | None = None,
         api_base: str | None = None,
-        encoding=None,
-        vertex_project=None,
-        vertex_location=None,
-        vertex_credentials=None,
+        encoding: object = None,
+        vertex_project: str | None = None,
+        vertex_location: str | None = None,
+        vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
         aembedding: bool | None = False,
         timeout: float | httpx.Timeout | None = 300,
         client=None,
@@ -332,20 +333,20 @@ class GoogleBatchEmbeddings(VertexLLM):
         model: str,
         api_base: str | None,
         url: str,
-        data: VertexAIBatchEmbeddingsRequestBody | dict | None,
+        data: VertexAIBatchEmbeddingsRequestBody | Mapping[str, object] | None,
         model_response: EmbeddingResponse,
         input: GeminiEmbeddingInput,
         timeout: float | httpx.Timeout | None,
-        headers={},
+        headers: dict[str, str] = {},
         client: AsyncHTTPHandler | None = None,
         use_embed_content: bool = False,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         logging_obj: "LiteLLMLoggingObj | None" = None,
         drop_params: bool = False,
     ) -> EmbeddingResponse:
         if client is None:
-            _params: Final = {}
+            _params: Final[dict[str, httpx.Timeout]] = {}
             if timeout is not None:
                 if isinstance(timeout, float) or isinstance(timeout, int):
                     _httpx_timeout: Final = httpx.Timeout(timeout)
