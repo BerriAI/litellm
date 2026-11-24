@@ -17,6 +17,7 @@ from typing import (
 )
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
@@ -47,6 +48,7 @@ _VERDICT_DETECT: Final = "DETECT"
 _KNOWN_VERDICTS: Final = frozenset({_VERDICT_ALLOW, _VERDICT_BLOCK, _VERDICT_MASK, _VERDICT_DETECT})
 
 _DEFAULT_BLOCK_MESSAGE: Final = "Blocked by your organization's content policy."
+_DECODED_JSON: Final = TypeAdapter(object)
 
 # apply_guardrail selects nothing: it forwards whichever of these came populated and lets Alice
 # decide what is worth evaluating. Only skip the call when every one of them is empty — there is
@@ -240,7 +242,7 @@ class AliceGuardrail(CustomGuardrail):
             timeout=self.timeout,
         )
         response.raise_for_status()
-        body = response.json()
+        body: Final = _DECODED_JSON.validate_python(response.json())
         if not isinstance(body, dict):
             raise TypeError("Alice returned a non-object body")
         return body

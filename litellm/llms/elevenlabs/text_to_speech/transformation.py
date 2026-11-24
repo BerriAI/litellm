@@ -4,6 +4,7 @@ Elevenlabs Text-to-Speech transformation
 Maps OpenAI TTS spec to Elevenlabs TTS API
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import urlencode
 
@@ -68,7 +69,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
     ELEVENLABS_VOICE_ID_KEY = "__elevenlabs_voice_id__"
     ELEVENLABS_STREAM_KEY = "__elevenlabs_stream__"
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         ElevenLabs TTS supports these OpenAI parameters
         """
@@ -84,7 +85,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
 
     def _resolve_voice_id(
         self,
-        voice: str | dict[str, object] | None,
+        voice: str | Mapping[str, object] | None,
         params: dict[str, object],
     ) -> str:
         """
@@ -117,10 +118,10 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         optional_params: dict,
-        voice: str | dict | None = None,
+        voice: str | Mapping[str, object] | None = None,
         drop_params: bool = False,
         kwargs: dict[str, object] | None = None,
-    ) -> tuple[str | None, dict]:
+    ) -> tuple[str | None, dict[str, object]]:
         """
         Map OpenAI parameters to ElevenLabs TTS parameters
         """
@@ -169,7 +170,7 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
@@ -191,7 +192,9 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
 
         return headers
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return ElevenLabsException(message=error_message, status_code=status_code, headers=headers)
 
     def transform_text_to_speech_request(
@@ -199,9 +202,9 @@ class ElevenLabsTextToSpeechConfig(BaseTextToSpeechConfig):
         model: str,
         input: str,
         voice: str | None,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
     ) -> TextToSpeechRequestData:
         """
         Build the ElevenLabs TTS request payload.

@@ -2,7 +2,7 @@
 import collections
 import json
 import os
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from functools import partial
@@ -82,7 +82,8 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
 from litellm.proxy.utils import handle_exception_on_proxy, hash_token_if_needed, query_raw_within_statement_timeout
 from litellm.redis.stores.spend_counters import key_counter, team_counter
 from litellm.repositories.prisma_protocols import TableActions
-from litellm.repositories.table_repositories import OrganizationMembershipRepository, SpendLogsRepository
+from litellm.repositories.spend_logs_repository import SpendLogsRepository
+from litellm.repositories.table_repositories import OrganizationMembershipRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.spend_capture_rate import CaptureRateReport, SpendCaptureProvider
 
@@ -130,11 +131,38 @@ _INTERNAL_HEALTH_CHECK_API_KEYS: Final = (
     hash_token(token=LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME),
 )
 
+_HEALTH_CHECK_LOG_FILTER_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
+    {"model_id": "health_check_deployment_id", "model_group": "health_check_model_group"}
+)
+
 _RowT = TypeVar("_RowT")
 
 
 class _SupportsModelDump(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
+
+
+class _DeploymentEntry(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+_DeploymentT = TypeVar("_DeploymentT", bound=_DeploymentEntry)
+_DeploymentT_co = TypeVar("_DeploymentT_co", bound=_DeploymentEntry, covariant=True)
+
+
+class _DeploymentRegistry(Protocol[_DeploymentT_co]):
+    def aliases(self) -> Mapping[str, object] | None: ...
+
+    def all(self) -> Iterable[_DeploymentT_co]: ...
+
+
+def _registered_deployment(registry: _DeploymentRegistry[_DeploymentT], model: str) -> _DeploymentT | None:
+    model_group_alias: Final = registry.aliases()
+    model_name: Final = (
+        model_group_alias[model] if model_group_alias is not None and model in model_group_alias else model
+    )
+    matches: Final = [deployment for deployment in registry.all() if deployment.get("model_name") == model_name]
+    return matches[-1] if matches else None
 
 
 class _ActivityRow(TypedDict):
@@ -580,7 +608,7 @@ async def spend_key_fn(
         )
 
 
-def _strip_password_from_users(users) -> None:
+def _strip_password_from_users(users: object) -> None:
     """Strip password field from a list of user objects."""
     for user in users if isinstance(users, list) else [users]:
         if user and hasattr(user, "__dict__"):
@@ -873,7 +901,7 @@ async def get_global_activity(
 
         sum_api_requests = 0
         sum_total_tokens = 0
-        daily_data = []
+        daily_data: list[_ActivityRow] = []
         for row in db_response:
             # cast date to datetime
             _date_obj = datetime.fromisoformat(row["date"])
@@ -1313,7 +1341,7 @@ async def get_global_activity_exceptions(
             return []
 
         sum_num_rate_limit_exceptions = 0
-        daily_data = []
+        daily_data: list[_ExceptionsRow] = []
         for row in db_response:
             # cast date to datetime
             _date_obj = datetime.fromisoformat(row["date"])
@@ -2490,24 +2518,10 @@ async def calculate_spend(request: SpendCalculateRequest):
                 )
 
             # check if model in llm_router
-            _model_in_llm_router = None
             cost_per_token: CostPerToken | None = None
-            if llm_router is not None:
-                router_registry: Final = llm_router.registry()
-                model_group_alias: Final = router_registry.aliases()
-                if model_group_alias is not None and request.model in model_group_alias:
-                    # lookup alias in llm_router
-                    _model_group_name: Final = model_group_alias[request.model]
-                    for model in router_registry.all():
-                        if model.get("model_name") == _model_group_name:
-                            _model_in_llm_router = model
-
-                else:
-                    # no model_group aliases set -> try finding model in llm_router
-                    # find model in llm_router
-                    for model in router_registry.all():
-                        if model.get("model_name") == request.model:
-                            _model_in_llm_router = model
+            _model_in_llm_router: Final = (
+                None if llm_router is None else _registered_deployment(llm_router.registry(), request.model)
+            )
 
             """
             3 cases for /spend/calculate
@@ -2954,7 +2968,7 @@ async def ui_view_spend_logs(
         # These are only needed in the detail endpoint /spend/logs/ui/{request_id}.
         sql_conditions: Final[list[str]] = ["organization_id = ANY($1::text[])"] if organization_ids is not None else []
         sql_params: Final[list[object]] = [organization_ids] if organization_ids is not None else []
-        p = len(sql_params) + 1  # parameter index counter
+        p = len(sql_params) + 1
 
         # Date range. Wrap the param side with `AT TIME ZONE 'UTC'` so comparison
         # against the plain `timestamp` column does not depend on the DB session
@@ -2991,10 +3005,11 @@ async def ui_view_spend_logs(
             val = where_conditions.get(wc_key)
             if not isinstance(val, str):
                 continue
-            if not is_v2 and not exclude_internal_health_checks and sql_col in ("model_id", "model_group"):
-                probe_field: Final = (
-                    "health_check_deployment_id" if sql_col == "model_id" else "health_check_model_group"
-                )
+            if (
+                not is_v2
+                and not exclude_internal_health_checks
+                and (probe_field := _HEALTH_CHECK_LOG_FILTER_FIELDS.get(sql_col)) is not None
+            ):
                 sql_conditions.append(
                     f"({sql_col} = ${p} OR (api_key IN (${p + 1}, ${p + 2}) "
                     f"AND metadata->'spend_logs_metadata'->>'{probe_field}' = ${p}))"
@@ -3317,15 +3332,15 @@ async def _ui_session_grouped_spend_logs(
 
 
 class RequestResponsePayload(NamedTuple):
-    messages: str | list | dict | None
-    response: str | list | dict | None
-    proxy_server_request: str | dict | None
+    messages: object
+    response: object
+    proxy_server_request: object
 
 
 _EMPTY_SPEND_LOG_VALUES: Final = frozenset({"", "{}", "[]", "null"})
 
 
-def _spend_log_field_has_content(value: str | list | dict | None) -> bool:
+def _spend_log_field_has_content(value: object) -> bool:
     if value is None:
         return False
     if isinstance(value, str):
@@ -3357,10 +3372,11 @@ def _hydrate_spend_log_metadata(rows: Sequence[Mapping[str, object]]) -> None:
 
 
 def _cold_storage_object_key_from_metadata(
-    metadata: str | Mapping[str, object] | None,
+    metadata: object,
 ) -> str | None:
     if not isinstance(metadata, str):
-        return _cold_storage_object_key(metadata if isinstance(metadata, dict) else None)
+        mapping: Final = as_str_mapping(metadata)
+        return _cold_storage_object_key(mapping if isinstance(mapping, dict) else None)
     try:
         decoded: Final = as_str_mapping(_DECODED_JSON.validate_python(json.loads(metadata)))
     except (json.JSONDecodeError, TypeError):
@@ -3374,7 +3390,7 @@ def _cold_storage_object_key(metadata: Mapping[str, object] | None) -> str | Non
 
 
 async def _resolve_request_response_payload(
-    row: Mapping[str, Any],
+    row: Mapping[str, object],
     cold_storage_handler: "ColdStorageHandler",
 ) -> RequestResponsePayload:
     """
@@ -4564,7 +4580,7 @@ async def ui_get_spend_by_tags(
     end_date: str,
     prisma_client: PrismaClient | None = None,
     tags_str: str | None = None,
-):
+) -> Mapping[str, object]:
     """
     Should cover 2 cases:
     1. When user is getting spend for all_tags. "all_tags" in tags_list
@@ -4574,7 +4590,7 @@ async def ui_get_spend_by_tags(
     # tags_str is a list of strings csv of tags
     # tags_str = tag1,tag2,tag3
     # convert to list if it's not None
-    tags_list: list[str] | None = None
+    tags_list: Sequence[str] | None = None
     if tags_str is not None and len(tags_str) > 0:
         tags_list = tags_str.split(",")
 
@@ -4625,7 +4641,7 @@ async def ui_get_spend_by_tags(
     # print(response)
     # Bar Chart 1 - Spend per tag - Top 10 tags by spend
     total_spend_per_tag: Final[collections.defaultdict] = collections.defaultdict(float)
-    total_requests_per_tag: Final[collections.defaultdict] = collections.defaultdict(int)
+    total_requests_per_tag: Final[collections.defaultdict[object, int]] = collections.defaultdict(int)
     for row in response:
         tag_name = row["individual_request_tag"]
         tag_spend = row["total_spend"]
@@ -4904,7 +4920,7 @@ async def _build_ui_spend_logs_response(
             )
 
     if enrich_session_counts:
-        enriched: Final[list[dict]] = []
+        enriched: Final[list[dict[str, object]]] = []
         for row in data:
             row_dict = dict(row) if isinstance(row, dict) else row.model_dump()
             sid = row_dict.get("session_id")

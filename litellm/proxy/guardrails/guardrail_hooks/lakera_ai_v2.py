@@ -383,7 +383,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         messages: Sequence[AllMessageValues],
         request_data: dict,
         event_type: GuardrailEventHooks,
-    ) -> tuple[LakeraAIResponse, dict]:
+    ) -> tuple[LakeraAIResponse, dict[str, int]]:
         """
         Call the Lakera AI v2 guard API.
         """
@@ -391,8 +391,8 @@ class LakeraAIGuardrail(CustomGuardrail):
         exception_str: str = ""
         start_time: Final[datetime] = datetime.now()
         lakera_response: LakeraAIResponse | None = None
-        request: dict = {}
-        masked_entity_count: Final[dict] = {}
+        request: dict[str, object] = {}
+        masked_entity_count: Final[dict[str, int]] = {}
         try:
             request = dict(
                 LakeraAIRequest(
@@ -425,7 +425,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             ####################################################
             # Create Guardrail Trace for logging on Langfuse, Datadog, etc.
             ####################################################
-            guardrail_json_response: Exception | str | dict | list[dict] = {}
+            guardrail_json_response: Exception | str | dict[str, object] | list[dict[str, object]] = {}
             if status == "success":
                 copy_lakera_response_dict: Final = dict(copy.deepcopy(lakera_response)) if lakera_response else {}
                 # payload contains PII, we don't want to log it
@@ -448,7 +448,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         self,
         messages: Sequence[AllMessageValues],
         lakera_response: LakeraAIResponse | None,
-        masked_entity_count: dict,
+        masked_entity_count: dict[str, int],
     ) -> Sequence[AllMessageValues]:
         """
         Return a copy of messages with any detected PII replaced by

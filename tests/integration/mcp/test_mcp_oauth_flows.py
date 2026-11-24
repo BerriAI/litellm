@@ -40,7 +40,7 @@ from integration._support.mcp import (
 )
 from integration._support.mcp_grants import create_toolset
 from integration._support.oauth_server import AuthorizationServer, oauth_server
-from integration._support.process import owned_proxy
+from integration._support.process import OwnedState, owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import TypeAdapter
 
@@ -49,6 +49,7 @@ pytestmark: Final = pytest.mark.shares_worker_state
 ADD: Final = {"a": 2, "b": 3}
 CLIENT_REDIRECT: Final = "http://127.0.0.1:9/cb"
 ACCEPT: Final = {"Accept": "application/json, text/event-stream"}
+_DCR_GATEWAY_BASE_URL: Final = "https://mcp-gateway.example.test"
 
 
 def _base(gateway: Gateway) -> str:
@@ -88,6 +89,25 @@ def _authorizations(peer: McpPeer) -> tuple[bytes | None, ...]:
         for call in tool_calls(peer.drain())
         if isinstance(call["headers"], dict)
     )
+
+
+def _assert_bridge_peer_authorization(
+    peer: McpPeer, key: str, upstream_token: str, envelope: str
+) -> None:
+    observed: Final = peer.drain()
+    assert len(tool_calls(observed)) == 1
+    expected_authorization: Final = f"Bearer {upstream_token}".encode()
+    for request in observed:
+        headers: Final = TypeAdapter(dict[bytes, bytes]).validate_python(request["headers"])
+        if headers.get(b"authorization") != expected_authorization:
+            pytest.fail("MCP peer did not receive the upstream OAuth bearer")
+        if b"x-litellm-api-key" in headers:
+            pytest.fail("MCP peer received the LiteLLM API-key header")
+        header_values: Final = b"\n".join(headers.values())
+        if key.encode() in header_values:
+            pytest.fail("MCP peer received the LiteLLM API-key value")
+        if envelope.encode() in header_values:
+            pytest.fail("MCP peer received the gateway OAuth envelope")
 
 
 def _issued_token(issued: dict[str, object]) -> str:
@@ -840,6 +860,163 @@ def _ui_session_cookie(scenario: Scenario, user_id: str) -> dict[str, str]:
         "exp": int(time.time()) + 600,
     }
     return {"token": jwt.encode(claims, scenario.gateway.key, algorithm="HS256")}
+
+
+@pytest.fixture(scope="module")
+def clientless_dcr_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+    directory: Final = tmp_path_factory.mktemp("mcp-clientless-dcr")
+    with (
+        gateway_from_environment() as source,
+        owned_proxy(
+            source,
+            directory,
+            {"PROXY_BASE_URL": _DCR_GATEWAY_BASE_URL},
+            remove_environment=("LITELLM_MCP_DCR_GATEWAY_CLIENT",),
+            workers=2,
+            state=OwnedState.SHARED_WITH_WORKER,
+        ) as candidate,
+    ):
+        yield candidate
+
+
+def test_clientless_dcr_bridge_relays_and_binds_the_token_to_the_service_key(
+    clientless_dcr_gateway: Gateway,
+) -> None:
+    with mcp_peer() as peer, oauth_server() as auth, clientless_dcr_gateway.scenario() as scenario:
+        alias: Final = "dr" + uuid.uuid4().hex[:8]
+        _register_oauth(
+            scenario, peer, auth, alias, auth_type="oauth_delegate", dcr_bridge=True, allow_all_keys=True
+        )
+        browser_user_id: Final = scenario.user()
+        service_user_id: Final = scenario.user()
+        other_user_id: Final = scenario.user()
+        service_key: Final = scenario.key(user_id=service_user_id)
+        other_key: Final = scenario.key(user_id=other_user_id)
+
+        registered: Final = clientless_dcr_gateway.client.post(
+            f"/{alias}/register", json={"redirect_uris": [CLIENT_REDIRECT], "client_name": "integration"}
+        )
+        assert registered.status_code == 200, registered.status_code
+        registration: Final = _response_object(registered)
+        client_id_value: Final = registration["client_id"]
+        assert isinstance(client_id_value, str)
+        client_id: Final = client_id_value
+        assert registration["redirect_uris"] == [CLIENT_REDIRECT]
+        registration_requests: Final = auth.drain()
+        assert len(registration_requests) == 1
+        registration_request: Final = registration_requests[0]
+        assert (registration_request.method, urlsplit(registration_request.target).path) == ("POST", "/register")
+        upstream_registration: Final = TypeAdapter(dict[str, object]).validate_json(registration_request.body)
+        assert upstream_registration["redirect_uris"] == [CLIENT_REDIRECT]
+
+        pkce: Final = _Pkce(secrets.token_urlsafe(48))
+        state: Final = "client-state-" + uuid.uuid4().hex
+        with httpx.Client(
+            base_url=str(clientless_dcr_gateway.client.base_url),
+            cookies=_ui_session_cookie(scenario, browser_user_id),
+            trust_env=False,
+        ) as browser:
+            started: Final = browser.get(
+                f"/{alias}/authorize",
+                params={
+                    "client_id": client_id,
+                    "redirect_uri": CLIENT_REDIRECT,
+                    "response_type": "code",
+                    "state": state,
+                    "code_challenge": pkce.challenge,
+                    "code_challenge_method": "S256",
+                },
+            )
+        assert started.status_code == 307, started.status_code
+        authorize_url: Final = started.headers["location"]
+        assert authorize_url.startswith(auth.issuer + "/authorize")
+        authorize_query: Final = parse_qs(urlsplit(authorize_url).query)
+        assert authorize_query["client_id"] == [client_id]
+        assert authorize_query["redirect_uri"] == [CLIENT_REDIRECT]
+        assert authorize_query["state"] == [state]
+        assert authorize_query["code_challenge"] == [pkce.challenge]
+        assert authorize_query["code_challenge_method"] == ["S256"]
+
+        consent: Final = httpx.get(authorize_url, follow_redirects=False, trust_env=False)
+        assert consent.status_code == 302, consent.status_code
+        client_callback: Final = consent.headers["location"]
+        assert client_callback.startswith(CLIENT_REDIRECT)
+        callback_query: Final = parse_qs(urlsplit(client_callback).query)
+        assert callback_query["state"] == [state]
+        authorization_code: Final = callback_query["code"][0]
+        authorize_requests: Final = auth.drain()
+        assert tuple(
+            (request.method, urlsplit(request.target).path) for request in authorize_requests
+        ) == (("GET", "/authorize"),)
+
+        redeemed: Final = _redeem(
+            clientless_dcr_gateway, alias, service_key, client_id, authorization_code, pkce
+        )
+        assert redeemed.status_code == 200, redeemed.status_code
+        issued: Final = _response_object(redeemed)
+        envelope: Final = _issued_token(issued)
+        refresh_token_value: Final = issued["refresh_token"]
+        assert isinstance(refresh_token_value, str)
+        assert tuple(request["grant_type"] for request in auth.token_requests()) == ("authorization_code",)
+        upstream_tokens: Final = tuple(auth.access_tokens)
+        assert len(upstream_tokens) == 1
+        upstream_token: Final = upstream_tokens[0]
+        assert auth.is_live(upstream_token)
+
+        caller: Final = McpCaller(
+            clientless_dcr_gateway,
+            service_key,
+            "server_mcp",
+            alias,
+            headers={"Authorization": f"Bearer {envelope}"},
+        )
+        assert caller.initialize().ok
+        assert caller.list_tools().ok
+        called: Final = caller.call(f"{alias}-add", ADD)
+        assert called.ok, called.raw
+        _assert_bridge_peer_authorization(peer, service_key, upstream_token, envelope)
+
+        mismatched: Final = McpCaller(
+            clientless_dcr_gateway,
+            other_key,
+            "server_mcp",
+            alias,
+            headers={"Authorization": f"Bearer {envelope}"},
+        ).initialize()
+        assert mismatched.status == 403, mismatched.status
+        assert "oauth_principal_mismatch" in mismatched.raw
+        assert peer.drain() == ()
+
+        refreshed: Final = clientless_dcr_gateway.client.post(
+            f"/{alias}/token",
+            headers={"x-litellm-api-key": service_key},
+            data={
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token_value,
+                "client_id": client_id,
+            },
+        )
+        assert refreshed.status_code == 200, refreshed.status_code
+        refreshed_issued: Final = _response_object(refreshed)
+        refreshed_envelope: Final = _issued_token(refreshed_issued)
+        assert tuple(request["grant_type"] for request in auth.token_requests()) == ("refresh_token",)
+        refreshed_upstream_tokens: Final = tuple(auth.access_tokens)
+        assert len(refreshed_upstream_tokens) == 2
+        refreshed_upstream_token: Final = refreshed_upstream_tokens[-1]
+        assert auth.is_live(refreshed_upstream_token)
+
+        refreshed_caller: Final = McpCaller(
+            clientless_dcr_gateway,
+            service_key,
+            "server_mcp",
+            alias,
+            headers={"Authorization": f"Bearer {refreshed_envelope}"},
+        )
+        assert refreshed_caller.initialize().ok
+        assert refreshed_caller.list_tools().ok
+        refreshed_call: Final = refreshed_caller.call(f"{alias}-add", ADD)
+        assert refreshed_call.ok, refreshed_call.raw
+        _assert_bridge_peer_authorization(peer, service_key, refreshed_upstream_token, refreshed_envelope)
 
 
 def _gateway_session_sign_in(

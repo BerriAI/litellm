@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+import inspect
 import os
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
@@ -18,6 +19,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH, GUARDRAIL_ROTATION_ATTEMPTS
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, keyword_arguments, subscript
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.guardrail_translation.utils import (
@@ -75,6 +77,54 @@ from .guardrail_initializers import (
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
+
+
+class CustomGuardrailPathError(Exception):
+    """Deliberately not a ValueError or TypeError: a config-file guardrail path that names an instance instead of a
+    class must stop startup instead of being skipped by init_guardrails_v2."""
+
+
+def _class_path(instance_path: str, cls: type) -> str:
+    entry_module: Final = instance_path.rsplit(".", 1)[0]
+    module: Final = entry_module if entry_module.endswith(f"/{cls.__module__}") else cls.__module__
+    return f"{module}.{cls.__name__}"
+
+
+def _constructor_note(cls: type) -> str:
+    try:
+        inspect.signature(cls).bind_partial(guardrail_name="", event_hook=None, default_on=False)
+    except TypeError:
+        return (
+            f" {cls.__name__}.__init__ does not accept them, so give it **kwargs and pass those to "
+            "super().__init__, or the proxy will skip the guardrail."
+        )
+    return ""
+
+
+def _guardrail_path_error(
+    guardrail_name: str, guardrail_path: str, resolved: object
+) -> CustomGuardrailPathError | None:
+    if callable(resolved):
+        return None
+    if isinstance(resolved, CustomGuardrail):
+        return CustomGuardrailPathError(
+            f"Guardrail '{guardrail_name}' sets guardrail: {guardrail_path}, which is a {type(resolved).__name__} "
+            "instance, but the proxy builds each guardrail itself and needs the class. Point it at the class, e.g. "
+            f"`guardrail: {_class_path(guardrail_path, type(resolved))}`. The proxy calls it with guardrail_name, "
+            "event_hook, default_on, and this guardrail's other litellm_params as keyword arguments, so set any "
+            f"constructor arguments under litellm_params.{_constructor_note(type(resolved))}"
+        )
+    if isinstance(resolved, CustomLogger):
+        return CustomGuardrailPathError(
+            f"Guardrail '{guardrail_name}' sets guardrail: {guardrail_path}, which is a {type(resolved).__name__} "
+            "instance. It is a CustomLogger but not a CustomGuardrail, so it does not work as a guardrail. "
+            f"To run it on every request, list `{guardrail_path}` under litellm_settings.callbacks instead. "
+            "To run it as a guardrail, subclass CustomGuardrail and point guardrail: at that class."
+        )
+    return CustomGuardrailPathError(
+        f"Guardrail '{guardrail_name}' sets guardrail: {guardrail_path}, which is a {type(resolved).__name__} "
+        "value, but the proxy builds each guardrail itself and needs a CustomGuardrail class."
+    )
 
 
 class _GuardrailRowLike(Protocol):
@@ -227,7 +277,9 @@ async def _rotate_guardrail_row(
     return await _rotate_guardrail_row(prisma_client, latest_row, encryption_key, attempts_left - 1)
 
 
-guardrail_initializer_registry: Final = {
+guardrail_initializer_registry: Final[
+    dict[str, Callable[..., CustomGuardrail | Sequence[CustomGuardrail] | None] | None]
+] = {
     SupportedGuardrailIntegrations.BEDROCK.value: initialize_bedrock,
     SupportedGuardrailIntegrations.LAKERA.value: initialize_lakera,
     SupportedGuardrailIntegrations.LAKERA_V2.value: initialize_lakera_v2,
@@ -252,7 +304,7 @@ guardrail_class_registry: Final[dict[str, type[CustomGuardrail]]] = {
 }
 
 
-def get_guardrail_initializer_from_hooks():
+def get_guardrail_initializer_from_hooks() -> dict[str, Callable[..., CustomGuardrail] | None]:
     """
     Get guardrail initializers by discovering them from the guardrail_hooks directory structure.
 
@@ -262,7 +314,7 @@ def get_guardrail_initializer_from_hooks():
     Returns:
         Dict[str, Callable]: A dictionary mapping guardrail types to their initializer functions
     """
-    discovered_initializers: Final = {}
+    discovered_initializers: Final[dict[str, Callable[..., CustomGuardrail] | None]] = {}
 
     try:
         # Get the path to the guardrail_hooks directory
@@ -330,7 +382,7 @@ def get_guardrail_initializer_from_hooks():
     return discovered_initializers
 
 
-def get_guardrail_class_from_hooks():
+def get_guardrail_class_from_hooks() -> dict[str, type[CustomGuardrail]]:
     """
     Get guardrail classes by discovering them from the guardrail_hooks directory structure.
     """
@@ -343,7 +395,7 @@ def get_guardrail_class_from_hooks():
     Returns:
         Dict[str, Callable]: A dictionary mapping guardrail types to their initializer functions
     """
-    discovered_classes: Final = {}
+    discovered_classes: Final[dict[str, type[CustomGuardrail]]] = {}
 
     try:
         # Get the path to the guardrail_hooks directory
@@ -666,6 +718,7 @@ def _configure_callback_scoping(
         "skip_tool_message_in_guardrail",
         "scan_only_tool_results",
         "scan_tool_descriptions_as_text",
+        "scan_tool_calls_as_text",
     ):
         setattr(custom_guardrail_callback, scoping_param, getattr(litellm_params, scoping_param, None))
     if (
@@ -674,7 +727,17 @@ def _configure_callback_scoping(
     ):
         raise ValueError(
             f"Guardrail {guardrail_name}: scan_tool_descriptions_as_text is only supported by the "
-            "panw_prisma_airs and presidio guardrails. Remove it from this guardrail."
+            "panw_prisma_airs, presidio and bedrock guardrails, and on bedrock not with mode during_call or "
+            "experimental_use_latest_role_message_only. Remove it from this guardrail."
+        )
+    if (
+        litellm_params.scan_tool_calls_as_text is True
+        and not custom_guardrail_callback.supports_scan_tool_calls_as_text()
+    ):
+        raise ValueError(
+            f"Guardrail {guardrail_name}: scan_tool_calls_as_text is only supported by the bedrock "
+            "guardrail, and not with mode during_call or experimental_use_latest_role_message_only. "
+            "Remove it from this guardrail."
         )
     scan_only_tool_results_enabled: Final = effective_scan_only_tool_results_for_guardrail(custom_guardrail_callback)
     if scan_only_tool_results_enabled and not custom_guardrail_callback.supports_scan_only_tool_results():
@@ -869,7 +932,9 @@ class InMemoryGuardrailHandler:
         config_file_path: str | None,
         llm_router: Optional["Router"],
     ) -> GuardrailCallbacks:
-        initializer: Final = guardrail_initializer_registry.get(guardrail_type)
+        initializer: Final[Callable[..., CustomGuardrail | Sequence[CustomGuardrail] | None] | None] = (
+            guardrail_initializer_registry.get(guardrail_type)
+        )
         if initializer:
             import inspect
 
@@ -942,6 +1007,9 @@ class InMemoryGuardrailHandler:
         _guardrail_class: Final[Callable[..., CustomGuardrail]] = get_instance_fn(
             guardrail_type, config_file_path=config_file_path
         )
+        path_error: Final = _guardrail_path_error(guardrail["guardrail_name"], guardrail_type, _guardrail_class)
+        if path_error is not None:
+            raise path_error
 
         mode: Final = litellm_params.mode
         if mode is None:

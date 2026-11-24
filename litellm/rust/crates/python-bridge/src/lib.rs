@@ -1,9 +1,12 @@
 mod auth;
+mod billable_route;
+mod budget_counters;
 mod budgets;
 mod cache;
 mod callable;
 mod callbacks_model_capacity;
 mod coercion;
+mod cost;
 mod credentials;
 mod db;
 mod db_repository;
@@ -18,11 +21,15 @@ mod model_registry;
 mod parallel_request_limiter;
 mod preflight;
 mod python_settings;
+mod redaction;
 mod redis;
 mod router;
 mod routes;
 mod s3_log;
 mod secrets;
+mod spend_log;
+mod spend_log_rows;
+mod spend_log_writer;
 mod tokenizer;
 
 #[pymodule(gil_used = true)]
@@ -35,8 +42,7 @@ mod _native {
     use crate::auth::{
         AuthCall, AuthOutcome, AuthSettings, AuthStep, ClaimIdentityView, DenialView, IdentityView,
         KeyContextView, MappedClaimsView, MappingView, PlanView, TeamGrantView, jwt_claims,
-        jwt_is_allowed_domain, jwt_is_jwt, jwt_key_mapping_cache_key, jwt_presents_claims,
-        jwt_unverified_claims,
+        jwt_is_allowed_domain, jwt_is_jwt, jwt_presents_claims, jwt_unverified_claims,
     };
     #[pymodule_export]
     use crate::auth::{
@@ -45,20 +51,29 @@ mod _native {
         auth_route_matches_prefix, auth_route_matches_wildcard,
     };
     #[pymodule_export]
+    use crate::billable_route::{billable_route_passthrough_prefixes, classify_billable_route};
+    #[pymodule_export]
     use crate::budgets::NativeBudgets;
     #[pymodule_export]
     use crate::budgets::budget_check_decision;
     #[pymodule_export]
     use crate::callbacks_model_capacity::{NativeModelCapacity, NativeModelCapacityState};
     #[pymodule_export]
+    use crate::cost::billable_service_tier;
+    #[pymodule_export]
+    use crate::cost::{
+        NativeCallContext, NativePriced, NativePrices, NativeQuote, NativeRateCard,
+        NativeTokenUsage,
+    };
+    #[pymodule_export]
     use crate::db::{DatabaseEndpoint, NativeDatabase, NativeDatabaseFailure};
     #[pymodule_export]
     use crate::db_repository::{
-        RustAccessGroupRepository, RustBudgetRepository, RustEndUserRepository,
-        RustJwtKeyMappingRepository, RustKeyRepository, RustModelAccessGroupRepository,
-        RustObjectPermissionRepository, RustOrganizationRepository, RustProjectRepository,
-        RustSpendLogRepository, RustTagRepository, RustTeamMembershipRepository,
-        RustTeamRepository, RustUserRepository,
+        RustAccessGroupRepository, RustAgentIdentityRepository, RustAuditLogRepository,
+        RustBudgetRepository, RustEndUserRepository, RustJwtKeyMappingRepository,
+        RustKeyRepository, RustModelAccessGroupRepository, RustObjectPermissionRepository,
+        RustOrganizationRepository, RustProjectRepository, RustSpendLogRepository,
+        RustTagRepository, RustTeamMembershipRepository, RustTeamRepository, RustUserRepository,
     };
     #[cfg(feature = "panic-test")]
     #[pymodule_export]
@@ -69,8 +84,6 @@ mod _native {
     use crate::errors::{RustBridgeDeclined, RustUpstreamError};
     #[pymodule_export]
     use crate::http::unsupported_tls_settings;
-    #[pymodule_export]
-    use crate::logger::{NativeDiagnosticProcessor, NativeTokenRedactor};
     #[pymodule_export]
     use crate::model_cost::{
         NativeCostMapSource, NativeFetchFailed, NativeFetchPolicy, NativeFetched, NativeInstalled,
@@ -84,13 +97,19 @@ mod _native {
         NativeParallelRequestLimiter, NativeParallelRequestLimiterState,
     };
     #[pymodule_export]
+    use crate::redaction::{NativeDiagnosticProcessor, NativeTokenRedactor};
+    #[pymodule_export]
     use crate::redis::breaker::{NativeAdmission, NativeRedisBreaker, native_redis_breaker_states};
     #[pymodule_export]
     use crate::redis::client::NativeRedisClient;
     #[pymodule_export]
     use crate::redis::store::active_teams::{NativeActiveTeams, PyActiveMember};
     #[pymodule_export]
-    use crate::redis::store::auth_cache::{NativeAuthCache, PyLocalSizes};
+    use crate::redis::store::auth_cache::{
+        NativeAuthCache, NativeTeamRoster, PyAuthObject, PyLocalSizes,
+    };
+    #[pymodule_export]
+    use crate::redis::store::cache_invalidation::NativeCacheInvalidation;
     #[pymodule_export]
     use crate::redis::store::deployment_health::NativeDeploymentHealth;
     #[pymodule_export]
@@ -99,7 +118,9 @@ mod _native {
         PyGuardedReply, PyWindowCount,
     };
     #[pymodule_export]
-    use crate::redis::store::request::{NativeRequestRedis, NativeSend};
+    use crate::redis::store::request::{
+        NativeRequestRedis, NativeSend, drain_post_call_redis_batches,
+    };
     #[pymodule_export]
     use crate::redis::store::router_session_pins::NativeRouterSessionPins;
     #[pymodule_export]
@@ -107,9 +128,7 @@ mod _native {
     #[pymodule_export]
     use crate::redis::store::sensitive_route_pins::NativeSensitiveRoutePins;
     #[pymodule_export]
-    use crate::redis::store::spend_counters::{
-        NativeSpendCounters, PyPostCallSettlement, PySpendRead,
-    };
+    use crate::redis::store::spend_counters::{NativeSpendCounters, PySpendRead};
     #[pymodule_export]
     use crate::redis::store::{
         NativePending, NativeRedisStoreError, router_cooldowns::NativeRouterCooldowns,
@@ -138,18 +157,31 @@ mod _native {
     use crate::routes::traces::trace_encode_error;
     #[pymodule_export]
     use crate::s3_log::NativeS3Log;
+    #[pymodule_export]
+    use crate::spend_log::RustSpendLog;
+    #[pymodule_export]
+    use crate::spend_log_rows::RustSpendLogRowBuilder;
+    #[pymodule_export]
+    use crate::spend_log_writer::RustSpendLogWriter;
     #[cfg(feature = "huggingface")]
     #[pymodule_export]
     use crate::tokenizer::HuggingFaceEncoding;
     #[pymodule_export]
     use crate::tokenizer::Tokenizer;
+    #[pymodule_export]
+    use litellm_callbacks_legacy_python::{NativeBilledRates, NativeReceipt};
 
     #[pymodule_init]
     fn init(module: &Bound<'_, PyModule>) -> PyResult<()> {
         let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = crate::logger::process().install_global();
         module.add(
             "JWT_ID_JAG_TYP",
             litellm_gateway_auth_core::authn::jwt::ID_JAG_TYP,
+        )?;
+        module.add(
+            "BOUND_DEFAULT_MAX_OUTPUT_TOKENS",
+            litellm_cost::bound::DEFAULT_MAX_OUTPUT_TOKENS,
         )?;
         let py = module.py();
         let dict = module.dict();
@@ -198,14 +230,19 @@ mod tests {
                 "ResponsesWebSocketConnection",
                 "NativeDiagnosticProcessor",
                 "NativeTokenRedactor",
+                "RustSpendLogRowBuilder",
                 "NativeRedisClient",
                 "NativeRedisBreaker",
                 "NativeAdmission",
                 "NativeRequestRedis",
                 "NativeSend",
+                "drain_post_call_redis_batches",
                 "NativeAuthCache",
+                "NativeTeamRoster",
                 "NativeDeploymentHealth",
                 "NativeRouterSessionPins",
+                "AuthObject",
+                "NativeCacheInvalidation",
                 "NativeRateLimits",
                 "WindowCount",
                 "AtomicApplied",
@@ -224,7 +261,6 @@ mod tests {
                 "ActiveMember",
                 "NativeRedisStoreError",
                 "NativeSpendCounters",
-                "PostCallSettlement",
                 "SpendRead",
                 "LocalSizes",
                 "native_redis_breaker_states",
@@ -243,6 +279,8 @@ mod tests {
                 "RustTeamMembershipRepository",
                 "RustTeamRepository",
                 "RustAccessGroupRepository",
+                "RustAgentIdentityRepository",
+                "RustAuditLogRepository",
                 "RustObjectPermissionRepository",
                 "RustProjectRepository",
                 "RustTagRepository",
@@ -250,6 +288,14 @@ mod tests {
                 "trace_encode_error",
                 "bundled_model_cost_map",
                 "NativeModelCostMap",
+                "NativePrices",
+                "NativeTokenUsage",
+                "NativeCallContext",
+                "NativePriced",
+                "NativeQuote",
+                "NativeReceipt",
+                "NativeBilledRates",
+                "NativeRateCard",
                 "NativeModelCostMapState",
                 "NativeInstalled",
                 "NativeRejected",
@@ -270,10 +316,15 @@ mod tests {
                 "reserve_process_for_forking",
                 "unsupported_tls_settings",
                 "NativeBudgets",
+                "billable_route_passthrough_prefixes",
+                "billable_service_tier",
+                "classify_billable_route",
                 "budget_check_decision",
                 "NativeModelCapacity",
                 "NativeModelCapacityState",
                 "NativeS3Log",
+                "RustSpendLog",
+                "RustSpendLogWriter",
                 "auth_allowed_routes_grant",
                 "auth_first_denied_route",
                 "auth_jwt_team_routes_grant",
@@ -283,6 +334,7 @@ mod tests {
                 "auth_route_matches_prefix",
                 "auth_route_matches_wildcard",
                 "JWT_ID_JAG_TYP",
+                "BOUND_DEFAULT_MAX_OUTPUT_TOKENS",
                 "RustAuth",
                 "RustAuthOutcome",
                 "RustAuthSettings",
@@ -298,7 +350,6 @@ mod tests {
                 "jwt_claims",
                 "jwt_is_allowed_domain",
                 "jwt_is_jwt",
-                "jwt_key_mapping_cache_key",
                 "jwt_presents_claims",
                 "jwt_unverified_claims",
             ];

@@ -390,18 +390,6 @@ pub fn eval_source<T: FromRedisValue + 'static>(
     )
 }
 
-/// The channel is sent as given, without the namespace, like redis-py's `publish`.
-pub fn publish(channel: &str, payload: &[u8]) -> Command<()> {
-    let command = redis::cmd("PUBLISH").arg(channel).arg(payload).to_owned();
-    Command::new(
-        Operation::Command("PUBLISH"),
-        Vec::new(),
-        false,
-        move |_| Plan::Commands(vec![command]),
-        |_| Ok(()),
-    )
-}
-
 pub(crate) fn ping() -> Cmd {
     redis::cmd("PING")
 }

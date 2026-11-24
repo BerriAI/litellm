@@ -6178,7 +6178,108 @@ AZURE_GPT_6_1_SOL_SERVICE_TIER_FLEX: Final = CostTrackingTestCase(
     ),
 )
 
+
+def _azure_gpt_6_2_sol_case(base: CostTrackingTestCase, name: str, expected: ExactExpected) -> CostTrackingTestCase:
+    old: Final = "gpt-6.1-sol-2026-09-29"
+    new: Final = "gpt-6.2-sol-2026-11-17"
+    response: Final = (
+        base.response.model_copy(update={"frames": tuple(frame.replace(old, new) for frame in base.response.frames)})
+        if isinstance(base.response, SseResponse)
+        else cast(JsonResponse, base.response).model_copy(
+            update={"body": {**cast(JsonResponse, base.response).body, "model": new}}
+        )
+    )
+    return base.model_copy(
+        update={"name": name, "model": "azure/gpt-6.2-sol", "response": response, "expected": expected}
+    )
+
+
+AZURE_GPT_6_2_SOL_INPUT_TEXT: Final = _azure_gpt_6_2_sol_case(
+    AZURE_GPT_6_1_SOL_INPUT_TEXT,
+    "azure-gpt-6.2-sol-input_text",
+    ExactExpected(spend=0.01053, input_cost=0.004968, output_cost=0.005562, prompt_tokens=1840, completion_tokens=412),
+)
+AZURE_GPT_6_2_SOL_STREAM: Final = _azure_gpt_6_2_sol_case(
+    AZURE_GPT_6_1_SOL_STREAM,
+    "azure-gpt-6.2-sol-stream",
+    ExactExpected(spend=0.01053, input_cost=0.004968, output_cost=0.005562, prompt_tokens=1840, completion_tokens=412),
+)
+AZURE_GPT_6_2_SOL_REASONING: Final = _azure_gpt_6_2_sol_case(
+    AZURE_GPT_6_1_SOL_REASONING,
+    "azure-gpt-6.2-sol-reasoning",
+    ExactExpected(spend=0.057888, input_cost=0.003348, output_cost=0.05454, prompt_tokens=1240, completion_tokens=4040),
+)
+AZURE_GPT_6_2_SOL_CACHE_READ: Final = _azure_gpt_6_2_sol_case(
+    AZURE_GPT_6_1_SOL_CACHE_READ,
+    "azure-gpt-6.2-sol-cache_read",
+    ExactExpected(spend=0.00851688, input_cost=0.00338688, output_cost=0.00513, prompt_tokens=12928, completion_tokens=380),
+)
+AZURE_GPT_6_2_SOL_CACHE_WRITE_5M: Final = _azure_gpt_6_2_sol_case(
+    AZURE_GPT_6_1_SOL_CACHE_WRITE_5M,
+    "azure-gpt-6.2-sol-cache_write_5m",
+    ExactExpected(spend=0.04833, input_cost=0.0432, output_cost=0.00513, prompt_tokens=12928, completion_tokens=380),
+)
+AZURE_GPT_6_2_SOL_TIERED_INPUT_ABOVE_272K: Final = _azure_gpt_6_2_sol_case(
+    AZURE_GPT_6_1_SOL_TIERED_INPUT_ABOVE_272K,
+    "azure-gpt-6.2-sol-tiered_input_above_272k",
+    ExactExpected(spend=1.628343, input_cost=1.62, output_cost=0.008343, prompt_tokens=300000, completion_tokens=412),
+)
+AZURE_GPT_6_2_SOL_TIERED_CACHE_READ_ABOVE_272K: Final = _azure_gpt_6_2_sol_case(
+    AZURE_GPT_6_1_SOL_TIERED_CACHE_READ_ABOVE_272K,
+    "azure-gpt-6.2-sol-tiered_cache_read_above_272k",
+    ExactExpected(spend=0.602343, input_cost=0.594, output_cost=0.008343, prompt_tokens=300000, completion_tokens=412),
+)
+AZURE_GPT_6_2_SOL_TIERED_AT_272K_BOUNDARY: Final = _azure_gpt_6_2_sol_case(
+    AZURE_GPT_6_1_SOL_TIERED_AT_272K_BOUNDARY,
+    "azure-gpt-6.2-sol-tiered_at_272k_boundary",
+    ExactExpected(spend=0.739962, input_cost=0.7344, output_cost=0.005562, prompt_tokens=272000, completion_tokens=412),
+)
+AZURE_GPT_6_2_SOL_MESSAGES_BRIDGED_JSON: Final = AZURE_GPT_6_2_SOL_INPUT_TEXT.model_copy(
+    update={
+        "name": "azure-gpt-6.2-sol-messages_bridged_json",
+        "endpoint": "/v1/messages",
+        "request": AZURE_GPT_6_1_SOL_MESSAGES_BRIDGED_JSON.request,
+    }
+)
+AZURE_GPT_6_2_SOL_MESSAGES_BRIDGED_STREAM: Final = _azure_messages_stream_case(
+    AZURE_GPT_6_2_SOL_MESSAGES_BRIDGED_JSON, AZURE_GPT_6_2_SOL_STREAM, "azure-gpt-6.2-sol-messages_bridged_stream"
+)
+_AZURE_GPT_6_2_SOL_RESPONSES_BASE: Final = _azure_responses_json_case(
+    AZURE_GPT_6_2_SOL_INPUT_TEXT, "azure-gpt-6.2-sol-responses_json", "gpt-6.2-sol", None
+)
+AZURE_GPT_6_2_SOL_RESPONSES_JSON: Final = _AZURE_GPT_6_2_SOL_RESPONSES_BASE.model_copy(
+    update={
+        "response": cast(JsonResponse, _AZURE_GPT_6_2_SOL_RESPONSES_BASE.response).model_copy(
+            update={
+                "body": {
+                    **cast(JsonResponse, _AZURE_GPT_6_2_SOL_RESPONSES_BASE.response).body,
+                    "input_transformations": [],
+                }
+            }
+        )
+    }
+)
+AZURE_GPT_6_2_SOL_RESPONSES_STREAM: Final = _responses_stream_case(
+    AZURE_GPT_6_2_SOL_RESPONSES_JSON,
+    "azure-gpt-6.2-sol-responses_stream",
+    "gpt-6.2-sol",
+    14,
+    include_content_filters=True,
+)
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
+    AZURE_GPT_6_2_SOL_INPUT_TEXT,
+    AZURE_GPT_6_2_SOL_STREAM,
+    AZURE_GPT_6_2_SOL_REASONING,
+    AZURE_GPT_6_2_SOL_CACHE_READ,
+    AZURE_GPT_6_2_SOL_CACHE_WRITE_5M,
+    AZURE_GPT_6_2_SOL_TIERED_INPUT_ABOVE_272K,
+    AZURE_GPT_6_2_SOL_TIERED_CACHE_READ_ABOVE_272K,
+    AZURE_GPT_6_2_SOL_TIERED_AT_272K_BOUNDARY,
+    AZURE_GPT_6_2_SOL_MESSAGES_BRIDGED_JSON,
+    AZURE_GPT_6_2_SOL_MESSAGES_BRIDGED_STREAM,
+    AZURE_GPT_6_2_SOL_RESPONSES_JSON,
+    AZURE_GPT_6_2_SOL_RESPONSES_STREAM,
     AZURE_GPT_6_SOL_MESSAGES_BRIDGED_JSON,
     AZURE_GPT_6_LUNA_MESSAGES_BRIDGED_JSON,
     AZURE_GPT_6_ASTRA_MESSAGES_BRIDGED_JSON,
@@ -6305,6 +6406,11 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=AZURE_GPT_6_LUNA_INPUT_TEXT, streamed=AZURE_GPT_6_LUNA_STREAM),
     StreamParityTestCase(plain=AZURE_GPT_6_ASTRA_INPUT_TEXT, streamed=AZURE_GPT_6_ASTRA_STREAM),
     StreamParityTestCase(plain=AZURE_GPT_6_1_SOL_INPUT_TEXT, streamed=AZURE_GPT_6_1_SOL_STREAM),
+    StreamParityTestCase(plain=AZURE_GPT_6_2_SOL_INPUT_TEXT, streamed=AZURE_GPT_6_2_SOL_STREAM),
+    StreamParityTestCase(plain=AZURE_GPT_6_2_SOL_RESPONSES_JSON, streamed=AZURE_GPT_6_2_SOL_RESPONSES_STREAM),
+    StreamParityTestCase(
+        plain=AZURE_GPT_6_2_SOL_MESSAGES_BRIDGED_JSON, streamed=AZURE_GPT_6_2_SOL_MESSAGES_BRIDGED_STREAM
+    ),
     StreamParityTestCase(plain=AZURE_GPT_5_6_TERRA_INPUT_TEXT, streamed=AZURE_GPT_5_6_TERRA_STREAM),
     StreamParityTestCase(plain=AZURE_GPT_6_1_SOL_RESPONSES_JSON, streamed=AZURE_GPT_6_1_SOL_RESPONSES_STREAM),
     StreamParityTestCase(plain=AZURE_GPT_6_LUNA_RESPONSES_JSON, streamed=AZURE_GPT_6_LUNA_RESPONSES_STREAM),
@@ -6340,6 +6446,13 @@ BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
         ("/v1/chat/completions",),
         deployment=Deployment(model="azure/responses/gpt-6.1-sol"),
     ),
+    *bridge_pairs(
+        (AZURE_GPT_6_2_SOL_RESPONSES_JSON,),
+        ("/v1/chat/completions",),
+        deployment=Deployment(model="azure/responses/gpt-6.2-sol"),
+    ),
+    BridgeCostParityTestCase(native=AZURE_GPT_6_2_SOL_INPUT_TEXT, bridged=AZURE_GPT_6_2_SOL_MESSAGES_BRIDGED_JSON),
+    BridgeCostParityTestCase(native=AZURE_GPT_6_2_SOL_STREAM, bridged=AZURE_GPT_6_2_SOL_MESSAGES_BRIDGED_STREAM),
     *bridge_pairs(
         (AZURE_GPT_5_6_INPUT_TEXT, AZURE_GPT_5_6_CACHE_READ, AZURE_GPT_5_6_STREAM, AZURE_GPT_5_6_REASONING),
         ("/v1/messages",),

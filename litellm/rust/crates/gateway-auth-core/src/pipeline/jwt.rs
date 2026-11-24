@@ -222,6 +222,12 @@ async fn admin<H: AuthHost>(
     if user.as_ref().is_some_and(|user| user.deactivated) {
         return Err(JwtDenial::UserDeactivated { user_id }.into());
     }
+    let member_id = user
+        .as_ref()
+        .map(|user| user.user_id.as_str())
+        .filter(|id| !id.is_empty())
+        .or(user_id.as_deref());
+    let team = bind_team_member(host, team, member_id).await?;
     Ok(JwtIdentity {
         claims: Value::Object(claims.0.clone()),
         is_proxy_admin: true,
@@ -344,7 +350,14 @@ async fn principal<H: AuthHost>(
         ),
         Some(selected) => (Some(selected), selected_team, selected_membership),
     };
-    let grants = match (provisioned, &user, &team) {
+    let member_id = user.as_ref().map(|user| user.user_id.as_str());
+    let grant_team = if provisioned.is_some() && member_id != user_id.as_deref() {
+        bind_team_member(host, team.clone(), member_id).await?
+    } else {
+        None
+    };
+    let team = bind_team_member(host, team, user_id.as_deref()).await?;
+    let grants = match (provisioned, &user, grant_team.as_ref().or(team.as_ref())) {
         (Some(_), Some(user), Some(team)) if !team.members.contains(&user.user_id) => {
             grants.with(Grant::AddTeamMember {
                 user_id: user.user_id.clone(),
@@ -368,6 +381,17 @@ async fn principal<H: AuthHost>(
         end_user,
         grants,
     })
+}
+
+async fn bind_team_member<H: AuthHost>(
+    host: &H,
+    team: Option<Team<crate::host::TeamRow<H>>>,
+    user_id: Option<&str>,
+) -> Result<Option<Team<crate::host::TeamRow<H>>>, Error> {
+    match (team, user_id) {
+        (Some(team), Some(user_id)) => host.bind_team_member(team, user_id).await.map(Some),
+        (team, _) => Ok(team),
+    }
 }
 
 fn identity_of<R: Rows>(claims: Value, principal: Principal<R>) -> Authorized<R> {
@@ -749,6 +773,39 @@ mod tests {
                 ..JwtRows::default()
             }
         );
+        assert_eq!(calls(&host), expected_calls);
+    }
+
+    #[rstest]
+    #[case::team_member(true, &["managed_agent", "team t1", "resolve_user jwt-sub team=t1", "bind_team_member t1 canonical"])]
+    #[case::nonmember(false, &["managed_agent", "team t1", "resolve_user jwt-sub team=t1", "bind_team_member t1 canonical", "add_member canonical t1"])]
+    #[tokio::test]
+    async fn team_roster_uses_the_resolved_identity_before_provisioning(
+        #[case] already_member: bool,
+        #[case] expected_calls: &[&str],
+    ) {
+        let roster = if already_member {
+            vec!["canonical"]
+        } else {
+            vec!["jwt-sub"]
+        };
+        let host = ScriptedHost {
+            teams: HashMap::from([("t1", team_of("t1", &[]))]),
+            team_rosters: HashMap::from([("t1", roster)]),
+            users: HashMap::from([("jwt-sub", user("canonical", "internal_user", &["t1"]))]),
+            ..host(json!({"sub": "jwt-sub", "team": "t1"}))
+        };
+        let settings = settings(JwtAuthSettings {
+            team_id_jwt_field: Some("team".into()),
+            ..config()
+        });
+
+        let identity = authorize_with(&host, request(CHAT), &settings, PROVISIONED)
+            .await
+            .unwrap();
+
+        assert_eq!(identity.user_id.as_deref(), Some("canonical"));
+        assert_eq!(identity.rows.team.as_deref(), Some("t1 canonical"));
         assert_eq!(calls(&host), expected_calls);
     }
 

@@ -73,7 +73,8 @@ def test_regression_openai_compatible_upstream_403_is_permission_denied_and_not_
 def test_guard_deepseek_upstream_401_is_authentication_error_and_not_retried(gateway: Gateway) -> None:
     """a DeepSeek 401 still surfaces as AuthenticationError and is sent upstream once"""
     upstream_message: Final = f"invalid api key {uuid.uuid4().hex}"
-    reply: Final = _openai_style_error_reply(401, upstream_message, "invalid_request_error")
+    upstream_type: Final = "invalid_request_error"
+    reply: Final = _openai_style_error_reply(401, upstream_message, upstream_type)
     with wire_server(lambda _: reply) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(
             model="deepseek/deepseek-chat",
@@ -87,7 +88,7 @@ def test_guard_deepseek_upstream_401_is_authentication_error_and_not_retried(gat
         upstream_calls: Final = [(request.method, request.target) for request in wire.drain()]
         assert (response.status_code, error_type, message.split(":", 1)[0], upstream_calls) == (
             401,
-            "authentication_error",
+            upstream_type,
             "litellm.AuthenticationError",
             [("POST", route)],
         ), response.text

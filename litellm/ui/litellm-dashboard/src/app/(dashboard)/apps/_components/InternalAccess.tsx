@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { ShieldCheck } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "@/lib/toast";
@@ -8,13 +9,15 @@ import useAuthorized from "../../hooks/useAuthorized";
 import { useOrganizations } from "../../hooks/organizations/useOrganizations";
 import { AdminOnlyNotice } from "@/components/shared/AdminOnlyNotice";
 import { ErrorState } from "@/components/shared/ErrorState";
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import OrganizationDropdown from "@/components/common_components/OrganizationDropdown";
 import TeamDropdown from "@/components/common_components/team_dropdown";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import AppAccessSelector from "./AppAccessSelector";
-import { appAccessChanged, GRANTEE_KINDS, loadGranteeApps, saveGranteeApps, type GranteeKind } from "./internalAccess";
+import { appAccessChanged, GRANTEE_KINDS, loadGranteeApps, saveGranteeApps, type GranteeKind } from "./appAccessApi";
 import { grantedAppsKey, readsEveryApp } from "./useGrantedApps";
 
 interface Grantee {
@@ -92,31 +95,43 @@ export default function InternalAccess() {
   const [kind, setKind] = useState<GranteeKind>("team");
   const [id, setId] = useState<string | null>(null);
   if (!accessToken || !readsEveryApp(userRole, isViewOnly))
-    return <AdminOnlyNotice pageTitle={t("apps.internalAccess.title")} />;
+    return <AdminOnlyNotice framed pageTitle={t("apps.internalAccess.title")} />;
   const pickKind = (next: GranteeKind) => {
     setKind(next);
     setId(null);
   };
   return (
-    <main className="max-w-2xl space-y-5 px-6 py-5">
-      <h1 className="text-lg font-semibold">{t("apps.internalAccess.title")}</h1>
-      <p className="text-sm text-muted-foreground">{t("apps.internalAccess.hint")}</p>
-      <Tabs value={kind} onValueChange={(next) => pickKind(GRANTEE_KINDS.find((known) => known === next) ?? "team")}>
-        <TabsList>
-          {GRANTEE_KINDS.map((known) => (
-            <TabsTrigger key={known} value={known}>
-              {t(`apps.internalAccess.kinds.${known}`)}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
-      <div className="space-y-3">
-        <label htmlFor="internal-access-grantee" className="text-sm font-medium">
-          {t(`apps.internalAccess.kinds.${kind}`)}
-        </label>
-        <GranteePicker grantee={{ kind, id }} onPick={setId} />
-      </div>
-      {id && <GranteeAppAccess key={`${kind}:${id}`} grantee={{ kind, id }} accessToken={accessToken} />}
-    </main>
+    <>
+      <PageHeader>
+        <PageHeaderTitle>
+          <ShieldCheck />
+          {t("apps.internalAccess.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("apps.internalAccess.hint")}</PageHeaderDescription>
+        <PageHeaderControls>
+          <Tabs
+            value={kind}
+            onValueChange={(next) => pickKind(GRANTEE_KINDS.find((known) => known === next) ?? "team")}
+          >
+            <TabsList>
+              {GRANTEE_KINDS.map((known) => (
+                <TabsTrigger key={known} value={known}>
+                  {t(`apps.internalAccess.kinds.${known}`)}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        </PageHeaderControls>
+      </PageHeader>
+      <PageContent className="max-w-2xl">
+        <div className="space-y-3">
+          <label htmlFor="internal-access-grantee" className="text-sm font-medium">
+            {t(`apps.internalAccess.kinds.${kind}`)}
+          </label>
+          <GranteePicker grantee={{ kind, id }} onPick={setId} />
+        </div>
+        {id && <GranteeAppAccess key={`${kind}:${id}`} grantee={{ kind, id }} accessToken={accessToken} />}
+      </PageContent>
+    </>
   );
 }

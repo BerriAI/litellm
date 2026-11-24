@@ -17,7 +17,8 @@ This pattern can be replicated for other message formats (e.g., Anthropic).
 import json
 import time
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
@@ -44,7 +45,10 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_chat_stream_usage,
+    choice_payload,
+    choice_refusal,
     effective_scan_only_tool_results_for_guardrail,
+    effective_scan_tool_calls_as_text_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
     list_field,
@@ -88,6 +92,9 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
+_REFUSAL_CONTENT_POSITION: Final = -1
+_REFUSAL_FIELD: Final = "refusal"
+
 
 class OpenAIChatCompletionsHandler(BaseTranslation):
     """
@@ -103,7 +110,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     delivers_ended_stream_rewrites = True
     assembles_streamed_response = True
 
-    def get_structured_messages(self, data: dict, *, keep_tool_errors: bool = False) -> list[AllMessageValues] | None:
+    def get_structured_messages(
+        self, data: Mapping[str, object], *, keep_tool_errors: bool = False
+    ) -> list[AllMessageValues] | None:
         """
         Convert chat completions request data to OpenAI-spec structured messages.
 
@@ -119,7 +128,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Process input messages by applying guardrails to text content.
         """
@@ -164,6 +173,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         tool_calls_with_server_calls: Final = [
             *tool_calls_to_check,
             *(_server_tool_call_input(call) for _, call in server_tool_call_tasks),
+            *(
+                _legacy_function_calls(cast("Iterable[object]", messages))  # cast-ok: request messages arrive untyped
+                if effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply) and not scan_only_tool_results
+                else ()
+            ),
         ]
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -440,7 +454,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> ModelResponse:
         """
         Process output response by applying guardrails to text content.
@@ -460,7 +474,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         """
 
         # Step 0: Check if response has any text content to process
-        if not self._has_text_content(response):
+        legacy_function_calls: Final = (
+            _legacy_function_calls(choice.message for choice in response.choices)
+            if effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply)
+            else ()
+        )
+        if not self._has_text_content(response) and not legacy_function_calls:
             verbose_proxy_logger.warning("OpenAI Chat Completions: No text content in response, skipping guardrail")
             return response
 
@@ -488,6 +507,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         tool_calls_with_server_calls: Final = [
             *tool_calls_to_check,
             *(_server_tool_call_input(call) for _, call in server_tool_call_tasks),
+            *legacy_function_calls,
         ]
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -558,7 +578,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
     ) -> list["ModelResponseStream"]:
@@ -614,7 +634,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: "UserAPIKeyAuth | None",
-        request_data: dict | None,
+        request_data: dict[str, object] | None,
         deliver_ended_stream_rewrites: bool = False,
     ) -> list["ModelResponseStream"]:
         """Block-only streaming path: run the guardrail so an in-flight BLOCK can
@@ -634,14 +654,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
             return responses_so_far
 
-        # Step 0: Check if any response has text content to process
-        has_any_text_content = False
-        for response in responses_so_far:
-            if self._has_text_content(response):
-                has_any_text_content = True
-                break
-
-        if not has_any_text_content:
+        chunks: Final = tuple(chunk for chunk in responses_so_far if isinstance(chunk, ModelResponseStream))
+        if not any(self._has_text_content(chunk) for chunk in chunks):
             verbose_proxy_logger.warning(
                 "OpenAI Chat Completions: No text content in streaming responses, skipping guardrail"
             )
@@ -650,7 +664,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         # Step 1: Combine all streaming chunks into complete text per choice
         # For streaming, we need to concatenate all delta.content across all chunks
         # Key: (choice_idx, content_idx), Value: combined text
-        combined_texts: Final = self._combine_streaming_texts(responses_so_far)
+        combined_texts: Final = self._combine_streaming_texts(chunks)
 
         # Step 2: Create lists for guardrail processing
         texts_to_check: Final[list[str]] = []
@@ -692,7 +706,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             # Step 4: Apply guardrailed text back to all streaming chunks
             # For each choice, replace the combined text across all chunks
             await self._apply_guardrail_responses_to_output_streaming(
-                responses=responses_so_far,
+                responses=chunks,
                 guardrailed_texts=guardrailed_texts,
                 task_mappings=task_mappings,
             )
@@ -718,7 +732,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         output guardrail against it, and (when opted in) write any text or
         tool-call rewrite back across the buffered chunks."""
         model_response: Final = self._rebuild_ended_stream_per_choice(responses_so_far, litellm_logging_obj)
-        pre_guardrail_texts: Final = self._string_choice_contents(model_response)
+        pre_guardrail_texts: Final = self._rewritable_choice_texts(model_response)
         pre_guardrail_tool_calls: Final = self._function_tool_call_shapes(model_response)
         await self.process_output_response(
             response=model_response,
@@ -826,7 +840,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: "UserAPIKeyAuth | None",
-        request_data: dict | None,
+        request_data: dict[str, object] | None,
         sink: StreamTransformSink,
     ) -> None:
         """Run the guardrail over the raw accumulated text and report the
@@ -954,6 +968,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 else:
                     continue
 
+                if (refusal := choice_refusal(choice)) is not None:
+                    refusal_key: tuple[int, int | None] = (choice.index, _REFUSAL_CONTENT_POSITION)
+                    combined_texts[refusal_key] = combined_texts.get(refusal_key, "") + refusal
+
                 if content is None:
                     continue
 
@@ -985,33 +1003,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         Override this method to customize text content detection.
         """
-        from litellm.types.utils import ModelResponse, ModelResponseStream
-
         if isinstance(response, ModelResponse):
-            for choice in response.choices:
-                if isinstance(choice, litellm.Choices):
-                    # Check for text content
-                    if choice.message.content and isinstance(choice.message.content, str):
-                        return True
-                    # Check for tool calls
-                    if choice.message.tool_calls and isinstance(choice.message.tool_calls, list):
-                        if len(choice.message.tool_calls) > 0:
-                            return True
-                    if anthropic_server_tool_call_params(choice.message):
-                        return True
-        elif isinstance(response, ModelResponseStream):
-            for streaming_choice in response.choices:
-                if isinstance(streaming_choice, litellm.StreamingChoices):
-                    # Check for text content
-                    if streaming_choice.delta.content and isinstance(streaming_choice.delta.content, str):
-                        return True
-                    # Check for tool calls
-                    if streaming_choice.delta.tool_calls and isinstance(streaming_choice.delta.tool_calls, list):
-                        if len(streaming_choice.delta.tool_calls) > 0:
-                            return True
-                    if anthropic_server_tool_call_params(streaming_choice.delta):
-                        return True
-        return False
+            return any(
+                _choice_has_content_to_scan(choice) for choice in response.choices if isinstance(choice, Choices)
+            )
+        return any(
+            _choice_has_content_to_scan(choice) for choice in response.choices if isinstance(choice, StreamingChoices)
+        )
 
     def _extract_output_text_images_and_tool_calls(
         self,
@@ -1066,6 +1064,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                         if url:
                             images_to_check.append(url)
 
+        refusal: Final = choice_refusal(choice)
+        if refusal is not None:
+            texts_to_check.append(refusal)
+            text_task_mappings.append((choice_idx, _REFUSAL_CONTENT_POSITION))
+
         # Process tool calls if they exist
         if tool_calls is not None and isinstance(tool_calls, list):
             for tool_call_idx, tool_call in enumerate(tool_calls):
@@ -1114,6 +1117,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             content_idx_optional = cast(int | None, mapping[1])
 
             choice = cast(Choices, response.choices[choice_idx])
+
+            if content_idx_optional == _REFUSAL_CONTENT_POSITION:
+                _write_choice_refusal(choice, guardrail_response)
+                continue
 
             # Handle content
             content = choice.message.content
@@ -1178,38 +1185,36 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             )
 
     @staticmethod
-    def _string_choice_contents(response: "ModelResponse") -> tuple[str | None, ...]:
-        return tuple(
-            choice.message.content if isinstance(choice.message.content, str) else None for choice in response.choices
+    def _rewritable_choice_texts(response: "ModelResponse") -> Mapping[tuple[int, int | None], str]:
+        return MappingProxyType(
+            dict(chain.from_iterable(_choice_rewritable_texts(choice) for choice in response.choices))
         )
 
     async def _write_ended_stream_text_rewrites(
         self,
         responses_so_far: list["ModelResponseStream"],  # mutable-ok: rewrites the caller's buffered chunks in place
         guardrailed_response: "ModelResponse",
-        pre_guardrail_texts: tuple[str | None, ...],
+        pre_guardrail_texts: Mapping[tuple[int, int | None], str],
     ) -> None:
         """Write ended-stream guardrail text rewrites back across the buffered
         chunks, one rewrite per rebuilt choice index: the full rewritten text
         lands in that choice's first content-carrying chunk and the rest are
         blanked, the same shape the in-flight write-back uses. Chunks carrying
         only finish_reason or usage stay untouched."""
-        post_guardrail_texts: Final = self._string_choice_contents(guardrailed_response)
-        rewrites_by_choice: Final = MappingProxyType(
+        post_guardrail_texts: Final = self._rewritable_choice_texts(guardrailed_response)
+        rewrites: Final = MappingProxyType(
             {
-                choice.index: after
-                for choice, before, after in zip(
-                    guardrailed_response.choices, pre_guardrail_texts, post_guardrail_texts
-                )
-                if before is not None and after is not None and after != before
+                position: after
+                for position, after in post_guardrail_texts.items()
+                if position in pre_guardrail_texts and after != pre_guardrail_texts[position]
             }
         )
-        if not rewrites_by_choice:
+        if not rewrites:
             return
         await self._apply_guardrail_responses_to_output_streaming(
             responses=responses_so_far,
-            guardrailed_texts=list(rewrites_by_choice.values()),
-            task_mappings=[(index, None) for index in rewrites_by_choice],
+            guardrailed_texts=list(rewrites.values()),
+            task_mappings=list(rewrites),
         )
 
     @staticmethod
@@ -1309,7 +1314,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     async def _apply_guardrail_responses_to_output_streaming(
         self,
-        responses: list["ModelResponseStream"],
+        responses: Sequence["ModelResponseStream"],
         guardrailed_texts: list[str],
         task_mappings: list[tuple[int, int | None]],
     ) -> None:
@@ -1351,6 +1356,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 else:
                     continue
 
+                refusal_key: tuple[int, int | None] = (choice.index, _REFUSAL_CONTENT_POSITION)
+                if refusal_key in guardrail_map and choice_refusal(choice) is not None:
+                    _write_choice_refusal(choice, "" if refusal_key in already_set else guardrail_map[refusal_key])
+                    already_set[refusal_key] = True
+
                 if content is None:
                     continue
 
@@ -1388,6 +1398,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                 else:
                                     # Subsequent chunks - clear the text
                                     content_item["text"] = ""
+
+    def starts_client_tool_call(self, item: object) -> bool:
+        return any(
+            _delta_has_client_tool_call(stream_item_field(choice, "delta")) for choice in _stream_chunk_choices(item)
+        )
 
     def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
         """
@@ -1486,11 +1501,38 @@ def _chat_sse_chunk(payload: _BlockedChunk) -> bytes:
     return f"data: {json.dumps(payload)}\n\n".encode()
 
 
+def _choice_has_content_to_scan(choice: Choices | StreamingChoices) -> bool:
+    body: Final = choice.message if isinstance(choice, Choices) else choice.delta
+    return (
+        choice_refusal(choice) is not None
+        or (isinstance(body.content, str) and bool(body.content))
+        or (isinstance(body.tool_calls, list) and len(body.tool_calls) > 0)
+        or bool(anthropic_server_tool_call_params(body))
+    )
+
+
+def _write_choice_refusal(choice: Choices | StreamingChoices, refusal: str) -> None:
+    setattr(choice_payload(choice), _REFUSAL_FIELD, refusal)
+
+
+def _choice_rewritable_texts(choice: Choices | StreamingChoices) -> Iterator[tuple[tuple[int, int | None], str]]:
+    content: Final = stream_item_field(choice_payload(choice), "content")
+    if isinstance(content, str):
+        yield (choice.index, None), content
+    refusal: Final = stream_item_field(choice_payload(choice), _REFUSAL_FIELD)
+    if isinstance(refusal, str):
+        yield (choice.index, _REFUSAL_CONTENT_POSITION), refusal
+
+
 def _stream_chunk_choices(item: object) -> Sequence[object]:
     choices: Final = stream_item_field(item, "choices")
     if isinstance(choices, Sequence) and not isinstance(choices, (str, bytes)):
         return choices
     return ()
+
+
+def _delta_has_client_tool_call(delta: object) -> bool:
+    return bool(stream_item_items(delta, "tool_calls")) or stream_item_field(delta, "function_call") is not None
 
 
 def _streamed_delta_tool_calls(delta: object) -> tuple[object, ...]:
@@ -1551,6 +1593,20 @@ def _choice_server_tool_calls(
     calls_by_id: Mapping[tuple[int, str | None], ChatCompletionAssistantToolCall], choice_index: int
 ) -> tuple[ChatCompletionAssistantToolCall, ...]:
     return tuple(call for (index, _), call in calls_by_id.items() if index == choice_index)
+
+
+def _function_call_of(message: object) -> object:
+    if isinstance(message, Mapping):
+        return cast("Mapping[str, object]", message).get("function_call")  # cast-ok: a message mapping has str keys
+    return getattr(message, "function_call", None)
+
+
+def _legacy_function_calls(
+    messages: Iterable[object],
+) -> tuple[dict[str, object], ...]:  # mutable-ok: the dict shape guardrail tool_calls inputs take
+    """The deprecated `function_call` of each message, shaped as a tool call. Scanned only, never written back."""
+    calls: Final = (_function_call_of(message) for message in messages)
+    return tuple({"type": "function", "function": call} for call in calls if call)
 
 
 def _server_tool_call_input(server_tool_call: ChatCompletionAssistantToolCall) -> dict[str, object]:

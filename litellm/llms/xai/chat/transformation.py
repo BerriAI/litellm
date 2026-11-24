@@ -1,7 +1,7 @@
 import copy
 from collections.abc import AsyncIterator, Iterator, Mapping
 from types import MappingProxyType
-from typing import Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter
@@ -33,6 +33,10 @@ from ...openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
     OpenAIGPTConfig,
 )
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 _RESPONSE_BODY: Final = TypeAdapter(dict[object, object], config=ConfigDict(hide_input_in_errors=True))
 _FILTERED_TOOL: Final = TypeAdapter(object)
@@ -88,14 +92,14 @@ class XAIChatConfig(OpenAIGPTConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         from litellm.llms.xai.oauth import (
             XAIOAuthAuthenticator,
             XAIOAuthError,
@@ -131,8 +135,8 @@ class XAIChatConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
@@ -150,7 +154,7 @@ class XAIChatConfig(OpenAIGPTConfig):
             stream=stream,
         )
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         base_openai_params: Final = [
             "logit_bias",
             "logprobs",
@@ -221,10 +225,10 @@ class XAIChatConfig(OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool = False,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
@@ -261,10 +265,10 @@ class XAIChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """Handle https://github.com/BerriAI/litellm/issues/9720"""
         if "web_search_options" in optional_params:
             verbose_logger.warning(
@@ -293,12 +297,12 @@ class XAIChatConfig(OpenAIGPTConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj,
-        request_data: dict,
+        logging_obj: "LiteLLMLoggingObj",
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        encoding,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -408,7 +412,9 @@ class XAIChatConfig(OpenAIGPTConfig):
 
         usage.completion_tokens = completion_tokens + reasoning_tokens
 
-    def _enhance_usage_with_xai_web_search_fields(self, model_response: ModelResponse, raw_response_json: dict) -> None:
+    def _enhance_usage_with_xai_web_search_fields(
+        self, model_response: ModelResponse, raw_response_json: dict[object, object]
+    ) -> None:
         """
         Copy usage.server_side_tool_usage_details from the provider usage block
         onto model_response.usage for tool cost calculation.

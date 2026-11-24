@@ -10,15 +10,19 @@ import { loadApps } from "../../apps/_components/appApi";
 export default function CustomerUsageAppFilter({
   value,
   onChange,
+  appGroupId,
 }: {
   value: string | null;
   onChange: (value: string | null) => void;
+  appGroupId?: string;
 }) {
   const { t } = useTranslation();
   const apps = useQuery({ queryKey: ["apps"], queryFn: () => loadApps() });
   const options = [
     { value: "__all__", label: t("apps.allApps") },
-    ...(apps.data ?? []).map((app) => ({ value: app.app_id, label: app.alias })),
+    ...(apps.data ?? [])
+      .filter((app) => !appGroupId || app.app_group_id === appGroupId)
+      .map((app) => ({ value: app.app_id, label: app.alias })),
   ];
   return (
     <div className="w-full space-y-1.5 sm:w-56">

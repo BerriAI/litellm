@@ -2,6 +2,7 @@
 DashScope Anthropic-compatible Messages transformation config.
 """
 
+from collections.abc import Sequence
 from typing import Final
 
 import litellm
@@ -54,7 +55,7 @@ class DashScopeAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         headers: dict[str, str],  # mutable-ok: mirrors the legacy base override signature
         model: str,
-        messages: list[object],  # mutable-ok: mirrors the legacy base override signature
+        messages: Sequence[object],
         optional_params: dict[str, object],  # mutable-ok: mirrors the legacy base override signature
         litellm_params: dict[str, object],  # mutable-ok: mirrors the legacy base override signature
         api_key: str | None = None,

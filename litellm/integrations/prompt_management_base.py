@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Final
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.prompts.init_prompts import PromptSpec
@@ -15,7 +16,7 @@ class PromptManagementClient(TypedDict):
     prompt_id: str | None
     prompt_template: list[AllMessageValues]
     prompt_template_model: str | None
-    prompt_template_optional_params: dict[str, Any] | None
+    prompt_template_optional_params: ReadOnly[Mapping[str, object] | None]
     completed_messages: list[AllMessageValues] | None
 
 
@@ -144,11 +145,11 @@ class PromptManagementBase(ABC):
         self,
         prompt_template: PromptManagementClient,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         model: str,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ):
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         completed_messages: Final = prompt_template["completed_messages"] or messages
 
         prompt_template_optional_params: Final = prompt_template["prompt_template_optional_params"] or {}
@@ -169,7 +170,7 @@ class PromptManagementBase(ABC):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
         prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
@@ -216,7 +217,7 @@ class PromptManagementBase(ABC):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
         prompt_variables: dict | None,
         dynamic_callback_params: StandardCallbackDynamicParams,

@@ -4,6 +4,7 @@ import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActiv
 import type { DailyData, SpendMetrics } from "@/components/UsagePage/types";
 import {
   customerAppSpendCall,
+  customerAppsUsageCall,
   customerChildSpendCall,
   customerHierarchyUsageCall,
   customerUsageEntity,
@@ -188,6 +189,28 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("customerHierarchyUsageCall", () => {
+  it.each([true, false])("loads all app usage pages with admin totals enabled %s", async (includeOverall) => {
+    fetchMock.mockImplementation(async (input) => {
+      const url = requestUrl(input);
+      const page = Number(url.searchParams.get("page"));
+      const row = records[page - 1];
+      return json({ results: [daily(row, row.organization)], metadata: { has_more: page === 1, total_pages: 2 } });
+    });
+    const totals = await customerAppsUsageCall(["app-one"], includeOverall, request);
+    const expected = { spend: 4, tokens: 600, inputTokens: 600, requests: 10 };
+    expect(totals.get("app-one")).toMatchObject(expected);
+    expect(totals.has(null)).toBe(includeOverall);
+    expect(dailyUrls()).toHaveLength(includeOverall ? 4 : 2);
+    expect(
+      dailyUrls().every((url) => {
+        const sameDates =
+          url.searchParams.get("start_date") === request.startDate &&
+          url.searchParams.get("end_date") === request.endDate;
+        return sameDates && (includeOverall || url.searchParams.get("app_id") === "app-one");
+      }),
+    ).toBe(true);
+  });
+
   it.each([
     { member: null, resource: "customer_organizations", id: "org-1", spend: 4, tokens: 600 },
     { member: "member-a", resource: "customer_members", id: "member-a", spend: 3, tokens: 100 },

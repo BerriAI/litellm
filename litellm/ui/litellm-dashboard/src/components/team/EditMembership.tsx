@@ -117,7 +117,7 @@ const MemberModal = <T extends BaseMember>({
       : config.roleOptions;
 
   const renderField = (field: MemberAdditionalField, name: string) => (
-    <FormField key={name} control={form.control} name={name} label={field.label}>
+    <FormField key={name} control={form.control} name={name} label={field.label} description={field.description}>
       {({ ref, id, value, onChange, ...rest }) => {
         switch (field.type) {
           case "input":
@@ -166,6 +166,8 @@ const MemberModal = <T extends BaseMember>({
           case "multi-select":
             return (
               <MultiSelect
+                id={id}
+                aria-describedby={rest["aria-describedby"]}
                 options={field.options ?? []}
                 value={Array.isArray(value) ? value : []}
                 onValueChange={onChange}
