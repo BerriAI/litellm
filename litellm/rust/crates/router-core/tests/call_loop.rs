@@ -2008,12 +2008,18 @@ fn stand_in_overflows(ids: &[&str]) -> PreCallFacts {
 }
 
 #[rstest]
-#[case::the_provider_refused_the_window(context_window(), 0)]
-#[case::another_failure(server_error(), 1)]
+#[case::the_provider_refused_the_window(context_window(), json!({}), 0)]
+#[case::a_context_window_fallback_applies(
+    server_error(),
+    json!({"context_window_fallbacks": [{"primary": ["backup"]}]}),
+    0
+)]
+#[case::another_failure(server_error(), json!({}), 1)]
 #[tokio::test]
-async fn a_stream_retry_sends_a_stand_in_overflow_only_when_no_provider_refused_the_window(
+async fn a_stream_retry_resends_a_stand_in_overflow_only_without_a_window_refusal_or_context_window_fallback(
     config: RouterConfig,
     #[case] stream_failure: AttemptError,
+    #[case] dynamic: Value,
     #[case] resent: usize,
 ) {
     let host = Arc::new(ScriptedHost {
@@ -2026,7 +2032,7 @@ async fn a_stream_retry_sends_a_stand_in_overflow_only_when_no_provider_refused_
             retry_policy: serde_json::from_value(json!({"BadRequestErrorRetries": 2})).unwrap(),
             ..config
         },
-        json!({}),
+        dynamic,
         host.clone(),
     );
     let _ = router
