@@ -43,6 +43,22 @@ impl Request {
     }
 }
 
+/// A header added to a response whose head was already written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("the response's head was already written")]
+pub struct HeadSent;
+
+/// The headers callbacks and Rust code add to the response, in the order they were added, until
+/// its head is written. After that the bag is closed and an add is refused.
+#[derive(Default)]
+struct ResponseHeaders {
+    added: Map<String, Value>,
+    /// Headers the response carries only when nothing else set one of the same name, such as the
+    /// model group's remaining usage.
+    defaults: Map<String, Value>,
+    sent: bool,
+}
+
 /// How a call ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ended {
@@ -75,13 +91,16 @@ pub struct CallState {
     first_event: Option<SystemTime>,
     request: Request,
     rate_limit_statuses: Option<Value>,
-    response_headers: Map<String, Value>,
+    response_headers: ResponseHeaders,
     served: Option<ServedCall>,
     ended: Option<Ended>,
     routing: Option<Routing>,
     served_deployment: Option<ServedDeployment>,
     attempt: Option<AttemptRecord>,
     failed_attempts: Vec<AttemptRecord>,
+    /// The call ended on an error, whose response names only what
+    /// [`CallState::respond_with_error`] was told.
+    error_response: bool,
 }
 
 /// `at` in seconds since the Unix epoch.
@@ -91,7 +110,7 @@ pub fn unix(at: SystemTime) -> f64 {
 }
 
 impl CallState {
-    pub(super) fn new(trace_id: String) -> Self {
+    pub(crate) fn new(trace_id: String) -> Self {
         Self {
             call_type: None,
             call_id: None,
@@ -106,13 +125,14 @@ impl CallState {
                 stream: false,
             },
             rate_limit_statuses: None,
-            response_headers: Map::new(),
+            response_headers: ResponseHeaders::default(),
             served: None,
             ended: None,
             routing: None,
             served_deployment: None,
             attempt: None,
             failed_attempts: Vec::new(),
+            error_response: false,
         }
     }
 
@@ -128,6 +148,17 @@ impl CallState {
         self.routing = Some(routing);
         self.served_deployment = deployment;
         self.attempt = Some(attempt);
+    }
+
+    /// The call ended on an error, whose response carries `routing`, what the router did for the
+    /// attempt it ended on, in place of what it did for the call before.
+    pub(crate) fn respond_with_error(&mut self, routing: Option<Routing>) {
+        self.routing = routing;
+        self.error_response = true;
+    }
+
+    pub fn is_error_response(&self) -> bool {
+        self.error_response
     }
 
     pub fn routing(&self) -> Option<&Routing> {
@@ -263,12 +294,47 @@ impl CallState {
     }
 
     pub fn response_headers(&self) -> &Map<String, Value> {
-        &self.response_headers
+        &self.response_headers.added
     }
 
-    /// Adds a header to the answer.
-    pub fn add_header(&mut self, name: String, value: Value) {
-        self.response_headers.insert(name, value);
+    /// Adds a header to the response. Refused once the response's head was written.
+    pub fn add_header(&mut self, name: String, value: Value) -> Result<(), HeadSent> {
+        if self.response_headers.sent {
+            return Err(HeadSent);
+        }
+        self.response_headers.added.insert(name, value);
+        Ok(())
+    }
+
+    /// Adds a header the response carries only when nothing else set one of the same name.
+    /// Refused once the response's head was written.
+    pub(crate) fn add_default_header(
+        &mut self,
+        name: String,
+        value: Value,
+    ) -> Result<(), HeadSent> {
+        if self.response_headers.sent {
+            return Err(HeadSent);
+        }
+        self.response_headers.defaults.insert(name, value);
+        Ok(())
+    }
+
+    /// Closes the header bag as the response's head is written, and hands back what was added
+    /// and the defaults. `headers::render_response_headers` is its one caller.
+    pub(crate) fn send_head(&mut self) -> (&Map<String, Value>, &Map<String, Value>) {
+        self.response_headers.sent = true;
+        (
+            &self.response_headers.added,
+            &self.response_headers.defaults,
+        )
+    }
+
+    /// Closes the header bag as [`Self::send_head`] does, for another crate's tests.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn close_head(&mut self) {
+        self.send_head();
     }
 
     pub fn serve(&mut self, served: ServedCall) {
@@ -321,6 +387,22 @@ mod tests {
         assert_eq!(
             (entries.model(), entries.stream(), entries.body().is_some()),
             (Some("claude-fallback"), true, !released)
+        );
+    }
+
+    #[rstest]
+    fn a_header_added_after_the_head_was_written_is_refused() {
+        let mut entries = CallState::new("trace-1".to_owned());
+        entries
+            .add_header("x-early".to_owned(), json!("yes"))
+            .unwrap();
+        entries.send_head();
+        assert_eq!(
+            (
+                entries.add_header("x-late".to_owned(), json!("yes")),
+                json!(entries.response_headers())
+            ),
+            (Err(HeadSent), json!({"x-early": "yes"}))
         );
     }
 }

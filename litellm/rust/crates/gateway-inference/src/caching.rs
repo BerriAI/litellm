@@ -1,19 +1,12 @@
 use std::time::Duration;
 
-use axum::{
-    http::{HeaderName, HeaderValue},
-    response::Response,
-};
 use litellm_cache_response::{CacheOptions, CachePolicy, CacheScope};
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{Caller, Rows, StoredKey};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use crate::{
-    BodyError, ExposedHeader,
-    record::{self, AttemptRecord},
-};
+use crate::BodyError;
 
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -77,23 +70,6 @@ fn duration(seconds: f64) -> Result<Duration, BodyError> {
         Ok(_) => Err(BodyError::CacheDuration(None)),
         Err(error) => Err(BodyError::CacheDuration(Some(error))),
     }
-}
-
-/// `response` with the `x-litellm-cache-key` of the cached answer the call was served from.
-pub(crate) fn with_cache_key(mut response: Response) -> Response {
-    let key = record::read(|entries| {
-        entries
-            .attempt()
-            .and_then(AttemptRecord::cache_key)
-            .and_then(|key| HeaderValue::from_str(key).ok())
-    })
-    .flatten();
-    if let Some(value) = key {
-        response
-            .headers_mut()
-            .insert(HeaderName::from(ExposedHeader::CacheKey), value);
-    }
-    response
 }
 
 #[cfg(test)]

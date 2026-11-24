@@ -31,7 +31,7 @@ use tokio::task::futures::TaskLocalFuture;
 
 pub use self::{
     attempt::{AttemptRecord, Recorder, ServedDeployment},
-    entries::{CallState, Charged, Ended, unix},
+    entries::{CallState, Charged, Ended, HeadSent, unix},
 };
 
 tokio::task_local! {
@@ -70,9 +70,19 @@ pub fn read<R>(look: impl FnOnce(&CallState) -> R) -> Option<R> {
         .ok()
 }
 
-/// Adds a header to the answer of the call this code runs in.
-pub fn add_header(name: impl Into<String>, value: impl Into<Value>) {
-    write(|entries| entries.add_header(name.into(), value.into()));
+/// Adds a header to the response of the call this code runs in. Refused once the response's head
+/// was written, which for a stream is before its first byte.
+pub fn add_header(name: impl Into<String>, value: impl Into<Value>) -> Result<(), HeadSent> {
+    write(|entries| entries.add_header(name.into(), value.into())).unwrap_or(Ok(()))
+}
+
+/// Adds a header the response of the call this code runs in carries only when nothing else set
+/// one of the same name. Refused once the response's head was written.
+pub(crate) fn default_header(
+    name: impl Into<String>,
+    value: impl Into<Value>,
+) -> Result<(), HeadSent> {
+    write(|entries| entries.add_default_header(name.into(), value.into())).unwrap_or(Ok(()))
 }
 
 /// Runs `future` as one attempt of the call, and hands back what it recorded next to its output.
@@ -189,9 +199,9 @@ mod tests {
             .route(
                 "/",
                 get(|| async {
-                    add_header("x-handler", "yes");
+                    add_header("x-handler", "yes").unwrap();
                     let body = futures_util::stream::once(async {
-                        add_header("x-body", "yes");
+                        add_header("x-body", "yes").unwrap();
                         Ok::<_, std::convert::Infallible>(Bytes::from(added().unwrap().to_string()))
                     });
                     Body::from_stream(body)
@@ -244,7 +254,7 @@ mod tests {
     async fn a_task_spawned_in_a_call_writes_its_record() {
         let record = CallRecord::new();
         scope(record.clone(), async {
-            litellm_call_scope::spawn_in_call(async { add_header("x-spawned", "yes") })
+            litellm_call_scope::spawn_in_call(async { add_header("x-spawned", "yes").unwrap() })
                 .await
                 .unwrap();
         })
@@ -261,7 +271,7 @@ mod tests {
         struct Dropped;
         impl Drop for Dropped {
             fn drop(&mut self) {
-                add_header("x-dropped", "yes");
+                add_header("x-dropped", "yes").unwrap();
             }
         }
         let record = CallRecord::new();

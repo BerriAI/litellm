@@ -6,7 +6,6 @@
 use std::{sync::Arc, time::Duration};
 
 use axum::{
-    Extension,
     extract::FromRequestParts,
     http::{HeaderMap, request::Parts},
     response::Response,
@@ -73,7 +72,7 @@ pub(crate) trait Endpoint: RouteAttempt {
     /// Those counts as Python's litellm `Usage`, `None` for a route that counts no tokens.
     fn usage(counts: Counts) -> Option<ChatCompletionsUsage>;
 
-    /// The provider's id for a complete output's answer.
+    /// The provider's id for a complete output's response.
     fn response_id(output: &Self::Output) -> Option<String>;
 
     /// The provider's id for a stream's answer, when the event whose `data` this is names it.
@@ -126,9 +125,9 @@ where
             model_group: routed.model_group,
         };
         let (mut output, recorded) = routed.output.response;
-        record::write(|entries| entries.routed(routing.clone(), deployment, recorded));
+        record::write(|entries| entries.routed(routing, deployment, recorded));
         let post_call = hooks::post_call::<E, _>(&hooks, &mut output, served).await?;
-        Ok(post_call.answer((Extension(routing), E::render(output, reported)?)))
+        Ok(post_call.answer(E::render(output, reported)?))
     };
     record::write(|entries| {
         entries.serve_as(E::CALL_TYPE);
@@ -140,5 +139,9 @@ where
         Ok(body) => hooks::around(gateway, identity, body, serve).await,
         Err(error) => Err(Ended::from(error)),
     };
-    served.unwrap_or_else(|ended| ended.response(E::ERRORS, call.request_id.as_deref()))
+    served.unwrap_or_else(|mut ended| {
+        let routing = ended.routing.take();
+        record::write(|entries| entries.respond_with_error(routing));
+        ended.response(E::ERRORS, call.request_id.as_deref())
+    })
 }

@@ -34,7 +34,7 @@ pub struct AttemptRecord {
 }
 
 impl AttemptRecord {
-    /// The key of the cached answer the attempt was served from.
+    /// The key of the cached response the attempt was served from.
     pub fn cache_key(&self) -> Option<&str> {
         match self.source.as_ref()? {
             ResultSource::Cache { key } => Some(key),
@@ -68,6 +68,17 @@ impl AttemptRecord {
             && route.upstream_response().is_some()
         {
             self.record_response(Some(route.upstream_headers().to_vec()));
+        }
+    }
+
+    /// An attempt served from the cached response `key`.
+    #[cfg(test)]
+    pub(crate) fn cached(key: &str) -> Self {
+        Self {
+            source: Some(ResultSource::Cache {
+                key: key.to_owned(),
+            }),
+            ..Self::default()
         }
     }
 }
@@ -164,8 +175,8 @@ mod tests {
     }
 
     /// What `Recorder` left in the attempt in scope once the core told it of a request `sends`, a
-    /// response head `answers` and a result from `source`.
-    async fn seen(sends: bool, answers: bool, source: ResultSource) -> Seen {
+    /// response head `responds` and a result from `source`.
+    async fn seen(sends: bool, responds: bool, source: ResultSource) -> Seen {
         let (_, record) = super::super::attempt(async {
             let recorder = &Recorder;
             if sends {
@@ -173,7 +184,7 @@ mod tests {
                     .await
                     .unwrap();
             }
-            if answers {
+            if responds {
                 Interceptors::<()>::after_provider_response(recorder, head())
                     .await
                     .unwrap();
@@ -192,7 +203,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::a_provider_answer(
+    #[case::a_provider_response(
         true,
         true,
         ResultSource::Provider,
@@ -212,11 +223,11 @@ mod tests {
     #[tokio::test]
     async fn the_recorder_writes_what_the_core_tells_it_into_the_attempt_in_scope(
         #[case] sends: bool,
-        #[case] answers: bool,
+        #[case] responds: bool,
         #[case] source: ResultSource,
         #[case] expected: Seen,
     ) {
-        assert_eq!(seen(sends, answers, source).await, expected);
+        assert_eq!(seen(sends, responds, source).await, expected);
     }
 
     /// What a failed attempt that sent its request left in its record, inside a call.

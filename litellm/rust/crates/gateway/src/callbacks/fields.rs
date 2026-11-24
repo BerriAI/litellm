@@ -13,7 +13,7 @@ use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{Caller, StoredKey};
 use litellm_gateway_inference::{
     CallType,
-    record::{CallState, Charged, Ended, unix},
+    record::{CallState, Charged, Ended, HeadSent, unix},
 };
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use litellm_python_compat::datetime::UtcDateTime;
@@ -41,6 +41,8 @@ pub enum Unwritable {
     Model(Value),
     #[error("{0:?} is part of the request body, which the route already has")]
     Routed(Field),
+    #[error(transparent)]
+    HeadSent(#[from] HeadSent),
 }
 
 /// Who `identity` is charged as: a key by the hash its row is stored under, its alias and its
@@ -331,9 +333,11 @@ pub fn write(entries: &mut CallState, op: PatchOp) -> Result<(), Unwritable> {
         PatchOp::Merge {
             field: Field::ResponseHeaders,
             keys,
-        } => keys
-            .into_iter()
-            .for_each(|(name, value)| entries.add_header(name, value)),
+        } => {
+            for (name, value) in keys {
+                entries.add_header(name, value)?;
+            }
+        }
         PatchOp::Set {
             field: Field::Model,
             value: Value::String(model),
@@ -536,6 +540,26 @@ mod tests {
                 )
             }),
             Err(Unwritable::Routed(Field::OptionalParams))
+        );
+    }
+
+    #[rstest]
+    fn a_patch_to_the_headers_of_a_response_whose_head_was_written_is_refused() {
+        assert_eq!(
+            on_a_call(|entries| {
+                entries.close_head();
+                (
+                    write(
+                        entries,
+                        PatchOp::Merge {
+                            field: Field::ResponseHeaders,
+                            keys: Map::from_iter([("x-late".to_owned(), json!("yes"))]),
+                        },
+                    ),
+                    entries.response_headers().is_empty(),
+                )
+            }),
+            (Err(Unwritable::HeadSent(HeadSent)), true)
         );
     }
 }
