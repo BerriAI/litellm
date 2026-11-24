@@ -5134,6 +5134,46 @@ class TestRouterPreRoutingAliasOverrides:
         assert request_kwargs.get("reasoning_effort") == (level if level in declared else None)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("level", REASONING_EFFORT_ADVERTISEMENT_ORDER)
+    async def test_tier_effort_follows_the_base_model_the_request_path_reads(self, level):
+        declared = declared_reasoning_efforts_for_map_key("azure_ai/gpt-chat-latest")
+        assert declared
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {
+                            "tiers": {
+                                "SIMPLE": {"model_name": "foundry-custom", "litellm_params": {"reasoning_effort": level}}
+                            }
+                        },
+                    },
+                },
+                {
+                    "model_name": "foundry-custom",
+                    "litellm_params": {
+                        "model": "azure_ai/my-reasoner",
+                        "api_base": "https://example.services.ai.azure.com",
+                        "api_key": "test-key",
+                        "base_model": "azure_ai/gpt-chat-latest",
+                    },
+                    "model_info": {"base_model": "azure_ai/gpt-5.5"},
+                },
+            ]
+        )
+        request_kwargs: Dict = {}
+
+        await router.async_get_available_deployment(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert request_kwargs.get("reasoning_effort") == (level if level in declared else None)
+
+    @pytest.mark.asyncio
     async def test_routing_never_resolves_an_authenticating_provider(self, monkeypatch, tmp_path):
         """Resolving github_copilot runs its OAuth device flow, so the whole routing path must
         answer without it: the tier-param filter fails open, the savings baseline qualifies by

@@ -12974,7 +12974,7 @@ class Router:
         if not deployment_params:
             return True
         deployment_model_info: Final = _configured_model_info(deployment)
-        base_model: Final = deployment_model_info.get("base_model") or deployment_params.get("base_model")
+        base_model: Final = deployment_params.get("base_model") or deployment_model_info.get("base_model")
         try:
             model, custom_llm_provider = Router._capability_model_and_provider(deployment_params, group)
             supported: Final = litellm.get_supported_openai_params(
