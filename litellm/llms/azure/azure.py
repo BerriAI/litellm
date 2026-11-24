@@ -236,7 +236,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         logging_obj: LiteLLMLoggingObj,
         optional_params,
         litellm_params,
-        logger_fn,
+        logger_fn: object,
         acompletion: bool = False,
         headers: dict | None = None,
         client=None,
@@ -430,7 +430,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_ad_token: str | None = None,
         azure_ad_token_provider: Callable | None = None,
         convert_tool_call_to_json_mode: bool | None = None,
-        client=None,  # this is the AsyncAzureOpenAI
+        client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,  # this is the AsyncAzureOpenAI
         litellm_params: dict | None = {},
     ):
         response = None
@@ -537,7 +537,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         max_retries: int,
         azure_ad_token: str | None = None,
         azure_ad_token_provider: Callable | None = None,
-        client=None,
+        client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
         litellm_params: dict | None = {},
     ):
         # init AzureOpenAI Client
@@ -614,7 +614,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         max_retries: int,
         azure_ad_token: str | None = None,
         azure_ad_token_provider: Callable | None = None,
-        client=None,
+        client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
         litellm_params: dict | None = {},
     ):
         try:
@@ -784,7 +784,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_ad_token_provider: Callable | None = None,
         max_retries: int | None = None,
         client=None,
-        aembedding=None,
+        aembedding: object = None,
         headers: dict | None = None,
         litellm_params: dict | None = None,
     ) -> EmbeddingResponse | Coroutine[object, object, EmbeddingResponse]:
@@ -1093,7 +1093,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         azure_ad_token: str | None = None,
         azure_ad_token_provider: Callable | None = None,
         client=None,
-        aimg_generation=None,
+        aimg_generation: object = None,
         litellm_params: dict | None = None,
     ) -> ImageResponse:
         try:

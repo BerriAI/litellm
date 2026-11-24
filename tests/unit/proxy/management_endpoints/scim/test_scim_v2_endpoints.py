@@ -15,6 +15,7 @@ from fastapi import FastAPI, HTTPException
 from httpx import ASGITransport, AsyncClient, ConnectError
 from pytest_mock import MockerFixture
 
+from litellm.redis.stores.auth_cache import AuthObject
 import litellm.proxy.management_endpoints.scim.scim_v2 as scim_v2_module
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
@@ -3207,7 +3208,7 @@ async def test_recompute_scim_member_roles_stops_serving_a_demoted_members_cache
     monkeypatch.setattr("litellm.default_internal_user_params", None, raising=False)
     cache = UserApiKeyCache()
     await cache.async_set_cache(
-        key="member-1", value={"user_id": "member-1", "user_role": LitellmUserRoles.PROXY_ADMIN.value}
+        key=AuthObject.user("member-1"), value={"user_id": "member-1", "user_role": LitellmUserRoles.PROXY_ADMIN.value}
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
     prisma, tx = _scim_admin_prisma(mocker, user_teams=["engineering"])
@@ -3215,7 +3216,7 @@ async def test_recompute_scim_member_roles_stops_serving_a_demoted_members_cache
     await _recompute_scim_member_roles(prisma, ["member-1"])
 
     tx.execute_raw.assert_awaited_once_with(ANY, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, ["member-1"])
-    assert await cache.async_get_cache(key="member-1") is None
+    assert await cache.async_get_cache(key=AuthObject.user("member-1")) is None
 
 
 @pytest.mark.asyncio
@@ -3910,6 +3911,37 @@ async def test_process_group_patch_operations_remove_uses_members_with_roles(moc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("path", ["members", "Members"])
+async def test_process_group_patch_operations_remove_members_without_value_or_filter_removes_every_member(
+    mocker: MockerFixture, path: str
+):
+    """RFC 7644 section 3.5.2.2: a remove on a multi-valued attribute with no
+    filter removes all of its values"""
+    existing_team: Final = LiteLLM_TeamTable(
+        team_id="team-1",
+        team_alias="Team One",
+        members=[],
+        members_with_roles=[
+            Member(user_id="member-1", role="user"),
+            Member(user_id="member-2", role="user"),
+        ],
+    )
+    patch_ops: Final = SCIMPatchOp(
+        schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+        Operations=[SCIMPatchOperation(op="remove", path=path)],
+    )
+
+    _, final_members, replace_target = await _process_group_patch_operations(
+        patch_ops=patch_ops,
+        existing_team=existing_team,
+        prisma_client=mocker.MagicMock(),
+    )
+
+    assert final_members == set()
+    assert replace_target == set()
+
+
+@pytest.mark.asyncio
 async def test_get_groups_reports_members_from_members_with_roles(mocker):
     """GET /Groups must report members from members_with_roles (the source of
     truth), not the legacy ``members`` column that team creation leaves empty.
@@ -3959,8 +3991,8 @@ async def test_apply_group_patch_updates_writes_only_the_patched_columns_and_evi
     mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
     updated = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=updated)
-    proxy_server.user_api_key_cache.set_cache(key="team_id:team-1", value={"team_id": "team-1"})
-    proxy_server.user_api_key_cache.set_cache(key="team_alias:Old", value={"team_id": "team-1"})
+    proxy_server.user_api_key_cache.set_cache(key=AuthObject.team("team-1"), value={"team_id": "team-1"})
+    proxy_server.user_api_key_cache.set_cache(key=AuthObject.team_alias("Old"), value={"team_id": "team-1"})
 
     result = await _apply_group_patch_updates(
         group_id="team-1",
@@ -3972,8 +4004,8 @@ async def test_apply_group_patch_updates_writes_only_the_patched_columns_and_evi
     assert result is updated
     mock_prisma_client.db.litellm_teamtable.update.assert_awaited_once()
     assert mock_prisma_client.db.litellm_teamtable.update.await_args.kwargs["data"] == {"team_alias": "Renamed"}
-    assert proxy_server.user_api_key_cache.get_cache("team_id:team-1") is None
-    assert proxy_server.user_api_key_cache.get_cache("team_alias:Old") is None
+    assert proxy_server.user_api_key_cache.get_cache(AuthObject.team("team-1")) is None
+    assert proxy_server.user_api_key_cache.get_cache(AuthObject.team_alias("Old")) is None
 
 
 @pytest.mark.asyncio
@@ -3986,7 +4018,7 @@ async def test_apply_group_patch_updates_with_nothing_to_write_reads_the_team_an
     existing = mocker.MagicMock()
     mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
     mock_prisma_client.db.litellm_teamtable.update = AsyncMock()
-    proxy_server.user_api_key_cache.set_cache(key="team_id:team-2", value={"team_id": "team-2"})
+    proxy_server.user_api_key_cache.set_cache(key=AuthObject.team("team-2"), value={"team_id": "team-2"})
 
     result = await _apply_group_patch_updates(
         group_id="team-2", update_data={}, prisma_client=mock_prisma_client, team_alias="Kept"
@@ -3994,7 +4026,7 @@ async def test_apply_group_patch_updates_with_nothing_to_write_reads_the_team_an
 
     assert result is existing
     mock_prisma_client.db.litellm_teamtable.update.assert_not_awaited()
-    assert proxy_server.user_api_key_cache.get_cache("team_id:team-2") is not None
+    assert proxy_server.user_api_key_cache.get_cache(AuthObject.team("team-2")) is not None
 
 
 def _mock_prisma_for_delete_user(mocker, team):
@@ -4226,6 +4258,63 @@ async def test_patch_group_replace_stays_absolute_against_concurrent_roster(mock
     group = await patch_group(group_id=group_id, patch_ops=patch_ops)
 
     assert [member.value for member in group.members or []] == ["alice"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "operations, expected",
+    [
+        ([SCIMPatchOperation(op="remove", path="members")], []),
+        (
+            [
+                SCIMPatchOperation(op="remove", path="members"),
+                SCIMPatchOperation(op="add", path="members", value=[{"value": "alice"}]),
+            ],
+            ["alice"],
+        ),
+    ],
+)
+async def test_patch_group_remove_every_member_clears_the_live_roster(
+    mocker: MockerFixture, operations: list[SCIMPatchOperation], expected: list[str]
+):
+    """A ``remove`` on ``members`` with no value or filter empties the roster, so it is
+    planned as a target like ``replace``. A member the snapshot read missed (a lagging
+    replica, or a request that added it after the read) is still removed by the
+    roster write, where a delta built from the snapshot would keep it."""
+    group_id: Final = "team-remove-all-concurrent"
+    snapshot_team: Final = LiteLLM_TeamTable(
+        team_id=group_id,
+        team_alias="Group",
+        members_with_roles=[Member(user_id="zed", role="user")],
+        metadata={"externalId": "grp-ext"},
+    )
+    live_team: Final = snapshot_team.model_copy(
+        update={"members_with_roles": [Member(user_id="zed", role="user"), Member(user_id="carol", role="user")]}
+    )
+    patch_ops: Final = SCIMPatchOp(schemas=["urn:ietf:params:scim:api:messages:2.0:PatchOp"], Operations=operations)
+
+    mock_prisma_client: Final = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=snapshot_team)
+    mock_prisma_client.db.litellm_teamtable.update = AsyncMock(return_value=snapshot_team)
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(side_effect=_rows_by_exact_id(_user_row_for))
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    _stub_roster_sync(mocker, live_team)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._recompute_scim_member_roles",
+        AsyncMock(),
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    group: Final = await patch_group(group_id=group_id, patch_ops=patch_ops)
+
+    assert [member.value for member in group.members or []] == expected
 
 
 @pytest.mark.parametrize(

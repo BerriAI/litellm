@@ -10,7 +10,7 @@ import json
 import os
 from collections.abc import Callable, Mapping
 from datetime import datetime
-from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional, TypeAlias, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional, cast
 from urllib.parse import urlparse
 
 from pydantic import TypeAdapter
@@ -21,6 +21,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import SupportsGet, as_str_mapping, require_get
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.custom_httpx.http_handler import (
@@ -42,8 +43,6 @@ _AIDR_SCAN_ENDPOINT: Final = "/litellm/guardrail"
 _INTERVENED_INPUT_FIELDS: Final = ("texts", "images", "tools", "tool_calls")
 _DEFAULT_API_BASE_HOSTNAME: Final = urlparse(_DEFAULT_API_BASE).hostname
 _DECODED_JSON: Final = TypeAdapter(object)
-
-_GuardrailJsonResponse: TypeAlias = Exception | str | dict[str, object]
 
 _KEYS_DUPLICATING_SCAN_INPUTS: Final = ("messages", "input")
 _LOGGING_KEYS_DUPLICATING_SCAN_INPUTS: Final = _KEYS_DUPLICATING_SCAN_INPUTS + (
@@ -165,7 +164,7 @@ class NomaV2Guardrail(CustomGuardrail):
 
     def _resolve_action_from_response(
         self,
-        response_json: Mapping[str, object],
+        response_json: SupportsGet,
     ) -> _Action:
         action: Final = response_json.get("action")
         if isinstance(action, str):
@@ -179,11 +178,11 @@ class NomaV2Guardrail(CustomGuardrail):
     def _build_scan_payload(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: Mapping[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"],
         application_id: str | None,
-    ) -> dict:
+    ) -> dict[str, object]:
         payload_request_data: Final = self._sanitize_payload_for_transport(
             {key: value for key, value in request_data.items() if key not in _KEYS_DUPLICATING_SCAN_INPUTS}
         )
@@ -212,7 +211,7 @@ class NomaV2Guardrail(CustomGuardrail):
         return payload
 
     @staticmethod
-    def _sanitize_payload_for_transport(payload: dict) -> dict:
+    def _sanitize_payload_for_transport(payload: Mapping[str, object]) -> dict:
         def _default(obj: object) -> object:
             model_dump: Final[Callable[[], Mapping[str, object]] | None] = getattr(obj, "model_dump", None)
             if model_dump is not None:
@@ -244,8 +243,8 @@ class NomaV2Guardrail(CustomGuardrail):
 
     async def _call_noma_scan(
         self,
-        payload: dict,
-    ) -> dict[str, object]:
+        payload: Mapping[str, object],
+    ) -> object:
         headers: Final[dict[str, str]] = {"Content-Type": "application/json"}
         authorization_header: Final = self._get_authorization_header()
         if authorization_header:
@@ -265,7 +264,7 @@ class NomaV2Guardrail(CustomGuardrail):
             response.text,
         )
         response.raise_for_status()
-        response_json: Final[dict[str, object]] = response.json()
+        response_json: Final = _DECODED_JSON.validate_python(response.json())
         verbose_proxy_logger.debug(
             "Noma v2 AIDR response parsed: %s",
             json.dumps(response_json, default=str),
@@ -274,10 +273,10 @@ class NomaV2Guardrail(CustomGuardrail):
 
     def _add_guardrail_observability(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         start_time: datetime,
         guardrail_status: GuardrailStatus,
-        guardrail_json_response: _GuardrailJsonResponse,
+        guardrail_json_response: object,
     ) -> None:
         end_time: Final = datetime.now()
         duration: Final = (end_time - start_time).total_seconds()
@@ -294,16 +293,17 @@ class NomaV2Guardrail(CustomGuardrail):
     def _apply_action(
         self,
         inputs: GenericGuardrailAPIInputs,
-        response_json: dict,
+        response_json: object,
         action: _Action,
     ) -> GenericGuardrailAPIInputs:
         if action == _Action.BLOCKED:
             raise NomaBlockedMessage(response_json)
 
         if action == _Action.GUARDRAIL_INTERVENED:
+            verdict: Final = require_get(response_json)
             updated_inputs: Final = cast(GenericGuardrailAPIInputs, dict(inputs))
             for field in _INTERVENED_INPUT_FIELDS:
-                value = response_json.get(field)
+                value = verdict.get(field)
                 if isinstance(value, list):
                     updated_inputs[field] = value
             return updated_inputs
@@ -320,11 +320,11 @@ class NomaV2Guardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         start_time: Final = datetime.now()
         guardrail_status: GuardrailStatus = "success"
-        guardrail_json_response: _GuardrailJsonResponse = {}
+        guardrail_json_response: object = {}
         dynamic_params = self.get_guardrail_dynamic_request_body_params(request_data)
         if not isinstance(dynamic_params, dict):
             dynamic_params = {}
-        response_json: dict[str, object] | None = None
+        response_json: object = None
 
         # Per-request dynamic params can override configured application context.
         application_id = self._get_non_empty_str(dynamic_params.get("application_id"))
@@ -352,7 +352,7 @@ class NomaV2Guardrail(CustomGuardrail):
             if self.monitor_mode:
                 action = _Action.NONE
             else:
-                action = self._resolve_action_from_response(response_json=response_json)
+                action = self._resolve_action_from_response(response_json=require_get(response_json))
             guardrail_json_response = response_json
             verbose_proxy_logger.debug(
                 "Noma v2 guardrail decision: input_type=%s action=%s",
@@ -371,8 +371,9 @@ class NomaV2Guardrail(CustomGuardrail):
         except NomaBlockedMessage as e:
             guardrail_status = "guardrail_intervened"
             blocked_detail: Final[dict[str, object]] = {"error": "blocked"}
+            blocked_response: Final = as_str_mapping(response_json)
             guardrail_json_response = (
-                response_json if isinstance(response_json, dict) else getattr(e, "detail", blocked_detail)
+                blocked_response if blocked_response is not None else getattr(e, "detail", blocked_detail)
             )
             raise
         except asyncio.CancelledError:

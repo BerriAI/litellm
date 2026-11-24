@@ -1,4 +1,5 @@
 use std::future::Future;
+use std::sync::{Arc, OnceLock};
 
 use bytes::Bytes;
 use serde_json::Value;
@@ -37,6 +38,8 @@ pub struct RequestContext {
     pub secret_fields: Vec<String>,
     /// The credential the route resolved for the provider call.
     pub api_key: Option<litellm_secret_value::SecretValue>,
+    /// Whether the host's own HTTP client sends the request, timing the exchange itself.
+    pub host_transport: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,14 +87,59 @@ pub enum ResultSource {
 }
 
 /// What the call cost, settled once by the route. A host records it; it never re-derives it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Cost {
     /// The amount the provider itself billed, taken from its response.
     Reported { amount: serde_json::Number },
+    /// The route priced the finished call from its usage.
+    Priced(Box<PricedCost>),
+    /// A stream the route prices once its usage is final. The host reads the meter after the stream ends.
+    Metered(StreamMeter),
     /// Served from the cache, so nothing was billed.
     CacheHit,
     /// No provider figure: the host estimates from usage and its price table.
     Deferred,
+}
+
+/// A call the route priced: its receipt and the call facts a host stores beside it, as the call stated them
+#[derive(Clone, Debug, PartialEq)]
+pub struct PricedCost {
+    pub receipt: litellm_cost::receipt::Receipt,
+    /// The billable tier resolved from the served and requested tiers, `None` for standard pricing
+    pub service_tier: Option<String>,
+    pub data_residency: Option<String>,
+}
+
+/// Where a stream's route leaves its price once the usage is final. It stays empty for a stream that ended before
+/// its usage did, or one the route could not price, and the host then prices the call itself.
+#[derive(Clone, Default)]
+pub struct StreamMeter(Arc<OnceLock<PricedCost>>);
+
+impl StreamMeter {
+    /// Keeps the first price, so a later event never replaces one the host may already have read
+    pub fn settle(&self, priced: PricedCost) {
+        let _ = self.0.set(priced);
+    }
+
+    pub fn settled(&self) -> Option<&PricedCost> {
+        self.0.get()
+    }
+}
+
+impl std::fmt::Debug for StreamMeter {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("StreamMeter")
+            .field(&self.settled().map(|priced| priced.receipt.total))
+            .finish()
+    }
+}
+
+/// Two meters are equal when they are the same meter
+impl PartialEq for StreamMeter {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
 }
 
 impl Cost {
@@ -105,7 +153,7 @@ impl Cost {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ExecutionFacts {
     pub provider: ProviderIdentity,
     pub source: ResultSource,
@@ -226,6 +274,7 @@ mod tests {
             optional_params: json!({}),
             secret_fields: Vec::new(),
             api_key: None,
+            host_transport: false,
         }
     }
 
@@ -274,6 +323,44 @@ mod tests {
             panic!("the call completes with the answers");
         };
         assert_eq!(sent.url, "rewritten");
+    }
+
+    fn priced(total: f64) -> PricedCost {
+        PricedCost {
+            receipt: litellm_cost::receipt::Receipt::of_total(total),
+            service_tier: None,
+            data_residency: None,
+        }
+    }
+
+    #[rstest::rstest]
+    fn a_meter_keeps_its_first_price_for_every_clone_of_it() {
+        let meter = StreamMeter::default();
+        let held = meter.clone();
+        assert_eq!(held.settled(), None);
+
+        meter.settle(priced(0.5));
+        held.settle(priced(9.0));
+
+        assert_eq!(held.settled(), Some(&priced(0.5)));
+        assert_eq!(Cost::Metered(held), Cost::Metered(meter));
+        assert_ne!(
+            Cost::Metered(StreamMeter::default()),
+            Cost::Metered(StreamMeter::default())
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::cache(ResultSource::Cache { key: "k".into() }, Some(1), Cost::CacheHit)]
+    #[case::host(ResultSource::Host, Some(1), Cost::Deferred)]
+    #[case::reported(ResultSource::Provider, Some(1), Cost::Reported { amount: 1.into() })]
+    #[case::unreported(ResultSource::Provider, None, Cost::Deferred)]
+    fn settle_leaves_pricing_to_the_route(
+        #[case] source: ResultSource,
+        #[case] reported: Option<u64>,
+        #[case] expected: Cost,
+    ) {
+        assert_eq!(Cost::settle(&source, reported.map(Into::into)), expected);
     }
 
     #[rstest::rstest]

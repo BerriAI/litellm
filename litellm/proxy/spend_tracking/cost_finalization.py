@@ -13,9 +13,8 @@ from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost,
 from litellm.proxy.hooks.search_free_tier import SharedCounter, allocate_search_free_tier
 from litellm.proxy.spend_tracking.customer_cost_margin import (
     apply_customer_cost_margin,
-    customer_cost_margin,
     request_customer_attribution,
-    request_has_customer,
+    request_customer_cost_margin,
 )
 from litellm.types.utils import CostBreakdown, StandardLoggingPayload
 
@@ -119,7 +118,7 @@ async def _finish_finalization(
         )
     finalized: Final = apply_customer_cost_margin(
         finalize_cost(amount, breakdown, logging_obj.cost_allowance_discount),
-        customer_cost_margin(request_has_customer(_customer_attribution(logging_obj, payload))),
+        request_customer_cost_margin(_customer_attribution(logging_obj, payload)),
     )
     logging_obj.record_finalized_cost(finalized)
     return finalized

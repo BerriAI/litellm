@@ -19,10 +19,6 @@ from litellm.llms.anthropic.common_utils import (
 from litellm.llms.anthropic.messages.native.transformation import AnthropicMessagesConfig
 from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
 from litellm.llms.base_llm.anthropic_messages.transformation import BaseAnthropicMessagesConfig
-from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
-    AmazonAnthropicClaudeMessagesConfig,
-)
-from litellm.llms.bedrock_mantle.messages.transformation import BedrockMantleAnthropicMessagesConfig
 from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
 from litellm.llms.openai_like.messages.transformation import OpenAILikeAnthropicMessagesConfig
 from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation import (
@@ -211,44 +207,6 @@ def test_other_hosts_never_send_a_block_binding(config: BaseAnthropicMessagesCon
     assert retried is case.get("other_hosts_retried", case["retried"])
     assert transformed == _retried_body(case, outcome)
     assert config.anthropic_messages_retry_header_beta(_rejection(case), body) is None
-
-
-_DROP_BLOCK_CASES: Final = tuple(case for case in RETRY["cases"] if case["outcome"] == "drop_block")
-
-
-@pytest.mark.parametrize("case", [pytest.param(case, id=case["name"]) for case in _DROP_BLOCK_CASES])
-@pytest.mark.parametrize(
-    "caller_betas",
-    (pytest.param((), id="no_caller_betas"), pytest.param(("zeta-beta", "alpha-beta"), id="caller_betas")),
-)
-def test_bedrock_invoke_carries_the_binding_beta_in_the_body(case: _RetryCase, caller_betas: tuple[str, ...]) -> None:
-    config: Final = AmazonAnthropicClaudeMessagesConfig()
-    body: Final = {**_request_body(case), **({"anthropic_beta": list(caller_betas)} if caller_betas else {})}
-
-    header_beta: Final = config.anthropic_messages_retry_header_beta(_rejection(case), body)
-    transformed: Final = config.transform_anthropic_messages_request_on_http_error(
-        e=_rejection(case), request_data=body
-    )
-
-    assert transformed == {
-        **_retried_body(case, "drop_block"),
-        "anthropic_beta": tuple(sorted((*caller_betas, RETRY["binding_beta"]))),
-    }
-    assert header_beta is None
-
-
-@pytest.mark.parametrize("case", [pytest.param(case, id=case["name"]) for case in _DROP_BLOCK_CASES])
-def test_bedrock_mantle_carries_the_binding_beta_in_the_header(case: _RetryCase) -> None:
-    config: Final = BedrockMantleAnthropicMessagesConfig()
-    body: Final = _request_body(case)
-
-    header_beta: Final = config.anthropic_messages_retry_header_beta(_rejection(case), body)
-    transformed: Final = config.transform_anthropic_messages_request_on_http_error(
-        e=_rejection(case), request_data=body
-    )
-
-    assert transformed == _retried_body(case, "drop_block")
-    assert header_beta == RETRY["binding_beta"]
 
 
 @pytest.mark.parametrize(

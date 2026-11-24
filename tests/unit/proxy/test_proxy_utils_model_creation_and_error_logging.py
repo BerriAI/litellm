@@ -2820,6 +2820,199 @@ def test_every_earlier_timed_out_attempt_is_billed_at_its_own_deployment_rate(mo
     assert all(a.usage is usage for a in attempts)
 
 
+def _failed_fallback_metadata() -> dict[str, object]:  # mutable-ok: the router's metadata dict
+    """What the router leaves when group ``lit45-primary`` timed out twice and its fallback
+    ``lit45-fallback`` then timed out twice: the client gets the primary's last error, which the
+    router names as ``client_seen_attempt``, while the routing fields describe the fallback's last call."""
+    return {
+        "original_model_group": "lit45-primary",
+        "model_group": "lit45-fallback",
+        "attempted_retries": 1,
+        "model_info": {"id": "dep-lit45-fallback"},
+        "previous_models": (
+            {
+                "model_group": "lit45-primary",
+                "deployment_id": "dep-lit45-primary",
+                "model": "lit45-primary-model",
+                "exception_type": "Timeout",
+                "attempted_retries": 0,
+            },
+            {
+                "model_group": "lit45-primary",
+                "deployment_id": "dep-lit45-primary",
+                "model": "lit45-primary-model",
+                "exception_type": "Timeout",
+                "attempted_retries": 1,
+            },
+            {
+                "model_group": "lit45-fallback",
+                "deployment_id": "dep-lit45-fallback",
+                "model": "lit45-fallback-model",
+                "exception_type": "Timeout",
+                "attempted_retries": 0,
+            },
+        ),
+        "failed_fallback_attempts": (
+            {
+                "model_group": "lit45-fallback",
+                "deployment_id": "dep-lit45-fallback",
+                "model": "lit45-fallback-model",
+                "exception_type": "Timeout",
+                "attempted_retries": 1,
+            },
+        ),
+        "client_seen_attempt": {
+            "model_group": "lit45-primary",
+            "deployment_id": "dep-lit45-primary",
+            "model": "lit45-primary-model",
+            "exception_type": "Timeout",
+            "attempted_retries": 1,
+        },
+    }
+
+
+def test_after_a_failed_fallback_every_timed_out_call_but_the_one_the_client_saw_is_an_attempt_row():
+    from litellm.proxy.utils import _billed_earlier_attempts
+
+    attempts = _billed_earlier_attempts(
+        model_call_details={"model": FAILURE_USAGE_MODEL, "custom_llm_provider": "openai"},
+        litellm_params={"metadata": _failed_fallback_metadata()},
+        estimated_usage=litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24),
+        base_model=None,
+        deployment_id="dep-lit45-fallback",
+    )
+
+    assert [(a.deployment_id, a.attempted_retries) for a in attempts] == [
+        ("dep-lit45-primary", 0),
+        ("dep-lit45-fallback", 0),
+        ("dep-lit45-fallback", 1),
+    ]
+
+
+def test_a_fallback_that_failed_without_timing_out_adds_no_attempt_row_for_the_call_the_client_saw():
+    from litellm.proxy.utils import _billed_earlier_attempts
+
+    metadata = _failed_fallback_metadata()
+    primary_first, primary_last, _ = metadata["previous_models"]
+    (fallback_last,) = metadata["failed_fallback_attempts"]
+
+    attempts = _billed_earlier_attempts(
+        model_call_details={"model": FAILURE_USAGE_MODEL, "custom_llm_provider": "openai"},
+        litellm_params={
+            "metadata": {
+                **metadata,
+                "attempted_retries": 0,
+                "previous_models": (primary_first, primary_last),
+                "failed_fallback_attempts": ({**fallback_last, "exception_type": "InternalServerError"},),
+            }
+        },
+        estimated_usage=litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24),
+        base_model=None,
+        deployment_id="dep-lit45-fallback",
+    )
+
+    assert [(a.deployment_id, a.attempted_retries) for a in attempts] == [("dep-lit45-primary", 0)]
+
+
+def test_the_failure_row_after_a_failed_fallback_is_priced_at_the_deployment_the_client_saw_fail(monkeypatch):
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    for deployment_id, input_rate in (("dep-lit45-primary", 0.02), ("dep-lit45-fallback", 0.5)):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            deployment_id,
+            {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": input_rate},
+        )
+    logging_obj = _dispatched_failure_logging_obj(
+        FAILURE_USAGE_MODEL, get_litellm_params(metadata=_failed_fallback_metadata())
+    )
+
+    lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    prompt_tokens = lifted["combined_usage_object"].prompt_tokens
+    assert prompt_tokens > 0
+    assert lifted["response_cost"] == pytest.approx(prompt_tokens * 0.02)
+    assert [a.response_cost for a in lifted["billed_failed_attempts"]] == [
+        pytest.approx(prompt_tokens * 0.02),
+        pytest.approx(prompt_tokens * 0.5),
+        pytest.approx(prompt_tokens * 0.5),
+    ]
+
+
+def _failure_row_and_attempt_rows(monkeypatch, metadata):
+    """``(main row cost per prompt token, [(deployment, attempt) of each attempt row])`` for a failed
+    request whose router metadata is ``metadata``, with the primary priced at 0.02 and the fallback at 0.5."""
+    from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    for deployment_id, input_rate in (("dep-lit45-primary", 0.02), ("dep-lit45-fallback", 0.5)):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            deployment_id,
+            {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": input_rate},
+        )
+    logging_obj = _dispatched_failure_logging_obj(FAILURE_USAGE_MODEL, get_litellm_params(metadata=metadata))
+    lifted = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+    return (
+        lifted["response_cost"] / lifted["combined_usage_object"].prompt_tokens,
+        [(a.deployment_id, a.attempted_retries) for a in lifted["billed_failed_attempts"]],
+    )
+
+
+def test_a_failure_no_attempt_raised_keeps_the_failure_row_on_the_call_that_was_running(monkeypatch):
+    """A deadline that cuts a fallback call short reaches the client as no attempt's own error, so
+    the router names no ``client_seen_attempt`` and the running fallback call stays the failure row."""
+    metadata = {
+        key: value
+        for key, value in _failed_fallback_metadata().items()
+        if key not in ("client_seen_attempt", "failed_fallback_attempts")
+    }
+
+    rate, attempt_rows = _failure_row_and_attempt_rows(monkeypatch, metadata)
+
+    assert rate == pytest.approx(0.5)
+    assert attempt_rows == [("dep-lit45-primary", 0), ("dep-lit45-primary", 1), ("dep-lit45-fallback", 0)]
+
+
+def test_a_fallbacks_error_that_reached_the_client_makes_the_fallbacks_call_the_failure_row(monkeypatch):
+    """Ordered deployments can hand the client the fallback's last error instead of the requested group's."""
+    metadata = _failed_fallback_metadata()
+    (fallback_last,) = metadata["failed_fallback_attempts"]
+
+    rate, attempt_rows = _failure_row_and_attempt_rows(monkeypatch, {**metadata, "client_seen_attempt": fallback_last})
+
+    assert rate == pytest.approx(0.5)
+    assert attempt_rows == [("dep-lit45-primary", 0), ("dep-lit45-primary", 1), ("dep-lit45-fallback", 0)]
+
+
+def test_a_forwarded_credential_clone_does_not_bill_its_final_timed_out_attempt_as_an_earlier_one():
+    """A request carrying its own credential runs on a clone whose id the retry records carry, while
+    pricing reads the configured deployment's id. The clone's final attempt is still the failure row's."""
+    from litellm.proxy.utils import _billed_earlier_attempts
+
+    usage: Final = litellm.Usage(prompt_tokens=24, completion_tokens=0, total_tokens=24)
+
+    attempts: Final = _billed_earlier_attempts(
+        model_call_details={"model": FAILURE_USAGE_MODEL, "custom_llm_provider": "openai"},
+        litellm_params={
+            "metadata": {
+                "attempted_retries": 1,
+                "model_info": {"id": "clone-of-configured", "original_model_id": "configured"},
+                "previous_models": (
+                    {"deployment_id": "clone-of-configured", "exception_type": "Timeout", "attempted_retries": 0},
+                    {"deployment_id": "clone-of-configured", "exception_type": "Timeout", "attempted_retries": 1},
+                ),
+            }
+        },
+        estimated_usage=usage,
+        base_model=None,
+        deployment_id="configured",
+    )
+
+    assert [(a.attempted_retries, a.deployment_id) for a in attempts] == [(0, "clone-of-configured")]
+
+
 def test_an_earlier_attempt_on_another_model_is_priced_at_that_models_rate_not_the_final_models(monkeypatch):
     """After a fallback hop the final attempt runs on another model group, so the records of the group
     that timed out first name their own deployment model (and its ``base_model`` when the deployment
@@ -4516,3 +4709,65 @@ def test_is_client_error_exception_existing_behaviour_unchanged() -> None:
     assert _is_client_error_exception(HTTPException(status_code=500, detail="x")) is False
     assert _is_client_error_exception(ProxyException(message="x", type="x", param=None, code="429")) is True
     assert _is_client_error_exception(ValueError("x")) is False
+
+
+class _NativeHookMCPGuardrail(_RecordingMCPGuardrail):
+    use_native_lifecycle_hooks = True
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+class _NativeHookDeclaringPostMCPCall(_NativeHookMCPGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls):
+        return [GuardrailEventHooks.post_call, GuardrailEventHooks.post_mcp_call]
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+class _NativeHookDeclaringOtherHooks(_NativeHookMCPGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls):
+        return [GuardrailEventHooks.post_call]
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+class _NativeHookDeclaringNoHooks(_NativeHookMCPGuardrail):
+    @classmethod
+    def get_supported_event_hooks(cls):
+        return None
+
+    async def apply_guardrail(self, inputs, request_data, input_type, **kwargs):
+        return await super().apply_guardrail(inputs, request_data, input_type, **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("guardrail_class", "expected_calls", "expected_text"),
+    [
+        (_NativeHookDeclaringPostMCPCall, 1, "<MASKED>"),
+        (_NativeHookDeclaringOtherHooks, 0, "jane@example.com"),
+        (_NativeHookDeclaringNoHooks, 0, "jane@example.com"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_post_mcp_call_hook_runs_a_native_hook_guardrail_only_when_it_supports_post_mcp_call(
+    restore_callbacks, guardrail_class, expected_calls, expected_text
+):
+    from mcp.types import CallToolResult, TextContent
+
+    guardrail = guardrail_class(event_hook=GuardrailEventHooks.post_mcp_call)
+    litellm.callbacks = [guardrail]  # test-quality-ok: post_mcp_call_hook reads litellm.callbacks, restore_callbacks undoes it
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    result = CallToolResult(content=[TextContent(type="text", text="jane@example.com")], isError=False)
+
+    returned = await proxy_logging_obj.post_mcp_call_hook(
+        response=result,
+        request_data={"mcp_tool_name": "echo"},
+        user_api_key_dict=None,
+    )
+
+    assert (guardrail.call_count, [item.text for item in returned.content]) == (expected_calls, [expected_text])

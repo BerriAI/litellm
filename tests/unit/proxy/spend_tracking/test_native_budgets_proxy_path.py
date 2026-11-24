@@ -32,6 +32,7 @@ from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
 from litellm.router import Router
 from litellm.types.utils import CallTypesLiteral
+from tests.unit.proxy._prisma import prisma_with_empty_config
 from tests.unit.proxy.spend_tracking.native_budgets_golden.golden import NATIVE_BUDGETS_PROXY_PATH, Golden
 
 API_KEY: Final = "sk-native-path"
@@ -41,10 +42,6 @@ BODY: Final = {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}
 
 
 RequestData: TypeAlias = dict[str, object]
-
-
-class _NoDatabase:
-    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +58,7 @@ def proxy(monkeypatch: pytest.MonkeyPatch) -> Iterator[Proxy]:
     logging: Final = ProxyLogging(user_api_key_cache=cache)
     monkeypatch.setattr(proxy_server, "spend_counter_store", store)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
-    monkeypatch.setattr(proxy_server, "prisma_client", _NoDatabase())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
     monkeypatch.setattr(proxy_server, "master_key", "sk-master")
     monkeypatch.setattr(proxy_server, "general_settings", {})
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging)

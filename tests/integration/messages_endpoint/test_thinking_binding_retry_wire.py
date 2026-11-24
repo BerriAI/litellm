@@ -23,7 +23,9 @@ from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
-Provider: TypeAlias = Literal["anthropic", "azure_ai", "bedrock_invoke", "bedrock_mantle", "vertex_ai", "openai_passthrough"]
+Provider: TypeAlias = Literal[
+    "anthropic", "azure_ai", "bedrock_invoke", "bedrock_mantle", "vertex_ai", "openai_passthrough"
+]
 Body: TypeAlias = dict[str, JsonValue]
 
 _PROVIDERS: Final[tuple[Provider, ...]] = ("anthropic", "azure_ai", "bedrock_invoke", "bedrock_mantle", "vertex_ai")

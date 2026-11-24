@@ -3,7 +3,7 @@
 from collections.abc import Callable, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import httpx
 from pydantic import TypeAdapter
@@ -19,8 +19,12 @@ from litellm.llms.vertex_ai.request_labels import (
 from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.utils import ModelResponse
 
-from ...custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from ...custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from ...custom_httpx.llm_http_handler import BaseLLMHTTPHandler, LiteLLMLoggingObj
 from ..vertex_llm_base import VertexBase
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 base_llm_http_handler = BaseLLMHTTPHandler()
 _PARAMS: Final = TypeAdapter(Mapping[str, object])
@@ -36,7 +40,7 @@ def _caller_labels(optional_params: Mapping[str, object]) -> Mapping[str, object
 
 
 class VertexAIError(Exception):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message: str):
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url=" https://cloud.google.com/vertex-ai/")
@@ -110,9 +114,9 @@ class VertexAIPartnerModels(VertexBase):
         model: str,
         messages: list,
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
-        logging_obj,
+        print_verbose: Callable[..., object],
+        encoding: "Tokenizer | None",
+        logging_obj: LiteLLMLoggingObj,
         api_base: str | None,
         optional_params: dict,
         custom_prompt_dict: dict,
@@ -122,9 +126,9 @@ class VertexAIPartnerModels(VertexBase):
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,
-        logger_fn=None,
+        logger_fn: object = None,
         acompletion: bool = False,
-        client=None,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
     ):
         try:
             from litellm.llms.anthropic.chat import AnthropicChatCompletion

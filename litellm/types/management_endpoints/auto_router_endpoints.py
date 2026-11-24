@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from datetime import datetime, timezone
 from typing import Final, Literal, TypeAlias
 
-from pydantic import ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import ConfigDict, Field, TypeAdapter, computed_field, field_validator, model_validator
 
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import StandardLoggingRoutingDecision
@@ -16,6 +16,7 @@ DEFAULT_ROUTING_TEST_ROUTER_NAME: Final[str] = "auto_router_routing_test"
 
 _REQUEST_MODELS_MODULE: Final = "litellm.router_strategy.complexity_router.request_models"
 _REQUEST_MODELS_EXPORTS: Final = frozenset({"RequestComplexityRouterConfig", "AutoRouterRoutingTestRequest"})
+_LAZY_EXPORT: Final = TypeAdapter(object)
 
 
 class ComplexityRouterConfigValidationRequest(LiteLLMBaseModel):
@@ -785,5 +786,5 @@ class ShadowEvalRubricResultResponse(LiteLLMBaseModel):
 
 def __getattr__(name: str) -> object:
     if name in _REQUEST_MODELS_EXPORTS:
-        return getattr(importlib.import_module(_REQUEST_MODELS_MODULE), name)
+        return _LAZY_EXPORT.validate_python(getattr(importlib.import_module(_REQUEST_MODELS_MODULE), name))
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -42,8 +42,12 @@ class DailyActivityScope:
     timezone_offset_minutes: int | None
     include_current_utc_day: bool = False
     team_ids: tuple[str, ...] | None = None
+    app_id: str | None = None
+    app_group_id: str | None = None
 
     def __post_init__(self) -> None:
+        if self.app_id is not None and self.table is not DailyActivityTable.CUSTOMER_MEMBER:
+            raise ValueError("App filtering is supported only on customer hierarchy activity")
         if self.entity_id_field not in _ENTITY_FIELDS[self.table]:
             raise ValueError(f"Invalid entity_id_field {self.entity_id_field!r} for {self.table.value}")
 
@@ -129,6 +133,8 @@ class ExportRow:
     failed_requests: int
     cache_read_input_tokens: int
     cache_creation_input_tokens: int
+    key_metadata: Mapping[str, object]
+    user_metadata: Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +147,8 @@ class RollupMetricsRow:
     completion_tokens: int | None
     cache_read_input_tokens: int | None
     cache_creation_input_tokens: int | None
+    cache_cost: float | None = field(default=None, kw_only=True)
+    priced_cache_tokens: int | None = field(default=None, kw_only=True)
     compression_saved_tokens: int | None
     compression_savings_spend: float | None
     prompt_caching_savings_spend: float | None

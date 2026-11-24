@@ -37,7 +37,7 @@ def optional_callback_budget(maximum: float, *, fraction: float = 0.25) -> float
     )
 
 
-def _coroutine_name(coroutine: Coroutine) -> str:
+def _coroutine_name(coroutine: Coroutine[object, None, object]) -> str:
     return getattr(coroutine, "__qualname__", None) or getattr(coroutine, "__name__", None) or type(coroutine).__name__
 
 
@@ -47,7 +47,7 @@ class LoggingTask(TypedDict):
     the original task's context.
     """
 
-    coroutine: Coroutine
+    coroutine: Coroutine[object, None, object]
     context: contextvars.Context
 
 
@@ -87,7 +87,7 @@ class LoggingWorker:
         self._timeout_total: int = 0
         self._timeout_burst_count: int = 0
         self._timeout_last_callback: str | None = None
-        self._timeout_summary_task: asyncio.Task | None = None
+        self._timeout_summary_task: asyncio.Task[None] | None = None
 
         # Register cleanup handler to flush remaining events on exit
         atexit.register(self._flush_on_exit)
@@ -117,7 +117,9 @@ class LoggingWorker:
                 return index
         return len(revived)
 
-    def _run_coroutine_silently(self, loop: asyncio.AbstractEventLoop, coroutine: Coroutine) -> bool:
+    def _run_coroutine_silently(
+        self, loop: asyncio.AbstractEventLoop, coroutine: Coroutine[object, None, object]
+    ) -> bool:
         token: Final = _CALLBACK_DEADLINE.set(loop.time() + self.timeout)
         try:
             loop.run_until_complete(asyncio.wait_for(coroutine, timeout=self.timeout))
@@ -220,7 +222,7 @@ class LoggingWorker:
             # Always release semaphore, even if queue is None
             sem.release()
 
-    def _record_callback_timeout(self, coroutine: Coroutine) -> None:
+    def _record_callback_timeout(self, coroutine: Coroutine[object, None, object]) -> None:
         """Count a callback timeout and arm a debounced summary, so a burst of timeouts
         (e.g. a slow Redis timing out many callbacks at once) logs one bounded line rather
         than a full ERROR stacktrace per callback."""
@@ -277,7 +279,7 @@ class LoggingWorker:
             # Attempt to clear remaining items to prevent "never awaited" warnings
             await self.clear_queue()
 
-    def enqueue(self, coroutine: Coroutine) -> None:
+    def enqueue(self, coroutine: Coroutine[object, None, object]) -> None:
         """
         Add a coroutine to the logging queue.
         Hot path: never blocks, aggressively clears queue if full.
@@ -415,7 +417,7 @@ class LoggingWorker:
         items_to_extract = min(items_to_extract, actual_size)
 
         # Extract tasks from queue (using list comprehension would require wrapping in try/except)
-        extracted_tasks: Final = []
+        extracted_tasks: Final[list[LoggingTask]] = []
         for _ in range(items_to_extract):
             try:
                 extracted_tasks.append(extracted := self._queue.get_nowait())

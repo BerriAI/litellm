@@ -10,7 +10,7 @@ describe("MoyaiConnected", () => {
 
     expect(screen.getByText("Workspace linked")).toBeInTheDocument();
     expect(screen.getByText("https://moyai.example.com")).toBeInTheDocument();
-    expect(screen.getByText("Virtual key issued")).toBeInTheDocument();
+    expect(screen.getByText("Virtual Key issued")).toBeInTheDocument();
     expect(screen.getByText("moyai-moyai.example.com")).toBeInTheDocument();
     expect(screen.getByText(/models available through LiteLLM/)).toHaveTextContent(
       "42 models available through LiteLLM",
@@ -23,6 +23,6 @@ describe("MoyaiConnected", () => {
     render(<MoyaiConnected moyaiUrl="https://moyai.example.com" keyAlias={null} models={null} />);
 
     expect(screen.queryByText(/models available through LiteLLM/)).not.toBeInTheDocument();
-    expect(screen.queryByText("Virtual key issued")).not.toBeInTheDocument();
+    expect(screen.queryByText("Virtual Key issued")).not.toBeInTheDocument();
   });
 });

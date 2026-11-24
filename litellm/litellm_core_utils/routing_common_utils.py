@@ -369,7 +369,9 @@ def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
     return hashlib.sha256(json.dumps(sensitive_params.model_dump()).encode()).hexdigest()
 
 
-def add_model_file_id_mappings(healthy_deployments: list[dict] | dict, responses: list["OpenAIFileObject"]) -> dict:
+def add_model_file_id_mappings(
+    healthy_deployments: list[dict] | dict, responses: list["OpenAIFileObject"]
+) -> dict[str, str]:
     """
     Create a mapping of model id to file id
     {
@@ -519,7 +521,7 @@ def is_web_search_request(request_kwargs: Mapping[str, object]) -> bool:
 
 def filter_web_search_deployments(
     healthy_deployments: list[dict] | dict,
-    request_kwargs: dict | None = None,
+    request_kwargs: Mapping[str, object] | None = None,
 ) -> list[dict] | dict:
     """
     If the request is websearch, filter out deployments that don't support web search
@@ -690,5 +692,5 @@ def warn_on_provider_credential_mismatch(model_name: str, litellm_params: Mappin
 
 def _owner_team(deployment: Mapping[str, object]) -> object:
     """The team a deployment belongs to (``model_info.team_id``), or None."""
-    model_info: Final = deployment.get("model_info")
-    return model_info.get("team_id") if isinstance(model_info, Mapping) else None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # a deployment dict's model_info
+    model_info: Final = as_str_mapping(deployment.get("model_info"))
+    return model_info.get("team_id") if model_info is not None else None

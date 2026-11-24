@@ -2,7 +2,7 @@
 by the migration job, or by a serving proxy that ran the migrations itself (in the
 background, once it serves).
 
-A migration cannot build them: a plain `CREATE INDEX` blocks spend-log inserts for the
+A migration cannot build them: a plain `CREATE INDEX` blocks writes to the indexed table for the
 whole build, and `CREATE INDEX CONCURRENTLY` is refused on a partitioned parent
 (litellm/scripts/db/partition_spend_logs.sql). `REQUEST_LOG_INDEXES` is the one list to extend;
 names match what Prisma derives from the `@@index` declarations in schema.prisma, so an
@@ -24,7 +24,7 @@ from litellm_proxy_extras.migration_data_checks import (
     migration_data_check_timeout_seconds,
     report,
 )
-from litellm_proxy_extras.migration_lock import held_migration_lock
+from litellm_proxy_extras.migration_lock import PSYCOPG_UNAVAILABLE_HINT, held_migration_lock
 
 if TYPE_CHECKING:
     import psycopg
@@ -66,9 +66,6 @@ END_USER_RESTRICTED_PREDICATE: Final = (
     "(blocked OR (budget_id IS NOT NULL) OR (allowed_model_region IS NOT NULL) "
     "OR (default_model IS NOT NULL) OR (object_permission_id IS NOT NULL) OR (models <> '{}'::text[]))"
 )
-END_USER_RESTRICTED_QUERY: Final = (
-    'SELECT user_id FROM "LiteLLM_EndUserTable" WHERE ' + END_USER_RESTRICTED_PREDICATE + " ORDER BY user_id LIMIT $1"
-)
 
 REQUEST_LOG_INDEXES: Final = (
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_api_key_startTime_idx", '("api_key", "startTime")'),
@@ -79,6 +76,14 @@ REQUEST_LOG_INDEXES: Final = (
         "LiteLLM_EndUserTable_restricted_idx",
         '("user_id") WHERE ' + END_USER_RESTRICTED_PREDICATE,
     ),
+    RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_session_id_idx", '("session_id")'),
+    RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_startTime_request_id_idx", '("startTime", "request_id")'),
+    RequestLogIndex(
+        "LiteLLM_SpendLogToolIndex",
+        "LiteLLM_SpendLogToolIndex_tool_name_start_time_idx",
+        '("tool_name", "start_time")',
+    ),
+    RequestLogIndex("LiteLLM_SpendLogToolIndex", "LiteLLM_SpendLogToolIndex_start_time_idx", '("start_time")'),
 )
 
 _IDENTIFIER_MAX_BYTES: Final = 63
@@ -178,7 +183,7 @@ def _without_comments(statement: str) -> str:
 def _connect(database_url: str) -> "psycopg.Connection[tuple[object, ...]]":
     import psycopg
 
-    return psycopg.connect(database_url, connect_timeout=10, autocommit=True)
+    return psycopg.connect(database_url, connect_timeout=10, autocommit=True, client_encoding="utf8")
 
 
 def ensure_request_log_indexes(
@@ -191,8 +196,17 @@ def ensure_request_log_indexes(
     the migration coordinator lock, held per statement so a resolver booting on another
     replica gets in between partitions rather than waiting for the whole table. Any
     failure is logged and left for the next index build; the result says whether
-    every index ended up valid. Never raises."""
-    import psycopg
+    every index ended up valid. True without building when psycopg cannot be imported,
+    since it is an optional dependency and no rerun on this node can change that. Never raises."""
+    try:
+        import psycopg
+    except ImportError as exc:
+        logger.warning(
+            "psycopg could not be imported (%s), skipping the request-log index build. %s",
+            exc,
+            PSYCOPG_UNAVAILABLE_HINT,
+        )
+        return True
 
     try:
         with connect(database_url) as connection:

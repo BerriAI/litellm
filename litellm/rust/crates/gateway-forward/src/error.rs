@@ -19,9 +19,9 @@ pub enum Error {
     Io(#[from] std::io::Error),
 }
 
-/// Why a request got an answer from Rust instead of from Python.
+/// Why the forwarder answered a request itself instead of forwarding it to Python.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum Rejection {
+pub(crate) enum NotForwarded {
     #[error("HTTP/1.1 request without a Host header")]
     MissingHost,
     #[error("request target has no path to forward")]
@@ -42,7 +42,7 @@ pub(crate) enum Rejection {
     Internal,
 }
 
-impl Rejection {
+impl NotForwarded {
     /// A client body that ends early or breaks its framing fails the upstream request too, but
     /// the fault is the client's, not Python's.
     pub fn from_upstream(error: hyper_util::client::legacy::Error) -> Self {
@@ -80,7 +80,7 @@ impl Rejection {
     }
 }
 
-impl IntoResponse for Rejection {
+impl IntoResponse for NotForwarded {
     fn into_response(self) -> Response {
         match self.is_gateway_fault() {
             true => tracing::warn!(error = %self, "request not forwarded"),

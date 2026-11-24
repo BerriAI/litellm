@@ -13,6 +13,7 @@ from litellm.proxy.common_utils.customer_usage import (
     customer_usage_key_fields,
     customer_usage_requested,
 )
+from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth
 from litellm.types.utils import StandardLoggingPayload
 
 
@@ -34,12 +35,37 @@ def is_valid_customer_margin(value: object) -> bool:
     return math.isfinite(value) and 0 <= value <= MAX_CUSTOMER_MARGIN
 
 
-def customer_cost_margin(has_customer: bool) -> float | None:
-    """The fraction added to a request's cost because it runs for a customer, e.g. 0.02 adds 2%."""
+def customer_cost_margin(has_customer: bool, app_margin: float | None = None) -> float | None:
+    """The fraction added to a request's cost because it runs for a customer, e.g. 0.02 adds 2%.
+
+    The app's own surcharge replaces the gateway-wide one, so an app set to 0 is not surcharged."""
     if not has_customer:
         return None
+    if app_margin is not None and is_valid_customer_margin(app_margin):
+        return float(app_margin)
     value: Final = litellm.cost_margin_config.get(CUSTOMER_MARGIN_KEY)
     return float(value) if isinstance(value, (int, float)) and is_valid_customer_margin(value) else None
+
+
+class _AppSurcharge(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="ignore", strict=True)
+
+    app_customer_margin: StrictFloat | StrictInt | None = None
+
+
+_APP_SURCHARGE: Final = TypeAdapter(_AppSurcharge)
+
+
+def request_app_margin(metadata: Mapping[str, object]) -> float | None:
+    """The surcharge of the app the request was authenticated as, read from the hierarchy the proxy stamped."""
+    try:
+        return _APP_SURCHARGE.validate_python(metadata.get("user_api_key_customer_hierarchy")).app_customer_margin
+    except ValidationError:
+        return None
+
+
+def request_customer_cost_margin(metadata: Mapping[str, object]) -> float | None:
+    return customer_cost_margin(request_has_customer(metadata), request_app_margin(metadata))
 
 
 def _has_customer_usage_attribution(metadata: Mapping[str, object]) -> bool:
@@ -94,8 +120,12 @@ def failed_request_customer_attribution(row_kwargs: object) -> Mapping[str, obje
     return request_customer_attribution(buckets, {**buckets["metadata"], **buckets["litellm_metadata"]})
 
 
-def key_has_customer(valid_token: object, has_customer_hierarchy: bool) -> bool:
-    return has_customer_hierarchy or customer_usage_requested({}, customer_usage_key_fields(valid_token))
+def key_customer_cost_margin(valid_token: object, hierarchy: CustomerHierarchyAuth | None) -> float | None:
+    """The surcharge to reserve for, before the request settles: the resolved hierarchy's, else the key's binding."""
+    has_customer: Final = (hierarchy is not None and hierarchy.customer_org_id is not None) or customer_usage_requested(
+        {}, customer_usage_key_fields(valid_token)
+    )
+    return customer_cost_margin(has_customer, hierarchy.app_customer_margin if hierarchy is not None else None)
 
 
 def _cost_is_finalized(payload: Mapping[str, object]) -> bool:

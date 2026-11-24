@@ -17,7 +17,7 @@ This pattern can be replicated for other message formats (e.g., Anthropic).
 import json
 import time
 import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
@@ -45,6 +45,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_chat_stream_usage,
     effective_scan_only_tool_results_for_guardrail,
+    effective_scan_tool_calls_as_text_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
     list_field,
@@ -103,7 +104,9 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     delivers_ended_stream_rewrites = True
     assembles_streamed_response = True
 
-    def get_structured_messages(self, data: dict, *, keep_tool_errors: bool = False) -> list[AllMessageValues] | None:
+    def get_structured_messages(
+        self, data: Mapping[str, object], *, keep_tool_errors: bool = False
+    ) -> list[AllMessageValues] | None:
         """
         Convert chat completions request data to OpenAI-spec structured messages.
 
@@ -164,6 +167,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         tool_calls_with_server_calls: Final = [
             *tool_calls_to_check,
             *(_server_tool_call_input(call) for _, call in server_tool_call_tasks),
+            *(
+                _legacy_function_calls(cast("Iterable[object]", messages))  # cast-ok: request messages arrive untyped
+                if effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply) and not scan_only_tool_results
+                else ()
+            ),
         ]
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -440,7 +448,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> ModelResponse:
         """
         Process output response by applying guardrails to text content.
@@ -460,7 +468,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         """
 
         # Step 0: Check if response has any text content to process
-        if not self._has_text_content(response):
+        legacy_function_calls: Final = (
+            _legacy_function_calls(choice.message for choice in response.choices)
+            if effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply)
+            else ()
+        )
+        if not self._has_text_content(response) and not legacy_function_calls:
             verbose_proxy_logger.warning("OpenAI Chat Completions: No text content in response, skipping guardrail")
             return response
 
@@ -488,6 +501,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         tool_calls_with_server_calls: Final = [
             *tool_calls_to_check,
             *(_server_tool_call_input(call) for _, call in server_tool_call_tasks),
+            *legacy_function_calls,
         ]
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -558,7 +572,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         user_api_key_dict: "UserAPIKeyAuth | None" = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
         stream_transform_sink: StreamTransformSink | None = None,
         deliver_ended_stream_rewrites: bool = False,
     ) -> list["ModelResponseStream"]:
@@ -614,7 +628,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: "UserAPIKeyAuth | None",
-        request_data: dict | None,
+        request_data: dict[str, object] | None,
         deliver_ended_stream_rewrites: bool = False,
     ) -> list["ModelResponseStream"]:
         """Block-only streaming path: run the guardrail so an in-flight BLOCK can
@@ -826,7 +840,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None",
         user_api_key_dict: "UserAPIKeyAuth | None",
-        request_data: dict | None,
+        request_data: dict[str, object] | None,
         sink: StreamTransformSink,
     ) -> None:
         """Run the guardrail over the raw accumulated text and report the
@@ -1225,20 +1239,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
     def _function_tool_call_fragments(
         responses_so_far: Sequence["ModelResponseStream"],
     ) -> tuple[tuple[ChatCompletionDeltaToolCall, ...], ...]:
-        """Group the stream's function tool-call fragments by their tool-call index, in
-        the index order ``stream_chunk_builder`` lists the rebuilt tool calls, keeping
-        only the indices the builder keeps (an id and a name somewhere in the stream)."""
-        fragments: Final = tuple(
-            tool_call
-            for response in responses_so_far
-            for choice in response.choices
-            for tool_call in choice.delta.tool_calls or ()
-            if isinstance(tool_call, ChatCompletionDeltaToolCall)
-        )
-        identified: Final = frozenset(fragment.index for fragment in fragments if fragment.id)
-        named: Final = frozenset(fragment.index for fragment in fragments if fragment.function.name)
+        """Group the stream's function tool-call fragments by (choice index, tool-call index), in
+        the order the per-choice rebuild lists the tool calls, keeping only the calls
+        ``stream_chunk_builder`` keeps (an id and a name somewhere in the stream)."""
+        fragments: Final = tuple(_keyed_function_tool_call_fragments(responses_so_far))
+        identified: Final = frozenset(key for key, fragment in fragments if fragment.id)
+        named: Final = frozenset(key for key, fragment in fragments if fragment.function.name)
         return tuple(
-            tuple(fragment for fragment in fragments if fragment.index == index) for index in sorted(identified & named)
+            tuple(fragment for key, fragment in fragments if key == kept) for kept in sorted(identified & named)
         )
 
     def _write_ended_stream_tool_call_rewrites(
@@ -1251,25 +1259,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         """Write ended-stream guardrail tool-call rewrites back across the buffered
         chunks: the rewritten name and full arguments land in the tool call's first
         fragment and the arguments of its later fragments are blanked, mirroring the
-        text write-back. A rewrite on a stream carrying more than one distinct choice
-        index, or whose fragments do not line up with the rebuilt tool calls, is
-        reported as undeliverable, so the pipeline executor discards it and releases
-        the original chunks."""
+        text write-back. A rewrite whose fragments do not line up with the rebuilt tool
+        calls is reported as undeliverable, so the pipeline executor discards it and
+        releases the original chunks."""
         post_guardrail_tool_calls: Final = self._function_tool_call_shapes(guardrailed_response)
         if post_guardrail_tool_calls == pre_guardrail_tool_calls:
             return
-        stream_choice_indices: Final = frozenset(
-            choice.index for response in responses_so_far for choice in response.choices
-        )
         fragments_by_tool_call: Final = self._function_tool_call_fragments(responses_so_far)
-        if len(stream_choice_indices) != 1:
-            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
-
-            raise UndeliverableStreamRewrite(
-                guardrail_name,
-                f"the stream carries {len(stream_choice_indices)} choices and tool-call rewrites are only written "
-                "back on single-choice streams",
-            )
         if len(fragments_by_tool_call) != len(post_guardrail_tool_calls):
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
@@ -1407,6 +1403,11 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                                     # Subsequent chunks - clear the text
                                     content_item["text"] = ""
 
+    def starts_client_tool_call(self, item: object) -> bool:
+        return any(
+            _delta_has_client_tool_call(stream_item_field(choice, "delta")) for choice in _stream_chunk_choices(item)
+        )
+
     def _check_streaming_has_ended(self, responses_so_far: Sequence[object]) -> bool:
         """
         True once any relayed chunk carries a non-null ``finish_reason``.
@@ -1511,6 +1512,10 @@ def _stream_chunk_choices(item: object) -> Sequence[object]:
     return ()
 
 
+def _delta_has_client_tool_call(delta: object) -> bool:
+    return bool(stream_item_items(delta, "tool_calls")) or stream_item_field(delta, "function_call") is not None
+
+
 def _streamed_delta_tool_calls(delta: object) -> tuple[object, ...]:
     function_call: Final = stream_item_field(delta, "function_call")
     legacy: Final = () if function_call is None else (function_call,)
@@ -1555,10 +1560,34 @@ def _streamed_server_tool_calls(
                 yield (choice.index, server_tool_call["id"]), server_tool_call
 
 
+def _keyed_function_tool_call_fragments(
+    responses: Sequence["ModelResponseStream"],
+) -> Iterator[tuple[tuple[int, int], ChatCompletionDeltaToolCall]]:
+    for response in responses:
+        for choice in response.choices:
+            for tool_call in choice.delta.tool_calls or ():
+                if isinstance(tool_call, ChatCompletionDeltaToolCall):
+                    yield (choice.index, tool_call.index), tool_call
+
+
 def _choice_server_tool_calls(
     calls_by_id: Mapping[tuple[int, str | None], ChatCompletionAssistantToolCall], choice_index: int
 ) -> tuple[ChatCompletionAssistantToolCall, ...]:
     return tuple(call for (index, _), call in calls_by_id.items() if index == choice_index)
+
+
+def _function_call_of(message: object) -> object:
+    if isinstance(message, Mapping):
+        return cast("Mapping[str, object]", message).get("function_call")  # cast-ok: a message mapping has str keys
+    return getattr(message, "function_call", None)
+
+
+def _legacy_function_calls(
+    messages: Iterable[object],
+) -> tuple[dict[str, object], ...]:  # mutable-ok: the dict shape guardrail tool_calls inputs take
+    """The deprecated `function_call` of each message, shaped as a tool call. Scanned only, never written back."""
+    calls: Final = (_function_call_of(message) for message in messages)
+    return tuple({"type": "function", "function": call} for call in calls if call)
 
 
 def _server_tool_call_input(server_tool_call: ChatCompletionAssistantToolCall) -> dict[str, object]:

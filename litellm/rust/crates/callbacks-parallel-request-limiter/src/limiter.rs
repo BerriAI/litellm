@@ -168,6 +168,10 @@ pub struct PostCallFailureFacts {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TargetFacts {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_group_id: Option<String>,
     pub user_api_key_hash: Option<String>,
     pub user_api_key_user_id: Option<String>,
     pub user_api_key_team_id: Option<String>,
@@ -419,7 +423,9 @@ pub(crate) fn auth_members(
     Ok(members)
 }
 
-fn prior_response(input: &HookInput) -> Result<Option<PriorResponse>, CallbackError> {
+/// The statuses a callback that ran earlier published, as the answer this limiter starts its own
+/// from: a member that is `None` is left out.
+pub fn prior_response(input: &HookInput) -> Result<Option<PriorResponse>, CallbackError> {
     let Some(Value::Object(mut statuses)) = input.fields.raw(Field::RateLimitStatuses)?.cloned()
     else {
         return Ok(None);
@@ -932,6 +938,46 @@ impl ParallelRequestLimiter {
     ) {
         if !facts.reuses_request_slot {
             self.release_stashed(state, false, ctx).await;
+        }
+    }
+
+    /// `raise_if_over_limit_before_body`: refuses a call from its caller alone once a limit that
+    /// needs no body is used up. Counters are only read, so an admitted call is still counted by
+    /// [`Self::pre_call`]. A token limit is left to it too when tokens are reserved before the call.
+    pub async fn before_body(
+        &self,
+        descriptors: &[Descriptor],
+        policy: PolicyFacts,
+        request: Option<&RequestRedis>,
+    ) -> Option<Abort> {
+        if descriptors.is_empty() {
+            return None;
+        }
+        let settings = self.engine.settings();
+        let ctx = Ctx {
+            policy: policy.into(),
+            request,
+        };
+        match self
+            .engine
+            .should_rate_limit(
+                descriptors,
+                true,
+                settings.tpm_reservation_enabled,
+                None,
+                false,
+                ctx,
+            )
+            .await
+        {
+            Ok(response) => refusal::rate_limited(
+                &response,
+                descriptors,
+                None,
+                self.engine.now(),
+                settings.window_size,
+            ),
+            Err(Unverifiable) => Some(refusal::unverifiable()),
         }
     }
 
@@ -1968,10 +2014,24 @@ fn collect_targets(
     if let Some(organization) = organization {
         push("organization", organization.to_owned());
     }
+    let app_org = truthy(&facts.app_id)
+        .zip(truthy(&facts.customer_org_id))
+        .map(|(app, customer)| format!("{app}:{customer}"));
+    let app_member = truthy(&facts.app_id)
+        .zip(truthy(&facts.customer_member_id))
+        .map(|(app, customer)| format!("{app}:{customer}"));
+    let group_org = truthy(&facts.app_group_id)
+        .zip(truthy(&facts.customer_org_id))
+        .map(|(group, customer)| format!("{group}:{customer}"));
     let customers = [
         ("customer_org", truthy(&facts.customer_org_id)),
         ("customer_team", truthy(&facts.customer_team_id)),
         ("customer_member", truthy(&facts.customer_member_id)),
+        ("app", truthy(&facts.app_id)),
+        ("app_customer_org", app_org.as_deref()),
+        ("app_customer_member", app_member.as_deref()),
+        ("app_group", truthy(&facts.app_group_id)),
+        ("app_group_customer_org", group_org.as_deref()),
     ];
     for (scope, owner) in customers {
         if let Some(owner) = owner {
@@ -1987,6 +2047,11 @@ fn collect_targets(
         ("model_per_customer_org", customers[0].1),
         ("model_per_customer_team", customers[1].1),
         ("model_per_customer_member", customers[2].1),
+        ("model_per_app", customers[3].1),
+        ("model_per_app_customer_org", customers[4].1),
+        ("model_per_app_customer_member", customers[5].1),
+        ("model_per_app_group", customers[6].1),
+        ("model_per_app_group_customer_org", customers[7].1),
     ];
     if let Some(model_group) = model_group.filter(|group| !group.is_empty()) {
         let mut seen: Vec<&str> = Vec::new();
@@ -2045,5 +2110,54 @@ impl Callback for ParallelRequestLimiter {
         host: Host,
     ) -> BoxFuture<'a, HookOutput> {
         Box::pin(self.handle_hosted_with(input, state, Value::Null, None, host))
+    }
+}
+
+#[cfg(test)]
+mod app_tests {
+    use super::*;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::app("app", "app")]
+    #[case::organization("app_customer_org", "app:org")]
+    #[case::member("app_customer_member", "app:member")]
+    #[case::group("app_group", "group")]
+    #[case::group_org("app_group_customer_org", "group:org")]
+    fn app_usage_settles_on_its_scope_and_every_served_model(
+        #[case] owner: &str,
+        #[case] identity: &str,
+    ) {
+        let facts = TargetFacts {
+            app_id: Some("app".into()),
+            app_group_id: Some("group".into()),
+            customer_org_id: Some("org".into()),
+            customer_member_id: Some("member".into()),
+            ..Default::default()
+        };
+        let targets = collect_targets(
+            &facts,
+            Some("first"),
+            &["first".into(), "second".into()],
+            &BTreeSet::new(),
+        );
+        assert!(targets.contains(&(owner.into(), identity.into())));
+        assert!(targets.contains(&(format!("model_per_{owner}"), format!("{identity}:first"))));
+        assert!(targets.contains(&(format!("model_per_{owner}"), format!("{identity}:second"))));
+    }
+
+    #[rstest]
+    fn app_alone_never_charges_an_app_customer_scope() {
+        let facts = TargetFacts {
+            app_id: Some("app".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            collect_targets(&facts, Some("model"), &[], &BTreeSet::new()),
+            vec![
+                ("app".into(), "app".into()),
+                ("model_per_app".into(), "app:model".into()),
+            ]
+        );
     }
 }

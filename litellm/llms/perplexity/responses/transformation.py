@@ -9,6 +9,7 @@ The only provider quirks:
 Ref: https://docs.perplexity.ai/api-reference/responses-post
 """
 
+from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any, Final
 
@@ -32,7 +33,7 @@ PERPLEXITY_REASONING_FIELD_VALUES: Final[ReasoningFieldValues] = MappingProxyTyp
 
 
 class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """Ref: https://docs.perplexity.ai/api-reference/responses-post"""
         return [
             "max_output_tokens",
@@ -40,6 +41,8 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             "temperature",
             "top_p",
             "tools",
+            "tool_choice",
+            "parallel_tool_calls",
             "reasoning",
             "instructions",
             "models",
@@ -58,7 +61,7 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
-    def get_complete_url(self, api_base: str | None, litellm_params: dict) -> str:
+    def get_complete_url(self, api_base: str | None, litellm_params: Mapping[str, object]) -> str:
         api_base = api_base or get_secret_str("PERPLEXITY_API_BASE") or "https://api.perplexity.ai"
         return join_api_base(api_base, "v1/responses")
 

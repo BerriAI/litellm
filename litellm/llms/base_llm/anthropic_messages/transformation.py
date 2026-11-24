@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -26,7 +26,7 @@ class BaseAnthropicMessagesConfig(ABC):
         self,
         headers: dict,
         model: str,
-        messages: list[Any],
+        messages: Sequence[object],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
@@ -47,7 +47,7 @@ class BaseAnthropicMessagesConfig(ABC):
         self,
         headers: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         model: str,
-        messages: list[Any],  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
+        messages: Sequence[object],
         optional_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         litellm_params: dict,  # mutable-ok: mirrors the sync validate_anthropic_messages_environment contract
         api_key: str | None = None,
@@ -86,7 +86,7 @@ class BaseAnthropicMessagesConfig(ABC):
         return api_base or ""
 
     @abstractmethod
-    def get_supported_anthropic_messages_params(self, model: str) -> list:
+    def get_supported_anthropic_messages_params(self, model: str) -> list[str]:
         pass
 
     @abstractmethod
@@ -149,6 +149,9 @@ class BaseAnthropicMessagesConfig(ABC):
     def supports_message_threads(self) -> bool:
         return False
 
+    def supports_diagnostics(self) -> bool:
+        return True
+
     def serves_api_base(self, model: str, api_base: str | None) -> bool:
         return True
 
@@ -177,7 +180,7 @@ class BaseAnthropicMessagesConfig(ABC):
         httpx_response: httpx.Response,
         request_body: dict,
         litellm_logging_obj: LiteLLMLoggingObj,
-    ) -> AsyncIterator:
+    ) -> AsyncIterator[bytes]:
         raise NotImplementedError("Subclasses must implement this method")
 
     def get_error_class(
@@ -198,9 +201,6 @@ class BaseAnthropicMessagesConfig(ABC):
 
     def recovers_thinking_binding_mismatch(self) -> bool:
         """Whether this upstream is a Claude host that accepts ``thinking.block_binding``."""
-        return False
-
-    def carries_anthropic_betas_in_body(self) -> bool:
         return False
 
     def _thinking_binding_retry(self, e: httpx.HTTPStatusError, request_body: object) -> Mapping[object, object] | None:
@@ -225,7 +225,7 @@ class BaseAnthropicMessagesConfig(ABC):
         )
 
     def anthropic_messages_retry_header_beta(self, e: httpx.HTTPStatusError, request_body: object) -> str | None:
-        if self.carries_anthropic_betas_in_body() or self._thinking_binding_retry(e, request_body) is None:
+        if self._thinking_binding_retry(e, request_body) is None:
             return None
         return ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER
 
@@ -277,16 +277,11 @@ class BaseAnthropicMessagesConfig(ABC):
             tools_without_strict,
             warn_claude_strict_tools_dropped,
             warn_thinking_binding_mismatch_recovered,
-            with_anthropic_beta,
         )
 
         binding_thinking: Final = self._thinking_binding_retry(e, request_data)
         if binding_thinking is not None:
             request_data["thinking"] = binding_thinking  # rebind-ok: the retry loop re-signs this same dict
-            if self.carries_anthropic_betas_in_body():
-                request_data["anthropic_beta"] = with_anthropic_beta(  # rebind-ok: same dict as above
-                    request_data.get("anthropic_beta"), ANTHROPIC_THINKING_BINDING_CONTROLS_BETA_HEADER
-                )
             warn_thinking_binding_mismatch_recovered()
         elif e.response.status_code == 400 and is_anthropic_invalid_thinking_block_error(e.response.text):
             strip_thinking_blocks_from_anthropic_messages_request_dict(request_data)

@@ -1,8 +1,12 @@
 """Tests for the single-statement daily spend upsert (LIT-5291)."""
 
+import hashlib
+import json
 import re
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from dataclasses import replace
+from typing import Final
 
 import pytest
 
@@ -10,9 +14,11 @@ from litellm.proxy.db.daily_spend_bulk_upsert import (
     DAILY_SPEND_TABLES,
     build_bulk_upsert,
     conflict_key,
+    hashed_row_id,
     merge_by_conflict_key,
 )
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import DailySpendUpdateQueue
 from litellm.proxy.db.rollup_lock_timeout import ROLLUP_LOCK_TIMEOUT_SQL
 
 TAG_TABLE = DAILY_SPEND_TABLES["tag"]
@@ -251,3 +257,79 @@ def test_customer_daily_aliases_of_one_model_keep_separate_rows_under_a_stable_i
     first_id, second_id = params[0], params[len(params) // 2]
     assert first_id != second_id
     assert build_bulk_upsert(table, merged[:1])[1][0] == first_id
+
+
+def test_app_daily_rows_split_but_empty_app_preserves_the_pre_app_hash() -> None:
+    table: Final = DAILY_SPEND_TABLES["customer_member"]
+    base: Final = {
+        **tag_txn(),
+        "customer_member_id": "member",
+        "customer_team_id": "team",
+        "customer_org_id": "org",
+    }
+    legacy_columns: Final = (
+        "customer_member_id",
+        "customer_team_id",
+        "customer_org_id",
+        "date",
+        "api_key",
+        "model",
+        "custom_llm_provider",
+        "mcp_namespaced_tool_name",
+        "endpoint",
+        "model_group",
+    )
+    legacy_pairs: Final = sorted((column, str(base.get(column) or "")) for column in legacy_columns)
+    legacy_id: Final = hashlib.sha256(json.dumps(legacy_pairs, separators=(",", ":")).encode()).hexdigest()
+    merged: Final = merge_by_conflict_key(
+        table,
+        (
+            base,
+            {**base, "app_id": ""},
+            {**base, "app_id": "app-a"},
+            {**base, "app_id": "app-b"},
+        ),
+    )
+    assert len(merged) == 3
+    ids: Final = tuple(build_bulk_upsert(table, (row,))[1][0] for row in merged)
+    assert len(set(ids)) == 3 and legacy_id in ids
+    assert sorted(row["spend"] for _, row in merged) == [0.25, 0.25, 0.5]
+
+
+@pytest.mark.asyncio
+async def test_old_and_new_queue_keys_flush_once_to_the_same_ungrouped_customer_row() -> None:
+    table: Final = DAILY_SPEND_TABLES["customer_member"]
+    legacy_table: Final = replace(
+        table, parent_id_columns=tuple(column for column in table.parent_id_columns if column != "app_group_id")
+    )
+    legacy: Final = {
+        **tag_txn(),
+        "customer_member_id": "member",
+        "customer_team_id": "team",
+        "customer_org_id": "org",
+        "app_id": "app",
+    }
+    current: Final = {**legacy, "app_group_id": "", "spend": 0.75, "api_requests": 3}
+    queue: Final = DailySpendUpdateQueue()
+    await queue.add_update({json.dumps(conflict_key(legacy_table, legacy)): legacy})
+    await queue.add_update({json.dumps(conflict_key(table, current)): current})
+    transactions: Final = await queue.flush_and_get_aggregated_daily_spend_update_transactions()
+    assert len(transactions) == 2
+    prisma_client: Final = _RecordingPrismaClient()
+
+    await DBSpendUpdateWriter.update_daily_customer_member_spend(
+        n_retry_times=0,
+        prisma_client=prisma_client,
+        proxy_logging_obj=None,
+        daily_spend_transactions=transactions,
+    )
+
+    assert len(prisma_client.db.statements) == 1
+    sql, params = prisma_client.db.statements[0]
+    columns: Final = tuple(re.findall(r'"([^"]+)"', sql.split("\nVALUES")[0]))[1:-1]
+    row: Final = dict(zip(columns, params, strict=True))
+    assert row["id"] == hashed_row_id(legacy_table, conflict_key(legacy_table, legacy))
+    assert row["app_group_id"] == ""
+    assert row["spend"] == pytest.approx(1.0)
+    assert row["api_requests"] == 4
+    assert transactions == {}

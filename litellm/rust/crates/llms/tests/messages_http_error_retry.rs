@@ -3,19 +3,21 @@ use litellm_llms::{
     anthropic::{
         common_utils::existing_betas, messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
     },
-    azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
+    azure_ai::messages::transformation::AZURE_AI_MESSAGES_CONFIG,
     base_llm::messages::{context::MessagesTransformContext, transformation::BaseMessagesConfig},
     bedrock::{
-        claude_platform::messages::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
-        messages::invoke_transformations::anthropic_claude_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+        messages::claude_platform::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
+        messages::invoke::transformation::BEDROCK_INVOKE_MESSAGES_CONFIG,
     },
-    bedrock_mantle::messages::transformation::BEDROCK_MANTLE_MESSAGES_CONFIG,
-    deepseek::messages::transformation::DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
+    bedrock_mantle::messages::transformation::{
+        BEDROCK_MANTLE_MESSAGES_CONFIG, BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG,
+    },
+    deepseek::messages::transformation::DEEPSEEK_MESSAGES_CONFIG,
     edenai::messages::transformation::EDENAI_MESSAGES_CONFIG,
     minimax::messages::transformation::MINIMAX_MESSAGES_CONFIG,
     openrouter::messages::transformation::OPENROUTER_MESSAGES_CONFIG,
     tencent::messages::transformation::TENCENT_MESSAGES_CONFIG,
-    vertex_ai::messages::transformation::VERTEX_ANTHROPIC_MESSAGES_CONFIG,
+    vertex_ai::messages::transformation::VERTEX_AI_MESSAGES_CONFIG,
 };
 use litellm_llms_types::providers::anthropic::AnthropicBeta;
 use rstest::rstest;
@@ -80,16 +82,17 @@ fn expected_retry(
 
 #[rstest]
 #[case::anthropic(&ANTHROPIC_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
-#[case::azure_ai(&AZURE_ANTHROPIC_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
-#[case::bedrock_invoke(&BEDROCK_ANTHROPIC_MESSAGES_CONFIG, BindingRecovery::BodyBeta)]
+#[case::azure_ai(&AZURE_AI_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
+#[case::bedrock_invoke(&BEDROCK_INVOKE_MESSAGES_CONFIG, BindingRecovery::BodyBeta)]
 #[case::bedrock_claude_platform(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
 #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
-#[case::deepseek(&DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG, BindingRecovery::None)]
+#[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
+#[case::deepseek(&DEEPSEEK_MESSAGES_CONFIG, BindingRecovery::None)]
 #[case::edenai(&EDENAI_MESSAGES_CONFIG, BindingRecovery::None)]
 #[case::minimax(&MINIMAX_MESSAGES_CONFIG, BindingRecovery::None)]
 #[case::openrouter(&OPENROUTER_MESSAGES_CONFIG, BindingRecovery::None)]
 #[case::tencent(&TENCENT_MESSAGES_CONFIG, BindingRecovery::None)]
-#[case::vertex_ai(&VERTEX_ANTHROPIC_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
+#[case::vertex_ai(&VERTEX_AI_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
 fn every_messages_provider_retries_like_the_shared_cases(
     #[case] config: &dyn BaseMessagesConfig,
     #[case] recovery: BindingRecovery,
@@ -119,12 +122,13 @@ fn every_messages_provider_retries_like_the_shared_cases(
 
 #[rstest]
 #[case::anthropic(&ANTHROPIC_MESSAGES_CONFIG, true)]
-#[case::azure_ai(&AZURE_ANTHROPIC_MESSAGES_CONFIG, true)]
+#[case::azure_ai(&AZURE_AI_MESSAGES_CONFIG, true)]
 #[case::bedrock_claude_platform(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG, true)]
 #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG, true)]
-#[case::vertex_ai(&VERTEX_ANTHROPIC_MESSAGES_CONFIG, true)]
-#[case::bedrock_invoke_reads_the_body(&BEDROCK_ANTHROPIC_MESSAGES_CONFIG, false)]
-#[case::deepseek(&DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG, false)]
+#[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG, true)]
+#[case::vertex_ai(&VERTEX_AI_MESSAGES_CONFIG, true)]
+#[case::bedrock_invoke_reads_the_body(&BEDROCK_INVOKE_MESSAGES_CONFIG, false)]
+#[case::deepseek(&DEEPSEEK_MESSAGES_CONFIG, false)]
 #[case::edenai(&EDENAI_MESSAGES_CONFIG, false)]
 #[case::minimax(&MINIMAX_MESSAGES_CONFIG, false)]
 #[case::openrouter(&OPENROUTER_MESSAGES_CONFIG, false)]
@@ -152,16 +156,17 @@ fn only_claude_header_hosts_add_the_binding_beta_to_a_retry(
 
 #[rstest]
 #[case::anthropic(&ANTHROPIC_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
-#[case::azure_ai(&AZURE_ANTHROPIC_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
-#[case::bedrock_invoke(&BEDROCK_ANTHROPIC_MESSAGES_CONFIG, BindingRecovery::BodyBeta)]
+#[case::azure_ai(&AZURE_AI_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
+#[case::bedrock_invoke(&BEDROCK_INVOKE_MESSAGES_CONFIG, BindingRecovery::BodyBeta)]
 #[case::bedrock_claude_platform(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
 #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
-#[case::deepseek(&DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG, BindingRecovery::None)]
+#[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
+#[case::deepseek(&DEEPSEEK_MESSAGES_CONFIG, BindingRecovery::None)]
 #[case::edenai(&EDENAI_MESSAGES_CONFIG, BindingRecovery::None)]
 #[case::minimax(&MINIMAX_MESSAGES_CONFIG, BindingRecovery::None)]
 #[case::openrouter(&OPENROUTER_MESSAGES_CONFIG, BindingRecovery::None)]
 #[case::tencent(&TENCENT_MESSAGES_CONFIG, BindingRecovery::None)]
-#[case::vertex_ai(&VERTEX_ANTHROPIC_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
+#[case::vertex_ai(&VERTEX_AI_MESSAGES_CONFIG, BindingRecovery::HeaderBeta)]
 fn every_messages_provider_drops_rejected_strict_tools_like_the_shared_cases(
     #[case] config: &dyn BaseMessagesConfig,
     #[case] recovery: BindingRecovery,

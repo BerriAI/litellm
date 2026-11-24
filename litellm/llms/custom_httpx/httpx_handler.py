@@ -9,7 +9,7 @@ except Exception:
     version = "0.0.0"
 
 
-def get_default_headers() -> dict:
+def get_default_headers() -> dict[str, str]:
     """
     Get default headers for HTTP requests.
 
@@ -24,7 +24,7 @@ def get_default_headers() -> dict:
 
 
 class HTTPHandler:
-    def __init__(self, concurrent_limit=1000):
+    def __init__(self, concurrent_limit: int = 1000):
         headers: Final = get_default_headers()
         # Create a client with a connection pool
         self.client = httpx.AsyncClient(

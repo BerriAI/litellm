@@ -145,7 +145,13 @@ def _validated_object_list(value: object) -> list[object] | None:
         return None
 
 
-_MessageT: Final = TypeVar("_MessageT")
+def _message_dict(message: AllMessageValues | BaseModel) -> AllMessageValues:
+    if isinstance(message, BaseModel):
+        return cast(AllMessageValues, message.model_dump())  # cast-ok: SDK messages dump to chat message fields
+    return message
+
+
+_MessageT = TypeVar("_MessageT")
 _CacheControlRewrite: TypeAlias = Callable[[object], ChatCompletionCachedContent | None]
 _MARK_CARRYING_MESSAGE_FIELDS: Final = ("content", "tool_calls")
 
@@ -832,7 +838,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         messages: list[AllMessageValues],
         non_default_params: dict,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -856,6 +862,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not injection_points:
             return model, messages, non_default_params
 
+        message_dicts: Final = [_message_dict(message) for message in messages]
         message_points: Final = tuple(
             cast(CacheControlMessageInjectionPoint, point)
             for point in injection_points
@@ -879,9 +886,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             )
         )
         processed_messages = copy.deepcopy(
-            [without_prompt_cache_breakpoints(message) for message in messages]
+            [without_prompt_cache_breakpoints(message) for message in message_dicts]
             if not openai_dialect and message_points and _translates_prompt_cache_breakpoint(model, custom_llm_provider)
-            else messages
+            else message_dicts
         )
         # A provisional message list defers every role-targeted point to the pass holding
         # the final one: a role with no message here may have one there, and settling all
@@ -1548,8 +1555,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     @staticmethod
     def _request_has_cache_control(
         messages: list[AllMessageValues],
-        system: str | list | None,
-        tools: list | None = None,
+        system: str | Sequence[object] | None,
+        tools: Sequence[object] | None = None,
         cache_control: object = None,
         request_kwargs: object = None,
         on_messages_route: bool = False,
@@ -1574,10 +1581,10 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     @staticmethod
     def get_default_injection_points(
         messages: list[AllMessageValues],
-        system: str | list | None,
+        system: str | Sequence[object] | None,
         model: str,
         custom_llm_provider: str | None,
-        tools: list | None = None,
+        tools: Sequence[object] | None = None,
         enable_prompt_caching: bool | None = None,
         cache_control: object = None,
         request_kwargs: object = None,
@@ -1675,7 +1682,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         messages: list[AllMessageValues],
         model: str,
         custom_llm_provider: str | None,
-        tools: list | None = None,
+        tools: Sequence[object] | None = None,
         enable_prompt_caching: bool | None = None,
         api_base: object = None,
         model_info: Mapping[str, object] | None = None,
@@ -1806,7 +1813,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         kwargs: dict[str, object],
         model: str | None = None,
         custom_llm_provider: str | None = None,
-        tools: list[dict] | None = None,
+        tools: Sequence[object] | None = None,
         api_base: str | None = None,
     ) -> tuple[list[dict], str | list | None]:
         """Extract cache_control_injection_points from kwargs and apply if present.
@@ -1892,7 +1899,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         self,
         prompt_id: str | None,
         prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
@@ -1909,7 +1916,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
     async def async_compile_prompt_helper(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -1929,13 +1936,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         prompt_spec: PromptSpec | None = None,
-        tools: list[dict] | None = None,
+        tools: Sequence[object] | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
@@ -1957,14 +1964,14 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         )
 
     @staticmethod
-    def should_use_anthropic_cache_control_hook(non_default_params: dict) -> bool:
+    def should_use_anthropic_cache_control_hook(non_default_params: Mapping[str, object]) -> bool:
         if non_default_params.get("cache_control_injection_points", None):
             return True
         return False
 
     @staticmethod
     def get_custom_logger_for_anthropic_cache_control_hook(
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
     ) -> CustomLogger | None:
         from litellm.litellm_core_utils.litellm_logging import (
             _init_custom_logger_compatible_class,
