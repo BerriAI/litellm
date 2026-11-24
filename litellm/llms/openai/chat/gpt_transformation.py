@@ -261,7 +261,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
     def get_config(cls):
         return super().get_config()
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         base_params: Final = [
             "frequency_penalty",
             "logit_bias",
