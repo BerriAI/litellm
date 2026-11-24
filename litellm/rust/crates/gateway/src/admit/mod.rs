@@ -156,7 +156,7 @@ impl Admit {
     }
 
     #[cfg(test)]
-    fn over(config: &Config, deployed: Vec<Deployed>) -> Self {
+    pub(crate) fn over(config: &Config, deployed: Vec<Deployed>) -> Self {
         Self::built(config, crate::boot::unhosted(config), deployed)
     }
 
