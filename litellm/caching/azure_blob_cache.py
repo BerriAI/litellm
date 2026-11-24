@@ -17,8 +17,9 @@ from typing import Final
 from pydantic import TypeAdapter
 
 from litellm._logging import print_verbose, verbose_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
-from .base_cache import BaseCache
+from .base_cache import BaseCache, response_cache_entry_is_fresh
 
 _DECODED_BLOB: Final = TypeAdapter(object)
 
@@ -45,14 +46,41 @@ class AzureBlobCache(BaseCache):
         with suppress(ResourceExistsError):
             self.container_client.create_container()
 
-    def set_cache(self, key: object, value: object, **kwargs: object) -> None:
+    def set_cache(self, key: str, value: object, **kwargs: object) -> None:
+        from azure.core.exceptions import ResourceExistsError
+
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")
         serialized_value: Final = json.dumps(value)
+        fields: Final = as_str_mapping(value)
         try:
-            self.container_client.upload_blob(key, serialized_value)
+            if fields is not None and isinstance(fields.get("response_cache_ttl"), int):
+                self.container_client.upload_blob(key, serialized_value, overwrite=True)
+            else:
+                try:
+                    self.container_client.upload_blob(key, serialized_value)
+                except ResourceExistsError:
+                    self._replace_expired_response(key, serialized_value)
         except Exception as e:
             # NON blocking - notify users Azure Blob is throwing an exception
             print_verbose(f"LiteLLM set_cache() - Got exception from Azure Blob: {e}")
+
+    def _replace_expired_response(self, key: str, serialized_value: str) -> None:
+        from azure.core import MatchConditions
+
+        blob: Final = self.container_client.download_blob(key)
+        stored: Final = as_str_mapping(_DECODED_BLOB.validate_python(json.loads(blob.readall())))
+        if (
+            stored is not None
+            and isinstance(stored.get("response_cache_ttl"), int)
+            and not response_cache_entry_is_fresh(stored)
+        ):
+            self.container_client.upload_blob(
+                key,
+                serialized_value,
+                overwrite=True,
+                etag=blob.properties.etag,
+                match_condition=MatchConditions.IfNotModified,
+            )
 
     async def async_set_cache(self, key: object, value: object, **kwargs: object) -> None:
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")

@@ -217,7 +217,7 @@ from litellm.types.interactions import (
     InteractionsAPIResponse,
     InteractionsAPIStreamingResponse,
 )
-from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
+from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD, STREAM_USAGE_STRIPPED_FIELD
 from litellm.types.llms.openai import (
     AllMessageValues,
     Batch,
@@ -1175,7 +1175,13 @@ class Logging(LiteLLMLoggingBaseClass):
         self._pre_call_session_id: str = session_id_var.get()
         _sid: Final = kwargs.get("litellm_session_id") if kwargs else None
         self.litellm_session_id: str = str(_sid) if _sid else ""
-        self.stream_usage_injected: Final = kwargs is not None and kwargs.get(STREAM_USAGE_INJECTED_FIELD) is True
+        stream_usage_flags: Final = frozenset(
+            flag
+            for flag in (STREAM_USAGE_INJECTED_FIELD, STREAM_USAGE_STRIPPED_FIELD)
+            if kwargs is not None and kwargs.get(flag) is True
+        )
+        self.stream_usage_injected: Final = STREAM_USAGE_INJECTED_FIELD in stream_usage_flags
+        self.stream_usage_stripped: Final = STREAM_USAGE_STRIPPED_FIELD in stream_usage_flags
         # supports_correlation_logging is False for calls originating from the
         # sync client entry point (wrapper() in utils.py): a plain OS thread
         # has no per-call context isolation the way an asyncio Task does, and
@@ -1543,6 +1549,10 @@ class Logging(LiteLLMLoggingBaseClass):
         return _priced_router_model_id(
             self.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
         )
+
+    def get_preset_cache_key(self) -> str | None:
+        preset_cache_key: Final = self._litellm_params_view.get("preset_cache_key")
+        return preset_cache_key if isinstance(preset_cache_key, str) else None
 
     def get_router_pricing_provider(self) -> str | None:
         """The deployment's ``model_info.pricing_provider``, the provider its cost-map lookups run under."""
