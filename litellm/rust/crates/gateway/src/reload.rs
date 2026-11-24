@@ -656,7 +656,7 @@ mod tests {
             config,
             &environment(&[]),
             rows,
-            None,
+            &Ok(None),
             &secrets(&[]),
         )
         .await;

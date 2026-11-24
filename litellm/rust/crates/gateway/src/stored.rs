@@ -22,13 +22,13 @@
 
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
-use litellm_at_rest::AtRestKey;
+use litellm_at_rest::{AtRestKey, KeyDerivation, KeyError};
 use litellm_config::{
     Config, Object, Value,
     db::{
         models::{DbCredential, DbModel, MissingCredential},
         settings::{Section, SettingsRows, UiSettings},
-        switches::{DbObject, store_model_in_db},
+        switches::{DbObject, FipsMode, store_model_in_db},
     },
 };
 use litellm_config_load::Document;
@@ -139,14 +139,14 @@ pub(crate) async fn load(path: &Path, secrets: Arc<Secrets>) -> Result<Loaded, E
         file,
         &*environment,
         &database,
-        key.as_ref(),
+        &key,
         &*secrets,
     )
     .await;
-    if loaded.stored == StoredConfig::Unused {
+    let (StoredConfig::Loaded | StoredConfig::Unread, Ok(key)) = (loaded.stored, key) else {
         pools.close().await;
         return Ok(loaded);
-    }
+    };
     let source = Source::new(document, key, secrets, database, pools, fetched);
     Ok(Loaded {
         source: Some(source),
@@ -164,10 +164,11 @@ pub(crate) async fn layered(
     file: Config,
     environment: &dyn Lookup,
     rows: &impl StoredRows,
-    key: Option<&AtRestKey>,
+    key: &Result<Option<AtRestKey>, Unkeyed>,
     secrets: &Secrets,
 ) -> (Loaded, Option<Fetched>) {
     let switched_on = file.general_settings.store_model_in_db;
+    let readable_key = key.as_ref().ok().and_then(Option::as_ref);
     let ui_settings = match rows.ui_settings().await {
         Ok(column) => column.map(|column| UiSettings::from_json(column.get())),
         Err(error) => {
@@ -181,7 +182,7 @@ pub(crate) async fn layered(
     let settings = match rows.settings().await {
         Ok(found) => SettingsRows {
             ui_settings: ui_settings.clone().unwrap_or_default(),
-            ..settings_rows(&found, key)
+            ..settings_rows(&found, readable_key)
         },
         Err(error) => {
             let on = store_model_in_db(switched_on, environment, &SettingsRows::default());
@@ -205,6 +206,16 @@ pub(crate) async fn layered(
             None,
         );
     }
+    let key = match key {
+        Ok(key) => key.as_ref(),
+        Err(error) => {
+            tracing::warn!(
+                error = %Report::new(error),
+                "the stored config cannot be decrypted the way the proxy decrypts it, so python answers every request"
+            );
+            return (without_stored(file, true), None);
+        }
+    };
     let fetched = match fetch(&document, settings, rows, key).await {
         Ok(fetched) => fetched,
         Err(error) => {
@@ -400,16 +411,41 @@ async fn merged(
         .await
 }
 
-/// `get_salt_key`: `LITELLM_SALT_KEY`, else the master key the proxy runs with, which is the
-/// file's `general_settings.master_key` with its `os.environ/` reference read, else
-/// `LITELLM_MASTER_KEY`. Without either Python decrypts nothing.
-fn salt_key(environment: &dyn Lookup, file: &Config) -> Option<AtRestKey> {
-    environment
-        .get(SALT_KEY)
-        .map(SecretValue::new)
-        .or_else(|| file.general_settings.master_key.clone())
-        .or_else(|| environment.get(MASTER_KEY).map(SecretValue::new))
-        .map(|salt_key| AtRestKey::from_salt_key(&salt_key))
+/// Why the stored config cannot be decrypted the way the proxy decrypts it. The proxy refuses to
+/// start over each of these, so the gateway never falls back to another key.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum Unkeyed {
+    #[error("general_settings.fips_mode is not a boolean")]
+    FipsModeNotABoolean,
+    #[error("general_settings.fips_mode is on and LITELLM_SALT_KEY is not set")]
+    NoSaltKeyInFipsMode,
+    #[error("the salt key does not give a cipher key")]
+    Key(#[from] KeyError),
+}
+
+/// The key the proxy decrypts stored values with, `None` when it decrypts nothing. With
+/// `general_settings.fips_mode` on it is the KBKDF key of `LITELLM_SALT_KEY` alone, as
+/// `fips_mode_refusal` and `_fips_at_rest_key` require. Otherwise `get_salt_key`: the SHA-256 key
+/// of `LITELLM_SALT_KEY`, else of the master key the proxy runs with, which is the file's
+/// `general_settings.master_key` with its `os.environ/` reference read, else
+/// `LITELLM_MASTER_KEY`.
+fn salt_key(environment: &dyn Lookup, file: &Config) -> Result<Option<AtRestKey>, Unkeyed> {
+    let salt_key = environment.get(SALT_KEY).map(SecretValue::new);
+    match FipsMode::of(&file.general_settings) {
+        FipsMode::NotABoolean => Err(Unkeyed::FipsModeNotABoolean),
+        FipsMode::On => {
+            let salt_key = salt_key.ok_or(Unkeyed::NoSaltKeyInFipsMode)?;
+            Ok(Some(AtRestKey::derive(
+                &salt_key,
+                KeyDerivation::FipsKbkdf,
+            )?))
+        }
+        FipsMode::Off => Ok(salt_key
+            .or_else(|| file.general_settings.master_key.clone())
+            .or_else(|| environment.get(MASTER_KEY).map(SecretValue::new))
+            .map(|salt_key| AtRestKey::derive(&salt_key, KeyDerivation::Sha256))
+            .transpose()?),
+    }
 }
 
 /// `value` decrypted when it is a string that decrypts under `key`, and as stored otherwise.
@@ -518,9 +554,13 @@ mod tests {
     const STORED: &str = r#"{"model": "anthropic/claude-haiku-5-5", "api_key": "stored-key"}"#;
 
     fn encrypted(salt_key: &str, plaintext: &str) -> String {
-        AtRestKey::from_salt_key(&SecretValue::new(salt_key.to_owned()))
-            .encrypt(plaintext, Algorithm::XSalsa20Poly1305)
-            .unwrap()
+        AtRestKey::derive(
+            &SecretValue::new(salt_key.to_owned()),
+            KeyDerivation::Sha256,
+        )
+        .unwrap()
+        .encrypt(plaintext, Algorithm::XSalsa20Poly1305)
+        .unwrap()
     }
 
     fn params_with_api_key(api_key: &str) -> String {
@@ -543,7 +583,7 @@ mod tests {
             config,
             &environment(variables),
             rows,
-            key.as_ref(),
+            &key,
             &secrets(variables),
         )
         .await
@@ -838,5 +878,78 @@ mod tests {
                 "model_list.litellm_params.litellm_credential_name".into()
             ))
         );
+    }
+
+    const FIPS_SALT_KEY: &str = "a-salt-key-of-enough-bytes";
+
+    fn fips_encrypted(plaintext: &str) -> String {
+        AtRestKey::derive(
+            &SecretValue::new(FIPS_SALT_KEY.to_owned()),
+            KeyDerivation::FipsKbkdf,
+        )
+        .unwrap()
+        .encrypt(plaintext, Algorithm::Aes256Gcm)
+        .unwrap()
+    }
+
+    #[rstest]
+    #[case::fips_mode_decrypts_a_value_written_in_fips_mode(
+        "true",
+        &[("LITELLM_SALT_KEY", FIPS_SALT_KEY)],
+        StoredConfig::Loaded,
+        Some("fips-key")
+    )]
+    #[case::fips_mode_without_a_salt_key_is_unread(
+        "true",
+        &[],
+        StoredConfig::Unread,
+        None
+    )]
+    #[case::fips_mode_with_a_short_salt_key_is_unread(
+        "true",
+        &[("LITELLM_SALT_KEY", "short")],
+        StoredConfig::Unread,
+        None
+    )]
+    #[case::fips_mode_that_is_not_a_boolean_is_unread(
+        "'yes'",
+        &[("LITELLM_SALT_KEY", FIPS_SALT_KEY)],
+        StoredConfig::Unread,
+        None
+    )]
+    #[case::fips_mode_off_keeps_the_value_it_cannot_decrypt(
+        "false",
+        &[("LITELLM_SALT_KEY", FIPS_SALT_KEY)],
+        StoredConfig::Loaded,
+        None
+    )]
+    #[tokio::test]
+    async fn fips_mode_decrypts_with_the_kbkdf_key_of_the_salt_key_or_reads_nothing(
+        #[case] fips_mode: &str,
+        #[case] variables: Variables,
+        #[case] stored: StoredConfig,
+        #[case] decrypted: Option<&str>,
+    ) {
+        let ciphertext = fips_encrypted("fips-key");
+        let rows = Rows {
+            models: Some(vec![model("stored", &params_with_api_key(&ciphertext))]),
+            ..rows_with(None, true, true)
+        };
+        let file = format!("{FILE}{ON}  master_key: {MASTER_KEY}\n  fips_mode: {fips_mode}\n");
+
+        let loaded = layered_over(&file, &rows, variables).await;
+
+        let api_key = loaded
+            .config
+            .model_list
+            .iter()
+            .find(|model| model.model_name == "stored")
+            .and_then(|model| model.litellm_params.api_key.as_ref())
+            .map(|key| key.expose().to_owned());
+        let expected = match stored {
+            StoredConfig::Loaded => Some(decrypted.unwrap_or(&ciphertext).to_owned()),
+            _ => None,
+        };
+        assert_eq!((loaded.stored, api_key), (stored, expected));
     }
 }
