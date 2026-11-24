@@ -55,6 +55,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     ensure_response_additional_headers,
     response_has_hidden_params,
 )
+from litellm.litellm_core_utils.attempt_settlement import release_in_background
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -67,6 +68,7 @@ from litellm.litellm_core_utils.ptu_pricing import is_ptu_cost_attribution_enabl
 from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.token_counter import (
+    count_embedding_input_tokens,
     estimate_media_block_tokens,
     split_embedding_input_tokens,
 )
@@ -108,6 +110,7 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointT
 from litellm.types.proxy.auth.customer_hierarchy import CustomerScopeAuth
 from litellm.types.utils import (
     CallTypes,
+    Usage,
 )
 
 if TYPE_CHECKING:
@@ -121,6 +124,7 @@ if TYPE_CHECKING:
         NativeParallelRequestLimiterState,
     )
     from litellm.types.agents import AgentResponse
+    from litellm.types.responses.streaming_websocket import ResponsesWsQuotaRefund
 
     Span = _Span
     InternalUsageCache = _InternalUsageCache
@@ -415,7 +419,7 @@ class PTUShareExceededError(HTTPException):
         )
 
 
-_FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG: Final = TypeAdapter(bool | None)
+_FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG: Final[TypeAdapter[bool | None]] = TypeAdapter(bool | None)
 
 
 def fail_closed_rate_limit_enforcement_enabled(general_settings: Mapping[str, object]) -> bool:
@@ -458,6 +462,7 @@ EMBEDDING_API_CALL_TYPES: Final = ("aembedding", "embedding")
 TEXT_COMPLETION_API_CALL_TYPES: Final = ("atext_completion", "text_completion")
 RERANK_API_CALL_TYPES: Final = (CallTypes.rerank.value, CallTypes.arerank.value)
 EXTRACTION_API_CALL_TYPES: Final = (CallTypes.extraction.value, CallTypes.aextraction.value)
+REALTIME_API_CALL_TYPES: Final = (CallTypes.arealtime.value,)
 GOOGLE_GENAI_NATIVE_CALL_TYPES: Final = (
     CallTypes.generate_content.value,
     CallTypes.agenerate_content.value,
@@ -503,6 +508,10 @@ class WindowGuardedIncrement:
 
 
 ReservationOperation: TypeAlias = CounterIncrement | WindowGuardedIncrement
+
+ResponsesWebSocketClose: TypeAlias = Literal[
+    "refused_at_open", "relay_failed", "turns_finished", "turn_unfinished", "settled_by_its_log"
+]
 
 
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
@@ -733,6 +742,28 @@ class BorrowingShareState:
             self.fallback_limits = MappingProxyType({k: h for k, h in self.fallback_limits.items() if h is not hold})
 
 
+@dataclass(frozen=True, slots=True)
+class RequestTokenEstimate:
+    input_tokens: int
+    output_tokens: int
+    unpriced_media: bool = False
+
+    def charged(self, rate_limit_type: str) -> int:
+        match rate_limit_type:
+            case "input":
+                return self.input_tokens
+            case "output":
+                return self.output_tokens
+            case _:
+                return self.input_tokens + self.output_tokens
+
+
+@dataclass(frozen=True, slots=True)
+class RememberedTokenEstimate:
+    model: str | None
+    estimate: RequestTokenEstimate
+
+
 @dataclass(slots=True)
 class RequestRateLimiterStash:
     """
@@ -758,6 +789,9 @@ class RequestRateLimiterStash:
 
     owner_litellm_call_id: str | None = None
     call_type: str | None = None
+    request_body: Mapping[str, object] | None = None
+    request_team_id: str | None = None
+    token_estimate: RememberedTokenEstimate | None = None
     rate_limit_response: RateLimitResponse | None = None
     parallel_slot: ParallelSlotAcquisition | None = None
     parallel_slot_reused_at: datetime | None = None
@@ -787,6 +821,7 @@ class RequestRateLimiterStash:
     io_reservation_released: bool = False
     tpm_limited_tags: frozenset[str] = field(default_factory=frozenset)
     socket_agent_windows: tuple[RateLimitDescriptor, ...] = ()
+    socket_turn_owner: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
     native_state: "NativeParallelRequestLimiterState | None" = None
     native_capacity_state: "NativeModelCapacityState | None" = None
 
@@ -883,9 +918,10 @@ def request_identity(data: Mapping[str, object]) -> str | None:
 
 
 def _call_id_from_callback_kwargs(kwargs: object) -> str | None:
-    if not isinstance(kwargs, dict):
+    callback_kwargs: Final = as_str_mapping(kwargs)
+    if not isinstance(kwargs, dict) or callback_kwargs is None:
         return None
-    call_id: Final = kwargs.get("litellm_call_id")
+    call_id: Final = callback_kwargs.get("litellm_call_id")
     return call_id if isinstance(call_id, str) else None
 
 
@@ -1012,6 +1048,7 @@ def _apply_implicit_output_cap(
         or is_embedding
         or endpoint_type == EndpointType.DECISIONS
         or call_type in EXTRACTION_API_CALL_TYPES
+        or call_type in REALTIME_API_CALL_TYPES
     ):
         return
     write_implicit_output_cap(data, call_type, max(capped_floor, configured_output_tokens or 0))
@@ -1033,10 +1070,11 @@ def _get_explicit_output_cap(data: object, call_type: str | None) -> int | None:
             if parsed is not None
         )
         return max(google_cap_values, default=None)
-    if not isinstance(data, dict):
+    request: Final = as_str_mapping(data)
+    if not isinstance(data, dict) or request is None:
         return None
     if call_type in RESPONSES_API_CALL_TYPES:
-        responses_cap: Final = _parse_output_cap_value(data.get("max_output_tokens"))
+        responses_cap: Final = _parse_output_cap_value(request.get("max_output_tokens"))
         if responses_cap is None:
             return None
         return max(RESPONSES_API_MIN_OUTPUT_TOKENS, responses_cap)
@@ -1048,9 +1086,14 @@ def _get_explicit_output_cap(data: object, call_type: str | None) -> int | None:
         else ("max_tokens", "max_completion_tokens", "max_output_tokens")
     )
     output_cap_values: Final = tuple(
-        parsed for field in fields for parsed in (_parse_output_cap_value(data.get(field)),) if parsed is not None
+        parsed for field in fields for parsed in (_parse_output_cap_value(request.get(field)),) if parsed is not None
     )
     return max(output_cap_values, default=None)
+
+
+def _embedding_input_type(request: Mapping[str, object] | None) -> str | None:
+    input_type: Final = (request.get("inputType") or request.get("input_type")) if request is not None else None
+    return input_type if isinstance(input_type, str) else None
 
 
 def _is_embedding_request(data: object, call_type: str | None) -> bool:
@@ -1060,9 +1103,10 @@ def _is_embedding_request(data: object, call_type: str | None) -> bool:
         return False
     if call_type:
         return False
-    if not isinstance(data, dict):
+    request: Final = as_str_mapping(data)
+    if not isinstance(data, dict) or request is None:
         return False
-    return data.get("input") is not None
+    return request.get("input") is not None
 
 
 def _merge_ratelimit_statuses_into_additional_headers(
@@ -1086,10 +1130,11 @@ def _translate_google_genai_native_request(
     data: object,
     call_type: str | None,
 ) -> Mapping[str, object] | None:
-    if not isinstance(data, dict) or call_type not in GOOGLE_GENAI_NATIVE_CALL_TYPES:
+    request: Final = as_str_mapping(data)
+    if not isinstance(data, dict) or request is None or call_type not in GOOGLE_GENAI_NATIVE_CALL_TYPES:
         return None
-    model: Final = data.get("model")
-    return generate_content_body_to_completion(body=data, model=model if isinstance(model, str) else "")
+    model: Final = request.get("model")
+    return generate_content_body_to_completion(body=request, model=model if isinstance(model, str) else "")
 
 
 def _has_explicit_output_cap(data: object, call_type: str | None) -> bool:
@@ -1175,7 +1220,7 @@ class ParallelRequestLimiterHook(CustomLogger):
         requested_model: str | None,
         estimated_input_tokens: int,
         estimated_output_tokens: int,
-    ) -> None:
+    ) -> "ResponsesWsQuotaRefund | None":
         """Reserve one WebSocket ``response.create`` frame's tokens against
         the caller's project ITPM/OTPM quota.
 
@@ -1184,11 +1229,12 @@ class ParallelRequestLimiterHook(CustomLogger):
         frames over its lifetime. Without this, a project caller could send
         unlimited high-token generations after a single minimal reservation.
         There is no per-frame post-call hook to reconcile against, so --
-        like the batch rate limiter -- this charges the estimate immediately
-        and never refunds it.
+        like the batch rate limiter -- this charges the estimate immediately.
+        The returned refund gives the charge back for a turn refused before it
+        reached the provider, and is a no-op once the charged window has rolled.
         """
         if user_api_key_dict is None:
-            return
+            return None
         scoped: Final = await run_scoped(
             self,
             user_api_key_dict,
@@ -1203,13 +1249,30 @@ class ParallelRequestLimiterHook(CustomLogger):
         response: Final = _native_reply(scoped.reply)
         if response["overall_code"] == "OVER_LIMIT":
             handle_rate_limit_error(self, response, scoped.descriptors, requested_model)
+        refund_operations: Final = _project_io_refund_operations(
+            scoped.descriptors,
+            response.get("reservation_windows", frozenset()),
+            estimated_input_tokens,
+            estimated_output_tokens,
+            self.window_size,
+        )
+        if not refund_operations:
+            return None
+
+        async def refund() -> None:
+            await increment_reservation_aware_tokens(self, refund_operations, user_api_key_dict.parent_otel_span)
+
+        return refund
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def enforce_token_limits_for_frame(
-        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        requested_model: str | None,
+        call_type: str = CallTypes.aresponses_websocket.value,
     ) -> None:
-        """Read one Responses WebSocket turn's token windows: every TPM limit the socket's request would
-        check, plus the agent windows its admission held, without the slot and RPM it already took."""
+        """Read one WebSocket turn's token windows: every TPM limit the socket's request would check, plus
+        the agent windows its admission held, without the slot and RPM it already took."""
         connection_stash: Final = get_request_stash()
         tags: Final = sorted(connection_stash.tpm_limited_tags) if connection_stash is not None else []
         agent_windows: Final = connection_stash.socket_agent_windows if connection_stash is not None else ()
@@ -1218,9 +1281,13 @@ class ParallelRequestLimiterHook(CustomLogger):
                 self,
                 user_api_key_dict,
                 MappingProxyType({"model": requested_model, "metadata": {"tags": tags}}),
-                {"kind": "socket_turn", "agent_windows": [dict(window) for window in agent_windows]},
+                {
+                    "kind": "socket_turn",
+                    "agent_windows": [dict(window) for window in agent_windows],
+                    "project_io": call_type == CallTypes.arealtime.value,
+                },
                 {"kind": "check", "read_only": True, "skip_parallel_check": True},
-                call_type=CallTypes.aresponses_websocket.value,
+                call_type=call_type,
             )
             response: Final = _native_reply(scoped.reply)
         except RateLimitUnverifiableError as unverifiable:
@@ -1231,7 +1298,67 @@ class ParallelRequestLimiterHook(CustomLogger):
             handle_rate_limit_error(self, response, scoped.descriptors, requested_model)
 
     @with_service_target(RATE_LIMITS_TARGET)
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def charge_realtime_turn_usage(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
+    ) -> None:
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+        connection_stash: Final = get_request_stash()
+        turn_owner: Final[Mapping[str, str]] = (
+            connection_stash.socket_turn_owner if connection_stash is not None else {}
+        )
+        turn_kwargs: Final = MappingProxyType(
+            {
+                "call_type": CallTypes.arealtime.value,
+                "litellm_params": {
+                    "metadata": {
+                        "model_group": requested_model,
+                        "user_api_key_metadata": LiteLLMProxyRequestSetup.get_tenant_logging_metadata(
+                            user_api_key_dict
+                        )["user_api_key_metadata"],
+                        "user_api_key_model_max_budget": _METADATA.validate_python(
+                            user_api_key_dict.model_max_budget or {}  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.model_max_budget is a bare dict
+                        ),
+                    }
+                },
+                "standard_logging_object": {
+                    "metadata": {
+                        **LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(user_api_key_dict),
+                        **turn_owner,
+                    }
+                },
+                "combined_usage_object": usage,
+            }
+        )
+        prompt_details: Final = usage.prompt_tokens_details
+        cached_tokens: Final = 0 if prompt_details is None else prompt_details.cached_tokens or 0
+        _ = await run_scoped(
+            self,
+            user_api_key_dict,
+            MappingProxyType({"model": requested_model}),
+            {"kind": "project_io"},
+            {
+                "kind": "settle_io",
+                "input_tokens": max(usage.prompt_tokens - cached_tokens, 0),
+                "output_tokens": usage.completion_tokens,
+            },
+            batched=False,
+        )
+        await self.native_companion.log_success(
+            _native_state(self, connection_stash),
+            turn_kwargs,
+            None,
+            None,
+            None,
+            _settlement_resolved(self, turn_kwargs, None, charges_ptu=False),
+            token_rate_limit_type(),
+            turn=True,
+        )
+
+    @with_service_target(RATE_LIMITS_TARGET)
+    async def async_log_success_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         """
         Settle the request's TPM usage and release its parallel slot in the native limiter, which reads the
         usage, the charged scopes and the slot reuse off the callback's kwargs and response itself.
@@ -1282,7 +1409,9 @@ class ParallelRequestLimiterHook(CustomLogger):
         return kwargs, result
 
     @with_service_target(RATE_LIMITS_TARGET)
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_failure_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         """
         On failure: release max_parallel_requests and refund the upfront TPM reservation, in the native
         limiter, only against the scopes the reservation actually charged. A failed stream whose partial
@@ -1308,6 +1437,46 @@ class ParallelRequestLimiterHook(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit failure event: %s", e)
 
+    def leave_reservation_to_socket_close(self) -> None:
+        """Leave this WebSocket's admission reservation to its close, so the failure callbacks of the socket's own
+        call only free its slot."""
+        native_state: Final = _native_state(self, get_request_stash())
+        if native_state is not None:
+            self.native_companion.leave_reservation_to_socket_close(native_state)
+
+    @with_service_target(RATE_LIMITS_TARGET)
+    async def async_release_responses_websocket_admission(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        close: ResponsesWebSocketClose,
+        turns_logged: Callable[[], Awaitable[bool]] | None = None,
+    ) -> None:
+        """Free the slot a Responses WebSocket took at admission once it closes, and settle its token reservations by
+        how it closed. A socket whose turns all finished settles in the background once ``turns_logged`` says their
+        charges are in, and keeps its reservation when they are not."""
+        native_state: Final = _native_state(self, get_request_stash())
+        if native_state is None:
+            return
+        try:
+            if close != "turns_finished":
+                await self.native_companion.close_socket(native_state, close)
+                return
+            await self.native_companion.release_on_disconnect(native_state)
+            _ = release_in_background(self._close_finished_responses_websocket(native_state, turns_logged))
+        except Exception as e:  # noqa: BLE001  # a failed release logs instead of failing the socket's close
+            _log_responses_websocket_release_error(e)
+
+    async def _close_finished_responses_websocket(
+        self,
+        native_state: "NativeParallelRequestLimiterState",
+        turns_logged: Callable[[], Awaitable[bool]] | None,
+    ) -> None:
+        try:
+            logged: Final = turns_logged is None or await turns_logged()
+            await self.native_companion.close_socket(native_state, "turns_finished" if logged else "turn_unfinished")
+        except Exception as e:  # noqa: BLE001  # a background refund has no caller to raise to, so it logs its failure
+            _log_responses_websocket_release_error(e)
+
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_release_max_parallel_requests_on_disconnect(
         self,
@@ -1329,7 +1498,9 @@ class ParallelRequestLimiterHook(CustomLogger):
             await self.native_companion.release_on_disconnect(native_state)
 
     @with_service_target(RATE_LIMITS_TARGET)
-    async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response) -> None:
+    async def async_post_call_success_hook(
+        self, data: Mapping[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> None:
         """
         Release completed-request slots and update rate limit headers in the response.
         """
@@ -1361,6 +1532,10 @@ class ParallelRequestLimiterHook(CustomLogger):
             await self.native_companion.log_post_call_failure(native_state, request_data, token_rate_limit_type())
         except Exception as e:
             verbose_proxy_logger.exception("Error releasing TPM reservation on post-call failure: %s", e)
+
+
+def _log_responses_websocket_release_error(error: Exception) -> None:
+    verbose_proxy_logger.error("Error releasing a closed Responses WebSocket's admission: %s", error, exc_info=error)
 
 
 PROXY_MaxParallelRequestsHandler_v3 = ParallelRequestLimiterHook
@@ -1892,10 +2067,12 @@ def _estimate_audio_block_tokens(block: object) -> int:
     When no payload is present (reference-only block or missing ``data``),
     falls back to ``DEFAULT_AUDIO_TOKEN_ESTIMATE``.
     """
-    if not isinstance(block, dict):
+    audio_block: Final = as_str_mapping(block)
+    if not isinstance(block, dict) or audio_block is None:
         return DEFAULT_AUDIO_TOKEN_ESTIMATE
-    input_audio: Final = block.get("input_audio")
-    b64_data: Final = input_audio.get("data") if isinstance(input_audio, dict) else None
+    input_audio: Final = audio_block.get("input_audio")
+    audio_payload: Final = as_str_mapping(input_audio)
+    b64_data: Final = audio_payload.get("data") if isinstance(input_audio, dict) and audio_payload is not None else None
     if b64_data and isinstance(b64_data, str):
         decoded_bytes: Final = len(b64_data) * 3 // 4
         return max(decoded_bytes // _AUDIO_BYTES_PER_TOKEN, DEFAULT_AUDIO_TOKEN_ESTIMATE)
@@ -2026,15 +2203,15 @@ def estimate_precise_input_tokens(
     """
     from litellm import token_counter
 
-    if not isinstance(data, dict):
+    request: Final = as_str_mapping(data)
+    if not isinstance(data, dict) or request is None:
         return 0
     is_responses_request: Final = call_type in RESPONSES_API_CALL_TYPES
     translated_request: Final = (
-        None if is_responses_request else _translate_google_genai_native_request(data, call_type)
+        None if is_responses_request else _translate_google_genai_native_request(request, call_type)
     )
-    is_embedding_request: Final = _is_embedding_request(data, call_type)
-    request: Final = as_str_mapping(data)
-    raw_embedding_input: Final = request.get("input") if is_embedding_request and request is not None else None
+    is_embedding_request: Final = _is_embedding_request(request, call_type)
+    raw_embedding_input: Final = request.get("input") if is_embedding_request else None
     pretokenized_input_tokens: Final = (
         _count_pretokenized_embedding_input(raw_embedding_input) if is_embedding_request else None
     )
@@ -2042,16 +2219,19 @@ def estimate_precise_input_tokens(
         return pretokenized_input_tokens
     embedding_text, embedding_media_tokens = (
         split_embedding_input_tokens(
-            raw_embedding_input, lambda: limiter.media_model_resolver(model or "", team_id), model
+            raw_embedding_input,
+            lambda: limiter.media_model_resolver(model or "", team_id),
+            model,
+            _embedding_input_type(request),
         )
         if is_embedding_request
         else (None, 0)
     )
 
-    prompt: Final = data.get("prompt")
-    fallback_text: Final = prompt if prompt is not None else data.get("input")
+    prompt: Final = request.get("prompt")
+    fallback_text: Final = prompt if prompt is not None else request.get("input")
     selected_inputs: Final[tuple[object | None, object | None, object | None, object | None]] = (
-        (_responses_input_to_chat_messages(data), None, data.get("tools"), data.get("tool_choice"))
+        (_responses_input_to_chat_messages(request), None, request.get("tools"), request.get("tool_choice"))
         if is_responses_request
         else (
             translated_request.get("messages"),
@@ -2060,15 +2240,15 @@ def estimate_precise_input_tokens(
             translated_request.get("tool_choice"),
         )
         if translated_request is not None
-        else (None, embedding_text, data.get("tools"), data.get("tool_choice"))
+        else (None, embedding_text, request.get("tools"), request.get("tool_choice"))
         if is_embedding_request
-        else (None, _rerank_input_to_text(data), data.get("tools"), data.get("tool_choice"))
+        else (None, _rerank_input_to_text(request), request.get("tools"), request.get("tool_choice"))
         if call_type in RERANK_API_CALL_TYPES
-        else (None, prompt, data.get("tools"), data.get("tool_choice"))
+        else (None, prompt, request.get("tools"), request.get("tool_choice"))
         if call_type in TEXT_COMPLETION_API_CALL_TYPES
         else (None, _extraction_input_text(_REQUEST_RATE_LIMIT_DATA.validate_python(data)), None, None)
         if call_type in EXTRACTION_API_CALL_TYPES
-        else (data.get("messages"), fallback_text, data.get("tools"), data.get("tool_choice"))
+        else (request.get("messages"), fallback_text, request.get("tools"), request.get("tool_choice"))
     )
     messages, selected_text, countable_tools, countable_tool_choice = selected_inputs
 
@@ -2101,7 +2281,7 @@ def estimate_precise_input_tokens(
         if call_type in RERANK_API_CALL_TYPES and isinstance(selected_text, str):
             return max(0, len(selected_text) // DEFAULT_CHARS_PER_TOKEN)
         estimated_input_tokens, _ = estimate_input_and_output_tokens(
-            data=data,
+            data=request,
             call_type=call_type,
             include_media=is_embedding_request,
             team_id=team_id,
@@ -2120,6 +2300,7 @@ async def run_scoped(
     call_type: str | None = None,
     state: "NativeParallelRequestLimiterState | None" = None,
     lookups: bool = True,
+    batched: bool = True,
 ) -> _ScopedReply:
     """Build an entry point's descriptors with the native pre-call's builder from the same typed key
     records and lookups, then run ``action`` on them. A Python error the builder reproduces is raised."""
@@ -2134,7 +2315,9 @@ async def run_scoped(
     reply: Final = await limiter.native_companion.scoped(
         {**inputs, "selection": selection, "action": action},
         state=state,
-        request=pre_call_request() if state is not None or limiter.rate_limits.has_request_batch else None,
+        request=pre_call_request()
+        if batched and (state is not None or limiter.rate_limits.has_request_batch)
+        else None,
     )
     raise_wire_abort(reply.get("abort"))
     return _ScopedReply(descriptors=_descriptors().validate_python(reply.get("descriptors")), reply=reply)
@@ -2316,6 +2499,33 @@ async def request_capacity(
             raise cancellation
 
 
+def _project_io_refund_operations(
+    descriptors: Sequence[RateLimitDescriptor],
+    reservation_windows: frozenset[ReservationWindowIdentity],
+    input_tokens: int,
+    output_tokens: int,
+    ttl: int,
+) -> tuple[WindowGuardedIncrement, ...]:
+    reserved: Final = MappingProxyType(
+        {
+            RateLimitScope(descriptor["key"], descriptor["value"]).counter("tokens"): (
+                input_tokens if descriptor["key"] == PROJECT_ITPM_DESCRIPTOR_KEY else output_tokens
+            )
+            for descriptor in descriptors
+            if descriptor["key"] in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
+        }
+    )
+    return tuple(
+        WindowGuardedIncrement(
+            increment=CounterIncrement(counter=counter, amount=-reserved[counter], ttl=ttl),
+            expected_window_start=window_start,
+            reservation_backend=backend,
+        )
+        for counter, window_start, backend in sorted(reservation_windows)
+        if reserved.get(counter)
+    )
+
+
 def _native_operation(operation: ReservationOperation) -> _NativeOp:
     if isinstance(operation, CounterIncrement):
         scope: Final = operation.counter.scope
@@ -2359,6 +2569,8 @@ def _settlement_resolved(
     limiter: ParallelRequestLimiterHook,
     kwargs: Mapping[str, object],
     native_state: "NativeParallelRequestLimiterState | None",
+    *,
+    charges_ptu: bool = True,
 ) -> Mapping[str, object]:
     """What only the proxy resolves for a native settlement: the served and reserved models through the
     router's aliases, whether the key owns each one's TPM limit, the team's PTU share, and the live policy.
@@ -2406,7 +2618,7 @@ def _settlement_resolved(
             if model is not None
             for ceiling in (
                 limiter.ptu_team_ceiling_resolver(team_id, model.group)
-                if isinstance(team_id, str) and team_id
+                if charges_ptu and isinstance(team_id, str) and team_id
                 else None,
             )
         },
@@ -2470,6 +2682,27 @@ def estimate_input_and_output_tokens(
     team_id: str | None = None,
     media_model_resolver: Callable[[str, str | None], tuple[str, ...]] | None = None,
 ) -> tuple[int, int]:
+    estimate: Final = estimate_tokens_and_unpriced_media(
+        data=data,
+        min_configured_tpm_limit=min_configured_tpm_limit,
+        call_type=call_type,
+        configured_output_tokens=configured_output_tokens,
+        include_media=include_media,
+        team_id=team_id,
+        media_model_resolver=media_model_resolver,
+    )
+    return estimate.input_tokens, estimate.output_tokens
+
+
+def estimate_tokens_and_unpriced_media(
+    data: object,
+    min_configured_tpm_limit: int | None = None,
+    call_type: str | None = None,
+    configured_output_tokens: int | None = None,
+    include_media: bool = True,
+    team_id: str | None = None,
+    media_model_resolver: Callable[[str, str | None], tuple[str, ...]] | None = None,
+) -> RequestTokenEstimate:
     """
     Estimate input tokens and output (max_tokens) budget separately, so
     callers needing independent ITPM/OTPM reservations (rather than one
@@ -2494,9 +2727,9 @@ def estimate_input_and_output_tokens(
     """
     request_data: Final = as_str_mapping(data)
     if not isinstance(data, dict) or request_data is None:
-        return 0, 0
+        return RequestTokenEstimate(0, 0)
     request_model: Final = request_data.get("model")
-    translated_data: Final = _translate_google_genai_native_request(data, call_type)
+    translated_data: Final = _translate_google_genai_native_request(request_data, call_type)
     estimable_data: Final = translated_data if translated_data is not None else request_data
     selected_fields: Final[tuple[object | None, object | None, object | None]] = (
         (None, None, estimable_data.get("input"))
@@ -2533,14 +2766,15 @@ def estimate_input_and_output_tokens(
     resolved_models: Final = (
         _media_models(media_model_resolver, fallback_model or "", team_id) if media else (fallback_model or "",)
     )
-    embedding_text, embedding_media_tokens = (
-        split_embedding_input_tokens(
+    embedding_text, embedding_media_tokens, unpriced_media = (
+        count_embedding_input_tokens(
             original_input,
             lambda: _media_models(media_model_resolver, fallback_model or "", team_id),
             fallback_model,
+            _embedding_input_type(estimable_data),
         )
         if include_media and is_embedding_call
-        else (original_input, 0)
+        else (original_input, 0, False)
     )
     input_text: Final = projected if call_type in RESPONSES_API_CALL_TYPES else embedding_text
     media_tokens: Final = embedding_media_tokens + sum(
@@ -2565,8 +2799,12 @@ def estimate_input_and_output_tokens(
         max(1, total_chars // DEFAULT_CHARS_PER_TOKEN) if total_chars > 0 else 0
     ) + media_tokens
 
-    explicit_max_tokens: Final = _get_explicit_output_cap(data, call_type)
-    generates_no_output: Final = _is_embedding_request(data, call_type) or call_type in EXTRACTION_API_CALL_TYPES
+    explicit_max_tokens: Final = _get_explicit_output_cap(request_data, call_type)
+    generates_no_output: Final = (
+        _is_embedding_request(request_data, call_type)
+        or call_type in EXTRACTION_API_CALL_TYPES
+        or call_type in REALTIME_API_CALL_TYPES
+    )
 
     base_output_floor: Final = no_max_tokens_output_floor(min_configured_tpm_limit)
     output_floor: Final = (
@@ -2585,7 +2823,11 @@ def estimate_input_and_output_tokens(
         else max(estimated_input_tokens, output_floor)
     )
 
-    return estimated_input_tokens, max_tokens_estimate * get_output_candidate_count(data, call_type)
+    return RequestTokenEstimate(
+        estimated_input_tokens,
+        max_tokens_estimate * get_output_candidate_count(request_data, call_type),
+        unpriced_media,
+    )
 
 
 def estimate_tokens_for_request(
@@ -2646,24 +2888,22 @@ def request_token_estimate(
     rate_limit_type: str = "total",
     media_model_resolver: Callable[[str, str | None], tuple[str, ...]] = _resolve_media_models_via_proxy_router,
 ) -> int:
-    """The reservation this limiter would hold for the request, for another limiter settling the same call."""
-    if rate_limit_type == "total":
-        return estimate_tokens_for_request(
-            data=data,
-            model=model,
-            min_configured_tpm_limit=min_configured_tpm_limit,
-            call_type=call_type,
-            team_id=team_id,
-            media_model_resolver=media_model_resolver,
-        )
-    estimated_input, output_budget = estimate_input_and_output_tokens(
-        data=data,
-        min_configured_tpm_limit=min_configured_tpm_limit,
-        call_type=call_type,
-        team_id=team_id,
-        media_model_resolver=media_model_resolver,
+    return dispatched_token_estimate(data, min_configured_tpm_limit, call_type, team_id, media_model_resolver).charged(
+        rate_limit_type
     )
-    return output_budget if rate_limit_type == "output" else estimated_input
+
+
+def dispatched_token_estimate(
+    data: object,
+    min_configured_tpm_limit: int,
+    call_type: str | None,
+    team_id: str | None,
+    media_model_resolver: Callable[[str, str | None], tuple[str, ...]] = _resolve_media_models_via_proxy_router,
+) -> RequestTokenEstimate:
+    """The reservation this limiter would hold for the request, for another limiter settling the same call."""
+    return estimate_tokens_and_unpriced_media(
+        data, min_configured_tpm_limit, call_type, team_id=team_id, media_model_resolver=media_model_resolver
+    )
 
 
 def cap_output_for_limit(data: object, min_configured_limit: int, call_type: str | None) -> None:

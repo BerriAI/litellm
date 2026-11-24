@@ -10,6 +10,7 @@ Has 4 methods:
 
 import asyncio
 import json
+from collections.abc import Coroutine, Iterable, Sequence
 from contextlib import suppress
 from typing import Final
 
@@ -23,7 +24,7 @@ _DECODED_BLOB: Final = TypeAdapter(object)
 
 
 class AzureBlobCache(BaseCache):
-    def __init__(self, account_url, container) -> None:
+    def __init__(self, account_url: str | None, container: str | None) -> None:
         from azure.core.exceptions import ResourceExistsError
         from azure.identity import DefaultAzureCredential
         from azure.identity.aio import (
@@ -44,7 +45,7 @@ class AzureBlobCache(BaseCache):
         with suppress(ResourceExistsError):
             self.container_client.create_container()
 
-    def set_cache(self, key, value, **kwargs) -> None:
+    def set_cache(self, key: object, value: object, **kwargs: object) -> None:
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")
         serialized_value: Final = json.dumps(value)
         try:
@@ -53,7 +54,7 @@ class AzureBlobCache(BaseCache):
             # NON blocking - notify users Azure Blob is throwing an exception
             print_verbose(f"LiteLLM set_cache() - Got exception from Azure Blob: {e}")
 
-    async def async_set_cache(self, key, value, **kwargs) -> None:
+    async def async_set_cache(self, key: object, value: object, **kwargs: object) -> None:
         print_verbose(f"LiteLLM SET Cache - Azure Blob. Key={key}. Value={value}")
         serialized_value: Final = json.dumps(value)
         try:
@@ -62,7 +63,7 @@ class AzureBlobCache(BaseCache):
             # NON blocking - notify users Azure Blob is throwing an exception
             print_verbose(f"LiteLLM set_cache() - Got exception from Azure Blob: {e}")
 
-    def get_cache(self, key, **kwargs):
+    def get_cache(self, key: object, **kwargs: object):
         from azure.core.exceptions import ResourceNotFoundError
 
         try:
@@ -82,7 +83,7 @@ class AzureBlobCache(BaseCache):
         except ResourceNotFoundError:
             return None
 
-    async def async_get_cache(self, key, **kwargs):
+    async def async_get_cache(self, key: object, **kwargs: object):
         from azure.core.exceptions import ResourceNotFoundError
 
         try:
@@ -109,8 +110,8 @@ class AzureBlobCache(BaseCache):
         self.container_client.close()
         await self.async_container_client.close()
 
-    async def async_set_cache_pipeline(self, cache_list, **kwargs) -> None:
-        tasks: Final = []
+    async def async_set_cache_pipeline(self, cache_list: Iterable[Sequence[object]], **kwargs: object) -> None:
+        tasks: Final[list[Coroutine[object, object, None]]] = []
         for val in cache_list:
             tasks.append(self.async_set_cache(val[0], val[1], **kwargs))
         await asyncio.gather(*tasks)

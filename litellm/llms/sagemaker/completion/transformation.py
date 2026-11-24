@@ -75,7 +75,7 @@ class SagemakerConfig(BaseConfig):
     def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
         return SagemakerError(message=error_message, status_code=status_code, headers=headers)
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "stream",
             "temperature",
@@ -88,11 +88,11 @@ class SagemakerConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param == "temperature":
                 if value == 0.0 or value == 0:
@@ -125,7 +125,7 @@ class SagemakerConfig(BaseConfig):
     def _transform_prompt(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         custom_prompt_dict: dict,
         hf_model_name: str | None,
     ) -> str:
@@ -159,15 +159,15 @@ class SagemakerConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         inference_params: Final = {
             key: value for key, value in STR_KEYED_MAPPING.validate_python(optional_params).items() if key != "model_id"
         }
         stream: Final = inference_params.pop("stream", False)
-        data: Final[dict] = {"parameters": inference_params}
+        data: Final[dict[str, object]] = {"parameters": inference_params}
         if stream is True:
             data["stream"] = True
 
@@ -189,10 +189,10 @@ class SagemakerConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: dict[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         return await asyncify(self.transform_request)(model, messages, optional_params, litellm_params, headers)
 
     def transform_response(
@@ -203,8 +203,8 @@ class SagemakerConfig(BaseConfig):
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -269,14 +269,14 @@ class SagemakerConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict | None,
+        headers: dict[str, object] | None,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         headers = {"Content-Type": "application/json"}
 
         if headers is not None:

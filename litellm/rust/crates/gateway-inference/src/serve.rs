@@ -22,7 +22,7 @@ use crate::{
     headers::Routing,
     hooks::{self, CallType},
     model_restamp::ReportedModel,
-    request,
+    record, request,
     routing::{self, Host, RouteAttempt},
     stream_event::Counts,
 };
@@ -101,8 +101,9 @@ where
         let told = hooks::answered::<E, _>(&hooks, &mut outcome, model_group).await?;
         Ok(told.answer((Extension(routing), E::render(outcome, reported)?)))
     };
+    record::write(|entries| entries.serve_as(E::CALL_TYPE));
     let served = match body {
-        Ok(body) => hooks::around(gateway, identity, E::CALL_TYPE, body, serve).await,
+        Ok(body) => hooks::around(gateway, identity, body, serve).await,
         Err(error) => Err(Ended::from(error)),
     };
     served.unwrap_or_else(|ended| ended.response(E::ERRORS, call.request_id.as_deref()))

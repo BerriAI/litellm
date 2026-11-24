@@ -108,7 +108,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         region: Final = self._resolve_region({**litellm_params, "api_base": api_base})
         base = api_base or get_secret_str("BEDROCK_MANTLE_API_BASE") or f"https://bedrock-mantle.{region}.api.aws"
@@ -125,7 +125,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         path: Final = "/openai/v1/responses" if self.use_openai_path else "/v1/responses"
         return join_api_base(base, path)
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: Mapping[str, object], model: str, litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         params: Final = litellm_params or GenericLiteLLMParams()
         return {**headers, **self._pinned_headers(params.api_key, params.aws_bedrock_project_id)}
 
@@ -188,7 +190,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         return list(kept)
 
     @staticmethod
-    def _handle_unsupported_service_tier(params: dict, drop_params: bool) -> dict:
+    def _handle_unsupported_service_tier(params: dict[str, object], drop_params: bool) -> dict[str, object]:
         service_tier: Final = params.get("service_tier")
         if service_tier is None or service_tier in _BEDROCK_MANTLE_SUPPORTED_SERVICE_TIERS:
             return params
@@ -246,10 +248,10 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         self,
         model: str,
         input: "str | ResponseInputParam",
-        response_api_optional_request_params: dict,
+        response_api_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
+        headers: dict[str, str],
+    ) -> dict[str, object]:
         params: Final = cast(  # cast-ok: the base signature leaves the params dict untyped
             "ResponsesAPIOptionalRequestParams", response_api_optional_request_params
         )
@@ -310,7 +312,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         params: Final = self._handle_unsupported_reasoning_summary(
             self._handle_unsupported_service_tier(
                 super().map_openai_params(

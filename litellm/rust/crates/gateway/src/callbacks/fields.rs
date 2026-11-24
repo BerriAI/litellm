@@ -1,24 +1,21 @@
-//! What the gateway knows of one call and how a callback reads and writes it by contract field,
-//! the native counterpart of the proxy's `v2_proxy_fields.py`. A field the gateway cannot work
-//! out yet is left out of what a callback is handed, and one it has no place for is not written.
-
-use std::time::{SystemTime, UNIX_EPOCH};
+//! How a callback reads and writes a call's record by contract field, the Rust counterpart of
+//! the proxy's `v2_proxy_fields.py`. A field the gateway cannot work out yet is left out of what
+//! a callback is handed, and one it has no place for is not written.
 
 use litellm_callbacks::{
-    CallFacts, CallIds, CallKind, CallTarget, CallTiming, Field, FieldSet, FieldValues, Hook,
-    HookInput, LoggedModelGroup, Outcome, PatchOp, Scalar, Usage, UsageRecord,
+    CallFacts, CallKind, CallTarget, CallTiming, Field, FieldSet, FieldValues, Hook, HookInput,
+    LoggedModelGroup, Outcome, PatchOp, Scalar, Usage, UsageRecord,
 };
-use litellm_gateway_inference::{CallType, ServedCall};
+use litellm_gateway_inference::record::{Ended, Entries};
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use serde::Serialize;
 use serde_json::{Map, Value};
 
 const MODEL: &str = "model";
-const STREAM: &str = "stream";
 
 /// A patch operation the gateway has no place to write.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub(super) enum Unwritable {
+pub enum Unwritable {
     #[error("the gateway has no place to write {0:?} yet")]
     Field(Field),
     #[error("{0:?} is replaced whole, never merged into")]
@@ -29,70 +26,6 @@ pub(super) enum Unwritable {
     Model(Value),
     #[error("{0:?} is part of the request body, which the route already has")]
     Routed(Field),
-}
-
-/// The request body of one call. The route owns it, so it is only held while the pre-call hook
-/// runs, and what it named of the call is all that stays once it is handed back. The model and
-/// the stream flag are read from whichever is there, so a patch to a held body is what every
-/// later reader sees.
-enum Request {
-    Held(Map<String, Value>),
-    Named { model: Option<String>, stream: bool },
-}
-
-impl Request {
-    fn body(&self) -> Option<&Map<String, Value>> {
-        match self {
-            Self::Held(body) => Some(body),
-            Self::Named { .. } => None,
-        }
-    }
-
-    fn model(&self) -> Option<&str> {
-        match self {
-            Self::Held(body) => body.get(MODEL).and_then(Value::as_str),
-            Self::Named { model, .. } => model.as_deref(),
-        }
-    }
-
-    fn stream(&self) -> bool {
-        match self {
-            Self::Held(body) => body.get(STREAM).and_then(Value::as_bool) == Some(true),
-            Self::Named { stream, .. } => *stream,
-        }
-    }
-
-    fn named(&self) -> Self {
-        Self::Named {
-            model: self.model().map(str::to_owned),
-            stream: self.stream(),
-        }
-    }
-
-    /// The held body for a write to `field`.
-    fn held(&mut self, field: Field) -> Result<&mut Map<String, Value>, Unwritable> {
-        match self {
-            Self::Held(body) => Ok(body),
-            Self::Named { .. } => Err(Unwritable::Routed(field)),
-        }
-    }
-}
-
-/// One call as it stands.
-pub(super) struct Known {
-    call_type: CallType,
-    start: f64,
-    request: Request,
-    rate_limit_statuses: Option<Value>,
-    response_headers: Map<String, Value>,
-    served: Option<ServedCall>,
-    outcome: Option<Outcome>,
-}
-
-fn unix_now() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0.0, |elapsed| elapsed.as_secs_f64())
 }
 
 fn record(value: impl Serialize) -> Option<Value> {
@@ -110,167 +43,151 @@ fn usage(used: &ChatCompletionsUsage) -> Usage {
             prompt_tokens: count(used.prompt_tokens),
             completion_tokens: count(used.completion_tokens),
             total_tokens: count(used.total_tokens),
-            cached_tokens: count(used.prompt_tokens_details.cached_tokens),
+            cached_tokens: used
+                .prompt_tokens_details
+                .as_ref()
+                .and_then(|details| details.cached_tokens)
+                .and_then(count),
             ..UsageRecord::default()
         }),
         ..Usage::default()
     }
 }
 
-impl Known {
-    pub(super) fn of(call_type: CallType) -> Self {
-        Self {
-            call_type,
-            start: unix_now(),
-            request: Request::Named {
-                model: None,
-                stream: false,
-            },
-            rate_limit_statuses: None,
-            response_headers: Map::new(),
-            served: None,
-            outcome: None,
+fn outcome(ended: Ended) -> Outcome {
+    match ended {
+        Ended::Served => Outcome::Success,
+        Ended::Failed => Outcome::Failure,
+    }
+}
+
+fn read(entries: &Entries, field: Field) -> Option<Value> {
+    match field {
+        Field::Model => entries.model().map(Value::from),
+        Field::RequestBody => entries.body().cloned().map(Value::Object),
+        Field::RateLimitStatuses => entries.rate_limit_statuses().cloned(),
+        Field::ResponseHeaders => Some(Value::Object(entries.response_headers().clone())),
+        Field::Outcome => record(outcome(entries.ended()?)),
+        Field::Usage => record(usage(entries.served()?.usage.as_ref()?)),
+        Field::LoggedModelGroup => record(LoggedModelGroup {
+            value: Some(Scalar::Text(entries.served()?.model_group.clone())),
+            ..LoggedModelGroup::default()
+        }),
+        _ => None,
+    }
+}
+
+fn facts(entries: &Entries) -> CallFacts {
+    CallFacts {
+        kind: CallKind {
+            call_type: entries
+                .call_type()
+                .map(<&str>::from)
+                .unwrap_or_default()
+                .to_owned(),
+            stream: entries.stream(),
+            ..CallKind::default()
+        },
+        target: CallTarget {
+            model: entries.model().unwrap_or_default().to_owned(),
+            model_group: entries.served().map(|served| served.model_group.clone()),
+            ..CallTarget::default()
+        },
+        timing: CallTiming {
+            start: entries.start(),
+            ..CallTiming::default()
+        },
+        ..CallFacts::default()
+    }
+}
+
+/// What a callback that reads `reads` is handed on `hook`.
+pub fn input(entries: &Entries, hook: Hook, reads: FieldSet) -> HookInput {
+    let fields = reads
+        .iter()
+        .filter(|field| !field.by_reference())
+        .filter_map(|field| Some((field, read(entries, field)?)))
+        .fold(FieldValues::new(reads), |fields, (field, value)| {
+            fields.with(field, value)
+        });
+    HookInput {
+        hook,
+        fields,
+        call: Some(facts(entries)),
+    }
+}
+
+/// The held body for a write to `field`.
+fn held(entries: &mut Entries, field: Field) -> Result<&mut Map<String, Value>, Unwritable> {
+    entries.body_mut().ok_or(Unwritable::Routed(field))
+}
+
+/// Writes one operation of a callback's patch: the request's own params into the body, as the
+/// proxy's hooks change `data`, and the rest where a later callback or the route reads it.
+pub fn write(entries: &mut Entries, op: PatchOp) -> Result<(), Unwritable> {
+    match op {
+        PatchOp::Merge {
+            field: Field::OptionalParams,
+            keys,
+        } => held(entries, Field::OptionalParams)?.extend(keys),
+        PatchOp::Merge {
+            field: Field::ResponseHeaders,
+            keys,
+        } => keys
+            .into_iter()
+            .for_each(|(name, value)| entries.add_header(name, value)),
+        PatchOp::Set {
+            field: Field::Model,
+            value: Value::String(model),
+        } => {
+            held(entries, Field::Model)?.insert(MODEL.to_owned(), Value::from(model));
+        }
+        PatchOp::Set {
+            field: Field::Model,
+            value,
+        } => return Err(Unwritable::Model(value)),
+        PatchOp::Set {
+            field: Field::RateLimitStatuses,
+            value,
+        } => entries.set_rate_limit_statuses(value),
+        PatchOp::Set {
+            field: field @ (Field::OptionalParams | Field::ResponseHeaders),
+            ..
+        } => return Err(Unwritable::Set(field)),
+        PatchOp::Merge {
+            field: field @ (Field::Model | Field::RateLimitStatuses),
+            ..
+        } => return Err(Unwritable::Merge(field)),
+        PatchOp::Set { field, .. } | PatchOp::Merge { field, .. } => {
+            return Err(Unwritable::Field(field));
         }
     }
-
-    /// Takes the route's `body` for the pre-call hook.
-    pub(super) fn hold(&mut self, body: Map<String, Value>) {
-        self.request = Request::Held(body);
-    }
-
-    /// The body as the callbacks left it, back to the route.
-    pub(super) fn release(&mut self) -> Map<String, Value> {
-        let named = self.request.named();
-        match std::mem::replace(&mut self.request, named) {
-            Request::Held(body) => body,
-            Request::Named { .. } => Map::new(),
-        }
-    }
-
-    pub(super) fn serve(&mut self, served: ServedCall) {
-        self.served = Some(served);
-        self.outcome = Some(Outcome::Success);
-    }
-
-    pub(super) fn fail(&mut self) {
-        self.outcome = Some(Outcome::Failure);
-    }
-
-    pub(super) fn response_headers(&self) -> &Map<String, Value> {
-        &self.response_headers
-    }
-
-    fn read(&self, field: Field) -> Option<Value> {
-        match field {
-            Field::Model => self.request.model().map(Value::from),
-            Field::RequestBody => self.request.body().cloned().map(Value::Object),
-            Field::RateLimitStatuses => self.rate_limit_statuses.clone(),
-            Field::ResponseHeaders => Some(Value::Object(self.response_headers.clone())),
-            Field::Outcome => record(self.outcome?),
-            Field::Usage => record(usage(self.served.as_ref()?.usage.as_ref()?)),
-            Field::LoggedModelGroup => record(LoggedModelGroup {
-                value: Some(Scalar::Text(self.served.as_ref()?.model_group.clone())),
-                ..LoggedModelGroup::default()
-            }),
-            _ => None,
-        }
-    }
-
-    fn facts(&self) -> CallFacts {
-        CallFacts {
-            ids: CallIds::default(),
-            kind: CallKind {
-                call_type: <&str>::from(self.call_type).to_owned(),
-                stream: self.request.stream(),
-                ..CallKind::default()
-            },
-            target: CallTarget {
-                model: self.request.model().unwrap_or_default().to_owned(),
-                model_group: self
-                    .served
-                    .as_ref()
-                    .map(|served| served.model_group.clone()),
-                ..CallTarget::default()
-            },
-            timing: CallTiming {
-                start: self.start,
-                ..CallTiming::default()
-            },
-            cache_hit: None,
-        }
-    }
-
-    /// What a callback that reads `reads` is handed on `hook`.
-    pub(super) fn input(&self, hook: Hook, reads: FieldSet) -> HookInput {
-        let fields = reads
-            .iter()
-            .filter(|field| !field.by_reference())
-            .filter_map(|field| Some((field, self.read(field)?)))
-            .fold(FieldValues::new(reads), |fields, (field, value)| {
-                fields.with(field, value)
-            });
-        HookInput {
-            hook,
-            fields,
-            call: Some(self.facts()),
-        }
-    }
-
-    /// Writes one operation of a callback's patch: the request's own params into the body, as
-    /// the proxy's hooks change `data`, and the rest where a later callback or the route reads it.
-    pub(super) fn write(&mut self, op: PatchOp) -> Result<(), Unwritable> {
-        match op {
-            PatchOp::Merge {
-                field: Field::OptionalParams,
-                keys,
-            } => self.request.held(Field::OptionalParams)?.extend(keys),
-            PatchOp::Merge {
-                field: Field::ResponseHeaders,
-                keys,
-            } => self.response_headers.extend(keys),
-            PatchOp::Set {
-                field: Field::Model,
-                value: Value::String(model),
-            } => {
-                self.request
-                    .held(Field::Model)?
-                    .insert(MODEL.to_owned(), Value::from(model));
-            }
-            PatchOp::Set {
-                field: Field::Model,
-                value,
-            } => return Err(Unwritable::Model(value)),
-            PatchOp::Set {
-                field: Field::RateLimitStatuses,
-                value,
-            } => self.rate_limit_statuses = Some(value),
-            PatchOp::Set {
-                field: field @ (Field::OptionalParams | Field::ResponseHeaders),
-                ..
-            } => return Err(Unwritable::Set(field)),
-            PatchOp::Merge {
-                field: field @ (Field::Model | Field::RateLimitStatuses),
-                ..
-            } => return Err(Unwritable::Merge(field)),
-            PatchOp::Set { field, .. } | PatchOp::Merge { field, .. } => {
-                return Err(Unwritable::Field(field));
-            }
-        }
-        Ok(())
-    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use litellm_gateway_inference::{
+        CallType,
+        record::{self, CallRecord},
+    };
     use rstest::rstest;
     use serde_json::json;
 
     use super::*;
 
-    fn known() -> Known {
-        let mut known = Known::of(CallType::AnthropicMessages);
-        known.hold(Map::from_iter([("model".to_owned(), json!("claude"))]));
-        known
+    /// Runs `look` on a fresh record of a Messages call holding a body that names `claude`.
+    fn on_a_call<R>(look: impl FnOnce(&mut Entries) -> R) -> R {
+        let scoped = || {
+            record::write(|entries| {
+                entries.serve_as(CallType::AnthropicMessages);
+                entries.hold(Map::from_iter([("model".to_owned(), json!("claude"))]));
+                look(entries)
+            })
+            .unwrap()
+        };
+        futures_util::FutureExt::now_or_never(record::scope(CallRecord::new(), async { scoped() }))
+            .unwrap()
     }
 
     fn keys() -> Map<String, Value> {
@@ -298,9 +215,8 @@ mod tests {
         #[case] op: PatchOp,
         #[case] refused: Unwritable,
     ) {
-        let mut known = known();
         assert_eq!(
-            (known.write(op), known.release()),
+            on_a_call(|entries| (write(entries, op), entries.release())),
             (
                 Err(refused),
                 Map::from_iter([("model".to_owned(), json!("claude"))])
@@ -310,8 +226,8 @@ mod tests {
 
     /// What a callback that reads the model is told of the call: the field, and the model and
     /// the stream flag among the call's facts.
-    fn told(known: &Known, hook: Hook) -> (Option<Value>, String, bool) {
-        let input = known.input(hook, FieldSet::of(&[Field::Model]));
+    fn told(entries: &Entries, hook: Hook) -> (Option<Value>, String, bool) {
+        let input = input(entries, hook, FieldSet::of(&[Field::Model]));
         let call = input.call.unwrap();
         (
             input.fields.raw(Field::Model).unwrap().cloned(),
@@ -339,28 +255,34 @@ mod tests {
         #[case] op: PatchOp,
         #[case] seen: (Option<Value>, String, bool),
     ) {
-        let mut known = known();
-        known.write(op).unwrap();
-        let on_the_same_hook = told(&known, Hook::PreCall);
-        let body = known.release();
-        assert_eq!(
+        let (on_the_same_hook, model, after) = on_a_call(|entries| {
+            write(entries, op).unwrap();
+            let on_the_same_hook = told(entries, Hook::PreCall);
+            let body = entries.release();
             (
                 on_the_same_hook,
                 body.get(MODEL).cloned(),
-                told(&known, Hook::AttemptEnded)
-            ),
+                told(entries, Hook::AttemptEnded),
+            )
+        });
+        assert_eq!(
+            (on_the_same_hook, model, after),
             (seen.clone(), seen.0.clone(), seen)
         );
     }
 
     #[rstest]
     fn a_body_the_route_already_has_is_never_written() {
-        let mut known = known();
-        known.release();
         assert_eq!(
-            known.write(PatchOp::Merge {
-                field: Field::OptionalParams,
-                keys: keys()
+            on_a_call(|entries| {
+                entries.release();
+                write(
+                    entries,
+                    PatchOp::Merge {
+                        field: Field::OptionalParams,
+                        keys: keys(),
+                    },
+                )
             }),
             Err(Unwritable::Routed(Field::OptionalParams))
         );

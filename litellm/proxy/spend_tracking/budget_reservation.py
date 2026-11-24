@@ -22,7 +22,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import BadRequestError
 from litellm.google_genai.adapters.transformation import GOOGLE_GENAI_CONFIG_FIELDS
 from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, float_of
 from litellm.litellm_core_utils.duration_parser import (
     duration_in_seconds,
     is_annual_budget_duration,
@@ -264,7 +264,7 @@ async def _renew_reservation_lease(
 
 
 async def reserve_budget_for_request(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     llm_router: Router | None,
     valid_token: UserAPIKeyAuth | None,
@@ -674,7 +674,7 @@ async def release_unbound_budget_reservation(budget_reservation: Mapping[str, ob
 
 
 async def _get_budget_counters(
-    request_body: dict,
+    request_body: Mapping[str, object],
     valid_token: UserAPIKeyAuth,
     team_object: LiteLLM_TeamTable | None,
     user_object: LiteLLM_UserTable | None,
@@ -850,7 +850,7 @@ async def _get_end_user_budget_counter(
 
 
 async def _get_tag_budget_counters(
-    request_body: dict,
+    request_body: Mapping[str, object],
     prisma_client: PrismaClient | None,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
@@ -1217,9 +1217,9 @@ async def reseed_reserved_counter(counter_key: str, actual_cost: float) -> None:
         await increment_spend_counter_cache(counter_key=counter_key, increment=actual_cost)
 
 
-def _get_entry_reserved_cost(entry: dict, default_reserved_cost: float) -> float:
+def _get_entry_reserved_cost(entry: Mapping[str, object], default_reserved_cost: float) -> float:
     try:
-        return float(entry.get("reserved_cost", default_reserved_cost) or 0.0)
+        return float_of(entry.get("reserved_cost", default_reserved_cost) or 0.0)
     except (TypeError, ValueError):
         return default_reserved_cost
 
@@ -1276,7 +1276,7 @@ def _coerce_datetime(value: object) -> datetime | None:
 
 
 def estimate_request_max_cost(
-    request_body: dict,
+    request_body: dict[str, object],
     route: str,
     llm_router: Router | None,
     input_token_counts: Mapping[str, int | None] | None = None,
@@ -1286,7 +1286,7 @@ def estimate_request_max_cost(
 
 
 def estimate_request_input_cost(
-    request_body: dict,
+    request_body: dict[str, object],
     route: str,
     llm_router: Router | None,
     input_token_counts: Mapping[str, int | None] | None = None,
@@ -1360,7 +1360,7 @@ _NO_SHAPES: Final = _ModelShapes(shapes=(), rows=(), serving=())
 
 
 def _bound(
-    request_body: dict,
+    request_body: dict[str, object],
     route: str,
     llm_router: Router | None,
     input_token_counts: Mapping[str, int | None] | None,
@@ -1389,7 +1389,7 @@ def _bound(
 
 
 def max_cost_for_cost_info(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     model_info: Mapping[str, object],
     requested_output_tokens: int,
@@ -1407,7 +1407,7 @@ def max_cost_for_cost_info(
 
 
 def input_cost_for_cost_info(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     model_info: Mapping[str, object],
     input_tokens: int | None,
@@ -1423,7 +1423,7 @@ def input_cost_for_cost_info(
 
 
 def _hold_for_row(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     model_info: Mapping[str, object],
     caps: _OutputCaps,
@@ -1619,7 +1619,7 @@ def _get_deployment_tiered_pricing_tables(
 
 
 def _get_request_models(
-    request_body: dict,
+    request_body: Mapping[str, object],
     route: str,
     llm_router: Router | None,
     path_params: Mapping[str, object] | None = None,
@@ -1631,7 +1631,7 @@ def _get_request_models(
 
 
 async def count_request_input_tokens(
-    request_body: dict,
+    request_body: dict[str, object],
     route: str,
     llm_router: Router | None,
     team_id: str | None,
@@ -1678,7 +1678,7 @@ def _largest_count(counts: Mapping[str, int], names: Sequence[str], chat_pdf_fil
 
 
 def _model_input_tokens(
-    request_body: dict, model: str, input_token_counts: Mapping[str, int | None] | None
+    request_body: dict[str, object], model: str, input_token_counts: Mapping[str, int | None] | None
 ) -> int | None:
     if input_token_counts is not None and model in input_token_counts:
         return input_token_counts[model]

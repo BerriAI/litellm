@@ -50,7 +50,9 @@ from .redis_semantic_cache import RedisSemanticCache
 from .s3_cache import S3Cache
 
 RESPONSE_CACHE_TARGET: Final = "llm_response"
-_ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset({"continuation_token", "return_token_ids"})
+_ALWAYS_KEYED_PROVIDER_PARAMS: Final = frozenset(
+    {"continuation_token", "return_token_ids", "responseFormat", "generationConfig", "generation_config"}
+)
 _DECODED_LITERAL: Final = TypeAdapter(object)
 _REDIS_STARTUP_NODES_ADAPTER: Final = TypeAdapter(
     list[dict[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
@@ -368,7 +370,7 @@ class Cache:
         valkey_semantic_cache_embedding_model: str = "text-embedding-ada-002",
         valkey_semantic_cache_index_name: str | None = None,
         redis_flush_size: int | None = None,
-        redis_startup_nodes: list | None = None,
+        redis_startup_nodes: Sequence[object] | None = None,
         disk_cache_dir: str | None = None,
         qdrant_api_base: str | None = None,
         qdrant_api_key: str | None = None,
@@ -685,8 +687,8 @@ class Cache:
     def _get_param_value(
         self,
         param: str,
-        kwargs: dict,
-    ) -> str | None:
+        kwargs: dict[str, object],
+    ) -> object:
         """
         Get the value for the given param from kwargs
         """
@@ -826,7 +828,7 @@ class Cache:
         verbose_logger.debug("Final hashed key: %s", hash_hex)
         return hash_hex
 
-    def generate_streaming_content(self, content):
+    def generate_streaming_content(self, content: str):
         chunk_size: Final = 5  # Adjust the chunk size as needed
         for i in range(0, len(content), chunk_size):
             yield {
@@ -1193,7 +1195,9 @@ class Cache:
         )
         return preset_cache_key, cached_data, kwargs
 
-    async def async_add_cache_pipeline(self, result, dynamic_cache_object: BaseCache | None = None, **kwargs):
+    async def async_add_cache_pipeline(
+        self, result: EmbeddingResponse, dynamic_cache_object: BaseCache | None = None, **kwargs: object
+    ):
         """
         Async implementation of add_cache for Embedding calls
 

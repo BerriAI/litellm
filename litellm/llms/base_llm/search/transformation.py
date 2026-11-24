@@ -76,7 +76,7 @@ class SearchResponse(LiteLLMPydanticObjectBase):
     model_config = {"extra": "allow"}
 
     # Define private attributes using PrivateAttr
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default_factory=dict)
 
     @property
     def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
@@ -196,7 +196,7 @@ class BaseSearchConfig:
         headers: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> dict:
         """
         Validate environment and return headers.
@@ -230,9 +230,9 @@ class BaseSearchConfig:
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
-        data: dict | list[dict] | None = None,
-        **kwargs,
+        optional_params: dict[str, object],
+        data: dict[str, object] | list[dict] | None = None,
+        **kwargs: object,
     ) -> str:
         """
         Get complete URL for Search endpoint.
@@ -257,8 +257,8 @@ class BaseSearchConfig:
     def transform_search_request(
         self,
         query: str | list[str],
-        optional_params: dict,
-        **kwargs,
+        optional_params: dict[str, object],
+        **kwargs: object,
     ) -> dict | list[dict]:
         """
         Transform Search request to provider-specific format.
@@ -277,7 +277,7 @@ class BaseSearchConfig:
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform provider-specific Search response to standard format.

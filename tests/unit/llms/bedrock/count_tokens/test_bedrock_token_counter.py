@@ -20,7 +20,12 @@ from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transform
 )
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.utils import CountContextManagement
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    CountContextManagement,
+    Function,
+    TokenCountMessagesFormat,
+)
 
 RUNTIME_HOST: Final = "bedrock-runtime.us-east-1.amazonaws.com"
 MANTLE_HOST: Final = "bedrock-mantle.us-east-1.api.aws"
@@ -158,6 +163,36 @@ async def test_bedrock_runtime_count_is_kept_when_it_answers() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("model_to_use", "runtime", "expected_hosts", "expected_tokens"),
+    (
+        ("us.anthropic.claude-sonnet-4-6", (200, {"inputTokens": 1353}), (RUNTIME_HOST,), 1353),
+        ("us.anthropic.claude-opus-5-5", (400, UNSUPPORTED), (RUNTIME_HOST, MANTLE_HOST), 2177),
+    ),
+)
+async def test_deployment_with_an_empty_api_base_counts_on_the_default_runtime_host(
+    model_to_use: str,
+    runtime: tuple[int, Mapping[str, object]],
+    expected_hosts: tuple[str, ...],
+    expected_tokens: int,
+) -> None:
+    bedrock: Final = _Bedrock(runtime=runtime, mantle=(200, {"input_tokens": 2177}))
+
+    result: Final = await _counter(bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=MESSAGES,
+        contents=None,
+        deployment={"litellm_params": {**DEPLOYMENT["litellm_params"], "api_base": ""}},
+        request_model=model_to_use,
+    )
+
+    assert result is not None
+    assert result.error is False
+    assert result.total_tokens == expected_tokens
+    assert bedrock.posted_hosts() == expected_hosts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("model_to_use", "runtime"),
     (
         ("global.anthropic.claude-opus-4-8", (401, {"Message": "not authorized to perform: bedrock:CountTokens"})),
@@ -234,6 +269,90 @@ def _default_handler_stream(record: logging.LogRecord, capsys: pytest.CaptureFix
     written: Final = capsys.readouterr()
     line: Final = f"{record.getMessage()}\n"
     return {(line, ""): "stdout", ("", line): "stderr"}.get((written.out, written.err), "both or neither")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("messages_format", ("anthropic", "openai"))
+@pytest.mark.parametrize(
+    ("model_to_use", "runtime"),
+    (
+        ("us.anthropic.claude-sonnet-4-6", (200, {"inputTokens": 36})),
+        ("us.anthropic.claude-opus-5-5", (400, UNSUPPORTED)),
+    ),
+)
+async def test_claude_count_sends_a_history_echoing_a_fallback_block_as_the_history_without_it(
+    model_to_use: str, runtime: tuple[int, Mapping[str, object]], messages_format: TokenCountMessagesFormat
+) -> None:
+    fallback_block: Final = {
+        "type": "fallback",
+        "from": {"model": "claude-opus-5-5"},
+        "to": {"model": "claude-haiku-5-5"},
+        "trigger": {"type": "refusal", "category": "cyber"},
+    }
+    reply: Final = ({"type": "text", "text": "Hello"}, {"type": "text", "text": "there"})
+    echoed_bedrock: Final = _Bedrock(runtime=runtime, mantle=(200, {"input_tokens": 20}))
+    plain_bedrock: Final = _Bedrock(runtime=runtime, mantle=(200, {"input_tokens": 20}))
+
+    echoed: Final = await _counter(echoed_bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=[
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [reply[0], fallback_block, reply[1]]},
+            {"role": "user", "content": "thanks"},
+        ],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model=model_to_use,
+        messages_format=messages_format,
+    )
+    plain: Final = await _counter(plain_bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=[
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": list(reply)},
+            {"role": "user", "content": "thanks"},
+        ],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model=model_to_use,
+        messages_format=messages_format,
+    )
+
+    assert echoed is not None and plain is not None
+    assert (echoed.error, plain.error) == (False, False)
+    assert echoed.total_tokens == plain.total_tokens
+    assert [request.content for request in echoed_bedrock.requests] == [
+        request.content for request in plain_bedrock.requests
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_count_sends_a_response_tool_call_object_the_way_it_sends_its_dict() -> None:
+    tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_1", type="function", function=Function(name="get_weather", arguments="{}")
+    )
+    object_bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 12}), mantle=(200, {"input_tokens": 20}))
+    dict_bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 12}), mantle=(200, {"input_tokens": 20}))
+
+    counts: Final = [
+        await _counter(bedrock).count_tokens(
+            model_to_use="amazon.nova-pro-v1:0",
+            messages=[
+                {"role": "user", "content": "weather?"},
+                {"role": "assistant", "content": None, "tool_calls": [call]},
+            ],
+            contents=None,
+            deployment=DEPLOYMENT,
+            request_model="amazon.nova-pro-v1:0",
+            messages_format="openai",
+        )
+        for bedrock, call in ((object_bedrock, tool_call), (dict_bedrock, tool_call.model_dump()))
+    ]
+
+    assert [(count.error, count.total_tokens) for count in counts if count is not None] == [(False, 12), (False, 12)]
+    assert [request.content for request in object_bedrock.requests] == [
+        request.content for request in dict_bedrock.requests
+    ]
 
 
 @pytest.mark.asyncio

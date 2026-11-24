@@ -5,7 +5,7 @@ import json
 import logging
 import math
 import re
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from types import MappingProxyType
@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.hidden_params import set_extra_attribute
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.types.litellm_params import MCP_HANDLER_KWARG_NAMES
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
+from litellm.types.rerank import RerankResponse
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -60,6 +61,10 @@ def camel_case_keys(config: Mapping[str, object]) -> Mapping[str, object]:
 
 def is_codex_user_agent(user_agent: str) -> bool:
     return bool(_CODEX_CLIENT_PREFIX_RE.match(user_agent))
+
+
+def is_github_copilot_chat_user_agent(user_agent: str) -> bool:
+    return user_agent.startswith("GitHubCopilotChat/")
 
 
 def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str:
@@ -252,15 +257,15 @@ _HTTP_ERROR_STATUSES: Final = range(HTTPStatus.BAD_REQUEST, 600)
 def error_status_code(exc: object, default: int) -> int:
     """The 4xx or 5xx HTTP status an exception carries as ``status_code`` (an int or a decimal string) or,
     the way ``ProxyException`` stores it, as a stringified ``code``; ``default`` when it carries neither."""
-    carried: Final = _http_error_status(attribute_or_none(exc, "status_code"))
+    carried: Final = http_error_status(attribute_or_none(exc, "status_code"))
     if carried is not None:
         return carried
     stringified: Final = attribute_or_none(exc, "code")
-    from_code: Final = _http_error_status(stringified) if isinstance(stringified, str) else None
+    from_code: Final = http_error_status(stringified) if isinstance(stringified, str) else None
     return default if from_code is None else from_code
 
 
-def _http_error_status(value: object) -> int | None:
+def http_error_status(value: object) -> int | None:
     match value:
         case bool():
             return None
@@ -273,6 +278,7 @@ def _http_error_status(value: object) -> int | None:
 
 
 _Shape = TypeVar("_Shape")
+_MetadataBucket = TypeVar("_MetadataBucket", bound=MutableMapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -423,13 +429,6 @@ def normalize_drop_params(value: object) -> bool | None:
 
 def drops_unsupported_params(drop_params: object) -> bool:
     return litellm.drop_params is True or normalize_drop_params(drop_params) is True
-
-
-def drop_params_flag(value: object, source: str, logger: logging.Logger) -> bool:
-    normalized: Final = normalize_drop_params(value)
-    if normalized is None and value is not None:
-        logger.warning("%s=%r is not a flag value, treating it as off", source, value)
-    return bool(normalized)
 
 
 DROP_PARAMS_ENV_VAR: Final = "LITELLM_DROP_PARAMS"
@@ -657,7 +656,9 @@ def remove_items_at_indices(items: _PoppableByIndex | None, indices: Iterable[in
             items.pop(index)
 
 
-def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: Mapping[str, object]) -> dict:
+def add_missing_spend_metadata_to_litellm_metadata(
+    litellm_metadata: _MetadataBucket, metadata: Mapping[str, object]
+) -> _MetadataBucket:
     """
     Helper to get litellm metadata for spend tracking
 
@@ -702,7 +703,7 @@ def max_retries_per_request_hit(kwargs: Mapping[str, object], num_retries_per_re
 
 
 def get_or_create_metadata_bucket(
-    request_data: dict,
+    request_data: MutableMapping[str, object],
 ) -> tuple[Literal["metadata", "litellm_metadata"], dict]:
     """
     Return the proxy-internal metadata bucket for this request, creating it if absent.
@@ -930,9 +931,9 @@ _get_parent_otel_span_from_kwargs = get_parent_otel_span_from_kwargs
 
 
 def process_response_headers(
-    response_headers: httpx.Headers | dict,
+    response_headers: httpx.Headers | Mapping[str, _Value],
     preserve_litellm_internal_headers: bool = False,
-) -> dict:
+) -> dict[str, _Value | str]:
     """
     `preserve_litellm_internal_headers` must only be True when the input is a
     LiteLLM-owned dict (e.g. `_hidden_params["additional_headers"]` that has
@@ -951,9 +952,9 @@ def process_response_headers(
     # must never be treated as LiteLLM-owned, regardless of caller intent.
     _preserve: Final = preserve_litellm_internal_headers and isinstance(response_headers, dict)
 
-    openai_headers: Final = {}
-    processed_headers: Final = {}
-    additional_headers = {}
+    openai_headers: Final[dict[str, _Value | str]] = {}
+    processed_headers: Final[dict[str, _Value | str]] = {}
+    additional_headers: dict[str, _Value | str] = {}
 
     for k, v in response_headers.items():
         if k in OPENAI_RESPONSE_HEADERS:  # return openai-compatible headers
@@ -1072,7 +1073,7 @@ def safe_deep_copy(data):
 
 
 def independent_snapshot(
-    data: dict,  # mutable-ok: caller-defined request-payload shape
+    data: dict[str, _Value],  # mutable-ok: caller-defined request-payload shape
 ) -> dict:  # mutable-ok: caller-defined request-payload shape
     """
     A copy of ``data`` whose top-level keys are deep-copied independently
@@ -1348,9 +1349,13 @@ def billed_usage_cost(response: object, custom_llm_provider: str | None) -> floa
     cost: Final = (
         _numeric(hidden[UPSTREAM_USAGE_COST])
         if hidden is not None and UPSTREAM_USAGE_COST in hidden
-        else provider_reported_usage_cost(_usage_field(response, "usage"), custom_llm_provider)
+        else provider_reported_usage_cost(_billed_usage_block(response), custom_llm_provider)
     )
     return cost if cost is not None and math.isfinite(cost) and cost >= 0 else None
+
+
+def _billed_usage_block(response: object) -> object:
+    return response.provider_usage if isinstance(response, RerankResponse) else _usage_field(response, "usage")
 
 
 _MESSAGES_REPORTED_COST_PROVIDERS: Final = frozenset({"opencode_go"})

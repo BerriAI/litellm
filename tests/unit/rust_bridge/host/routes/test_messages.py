@@ -127,6 +127,7 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
         "detached_drain_timeout": None,
         "detached_drain_limit": None,
         "connect_retry": False,
+        "pricing": None,
     }
 
 
@@ -1885,7 +1886,7 @@ def test_agentic_stream_tags_the_head_only_when_a_hook_runs(monkeypatch: pytest.
     call: Final = bound["call"]
     assert isinstance(call, messages_host._AgenticCall)  # pyright: ignore[reportPrivateUsage]  # the partial binds the handler call
     assert call.messages == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
-    assert call.params == {"stream": True, "tools": request["tools"]}
+    assert call.params == {"max_tokens": 16, "stream": True, "tools": request["tools"]}
     assert call.params["tools"] is request["tools"]
     assert call.kwargs["api_key"] == "sk-test"
     assert "tools" not in call.kwargs
@@ -1910,7 +1911,7 @@ def test_agentic_params_take_the_callers_system_not_the_hoisted_wire_system(
 
     params: Final = messages_host._agentic_params(sent, requested, {"model": "azure_ai/claude-sonnet-4-5"})  # pyright: ignore[reportPrivateUsage]  # the follow-up params the handler's hooks read
 
-    assert params == {"stream": False, **expected}
+    assert params == {"stream": False, "max_tokens": 16, **expected}
 
 
 _DANGEROUS_TOOL_USE: Final = [{"type": "dangerous_tool_use"}]
@@ -4054,3 +4055,124 @@ def test_a_mantle_route_credential_source_outage_stays_the_retryable_credential_
     )
 
     assert type(mapped) is CredentialRetrievalError
+
+
+def _priced_logger(litellm_params: Mapping[str, object]) -> Logging:
+    logger: Final = Logging(
+        model="claude-opus-5-5",
+        messages=[],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="priced",
+        function_id="priced",
+    )
+    logger.litellm_params = dict(litellm_params)
+    logger.model_call_details["litellm_params"] = logger.litellm_params
+    return logger
+
+
+_ROUTED: Final = MappingProxyType({"metadata": {"model_info": {"id": "deployment-1", "base_model": "claude-opus-5-5"}}})
+
+
+@pytest.mark.parametrize(
+    ("model", "litellm_params", "expected"),
+    [
+        (
+            "anthropic/claude-opus-5-5",
+            _ROUTED,
+            {
+                "deployment_id": "deployment-1",
+                "base_model": "claude-opus-5-5",
+                "region": None,
+                "vertex_location": None,
+                "data_residency": None,
+            },
+        ),
+        (
+            "vertex_ai/claude-opus-5-5",
+            {"vertex_location": "us-east5", "data_residency": "EU"},
+            {
+                "deployment_id": None,
+                "base_model": None,
+                "region": None,
+                "vertex_location": "us-east5",
+                "data_residency": "EU",
+            },
+        ),
+        (
+            _MANTLE_ROUTE,
+            {"aws_region_name": "us-gov-west-1"},
+            {
+                "deployment_id": None,
+                "base_model": None,
+                "region": "us-gov-west-1",
+                "vertex_location": None,
+                "data_residency": None,
+            },
+        ),
+        ("anthropic/claude-opus-5-5", {**_ROUTED, "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}, None),
+        (
+            "anthropic/claude-opus-5-5",
+            {"metadata": {"model_info": {"id": "deployment-1", "pricing_provider": "bedrock"}}},
+            None,
+        ),
+    ],
+)
+def test_settings_hand_the_route_the_deployment_facts_its_logging_would_price_with(
+    model: str, litellm_params: Mapping[str, object], expected: Mapping[str, object] | None
+) -> None:
+    logger: Final = _priced_logger(litellm_params)
+
+    settings: Final = messages_host.settings({"litellm_logging_obj": logger}, {**_CALL, "model": model})
+
+    assert settings["pricing"] == expected
+
+
+def test_the_route_prices_at_the_routed_deployments_vertex_location_before_the_logger_holds_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "vertex_location", "global")
+    logger: Final = _priced_logger({})
+    request: Final = {**_CALL, "vertex_location": "us-east5", "model": "vertex_ai/claude-opus-5-5"}
+
+    priced_at: Final = messages_host.settings({"litellm_logging_obj": logger}, request)["pricing"]
+
+    assert isinstance(priced_at, dict)
+    assert priced_at["vertex_location"] == "us-east5"
+
+
+@pytest.mark.parametrize("deployment_location", ["us-east5", None])
+def test_the_route_prices_at_the_vertex_location_its_logging_would_price_at(
+    monkeypatch: pytest.MonkeyPatch, deployment_location: str | None
+) -> None:
+    """The route resolves the location without the call's optional params, which Logging reads, so the two must
+    agree once the resolved call is logged: the optional params Logging then holds are the Messages body fields."""
+    from litellm.litellm_core_utils.litellm_logging import resolve_vertex_location_for_cost
+
+    monkeypatch.setattr(litellm, "vertex_location", "europe-west4")
+    deployment: Final = {} if deployment_location is None else {"vertex_location": deployment_location}
+    logger: Final = _priced_logger(deployment)
+    request: Final = {**_CALL, **deployment, "model": "vertex_ai/claude-opus-5-5", "litellm_logging_obj": logger}
+
+    priced_at: Final = messages_host.settings({"litellm_logging_obj": logger}, request)["pricing"]
+    messages_host.log_resolved_call(request, "vertex_ai")
+    logged_at: Final = resolve_vertex_location_for_cost(
+        custom_llm_provider="vertex_ai",
+        litellm_params=logger.litellm_params,
+        optional_params=logger.optional_params,
+        model=logger.model,
+    )
+
+    assert isinstance(priced_at, dict)
+    assert priced_at["vertex_location"] == logged_at == (deployment_location or "europe-west4")
+
+
+def test_settings_leave_pricing_to_python_for_an_invoked_bedrock_model_id() -> None:
+    logger: Final = _priced_logger(_ROUTED)
+
+    settings: Final = messages_host.settings(
+        {"litellm_logging_obj": logger}, {**_CALL, "model": "anthropic/claude-opus-5-5", "model_id": "arn:profile"}
+    )
+
+    assert settings["pricing"] is None

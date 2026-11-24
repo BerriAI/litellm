@@ -1017,7 +1017,7 @@ def file_content_streaming(
     extra_headers: dict[str, str] | None,
     chunk_size: int,
     optional_params: GenericLiteLLMParams,
-    litellm_params: dict,
+    litellm_params: dict[str, object],
     timeout: float | httpx.Timeout,
     logging_obj: LiteLLMLoggingObj,
     _is_async: bool,

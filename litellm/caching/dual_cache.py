@@ -459,7 +459,7 @@ class DualCache(BaseCache):
             with_traceback=True,
         )
 
-    async def async_set_cache(self, key, value: object, local_only: bool = False, **kwargs: object):
+    async def async_set_cache(self, key: str, value: object, local_only: bool = False, **kwargs: object):
         print_verbose("async set cache: cache key: %s; local_only: %s; value: %s", key, local_only, value)
         try:
             if self.in_memory_cache is not None:
