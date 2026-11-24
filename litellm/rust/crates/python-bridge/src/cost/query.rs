@@ -5,6 +5,7 @@
 
 use std::sync::Arc;
 
+use litellm_callbacks_legacy_python::NativeReceipt;
 use litellm_cost::adjust::CostConfig;
 use litellm_cost::adjust::{AdjustmentKey, Discounts, MarginRule, Margins, adjust as adjusted};
 use litellm_cost::bound::{
@@ -15,8 +16,9 @@ use litellm_cost::candidates::{
 };
 use litellm_cost::price::{InputUnit, Meter, OutputUnit, TokenKind};
 use litellm_cost::rates::{Pricing, RatesQuery};
-use litellm_cost::receipt::{BilledRates, Receipt};
+use litellm_cost::receipt::Receipt;
 use litellm_host_python::{from_py_argument, json_from_py};
+use litellm_inference_messages::PricedCall;
 use litellm_model_catalog::{CatalogView, CostLookup, LoweredRow};
 use litellm_python_compat::number::float_of;
 use pyo3::prelude::*;
@@ -24,7 +26,7 @@ use pyo3::types::PyMapping;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::model_cost::row_fields;
+use crate::model_cost::{CostSnapshot, row_fields};
 
 #[derive(Deserialize)]
 struct BoundDocument {
@@ -57,52 +59,6 @@ struct ShapeFacts {
 enum FlatFacts {
     Row { row: usize },
     Group(GroupRates),
-}
-
-/// The per-meter amounts and rates of a priced call, in the fields main stores in its cost breakdown
-#[pyclass(
-    frozen,
-    get_all,
-    name = "NativeReceipt",
-    module = "litellm.rust_bridge._native"
-)]
-pub(crate) struct NativeReceipt {
-    /// The candidate model that priced
-    model: Option<String>,
-    prompt_cost: f64,
-    completion_cost: f64,
-    tools_cost: f64,
-    original_cost: f64,
-    discount_percent: f64,
-    discount_amount: f64,
-    margin_percent: f64,
-    margin_fixed_amount: f64,
-    margin_total_amount: f64,
-    cache_read_cost: f64,
-    cache_creation_cost: f64,
-    reasoning_cost: f64,
-    rates: Option<Py<NativeBilledRates>>,
-    cache_savings: Option<f64>,
-    total: f64,
-}
-
-/// `BilledTokenRates`: the per-token rates the breakdown was billed at
-#[pyclass(
-    frozen,
-    get_all,
-    name = "NativeBilledRates",
-    module = "litellm.rust_bridge._native"
-)]
-pub(crate) struct NativeBilledRates {
-    input: f64,
-    output: f64,
-    cache_read: f64,
-    cache_read_audio: f64,
-    cache_read_image: Option<f64>,
-    cache_write: f64,
-    cache_write_1h: f64,
-    cache_write_12h: f64,
-    reasoning: f64,
 }
 
 /// A row's flat token rates, the raw key facts the auth checks read and whether it bills anything
@@ -173,8 +129,29 @@ pub(crate) fn price<V: CatalogView + ?Sized>(
     let per_call =
         row.map(|fields| move |provider: &str| LoweredRow::lower(Arc::new(fields), provider));
     priced(lookup, call, per_call)
-        .map(|receipt| NativeReceipt::new(py, receipt))
+        .map(|receipt| NativeReceipt::new(py, &receipt))
         .transpose()
+}
+
+/// The Messages route's pricing over the snapshot taken when the call was set up. Each call reads that snapshot
+/// through one `CostLookup`, and `litellm_inference_messages::price_call` reads the call the way `completion_cost`
+/// reads a native `/v1/messages` result on main
+pub(crate) struct RoutePricing {
+    snapshot: Arc<CostSnapshot>,
+}
+
+impl RoutePricing {
+    pub(crate) fn new(snapshot: Arc<CostSnapshot>) -> Self {
+        Self { snapshot }
+    }
+}
+
+impl litellm_inference_messages::Pricing for RoutePricing {
+    fn price(&self, call: &PricedCall) -> Option<Receipt> {
+        self.snapshot.lookup(|lookup| {
+            litellm_inference_messages::price_call(lookup, call, jiff::Timestamp::now())
+        })
+    }
 }
 
 /// The legacy budget hold and input floor, `(None, None)` when no shape prices. `rows` are the model info mappings
@@ -290,49 +267,6 @@ pub(crate) fn adjust(
         applied.margin.fixed,
         applied.margin.total,
     )
-}
-
-impl NativeReceipt {
-    fn new(py: Python<'_>, receipt: Receipt) -> PyResult<Self> {
-        let rates = receipt
-            .rates
-            .map(|rates| Py::new(py, NativeBilledRates::from(rates)))
-            .transpose()?;
-        Ok(Self {
-            original_cost: receipt.original(),
-            model: receipt.candidate.map(|candidate| candidate.model.into()),
-            prompt_cost: receipt.prompt.get(),
-            completion_cost: receipt.completion.get(),
-            tools_cost: receipt.tools.get(),
-            discount_percent: receipt.discount.percent,
-            discount_amount: receipt.discount.amount,
-            margin_percent: receipt.margin.percent,
-            margin_fixed_amount: receipt.margin.fixed,
-            margin_total_amount: receipt.margin.total,
-            cache_read_cost: receipt.breakdown.cache_read,
-            cache_creation_cost: receipt.breakdown.cache_creation,
-            reasoning_cost: receipt.breakdown.reasoning,
-            rates,
-            cache_savings: receipt.cache_savings,
-            total: receipt.total,
-        })
-    }
-}
-
-impl From<BilledRates> for NativeBilledRates {
-    fn from(rates: BilledRates) -> Self {
-        Self {
-            input: rates.input,
-            output: rates.output,
-            cache_read: rates.cache_read,
-            cache_read_audio: rates.cache_read_audio,
-            cache_read_image: rates.cache_read_image,
-            cache_write: rates.cache_write,
-            cache_write_1h: rates.cache_write_one_hour,
-            cache_write_12h: rates.cache_write_twelve_hours,
-            reasoning: rates.reasoning,
-        }
-    }
 }
 
 #[cfg(test)]

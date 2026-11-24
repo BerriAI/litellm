@@ -433,6 +433,7 @@ class ActiveMember:
     @property
     def priority_class(self) -> str: ...
 
+@final
 class NativeActiveTeams:
     def __new__(
         cls, client: NativeRedisClient | None, clock: Callable[[], float] | None = None
@@ -444,6 +445,7 @@ class NativeActiveTeams:
     ) -> Future[list[ActiveMember]]: ...
     def touch_local(self, model: str, member: str, priority_class: str, window_seconds: int) -> list[ActiveMember]: ...
 
+@final
 class NativeSensitiveRoutePins:
     def __new__(cls, client: NativeRedisClient | None) -> NativeSensitiveRoutePins: ...
     def get(self, tenant: str, session_id: str, default_ttl_seconds: float) -> Future[str | None]: ...
@@ -2055,6 +2057,7 @@ class AuthObject:
 class NativeTeamRoster:
     def member(self, user_id: str) -> object: ...
 
+@final
 class NativeAuthCache:
     def __new__(
         cls,
@@ -2168,6 +2171,7 @@ class NativeBudgets:
         /,
     ) -> Execution: ...
 
+def billable_service_tier(requested: str | None, served: str | None) -> str | None: ...
 def budget_check_decision(check: BudgetCheck) -> JsonValue: ...
 
 @final
@@ -2680,6 +2684,7 @@ __all__ = [
     "NativeAuthCache",
     "NativeBilledRates",
     "NativeBudgets",
+    "NativeCacheInvalidation",
     "NativeCallContext",
     "NativeClickHouseSpendConfig",
     "NativeClickHouseSpendStorage",
@@ -2720,6 +2725,7 @@ __all__ = [
     "NativeSensitiveRoutePins",
     "NativeSpendCounters",
     "NativeTableSwapped",
+    "NativeTeamRoster",
     "NativeTokenRedactor",
     "NativeTokenUsage",
     "NativeUsageRead",
@@ -2778,6 +2784,7 @@ __all__ = [
     "auth_route_matches_denied",
     "auth_route_matches_prefix",
     "auth_route_matches_wildcard",
+    "billable_service_tier",
     "budget_check_decision",
     "bundled_model_cost_map",
     "completion",

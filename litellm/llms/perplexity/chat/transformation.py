@@ -11,6 +11,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
@@ -156,7 +157,9 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             if num_search_queries is not None and num_search_queries > 0:
                 usage.prompt_tokens_details.web_search_requests = num_search_queries
 
-    def _add_citations_as_annotations(self, model_response: ModelResponse, raw_response_json: dict) -> None:
+    def _add_citations_as_annotations(
+        self, model_response: ModelResponse, raw_response_json: Mapping[str, object]
+    ) -> None:
         """
         Extract citations and search_results from Perplexity API response
         and add them as ChatCompletionAnnotation objects to the message.
@@ -170,7 +173,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
             return
 
         message: Final = choice.message
-        annotations: Final = []
+        annotations: Final[list[ChatCompletionAnnotation]] = []
 
         # Extract citations from the response
         citations: Final = raw_response_json.get("citations", [])
@@ -178,7 +181,7 @@ class PerplexityChatConfig(OpenAIGPTConfig):
 
         # Create a mapping of URLs to search result titles
         url_to_title: Final = {}
-        for result in search_results:
+        for result in iter_items(search_results):
             if isinstance(result, dict) and "url" in result and "title" in result:
                 url_to_title[result["url"]] = result["title"]
 
@@ -194,8 +197,8 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         citation_matches: Final = list(re.finditer(citation_pattern, content))
 
         # Create a mapping of citation numbers to URLs
-        citation_number_to_url: Final = {}
-        for i, citation in enumerate(citations):
+        citation_number_to_url: Final[dict[int, str]] = {}
+        for i, citation in enumerate(iter_items(citations)):
             if isinstance(citation, str):
                 citation_number_to_url[i + 1] = citation  # 1-indexed
 

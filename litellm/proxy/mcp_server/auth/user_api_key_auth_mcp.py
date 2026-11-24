@@ -2078,7 +2078,7 @@ class MCPRequestHandler:
         """
         from litellm.proxy.proxy_server import general_settings
 
-        if managed_agent_policy(user_api_key_auth) is not None:
+        if user_api_key_auth is not None and managed_agent_policy(user_api_key_auth) is not None:
             from litellm.proxy.mcp_server.auth.managed_agent_access import managed_agent_servers
 
             return MCPServerAccess(server_ids=await managed_agent_servers(user_api_key_auth), scope="scoped")
@@ -4691,7 +4691,9 @@ class MCPRequestHandler:
             return None
 
     @staticmethod
-    def _get_config_server_ids_for_access_groups(config_mcp_servers, access_groups: list[str]) -> set[str]:
+    def _get_config_server_ids_for_access_groups(
+        config_mcp_servers: Mapping[str, MCPServer], access_groups: list[str]
+    ) -> set[str]:
         """
         Helper to get server_ids from config-loaded servers that match any of the given access groups.
         """
@@ -4704,7 +4706,7 @@ class MCPRequestHandler:
 
     @staticmethod
     async def _get_db_server_ids_for_access_groups(
-        prisma_client,
+        prisma_client: "PrismaClient | None",
         access_groups: list[str],
         *,
         use_writer: bool = False,

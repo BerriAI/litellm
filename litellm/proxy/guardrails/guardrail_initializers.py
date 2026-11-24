@@ -204,7 +204,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
     )
 
 
-def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail):
+def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail) -> CustomGuardrail:
     try:
         from litellm_enterprise.enterprise_callbacks.secret_detection import (
             _ENTERPRISE_SecretDetection,
