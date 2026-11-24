@@ -29,8 +29,9 @@
 //! [`Countable::of`] with its own rules here.
 
 use litellm_gateway_inference::routing::Prompt;
-use litellm_token_counter::{CountableRequest, TokenCounter};
-use serde::Deserialize;
+use litellm_llms_types::recognized::Recognized;
+use litellm_token_counter::{ContentItem, CountableRequest, TokenCounter};
+use serde::{Deserialize, de::value::MapDeserializer};
 use serde_json::{Map, Value, json};
 
 /// The encoding `litellm.token_counter` counts with for a group that does not serve only OpenAI
@@ -43,7 +44,41 @@ const MEDIA_TOKENS: usize = 250;
 
 /// The kinds of `source` that carry media as bytes or by reference. A `text` or `content` source
 /// carries text, which is counted as text.
-const MEDIA_SOURCES: [&str; 3] = ["base64", "url", "file"];
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum MediaSource {
+    Base64,
+    Url,
+    File,
+}
+
+/// What of a Messages body is counted. Every field but `messages` takes whatever was sent, so only
+/// a body with no list of messages goes without an estimate.
+#[derive(Deserialize)]
+struct Sent {
+    messages: Vec<Recognized<SentMessage>>,
+    #[serde(default)]
+    system: Option<Recognized<SentContent>>,
+    #[serde(default)]
+    tools: Option<Recognized<Vec<Value>>>,
+}
+
+#[derive(Deserialize)]
+struct SentMessage {
+    #[serde(default)]
+    role: Option<Recognized<String>>,
+    #[serde(default)]
+    content: Option<Recognized<SentContent>>,
+}
+
+/// A message's or the system's content. Each block is kept as sent, since a block the counter
+/// does not read is counted as the text of its JSON.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum SentContent {
+    Text(String),
+    Blocks(Vec<Value>),
+}
 
 /// How one content block is counted.
 enum Counted<'a> {
@@ -55,22 +90,11 @@ enum Counted<'a> {
 }
 
 fn is_read(block: &Value) -> bool {
-    let holds_text = |field: &str| block.get(field).is_some_and(Value::is_string);
-    match block.get("type").and_then(Value::as_str) {
-        Some("text") => holds_text("text"),
-        Some("thinking") => holds_text("thinking"),
-        Some("tool_reference") => block
-            .get("tool_name")
-            .is_none_or(|name| name.is_string() || name.is_null()),
-        _ => block.is_string(),
-    }
+    ContentItem::deserialize(block).is_ok_and(|item| item.is_counted())
 }
 
 fn is_media(source: &Value) -> bool {
-    source
-        .get("type")
-        .and_then(Value::as_str)
-        .is_some_and(|kind| MEDIA_SOURCES.contains(&kind))
+    MediaSource::deserialize(source).is_ok()
 }
 
 /// `value` without the media sources inside it, and how many it held.
@@ -110,9 +134,9 @@ fn counted(block: &Value) -> Counted<'_> {
 }
 
 /// A message's content as the counter reads it, and how many media sources were taken out of it.
-fn content(sent: Option<&Value>) -> (Value, usize) {
+fn content(sent: Option<Recognized<SentContent>>) -> (Value, usize) {
     match sent {
-        Some(Value::Array(blocks)) => {
+        Some(Recognized::Known(SentContent::Blocks(blocks))) => {
             let (read, media): (Vec<Value>, Vec<usize>) = blocks
                 .iter()
                 .map(|block| match counted(block) {
@@ -124,20 +148,36 @@ fn content(sent: Option<&Value>) -> (Value, usize) {
                 .unzip();
             (Value::Array(read), media.iter().sum())
         }
-        Some(text @ Value::String(_)) => (text.clone(), 0),
-        _ => (Value::Null, 0),
+        Some(Recognized::Known(SentContent::Text(text))) => (Value::String(text), 0),
+        Some(Recognized::Unrecognized(_)) | None => (Value::Null, 0),
     }
 }
 
 /// `anthropic_system_to_openai_message`: a `system` that is text or a list of blocks, and not
 /// empty, counts as a leading system message.
-fn system_message(body: &Map<String, Value>) -> Option<Value> {
-    let system = body.get("system").filter(|system| match system {
-        Value::String(text) => !text.is_empty(),
-        Value::Array(blocks) => !blocks.is_empty(),
-        _ => false,
-    })?;
+fn system_message(system: Option<Recognized<SentContent>>) -> Option<Value> {
+    let system = match system? {
+        Recognized::Known(SentContent::Text(text)) if !text.is_empty() => Value::String(text),
+        Recognized::Known(SentContent::Blocks(blocks)) if !blocks.is_empty() => {
+            Value::Array(blocks)
+        }
+        Recognized::Known(_) | Recognized::Unrecognized(_) => return None,
+    };
     Some(json!({"role": "system", "content": system}))
+}
+
+/// The message as the counter reads it, and how many media sources were taken out of it.
+fn message(sent: Recognized<SentMessage>) -> (Value, usize) {
+    let (role, sent) = match sent {
+        Recognized::Known(SentMessage { role, content }) => (role, content),
+        Recognized::Unrecognized(_) => (None, None),
+    };
+    let role = match role {
+        Some(Recognized::Known(role)) => Some(role),
+        Some(Recognized::Unrecognized(_)) | None => None,
+    };
+    let (content, media) = content(sent);
+    (json!({"role": role, "content": content}), media)
 }
 
 /// What of a prompt is counted, in the shape the counter reads.
@@ -151,22 +191,24 @@ impl Countable {
     /// `None` for a body with no list of messages.
     pub(super) fn of(prompt: &Prompt<'_>) -> Option<Self> {
         let Prompt::Messages(body) = prompt;
-        let sent = body.get("messages")?.as_array()?;
-        let (messages, media): (Vec<Value>, Vec<usize>) = system_message(body)
-            .iter()
-            .chain(sent)
-            .map(|message| {
-                let (content, media) = content(message.get("content"));
-                let role = message.get("role").and_then(Value::as_str);
-                (json!({"role": role, "content": content}), media)
-            })
+        let fields = body.iter().map(|(name, value)| (name.as_str(), value));
+        let Sent {
+            messages,
+            system,
+            tools,
+        } = Sent::deserialize(MapDeserializer::<_, serde_json::Error>::new(fields)).ok()?;
+        let system = system_message(system).map(|system| (system, 0));
+        let (messages, media): (Vec<Value>, Vec<usize>) = system
+            .into_iter()
+            .chain(messages.into_iter().map(message))
             .unzip();
-        let tools = body
-            .get("tools")
-            .filter(|tools| tools.as_array().is_some_and(|tools| !tools.is_empty()));
+        let tools = match tools {
+            Some(Recognized::Known(tools)) if !tools.is_empty() => Some(Value::Array(tools)),
+            Some(_) | None => None,
+        };
         Some(Self {
             messages,
-            tools: tools.cloned(),
+            tools,
             media: media.iter().sum(),
         })
     }
@@ -284,6 +326,72 @@ mod tests {
             estimate(json!({"messages": messages, "tools": tools})),
             estimate(json!({"messages": messages})).map(|alone| alone + as_text)
         );
+    }
+
+    #[rstest]
+    #[case::a_bare_string_block(json!(["word ".repeat(10)]), json!("word ".repeat(10)))]
+    #[case::a_tool_reference_with_no_name(
+        json!([{"type": "tool_reference", "tool_name": null}]),
+        json!([])
+    )]
+    #[case::text_that_is_not_a_string(
+        json!([{"type": "text", "text": 7}]),
+        json!([{"type": "text", "text": r#"{"type":"text","text":7}"#}])
+    )]
+    #[case::a_block_with_no_type(
+        json!([{"text": "hi"}]),
+        json!([{"type": "text", "text": r#"{"text":"hi"}"#}])
+    )]
+    fn a_block_is_read_only_as_the_counter_reads_it(#[case] sent: Value, #[case] read: Value) {
+        assert_eq!(estimate(asking(sent)), estimate(asking(read)));
+    }
+
+    #[rstest]
+    #[case::a_source_with_no_media_type(json!({"type": "base64", "data": "A".repeat(100_000)}))]
+    #[case::a_url_that_is_no_text(json!({"type": "url", "url": 7}))]
+    #[case::a_file(json!({"type": "file", "file_id": "file_1"}))]
+    fn a_source_of_a_media_kind_is_media_whatever_else_it_holds(#[case] source: Value) {
+        let with = |source: Value| asking(json!([{"type": "image", "source": source}]));
+
+        assert_eq!(
+            estimate(with(source)),
+            estimate(with(Value::Null)).map(|text| text + 250)
+        );
+    }
+
+    #[rstest]
+    #[case::a_message_that_is_no_object(
+        json!({"messages": ["hi"]}),
+        json!({"messages": [{}]})
+    )]
+    #[case::a_role_that_is_no_text(
+        json!({"messages": [{"role": 7, "content": "hi"}]}),
+        json!({"messages": [{"content": "hi"}]})
+    )]
+    #[case::content_that_is_neither_text_nor_blocks(
+        json!({"messages": [{"role": "user", "content": {"text": "hi"}}]}),
+        json!({"messages": [{"role": "user"}]})
+    )]
+    #[case::a_system_that_is_neither_text_nor_blocks(
+        json!({"system": {"text": "be brief"}, "messages": [{"role": "user", "content": "hi"}]}),
+        json!({"messages": [{"role": "user", "content": "hi"}]})
+    )]
+    #[case::an_empty_system(
+        json!({"system": "", "messages": [{"role": "user", "content": "hi"}]}),
+        json!({"messages": [{"role": "user", "content": "hi"}]})
+    )]
+    #[case::tools_that_are_no_list(
+        json!({"tools": {"name": "noop"}, "messages": [{"role": "user", "content": "hi"}]}),
+        json!({"messages": [{"role": "user", "content": "hi"}]})
+    )]
+    fn what_is_not_of_its_shape_counts_as_if_it_was_not_sent(
+        #[case] sent: Value,
+        #[case] counted_as: Value,
+    ) {
+        let (sent, counted_as) = (estimate(sent), estimate(counted_as));
+
+        assert!(sent.is_some());
+        assert_eq!(sent, counted_as);
     }
 
     #[rstest]
