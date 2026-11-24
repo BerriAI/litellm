@@ -57,6 +57,13 @@ open_ai_to_generic_oci_role_map: Final[dict[str, OCIRoles]] = {
 # ---------------------------------------------------------------------------
 
 
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    """Return ``value`` when it is a dict, else ``None``."""
+    if not isinstance(value, dict):
+        return None
+    return value
+
+
 def adapt_messages_to_generic_oci_standard_content_message(role: str, content: str | Sequence[object]) -> OCIMessage:
     """Convert a plain-text or multipart content message to OCI format."""
     new_content: Final[list[OCIContentPartUnion]] = []
@@ -68,8 +75,9 @@ def adapt_messages_to_generic_oci_standard_content_message(role: str, content: s
             toolCallId=None,
         )
 
-    for content_item in content:
-        if not isinstance(content_item, dict):
+    for raw_content_item in content:
+        content_item = _as_dict(raw_content_item)
+        if content_item is None:
             raise OCIError(status_code=400, message="Each content item must be a dictionary")
 
         item_type = content_item.get("type")
@@ -116,17 +124,18 @@ def adapt_messages_to_generic_oci_standard_tool_call(role: str, tool_calls: Sequ
     """Convert an assistant tool-call message to OCI format."""
     tool_calls_formatted: Final[list[OCIToolCall]] = []
     for tool_call in tool_calls:
-        if not isinstance(tool_call, dict):
+        tool_call_mapping = _as_dict(tool_call)
+        if not isinstance(tool_call, dict) or tool_call_mapping is None:
             raise OCIError(status_code=400, message="Each tool call must be a dictionary")
-        if tool_call.get("type") != "function":
+        if tool_call_mapping.get("type") != "function":
             raise OCIError(status_code=400, message="OCI only supports function tool calls")
 
-        tool_call_id = tool_call.get("id")
+        tool_call_id = tool_call_mapping.get("id")
         if not isinstance(tool_call_id, str):
             raise OCIError(status_code=400, message="Tool call `id` must be a string")
 
-        tool_function = tool_call.get("function")
-        if not isinstance(tool_function, dict):
+        tool_function = _as_dict(tool_call_mapping.get("function"))
+        if tool_function is None:
             raise OCIError(status_code=400, message="Tool call `function` must be a dictionary")
 
         function_name = tool_function.get("name")

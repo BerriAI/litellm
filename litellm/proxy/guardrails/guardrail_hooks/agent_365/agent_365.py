@@ -112,6 +112,13 @@ def _as_mapping(value: object) -> Mapping[object, object] | None:
     return mapping
 
 
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    """Return ``value`` when it is a dict, else ``None``."""
+    if not isinstance(value, dict):
+        return None
+    return value
+
+
 class _EvaluateResponse(TypedDict, total=False):
     allowed: ReadOnly[bool]
     defender: ReadOnly[_DefenderResult]
@@ -503,9 +510,9 @@ class Agent365Guardrail(CustomGuardrail):
             parsed_body: Final = _DECODED_JSON.validate_python(response.json())
         except ValueError as exc:
             raise Agent365MalformedResponseError("the Entra token endpoint returned a non-JSON body") from exc
-        if not isinstance(parsed_body, dict):
+        body: Final = _as_dict(parsed_body)
+        if body is None:
             raise Agent365MalformedResponseError("the Entra token endpoint returned a non-object JSON body")
-        body: Final = parsed_body
         if response.status_code >= 400:
             raise Agent365TokenExchangeError(
                 status_code=response.status_code,
