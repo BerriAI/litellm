@@ -1,5 +1,6 @@
 import asyncio
 import contextvars
+import itertools
 import json
 import logging
 import math
@@ -470,6 +471,19 @@ async def test_concurrent_calls_on_one_worker_claim_a_turn_once_while_the_shared
     granted: Final = await asyncio.gather(claims.claim("turn_1", "call_a"), claims.claim("turn_1", "call_b"))
 
     assert sorted(granted) == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_another_worker_claimed_stays_taken_here_once_the_shared_claim_store_goes_down():
+    redis: Final = _SharedRedis()
+    other_worker: Final = TurnClaims(lambda: redis)
+    stores: Final = itertools.chain((redis,), itertools.repeat(_DownRedis()))
+    this_worker: Final = TurnClaims(lambda: next(stores))
+
+    assert await other_worker.claim("turn_1", "call_a")
+    assert await this_worker.taken("turn_1")
+    assert await this_worker.taken("turn_1")
+    assert not await this_worker.claim("turn_1", "call_b")
 
 
 @pytest.mark.asyncio
@@ -955,6 +969,22 @@ async def test_a_shutdown_that_runs_out_of_time_logs_a_waiting_row_at_zero_befor
     assert row["total_tokens"] == 0
     assert not row["spend"]
     assert any(SESSION_ID in message and "shut down" in message for message in caplog.messages)
+
+
+@pytest.mark.asyncio
+async def test_a_shutdown_drain_cut_short_still_logs_the_waiting_row_at_zero(local_model_cost_map: None):
+    rows: Final = _SpendRows()
+    biller: Final = OpenAIAgentsTurnBiller(get=_unanswered_get, sleep=_blocked_sleep, clock=_Clock())
+    await _relay_call(
+        biller, rows, EVENTS_URL, {"events": [INPUT_MESSAGE]}, None, "4d6f8b0d-2f4b-4d6f-8b0d-2f4b6d8f0b24"
+    )
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(biller.drain(timeout=60), timeout=0.05)
+    row: Final = await rows.only_row()
+
+    assert row["total_tokens"] == 0
+    assert not row["spend"]
 
 
 @pytest.mark.asyncio
@@ -1513,6 +1543,77 @@ async def test_a_subagent_closed_before_the_turn_started_is_never_polled(local_m
 
     assert closed_turns_url not in api.urls
     assert row["total_tokens"] == TURN_USAGE["total_tokens"] + SECOND_TURN_USAGE["total_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_an_open_subagent_listed_on_a_later_subagents_page_is_billed(local_model_cost_map: None):
+    older_turns_url: Final = f"{SESSIONS_URL}/{SESSION_ID}/subagents/subagent_0/turns?order=desc&limit=100"
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),),
+        session=_session(),
+        replies={
+            SUBAGENTS_URL: (
+                {
+                    **_page({"id": "subagent_1", "object": "agent.session.subagent", "closed_at": None}),
+                    "has_more": True,
+                    "last_id": "subagent_1",
+                },
+            ),
+            f"{SUBAGENTS_URL}&after=subagent_1": (
+                _page({"id": "subagent_0", "object": "agent.session.subagent", "closed_at": None}),
+            ),
+            SUBAGENT_TURNS_URL: (_page(_turn("subturn_1", CALL_STARTED_AT + 3, "completed", SECOND_TURN_USAGE)),),
+            older_turns_url: (_page(_turn("subturn_0", CALL_STARTED_AT + 2, "completed", SECOND_TURN_USAGE)),),
+        },
+    )
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "4d6f8b0d-2f4b-4d6f-9b8d-0f2b4d6f8b02",
+    )
+
+    assert (await rows.only_row())["total_tokens"] == TURN_USAGE["total_tokens"] + 2 * SECOND_TURN_USAGE["total_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_row_counts_toward_the_keys_tpm_limit_on_the_legacy_limiter(local_model_cost_map: None):
+    limiter: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=lambda: CALL_TIME
+    )
+    key: Final = UserAPIKeyAuth(api_key=hash_token("sk-agents-legacy-tpm"), tpm_limit=7240)
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),), session=_session()
+    )
+    rows: Final = _SpendRows()
+
+    async def call(litellm_call_id: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=key,
+            cache=DualCache(),
+            data={"litellm_call_id": litellm_call_id},
+            call_type="pass_through_endpoint",
+        )
+
+    await call("6f8b0d2f-4b6d-4f8b-9d2f-4b6d8f0b2d01")
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "6f8b0d2f-4b6d-4f8b-9d2f-4b6d8f0b2d01",
+        metadata={"user_api_key": key.api_key, "user_api_key_model_max_budget": key.model_max_budget},
+        callbacks=(limiter,),
+    )
+    assert (await rows.only_row())["total_tokens"] == key.tpm_limit
+
+    with pytest.raises(ProxyRateLimitError):
+        await call("6f8b0d2f-4b6d-4f8b-9d2f-4b6d8f0b2d02")
 
 
 @pytest.mark.asyncio

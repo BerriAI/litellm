@@ -1238,6 +1238,7 @@ async def _flush_spend_around_agents_rows_drain_on_shutdown(
     await flush_spend()
     remaining: Final = GracefulShutdownManager.remaining(clock=clock)
     await drain_deferred_rows(max(0.0, remaining - GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS))
+    await drain_deferred_rows(GracefulShutdownManager.remaining(5.0, clock=clock))
     await flush_spend()
 
 
