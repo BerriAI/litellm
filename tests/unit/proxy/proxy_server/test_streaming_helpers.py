@@ -759,7 +759,7 @@ def _azure_chunk(choice_fields: dict[str, object], chunk_fields: dict[str, objec
     ],
 )
 async def test_async_data_generator_sse_frame_keeps_provider_fields_on_a_text_chunk(
-    monkeypatch, chunk: ModelResponseStream, read_field: Callable[[dict[str, object]], object], sent: object
+    monkeypatch: pytest.MonkeyPatch, chunk: ModelResponseStream, read_field: Callable[[dict[str, object]], object], sent: object
 ):
     _patch_logging_flags(monkeypatch)
 

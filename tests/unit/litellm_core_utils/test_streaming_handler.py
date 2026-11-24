@@ -4571,7 +4571,6 @@ def test_openai_sdk_stream_with_two_choices_keeps_choice_extras_on_their_own_cho
     [
         pytest.param({"token_ids": None}, id="null-token-ids"),
         pytest.param({"content_filter_results": None}, id="null-content-filter-results"),
-        pytest.param({"token_ids": [20]}, id="token-ids"),
         pytest.param({"message": {"role": "assistant", "content": "1"}}, id="message"),
     ],
 )
@@ -4609,6 +4608,46 @@ def test_openai_sdk_stream_does_not_move_a_later_choiceless_chunks_fields_onto_t
     )
 
     assert not any("prompt_filter_results" in _wire_dump(chunk) for chunk in wrapper)
+
+
+def test_openai_sdk_stream_keeps_token_ids_on_their_own_frame(logging_obj: Logging) -> None:
+    emitted: Final = _openai_sdk_stream_choices(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": "1"}, "finish_reason": None, "token_ids": [16]},
+            {"index": 0, "delta": {}, "finish_reason": "stop", "token_ids": [20]},
+        ),
+    )
+
+    assert [(choice.get("finish_reason"), choice.get("token_ids")) for choice in emitted] == [
+        (None, [16]),
+        ("stop", [20]),
+    ]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_azure_ai_stream_keeps_finish_content_filter_results(sync_mode: bool, logging_obj: Logging) -> None:
+    parser: Final = OpenAIChatCompletionStreamingHandler(streaming_response=iter(()), sync_stream=sync_mode)
+    chunks: Final = tuple(
+        parser.chunk_parser(
+            {"id": "c1", "created": 1, "model": "gpt-4o", "object": "chat.completion.chunk", "choices": [choice]}
+        )
+        for choice in (
+            {"index": 0, "delta": {"role": "assistant", "content": "Red"}, "content_filter_results": {}},
+            {"index": 0, "delta": {}, "finish_reason": "stop", "content_filter_results": _AZURE_FINISH_FILTER_RESULTS},
+        )
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks), model="gpt-4o", custom_llm_provider="azure_ai", logging_obj=logging_obj
+    )
+    emitted: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
+    finish_choices: Final = [
+        choice for frame in map(_wire_dump, emitted) for choice in frame["choices"] if choice.get("finish_reason")
+    ]
+    assert [(choice["finish_reason"], choice["content_filter_results"]) for choice in finish_choices] == [
+        ("stop", _AZURE_FINISH_FILTER_RESULTS)
+    ]
 
 
 def test_gemini_legacy_vertex_stop_finish_reason_normalised():

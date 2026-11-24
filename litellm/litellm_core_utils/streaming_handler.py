@@ -15,6 +15,7 @@ from typing import Any, Final, NoReturn, Protocol, TypeVar, cast, runtime_checka
 import anyio
 import httpx
 from openai.types.chat import ChatCompletionChunk
+from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
 from pydantic import BaseModel, ValidationError
 from typing_extensions import NotRequired, TypedDict
 
@@ -122,7 +123,7 @@ def _carries_payload(choice: StreamingChoices) -> bool:
     )
 
 
-_CHOICE_EXTRAS_NOT_CARRIED_TO_FINISH: Final = frozenset({"message", "token_ids"})
+_CHOICE_EXTRAS_NOT_CARRIED_TO_FINISH: Final = frozenset({"message", *ChunkChoice.model_fields})
 
 
 def _keep_single_upstream_choice_extras(
@@ -130,7 +131,7 @@ def _keep_single_upstream_choice_extras(
 ) -> None:
     original_chunk: Final = response_obj.get("original_chunk")
     if (
-        not isinstance(original_chunk, ChatCompletionChunk)
+        not isinstance(original_chunk, (ChatCompletionChunk, ModelResponseStream))
         or len(original_chunk.choices) != 1
         or len(model_response.choices) != 1
         or original_chunk.choices[0].index != model_response.choices[0].index
