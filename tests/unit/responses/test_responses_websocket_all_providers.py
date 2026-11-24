@@ -530,6 +530,375 @@ class TestManagedWebSocketHandlerIntegration:
         second_call_input: Final = aresponses_mock.call_args_list[1].kwargs["input"]
         assert second_call_input == expected_input, terminal_type
 
+    @pytest.mark.parametrize(
+        "call, answer",
+        [
+            (
+                {"type": "custom_tool_call", "id": "ctc_1", "call_id": "call_exec", "name": "exec", "input": "1 + 1"},
+                {"type": "custom_tool_call_output", "call_id": "call_exec", "output": "2"},
+            ),
+            (
+                {"type": "function_call", "id": "fc_1", "call_id": "call_weather", "name": "weather", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_weather", "output": "sunny"},
+            ),
+            (
+                {
+                    "type": "apply_patch_call",
+                    "id": "apc_1",
+                    "call_id": "call_patch",
+                    "status": "completed",
+                    "operation": {"type": "create_file", "path": "notes.txt", "diff": "+hi"},
+                },
+                {"type": "apply_patch_call_output", "call_id": "call_patch", "status": "completed", "output": "done"},
+            ),
+            (
+                {
+                    "type": "mcp_approval_request",
+                    "id": "mcpr_1",
+                    "server_label": "deepwiki",
+                    "name": "read_wiki_structure",
+                    "arguments": "{}",
+                },
+                {"type": "mcp_approval_response", "approval_request_id": "mcpr_1", "approve": True},
+            ),
+        ],
+        ids=["custom_tool_call", "function_call", "apply_patch_call", "mcp_approval_request"],
+    )
+    @pytest.mark.asyncio
+    async def test_next_turn_sends_the_provider_the_call_its_output_answers(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+        call: dict[str, object],
+        answer: dict[str, object],
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            side_effect=[_provider_turn_answering((call,)), _provider_turn_answering(())]
+        )
+
+        await _relay_turns_to(
+            monkeypatch,
+            "openai/gpt-5-mini",
+            _rate_limit_check(_memory_usage()),
+            (
+                json.dumps({"type": "response.create", "input": "run it"}),
+                json.dumps({"type": "response.create", "previous_response_id": "resp_turn", "input": [answer]}),
+            ),
+            None,
+            {},
+            api_key="sk-fake",
+        )
+
+        second_turn_input: Final = json.loads(provider.calls[1].request.read())["input"]
+        assert second_turn_input[1:] == [call, answer]
+
+    @pytest.mark.asyncio
+    async def test_next_turn_leaves_out_items_no_later_turn_answers(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        unanswerable: Final = (
+            {"type": "reasoning", "id": "rs_1", "summary": []},
+            {"type": "web_search_call", "id": "ws_1", "status": "completed", "action": {"type": "search", "query": "x"}},
+            {"type": "mcp_list_tools", "id": "mcpl_1", "server_label": "deepwiki", "tools": []},
+            {
+                "type": "mcp_call",
+                "id": "mcp_1",
+                "approval_request_id": "mcpr_nobody_approved",
+                "server_label": "litellm",
+                "name": "read_wiki_structure",
+                "arguments": "{}",
+                "output": "1 Overview",
+            },
+        )
+        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            side_effect=[_provider_turn_answering(unanswerable), _provider_turn_answering(())]
+        )
+
+        await _relay_turns_to(
+            monkeypatch,
+            "openai/gpt-5-mini",
+            _rate_limit_check(_memory_usage()),
+            (
+                json.dumps({"type": "response.create", "input": "run it"}),
+                json.dumps({"type": "response.create", "previous_response_id": "resp_turn", "input": "thanks"}),
+            ),
+            None,
+            {},
+            api_key="sk-fake",
+        )
+
+        second_turn_input: Final = json.loads(provider.calls[1].request.read())["input"]
+        assert [item.get("type") for item in second_turn_input] == ["message", "message"]
+
+    @pytest.mark.parametrize(
+        "malformed",
+        [
+            {"type": ["function_call"], "id": "fc_1"},
+            {"type": "mcp_call", "id": "mcp_1", "approval_request_id": ["mcpr_1"]},
+        ],
+        ids=["list_type", "list_approval_request_id"],
+    )
+    @pytest.mark.asyncio
+    async def test_next_turn_reaches_the_provider_after_a_malformed_output_item(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+        malformed: dict[str, object],
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            side_effect=[_provider_turn_answering((malformed,)), _provider_turn_answering(())]
+        )
+
+        await _relay_turns_to(
+            monkeypatch,
+            "openai/gpt-5-mini",
+            _rate_limit_check(_memory_usage()),
+            (
+                json.dumps({"type": "response.create", "input": "run it"}),
+                json.dumps({"type": "response.create", "previous_response_id": "resp_turn", "input": "thanks"}),
+            ),
+            None,
+            {},
+            api_key="sk-fake",
+        )
+
+        second_turn_input: Final = json.loads(provider.calls[1].request.read())["input"]
+        assert [item.get("type") for item in second_turn_input] == ["message", "message"]
+
+    @pytest.mark.parametrize(
+        ("terminal", "next_input", "expected_types"),
+        [
+            ("response.incomplete", "never mind", ["message", "message"]),
+            (
+                "response.incomplete",
+                [{"type": "custom_tool_call_output", "call_id": "call_cut", "output": "1"}],
+                ["message", "custom_tool_call", "custom_tool_call_output"],
+            ),
+            ("response.completed", "never mind", ["message", "custom_tool_call", "message"]),
+        ],
+        ids=["cut_off_and_skipped", "cut_off_and_answered", "completed_and_skipped"],
+    )
+    @pytest.mark.asyncio
+    async def test_next_turn_sends_a_call_cut_off_by_an_incomplete_turn_only_when_it_answers_it(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+        terminal: str,
+        next_input: object,
+        expected_types: list[str],
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        call: Final = {
+            "type": "custom_tool_call",
+            "id": "ctc_1",
+            "call_id": "call_cut",
+            "name": "exec",
+            "input": "printf 1",
+            "status": "incomplete" if terminal == "response.incomplete" else "completed",
+        }
+        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            side_effect=[_provider_turn_answering((call,), terminal), _provider_turn_answering(())]
+        )
+
+        await _relay_turns_to(
+            monkeypatch,
+            "openai/gpt-5-mini",
+            _rate_limit_check(_memory_usage()),
+            (
+                json.dumps({"type": "response.create", "input": "run it"}),
+                json.dumps({"type": "response.create", "previous_response_id": "resp_turn", "input": next_input}),
+            ),
+            None,
+            {},
+            api_key="sk-fake",
+        )
+
+        second_turn_input: Final = json.loads(provider.calls[1].request.read())["input"]
+        assert [item.get("type") for item in second_turn_input] == expected_types
+
+    @pytest.mark.asyncio
+    async def test_next_turn_keeps_a_search_the_provider_finished_before_an_incomplete_turn_ended(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        search: Final = (
+            {
+                "type": "tool_search_call",
+                "id": "tsc_1",
+                "call_id": "srvtoolu_1",
+                "status": "completed",
+                "execution": "server",
+                "arguments": {"pattern": "exec"},
+            },
+            {
+                "type": "tool_search_output",
+                "id": "tso_1",
+                "call_id": "srvtoolu_1",
+                "status": "completed",
+                "execution": "server",
+                "tools": [],
+            },
+        )
+        cut_off_call: Final = {
+            "type": "custom_tool_call",
+            "id": "ctc_1",
+            "call_id": "call_cut",
+            "name": "exec",
+            "input": "printf 1",
+            "status": "incomplete",
+        }
+        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            side_effect=[
+                _provider_turn_answering((*search, cut_off_call), "response.incomplete"),
+                _provider_turn_answering(()),
+            ]
+        )
+
+        await _relay_turns_to(
+            monkeypatch,
+            "openai/gpt-5-mini",
+            _rate_limit_check(_memory_usage()),
+            (
+                json.dumps({"type": "response.create", "input": "run it"}),
+                json.dumps({"type": "response.create", "previous_response_id": "resp_turn", "input": "never mind"}),
+            ),
+            None,
+            {},
+            api_key="sk-fake",
+        )
+
+        second_turn_input: Final = json.loads(provider.calls[1].request.read())["input"]
+        assert [item.get("type") for item in second_turn_input] == [
+            "message",
+            "tool_search_call",
+            "tool_search_output",
+            "message",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_turn_after_an_approved_mcp_call_sends_the_call_that_used_the_approval(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        approval_request: Final = {
+            "type": "mcp_approval_request",
+            "id": "mcpr_1",
+            "server_label": "deepwiki",
+            "name": "read_wiki_structure",
+            "arguments": "{}",
+        }
+        approval: Final = {"type": "mcp_approval_response", "approval_request_id": "mcpr_1", "approve": True}
+        approved_call: Final = {
+            "type": "mcp_call",
+            "id": "mcp_1",
+            "approval_request_id": "mcpr_1",
+            "server_label": "deepwiki",
+            "name": "read_wiki_structure",
+            "arguments": "{}",
+            "output": "1 Overview",
+        }
+        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            side_effect=[
+                _provider_turn_answering((approval_request,)),
+                _provider_turn_answering((approved_call,)),
+                _provider_turn_answering(()),
+            ]
+        )
+
+        await _relay_turns_to(
+            monkeypatch,
+            "openai/gpt-5-mini",
+            _rate_limit_check(_memory_usage()),
+            (
+                json.dumps({"type": "response.create", "input": "read the wiki"}),
+                json.dumps({"type": "response.create", "previous_response_id": "resp_turn", "input": [approval]}),
+                json.dumps({"type": "response.create", "previous_response_id": "resp_turn", "input": "thanks"}),
+            ),
+            None,
+            {},
+            api_key="sk-fake",
+        )
+
+        third_turn_input: Final = json.loads(provider.calls[2].request.read())["input"]
+        assert third_turn_input[1:4] == [approval_request, approval, approved_call]
+
+    @pytest.mark.asyncio
+    async def test_next_turn_keeps_the_tool_search_the_provider_already_ran(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        respx_mock: respx.MockRouter,
+    ) -> None:
+        import litellm
+
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        search: Final = (
+            {
+                "type": "tool_search_call",
+                "id": "tsc_1",
+                "call_id": "srvtoolu_1",
+                "status": "completed",
+                "execution": "server",
+                "arguments": {"pattern": "weather"},
+            },
+            {
+                "type": "tool_search_output",
+                "id": "tso_1",
+                "call_id": "srvtoolu_1",
+                "status": "completed",
+                "execution": "server",
+                "tools": [],
+            },
+        )
+        call: Final = {"type": "function_call", "id": "fc_1", "call_id": "call_weather", "name": "weather", "arguments": "{}"}
+        answer: Final = {"type": "function_call_output", "call_id": "call_weather", "output": "sunny"}
+        provider: Final = respx_mock.post("https://api.openai.com/v1/responses").mock(
+            side_effect=[_provider_turn_answering((*search, call)), _provider_turn_answering(())]
+        )
+
+        await _relay_turns_to(
+            monkeypatch,
+            "openai/gpt-5-mini",
+            _rate_limit_check(_memory_usage()),
+            (
+                json.dumps({"type": "response.create", "input": "weather in Paris?"}),
+                json.dumps({"type": "response.create", "previous_response_id": "resp_turn", "input": [answer]}),
+            ),
+            None,
+            {},
+            api_key="sk-fake",
+        )
+
+        second_turn_input: Final = json.loads(provider.calls[1].request.read())["input"]
+        assert second_turn_input[1:] == [*search, call, answer]
+
     @pytest.mark.asyncio
     async def test_warmup_frame_skips_provider_and_sends_synthetic_ack(
         self, monkeypatch
@@ -778,6 +1147,7 @@ class TestChunkTransformation:
                     {
                         "type": "function_call",
                         "id": "call_123",
+                        "call_id": "call_weather",
                         "name": "get_weather",
                         "arguments": '{"location": "Paris"}',
                     }
@@ -1194,6 +1564,7 @@ class TestMultiTurnSessionHistory:
                     {
                         "type": "function_call",
                         "id": "call_123",
+                        "call_id": "call_weather",
                         "name": "get_weather",
                         "arguments": "{}",
                     },
@@ -1902,13 +2273,19 @@ def _connection_logged_through(rate_limits: "ModelRateLimitingCheck", opened_wit
 
 
 def _provider_turn_stream(_request: httpx.Request) -> httpx.Response:
+    return _provider_turn_answering(())
+
+
+def _provider_turn_answering(
+    output: tuple[dict[str, object], ...], terminal: str = "response.completed"
+) -> httpx.Response:
     completed: Final = {
         "id": "resp_turn",
         "object": "response",
         "created_at": 1767271505,
-        "status": "completed",
+        "status": "incomplete" if terminal == "response.incomplete" else "completed",
         "model": "gpt-5-mini",
-        "output": [],
+        "output": list(output),
         "parallel_tool_calls": True,
         "tool_choice": "auto",
         "tools": [],
@@ -1919,7 +2296,7 @@ def _provider_turn_stream(_request: httpx.Request) -> httpx.Response:
         headers={"content-type": "text/event-stream"},
         text="".join(
             f"event: {kind}\ndata: {json.dumps({'type': kind, 'response': completed})}\n\n"
-            for kind in ("response.created", "response.completed")
+            for kind in ("response.created", terminal)
         ),
     )
 
@@ -2222,6 +2599,158 @@ class TestWebSocketTurnAdmission:
 
         assert isinstance(failure, RateLimitError)
         assert "crossed budget" in str(failure)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("upstream_events", "left_unfinished"),
+        [
+            pytest.param((), True, id="cut_before_any_event"),
+            pytest.param((json.dumps({"type": "response.created", "response": {"id": "resp_turn"}}),), True, id="cut"),
+            pytest.param((_turn_completed(),), False, id="completed"),
+            pytest.param((_UPSTREAM_ERROR,), False, id="failed"),
+        ],
+    )
+    async def test_native_relay_reports_a_turn_the_socket_closed_on_before_its_terminal_event(
+        self, upstream_events: tuple[str, ...], left_unfinished: bool
+    ) -> None:
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        from litellm.caching.dual_cache import DualCache
+        from litellm.responses.streaming_iterator import drain_logging_tasks
+        from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
+
+        first, _, _ = _turn_frames()
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock()
+        backend_ws.recv = AsyncMock(side_effect=[*upstream_events, Exception("client left")])
+        unfinished_reports: Final[list[str]] = []
+        handler: Final = _make_streaming(
+            websocket=_ClientSocket(),
+            backend_ws=backend_ws,
+            request_data={},
+            logging_obj=_connection_logged_through(ModelRateLimitingCheck(DualCache()), {}),
+            first_message=first,
+            on_unfinished_turn=lambda: unfinished_reports.append("unfinished"),
+        )
+
+        await handler.client_to_backend()
+        await handler.backend_to_client()
+        await drain_logging_tasks()
+
+        assert unfinished_reports == (["unfinished"] if left_unfinished else [])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("client_leaves_after", "left_unfinished"),
+        [
+            pytest.param(1, True, id="client_left_mid_turn"),
+            pytest.param(None, False, id="client_read_the_whole_turn"),
+        ],
+    )
+    async def test_managed_relay_reports_a_turn_its_client_left_before_the_terminal_event(
+        self, client_leaves_after: int | None, left_unfinished: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        async def turn_stream():
+            yield {"type": "response.created", "response": {"id": "resp_turn"}}
+            yield {"type": "response.output_text.delta", "delta": "hel"}
+            yield json.loads(_turn_completed())
+
+        sends: Final[list[str]] = []
+
+        async def send_text(data: str) -> None:
+            if client_leaves_after is not None and len(sends) >= client_leaves_after:
+                raise RuntimeError("WebSocket is not connected")
+            sends.append(data)
+
+        monkeypatch.setattr(litellm, "aresponses", AsyncMock(side_effect=lambda **kwargs: turn_stream()))
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock(side_effect=send_text)
+        unfinished_reports: Final[list[str]] = []
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="anthropic/claude-sonnet-4-5",
+            logging_obj=Logging(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="connection-call",
+                function_id="connection-call",
+            ),
+            on_unfinished_turn=lambda: unfinished_reports.append("unfinished"),
+        )
+
+        await handler._process_response_create(json.dumps({"type": "response.create", "input": "hi"}))
+
+        assert unfinished_reports == (["unfinished"] if left_unfinished else [])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("events_before_cancel", "left_unfinished"),
+        [
+            pytest.param(1, True, id="cancelled_mid_turn"),
+            pytest.param(3, False, id="cancelled_after_the_terminal_event"),
+        ],
+    )
+    async def test_managed_relay_reports_a_turn_the_session_limit_cancelled_before_its_terminal_event(
+        self, events_before_cancel: int, left_unfinished: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        events: Final = (
+            {"type": "response.created", "response": {"id": "resp_turn"}},
+            {"type": "response.output_text.delta", "delta": "hel"},
+            json.loads(_turn_completed()),
+        )
+
+        async def turn_stream():
+            for event in events[:events_before_cancel]:
+                yield event
+            await asyncio.Event().wait()
+
+        sends: Final[list[str]] = []
+        sent_every_event: Final = asyncio.Event()
+
+        async def send_text(data: str) -> None:
+            sends.append(data)
+            if len(sends) == events_before_cancel:
+                sent_every_event.set()
+
+        monkeypatch.setattr(litellm, "aresponses", AsyncMock(side_effect=lambda **kwargs: turn_stream()))
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock(side_effect=send_text)
+        unfinished_reports: Final[list[str]] = []
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="anthropic/claude-sonnet-4-5",
+            logging_obj=Logging(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="connection-call",
+                function_id="connection-call",
+            ),
+            on_unfinished_turn=lambda: unfinished_reports.append("unfinished"),
+        )
+        turn: Final = asyncio.ensure_future(
+            handler._process_response_create(json.dumps({"type": "response.create", "input": "hi"}))
+        )
+        await asyncio.wait_for(sent_every_event.wait(), timeout=5)
+
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+
+        assert unfinished_reports == (["unfinished"] if left_unfinished else [])
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(

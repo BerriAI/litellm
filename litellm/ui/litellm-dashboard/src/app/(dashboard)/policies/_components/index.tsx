@@ -2,10 +2,12 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { Alert, AlertDescription, AlertTitle, AlertAction } from "@/components/shared/Alert";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TabsContent } from "@/components/ui/tabs";
+import { PageContent, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 
 import { toast } from "@/lib/toast";
-import { Info, TriangleAlert, X } from "lucide-react";
+import { Info, ScrollText, TriangleAlert, X } from "lucide-react";
 import { isAdminRole } from "@/utils/roles";
 import PolicyTable from "./PolicyTable";
 import PolicyInfoView from "./policy_info";
@@ -448,171 +450,173 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
   }
 
   return (
-    <div className="m-8 mx-auto w-full flex-auto overflow-y-auto p-2">
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList variant="line" className="mb-4 h-auto w-full justify-start rounded-none border-b p-0">
-          <TabsTrigger value="templates" className="flex-none rounded-none px-4 py-2">
-            {t("policies.panel.tabs.templates")}
-          </TabsTrigger>
-          <TabsTrigger value="policies" className="flex-none rounded-none px-4 py-2">
-            {t("policies.panel.tabs.policies")}
-          </TabsTrigger>
-          <TabsTrigger value="attachments" className="flex-none rounded-none px-4 py-2">
-            {t("policies.panel.tabs.attachments")}
-          </TabsTrigger>
-          <TabsTrigger value="simulator" className="flex-none rounded-none px-4 py-2">
-            {t("policies.panel.tabs.simulator")}
-          </TabsTrigger>
-        </TabsList>
+    <>
+      <PageContent>
+        <PageTabs value={activeTab} onValueChange={setActiveTab}>
+          <PageHeader>
+            <PageHeaderTitle>
+              <ScrollText />
+              {t("shell.nav.items.policies")}
+            </PageHeaderTitle>
+            <PageHeaderDescription>{t("shell.pageDescriptions.policies")}</PageHeaderDescription>
+            <PageHeaderControls className="flex-wrap">
+              {activeTab === "policies" && (
+                <Button onClick={handleAddPolicy} disabled={!accessToken}>
+                  {t("policies.panel.addPolicy")}
+                </Button>
+              )}
+              <PageTabsList className="w-full flex-none sm:w-auto sm:flex-1">
+                <PageTabsTrigger value="templates">{t("policies.panel.tabs.templates")}</PageTabsTrigger>
+                <PageTabsTrigger value="policies">{t("policies.panel.tabs.policies")}</PageTabsTrigger>
+                <PageTabsTrigger value="attachments">{t("policies.panel.tabs.attachments")}</PageTabsTrigger>
+                <PageTabsTrigger value="simulator">{t("policies.panel.tabs.simulator")}</PageTabsTrigger>
+              </PageTabsList>
+            </PageHeaderControls>
+          </PageHeader>
 
-        <TabsContent value="templates" keepMounted>
-          <AboutPoliciesAlert />
-          <PolicyTemplates
-            onUseTemplate={handleUseTemplate}
-            onOpenAiSuggestion={() => setIsAiSuggestionModalOpen(true)}
-            onTemplatesLoaded={setLoadedTemplates}
-            accessToken={accessToken}
-          />
-        </TabsContent>
+          <TabsContent value="templates" keepMounted>
+            <AboutPoliciesAlert />
+            <PolicyTemplates
+              onUseTemplate={handleUseTemplate}
+              onOpenAiSuggestion={() => setIsAiSuggestionModalOpen(true)}
+              onTemplatesLoaded={setLoadedTemplates}
+              accessToken={accessToken}
+            />
+          </TabsContent>
 
-        <TabsContent value="policies" keepMounted>
-          <AboutPoliciesAlert />
+          <TabsContent value="policies" keepMounted>
+            <AboutPoliciesAlert />
 
-          <div className="mb-4 flex items-center justify-between">
-            <Button onClick={handleAddPolicy} disabled={!accessToken}>
-              {t("policies.panel.addPolicy")}
-            </Button>
-          </div>
+            {selectedPolicyId ? (
+              <PolicyInfoView
+                policyId={selectedPolicyId}
+                onClose={() => setSelectedPolicyId(null)}
+                onEdit={(policy) => {
+                  setEditingPolicy(policy);
+                  setSelectedPolicyId(null);
+                  setShowFlowBuilder(true);
+                }}
+                accessToken={accessToken}
+                isAdmin={isAdmin}
+                getPolicy={getPolicyInfo}
+              />
+            ) : (
+              <PolicyTable
+                policies={policiesList}
+                isLoading={isLoading}
+                onDeleteClick={handleDeleteClick}
+                onEditClick={(policy) => {
+                  setEditingPolicy(policy);
+                  setShowFlowBuilder(true);
+                }}
+                onViewClick={(policyId) => setSelectedPolicyId(policyId)}
+                isAdmin={isAdmin}
+              />
+            )}
 
-          {selectedPolicyId ? (
-            <PolicyInfoView
-              policyId={selectedPolicyId}
-              onClose={() => setSelectedPolicyId(null)}
-              onEdit={(policy) => {
-                setEditingPolicy(policy);
-                setSelectedPolicyId(null);
+            <AddPolicyForm
+              visible={isAddPolicyModalVisible}
+              onClose={handleCloseModal}
+              onSuccess={handleSuccess}
+              onOpenFlowBuilder={() => {
+                setIsAddPolicyModalVisible(false);
                 setShowFlowBuilder(true);
               }}
               accessToken={accessToken}
-              isAdmin={isAdmin}
-              getPolicy={getPolicyInfo}
+              editingPolicy={editingPolicy}
+              existingPolicies={policiesList}
+              availableGuardrails={guardrailsList}
+              createPolicy={createPolicyCall}
+              updatePolicy={updatePolicyCall}
             />
-          ) : (
-            <PolicyTable
+
+            <DeleteResourceModal
+              isOpen={isDeleteModalOpen}
+              title={t("policies.deletePolicy.title")}
+              message={t("policies.deletePolicy.message", { name: String(policyToDelete?.policy_name) })}
+              resourceInformationTitle={t("policies.deletePolicy.infoTitle")}
+              resourceInformation={[
+                { label: t("policies.deletePolicy.fields.name"), value: policyToDelete?.policy_name },
+                { label: t("policies.deletePolicy.fields.id"), value: policyToDelete?.policy_id, code: true },
+                { label: t("policies.deletePolicy.fields.description"), value: policyToDelete?.description || "-" },
+                { label: t("policies.deletePolicy.fields.inherit"), value: policyToDelete?.inherit || "-" },
+              ]}
+              onCancel={handleDeleteCancel}
+              onOk={handleDeleteConfirm}
+              confirmLoading={isDeleting}
+            />
+          </TabsContent>
+
+          <TabsContent value="attachments" keepMounted>
+            <DismissibleAlert title={t("policies.panel.aboutAttachments.title")} icon={<Info />}>
+              <p className="mb-3">{t("policies.panel.aboutAttachments.description")}</p>
+              <p className="mb-2 font-semibold">{t("policies.panel.aboutAttachments.scopesTitle")}</p>
+              <ul className="mb-3 ml-2 list-inside list-disc space-y-1">
+                <li>
+                  <Trans i18nKey="policies.panel.aboutAttachments.scopes.global" components={{ strong: <strong /> }} />
+                </li>
+                <li>
+                  <Trans i18nKey="policies.panel.aboutAttachments.scopes.teams" components={{ strong: <strong /> }} />
+                </li>
+                <li>
+                  <Trans i18nKey="policies.panel.aboutAttachments.scopes.keys" components={{ strong: <strong /> }} />
+                </li>
+                <li>
+                  <Trans i18nKey="policies.panel.aboutAttachments.scopes.models" components={{ strong: <strong /> }} />
+                </li>
+                <li>
+                  <Trans
+                    i18nKey="policies.panel.aboutAttachments.scopes.tags"
+                    components={{ strong: <strong />, code: <code /> }}
+                  />
+                </li>
+              </ul>
+              <a
+                href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies#attachments"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-1 inline-block text-primary underline underline-offset-4"
+              >
+                {t("policies.panel.aboutAttachments.learnMore")}
+              </a>
+            </DismissibleAlert>
+
+            <DismissibleAlert title={t("policies.panel.enterpriseNotice.title")} icon={<TriangleAlert />}>
+              {t("policies.panel.enterpriseNotice.description")}
+            </DismissibleAlert>
+
+            <div className="mb-4 flex items-center justify-between">
+              <Button
+                onClick={() => setIsAddAttachmentModalVisible(true)}
+                disabled={!accessToken || policiesList.length === 0}
+              >
+                {t("policies.panel.addAttachment")}
+              </Button>
+            </div>
+
+            <AttachmentTable
+              attachments={attachmentsList}
+              isLoading={isAttachmentsLoading}
+              onDeleteClick={handleDeleteAttachmentClick}
+              isAdmin={isAdmin}
+              accessToken={accessToken}
+            />
+
+            <AddAttachmentForm
+              visible={isAddAttachmentModalVisible}
+              onClose={() => setIsAddAttachmentModalVisible(false)}
+              onSuccess={handleAttachmentSuccess}
+              accessToken={accessToken}
               policies={policiesList}
-              isLoading={isLoading}
-              onDeleteClick={handleDeleteClick}
-              onEditClick={(policy) => {
-                setEditingPolicy(policy);
-                setShowFlowBuilder(true);
-              }}
-              onViewClick={(policyId) => setSelectedPolicyId(policyId)}
-              isAdmin={isAdmin}
+              createAttachment={createPolicyAttachmentCall}
             />
-          )}
+          </TabsContent>
 
-          <AddPolicyForm
-            visible={isAddPolicyModalVisible}
-            onClose={handleCloseModal}
-            onSuccess={handleSuccess}
-            onOpenFlowBuilder={() => {
-              setIsAddPolicyModalVisible(false);
-              setShowFlowBuilder(true);
-            }}
-            accessToken={accessToken}
-            editingPolicy={editingPolicy}
-            existingPolicies={policiesList}
-            availableGuardrails={guardrailsList}
-            createPolicy={createPolicyCall}
-            updatePolicy={updatePolicyCall}
-          />
-
-          <DeleteResourceModal
-            isOpen={isDeleteModalOpen}
-            title={t("policies.deletePolicy.title")}
-            message={t("policies.deletePolicy.message", { name: String(policyToDelete?.policy_name) })}
-            resourceInformationTitle={t("policies.deletePolicy.infoTitle")}
-            resourceInformation={[
-              { label: t("policies.deletePolicy.fields.name"), value: policyToDelete?.policy_name },
-              { label: t("policies.deletePolicy.fields.id"), value: policyToDelete?.policy_id, code: true },
-              { label: t("policies.deletePolicy.fields.description"), value: policyToDelete?.description || "-" },
-              { label: t("policies.deletePolicy.fields.inherit"), value: policyToDelete?.inherit || "-" },
-            ]}
-            onCancel={handleDeleteCancel}
-            onOk={handleDeleteConfirm}
-            confirmLoading={isDeleting}
-          />
-        </TabsContent>
-
-        <TabsContent value="attachments" keepMounted>
-          <DismissibleAlert title={t("policies.panel.aboutAttachments.title")} icon={<Info />}>
-            <p className="mb-3">{t("policies.panel.aboutAttachments.description")}</p>
-            <p className="mb-2 font-semibold">{t("policies.panel.aboutAttachments.scopesTitle")}</p>
-            <ul className="mb-3 ml-2 list-inside list-disc space-y-1">
-              <li>
-                <Trans i18nKey="policies.panel.aboutAttachments.scopes.global" components={{ strong: <strong /> }} />
-              </li>
-              <li>
-                <Trans i18nKey="policies.panel.aboutAttachments.scopes.teams" components={{ strong: <strong /> }} />
-              </li>
-              <li>
-                <Trans i18nKey="policies.panel.aboutAttachments.scopes.keys" components={{ strong: <strong /> }} />
-              </li>
-              <li>
-                <Trans i18nKey="policies.panel.aboutAttachments.scopes.models" components={{ strong: <strong /> }} />
-              </li>
-              <li>
-                <Trans
-                  i18nKey="policies.panel.aboutAttachments.scopes.tags"
-                  components={{ strong: <strong />, code: <code /> }}
-                />
-              </li>
-            </ul>
-            <a
-              href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies#attachments"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-1 inline-block text-primary underline underline-offset-4"
-            >
-              {t("policies.panel.aboutAttachments.learnMore")}
-            </a>
-          </DismissibleAlert>
-
-          <DismissibleAlert title={t("policies.panel.enterpriseNotice.title")} icon={<TriangleAlert />}>
-            {t("policies.panel.enterpriseNotice.description")}
-          </DismissibleAlert>
-
-          <div className="mb-4 flex items-center justify-between">
-            <Button
-              onClick={() => setIsAddAttachmentModalVisible(true)}
-              disabled={!accessToken || policiesList.length === 0}
-            >
-              {t("policies.panel.addAttachment")}
-            </Button>
-          </div>
-
-          <AttachmentTable
-            attachments={attachmentsList}
-            isLoading={isAttachmentsLoading}
-            onDeleteClick={handleDeleteAttachmentClick}
-            isAdmin={isAdmin}
-            accessToken={accessToken}
-          />
-
-          <AddAttachmentForm
-            visible={isAddAttachmentModalVisible}
-            onClose={() => setIsAddAttachmentModalVisible(false)}
-            onSuccess={handleAttachmentSuccess}
-            accessToken={accessToken}
-            policies={policiesList}
-            createAttachment={createPolicyAttachmentCall}
-          />
-        </TabsContent>
-
-        <TabsContent value="simulator" keepMounted>
-          <PolicyTestPanel accessToken={accessToken} />
-        </TabsContent>
-      </Tabs>
+          <TabsContent value="simulator" keepMounted>
+            <PolicyTestPanel accessToken={accessToken} />
+          </TabsContent>
+        </PageTabs>
+      </PageContent>
 
       <DeleteResourceModal
         isOpen={isDeleteAttachmentModalOpen}
@@ -670,7 +674,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({ accessToken, userRole }) 
         accessToken={accessToken}
         allTemplates={loadedTemplates}
       />
-    </div>
+    </>
   );
 };
 

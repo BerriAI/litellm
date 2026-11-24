@@ -2,7 +2,7 @@ import asyncio
 import json
 import math
 import ssl as ssl_module
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, suppress
 from dataclasses import dataclass
 from datetime import datetime
@@ -85,9 +85,36 @@ class _LivePreCallArgs(TypedDict):
 
 
 @dataclass(frozen=True, slots=True)
+class LiveAttach:
+    """Join a session that already runs upstream, such as one a browser started over WebRTC."""
+
+    session_id: str
+    metered: bool
+    metered_seconds: float = 0.0
+    """Seconds of this session that earlier sidebands already billed, which the provider's running total repeats."""
+    on_metered: Callable[[float], None] | None = None
+    """Told the seconds this sideband billed, so the sideband that follows it can leave them out."""
+
+
+@dataclass(frozen=True, slots=True)
 class LiveUpstream:
     url: str
     headers: Mapping[str, str]
+
+
+class LiveRelayedFrame(Protocol):
+    """A client frame as the provider should get it, or why it will not be relayed."""
+
+    @property
+    def frame(self) -> str: ...
+
+    @property
+    def denial(self) -> str | None: ...
+
+
+LiveClientFrameGate: TypeAlias = Callable[[str], Awaitable[LiveRelayedFrame]]
+LiveProviderFrameGate: TypeAlias = Callable[[str, str], Awaitable[LiveRelayedFrame]]
+"""Gates a client frame for the provider named by its second argument."""
 
 
 class LiveClientWebSocket(Protocol):
@@ -165,6 +192,49 @@ def _usage_event(event: Mapping[str, object], event_type: str) -> _LiveUsageEven
     return usage_without_seconds
 
 
+def _usage_seconds(event: Mapping[str, object] | None) -> float | None:
+    usage: Final = None if event is None else as_str_mapping(event.get("usage"))
+    seconds: Final = None if usage is None else usage.get("seconds")
+    return None if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) else float(seconds)
+
+
+def _billing_start(logging_obj: LiteLLMLogging, connected_at: datetime) -> datetime:
+    """When the session's wall clock starts, which is the logged start the cost calculation also measures from."""
+    start_time: Final = logging_obj.model_call_details.get("start_time")
+    if isinstance(start_time, datetime) and (start_time.tzinfo is None) == (connected_at.tzinfo is None):
+        return start_time
+    return connected_at
+
+
+def _sideband_billing(
+    events: Sequence[Mapping[str, object]], metered_seconds: float, connected_seconds: float
+) -> tuple[float, tuple[Mapping[str, object], ...]]:
+    """The seconds one metering sideband bills, and its events restated so that they bill exactly those.
+
+    The provider reports a running total for the session. A sideband bills that total, or its estimate of it
+    when the sideband dropped before the provider sent one, less what earlier sidebands billed.
+    """
+    closed: Final = next((event for event in events if event.get("type") == "session.closed"), None)
+    reported: Final = (
+        _usage_seconds(event) for event in reversed(events) if event.get("type") == "session.usage.updated"
+    )
+    closed_seconds: Final = _usage_seconds(closed)
+    session_seconds: Final = (
+        closed_seconds
+        if closed_seconds is not None
+        else max(next(reported, None) or 0.0, metered_seconds + connected_seconds)
+    )
+    billed_seconds: Final = max(0.0, session_seconds - metered_seconds)
+    billed_usage: Final = {"seconds": billed_seconds}
+    others: Final = tuple(event for event in events if event.get("type") not in _LIVE_USAGE_EVENT_TYPES)
+    final_event: Final[Mapping[str, object]] = (
+        {"type": "session.usage.updated", "usage": billed_usage}
+        if closed is None
+        else {**closed, "usage": billed_usage}
+    )
+    return billed_seconds, (*others, final_event)
+
+
 def _terminal_response_event(event: Mapping[str, object]) -> _LiveResponseEvent | None:
     nested_event: Final = as_str_mapping(event.get("event"))
     if nested_event is None:
@@ -228,6 +298,20 @@ def parse_live_session_start(first_message: str) -> LiveSessionStart | None:
 
 def _is_session_close_message(message: str) -> bool:
     return _live_event_type(message) == "session.close"
+
+
+async def _close_after_relay_failure(websocket: LiveClientWebSocket, error: Exception) -> None:
+    redacted_error: Final = redact_secrets(str(error))
+    with suppress(Exception):
+        await websocket.send_text(realtime_error_event(redacted_error, error_type="server_error"))
+    try:
+        await websocket.close(
+            code=1011,
+            reason=websocket_close_reason(redacted_error, fallback="Internal server error"),
+        )
+    except RuntimeError as close_error:
+        if "already completed" not in str(close_error) and "websocket.close" not in str(close_error):
+            raise RuntimeError(f"Unexpected error while closing WebSocket: {close_error}") from close_error
 
 
 def _is_session_closed_message(message: str) -> bool:
@@ -297,9 +381,14 @@ async def _forward_live_client_frames(
     backend_websocket: LiveBackendWebSocket,
     client_gone: asyncio.Event,
     client_close_sent: asyncio.Event,
+    client_frame_gate: LiveClientFrameGate | None = None,
 ) -> None:
     async for message in _live_client_messages(websocket, client_gone):
-        await backend_websocket.send(message)
+        relayed = None if client_frame_gate is None else await client_frame_gate(message)
+        if relayed is not None and relayed.denial is not None:
+            await websocket.send_text(realtime_error_event(relayed.denial, error_type="invalid_request_error"))
+            continue
+        await backend_websocket.send(message if relayed is None else relayed.frame)
         if _is_session_close_message(message):
             client_close_sent.set()
 
@@ -415,7 +504,7 @@ class OpenAILiveSessions(OpenAIRealtime):
         websocket_scheme: Final = LIVE_WEBSOCKET_SCHEMES.get(parsed_url.scheme, parsed_url.scheme)
         return urlunsplit((websocket_scheme, parsed_url.netloc, "/v1/live/sessions", "", ""))
 
-    def _openai_upstream(self, api_base: str | None, api_key: str | None) -> LiveUpstream:
+    def openai_upstream(self, api_base: str | None, api_key: str | None) -> LiveUpstream:
         if api_key is None:
             raise ValueError("api_key is required for OpenAI Live session calls")
         return LiveUpstream(
@@ -433,11 +522,13 @@ class OpenAILiveSessions(OpenAIRealtime):
         api_base: str | None,
         api_key: str | None,
         upstream: LiveUpstream | None = None,
+        attach: LiveAttach | None = None,
+        client_frame_gate: LiveClientFrameGate | None = None,
     ) -> None:
-        resolved_upstream: Final = upstream if upstream is not None else self._openai_upstream(api_base, api_key)
+        resolved_upstream: Final = upstream if upstream is not None else self.openai_upstream(api_base, api_key)
         from websockets.exceptions import InvalidStatus
 
-        url: Final = resolved_upstream.url
+        url: Final = resolved_upstream.url if attach is None else f"{resolved_upstream.url}/{attach.session_id}/attach"
         headers: Final = resolved_upstream.headers
         ssl_config: Final = self._get_ssl_config(url)
         session: Final = as_str_mapping(session_start.get("session"))
@@ -447,7 +538,11 @@ class OpenAILiveSessions(OpenAIRealtime):
             **session_start,
             "session": {**session, "model": model},
         }
-        upstream_start: Final = json.dumps(rewritten_start)
+        gated_start: Final = None if client_frame_gate is None else await client_frame_gate(json.dumps(rewritten_start))
+        if gated_start is not None and gated_start.denial is not None:
+            await websocket.close(code=1008, reason="Session not allowed")
+            return
+        upstream_start: Final = json.dumps(rewritten_start) if gated_start is None else gated_start.frame
         pre_call_args: Final[_LivePreCallArgs] = {
             "api_base": url,
             "headers": headers,
@@ -463,31 +558,46 @@ class OpenAILiveSessions(OpenAIRealtime):
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
                 ssl=ssl_config,
             ) as backend_websocket:
-                await backend_websocket.send(upstream_start)
+                connected_at: Final = self._clock()
+                if attach is None:
+                    await backend_websocket.send(upstream_start)
                 try:
                     await self._bidirectional_forward(
                         websocket=websocket,
                         backend_websocket=backend_websocket,
                         event_retention=event_retention,
                         upstream_ended_abnormally=session_ended_abnormally,
+                        closes_session_with_client=attach is None,
+                        client_frame_gate=client_frame_gate,
                     )
                 except Exception:
                     session_ended_abnormally.set()
                     raise
                 finally:
                     session_end_time: Final = self._clock()
-                    retained_events: Final = event_retention.results()
+                    billed_seconds, retained_events = (
+                        (0.0, event_retention.results())
+                        if attach is None or not attach.metered
+                        else _sideband_billing(
+                            event_retention.results(),
+                            attach.metered_seconds,
+                            (session_end_time - _billing_start(logging_obj, connected_at)).total_seconds(),
+                        )
+                    )
+                    if attach is not None and attach.on_metered is not None:
+                        attach.on_metered(billed_seconds)
                     logging_result: Final = LiteLLMRealtimeStreamLoggingObject.model_validate(
                         {"usage": Usage(), "results": list(retained_events)}
                     )
-                    self._logging_worker.ensure_initialized_and_enqueue(
-                        logging_obj.dispatch_success_handlers(
-                            logging_result, end_time=session_end_time, prefer_async_handlers=True
+                    if attach is None or attach.metered:
+                        self._logging_worker.ensure_initialized_and_enqueue(
+                            logging_obj.dispatch_success_handlers(
+                                logging_result, end_time=session_end_time, prefer_async_handlers=True
+                            )
                         )
-                    )
-                    logging_obj.model_call_details[  # rebind-ok: flags the shared logging object as already logged
-                        REALTIME_SESSION_SUCCESS_LOGGED_KEY
-                    ] = True
+                        logging_obj.model_call_details[  # rebind-ok: flags the shared logging object as already logged
+                            REALTIME_SESSION_SUCCESS_LOGGED_KEY
+                        ] = True
                     if session_ended_abnormally.is_set():
                         logging_obj.model_call_details[  # rebind-ok: flags the shared logging object for the router
                             REALTIME_SESSION_ENDED_ABNORMALLY_KEY
@@ -495,17 +605,7 @@ class OpenAILiveSessions(OpenAIRealtime):
         except InvalidStatus as error:
             await close_after_upstream_handshake_refusal(websocket, error.response.status_code)
         except Exception as error:  # noqa: BLE001  # any relay failure must still close the client socket with a redacted reason
-            redacted_error: Final = redact_secrets(str(error))
-            with suppress(Exception):
-                await websocket.send_text(realtime_error_event(redacted_error, error_type="server_error"))
-            try:
-                await websocket.close(
-                    code=1011,
-                    reason=websocket_close_reason(redacted_error, fallback="Internal server error"),
-                )
-            except RuntimeError as close_error:
-                if "already completed" not in str(close_error) and "websocket.close" not in str(close_error):
-                    raise RuntimeError(f"Unexpected error while closing WebSocket: {close_error}") from close_error
+            await _close_after_relay_failure(websocket, error)
 
     async def _bidirectional_forward(
         self,
@@ -514,6 +614,8 @@ class OpenAILiveSessions(OpenAIRealtime):
         backend_websocket: LiveBackendWebSocket,
         event_retention: _LiveEventRetention,
         upstream_ended_abnormally: asyncio.Event,
+        closes_session_with_client: bool = True,
+        client_frame_gate: LiveClientFrameGate | None = None,
     ) -> None:
         from websockets.exceptions import ConnectionClosed
 
@@ -525,6 +627,7 @@ class OpenAILiveSessions(OpenAIRealtime):
                 backend_websocket=backend_websocket,
                 client_gone=client_gone,
                 client_close_sent=client_close_sent,
+                client_frame_gate=client_frame_gate,
             )
         )
         backend_forward_task: Final = asyncio.create_task(
@@ -553,7 +656,7 @@ class OpenAILiveSessions(OpenAIRealtime):
                 await asyncio.gather(client_forward_task, return_exceptions=True)
             event_loop: Final = asyncio.get_running_loop()
             close_deadline: Final = event_loop.time() + OPENAI_LIVE_SESSION_CLOSE_TIMEOUT_SECONDS
-            if not client_close_sent.is_set():
+            if closes_session_with_client and not client_close_sent.is_set():
                 remaining_send_timeout: Final = max(close_deadline - event_loop.time(), 0)
                 with suppress(ConnectionClosed, TimeoutError, asyncio.TimeoutError):
                     await asyncio.wait_for(

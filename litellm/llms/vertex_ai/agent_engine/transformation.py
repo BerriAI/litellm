@@ -10,7 +10,7 @@ API Reference:
 """
 
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 import httpx
@@ -68,7 +68,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
     Where resource_id is the numeric ID of the reasoning engine.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         BaseConfig.__init__(self, **kwargs)
         VertexBase.__init__(self)
 
@@ -78,7 +78,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -114,7 +114,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
@@ -152,8 +152,8 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
 
     def _get_auth_headers(
         self,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: dict[str, object],
     ) -> dict[str, str]:
         """Get authentication headers using Google Cloud credentials."""
         vertex_credentials: Final = self.safe_get_vertex_ai_credentials(litellm_params)
@@ -189,9 +189,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform the request to Vertex Agent Engine format.
 
@@ -224,7 +224,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         # Build the request payload
         # Note: stream_query is used for both streaming and non-streaming
         # The difference is the endpoint (:streamQuery vs :query)
-        payload: Final = {
+        payload: Final[dict[str, object]] = {
             "class_method": "stream_query",
             "input": input_data,
         }
@@ -237,7 +237,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
@@ -289,10 +289,10 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -369,8 +369,8 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
         headers: dict,
-        data: dict,
-        messages: list,
+        data: Mapping[str, object],
+        messages: Sequence[object],
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
@@ -430,8 +430,8 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
         headers: dict,
-        data: dict,
-        messages: list,
+        data: Mapping[str, object],
+        messages: Sequence[object],
         client: Optional["AsyncHTTPHandler"] = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
@@ -497,7 +497,9 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         """Agent Engine does not allow passing `stream` in the request body."""
         return False
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return VertexAgentEngineError(status_code=status_code, message=error_message)
 
     def should_fake_stream(

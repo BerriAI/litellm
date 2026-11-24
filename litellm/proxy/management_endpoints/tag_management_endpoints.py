@@ -12,7 +12,7 @@ All /tag management endpoints
 
 import asyncio
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Protocol, TypedDict, overload
 
@@ -30,16 +30,13 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.user_api_key_cache import (
-    tag_cache_key,
-    tag_registry_cache_key,
-)
 from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     get_daily_activity,
 )
 from litellm.proxy.management_endpoints.common_utils import validate_finite_spend
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     tag_counter,
 )
@@ -159,7 +156,7 @@ async def _evict_tag_cache_keys(cache_keys: Sequence[str]) -> None:
     enforced and a newly created one stays invisible to the cached name registry until the TTL
     expires: auth reads tags cache-first, with no freshness check.
     """
-    from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
+    from litellm.proxy.common_utils.cache_invalidation_pubsub import (
         evict_and_broadcast,
     )
     from litellm.proxy.proxy_server import user_api_key_cache
@@ -175,7 +172,7 @@ async def _get_internal_user_api_keys(
     if user_role is None or not user_role.is_internal_user_role:
         return []
 
-    user_api_keys: Final = set()
+    user_api_keys: Final[set[str]] = set()
     if user_api_key_dict.api_key and user_api_key_dict.impersonated_by is None:
         user_api_keys.add(user_api_key_dict.api_key)
 
@@ -330,12 +327,12 @@ async def new_tag(
             }
         )
 
-        await _evict_tag_cache_keys((tag_cache_key(tag.name), tag_registry_cache_key()))
+        await _evict_tag_cache_keys((AuthObject.tag(tag.name).key, AuthObject.tag_registry().key))
         await invalidate_spend_counter(counter_key=tag_counter(tag.name))
 
         # Update models with new tag
         if tag.models:
-            tasks: Final = []
+            tasks: Final[list[Awaitable[object]]] = []
             for model in tag.models:
                 deployments = await get_deployments_by_model(model, llm_router)
                 tasks.extend(
@@ -512,7 +509,7 @@ async def update_tag(
             data=update_data,
         )
 
-        await _evict_tag_cache_keys((tag_cache_key(tag.name),))
+        await _evict_tag_cache_keys((AuthObject.tag(tag.name).key,))
 
         if tag.spend is not None:
             await set_spend_counter_with_floor_and_broadcast(counter_key=f"spend:tag:{tag.name}", value=tag.spend)
@@ -571,7 +568,7 @@ async def info_tag(
             raise HTTPException(status_code=404, detail=f"Tags not found: {missing_tags}")
 
         # Build response
-        requested_tags: Final = {}
+        requested_tags: Final[dict[str, Mapping[str, object]]] = {}
         for tag_record in tag_records:
             # Parse model_info from JSON
             model_info: object = {}
@@ -692,8 +689,8 @@ async def list_tags(
             include={"litellm_budget_table": True},
         )
 
-        stored_tag_names: Final = set()
-        list_of_tags: Final = []
+        stored_tag_names: Final[set[str]] = set()
+        list_of_tags: Final[list[Mapping[str, object]]] = []
         for tag_record in tag_records:
             stored_tag_names.add(tag_record.tag_name)
             # Parse model_info from JSON
@@ -766,7 +763,7 @@ async def delete_tag(
         # Delete tag from database
         await _table(TagRepository(prisma_client)).delete(where={"tag_name": data.name})
 
-        await _evict_tag_cache_keys((tag_cache_key(data.name), tag_registry_cache_key()))
+        await _evict_tag_cache_keys((AuthObject.tag(data.name).key, AuthObject.tag_registry().key))
 
         return {"message": f"Tag {data.name} deleted successfully"}
     except Exception as e:

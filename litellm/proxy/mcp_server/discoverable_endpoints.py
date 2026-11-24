@@ -707,6 +707,7 @@ async def _store_per_user_token_server_side(
     identity_binding_proof: str | None = None,
     cimd_client_id: str | None = None,
     requested_scope: str | None = None,
+    refreshed_from: str | None = None,
 ) -> None:
     """Persist the OAuth token server-side and warm the Redis cache.
 
@@ -734,7 +735,7 @@ async def _store_per_user_token_server_side(
     except (TypeError, ValueError):
         expires_in = None
 
-    refresh_token: Final[str | None] = token_response.get("refresh_token") or None
+    refresh_token: Final[str | None] = token_response.get("refresh_token") or refreshed_from
     raw_scope: Final[object] = _DECODED_JSON.validate_python(token_response.get("scope", requested_scope))
     scopes: Final[list[str] | None] = raw_scope.split() if isinstance(raw_scope, str) else None
 
@@ -744,7 +745,7 @@ async def _store_per_user_token_server_side(
             store_user_oauth_credential,
         )
 
-        await store_user_oauth_credential(
+        stored: Final = await store_user_oauth_credential(
             prisma_client=prisma_client,
             user_id=user_id,
             server_id=server.server_id,
@@ -754,7 +755,10 @@ async def _store_per_user_token_server_side(
             scopes=scopes,
             identity_binding_proof=identity_binding_proof,
             **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
+            **({"refreshed_from": refreshed_from} if refreshed_from is not None else {}),
         )
+        if stored is False:
+            return
         verbose_logger.info(
             "_store_per_user_token_server_side: stored token for user=%s server=%s",
             user_id,
@@ -1405,7 +1409,7 @@ async def exchange_token_with_server(
                 status_code=400,
                 detail="refresh_token is required for refresh_token grant",
             )
-        token_data: dict = {
+        token_data: dict[str, str | None] = {
             "grant_type": "refresh_token",
             "refresh_token": upstream_refresh_token,
             **token_request.body,
@@ -1580,6 +1584,7 @@ async def exchange_token_with_server(
                         token_response=token_response,
                         identity_binding_proof=binding_proof,
                         requested_scope=requested_scope,
+                        **({"refreshed_from": refresh_token} if grant_type == "refresh_token" else {}),
                         **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
                     )
                 else:
@@ -3022,7 +3027,7 @@ async def _build_oauth_protected_resource_response(
     request: Request,
     mcp_server_name: str | None,
     use_standard_pattern: bool,
-) -> dict:
+) -> Mapping[str, object]:
     """
     Build OAuth protected resource response with the appropriate URL pattern.
 
@@ -3145,7 +3150,7 @@ async def _build_oauth_protected_resource_response(
     }
 
 
-def _obo_protected_resource_response(mcp_server: MCPServer | None, resource_url: str) -> dict | None:
+def _obo_protected_resource_response(mcp_server: MCPServer | None, resource_url: str) -> dict[str, object] | None:
     """The OBO (token_exchange) PRM, or None when this server is not OBO / no issuer is configured.
 
     The client SSOs with the IdP to obtain a subject token, which LiteLLM then exchanges, so discovery
@@ -3165,7 +3170,7 @@ def _obo_protected_resource_response(mcp_server: MCPServer | None, resource_url:
     }
 
 
-def _jwt_auth_issuers() -> list:
+def _jwt_auth_issuers() -> list[object]:
     """The OAuth issuer identifier(s) LiteLLM's JWT auth trusts, for the OBO PRM authorization_servers.
 
     In token_exchange the IdP that issues the subject JWT is the same one LiteLLM validates it
@@ -3176,7 +3181,7 @@ def _jwt_auth_issuers() -> list:
 
     from litellm.proxy.proxy_server import general_settings  # noqa: PLC0415
 
-    issuers: Final[list] = []
+    issuers: Final[list[object]] = []
     env_issuer: Final = os.getenv("JWT_ISSUER")
     if env_issuer:
         issuers.append(env_issuer)
@@ -3201,7 +3206,7 @@ def oauth_protected_resource_root(request: Request) -> dict[str, str | tuple[str
     }
 
 
-def _build_aggregate_protected_resource_response(request: Request) -> dict:
+def _build_aggregate_protected_resource_response(request: Request) -> dict[str, object]:
     """RFC 9728 metadata for the aggregate /mcp resource: the gateway itself is
     the authorization server. No per-server names or scopes leak here; access
     is resolved after sign-in from the authenticated user's grants.
@@ -3352,7 +3357,7 @@ def _build_oauth_authorization_server_response(
     mcp_server_name: str | None,
     *,
     issuer_path: str | None = None,
-) -> dict:
+) -> dict[str, object]:
     """Build OAuth authorization server metadata response (gateway-as-AS shape)."""
     request_base_url: Final = get_request_base_url(request)
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)

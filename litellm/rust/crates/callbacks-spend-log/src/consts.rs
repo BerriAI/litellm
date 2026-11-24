@@ -6,9 +6,10 @@
 //! a pattern added to `SensitiveDataMasker`, a header added to the client IP list.
 
 /// `SpendLogsMetadata.__annotations__`, in order: the keys of the stored metadata JSON.
-pub(crate) const SPEND_LOGS_METADATA_FIELDS: [&str; 65] = [
+pub(crate) const SPEND_LOGS_METADATA_FIELDS: [&str; 67] = [
     "user_api_key_customer_org_id",
     "user_api_key_app_id",
+    "user_api_key_app_group_id",
     "user_api_key_app_alias",
     "user_api_key_customer_org_alias",
     "user_api_key_customer_team_id",
@@ -36,6 +37,7 @@ pub(crate) const SPEND_LOGS_METADATA_FIELDS: [&str; 65] = [
     "requester_ip_address",
     "user_agent",
     "litellm_call_id",
+    "litellm_previous_response_ids",
     "applied_guardrails",
     "mcp_tool_call_metadata",
     "vector_store_request_metadata",
@@ -75,7 +77,7 @@ pub(crate) const SPEND_LOGS_METADATA_FIELDS: [&str; 65] = [
 ];
 
 /// `_STAMPED_METADATA_KEYS`: metadata keys the row stamps itself instead of copying.
-pub(crate) const STAMPED_METADATA_KEYS: [&str; 22] = [
+pub(crate) const STAMPED_METADATA_KEYS: [&str; 23] = [
     "router_metadata",
     "azure_spillover",
     "autorouter_savings",
@@ -92,6 +94,7 @@ pub(crate) const STAMPED_METADATA_KEYS: [&str; 22] = [
     "user_api_key_user_email",
     "user_api_key_customer_org_id",
     "user_api_key_app_id",
+    "user_api_key_app_group_id",
     "user_api_key_app_alias",
     "user_api_key_customer_org_alias",
     "user_api_key_customer_team_id",
@@ -101,8 +104,9 @@ pub(crate) const STAMPED_METADATA_KEYS: [&str; 22] = [
 ];
 
 /// `_CustomerIdentityMetadata.__annotations__`.
-pub(crate) const CUSTOMER_IDENTITY_FIELDS: [&str; 8] = [
+pub(crate) const CUSTOMER_IDENTITY_FIELDS: [&str; 9] = [
     "user_api_key_app_id",
+    "user_api_key_app_group_id",
     "user_api_key_app_alias",
     "user_api_key_customer_org_id",
     "user_api_key_customer_org_alias",
@@ -268,7 +272,7 @@ pub(crate) const GUARDRAIL_METADATA_FIELDS: [&str; 2] = [
 ];
 
 /// `_ACCOUNTING_FIELDS` from `accounting/snapshot.py`: the row columns the payload keeps.
-pub(crate) const ACCOUNTING_FIELDS: [&str; 23] = [
+pub(crate) const ACCOUNTING_FIELDS: [&str; 24] = [
     "request_id",
     "call_type",
     "api_key",
@@ -287,6 +291,7 @@ pub(crate) const ACCOUNTING_FIELDS: [&str; 23] = [
     "customer_team_id",
     "customer_org_id",
     "app_id",
+    "app_group_id",
     "agent_id",
     "request_tags",
     "status",

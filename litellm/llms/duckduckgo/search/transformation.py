@@ -62,11 +62,11 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-        **kwargs,
-    ) -> dict:
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Validate environment and return headers.
         DuckDuckGo Instant Answer API does not require authentication.
@@ -78,9 +78,9 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         data: dict | list[dict] | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> str:
         """
         Get complete URL for Search endpoint.
@@ -99,9 +99,9 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
     def transform_search_request(
         self,
         query: str | list[str],
-        optional_params: dict,
-        **kwargs,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        **kwargs: object,
+    ) -> dict[str, object]:
         """
         Transform Search request to DuckDuckGo API format.
 
@@ -147,7 +147,7 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        **kwargs,
+        **kwargs: object,
     ) -> SearchResponse:
         """
         Transform DuckDuckGo API response to LiteLLM unified SearchResponse format.
@@ -177,7 +177,7 @@ class DuckDuckGoSearchConfig(BaseSearchConfig):
                 pass
 
         # Transform results to SearchResult objects
-        results: Final = []
+        results: Final[list[SearchResult]] = []
 
         # DuckDuckGo can return results in different fields
         # Priority: Abstract > Answer > RelatedTopics

@@ -21,6 +21,7 @@ use litellm_redis_client::{
 };
 use litellm_redis_store::{
     Number, Remote, RequestRedis,
+    auth_cache::AuthObject,
     spend_counters::{SpendCounter, SpendCounters},
 };
 use litellm_redis_testing::RedisServer;
@@ -78,7 +79,13 @@ impl Proxy {
                                 .as_array()
                                 .unwrap()
                                 .iter()
-                                .find_map(|key| self.cached.get(key.as_str().unwrap()))
+                                .find_map(|source| {
+                                    self.cached.get(
+                                        &serde_json::from_value::<AuthObject>(source.clone())
+                                            .unwrap()
+                                            .key(),
+                                    )
+                                })
                                 .copied()
                                 .unwrap_or(0.0)
                         )
@@ -854,7 +861,7 @@ async fn a_customer_counter_that_cannot_be_seeded_fails_the_step_with_the_rest()
         Some(CounterError::Store(_))
     ));
     assert!(!outcome.finalized);
-    assert_eq!(outcome.stamps, [None]);
+    assert_eq!(outcome.stamps, [Some(-3.0)]);
     assert!(snapshot(&store).is_empty());
 }
 

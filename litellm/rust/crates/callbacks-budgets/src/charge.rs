@@ -25,6 +25,7 @@ use futures_util::future::join_all;
 use litellm_callbacks::{BudgetReservation, Host, HostCall, HostCallError};
 use litellm_redis_store::{
     ErrorKind, Number, RequestRedis, Send,
+    auth_cache::AuthObject,
     spend_counters::{LostSeed, Reading, SpendCounter, SpendCounters},
 };
 use serde::{Deserialize, Serialize};
@@ -39,7 +40,7 @@ use crate::{
 };
 
 /// One charged request's counter inputs, as the cost callback has them after the spend write.
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct CounterStep {
     pub token: Option<String>,
@@ -52,7 +53,10 @@ pub struct CounterStep {
     pub model_access_groups: Option<Vec<Option<String>>>,
     pub response_cost: Option<f64>,
     /// The entity counters whose committed twin exists for this charge.
-    #[serde(deserialize_with = "counters::counter_keys")]
+    #[serde(
+        deserialize_with = "counters::counter_keys",
+        serialize_with = "counters::counter_keys_text"
+    )]
     pub committed_tracked: Vec<SpendCounter>,
     pub customer_windows: Vec<CustomerWindow>,
     /// The customer hierarchy counters the request was admitted under, each seeded from its
@@ -145,7 +149,7 @@ impl HostCall for StoredSpend {
 /// is cached, `0.0` when none is.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 struct CachedSpend {
-    sources: Vec<Vec<String>>,
+    sources: Vec<Vec<AuthObject>>,
 }
 
 impl HostCall for CachedSpend {
@@ -181,7 +185,7 @@ enum Unit {
     /// A lifetime counter, seeded from its row or, without one, from the auth cache.
     Counter {
         counter: SpendCounter,
-        sources: Vec<String>,
+        sources: Vec<AuthObject>,
     },
     /// A budget window, seeded from its window spend. A strict (customer) window is skipped when
     /// only this pod's memory could answer for it.

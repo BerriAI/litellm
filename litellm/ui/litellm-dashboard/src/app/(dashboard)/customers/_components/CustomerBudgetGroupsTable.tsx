@@ -1,3 +1,4 @@
+import type { BudgetGroupCatalogScope } from "./CustomerBudgetCatalog";
 import { useId } from "react";
 import { Plus, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
@@ -27,6 +28,16 @@ const capOptions = [
   ["pause_allow_increase", "pauseAllowIncrease"],
 ] as const;
 
+const defaultLabels = {
+  member: ["customerPortal.createDialog.newMembersJoin", "customerPortal.createDialog.newMembersHelp"],
+  organization: [
+    "customerPortal.budgetGroups.newOrganizationsJoin",
+    "customerPortal.budgetGroups.newOrganizationsHelp",
+  ],
+  "overall-app": ["customerPortal.budgetGroups.newAppsUse", "customerPortal.budgetGroups.newAppsHelp"],
+  "app-group": ["customerPortal.budgetGroups.newAppGroupsUse", "customerPortal.budgetGroups.newAppGroupsHelp"],
+} as const;
+
 export default function CustomerBudgetGroupsTable({
   groups,
   defaultGroupId,
@@ -42,7 +53,7 @@ export default function CustomerBudgetGroupsTable({
   groups: CustomerBudgetGroupFields[];
   defaultGroupId: string;
   disabled: boolean;
-  scope: "member" | "organization" | "app" | "overall-app" | "app-member";
+  scope: "member" | BudgetGroupCatalogScope;
   title: string;
   description: string;
   onUpdate: (id: string, patch: Partial<Omit<CustomerBudgetGroupFields, "id">>) => void;
@@ -53,16 +64,23 @@ export default function CustomerBudgetGroupsTable({
   const { t } = useTranslation();
   const id = useId();
   const memberGroups = scope === "member";
+  const defaultLabel = scope in defaultLabels ? defaultLabels[scope as keyof typeof defaultLabels] : undefined;
   const groupName = (group: CustomerBudgetGroupFields, index: number) =>
     group.name || t("customerPortal.createDialog.unnamedGroup", { index: index + 1 });
   const defaultIndex = groups.findIndex((group) => group.id === defaultGroupId);
   return (
     <section className="space-y-3" aria-labelledby={`${id}-heading`}>
-      <div className="space-y-1">
-        <h3 id={`${id}-heading`} className="font-semibold">
-          {title}
-        </h3>
-        <p className="text-sm text-muted-foreground">{description}</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <h3 id={`${id}-heading`} className="font-semibold">
+            {title}
+          </h3>
+          <p className="text-sm text-muted-foreground">{description}</p>
+        </div>
+        <Button type="button" disabled={disabled} onClick={onAdd}>
+          <Plus aria-hidden="true" className="size-4" />
+          {t("customerPortal.createDialog.addGroup")}
+        </Button>
       </div>
       <div className="overflow-hidden rounded-lg border">
         <Table className="min-w-[70rem] table-fixed" aria-label={title}>
@@ -232,29 +250,13 @@ export default function CustomerBudgetGroupsTable({
             ))}
           </TableBody>
         </Table>
-        <div className="border-t p-2">
-          <Button type="button" variant="ghost" size="sm" disabled={disabled} onClick={onAdd}>
-            <Plus className="size-4" />
-            {t("customerPortal.createDialog.addGroup")}
-          </Button>
-        </div>
       </div>
-      {(memberGroups || scope === "organization") && (
+      {defaultLabel && (
         <div className="grid items-center gap-3 rounded-lg bg-muted/40 p-4 sm:grid-cols-[1fr_14rem]">
           <div className="space-y-1">
-            <Label htmlFor={`${id}-default-group`}>
-              {t(
-                memberGroups
-                  ? "customerPortal.createDialog.newMembersJoin"
-                  : "customerPortal.budgetGroups.newOrganizationsJoin",
-              )}
-            </Label>
+            <Label htmlFor={`${id}-default-group`}>{t(defaultLabel[0])}</Label>
             <p className="text-xs text-muted-foreground" id={`${id}-default-group-help`}>
-              {t(
-                memberGroups
-                  ? "customerPortal.createDialog.newMembersHelp"
-                  : "customerPortal.budgetGroups.newOrganizationsHelp",
-              )}
+              {t(defaultLabel[1])}
             </p>
           </div>
           <Select

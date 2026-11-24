@@ -46,6 +46,7 @@ IGNORE_FUNCTIONS = [
     "_contains_vision_content",  # max depth set.
     "_read_all_bytes",  # max depth set.
     "_fix_enum_types",  # max depth set.
+    "_pin_scalar_consts",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); leaves the subtree past the cap untouched.
     "_collect_argument_paths",  # max depth set.
     "_split_text",  # max depth set.
     "_mask_sequence",  # max depth set.
@@ -97,7 +98,7 @@ IGNORE_FUNCTIONS = [
     "_string_leaves",  # bounded by the nesting depth of a safe_json_structure output (a finite JSON tree, no cycles possible).
     "_compact_actor_value",  # OCSF actors have schema-bounded depth.
     "_replace_string_leaves",  # bounded by the nesting depth of a safe_json_structure output (a finite JSON tree, no cycles possible).
-    "_redacted_client_field",  # bounded by the nesting depth of a JSON-decoded error body (a finite JSON tree, no cycles possible).
+    "_redacted_client_field",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); fails closed by returning REDACTED for anything nested past the cap.
     "_sort_processed_sets",  # bounded by the nesting depth of the log-record extra it walks (a finite JSON tree, no cycles possible).
     "scrub_json_strings",  # max depth set (MAX_SCRUB_DEPTH); fails closed by returning "[Filtered]" for anything nested past the cap.
     "_without_requester_ip_address",  # walks only the fresh tree _sanitize_request_body_for_spend_logs_payload returns (mapping cycles already cut), so it never goes deeper than that sanitizer did.
@@ -109,6 +110,7 @@ IGNORE_FUNCTIONS = [
     "_valid_frontmatter_node",  # max depth 32, manifest size capped at 1 MiB, and YAML aliases rejected before traversal.
     "_gemini_wire_value",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH); returns the subtree as plain JSON at the cap.
     "_schema_rejection",  # cohere v2 response_format schema check: max depth set (_SCHEMA_DEPTH_CHECKED); returns a rejection at the cap.
+    "_without_token_data",  # guardrail fingerprint: max depth set (DEFAULT_MAX_RECURSE_DEPTH); hashes the subtree as is at the cap.
 ]
 
 

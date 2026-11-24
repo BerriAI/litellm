@@ -185,6 +185,7 @@ _STAMPED_METADATA_KEYS: Final = frozenset(
         "user_api_key_user_email",
         "user_api_key_customer_org_id",
         "user_api_key_app_id",
+        "user_api_key_app_group_id",
         "user_api_key_app_alias",
         "user_api_key_customer_org_alias",
         "user_api_key_customer_team_id",
@@ -233,6 +234,7 @@ _CUSTOMER_METADATA_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAd
 
 class _CustomerIdentityMetadata(TypedDict, total=False):
     user_api_key_app_id: ReadOnly[str]
+    user_api_key_app_group_id: ReadOnly[str]
     user_api_key_app_alias: ReadOnly[str]
     user_api_key_customer_org_id: ReadOnly[str]
     user_api_key_customer_org_alias: ReadOnly[str]
@@ -456,8 +458,8 @@ def _dumped_usage_info(usage_info: object) -> object:
 
 
 def _extract_usage_for_ocr_call(  # pyright: ignore[reportUnusedFunction]  # shared with legacy_spend_log_rows and rust_spend_log_rows
-    response_obj: object, response_obj_dict: dict
-) -> dict:
+    response_obj: object, response_obj_dict: Mapping[str, object]
+) -> dict[str, object]:
     """
     Extract usage information for OCR/AOCR calls.
 
@@ -487,7 +489,7 @@ def _extract_usage_for_ocr_call(  # pyright: ignore[reportUnusedFunction]  # sha
     if usage_info is not None:
         # Handle dict or object with attributes
         if isinstance(usage_info, dict):
-            result: Final = {
+            result: Final[dict[str, object]] = {
                 "prompt_tokens": 0,  # OCR doesn't use traditional tokens
                 "completion_tokens": 0,
                 "total_tokens": 0,
@@ -728,7 +730,7 @@ async def get_spend_by_team(
     end_date: dt,
     team_id: str | None,
     prisma_client: PrismaClient,
-):
+) -> Sequence[Mapping[str, object]]:
     sql_query: Final = """
     WITH SpendByModelApiKey AS (
         SELECT
@@ -797,7 +799,7 @@ async def get_spend_by_team_and_customer(
     team_id: str,
     customer_id: str,
     prisma_client: PrismaClient,
-):
+) -> Sequence[Mapping[str, object]]:
     sql_query: Final = """
     WITH SpendByModelApiKey AS (
         SELECT
@@ -972,11 +974,11 @@ def _bounded_compaction_summary(
 
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: Mapping[str, object],
-    visited: set | None = None,
+    visited: set[int] | None = None,
     max_string_length_prompt_in_db: int | None = None,
     mask_credentials: bool = True,
     keep_compaction_blocks: bool = False,
-) -> dict:
+) -> dict[str, object]:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
