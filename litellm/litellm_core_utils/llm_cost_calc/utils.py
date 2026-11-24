@@ -1546,7 +1546,7 @@ class CostCalculatorUtils:
         quality: str | None = None,
         n: int | None = None,
         size: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         call_type: str | None = None,
         model_info: ModelInfo | None = None,
         vertex_location: str | None = None,

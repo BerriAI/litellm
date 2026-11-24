@@ -296,7 +296,7 @@ class AzureOpenAIConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         headers: dict[str, object],
     ) -> dict:
@@ -351,7 +351,7 @@ class AzureOpenAIConfig(BaseConfig):
     def get_mapped_special_auth_params(self) -> dict[str, str]:
         return {"token": "azure_ad_token"}
 
-    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict):
+    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict[str, object]):
         for param, value in non_default_params.items():
             if param == "token":
                 optional_params["azure_ad_token"] = value
@@ -388,8 +388,8 @@ class AzureOpenAIConfig(BaseConfig):
         headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:

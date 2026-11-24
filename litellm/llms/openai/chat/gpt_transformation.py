@@ -339,8 +339,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -740,8 +740,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         headers: dict[str, object],
     ) -> dict:
         if not has_file_id_urls(messages, _PDF_URL_STARTS):
@@ -886,8 +886,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -939,8 +939,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -967,8 +967,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:

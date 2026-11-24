@@ -127,7 +127,7 @@ class CustomSecretManager(BaseSecretManager):
     def sync_read_secret(
         self,
         secret_name: str,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> str | None:
         """
