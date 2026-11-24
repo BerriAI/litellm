@@ -77,14 +77,14 @@ class AzureAnthropicConfig(AnthropicConfig):
 
     def validate_environment(
         self,
-        headers: dict[str, str],
+        headers: dict,
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict | GenericLiteLLMParams,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict:
         """
         Validate environment and set up Azure authentication headers.
         Azure supports:

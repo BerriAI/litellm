@@ -138,8 +138,6 @@ class FireworksAIMixin:
         )
         return self._add_session_affinity_header({**auth_headers, **content_type_header}, litellm_params)
 
-    def _add_session_affinity_header(
-        self, headers: Mapping[str, str], litellm_params: Mapping[str, object]
-    ) -> dict[str, str]:
+    def _add_session_affinity_header(self, headers: dict, litellm_params: dict) -> dict:
         pinned: Final = with_fireworks_session_affinity(headers, litellm_params)
         return dict(pinned)

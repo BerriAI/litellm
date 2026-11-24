@@ -104,8 +104,8 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         stream: bool | None = None,
     ) -> str:
         """
@@ -132,7 +132,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
 
     def map_openai_params(
         self,
-        non_default_params: Mapping[str, object],
+        non_default_params: dict,
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -143,9 +143,9 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         self,
         model: str,
         create_file_data: CreateFileRequest,
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
-    ) -> dict[str, object]:
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> dict:
         """
         Transform the OpenAI-style file creation request into Gemini's format
 
@@ -196,7 +196,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         model: str | None,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: Mapping[str, object],
+        litellm_params: dict,
     ) -> OpenAIFileObject:
         """
         Transform Gemini's file upload response into OpenAI-style FileObject
@@ -225,9 +225,9 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
     def transform_retrieve_file_request(
         self,
         file_id: str,
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict[str, object]]:
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
         """
         Get the URL to retrieve a file from Google AI Studio.
 
@@ -262,7 +262,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: Mapping[str, object],
+        litellm_params: dict,
     ) -> OpenAIFileObject:
         """
         Transform Gemini's file retrieval response into OpenAI-style FileObject
@@ -301,9 +301,9 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
     def transform_delete_file_request(
         self,
         file_id: str,
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict[str, object]]:
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
         """
         Transform delete file request for Google AI Studio.
 
@@ -331,7 +331,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         url: Final = join_api_base(api_base, f"v1beta/{file_name}")
 
         # Add API key as header (Google AI Studio uses x-goog-api-key header)
-        params: Final[dict[str, object]] = {}
+        params: Final[dict] = {}
 
         return url, params
 
@@ -339,7 +339,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: Mapping[str, object],
+        litellm_params: dict,
     ) -> FileDeleted:
         """
         Transform Gemini's file delete response into OpenAI-style FileDeleted.
@@ -369,16 +369,16 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
     def transform_list_files_request(
         self,
         purpose: str | None,
-        optional_params: Mapping[str, object],
-        litellm_params: Mapping[str, object],
-    ) -> tuple[str, dict[str, object]]:
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
         raise NotImplementedError("GoogleAIStudioFilesHandler does not support file listing")
 
     def transform_list_files_response(
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: Mapping[str, object],
+        litellm_params: dict,
     ) -> list[OpenAIFileObject]:
         raise NotImplementedError("GoogleAIStudioFilesHandler does not support file listing")
 
@@ -402,6 +402,6 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: Mapping[str, object],
+        litellm_params: dict,
     ) -> HttpxBinaryResponseContent:
         return HttpxBinaryResponseContent(response=raw_response)

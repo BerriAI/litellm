@@ -915,7 +915,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         top_k: int | None = None,
         top_p: float | None = None,
         output_format: dict[str, object] | None = None,
-        **kwargs: object,
+        **kwargs,
     ) -> AnthropicMessagesResponse | AsyncIterator[bytes] | Iterator[bytes]:
         """Handle non-Anthropic models asynchronously using the adapter"""
         context_management: Final = kwargs.pop("context_management", None)

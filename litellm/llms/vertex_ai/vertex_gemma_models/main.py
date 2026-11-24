@@ -44,7 +44,7 @@ class VertexAIGemmaModels(VertexBase):
         messages: list,
         model_response: ModelResponse,
         print_verbose: Callable[..., object],
-        encoding: object,
+        encoding,
         logging_obj: "LiteLLMLoggingObj",
         api_base: str | None,
         optional_params: dict,
