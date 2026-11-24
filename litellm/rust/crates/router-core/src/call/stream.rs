@@ -21,7 +21,7 @@ use crate::{
     health::should_retry_status,
     host::{CallError, RouterEvent, RouterHost, RouterRequest, UncountedRetries},
     retry::RetryStep,
-    select::SelectInputs,
+    select::{SelectInputs, skips_batch_only},
 };
 
 /// Where a streamed response came from: the level of the fallback chain its attempt served, as
@@ -382,7 +382,7 @@ impl<H: RouterHost> Call<'_, H> {
         let (healthy, all) = self
             .candidates(snapshot, op, request, &target.group, &counting())
             .await
-            .map(|c| (counted(&c, c.healthy.len()), counted(&c, c.all.len())))
+            .map(|c| (counted(&c, c.healthy.len()), counted(&c, c.routable())))
             .unwrap_or((0, 0));
         let mut inputs = SelectInputs {
             target_order: target.order,
@@ -608,9 +608,14 @@ fn stream_can_fall_back(
     }
     // `_stream_order_levels`, the levels the fallback walk sees for the group.
     let listing_team = request.listing_team_id.as_deref();
-    let mut orders: Vec<i64> = group_members(snapshot, &origin.target.group, listing_team)
-        .iter()
+    let members: Vec<_> = group_members(snapshot, &origin.target.group, listing_team)
+        .into_iter()
         .filter(|d| d.listed_for_team(listing_team))
+        .collect();
+    let skips_batch_only = skips_batch_only(request, &members);
+    let mut orders: Vec<i64> = members
+        .iter()
+        .filter(|d| !skips_batch_only || !d.serves_only_batches())
         .filter_map(|d| d.order())
         .collect();
     orders.sort_unstable();

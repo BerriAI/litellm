@@ -407,22 +407,22 @@ def test_reference_to_a_credential_without_logging_values_exports_nothing_and_is
         assert health.json()["key"] == "unhealthy", health.text
 
 
-def test_malformed_key_logging_fails_requests_like_main(gateway: Gateway, tmp_path: Path) -> None:
+def test_malformed_key_logging_is_rejected_before_storage(gateway: Gateway, tmp_path: Path) -> None:
     stored_logging: Final[dict[str, JsonValue]] = {
         "string": "abc",
         "list-with-string": ["x"],
         "object": {"callback_name": "arize"},
-        "empty-list": [],
     }
     with (
         _rig(gateway, tmp_path, _echo_marker, extra_config=CREDENTIAL_CONFIG) as rig,
         rig.proxy.scenario() as scenario,
     ):
         statuses: Final = {
-            label: _send_chat(
-                rig.proxy, rig.model, scenario.key(metadata={"logging": value}), "malformed-" + uuid.uuid4().hex
-            ).status_code
+            label: rig.proxy.request("POST", "/key/generate", {"metadata": {"logging": value}}).status_code
             for label, value in stored_logging.items()
         }
+        empty_key: Final = scenario.key(metadata={"logging": []})
+        response: Final = _send_chat(rig.proxy, rig.model, empty_key, "empty-" + uuid.uuid4().hex)
+        assert response.status_code == 200, response.text
 
-    assert statuses == {"string": 500, "list-with-string": 500, "object": 500, "empty-list": 200}, statuses
+    assert statuses == {"string": 400, "list-with-string": 400, "object": 400}, statuses

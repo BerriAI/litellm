@@ -1,8 +1,8 @@
 import asyncio
 import json
 import time
-from collections.abc import Callable, Iterable
-from typing import Final
+from collections.abc import Callable, Iterable, Mapping
+from typing import TYPE_CHECKING, Final
 
 from pydantic import ConfigDict, TypeAdapter
 
@@ -21,6 +21,9 @@ from litellm.utils import CustomStreamWrapper, ModelResponse
 from ..common_utils import ReplicateError
 from .transformation import ReplicateConfig
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
 replicate_config: Final = ReplicateConfig()
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 _POLLED_PREDICTION: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True))
@@ -29,7 +32,11 @@ _TEXTS: Final = TypeAdapter(Iterable[str], config=ConfigDict(strict=True, hide_i
 
 # Function to handle prediction response (streaming)
 def handle_prediction_response_streaming(
-    prediction_url, api_token, print_verbose, headers: dict, http_client: HTTPHandler
+    prediction_url: str,
+    api_token: object,
+    print_verbose: Callable[[str], object],
+    headers: Mapping[str, object],
+    http_client: HTTPHandler,
 ):
     previous_output = ""
     output_string = ""
@@ -72,10 +79,10 @@ def handle_prediction_response_streaming(
 
 # Function to handle prediction response (streaming)
 async def async_handle_prediction_response_streaming(
-    prediction_url,
-    api_token,
-    print_verbose,
-    headers: dict,
+    prediction_url: str,
+    api_token: object,
+    print_verbose: Callable[[str], object],
+    headers: dict[str, object],
     http_client: AsyncHTTPHandler,
 ):
     previous_output = ""
@@ -128,19 +135,19 @@ async def async_handle_prediction_response_streaming(
 # Main function for prediction completion
 def completion(
     model: str,
-    messages: list,
+    messages: list[AllMessageValues],
     api_base: str,
     model_response: ModelResponse,
-    print_verbose: Callable,
+    print_verbose: Callable[[str], object],
     optional_params: dict,
     litellm_params: dict,
     logging_obj: LiteLLMLoggingObj,
     api_key,
-    encoding,
-    custom_prompt_dict={},
-    logger_fn=None,
-    acompletion=None,
-    headers={},
+    encoding: "Tokenizer | None",
+    custom_prompt_dict: object = {},
+    logger_fn: object = None,
+    acompletion: object = None,
+    headers: dict[str, object] = {},
 ) -> ModelResponse | CustomStreamWrapper:
     headers = replicate_config.validate_environment(
         api_key=api_key,
@@ -245,16 +252,16 @@ async def async_completion(
     model_response: ModelResponse,
     model: str,
     messages: list[AllMessageValues],
-    encoding,
+    encoding: "Tokenizer | None",
     optional_params: dict,
     litellm_params: dict,
-    version_id,
-    input_data,
-    api_key,
-    api_base,
+    version_id: object,
+    input_data: dict[str, object],
+    api_key: str | None,
+    api_base: str | None,
     logging_obj: LiteLLMLoggingObj,
-    print_verbose,
-    headers: dict,
+    print_verbose: Callable[[str], object],
+    headers: dict[str, object],
 ) -> ModelResponse | CustomStreamWrapper:
     prediction_url = replicate_config.get_complete_url(
         api_base=api_base,

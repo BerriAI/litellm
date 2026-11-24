@@ -34,10 +34,10 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:
+    ) -> dict[str, str]:
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key: Final = (
             litellm_params.api_key or get_secret_str("HOSTED_VLLM_API_KEY") or "fake-api-key"
@@ -52,7 +52,7 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         api_base = api_base or get_secret_str("HOSTED_VLLM_API_BASE")
 

@@ -11,11 +11,14 @@ litellm-cache-response.workspace = true
 axum = { workspace = true, features = ["json", "multipart"] }
 bytes.workspace = true
 futures-util.workspace = true
+http-body = "1.0.1"
 litellm-framer.workspace = true
 litellm-python-compat.workspace = true
 litellm-auth.workspace = true
 litellm-error.workspace = true
+litellm-config.workspace = true
 litellm-gateway-auth.workspace = true
+litellm-gateway-auth-core.workspace = true
 litellm-inference.workspace = true
 litellm-inference-messages.workspace = true
 litellm-inference-ocr.workspace = true
@@ -29,6 +32,7 @@ litellm-cache.workspace = true
 litellm-core-utils.workspace = true
 litellm-router-types.workspace = true
 litellm-secrets.workspace = true
+parking_lot.workspace = true
 litellm-llms-types.workspace = true
 serde.workspace = true
 serde_json = { workspace = true, features = ["preserve_order"] }
@@ -41,7 +45,6 @@ tracing.workspace = true
 [dev-dependencies]
 litellm-redis-client.workspace = true
 litellm-redis-testing.workspace = true
-parking_lot.workspace = true
 litellm-callbacks.workspace = true
 litellm-gateway.workspace = true
 litellm-cache-memory.workspace = true

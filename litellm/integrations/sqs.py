@@ -66,13 +66,13 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         sqs_aws_sts_endpoint: str | None = None,
         sqs_flush_interval: int | None = DEFAULT_SQS_FLUSH_INTERVAL_SECONDS,
         sqs_batch_size: int | None = DEFAULT_SQS_BATCH_SIZE,
-        sqs_config=None,
+        sqs_config: object = None,
         sqs_strip_base64_files: bool = False,
         # --- 🔐 Application-level encryption params ---
         sqs_aws_use_application_level_encryption: bool = False,
         sqs_app_encryption_key_b64: str | None = None,
         sqs_app_encryption_aad: str | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         try:
             verbose_logger.debug("in init sqs logger - sqs_callback_params %s", litellm.aws_sqs_callback_params)
@@ -143,7 +143,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         sqs_aws_use_application_level_encryption: bool = False,
         sqs_app_encryption_key_b64: str | None = None,
         sqs_app_encryption_aad: str | None = None,
-        sqs_config=None,
+        sqs_config: object = None,
     ) -> None:
         litellm.aws_sqs_callback_params = litellm.aws_sqs_callback_params or {}
 
@@ -206,7 +206,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             verbose_logger.debug("SQSLogger: Application-level encryption enabled.")
         self.sqs_config = litellm.aws_sqs_callback_params.get("sqs_config") or sqs_config
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         try:
             verbose_logger.debug("SQS Logging - Enters logging function for model %s", kwargs)
             standard_logging_payload = kwargs.get("standard_logging_object")
@@ -224,7 +224,7 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
         except Exception as e:
             verbose_logger.exception("sqs Layer Error - %s", e)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         try:
             standard_logging_payload = kwargs.get("standard_logging_object")
             if standard_logging_payload is None:

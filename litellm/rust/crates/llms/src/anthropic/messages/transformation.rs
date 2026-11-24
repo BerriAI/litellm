@@ -1,12 +1,15 @@
 use litellm_auth::CredentialPlacement;
 use litellm_host::interceptors::{RetriedRequest, RetryReason};
-use litellm_http::request::{with_header, without_headers};
+use litellm_http::request::{header_value, with_header, without_headers};
 use litellm_llms_types::{
     formats::messages::{
         ContentBlock, ContentBlockType, ContextEdit, ContextManagement, Message, MessageContent,
         MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
-    providers::anthropic::{AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet, DEFAULT_HEADERS},
+    providers::anthropic::{
+        API_VERSION, AnthropicBeta, BETA_HEADER, BetaProvider, BetaSet, DEFAULT_HEADERS,
+        VERSION_HEADER,
+    },
     recognized::{Recognized, is_one, python_str},
 };
 use litellm_python_compat::scalar::python_value;
@@ -50,6 +53,8 @@ use crate::{
     },
 };
 
+const FIRST_VERSION_WITHOUT_SAMPLING_PARAMS: &str = "2026-10-21";
+
 pub struct AnthropicMessagesConfig;
 
 pub const ANTHROPIC_MESSAGES_CONFIG: AnthropicMessagesConfig = AnthropicMessagesConfig;
@@ -64,6 +69,15 @@ impl MessagesEndpoint for AnthropicMessagesConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         Ok(complete_anthropic_url(api_base, env_lookup))
+    }
+
+    fn checks_claude_signatures(
+        &self,
+        api_base: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        !url_host(&complete_anthropic_url(api_base, env_lookup))
+            .is_some_and(|host| replays_unsigned_thinking(&host))
     }
 
     fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
@@ -145,6 +159,19 @@ impl MessagesDialect for AnthropicMessagesConfig {
         transform_messages_request(request, &context.keeping_display_updates())
     }
 
+    fn request_body(
+        &self,
+        request: MessagesRequest,
+        headers: &Headers,
+        url: &str,
+        drop_params: bool,
+    ) -> Result<MessagesRequest, Error> {
+        if !serves_anthropic_api_versions(url) {
+            return Ok(request);
+        }
+        drop_sampling_params_removed_by_requested_version(request, headers, drop_params)
+    }
+
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         DEFAULT_HEADERS
     }
@@ -194,7 +221,17 @@ const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
     "cognitiveservices.azure.com",
 ];
 
-fn is_foundry_url(url: &str) -> bool {
+const ANTHROPIC_API_HOST: &str = "api.anthropic.com";
+const UNSIGNED_THINKING_HOST_SUFFIXES: [&str; 6] = [
+    "deepseek.com",
+    "minimax.io",
+    "minimaxi.com",
+    "tencentcloudmaas.com",
+    "z.ai",
+    "bigmodel.cn",
+];
+
+fn url_host(url: &str) -> Option<String> {
     let absolute = if url.contains("://") {
         url.to_string()
     } else {
@@ -203,11 +240,26 @@ fn is_foundry_url(url: &str) -> bool {
     url::Url::parse(&absolute)
         .ok()
         .and_then(|parsed| parsed.host_str().map(str::to_ascii_lowercase))
-        .is_some_and(|host| {
-            FOUNDRY_HOST_SUFFIXES
-                .iter()
-                .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
-        })
+}
+
+fn is_foundry_host(host: &str) -> bool {
+    FOUNDRY_HOST_SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+fn replays_unsigned_thinking(host: &str) -> bool {
+    UNSIGNED_THINKING_HOST_SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+fn is_foundry_url(url: &str) -> bool {
+    url_host(url).is_some_and(|host| is_foundry_host(&host))
+}
+
+fn serves_anthropic_api_versions(url: &str) -> bool {
+    url_host(url).is_some_and(|host| host == ANTHROPIC_API_HOST || is_foundry_host(&host))
 }
 
 pub fn is_claude_model(model: &str) -> bool {
@@ -358,7 +410,9 @@ pub(crate) fn transform_messages_request(
         strip_encrypted_reasoning_blocks_restoring_redacted_data,
         strip_raw_encrypted_reasoning_blocks,
     );
-    let messages = if context.claude_base_model || is_claude_model(&request.model) {
+    let messages = if (context.claude_base_model || is_claude_model(&request.model))
+        && !context.keeps_unsigned_thinking
+    {
         map_messages(
             messages,
             strip_unsigned_thinking_blocks,
@@ -690,7 +744,7 @@ pub fn drop_unsupported_params(
     let speed = match &params.speed {
         Some(speed) if !capabilities.supports_speed => {
             reject("speed", speed_repr(speed), "")?;
-            litellm_tracing::warn!(
+            tracing::warn!(
                 "Dropping unsupported `speed` for model={model} (drop_params=True). Fast mode is only supported on select Opus models."
             );
             None
@@ -730,6 +784,68 @@ pub fn drop_unsupported_params(
         },
         ..request
     })
+}
+
+fn requested_api_version(headers: &Headers) -> &str {
+    header_value(headers, VERSION_HEADER).map_or(API_VERSION, str::trim)
+}
+
+pub(crate) fn drop_sampling_params_removed_by_requested_version(
+    request: MessagesRequest,
+    headers: &Headers,
+    drop_params: bool,
+) -> Result<MessagesRequest, Error> {
+    drop_sampling_params_removed_by_version(request, requested_api_version(headers), drop_params)
+}
+
+pub(crate) fn drop_sampling_params_removed_by_version(
+    request: MessagesRequest,
+    api_version: &str,
+    drop_params: bool,
+) -> Result<MessagesRequest, Error> {
+    if !removes_sampling_params(api_version) {
+        return Ok(request);
+    }
+    let params = &request.params;
+    let first_sent = [
+        ("temperature", params.temperature.as_ref().map(python_str)),
+        ("top_p", params.top_p.as_ref().map(python_str)),
+        ("top_k", params.top_k.as_ref().map(python_str)),
+    ]
+    .into_iter()
+    .find_map(|(param, value)| Some((param, value?)));
+    if let (Some((param, value)), false) = (first_sent, drop_params) {
+        return Err(unsupported_param(
+            &request.model,
+            param,
+            &value,
+            &format!("anthropic-version {api_version} removed temperature, top_p and top_k. "),
+        ));
+    }
+    Ok(MessagesRequest {
+        params: MessagesOptionalParams {
+            temperature: None,
+            top_p: None,
+            top_k: None,
+            ..request.params
+        },
+        ..request
+    })
+}
+
+fn removes_sampling_params(api_version: &str) -> bool {
+    is_dated_version(api_version) && api_version >= FIRST_VERSION_WITHOUT_SAMPLING_PARAMS
+}
+
+fn is_dated_version(version: &str) -> bool {
+    version.len() == 10
+        && version
+            .bytes()
+            .enumerate()
+            .all(|(index, byte)| match index {
+                4 | 7 => byte == b'-',
+                _ => byte.is_ascii_digit(),
+            })
 }
 
 fn speed_repr(speed: &Recognized<Speed>) -> String {
@@ -1138,6 +1254,143 @@ mod tests {
         assert_eq!(detail.to_string(), message);
     }
 
+    const ANTHROPIC_URL: &str = "https://api.anthropic.com/v1/messages";
+
+    fn versioned_body(
+        url: &str,
+        version: &[(&str, &str)],
+        fields: Value,
+        drop_params: bool,
+    ) -> Result<Value, Error> {
+        ANTHROPIC_MESSAGES_CONFIG
+            .request_body(request(fields), &headers(version), url, drop_params)
+            .map(|body| serde_json::to_value(body).unwrap())
+    }
+
+    #[rstest]
+    #[case::unit_temperature(&[("anthropic-version", "2026-10-21")], json!({"temperature": 1.0}), json!({}))]
+    #[case::any_header_case(&[("Anthropic-Version", "2026-10-21")], json!({"top_p": 0.9}), json!({}))]
+    #[case::padded_header(&[("anthropic-version", " 2026-10-21 ")], json!({"top_k": 40}), json!({}))]
+    #[case::every_sampling_param_keeping_the_rest(
+        &[("anthropic-version", "2026-10-21")],
+        json!({"temperature": 0.3, "top_p": 0.9, "top_k": 40, "stream": true}),
+        json!({"stream": true})
+    )]
+    #[case::later_dated_version(&[("anthropic-version", "2027-01-01")], json!({"top_k": 40}), json!({}))]
+    fn sampling_params_are_dropped_under_an_api_version_that_removed_them(
+        #[case] version: &[(&str, &str)],
+        #[case] fields: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(
+            versioned_body(ANTHROPIC_URL, version, fields, true),
+            Ok(body(expected))
+        );
+    }
+
+    #[rstest]
+    #[case::sdk_1(&[("anthropic-version", "2023-06-01")])]
+    #[case::default_version(&[])]
+    #[case::day_before(&[("anthropic-version", "2026-10-20")])]
+    #[case::undated(&[("anthropic-version", "latest")])]
+    fn sampling_params_reach_an_api_version_that_has_them(
+        #[case] version: &[(&str, &str)],
+        #[values(false, true)] drop_params: bool,
+    ) {
+        let fields = json!({"temperature": 0.3, "top_p": 0.9, "top_k": 40});
+        assert_eq!(
+            versioned_body(ANTHROPIC_URL, version, fields.clone(), drop_params),
+            Ok(body(fields))
+        );
+    }
+
+    #[rstest]
+    #[case::unit_temperature(
+        "2026-10-21",
+        json!({"temperature": 1.0}),
+        "claude does not support temperature=1.0. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
+    #[case::top_k(
+        "2026-10-21",
+        json!({"top_k": 40}),
+        "claude does not support top_k=40. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
+    #[case::top_p_ahead_of_top_k(
+        "2026-10-21",
+        json!({"top_p": 0.9, "top_k": 40}),
+        "claude does not support top_p=0.9. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
+    #[case::later_dated_version(
+        "2027-01-01",
+        json!({"temperature": 0.3}),
+        "claude does not support temperature=0.3. anthropic-version 2027-01-01 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
+    )]
+    fn sampling_params_are_rejected_under_an_api_version_that_removed_them(
+        #[case] version: &str,
+        #[case] fields: Value,
+        #[case] message: &str,
+    ) {
+        let Error::InvalidRequest(detail) = versioned_body(
+            ANTHROPIC_URL,
+            &[("anthropic-version", version)],
+            fields,
+            false,
+        )
+        .unwrap_err() else {
+            panic!("expected an invalid request");
+        };
+        assert_eq!(detail.to_string(), message);
+    }
+
+    #[rstest]
+    fn a_request_without_sampling_params_passes_an_api_version_that_removed_them() {
+        assert_eq!(
+            versioned_body(
+                ANTHROPIC_URL,
+                &[("anthropic-version", "2026-10-21")],
+                json!({}),
+                false
+            ),
+            Ok(body(json!({})))
+        );
+    }
+
+    #[rstest]
+    #[case::deepseek("https://api.deepseek.com/anthropic/v1/messages")]
+    #[case::minimax("https://api.minimax.io/anthropic/v1/messages")]
+    #[case::anthropic_lookalike("https://api.anthropic.com.example/v1/messages")]
+    fn sampling_params_reach_a_third_party_anthropic_api_under_2026_10_21(
+        #[case] url: &str,
+        #[values(false, true)] drop_params: bool,
+    ) {
+        let fields = json!({"temperature": 0.2, "top_p": 0.9, "top_k": 40});
+        assert_eq!(
+            versioned_body(
+                url,
+                &[("anthropic-version", "2026-10-21")],
+                fields.clone(),
+                drop_params
+            ),
+            Ok(body(fields))
+        );
+    }
+
+    #[rstest]
+    #[case::anthropic(ANTHROPIC_URL)]
+    #[case::anthropic_host_in_any_case("https://API.Anthropic.com/v1/messages")]
+    #[case::foundry(FOUNDRY)]
+    fn anthropic_and_foundry_hosts_drop_sampling_params_under_2026_10_21(#[case] url: &str) {
+        assert_eq!(
+            versioned_body(
+                url,
+                &[("anthropic-version", "2026-10-21")],
+                json!({"temperature": 0.2, "top_p": 0.9, "top_k": 40}),
+                true
+            ),
+            Ok(body(json!({})))
+        );
+    }
+
     #[rstest]
     #[case::string_dropped(json!("json"), true, None)]
     #[case::string_kept_without_drop_params(json!("json"), false, Some(json!("json")))]
@@ -1357,6 +1610,22 @@ mod tests {
     }
 
     #[rstest]
+    #[case::anthropic("https://api.anthropic.com", true)]
+    #[case::gateway("https://llm-gateway.example.com/anthropic", true)]
+    #[case::foundry("https://example.services.ai.azure.com/anthropic", true)]
+    #[case::deepseek("https://api.deepseek.com/anthropic", false)]
+    #[case::z_ai("https://api.z.ai/api/anthropic", false)]
+    fn only_an_anthropic_compatible_host_gets_unsigned_thinking_back(
+        #[case] api_base: &str,
+        #[case] checks: bool,
+    ) {
+        assert_eq!(
+            ANTHROPIC_MESSAGES_CONFIG.checks_claude_signatures(Some(api_base), &|_| None),
+            checks
+        );
+    }
+
+    #[rstest]
     fn unsigned_thinking_is_still_replayed_to_an_open_model(unmapped: MessagesModelCapabilities) {
         let messages = tool_turn(Some(
             json!({"type": "thinking", "thinking": "open model plan", "signature": ""}),
@@ -1418,6 +1687,7 @@ mod tests {
                     drops_unsupported_params: false,
                     global_drop_params: false,
                     claude_base_model: false,
+                    keeps_unsigned_thinking: false,
                 }
             );
             return;

@@ -4,15 +4,17 @@
 
 use std::sync::Arc;
 
-use litellm_callbacks::ErasedCallback;
+use litellm_callbacks::{Callback, ErasedCallback};
 use litellm_callbacks_budgets::Budgets;
-use litellm_callbacks_python::RustCallback;
+use litellm_callbacks_python::{RustCallback, hook_input, run_hosted_hook};
 use litellm_callbacks_spend_logger::{SpendLogCallback, SpendLogParts};
+use litellm_host_python::Execution;
 use litellm_spend_log_writer::PgLedgerStore;
-use pyo3::prelude::*;
+use pyo3::{prelude::*, types::PyDict};
 
 use crate::{
-    logger::NativeTokenRedactor, redis::store::spend_counters::NativeSpendCounters,
+    redaction::NativeTokenRedactor,
+    redis::store::{request::NativeRequestRedis, spend_counters::NativeSpendCounters},
     spend_log_writer::RustSpendLogWriter,
 };
 
@@ -43,5 +45,28 @@ impl RustSpendLog {
         Ok(RustCallback::new(
             Arc::clone(&self.0) as Arc<dyn ErasedCallback>
         )?)
+    }
+
+    /// One hook run as an execution the proxy drives, `host` answering its host calls. The
+    /// counter increments ride `request`'s post-call batch, which tracks the request's own
+    /// committed charge until it lands.
+    #[pyo3(signature = (hook, fields, call, host, request, /))]
+    fn start<'py>(
+        &self,
+        hook: &str,
+        fields: &Bound<'py, PyDict>,
+        call: Option<&Bound<'py, PyAny>>,
+        host: Py<PyAny>,
+        request: Option<PyRef<'py, NativeRequestRedis>>,
+    ) -> PyResult<Execution> {
+        let input = hook_input(Callback::manifest(&*self.0), hook, fields, call)?;
+        let callback = Arc::clone(&self.0);
+        let redis = request.map(|request| request.0.clone());
+        Ok(run_hosted_hook(
+            move |host| async move {
+                Box::pin(callback.handle_with(&input, host, redis.as_ref())).await
+            },
+            host,
+        ))
     }
 }

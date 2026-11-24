@@ -80,7 +80,9 @@ MAP_GEMINI_FIELD_TO_OPENAI_EVENT: Final[dict[str, OpenAIRealtimeEventTypes | Res
 }
 
 # Keys the main transform loop handles; siblings like ``usageMetadata`` are skipped.
-_KNOWN_GEMINI_TOP_LEVEL_KEYS: Final[set] = {map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT}
+_KNOWN_GEMINI_TOP_LEVEL_KEYS: Final[set[str]] = {
+    map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT
+}
 _GEMINI_LIVE_RESPONSE_MODALITIES: Final = frozenset({"TEXT", "AUDIO"})
 _GEMINI_LIVE_AVATAR_RESPONSE_MODALITIES: Final = _GEMINI_LIVE_RESPONSE_MODALITIES | {"VIDEO"}
 
@@ -240,10 +242,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         self._unbilled_input_audio_bytes: int = 0
         self._manual_activity_open: bool = False
 
-    def is_setup_message(self, msg_obj: dict) -> bool:
+    def is_setup_message(self, msg_obj: Mapping[str, object]) -> bool:
         return "setup" in msg_obj
 
-    def is_content_message(self, msg_obj: dict) -> bool:
+    def is_content_message(self, msg_obj: Mapping[str, object]) -> bool:
         return any(k in msg_obj for k in ("realtimeInput", "clientContent", "toolResponse"))
 
     def _include_function_response_id(self) -> bool:
@@ -294,7 +296,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
         return usage_dict
 
-    def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
+    def validate_environment(self, headers: dict[str, str], model: str, api_key: str | None = None) -> dict[str, str]:
         return headers
 
     def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
@@ -502,7 +504,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return BidiGenerateContentRealtimeInputConfig(automaticActivityDetection=transformed_audio_activity_config)
 
     @staticmethod
-    def _extract_turn_detection(session: dict) -> dict | None:
+    def _extract_turn_detection(session: dict[str, object]) -> dict[str, object] | None:
         """Extract turn_detection from a session.update payload.
 
         Handles both the flat beta shape (``session.turn_detection``) and the
@@ -523,7 +525,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return None
 
     @staticmethod
-    def _normalize_session_payload_for_mapping(session: dict) -> dict:
+    def _normalize_session_payload_for_mapping(session: dict[str, object]) -> dict[str, object]:
         """Normalize GA-remapped session fields back to their beta keys.
 
         ``map_openai_params`` only recognises the flat OpenAI-beta key names
@@ -1229,7 +1231,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         returned_items.append(response_output_item_done)
         return returned_items
 
-    def _consume_usage_metadata_for_response_done(self, frame: dict) -> dict | None:
+    def _consume_usage_metadata_for_response_done(self, frame: dict[str, object]) -> dict[str, object] | None:
         """Pop usageMetadata from the frame (authoritative) or drain the pending buffer.
 
         Uses pop so a frame with both ``toolCall`` and ``turnComplete`` can't
@@ -1282,7 +1284,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return events
 
     @staticmethod
-    def get_nested_value(obj: dict, path: str) -> object | None:
+    def get_nested_value(obj: Mapping[str, object], path: str) -> object | None:
         keys: Final = path.split(".")
         current: object = obj
         for key in keys:

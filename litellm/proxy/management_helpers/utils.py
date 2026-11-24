@@ -399,6 +399,7 @@ async def handle_budget_for_entity(
 # default member-budget into an individual member-budget so that the new
 # row starts with the same limits as the default.
 _CLONABLE_BUDGET_FIELDS: Final[tuple[str, ...]] = (
+    "rollover_max_budget",
     "max_budget",
     "soft_budget",
     "max_parallel_requests",
@@ -659,7 +660,7 @@ async def add_new_member(
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
-def _delete_user_id_from_cache(kwargs):
+def _delete_user_id_from_cache(kwargs: Mapping[str, object]):
     from litellm.proxy.proxy_server import user_api_key_cache
 
     if kwargs.get("data") is not None:
@@ -674,7 +675,7 @@ def _delete_user_id_from_cache(kwargs):
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
-def _delete_api_key_from_cache(kwargs):
+def _delete_api_key_from_cache(kwargs: Mapping[str, object]):
     from litellm.proxy.proxy_server import user_api_key_cache
 
     if kwargs.get("data") is not None:
@@ -689,7 +690,7 @@ def _delete_api_key_from_cache(kwargs):
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
-def _delete_team_id_from_cache(kwargs):
+def _delete_team_id_from_cache(kwargs: Mapping[str, object]):
     from litellm.proxy.proxy_server import user_api_key_cache
 
     if kwargs.get("data") is not None:
@@ -704,7 +705,7 @@ def _delete_team_id_from_cache(kwargs):
 
 
 @with_service_target(AUTH_OBJECTS_TARGET)
-def _delete_customer_id_from_cache(kwargs):
+def _delete_customer_id_from_cache(kwargs: Mapping[str, object]):
     from litellm.proxy.proxy_server import user_api_key_cache
 
     if kwargs.get("data") is not None:
@@ -719,7 +720,7 @@ def _delete_customer_id_from_cache(kwargs):
 
 
 async def send_management_endpoint_alert(
-    request_kwargs: dict,
+    request_kwargs: dict[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     function_name: str,
 ):
@@ -842,7 +843,7 @@ def _response_fields(result: object) -> Mapping[str, object]:
 
 
 async def _emit_management_endpoint_otel_span(
-    func: Callable,
+    func: Callable[..., object],
     kwargs: dict,
     parent_otel_span: Span | None,
     start_time: datetime,
@@ -930,8 +931,8 @@ async def _emit_management_endpoint_otel_span(
         )
 
 
-_P: Final = ParamSpec("_P")
-_R: Final = TypeVar("_R")
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
 
 
 def management_endpoint_wrapper(func: Callable[_P, Awaitable[_R]]) -> Callable[_P, Awaitable[_R]]:

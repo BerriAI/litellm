@@ -321,6 +321,7 @@ async def test_opt_out_is_shared_and_config_false_cannot_be_overridden(fixture: 
         "alerts_used": 0,
         "alert_limit": None if os.environ.get("LITELLM_LICENSE") else FREE_ALERT_LIMIT,
         "disabled_by_config": False,
+        "thresholds": DEFAULT_THRESHOLDS.model_dump(mode="json"),
     }
     claim: Final = await fixture.repository.claim(timedelta(0))
     assert claim is not None

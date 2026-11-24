@@ -50,6 +50,13 @@ pub trait MessagesEndpoint {
     fn headers_for_url(&self, headers: Headers, _url: &str) -> Headers {
         headers
     }
+    fn checks_claude_signatures(
+        &self,
+        _api_base: Option<&str>,
+        _env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        true
+    }
 }
 
 /// How a Messages provider authenticates: the secrets it reads and the credential it validates
@@ -158,6 +165,7 @@ pub trait MessagesDialect {
         &self,
         request: MessagesRequest,
         _headers: &Headers,
+        _url: &str,
         _drop_params: bool,
     ) -> Result<MessagesRequest, Error> {
         Ok(request)

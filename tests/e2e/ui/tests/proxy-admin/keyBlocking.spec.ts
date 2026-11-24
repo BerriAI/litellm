@@ -49,7 +49,7 @@ test.describe("Proxy Admin - Key blocking", () => {
     await openKeyDetail(page, alias);
 
     await page.getByRole("button", { name: "More key actions" }).click();
-    await page.getByRole("menuitem", { name: "Block Key" }).click();
+    await page.getByRole("menuitem", { name: "Block key" }).click();
     const blockDialog = page.getByRole("dialog", { name: "Block Key" });
     await expect(blockDialog, "the Block Key confirmation never opened").toBeVisible({ timeout: 10_000 });
     await blockDialog.getByRole("button", { name: "Block", exact: true }).click();
@@ -83,7 +83,7 @@ test.describe("Proxy Admin - Key blocking", () => {
     ).toBeVisible({ timeout: 15_000 });
 
     await page.getByRole("button", { name: "More key actions" }).click();
-    await page.getByRole("menuitem", { name: "Unblock Key" }).click();
+    await page.getByRole("menuitem", { name: "Unblock key" }).click();
     const unblockDialog = page.getByRole("dialog", { name: "Unblock Key" });
     await expect(unblockDialog, "the Unblock Key confirmation never opened").toBeVisible({ timeout: 10_000 });
     await unblockDialog.getByRole("button", { name: "Unblock", exact: true }).click();
