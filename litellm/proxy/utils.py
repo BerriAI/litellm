@@ -1879,6 +1879,11 @@ _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRai
 _PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
     {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}
 )
+_PROMPT_FIELD_BY_SETUP_CALL_TYPE: Final[Mapping[str | None, str]] = {
+    CallTypes.aresponses.value: "input",
+    CallTypes.atext_completion.value: "prompt",
+    CallTypes.aembedding.value: "input",
+}
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
 
 
@@ -4666,8 +4671,14 @@ class ProxyLogging:
 
             request_data.setdefault("litellm_call_id", str(uuid.uuid4()))
 
+            route_call_type: Final = _call_type_for_route(route)
             litellm_logging_obj, data = litellm.utils.function_setup(
-                original_function=route or "IGNORE_THIS",
+                original_function=(
+                    route_call_type
+                    if request_fields.get(_PROMPT_FIELD_BY_SETUP_CALL_TYPE.get(route_call_type, ""))
+                    else route
+                )
+                or "IGNORE_THIS",
                 rules_obj=litellm.utils.Rules(),
                 start_time=datetime.now(),
                 **_proxy_only_error_log_fields(  # pyright: ignore[reportArgumentType]  # the allowlist never carries is_async_call

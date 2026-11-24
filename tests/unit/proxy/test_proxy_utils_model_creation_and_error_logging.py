@@ -258,6 +258,68 @@ async def test_proxy_only_error_log_builds_payload_when_logging_object_has_malfo
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "prompt_fields", "logged_messages"),
+    [
+        ("/v1/responses", {"input": "PROMPT-CANARY"}, [{"role": "user", "content": "PROMPT-CANARY"}]),
+        (
+            "/v1/responses",
+            {"input": [{"role": "user", "content": "PROMPT-CANARY"}]},
+            [{"role": "user", "content": "PROMPT-CANARY"}],
+        ),
+        ("/v1/completions", {"prompt": "PROMPT-CANARY"}, [{"role": "user", "content": "PROMPT-CANARY"}]),
+        (
+            "/v1/completions",
+            {"prompt": ["first", "PROMPT-CANARY"]},
+            [{"role": "user", "content": "first"}, {"role": "user", "content": "PROMPT-CANARY"}],
+        ),
+        ("/v1/embeddings", {"input": "PROMPT-CANARY"}, [{"role": "user", "content": "PROMPT-CANARY"}]),
+        (
+            "/embeddings",
+            {"input": ["first", "PROMPT-CANARY"]},
+            [{"role": "user", "content": "first"}, {"role": "user", "content": "PROMPT-CANARY"}],
+        ),
+        ("/v1/responses", {}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/completions", {}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/embeddings", {"input": ""}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/images/generations", {"prompt": "PROMPT-CANARY"}, [{"role": "user", "content": "default-message-value"}]),
+    ],
+    ids=[
+        "responses_text",
+        "responses_items",
+        "completions_text",
+        "completions_list",
+        "embeddings_text",
+        "embeddings_list",
+        "responses_without_input",
+        "completions_without_prompt",
+        "embeddings_with_empty_input",
+        "image_generation_unchanged",
+    ],
+)
+async def test_proxy_only_error_log_keeps_the_prompt_as_the_logged_messages(
+    route: str,
+    prompt_fields: Mapping[str, object],
+    logged_messages: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    request_data: Final[dict[str, object]] = {"model": "gpt-4o", **prompt_fields}
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", request_route=route),
+        route=route,
+        original_exception=HTTPException(status_code=401, detail="rejected"),
+    )
+
+    assert request_data["litellm_logging_obj"].model_call_details["messages"] == logged_messages
+
+
+@pytest.mark.asyncio
 async def test_proxy_only_error_log_keeps_the_request_litellm_call_id(monkeypatch: pytest.MonkeyPatch):
     """LIT-7836: a route that already stamped the caller's litellm_call_id must
     keep it when the failure is a proxy-only error, so the spend-log row and the
