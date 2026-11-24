@@ -130,9 +130,7 @@ class ClarifaiConfig(OpenAIGPTConfig):
 
         return response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         """
         Get the appropriate error class for Clarifai errors.
         Since Clarifai is OpenAI-compatible, we use OpenAI error handling.
