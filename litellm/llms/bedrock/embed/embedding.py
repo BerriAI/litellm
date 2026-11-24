@@ -140,6 +140,18 @@ def _fields(value: object) -> Mapping[str, object]:
     return _FIELDS.validate_python(value) if isinstance(value, Mapping) else _NO_FIELDS
 
 
+def _deployment_prices(logging_obj: "LiteLLMLoggingObj") -> Mapping[str, object] | None:
+    if not logging_obj.custom_pricing_for(None):
+        return None
+    params: Final = _fields(logging_obj.litellm_params)
+    declared: Final = {k: v for k, v in params.items() if v is not None}
+    return {
+        **_fields(_fields(params.get("litellm_metadata")).get("model_info")),
+        **_fields(_fields(params.get("metadata")).get("model_info")),
+        **declared,
+    }
+
+
 def _nova_params(model_input: Mapping[str, object]) -> Mapping[str, object]:
     return next((_fields(model_input[key]) for key in _NOVA_PARAMS_KEYS if key in model_input), _NO_FIELDS)
 
@@ -381,6 +393,7 @@ class BedrockEmbedding(BaseAWSLLM):
         aws_region_name: str | None = None,
         metered_input_tokens: Sequence[int | None] = (),
         base64_embeddings: bool = False,
+        deployment_prices: Mapping[str, object] | None = None,
     ) -> EmbeddingResponse | None:
         """
         Transforms the response from the Bedrock embedding provider to the OpenAI format.
@@ -446,6 +459,7 @@ class BedrockEmbedding(BaseAWSLLM):
                     model=model,
                     batch_data=batch_data,
                     metered_input_tokens=metered_input_tokens,
+                    deployment_prices=deployment_prices,
                 )
 
         ##########################################################
@@ -529,6 +543,7 @@ class BedrockEmbedding(BaseAWSLLM):
             aws_region_name=aws_region_name,
             metered_input_tokens=tuple(count for _, count in results),
             base64_embeddings=base64_embeddings,
+            deployment_prices=_deployment_prices(logging_obj),
         )
 
     async def _async_single_func_embeddings(
@@ -606,6 +621,7 @@ class BedrockEmbedding(BaseAWSLLM):
             aws_region_name=aws_region_name,
             metered_input_tokens=tuple(count for _, count in results),
             base64_embeddings=base64_embeddings,
+            deployment_prices=_deployment_prices(logging_obj),
         )
 
     def embeddings(

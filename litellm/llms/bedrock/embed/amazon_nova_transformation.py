@@ -63,19 +63,35 @@ class _InlineMedia(BaseModel):
 class _ClipPrices(BaseModel):
     model_config = ConfigDict(frozen=True)
     input_cost_per_token: float = 0.0
-    input_cost_per_audio_per_second: float = 0.0
-    input_cost_per_video_per_second: float = 0.0
+    input_cost_per_audio_per_second: float | None = 0.0
+    input_cost_per_video_per_second: float | None = 0.0
 
 
-def _clip_prices(model: str) -> _ClipPrices:
+def _listed_clip_prices(model: str) -> _ClipPrices:
     try:
         return _ClipPrices.model_validate(litellm.get_model_info(model=model, custom_llm_provider="bedrock"))
     except (ModelNotMappedError, ValidationError):
         return _ClipPrices()
 
 
-def _seconds_costing_at_least(seconds: float | None, per_second: float, floor_cost: float) -> float | None:
-    return seconds if seconds is not None and seconds * per_second >= floor_cost else None
+def _clip_prices(model: str, deployment_prices: Mapping[str, object] | None) -> _ClipPrices:
+    """A deployment that sets its own prices is billed by seconds only for the rates it declares."""
+    listed: Final = _listed_clip_prices(model)
+    if deployment_prices is None:
+        return listed
+    return listed.model_copy(
+        update={
+            rate: None
+            for rate in ("input_cost_per_audio_per_second", "input_cost_per_video_per_second")
+            if deployment_prices.get(rate) is None
+        }
+    )
+
+
+def _seconds_costing_at_least(seconds: float | None, per_second: float | None, floor_cost: float) -> float | None:
+    if seconds is None or per_second is None:
+        return None
+    return seconds if seconds * per_second >= floor_cost else None
 
 
 def _embedding_params(request_data: Mapping[str, object]) -> Mapping[str, object]:
@@ -385,6 +401,7 @@ class AmazonNovaEmbeddingConfig:
         model: str,
         batch_data: Sequence[Mapping[str, object]] | None = None,
         metered_input_tokens: Sequence[int | None] = (),
+        deployment_prices: Mapping[str, object] | None = None,
     ) -> EmbeddingResponse:
         """
         Transform Nova response to OpenAI format.
@@ -423,7 +440,7 @@ class AmazonNovaEmbeddingConfig:
                 embeddings.append(embedding)
 
         requests: Final[Sequence[Mapping[str, object]]] = batch_data or ()
-        prices: Final = _clip_prices(model)
+        prices: Final = _clip_prices(model, deployment_prices)
         estimated_tokens: Final = tuple(_estimated_input_tokens(response) for response in response_list)
         estimate_costs: Final = tuple(tokens * prices.input_cost_per_token for tokens in estimated_tokens)
         audio_seconds: Final = tuple(
@@ -477,8 +494,9 @@ class AmazonNovaEmbeddingConfig:
         model: str,
         batch_data: list[dict[str, object]] | None = None,  # mutable-ok: mirrors override contract
         metered_input_tokens: Sequence[int | None] = (),
+        deployment_prices: Mapping[str, object] | None = None,
     ) -> EmbeddingResponse:
-        return self._transform_response(response_list, model, batch_data, metered_input_tokens)
+        return self._transform_response(response_list, model, batch_data, metered_input_tokens, deployment_prices)
 
     def _transform_async_invoke_response(self, response: Mapping[str, object], model: str) -> EmbeddingResponse:
         """

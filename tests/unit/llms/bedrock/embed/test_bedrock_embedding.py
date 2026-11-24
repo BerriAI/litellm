@@ -2352,6 +2352,40 @@ def test_bedrock_nova_embedding_bills_inline_audio_by_its_length(respx_mock: res
     assert cost == pytest.approx(6.5 * prices["input_cost_per_audio_per_second"] + prices["input_cost_per_image"])
 
 
+def test_bedrock_nova_embedding_bills_clips_by_tokens_when_the_deployment_sets_only_a_token_price(
+    respx_mock: respx.MockRouter,
+) -> None:
+    usage, cost = _nova_usage_and_cost(
+        respx_mock,
+        ("AUDIO", "VIDEO"),
+        input=[f"data:audio/wav;base64,{_wav_base64(2.5)}", f"data:video/mp4;base64,{_mp4_base64(1000, 6500)}"],
+        input_cost_per_token=0.001,
+    )
+
+    assert (usage.prompt_tokens, usage.prompt_tokens_details) == (2 * 768, None)
+    assert cost == pytest.approx(2 * 768 * 0.001)
+
+
+def test_bedrock_nova_embedding_bills_only_the_clip_kind_the_deployment_prices_by_the_second(
+    respx_mock: respx.MockRouter,
+) -> None:
+    usage, cost = _nova_usage_and_cost(
+        respx_mock,
+        ("AUDIO", "VIDEO"),
+        input=[f"data:audio/wav;base64,{_wav_base64(2.5)}", f"data:video/mp4;base64,{_mp4_base64(1000, 6500)}"],
+        input_cost_per_token=0.001,
+        input_cost_per_audio_per_second=2.0,
+    )
+
+    details: Final = usage.prompt_tokens_details
+    assert (usage.prompt_tokens, details.audio_length_seconds, getattr(details, "video_length_seconds", None)) == (
+        768,
+        2.5,
+        None,
+    )
+    assert cost == pytest.approx(2.5 * 2.0 + 768 * 0.001)
+
+
 @pytest.mark.parametrize(
     ("video", "expected_seconds"),
     [
