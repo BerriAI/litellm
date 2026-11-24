@@ -18,6 +18,7 @@ from pydantic import TypeAdapter
 from typing_extensions import TypedDict
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     decoded_json_object,
@@ -143,14 +144,14 @@ class GigaChatConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: mutates in place per GigaChat OAuth setup
+        headers: dict[str, object],  # mutable-ok: mutates in place per GigaChat OAuth setup
         model: str,
         messages: Sequence[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: base class contract returns dict for httpx
+    ) -> dict[str, object]:  # mutable-ok: base class contract returns dict for httpx
         """
         Set up headers with OAuth token.
         """
@@ -182,23 +183,23 @@ class GigaChatConfig(BaseConfig):
             "response_format",
         ]
 
-    def strips_hosted_mcp_tools(self, model: str) -> bool:
-        return True
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops"
 
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,  # mutable-ok: mutated in place per GigaChat mapping
+        optional_params: dict[str, object],  # mutable-ok: mutated in place per GigaChat mapping
         model: str,
         drop_params: bool,
-    ) -> dict:  # mutable-ok: base class contract returns dict
+    ) -> dict[str, object]:  # mutable-ok: base class contract returns dict
         """Map OpenAI parameters to GigaChat parameters."""
         request_params: Final = tool_params_without_hosted_mcp(
             dict(non_default_params),
             model=model,
             route="gigachat",
             drop_params=drop_params,
-            strips_hosted_mcp_tools=self.strips_hosted_mcp_tools,
+            handling=self.hosted_mcp_tool_handling(model),
         )
         for param, value in request_params.items():
             if param == "stream":
@@ -257,7 +258,7 @@ class GigaChatConfig(BaseConfig):
 
         return optional_params
 
-    def _convert_tools_to_functions(self, tools: Sequence) -> Sequence[dict]:
+    def _convert_tools_to_functions(self, tools: Sequence[object]) -> Sequence[dict[str, object]]:
         """Convert OpenAI tools format to GigaChat functions format."""
         return [
             {
@@ -333,7 +334,7 @@ class GigaChatConfig(BaseConfig):
             verbose_logger.error("Failed to upload image: %s", e)
             return None
 
-    def _transform_list_content(self, content: Sequence) -> tuple[str, Sequence[object]]:
+    def _transform_list_content(self, content: Sequence[object]) -> tuple[str, Sequence[object]]:
         """
         Extract text, image and file attachments from a multimodal message content list.
 
@@ -374,7 +375,7 @@ class GigaChatConfig(BaseConfig):
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
-    ) -> dict:  # mutable-ok: request payload sent to httpx
+    ) -> dict[str, object]:  # mutable-ok: request payload sent to httpx
         """Transform OpenAI request to GigaChat format."""
         giga_messages: Final = self._transform_messages(messages)
 
@@ -401,9 +402,9 @@ class GigaChatConfig(BaseConfig):
 
         return request_data
 
-    def _transform_messages(self, messages: Sequence[AllMessageValues]) -> Sequence[dict]:
+    def _transform_messages(self, messages: Sequence[AllMessageValues]) -> Sequence[dict[str, object]]:
         """Transform OpenAI messages to GigaChat format."""
-        transformed: Final[list[dict]] = []  # mutable-ok: accumulator for building transformed messages
+        transformed: Final[list[dict[str, object]]] = []  # mutable-ok: accumulator for building transformed messages
 
         for i, msg in enumerate(messages):
             message = dict(msg)
@@ -457,10 +458,10 @@ class GigaChatConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: Tokenizer | None,
         api_key: str | None = None,
         json_mode: bool | None = None,

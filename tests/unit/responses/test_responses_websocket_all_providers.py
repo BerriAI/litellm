@@ -2602,6 +2602,158 @@ class TestWebSocketTurnAdmission:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
+        ("upstream_events", "left_unfinished"),
+        [
+            pytest.param((), True, id="cut_before_any_event"),
+            pytest.param((json.dumps({"type": "response.created", "response": {"id": "resp_turn"}}),), True, id="cut"),
+            pytest.param((_turn_completed(),), False, id="completed"),
+            pytest.param((_UPSTREAM_ERROR,), False, id="failed"),
+        ],
+    )
+    async def test_native_relay_reports_a_turn_the_socket_closed_on_before_its_terminal_event(
+        self, upstream_events: tuple[str, ...], left_unfinished: bool
+    ) -> None:
+        import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
+
+        from litellm.caching.dual_cache import DualCache
+        from litellm.responses.streaming_iterator import drain_logging_tasks
+        from litellm.router_utils.pre_call_checks.model_rate_limit_check import ModelRateLimitingCheck
+
+        first, _, _ = _turn_frames()
+        backend_ws: Final = MagicMock()
+        backend_ws.send = AsyncMock()
+        backend_ws.recv = AsyncMock(side_effect=[*upstream_events, Exception("client left")])
+        unfinished_reports: Final[list[str]] = []
+        handler: Final = _make_streaming(
+            websocket=_ClientSocket(),
+            backend_ws=backend_ws,
+            request_data={},
+            logging_obj=_connection_logged_through(ModelRateLimitingCheck(DualCache()), {}),
+            first_message=first,
+            on_unfinished_turn=lambda: unfinished_reports.append("unfinished"),
+        )
+
+        await handler.client_to_backend()
+        await handler.backend_to_client()
+        await drain_logging_tasks()
+
+        assert unfinished_reports == (["unfinished"] if left_unfinished else [])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("client_leaves_after", "left_unfinished"),
+        [
+            pytest.param(1, True, id="client_left_mid_turn"),
+            pytest.param(None, False, id="client_read_the_whole_turn"),
+        ],
+    )
+    async def test_managed_relay_reports_a_turn_its_client_left_before_the_terminal_event(
+        self, client_leaves_after: int | None, left_unfinished: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        async def turn_stream():
+            yield {"type": "response.created", "response": {"id": "resp_turn"}}
+            yield {"type": "response.output_text.delta", "delta": "hel"}
+            yield json.loads(_turn_completed())
+
+        sends: Final[list[str]] = []
+
+        async def send_text(data: str) -> None:
+            if client_leaves_after is not None and len(sends) >= client_leaves_after:
+                raise RuntimeError("WebSocket is not connected")
+            sends.append(data)
+
+        monkeypatch.setattr(litellm, "aresponses", AsyncMock(side_effect=lambda **kwargs: turn_stream()))
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock(side_effect=send_text)
+        unfinished_reports: Final[list[str]] = []
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="anthropic/claude-sonnet-4-5",
+            logging_obj=Logging(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="connection-call",
+                function_id="connection-call",
+            ),
+            on_unfinished_turn=lambda: unfinished_reports.append("unfinished"),
+        )
+
+        await handler._process_response_create(json.dumps({"type": "response.create", "input": "hi"}))
+
+        assert unfinished_reports == (["unfinished"] if left_unfinished else [])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("events_before_cancel", "left_unfinished"),
+        [
+            pytest.param(1, True, id="cancelled_mid_turn"),
+            pytest.param(3, False, id="cancelled_after_the_terminal_event"),
+        ],
+    )
+    async def test_managed_relay_reports_a_turn_the_session_limit_cancelled_before_its_terminal_event(
+        self, events_before_cancel: int, left_unfinished: bool, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        events: Final = (
+            {"type": "response.created", "response": {"id": "resp_turn"}},
+            {"type": "response.output_text.delta", "delta": "hel"},
+            json.loads(_turn_completed()),
+        )
+
+        async def turn_stream():
+            for event in events[:events_before_cancel]:
+                yield event
+            await asyncio.Event().wait()
+
+        sends: Final[list[str]] = []
+        sent_every_event: Final = asyncio.Event()
+
+        async def send_text(data: str) -> None:
+            sends.append(data)
+            if len(sends) == events_before_cancel:
+                sent_every_event.set()
+
+        monkeypatch.setattr(litellm, "aresponses", AsyncMock(side_effect=lambda **kwargs: turn_stream()))
+        websocket: Final = MagicMock()
+        websocket.send_text = AsyncMock(side_effect=send_text)
+        unfinished_reports: Final[list[str]] = []
+        handler: Final = ManagedResponsesWebSocketHandler(
+            websocket=websocket,
+            model="anthropic/claude-sonnet-4-5",
+            logging_obj=Logging(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="connection-call",
+                function_id="connection-call",
+            ),
+            on_unfinished_turn=lambda: unfinished_reports.append("unfinished"),
+        )
+        turn: Final = asyncio.ensure_future(
+            handler._process_response_create(json.dumps({"type": "response.create", "input": "hi"}))
+        )
+        await asyncio.wait_for(sent_every_event.wait(), timeout=5)
+
+        turn.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await turn
+
+        assert unfinished_reports == (["unfinished"] if left_unfinished else [])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
         ("first_turn_end", "first_turn_tokens"),
         [
             pytest.param(_turn_completed(), _OUTPUT_TOKENS_PER_TURN, id="first_turn_completed"),

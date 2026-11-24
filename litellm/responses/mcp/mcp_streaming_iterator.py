@@ -60,16 +60,17 @@ def output_items(response: ResponsesAPIResponse) -> Sequence[object]:
     return tuple(cast("Sequence[object]", response.output))  # cast-ok: items are only carried, never inspected
 
 
+def _item_field(item: object, name: str) -> object:
+    """One field of a response item, which is either a dict or a model."""
+    return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
+
+
 def _function_call_id(item: object) -> str | None:
     """The call id of a function_call item, None for every other item kind."""
-    item_type: Final[object] = item.get("type") if isinstance(item, dict) else getattr(item, "type", None)
+    item_type: Final = _item_field(item, "type")
     if item_type != "function_call":
         return None
-    call_id: Final[object] = (
-        item.get("call_id") or item.get("id")
-        if isinstance(item, dict)
-        else getattr(item, "call_id", None) or getattr(item, "id", None)
-    )
+    call_id: Final = _item_field(item, "call_id") or _item_field(item, "id")
     return call_id if isinstance(call_id, str) else None
 
 

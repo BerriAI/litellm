@@ -50,6 +50,7 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 from litellm.litellm_core_utils.internal_call_metadata import (
     BACKGROUND_RESPONSE_COST_REQUEST_ID_SUFFIX,
+    inherits_parent_session,
     settles_background_response,
 )
 from litellm.litellm_core_utils.litellm_logging import (
@@ -458,8 +459,8 @@ def _dumped_usage_info(usage_info: object) -> object:
 
 
 def _extract_usage_for_ocr_call(  # pyright: ignore[reportUnusedFunction]  # shared with legacy_spend_log_rows and rust_spend_log_rows
-    response_obj: object, response_obj_dict: dict
-) -> dict:
+    response_obj: object, response_obj_dict: Mapping[str, object]
+) -> dict[str, object]:
     """
     Extract usage information for OCR/AOCR calls.
 
@@ -489,7 +490,7 @@ def _extract_usage_for_ocr_call(  # pyright: ignore[reportUnusedFunction]  # sha
     if usage_info is not None:
         # Handle dict or object with attributes
         if isinstance(usage_info, dict):
-            result: Final = {
+            result: Final[dict[str, object]] = {
                 "prompt_tokens": 0,  # OCR doesn't use traditional tokens
                 "completion_tokens": 0,
                 "total_tokens": 0,
@@ -692,16 +693,20 @@ def _get_session_id_for_spend_log(  # pyright: ignore[reportUnusedFunction]  # s
     omit_when_missing: bool,
     batch_trace_session_id: str | None = None,
 ) -> str | None:
-    """Resolve the session id for the spend log row: `omit` honors only metadata.session_id,
-    batch sessions outrank everything, then the conversation id the caller sent (also one an x-litellm-trace-id header
-    displaced from the request's session), then trace ids.
+    """Resolve the session id for the spend log row: `omit` honors metadata.session_id, else the parent session a proxy
+    sub-call inherited, never a trace id; batch sessions outrank everything,
+    then the conversation id the caller sent (also one an x-litellm-trace-id header displaced from the request's
+    session), then trace ids.
 
     A session minted by `missing_session_id: generate` or copied from the request's trace id is not a conversation, so
     it yields to the trace id, which the Responses bridge points at the previous turn's session to keep a chain whole.
     """
     if omit_when_missing:
         session_id: Final = metadata.get("session_id") if metadata else None
-        return str(session_id) if session_id else None
+        if session_id:
+            return str(session_id)
+        params: Final = as_str_mapping(kwargs.get("litellm_params")) or MappingProxyType({})
+        return _caller_session_for_spend_log(kwargs, metadata=None) if inherits_parent_session(params) else None
 
     from litellm._uuid import uuid
 
@@ -730,7 +735,7 @@ async def get_spend_by_team(
     end_date: dt,
     team_id: str | None,
     prisma_client: PrismaClient,
-):
+) -> Sequence[Mapping[str, object]]:
     sql_query: Final = """
     WITH SpendByModelApiKey AS (
         SELECT
@@ -799,7 +804,7 @@ async def get_spend_by_team_and_customer(
     team_id: str,
     customer_id: str,
     prisma_client: PrismaClient,
-):
+) -> Sequence[Mapping[str, object]]:
     sql_query: Final = """
     WITH SpendByModelApiKey AS (
         SELECT
@@ -974,11 +979,11 @@ def _bounded_compaction_summary(
 
 def _sanitize_request_body_for_spend_logs_payload(
     request_body: Mapping[str, object],
-    visited: set | None = None,
+    visited: set[int] | None = None,
     max_string_length_prompt_in_db: int | None = None,
     mask_credentials: bool = True,
     keep_compaction_blocks: bool = False,
-) -> dict:
+) -> dict[str, object]:
     """
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.

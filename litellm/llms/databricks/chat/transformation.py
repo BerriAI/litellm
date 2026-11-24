@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.anthropic_beta_gated_fields import log_beta_gated_strips, strip_beta_gated_thinking
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     handle_invalid_parallel_tool_calls,
@@ -584,8 +585,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         # every request doesn't have to be transformed for to OpenAI and Anthropic request formats.
         return messages, tools
 
-    def strips_hosted_mcp_tools(self, model: str) -> bool:
-        return "claude" in model
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops" if "claude" in model else "forwards"
 
     def map_openai_params(
         self,
@@ -600,7 +601,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
             model=model,
             route="databricks",
             drop_params=drop_params,
-            strips_hosted_mcp_tools=self.strips_hosted_mcp_tools,
+            handling=self.hosted_mcp_tool_handling(model),
         )
         mapped_params: Final = super().map_openai_params(request_params, optional_params, model, drop_params)
         if "claude" in model:

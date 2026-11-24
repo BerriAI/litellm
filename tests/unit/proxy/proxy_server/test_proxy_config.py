@@ -43,6 +43,7 @@ from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.common_utils.fips import enforce_fips_mode
 from litellm.proxy.config_resolvers.settings_store import SettingsStore
+from litellm.proxy.litellm_pre_call_utils import should_auto_drop_params_for_agentic_cli
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -4029,20 +4030,22 @@ def test_ProxyConfig__add_deployment_keeps_loading_rows_after_a_non_flag_drop_pa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("configured, expected", [("true", True), ("false", False)])
-async def test_ProxyConfig_load_config_turns_litellm_settings_drop_params_string_into_bool(
-    tmp_path, monkeypatch, configured, expected
+@pytest.mark.parametrize("configured, expected", [('"true"', True), ('"false"', False), ("null", False)])
+async def test_ProxyConfig_load_config_reads_a_flag_string_or_null_litellm_settings_drop_params_without_a_warning(
+    tmp_path, monkeypatch, caplog, configured, expected
 ):
     f = tmp_path / "c.yaml"
-    f.write_text(f'model_list: []\nlitellm_settings:\n  drop_params: "{configured}"\n')
+    f.write_text(f"model_list: []\nlitellm_settings:\n  drop_params: {configured}\n")
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
     monkeypatch.setattr(litellm, "drop_params", not expected)
 
-    await ProxyConfig().load_config(router=None, config_file_path=str(f))
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await ProxyConfig().load_config(router=None, config_file_path=str(f))
 
     assert litellm.drop_params is expected
+    assert "drop_params" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -4061,21 +4064,31 @@ async def test_ProxyConfig_load_config_resolves_a_litellm_settings_drop_params_e
 
 
 @pytest.mark.asyncio
-async def test_ProxyConfig_load_config_warns_and_turns_off_a_non_flag_litellm_settings_drop_params(
-    tmp_path, monkeypatch, caplog
+@pytest.mark.parametrize("configured, logged", [("ture", "'ture'"), ('"maybe"', "'maybe'"), ("2", "2")])
+async def test_ProxyConfig_load_config_warns_that_a_non_flag_litellm_settings_drop_params_is_off_except_for_agentic_clis(
+    tmp_path, monkeypatch, caplog, configured, logged
 ):
     f = tmp_path / "c.yaml"
-    f.write_text("model_list: []\nlitellm_settings:\n  drop_params: ture\n")
+    f.write_text(f"model_list: []\nlitellm_settings:\n  drop_params: {configured}\n")
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
     monkeypatch.setattr(litellm, "drop_params", True)
+    proxy_config = ProxyConfig()
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        await ProxyConfig().load_config(router=None, config_file_path=str(f))
+        await proxy_config.load_config(router=None, config_file_path=str(f))
 
     assert litellm.drop_params is False
-    assert "litellm_settings.drop_params='ture' is not a flag value, treating it as off" in caplog.text
+    assert caplog.text.count("is not a flag value") == 1
+    assert (
+        f"litellm_settings.drop_params={logged} is not a flag value, treating it as off, except for Claude Code, "
+        "Codex, and VS Code Copilot Chat requests, which keep their drop_params default on" in caplog.text
+    )
+    assert should_auto_drop_params_for_agentic_cli("claude-cli/2.1.299 (external, cli)", False, proxy_config)
+    assert should_auto_drop_params_for_agentic_cli("codex_cli_rs/0.165.0", False, proxy_config)
+    assert should_auto_drop_params_for_agentic_cli("GitHubCopilotChat/0.74.0", False, proxy_config)
+    assert not should_auto_drop_params_for_agentic_cli("curl/8.5.0", False, proxy_config)
 
 
 # ---------------------------------------------------------------------------

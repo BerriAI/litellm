@@ -333,6 +333,12 @@ def _reasoning_effort_params(
             assert_never(outcome)
 
 
+def _without_tool_choice_when_no_tools(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    if optional_params.get("tools") or optional_params.get("functions"):
+        return optional_params
+    return {key: value for key, value in optional_params.items() if key != "tool_choice"}
+
+
 class AzureAIStudioConfig(OpenAIConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:
         model_supports_tool_choice = True  # azure ai supports this by default
@@ -349,7 +355,7 @@ class AzureAIStudioConfig(OpenAIConfig):
             )
         )
         if not model_supports_tool_choice:
-            filtered_supported_params: Final = []
+            filtered_supported_params: Final[list[str]] = []
             for param in supported_params:
                 if param != "tool_choice":
                     filtered_supported_params.append(param)
@@ -423,14 +429,14 @@ class AzureAIStudioConfig(OpenAIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         if api_key:
             if api_base and self._should_use_api_key_header(api_base):
                 headers["api-key"] = api_key
@@ -458,8 +464,8 @@ class AzureAIStudioConfig(OpenAIConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -553,7 +559,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         reads_breakpoints: bool | None = None,
         drop_params: bool = False,
         base_model: str | None = None,
-    ) -> list:
+    ) -> list[AllMessageValues]:
         """
         - Azure AI Studio doesn't support content as a list. This handles:
             1. Strips message fields that are not part of the OpenAI chat-completions
@@ -651,10 +657,10 @@ class AzureAIStudioConfig(OpenAIConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict,
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         extra_body: Final = optional_params.pop("extra_body", {})
         if extra_body and isinstance(extra_body, dict):
             optional_params.update(extra_body)
@@ -670,7 +676,7 @@ class AzureAIStudioConfig(OpenAIConfig):
                 bool(litellm_params.get("drop_params") or litellm.drop_params),
                 base_model if isinstance(base_model, str) else None,
             ),
-            **optional_params,
+            **_without_tool_choice_when_no_tools(optional_params),
         }
 
     def transform_response(
@@ -679,10 +685,10 @@ class AzureAIStudioConfig(OpenAIConfig):
         raw_response: Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -717,7 +723,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         )
 
     def should_retry_llm_api_inside_llm_translation_on_http_error(
-        self, e: httpx.HTTPStatusError, litellm_params: dict
+        self, e: httpx.HTTPStatusError, litellm_params: dict[str, object]
     ) -> bool:
         should_drop_params: Final = litellm_params.get("drop_params") or litellm.drop_params
         error_text: Final = e.response.text
@@ -738,7 +744,9 @@ class AzureAIStudioConfig(OpenAIConfig):
     def max_retry_on_unprocessable_entity_error(self) -> int:
         return 2
 
-    def transform_request_on_unprocessable_entity_error(self, e: httpx.HTTPStatusError, request_data: dict) -> dict:
+    def transform_request_on_unprocessable_entity_error(
+        self, e: httpx.HTTPStatusError, request_data: dict[str, object]
+    ) -> dict[str, object]:
         error_text: Final = e.response.text
         _messages: Final = cast(list[AllMessageValues] | None, request_data.get("messages"))
         if "unknown field: parameter index is not a valid field" in error_text and _messages is not None:
@@ -758,7 +766,7 @@ class AzureAIStudioConfig(OpenAIConfig):
         )
         return data
 
-    def _drop_tool_level_extra_fields(self, request_data: dict, error_text: str) -> dict:
+    def _drop_tool_level_extra_fields(self, request_data: dict[str, object], error_text: str) -> dict[str, object]:
         fields_to_drop: Final[Collection[str]] = set(re.findall(r"tools\[\d+\]\.([\w-]+)", error_text))
         tools: Final = request_data.get("tools")
         if fields_to_drop and isinstance(tools, list):
@@ -768,7 +776,9 @@ class AzureAIStudioConfig(OpenAIConfig):
                         tool.pop(field, None)
         return request_data
 
-    def _drop_extra_params_from_request_data(self, request_data: dict, error_text: str) -> dict:
+    def _drop_extra_params_from_request_data(
+        self, request_data: dict[str, object], error_text: str
+    ) -> dict[str, object]:
         params_to_drop: Final = self._extract_params_to_drop_from_error_text(error_text)
         if params_to_drop:
             request: Final = _REQUEST_BODY.validate_python(request_data)
@@ -795,7 +805,7 @@ class AzureAIStudioConfig(OpenAIConfig):
 
         # Parse the extracted string into a list of parameter names
         params_str: Final = match.group(1)
-        params: Final = []
+        params: Final[list[str]] = []
         for param in params_str.split(","):
             # Clean up the parameter name (remove quotes, spaces)
             clean_param = param.strip().strip("'").strip('"')

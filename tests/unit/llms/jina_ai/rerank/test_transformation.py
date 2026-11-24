@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
@@ -57,6 +58,25 @@ def test_transform_rerank_response_keeps_only_known_usage_counters(
     payload: dict[str, object], expected_meta: dict[str, object]
 ):
     assert _transform(payload).meta == expected_meta
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        {},
+        {"search_units": 1, "cost": 0.002},
+        {"search_units": 1, "cost": "n/a", "is_byok": False, "cost_details": {"upstream": None}},
+        {"total_tokens": 21, "prompt_tokens": 21},
+    ],
+)
+def test_transform_rerank_response_keeps_the_provider_usage_block_verbatim(usage: dict[str, object]) -> None:
+    response: Final = _transform({"results": [{"index": 0, "relevance_score": 0.5}], "usage": usage})
+
+    assert response.model_dump(by_alias=True)["usage"] == usage
+
+
+def test_transform_rerank_response_without_usage_serializes_no_usage_key() -> None:
+    assert "usage" not in _transform({"id": "rerank-1", "results": []}).model_dump(by_alias=True)
 
 
 def test_transform_rerank_response_generates_an_id_when_the_provider_sends_none():

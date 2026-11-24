@@ -25,7 +25,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                 self.async_get_cache
             )  # map the litellm 'get_cache' function to our custom function
 
-    def print_verbose(self, print_statement, debug_level: Literal["INFO", "DEBUG"] = "DEBUG") -> None:
+    def print_verbose(self, print_statement: object, debug_level: Literal["INFO", "DEBUG"] = "DEBUG") -> None:
         if debug_level == "DEBUG" or debug_level == "INFO":
             verbose_proxy_logger.debug(print_statement)
         if litellm.set_verbose is True:

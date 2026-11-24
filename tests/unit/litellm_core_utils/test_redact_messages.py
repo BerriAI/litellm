@@ -26,8 +26,10 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger_v2 import Field, Patch
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import (
+    TokenDataCheckedFields,
     _redact_responses_api_output,
     _redacted_responses_api_response,
     perform_redaction,
@@ -2603,3 +2605,30 @@ def test_redaction_keeps_the_compression_savings_a_guardrail_reports() -> None:
 
     assert "4111" not in str(redacted["guardrail_information"])
     assert extract_compression_saved_tokens(redacted) == extract_compression_saved_tokens(payload) == 600
+
+
+def _token_ids_answer(content: str) -> dict[str, object]:
+    return {
+        "choices": [
+            {"index": 0, "message": {"role": "assistant", "content": content}, "token_ids": [785, 6722, 12095, 13]}
+        ]
+    }
+
+
+@pytest.mark.parametrize(
+    ("patched_answer", "served_token_ids"),
+    [("The capital of France is [MASKED].", None), ("The capital of France is Paris. Enjoy!", [785, 6722, 12095, 13])],
+    ids=["masked", "extended"],
+)
+def test_token_data_checked_fields_checks_each_patch_on_a_plain_mapping(
+    patched_answer: str, served_token_ids: object
+) -> None:
+    fields = TokenDataCheckedFields(MappingProxyType({Field.response: _token_ids_answer("The capital of France is Paris.")}))
+
+    patched = fields.apply(Patch().set(Field.response, _token_ids_answer(patched_answer)))
+
+    choice = patched[Field.response]["choices"][0]
+    assert choice["message"]["content"] == patched_answer
+    assert choice["token_ids"] == served_token_ids
+    assert dict(patched) == {Field.response: patched[Field.response]}
+    assert len(patched) == 1

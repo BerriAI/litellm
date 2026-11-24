@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from datetime import datetime, timezone
 from functools import partial
 from itertools import chain
 from typing import Final
@@ -8,6 +9,7 @@ from typing import Final
 import httpx
 import prometheus_client
 import pytest
+from fastapi import Request
 from prometheus_client import CollectorRegistry, Counter
 
 from litellm.integrations.lens import exporter as exporter_module
@@ -19,6 +21,137 @@ from litellm.integrations.lens.exporter import (
     encode_record,
     lens_export_counters,
 )
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", (False, True), ids=("success", "failure"))
+@pytest.mark.parametrize(
+    ("key_value", "team_value", "expected_count"),
+    ((None, None, 1), (None, False, 0), (False, True, 0), (True, False, 1)),
+    ids=("configured-default", "team-off", "key-off", "key-overrides-team"),
+)
+async def test_passthrough_request_records_obey_the_authenticated_lens_policy(
+    failed: bool, key_value: bool | None, team_value: bool | None, expected_count: int
+) -> None:
+    at: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    auth: Final = UserAPIKeyAuth(metadata={"lens_enabled": key_value}, team_metadata={"lens_enabled": team_value})
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/gemini/v1beta/models/test-model:generateContent",
+            "query_string": b"",
+            "headers": [],
+            "server": ("gateway.test", 80),
+        }
+    )
+    logging_obj: Final = Logging(
+        model="test-model",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=at,
+        litellm_call_id="passthrough-policy",
+        function_id="passthrough-policy",
+    )
+    kwargs: Final = HttpPassThroughEndpointHelpers.init_kwargs_for_pass_through_endpoint(
+        request=request,
+        user_api_key_dict=auth,
+        passthrough_logging_payload={},
+        logging_obj=logging_obj,
+        _parsed_body={
+            "metadata": {
+                "lens_enabled": True,
+                "user_api_key_auth": {"metadata": {"lens_enabled": True}},
+            }
+        },
+        litellm_call_id="passthrough-policy",
+    )
+    received: Final = asyncio.Queue[httpx.Request]()
+
+    def accept(export_request: httpx.Request) -> httpx.Response:
+        received.put_nowait(export_request)
+        return httpx.Response(204)
+
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as client:
+        exporter: Final = LensExporter(client)
+        exporter.start()
+        callback: Final = exporter.async_log_failure_event if failed else exporter.async_log_success_event
+        await callback(
+            {
+                **kwargs,
+                "standard_logging_object": {
+                    "id": "passthrough-policy",
+                    "call_type": "pass_through_endpoint",
+                    "status": "failure" if failed else "success",
+                    "messages": [{"role": "user", "content": "passthrough request content"}],
+                    "response": {"text": "passthrough response content"},
+                },
+            },
+            None,
+            at,
+            at,
+        )
+        await exporter.aclose()
+
+    assert received.qsize() == expected_count
+    assert exporter.rows_written == expected_count
+    assert exporter.rows_dropped == 0
+    assert "user_api_key_auth" not in kwargs["litellm_params"]["metadata"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed", (False, True), ids=("success", "failure"))
+@pytest.mark.parametrize(
+    ("key_metadata", "team_metadata", "expected_count"),
+    (
+        pytest.param(None, None, 1, id="global-default"),
+        pytest.param({}, {"lens_enabled": False}, 0, id="team-disabled"),
+        pytest.param({"lens_enabled": None}, {"lens_enabled": False}, 0, id="key-inherits-disabled-team"),
+        pytest.param({"lens_enabled": False}, {"lens_enabled": True}, 0, id="key-disabled"),
+        pytest.param({"lens_enabled": True}, {"lens_enabled": False}, 1, id="key-overrides-disabled-team"),
+    ),
+)
+async def test_lens_policy_controls_success_and_failure_exports(
+    failed: bool,
+    key_metadata: dict[str, object] | None,
+    team_metadata: dict[str, object] | None,
+    expected_count: int,
+) -> None:
+    requests: Final = asyncio.Queue[httpx.Request]()
+
+    def accept(request: httpx.Request) -> httpx.Response:
+        requests.put_nowait(request)
+        return httpx.Response(204)
+
+    auth: Final = UserAPIKeyAuth(metadata=key_metadata or {}, team_metadata=team_metadata)
+    async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(accept)) as client:
+        exporter: Final = LensExporter(client)
+        exporter.start()
+        callback: Final = exporter.async_log_failure_event if failed else exporter.async_log_success_event
+        await callback(
+            {
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key_auth": auth,
+                        "lens_enabled": True,
+                        "user_api_key_metadata": {"lens_enabled": True},
+                    }
+                },
+                "standard_logging_object": {"id": "policy-request", "status": "failure" if failed else "success"},
+            },
+            None,
+            None,
+            None,
+        )
+        await exporter.aclose()
+    assert requests.qsize() == expected_count
+    assert exporter.rows_written == expected_count
+    assert exporter.rows_dropped == 0
 
 
 @pytest.mark.asyncio

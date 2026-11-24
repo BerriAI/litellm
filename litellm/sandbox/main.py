@@ -11,6 +11,7 @@ Each entrypoint is `@client`-decorated, so every operation is logged the same
 way `litellm.asearch` is.
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 from litellm._logging import verbose_logger
@@ -44,7 +45,7 @@ def _get_config(provider: str) -> BaseSandboxConfig:
     return config
 
 
-def _forward_kwargs(kwargs: dict) -> dict:
+def _forward_kwargs(kwargs: Mapping[str, object]) -> dict:
     return {k: v for k, v in kwargs.items() if k not in _LITELLM_INTERNAL_KWARGS}
 
 
@@ -69,7 +70,7 @@ async def acreate_sandbox(
     allow_internet_access: bool | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> ContainerHandle:
     _update_logging(kwargs, provider, "create_sandbox")
     return await _get_config(provider).acreate_sandbox(
@@ -88,7 +89,7 @@ async def arun_code(
     container: ContainerHandle | str,
     code: str,
     api_key: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> CodeExecutionResult:
     _update_logging(kwargs, provider, "run_code")
     return await _get_config(provider).arun_code(
@@ -105,7 +106,7 @@ async def adelete_sandbox(
     container: ContainerHandle | str,
     api_key: str | None = None,
     api_base: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> bool:
     _update_logging(kwargs, provider, "delete_sandbox")
     return await _get_config(provider).adelete_sandbox(
@@ -124,7 +125,7 @@ async def acode_interpreter_tool(
     timeout: int | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> CodeExecutionResult:
     _update_logging(kwargs, provider, "code_interpreter_tool")
     config: Final = _get_config(provider)

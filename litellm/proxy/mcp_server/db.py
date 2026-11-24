@@ -136,11 +136,16 @@ _OAUTH_CLIENT_CREDENTIAL_FIELDS: Final = frozenset(
 )
 
 
-def stale_mcp_auth_fields(submitted: Mapping[str, object], previous_value: Callable[[str], object]) -> dict[str, None]:
+def stale_mcp_auth_fields(
+    submitted: Mapping[str, object],
+    previous_value: Callable[[str], object],
+    *,
+    preserve_explicit: bool = False,
+) -> dict[str, None]:
     return {
         field: None
         for field in _AUTH_FLOW_SCOPED_FIELDS
-        if field not in submitted or submitted[field] == previous_value(field)
+        if field not in submitted or (not preserve_explicit and submitted[field] == previous_value(field))
     }
 
 
@@ -537,6 +542,8 @@ def _prepare_mcp_server_data(
     if not exclude_unset:
         data_dict["is_byok"] = getattr(data, "is_byok", False)
 
+    if "events" in data_dict:
+        return {**data_dict, "events": safe_dumps(data_dict["events"])}
     return data_dict
 
 
@@ -1399,7 +1406,11 @@ async def update_mcp_server(
     )
     edited_credentials: Final = {"credentials": safe_dumps(retained_credentials)} if oauth_upstream_edited else {}
     cleared_auth_fields: Final = (
-        stale_mcp_auth_fields(prepared_data, lambda field: getattr(existing, field, None))
+        stale_mcp_auth_fields(
+            prepared_data,
+            lambda field: getattr(existing, field, None),
+            preserve_explicit=data.preserve_explicit_oauth_settings,
+        )
         if auth_type_changed or url_changed or issuer_changed
         else {}
     )

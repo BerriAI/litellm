@@ -15,7 +15,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import require_attributes, subscript
+from litellm.litellm_core_utils.core_helpers import as_object_list, iter_items, joined, require_attributes, subscript
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
     get_content_from_model_response,
@@ -131,8 +131,23 @@ class _GalileoLoggingKwargs(TypedDict, total=False, extra_items=object):
     standard_logging_object: ReadOnly[GalileoStandardLoggingFields | None]
 
 
+def _as_dict(value: object) -> Mapping[object, object] | None:
+    return value if isinstance(value, dict) else None
+
+
 def _record_messages(messages: object) -> object:
-    return messages.get("messages") if isinstance(messages, dict) else messages
+    fields: Final = _as_dict(messages)
+    return fields.get("messages") if fields is not None else messages
+
+
+def _block_text(block: object) -> object:
+    fields: Final = _as_dict(block)
+    return fields.get("text", "") if fields is not None else str(block)
+
+
+def _content_text(content: object) -> object:
+    blocks: Final = as_object_list(content)
+    return content if blocks is None else joined(" ", (_block_text(block) for block in blocks))
 
 
 def _galileo_record(response: LLMResponse, messages: object) -> _GalileoRecord:
@@ -278,18 +293,19 @@ class GalileoObserve(CustomLogger):
 
     @staticmethod
     def _galileo_input_messages(messages: object, input_text: str) -> list[dict[str, str]]:
-        if isinstance(messages, dict):
-            messages = messages.get("messages")
-        if not messages:
+        record_messages: Final = _record_messages(messages)
+        if not record_messages:
             return [{"role": "user", "content": input_text}]
-        if not isinstance(messages, list):
+        listed: Final = as_object_list(record_messages)
+        if listed is None:
             return [{"role": "user", "content": input_text}]
 
         galileo_messages: Final[list[dict[str, str]]] = []
-        for message in messages:
-            if not isinstance(message, dict):
+        for message in listed:
+            fields = _as_dict(message)
+            if fields is None:
                 continue
-            role = message.get("role")
+            role = fields.get("role")
             if not role:
                 continue
             galileo_messages.append(
@@ -463,17 +479,19 @@ class GalileoObserve(CustomLogger):
         if not traces_value:
             missing_fields.append("traces")
 
-        traces: Final[Sequence[object]] = traces_value if isinstance(traces_value, list) else []
-        for trace_index, trace in enumerate(traces):
-            if not isinstance(trace, dict):
+        traces: Final[Sequence[object]] = as_object_list(traces_value) or []
+        for trace_index, trace_value in enumerate(traces):
+            trace = _as_dict(trace_value)
+            if trace is None:
                 continue
             for field in ("id", "type", "spans"):
                 if field not in trace:
                     missing_fields.append(f"traces[{trace_index}].{field}")
 
             trace_id = trace.get("id")
-            for span_index, span in enumerate(trace.get("spans", [])):
-                if not isinstance(span, dict):
+            for span_index, span_value in enumerate(iter_items(trace.get("spans", []))):
+                span = _as_dict(span_value)
+                if span is None:
                     continue
                 for field in ("id", "trace_id", "parent_id"):
                     if field not in span:
@@ -488,11 +506,11 @@ class GalileoObserve(CustomLogger):
             )
 
     def _log_flush_payload(self, url: str, payload: dict[str, object]) -> None:
-        traces: Final = payload.get("traces")
+        traces: Final = as_object_list(payload.get("traces"))
         verbose_logger.debug(
             "Galileo Logger flush URL: %s trace_count=%s",
             url,
-            len(traces) if isinstance(traces, list) else 0,
+            len(traces) if traces is not None else 0,
         )
         if self.use_v2_api and "/ingest/traces/" in url:
             self._log_v2_payload_validation(payload)
@@ -694,24 +712,23 @@ class GalileoObserve(CustomLogger):
         """Return a plain-string summary of the input suitable for the trace-level input field."""
         if isinstance(messages, str):
             return messages
-        if not isinstance(messages, list):
+        listed: Final = as_object_list(messages)
+        if listed is None:
             return ""
         # Use the last user/human message so the trace table shows the actual prompt
-        for msg in reversed(messages):
-            if not isinstance(msg, dict):
+        for msg in reversed(listed):
+            fields = _as_dict(msg)
+            if fields is None:
                 continue
-            if str(msg.get("role", "")).lower() in ("user", "human"):
-                content = msg.get("content") or ""
-                if isinstance(content, list):
-                    content = " ".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
+            if str(fields.get("role", "")).lower() in ("user", "human"):
+                content = _content_text(fields.get("content") or "")
                 if content:
                     return str(content)
         # Fallback: first non-empty content of any role
-        for msg in messages:
-            if isinstance(msg, dict):
-                content = msg.get("content") or ""
-                if isinstance(content, list):
-                    content = " ".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in content)
+        for msg in listed:
+            fields = _as_dict(msg)
+            if fields is not None:
+                content = _content_text(fields.get("content") or "")
                 if content:
                     return str(content)
         return ""

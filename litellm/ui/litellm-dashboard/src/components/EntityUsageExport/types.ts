@@ -3,6 +3,7 @@ import type { Team } from "@/components/key_team_helpers/key_list";
 import type { DailyActivityEntity, ExportFormat, ExportType } from "@/components/UsagePage/dailyActivityApi";
 
 export type { ExportFormat, ExportType };
+export type UsageExportFormat = ExportFormat | "pdf";
 export type EntityType = DailyActivityEntity;
 
 export interface EntityUsageExportModalProps {
