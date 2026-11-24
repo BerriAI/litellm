@@ -25,7 +25,7 @@ from litellm.llms.base_llm.vector_store.transformation import (
     VectorStoreEmbeddingExecutor,
     vector_store_request_metadata,
 )
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import EmbeddingResponse
@@ -73,6 +73,11 @@ def _direct_vector_store_embedding_executor(
     return BaseQueryEmbeddingVectorStoreConfig.query_embedding_executor(
         value, router, vector_store_request_metadata(request_kwargs)
     )
+
+
+def _passed_http_client(value: object) -> HTTPHandler | AsyncHTTPHandler | None:
+    """Return the caller's client when it is one the HTTP handler would reuse, else None."""
+    return value if isinstance(value, (HTTPHandler, AsyncHTTPHandler)) else None
 
 
 def _items_without_key(values: Mapping[str, object], excluded_key: str) -> Iterator[tuple[str, object]]:
@@ -146,7 +151,7 @@ async def acreate(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreCreateResponse:
     """
     Async: Create a vector store.
@@ -210,7 +215,7 @@ def create(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreCreateResponse | Coroutine[object, object, VectorStoreCreateResponse]:
     """
     Create a vector store.
@@ -228,7 +233,7 @@ def create(
     local_vars: Final = locals()
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("acreate", False) is True
 
         # get llm provider logic
@@ -294,7 +299,7 @@ def create(
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=_passed_http_client(kwargs.get("client")),
         )
 
         return response
@@ -470,7 +475,7 @@ async def asearch(
     router: "Router | None" = None,
     *,
     query_image: VectorStoreSearchQueryImage | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreSearchResponse:
     """
     Async: Search a vector store for relevant chunks based on a query and file attributes filter.
@@ -577,7 +582,7 @@ def search(
     router: "Router | None" = None,
     *,
     query_image: VectorStoreSearchQueryImage | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreSearchResponse | Coroutine[object, object, VectorStoreSearchResponse]:
     """
     Search a vector store for relevant chunks based on a query and file attributes filter.
@@ -602,7 +607,7 @@ def search(
     local_vars: Final = dict(_items_without_key(locals(), "embedding_executor"))
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("asearch", False) is True
         # pull credentials from registry if available
         if litellm.vector_store_registry is not None and vector_store_id is not None:
@@ -698,7 +703,7 @@ def search(
             else dict(_items_without_key(sent_extra_body, "query_image")),
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=_passed_http_client(kwargs.get("client")),
         )
 
         return response
@@ -720,7 +725,7 @@ async def aretrieve(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreCreateResponse:
     """
     Async: Retrieve a vector store.
@@ -772,7 +777,7 @@ def retrieve(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreCreateResponse | Coroutine[object, object, VectorStoreCreateResponse]:
     """
     Retrieve a vector store.
@@ -786,7 +791,7 @@ def retrieve(
     local_vars: Final = locals()
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aretrieve", False) is True
 
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -830,7 +835,7 @@ def retrieve(
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=_passed_http_client(kwargs.get("client")),
         )
 
         return response
@@ -855,7 +860,7 @@ async def alist(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> object:
     """
     Async: List vector stores.
@@ -913,7 +918,7 @@ def list(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> object | Coroutine[object, object, object]:
     """
     List vector stores.
@@ -930,7 +935,7 @@ def list(
     local_vars: Final = locals()
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("alist", False) is True
 
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -982,7 +987,7 @@ def list(
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=_passed_http_client(kwargs.get("client")),
         )
 
         return response
@@ -1007,7 +1012,7 @@ async def aupdate(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreCreateResponse:
     """
     Async: Update a vector store.
@@ -1065,7 +1070,7 @@ def update(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> VectorStoreCreateResponse | Coroutine[object, object, VectorStoreCreateResponse]:
     """
     Update a vector store.
@@ -1082,7 +1087,7 @@ def update(
     local_vars: Final = locals()
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aupdate", False) is True
 
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -1137,7 +1142,7 @@ def update(
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=_passed_http_client(kwargs.get("client")),
         )
 
         return response
@@ -1159,7 +1164,7 @@ async def adelete(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> object:
     """
     Async: Delete a vector store.
@@ -1211,7 +1216,7 @@ def delete(
     extra_body: dict[str, object] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> object | Coroutine[object, object, object]:
     """
     Delete a vector store.
@@ -1225,7 +1230,7 @@ def delete(
     local_vars: Final = locals()
     try:
         litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-        litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+        litellm_call_id: Final = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("adelete", False) is True
 
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
@@ -1269,7 +1274,7 @@ def delete(
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
-            client=kwargs.get("client"),
+            client=_passed_http_client(kwargs.get("client")),
         )
 
         return response

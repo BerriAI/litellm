@@ -2,7 +2,7 @@
 ## Handler file for calling claude-3 on vertex ai
 import base64
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -112,7 +112,9 @@ class VertexAIAnthropicConfig(AnthropicConfig):
     def should_strip_billing_metadata(self) -> bool:
         return True
 
-    def _add_context_management_beta_headers(self, beta_set: set[str], context_management: dict) -> None:
+    def _add_context_management_beta_headers(
+        self, beta_set: set[str], context_management: Mapping[str, Iterable[Mapping[str, object]]]
+    ) -> None:
         """
         Add context_management beta headers to the beta_set.
 
