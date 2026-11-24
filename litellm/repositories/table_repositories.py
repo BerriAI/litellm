@@ -132,10 +132,6 @@ class OrganizationMembershipRepository(PrismaTableRepository["prisma_models.Lite
     table_name = "litellm_organizationmembership"
 
 
-class BudgetWindowSpendRepository(PrismaTableRepository["prisma_models.LiteLLM_BudgetWindowSpend"]):
-    table_name = "litellm_budgetwindowspend"
-
-
 class ClaudeCodePluginRepository(PrismaTableRepository["prisma_models.LiteLLM_ClaudeCodePluginTable"]):
     table_name = "litellm_claudecodeplugintable"
 
