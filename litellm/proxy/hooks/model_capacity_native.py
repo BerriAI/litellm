@@ -51,6 +51,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     callback_kwargs_mapping,
     cap_output_for_limit,
     claim_request_stash_for_data,
+    counts_unpriced_embedding_media,
     get_or_create_request_stash,
     get_request_stash,
     limiter_post_call_success,
@@ -174,14 +175,6 @@ def _live() -> LiveRequest:
     if live is None:
         raise RuntimeError("the model capacity seam was called outside a live request")
     return live
-
-
-def _client_request_body(logged_kwargs: Mapping[str, object] | None) -> Mapping[str, object] | None:
-    litellm_params: Final = as_str_mapping(None if logged_kwargs is None else logged_kwargs.get("litellm_params"))
-    proxy_request: Final = as_str_mapping(
-        None if litellm_params is None else litellm_params.get("proxy_server_request")
-    )
-    return None if proxy_request is None else as_str_mapping(proxy_request.get("body"))
 
 
 def auth_from_request(data: object) -> UserAPIKeyAuth | None:
@@ -437,13 +430,20 @@ class CapacityHost:
     @_host_call
     async def estimate_tokens(self, args: Mapping[str, object]) -> object:
         live: Final = _live()
-        data: Final = live.data or _client_request_body(live.kwargs)
+        data: Final = live.data
         if not data:
             return {"kind": "no_body"}
         model: Final = str(args["model"])
         tpm_share: Final = int(str(args["tpm_share"]))
         call_type: Final = args["call_type"] if isinstance(args["call_type"], str) else None
         as_dispatched: Final = dict(data, model=model)
+        media_model_resolver: Final = (
+            {} if self.media_model_resolver is None else {"media_model_resolver": self.media_model_resolver}
+        )
+        if live.hook is Hook.attempt_ended and counts_unpriced_embedding_media(
+            as_dispatched, call_type, team_id=None, **media_model_resolver
+        ):
+            return {"kind": "unpriced"}
         rate_limit_type: Final = token_rate_limit_type()
         if rate_limit_type != "input":
             cap_output_for_limit(as_dispatched, tpm_share, call_type)
@@ -455,7 +455,7 @@ class CapacityHost:
                 call_type=call_type,
                 team_id=None if live.auth is None else live.auth.team_id,
                 rate_limit_type=rate_limit_type,
-                **({} if self.media_model_resolver is None else {"media_model_resolver": self.media_model_resolver}),
+                **media_model_resolver,
             )
         except Exception as error:  # noqa: BLE001  # an unreadable prompt still holds the minimum so admission runs
             from litellm._logging import verbose_proxy_logger
@@ -754,13 +754,16 @@ class NativeDynamicRateLimiter(RustLogger):
         self, hook: Hook, reads: frozenset[Field], view: object, ctx: CallContext[object]
     ) -> Patch | Abort | None:
         data: Final = as_str_mapping(getattr(view, Field.deprecated_kwargs.value, None))
+        stash: Final = _request_stash(hook, data)
+        if hook is Hook.pre_call and stash is not None:
+            stash.request_body = data
         live: Final = LiveRequest(
             hook=hook,
-            data=data if hook is not Hook.attempt_ended else None,
+            data=data if hook is not Hook.attempt_ended else None if stash is None else stash.request_body,
             auth=(REQUEST_AUTH.get() or auth_from_request(data)) if hook is not Hook.attempt_ended else None,
             response=getattr(view, Field.deprecated_response_obj.value, None),
             kwargs=data if hook is Hook.attempt_ended else None,
-            state=self._state_for(_request_stash(hook, data)),
+            state=self._state_for(stash),
         )
         token: Final = _LIVE.set(live)
         try:

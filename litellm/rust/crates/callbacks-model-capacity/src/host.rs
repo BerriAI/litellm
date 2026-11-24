@@ -21,6 +21,7 @@ pub enum Estimate {
     NoBody,
     Tokens(i64),
     Failed,
+    Unpriced,
 }
 
 pub trait CounterStore: Send + Sync {

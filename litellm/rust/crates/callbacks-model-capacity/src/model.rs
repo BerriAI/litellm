@@ -519,6 +519,19 @@ impl UsageTokens {
         embedding && reported_nothing && rate_limit_type != TokenRateLimitType::Output
     }
 
+    pub fn charged(
+        usage: Option<&Self>,
+        rate_limit_type: TokenRateLimitType,
+        embedding: bool,
+    ) -> i64 {
+        match Self::settled(usage, rate_limit_type) {
+            0 if embedding && rate_limit_type == TokenRateLimitType::Total => {
+                Self::settled(usage, TokenRateLimitType::Input)
+            }
+            tokens => tokens,
+        }
+    }
+
     pub fn settled(usage: Option<&Self>, rate_limit_type: TokenRateLimitType) -> i64 {
         usage.map_or(0, |usage| match rate_limit_type {
             TokenRateLimitType::Output => usage.completion_tokens,
@@ -612,6 +625,22 @@ mod tests {
         let key = KeyFacts::new(Some(&identity(members)), KeyGaps::default());
         assert_eq!(key.team_text().as_deref(), text);
         assert_eq!(key.team_str(), exact);
+    }
+
+    #[rstest]
+    #[case::prompt_without_total(tokens(7, 0, 0), TokenRateLimitType::Total, 7)]
+    #[case::reported_total(tokens(7, 0, 9), TokenRateLimitType::Total, 9)]
+    #[case::input_limit(tokens(7, 0, 0), TokenRateLimitType::Input, 7)]
+    #[case::nothing_reported(tokens(0, 0, 0), TokenRateLimitType::Total, 0)]
+    fn an_embedding_reporting_prompt_tokens_without_a_total_charges_its_prompt_tokens(
+        #[case] usage: Option<UsageTokens>,
+        #[case] rate_limit_type: TokenRateLimitType,
+        #[case] expected: i64,
+    ) {
+        assert_eq!(
+            UsageTokens::charged(usage.as_ref(), rate_limit_type, true),
+            expected
+        );
     }
 
     fn usage(members: Value) -> Usage {

@@ -48,6 +48,7 @@ from tests.unit.proxy.hooks.native_capacity_handler import (
     pre_call_at_saturation,
     priority_based_descriptors,
     redis_answering_counts,
+    saturation_reads,
     seed_counter,
 )
 
@@ -1933,12 +1934,9 @@ async def test_an_embedding_the_provider_reports_as_zero_tokens_keeps_its_reserv
     assert await _team_tokens_remaining(handler) == remaining
 
 
-@pytest.mark.asyncio
-async def test_an_embedding_the_provider_reports_as_zero_tokens_counts_its_estimate_toward_saturation(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import request_token_estimate
-
+async def _embedding_tokens_toward_saturation(
+    monkeypatch: pytest.MonkeyPatch, embedding_input: object, prompt_tokens: int, media_models: tuple[str, ...]
+) -> Mapping[str, float]:
     monkeypatch.setenv("LITELLM_LICENSE", "test-license-key")
     monkeypatch.setattr(litellm, "priority_reservation", {"dev": 0.1, "prod": 0.9})
     model: Final = "media-embedding"
@@ -1954,32 +1952,78 @@ async def test_an_embedding_the_provider_reports_as_zero_tokens_counts_its_estim
         )
     )
     redis: Final = handler.saturation_redis()
-    body: Final = {"model": model, "input": "word " * 30}
-
+    handler.v3_limiter = PROXY_MaxParallelRequestsHandler_v3(
+        handler.internal_usage_cache, media_model_resolver=lambda _model, _team_id: media_models
+    )
+    with redis.answering(saturation_reads(handler, model, 0.0)):
+        await handler.async_pre_call_hook(
+            UserAPIKeyAuth(api_key="sk-dev", metadata={"priority": "dev"}),
+            DualCache(),
+            {"model": model, "input": embedding_input},
+            "aembedding",
+        )
     await handler.async_log_success_event(
         kwargs={
             "call_type": "aembedding",
-            "litellm_params": {"metadata": {"model_group": model}, "proxy_server_request": {"body": body}},
+            "litellm_params": {
+                "metadata": {"model_group": model},
+                "proxy_server_request": {"body": {"model": model, "input": "redacted-by-litellm"}},
+            },
             "standard_logging_object": {
                 "metadata": {"user_api_key_auth_metadata": {"priority": "dev"}},
                 "model_group": model,
             },
         },
-        response_obj=litellm.EmbeddingResponse(usage=litellm.Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0)),
+        response_obj=litellm.EmbeddingResponse(
+            usage=litellm.Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=0)
+        ),
         start_time=None,
         end_time=None,
     )
+    token_keys: Final = (
+        counter_key(RateLimitScope("model_saturation_check", model).counter("tokens")),
+        counter_key(RateLimitScope("priority_model", f"{model}:dev").counter("tokens")),
+    )
+    increments: Final = redis.increments()
+    return {key: sum(amount for counted_key, amount in increments if counted_key == key) for key in token_keys}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prompt_tokens", [0, 7])
+async def test_an_embedding_counts_its_prompt_tokens_or_else_its_pre_call_estimate_toward_saturation(
+    monkeypatch: pytest.MonkeyPatch, prompt_tokens: int
+) -> None:
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import request_token_estimate
+
+    embedding_input: Final = "word " * 30
+    counted: Final = await _embedding_tokens_toward_saturation(
+        monkeypatch, embedding_input, prompt_tokens, ("bedrock/amazon.titan-embed-image-v1",)
+    )
 
     estimate: Final = request_token_estimate(
-        data=body, model=model, min_configured_tpm_limit=0, call_type="aembedding", team_id=None
+        data={"model": "media-embedding", "input": embedding_input},
+        model="media-embedding",
+        min_configured_tpm_limit=0,
+        call_type="aembedding",
+        team_id=None,
     )
     assert estimate > 0
-    assert sorted(redis.increments()) == sorted(
-        [
-            (counter_key(RateLimitScope("model_saturation_check", model).counter("tokens")), estimate),
-            (counter_key(RateLimitScope("priority_model", f"{model}:dev").counter("tokens")), estimate),
-        ]
+    assert estimate != 7
+    assert set(counted.values()) == {prompt_tokens or estimate}
+
+
+@pytest.mark.asyncio
+async def test_an_embedding_whose_media_no_deployment_prices_counts_nothing_toward_saturation_at_zero_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counted: Final = await _embedding_tokens_toward_saturation(
+        monkeypatch,
+        ["data:video/mp4;base64,AAAAIGZ0eXBpc29t" + "A" * 4096],
+        0,
+        ("bedrock/async_invoke/us.twelvelabs.marengo-embed-3-0-v1:0",),
     )
+
+    assert set(counted.values()) == {0}
 
 
 @pytest.mark.asyncio

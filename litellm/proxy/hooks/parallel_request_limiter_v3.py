@@ -69,6 +69,7 @@ from litellm.litellm_core_utils.ptu_shares import PTUTeamCeiling
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.token_counter import (
     estimate_media_block_tokens,
+    has_unpriced_embedding_media,
     split_embedding_input_tokens,
 )
 from litellm.proxy._types import UserAPIKeyAuth
@@ -763,6 +764,7 @@ class RequestRateLimiterStash:
 
     owner_litellm_call_id: str | None = None
     call_type: str | None = None
+    request_body: Mapping[str, object] | None = None
     rate_limit_response: RateLimitResponse | None = None
     parallel_slot: ParallelSlotAcquisition | None = None
     parallel_slot_reused_at: datetime | None = None
@@ -2736,6 +2738,23 @@ def request_token_estimate(
         media_model_resolver=media_model_resolver,
     )
     return output_budget if rate_limit_type == "output" else estimated_input
+
+
+def counts_unpriced_embedding_media(
+    data: Mapping[str, object],
+    call_type: str | None,
+    team_id: str | None,
+    media_model_resolver: Callable[[str, str | None], tuple[str, ...]] = _resolve_media_models_via_proxy_router,
+) -> bool:
+    if call_type not in EMBEDDING_API_CALL_TYPES:
+        return False
+    model: Final = data.get("model")
+    requested: Final = model if isinstance(model, str) else ""
+    return has_unpriced_embedding_media(
+        data.get("input"),
+        lambda: _media_models(media_model_resolver, requested, team_id),
+        _embedding_input_type(data),
+    )
 
 
 def cap_output_for_limit(data: object, min_configured_limit: int, call_type: str | None) -> None:

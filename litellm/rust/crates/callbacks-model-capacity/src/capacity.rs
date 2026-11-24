@@ -655,7 +655,7 @@ impl Engine {
                 .estimate_tokens(tpm_share, model, call_type)
                 .await?
             {
-                Estimate::NoBody => 0,
+                Estimate::NoBody | Estimate::Unpriced => 0,
                 Estimate::Failed => 1,
                 Estimate::Tokens(tokens) => tokens.max(1),
             },
@@ -666,11 +666,12 @@ impl Engine {
         &self,
         model: &str,
         call_type: Option<&str>,
-    ) -> Result<i64, CapacityError> {
+    ) -> Result<Option<i64>, CapacityError> {
         Ok(
             match self.host.estimate_tokens(0, model, call_type).await? {
-                Estimate::Tokens(tokens) => tokens.max(0),
-                Estimate::NoBody | Estimate::Failed => 0,
+                Estimate::Tokens(tokens) => Some(tokens.max(0)),
+                Estimate::NoBody | Estimate::Failed => Some(0),
+                Estimate::Unpriced => None,
             },
         )
     }

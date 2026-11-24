@@ -717,20 +717,34 @@ def split_embedding_input_tokens(
     fallback_model: str | None = None,
     input_type: str | None = None,
 ) -> tuple[_EmbeddingInputT, int]:
-    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import (
-        embedding_input_is_all_media,
-        split_embedding_media_for_tpm,
-    )
+    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import split_embedding_media_for_tpm
 
     text, media = split_embedding_media_for_tpm(value)
     if not media:
         return value, 0
     models: Final = tuple(media_models())
-    scopes: Final = frozenset(_data_uri_media_scope(model, media, input_type) for model in models)
-    if not models or None in scopes or ("whole_batch" in scopes and not embedding_input_is_all_media(value)):
+    if not _prices_embedding_media(value, media, models, input_type):
         return value, 0
     media_tokens: Final = sum(estimate_media_block_tokens(block, models, fallback_model) for block in media)
     return cast(_EmbeddingInputT, text), media_tokens  # cast-ok: the projection keeps the input's container shape
+
+
+def has_unpriced_embedding_media(
+    value: object, media_models: Callable[[], Sequence[str]], input_type: str | None = None
+) -> bool:
+    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import split_embedding_media_for_tpm
+
+    _, media = split_embedding_media_for_tpm(value)
+    return bool(media) and not _prices_embedding_media(value, media, tuple(media_models()), input_type)
+
+
+def _prices_embedding_media(
+    value: object, media: Sequence[Mapping[str, object]], models: Sequence[str], input_type: str | None
+) -> bool:
+    from litellm.litellm_core_utils.prompt_templates.tpm_media_utils import embedding_input_is_all_media
+
+    scopes: Final = frozenset(_data_uri_media_scope(model, media, input_type) for model in models)
+    return bool(models) and None not in scopes and ("whole_batch" not in scopes or embedding_input_is_all_media(value))
 
 
 def embedding_aware_token_count(

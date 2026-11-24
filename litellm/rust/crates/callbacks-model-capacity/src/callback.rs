@@ -355,23 +355,28 @@ impl ModelCapacity {
             .map_err(|error| error.python_message())?;
         let embedding =
             call_type.is_some_and(|call_type| EMBEDDING_CALL_TYPES.contains(&call_type));
-        let charge =
+        let estimate =
             if UsageTokens::settles_at_estimate(used.as_ref(), settings.rate_limit_type, embedding)
             {
-                Charge::Estimated(match group.as_ref().filter(|group| group.truthy) {
+                match group.as_ref().filter(|group| group.truthy) {
                     Some(group) => self
                         .engine
                         .settled_estimate(&group.text, call_type)
                         .await
                         .map_err(|error| error.python_message())?,
-                    None => 0,
-                })
+                    None => Some(0),
+                }
             } else {
-                Charge::Reported(UsageTokens::settled(
-                    used.as_ref(),
-                    settings.rate_limit_type,
-                ))
+                None
             };
+        let charge = match estimate {
+            Some(tokens) => Charge::Estimated(tokens),
+            None => Charge::Reported(UsageTokens::charged(
+                used.as_ref(),
+                settings.rate_limit_type,
+                embedding,
+            )),
+        };
         let settlement = team.settlement(group.as_ref(), gaps);
         self.engine
             .settle_success(

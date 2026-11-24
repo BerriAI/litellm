@@ -84,6 +84,8 @@ pub struct PreCallFacts {
     pub io_estimate: Option<Estimate>,
     #[serde(skip)]
     pub ptu_exact: Option<(f64, f64)>,
+    #[serde(skip)]
+    pub counts_unpriced_media: bool,
     #[serde(default)]
     pub reuses_request_slot: bool,
     #[serde(default)]
@@ -768,6 +770,7 @@ impl ParallelRequestLimiter {
             let mut stash = state.stash();
             stash.discard_released_tpm_reservation();
             stash.reserved_tokens = estimated;
+            stash.reservation_counts_unpriced_media = facts.counts_unpriced_media;
             stash.ptu_reserved_tokens = ptu_estimated;
             stash.ptu_windows = windows_keyed(tpm_response.windows(), PTU_TEAM);
             stash.reserved_windows = tpm_response.windows().to_vec();
@@ -1627,7 +1630,8 @@ impl ParallelRequestLimiter {
         } else {
             Vec::new()
         };
-        let settled_tokens = if facts.settles_at_reservation {
+        let keeps_reservation = !stash.reservation_counts_unpriced_media;
+        let settled_tokens = if facts.settles_at_reservation && keeps_reservation {
             stash.reserved_tokens
         } else {
             facts.total_tokens
@@ -1653,7 +1657,7 @@ impl ParallelRequestLimiter {
             operations.extend(self.engine.project_ops(
                 &reserved_ptu,
                 &stash.reserved_scopes,
-                if facts.embedding_reported_no_tokens {
+                if facts.embedding_reported_no_tokens && keeps_reservation {
                     stash.ptu_reserved_tokens
                 } else {
                     settlement_tokens(

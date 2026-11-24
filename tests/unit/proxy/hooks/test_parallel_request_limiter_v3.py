@@ -1480,6 +1480,8 @@ _JPEG_DATA_URI: Final = (
 )
 
 
+_MP4_DATA_URI: Final = "data:video/mp4;base64,AAAAIGZ0eXBpc29t" + "A" * 4096
+
 _SETTLE_PROJECT_ITPM: Final = ("model_per_project_itpm", "p-settle:titan-embed-image")
 
 
@@ -1492,13 +1494,14 @@ async def _settle_tpm_for_call(
     rate_limit_type: str = "total",
     failed_attempts: int = 0,
     counted: tuple[str, str] | None = None,
+    media_models: tuple[str, ...] = ("bedrock/amazon.titan-embed-image-v1",),
 ) -> tuple[int, float]:
     _set_token_rate_limit_type(monkeypatch, rate_limit_type)
     api_key: Final = hash_token(f"sk-settle-{call_type}")
     cache: Final = DualCache()
     handler: Final = NativeLimiter(
         internal_usage_cache=InternalUsageCache(cache),
-        media_model_resolver=lambda _model, _team_id: ("bedrock/amazon.titan-embed-image-v1",),
+        media_model_resolver=lambda _model, _team_id: media_models,
     )
     await handler.async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(
@@ -1564,14 +1567,30 @@ async def test_embedding_served_after_a_failed_attempt_still_charges_its_tpm_est
 
 
 @pytest.mark.asyncio
-async def test_embedding_with_reported_tokens_settles_tpm_to_the_reported_count(
+async def test_embedding_media_no_deployment_prices_refunds_its_tpm_reservation_when_reported_as_zero_tokens(
     monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _, counted = await _settle_tpm_for_call(
+        monkeypatch,
+        call_type="aembedding",
+        data={"model": "titan-embed-image", "input": [_MP4_DATA_URI]},
+        usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+        media_models=("bedrock/async_invoke/us.twelvelabs.marengo-embed-3-0-v1:0",),
+    )
+
+    assert counted == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("total_tokens", [7, 0])
+async def test_embedding_with_reported_tokens_settles_tpm_to_the_reported_count(
+    monkeypatch: pytest.MonkeyPatch, total_tokens: int
 ) -> None:
     reserved, counted = await _settle_tpm_for_call(
         monkeypatch,
         call_type="aembedding",
         data={"model": "titan-embed-image", "input": [_JPEG_DATA_URI]},
-        usage=Usage(prompt_tokens=7, completion_tokens=0, total_tokens=7),
+        usage=Usage(prompt_tokens=7, completion_tokens=0, total_tokens=total_tokens),
     )
 
     assert counted == 7 != reserved
