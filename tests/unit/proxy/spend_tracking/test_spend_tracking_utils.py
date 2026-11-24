@@ -3709,7 +3709,7 @@ def test_sanitize_guardrail_information_stores_none_for_a_prompt_field_that_hold
     ]
 
 
-class _FieldlessVerdict(BaseModel):
+class _FieldlessVerdict(BaseModel, frozen=True):
     pass
 
 
