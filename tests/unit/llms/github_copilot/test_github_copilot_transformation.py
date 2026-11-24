@@ -17,6 +17,58 @@ from litellm.llms.github_copilot.common_utils import (
 )
 
 
+def test_copilot_chat_only_drops_unicode_property_escapes_from_pattern_values() -> None:
+    unicode_pattern: Final = r"^\p{Cc}+$"
+    preserved_properties: Final = {
+        "slug": {"type": "string", "pattern": r"^(?!__)[a-z]+$"},
+        "ascii": {"type": "string", "pattern": r"^[a-z]+$"},
+        "literal": {"type": "string", "pattern": r"^\\p{Cc}$"},
+        "code_point": {"type": "string", "pattern": r"\u{1F600}"},
+    }
+    parameters: Final = {
+        "type": "object",
+        "additionalProperties": False,
+        "patternProperties": {unicode_pattern: {"type": "string"}},
+        "required": ["names"],
+    }
+    names: Final = {"type": "array", "default": [{"pattern": unicode_pattern}]}
+    function: Final = {"name": "Artifact", "description": "Create an artifact"}
+    tool: Final = {
+        "type": "function",
+        "function": {
+            **function,
+            "parameters": {
+                **parameters,
+                "properties": {
+                    **preserved_properties,
+                    "names": {**names, "items": {"type": "string", "pattern": unicode_pattern}},
+                },
+            },
+        },
+    }
+    caller_tool: Final = json.dumps(tool)
+    result: Final = GithubCopilotConfig().transform_request(
+        model="gpt-4.1",
+        messages=[{"role": "user", "content": "Say hello"}],
+        optional_params={"tools": [tool]},
+        litellm_params={"custom_llm_provider": "github_copilot"},
+        headers={},
+    )
+    assert result["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                **function,
+                "parameters": {
+                    **parameters,
+                    "properties": {**preserved_properties, "names": {**names, "items": {"type": "string"}}},
+                },
+            },
+        }
+    ]
+    assert json.dumps(tool) == caller_tool
+
+
 def test_github_copilot_config_get_openai_compatible_provider_info():
     """Test the GitHub Copilot configuration provider info retrieval."""
 

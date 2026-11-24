@@ -221,15 +221,20 @@ def drop_lookaround_regex_patterns(schema: Mapping[str, object]) -> Mapping[str,
     return _schema_without_rejected_regex(schema, _uses_regex_lookaround)
 
 
+def drop_matching_pattern_values(schema: Mapping[str, object], rejected: Callable[[str], bool]) -> Mapping[str, object]:
+    return _schema_without_rejected_regex(schema, rejected, check_pattern_property_keys=False)
+
+
 def _schema_without_rejected_regex(
-    schema: Mapping[str, object], rejected: Callable[[str], bool]
+    schema: Mapping[str, object], rejected: Callable[[str], bool], *, check_pattern_property_keys: bool = True
 ) -> Mapping[str, object]:
+    reject_property_name: Final = rejected if check_pattern_property_keys else None
     rebuilt: dict[int, Mapping[str, object]] = {}  # mutable-ok: per-call memo of rewritten nodes, deepest level first
     for level in reversed(tuple(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))):
         rebuilt.update(
             (id(node), rewritten)
             for node in level
-            if (rewritten := _node_without_rejected_regex(node, rebuilt, rejected)) is not node
+            if (rewritten := _node_without_rejected_regex(node, rebuilt, rejected, reject_property_name)) is not node
         )
     return rebuilt.get(id(schema), schema)
 
@@ -372,9 +377,10 @@ def _node_without_rejected_regex(
     node: Mapping[str, object],
     rebuilt: Mapping[int, Mapping[str, object]],
     rejected: Callable[[str], bool],
+    reject_property_name: Callable[[str], bool] | None,
 ) -> Mapping[str, object]:
     kept: Final = {
-        key: _keyword_value_rebuilt(key, value, rebuilt, rejected)
+        key: _keyword_value_rebuilt(key, value, rebuilt, reject_property_name)
         for key, value in node.items()
         if key != "pattern" or not isinstance(value, str) or not rejected(value)
     }
@@ -411,13 +417,13 @@ def _keyword_value_rebuilt(
     key: str,
     value: object,
     rebuilt: Mapping[int, Mapping[str, object]],
-    rejected: Callable[[str], bool],
+    rejected: Callable[[str], bool] | None,
 ) -> object:
     if key in _SUBSCHEMA_MAP_KEYWORDS and isinstance(value, dict):
         kept: Final = {
             name: rebuilt.get(id(sub), sub)
             for name, sub in value.items()
-            if key != "patternProperties" or not isinstance(name, str) or not rejected(name)
+            if key != "patternProperties" or rejected is None or not isinstance(name, str) or not rejected(name)
         }
         return value if len(kept) == len(value) and all(kept[name] is value[name] for name in kept) else kept
     if key in _SUBSCHEMA_LIST_KEYWORDS and isinstance(value, list):

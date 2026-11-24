@@ -1,12 +1,19 @@
 import json
 import os
+import re
 from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # spread dict loses the role literal without a cast
 
 import httpx
 from pydantic import TypeAdapter
 
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
+from litellm.litellm_core_utils.prompt_templates.json_schema_utils import (
+    drop_matching_pattern_values,
+    tool_with_sanitized_parameters,
+)
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.openai.common_utils import decoded_json_object
 from litellm.llms.openai.openai import OpenAIConfig
@@ -27,6 +34,11 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding
 
 _DECODED_JSON: Final = TypeAdapter(object)
+_UNICODE_PROPERTY_ESCAPE: Final = re.compile(r"(?:^|[^\\])(?:\\\\)*\\p\{[^{}]+\}")
+
+
+def _drop_copilot_chat_patterns(schema: Mapping[str, object]) -> Mapping[str, object]:
+    return drop_matching_pattern_values(schema, lambda pattern: _UNICODE_PROPERTY_ESCAPE.search(pattern) is not None)
 
 
 class GithubCopilotConfig(OpenAIConfig):
@@ -99,6 +111,20 @@ class GithubCopilotConfig(OpenAIConfig):
                 transformed_messages.append(message)
 
         return transformed_messages
+
+    def _transform_chat_request_params(
+        self, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> Mapping[str, object]:
+        tools: Final = as_object_list(optional_params.get("tools"))
+        if litellm_params.get("custom_llm_provider") != "github_copilot" or tools is None:
+            return optional_params
+        sanitized: Final = [
+            tool_with_sanitized_parameters(tool_map, _drop_copilot_chat_patterns)
+            if (tool_map := as_str_mapping(tool)) is not None
+            else tool
+            for tool in tools
+        ]
+        return MappingProxyType({**optional_params, "tools": sanitized})
 
     def _copilot_headers(self, session_token: str | None) -> Mapping[str, str]:
         if session_token is not None:

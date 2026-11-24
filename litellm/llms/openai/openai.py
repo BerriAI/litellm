@@ -317,6 +317,11 @@ class OpenAIConfig(BaseConfig):
             headers=headers,
         )
 
+    def _transform_chat_request_params(
+        self, optional_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> Mapping[str, object]:
+        return optional_params
+
     def transform_request(
         self,
         model: str,
@@ -326,7 +331,11 @@ class OpenAIConfig(BaseConfig):
         headers: dict,
     ) -> dict:
         messages = self._transform_messages(messages=messages, model=model)
-        return {"model": model, "messages": messages, **optional_params}
+        request_params: Final = self._transform_chat_request_params(
+            optional_params,  # pyright: ignore[reportUnknownArgumentType]  # BaseConfig leaves the request dict untyped
+            litellm_params,  # pyright: ignore[reportUnknownArgumentType]  # BaseConfig leaves the context dict untyped
+        )
+        return {"model": model, "messages": messages, **request_params}
 
     def transform_response(
         self,
