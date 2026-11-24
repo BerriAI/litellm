@@ -4030,12 +4030,12 @@ def test_ProxyConfig__add_deployment_keeps_loading_rows_after_a_non_flag_drop_pa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("configured, expected", [("true", True), ("false", False)])
-async def test_ProxyConfig_load_config_turns_litellm_settings_drop_params_string_into_bool(
+@pytest.mark.parametrize("configured, expected", [('"true"', True), ('"false"', False), ("null", False)])
+async def test_ProxyConfig_load_config_reads_a_flag_string_or_null_litellm_settings_drop_params_without_a_warning(
     tmp_path, monkeypatch, caplog, configured, expected
 ):
     f = tmp_path / "c.yaml"
-    f.write_text(f'model_list: []\nlitellm_settings:\n  drop_params: "{configured}"\n')
+    f.write_text(f"model_list: []\nlitellm_settings:\n  drop_params: {configured}\n")
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
