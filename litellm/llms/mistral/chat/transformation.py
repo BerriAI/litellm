@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 Docs - https://docs.mistral.ai/api/
 """
 
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, cast, get_type_hints, overload
 
 import httpx
@@ -51,6 +51,10 @@ def _accepted_reasoning_effort(model: str, requested: str, custom_llm_provider: 
             requested,
         )
     return accepted
+
+
+_SENT_AS_IS: Final = frozenset(("temperature", "top_p", "stop"))
+_SENT_AS_IS_WHEN_SUPPORTED: Final = frozenset(("presence_penalty", "frequency_penalty", "n"))
 
 
 class MistralConfig(OpenAIGPTConfig):
@@ -176,6 +180,7 @@ class MistralConfig(OpenAIGPTConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
+        supported_params: Final = frozenset(self.get_supported_openai_params(model))
         for param, value in non_default_params.items():
             if param == "max_tokens":
                 optional_params["max_tokens"] = value
@@ -186,12 +191,8 @@ class MistralConfig(OpenAIGPTConfig):
                 optional_params["tools"] = self._clean_tool_schema_for_mistral(value)
             if param == "stream" and value is True:
                 optional_params["stream"] = value
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["top_p"] = value
-            if param == "stop":
-                optional_params["stop"] = value
+            if param in _SENT_AS_IS or (param in _SENT_AS_IS_WHEN_SUPPORTED and param in supported_params):
+                optional_params[param] = value
             if param == "tool_choice" and isinstance(value, str):
                 optional_params["tool_choice"] = self._map_tool_choice(tool_choice=value)
             if param == "seed":
@@ -270,7 +271,7 @@ class MistralConfig(OpenAIGPTConfig):
                         return messages
 
         ## 2. If content is list, then convert to string
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
+        messages = [self._with_flattened_content(m) for m in messages]
 
         ## 3. Handle name in message
         new_messages: Final[list[AllMessageValues]] = []
@@ -433,6 +434,16 @@ class MistralConfig(OpenAIGPTConfig):
         if message["role"] != "assistant":
             return message
         return strip_litellm_internal_message_fields(message)
+
+    @staticmethod
+    def _with_flattened_content(message: AllMessageValues) -> AllMessageValues:
+        return handle_messages_with_content_list_to_str_conversion([message])[0]
+
+    @staticmethod
+    def _with_content_parts(message: AllMessageValues, parts: Sequence[object]) -> AllMessageValues:
+        return cast(  # cast-ok: every message role takes a list of content parts
+            AllMessageValues, {**message, "content": list(parts)}
+        )
 
     @classmethod
     def _handle_name_in_message(cls, message: AllMessageValues) -> AllMessageValues:

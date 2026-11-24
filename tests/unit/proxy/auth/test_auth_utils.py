@@ -3564,6 +3564,98 @@ class TestIsRequestBodySafeBlocksFallbackSmuggle:
             )
 
 
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        pytest.param({"extra_body": {"fallbacks": "default"}}, id="default"),
+        pytest.param({"extra_body": {"fallbacks": [{"model": "claude-opus-5-5"}]}}, id="list"),
+        pytest.param({"extra_body": '{"fallbacks": [{"model": "claude-opus-5-5"}]}'}, id="stringified"),
+        pytest.param(
+            {"fallbacks": [{"model": "claude-sonnet-5", "extra_body": {"fallbacks": [{"model": "claude-opus-5-5"}]}}]},
+            id="inside_a_fallback_target",
+        ),
+        pytest.param(
+            {"context_window_fallbacks": [{"model": "claude-sonnet-5", "extra_body": '{"fallbacks": "default"}'}]},
+            id="inside_a_stringified_context_window_fallback_target",
+        ),
+    ],
+)
+def test_client_chosen_server_side_fallbacks_in_extra_body_are_rejected(request_fields: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="fallbacks is not allowed in request body"):
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-5-5", **request_fields},
+            general_settings={},
+            llm_router=None,
+            model="claude-sonnet-5-5",
+        )
+
+
+_EXTRA_BODY_FALLBACKS_REQUESTS: Final = (
+    pytest.param({"extra_body": {"fallbacks": [{"model": "claude-opus-5-5"}]}}, id="extra_body"),
+    pytest.param(
+        {"fallbacks": [{"model": "claude-sonnet-5", "extra_body": {"fallbacks": [{"model": "claude-opus-5-5"}]}}]},
+        id="inside_a_fallback_target",
+    ),
+)
+
+
+@pytest.mark.parametrize("request_fields", _EXTRA_BODY_FALLBACKS_REQUESTS)
+def test_extra_body_fallbacks_are_allowed_with_the_proxy_wide_opt_in(request_fields: dict[str, object]) -> None:
+    assert is_request_body_safe(
+        request_body={"model": "claude-sonnet-5-5", **request_fields},
+        general_settings={"allow_client_side_credentials": True},
+        llm_router=None,
+        model="claude-sonnet-5-5",
+    )
+
+
+def _claude_router(configurable_clientside_auth_params: list[str]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": f"anthropic/{model_name}",
+                    "configurable_clientside_auth_params": configurable_clientside_auth_params,
+                },
+            }
+            for model_name in ("claude-sonnet-5-5", "claude-sonnet-5")
+        ]
+    )
+
+
+@pytest.mark.parametrize("request_fields", _EXTRA_BODY_FALLBACKS_REQUESTS)
+def test_extra_body_fallbacks_are_allowed_when_every_deployment_opts_in(request_fields: dict[str, object]) -> None:
+    assert is_request_body_safe(
+        request_body={"model": "claude-sonnet-5-5", **request_fields},
+        general_settings={},
+        llm_router=_claude_router(["fallbacks"]),
+        model="claude-sonnet-5-5",
+    )
+
+
+@pytest.mark.parametrize("request_fields", _EXTRA_BODY_FALLBACKS_REQUESTS)
+def test_extra_body_fallbacks_stay_rejected_when_deployments_opt_in_to_another_param(
+    request_fields: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match="fallbacks is not allowed in request body"):
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-5-5", **request_fields},
+            general_settings={},
+            llm_router=_claude_router(["api_base"]),
+            model="claude-sonnet-5-5",
+        )
+
+
+def test_extra_body_without_fallbacks_is_allowed() -> None:
+    assert is_request_body_safe(
+        request_body={"model": "claude-sonnet-5-5", "extra_body": {"stop_sequences": ["5"]}},
+        general_settings={},
+        llm_router=None,
+        model="claude-sonnet-5-5",
+    )
+
+
 class TestIsRequestBodySafeRejectsUrlValuedFallback:
     @pytest.mark.parametrize("fallback_field", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
     def test_url_valued_string_fallback_is_rejected(self, fallback_field):

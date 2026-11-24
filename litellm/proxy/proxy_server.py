@@ -184,6 +184,7 @@ from litellm.router_utils.auto_router_tuning_baseline import (
     tuning_limit_violation,
 )
 from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.router_utils.deployment_pricing import unpriced_bedrock_arn
 from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
@@ -299,7 +300,12 @@ import litellm
 import litellm._redis
 from litellm import Router
 from litellm._internal_context import service_target, with_service_target
-from litellm._logging import redact_string, verbose_proxy_logger, verbose_router_logger
+from litellm._logging import (
+    redact_internal_details_from_client_message,
+    redact_string,
+    verbose_proxy_logger,
+    verbose_router_logger,
+)
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.redis_batch import (
     active_post_call_redis_batch,
@@ -505,8 +511,13 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
+    error_status_code,
     headers_with_litellm_call_id,
     litellm_call_id_headers,
+    openai_error_param,
+    openai_error_type,
+    redacted_raw_error_param,
+    relayed_provider_specific_fields,
     with_litellm_call_id,
 )
 from litellm.proxy.common_utils.periodic_reload_schedule import (
@@ -10262,11 +10273,15 @@ async def async_data_generator(
             # Including it in the SSE response leaks internal details to clients.
             error_msg = str(e)
 
+        client_message: Final = getattr(e, "message", error_msg)
         proxy_exception: Final = ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
+            message=redact_internal_details_from_client_message(
+                client_message if isinstance(client_message, str) else error_msg
+            ),
+            type=openai_error_type(e, error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)),
+            param=openai_error_param(e),
             code=getattr(e, "status_code", 500),
+            provider_specific_fields=relayed_provider_specific_fields(e),
         )
         error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
         stream_completed = True
@@ -10311,10 +10326,16 @@ def _pricing_override_stamps(
 
 def get_litellm_model_info(model: dict = {}):
     model_info: Final = model.get("model_info", {})
+    configured_base_model: Final = model_info.get("base_model")
+    base_model: Final = (
+        None
+        if isinstance(configured_base_model, str) and unpriced_bedrock_arn(configured_base_model)
+        else configured_base_model
+    )
     model_to_lookup = model.get("litellm_params", {}).get("model", None)
     try:
-        if "azure" in model_to_lookup or model_info.get("base_model"):
-            model_to_lookup = model_info.get("base_model", None)
+        if "azure" in model_to_lookup or base_model:
+            model_to_lookup = base_model
         litellm_model_info: Final = litellm.get_model_info(model_to_lookup)
         return litellm_model_info
     except Exception:
@@ -12591,11 +12612,12 @@ async def completion(
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
+            type=openai_error_type(e, error_status_code(e, status.HTTP_500_INTERNAL_SERVER_ERROR)),
+            param=openai_error_param(e),
             headers=litellm_call_id_headers(litellm_call_id),
             openai_code=getattr(e, "code", None),
             code=getattr(e, "status_code", 500),
+            provider_specific_fields=relayed_provider_specific_fields(e),
         )
 
 
@@ -12819,7 +12841,7 @@ async def moderations(
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
                 type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                param=redacted_raw_error_param(e),
                 headers=litellm_call_id_headers(litellm_call_id),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
@@ -12828,7 +12850,7 @@ async def moderations(
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
+                param=redacted_raw_error_param(e),
                 headers=litellm_call_id_headers(litellm_call_id),
                 code=getattr(e, "status_code", 500),
             )

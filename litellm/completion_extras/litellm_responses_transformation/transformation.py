@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    is_unrendered_block_without_text,
     responses_reasoning_items_from_thinking_blocks,
     thinking_blocks_from_reasoning_items,
     with_prompt_cache_breakpoint,
@@ -521,6 +522,72 @@ def _with_stream_block_index(
 def _stream_output_index(chunk: Mapping[str, object]) -> int | None:
     output_index: Final = chunk.get("output_index")
     return output_index if isinstance(output_index, int) and not isinstance(output_index, bool) else None
+
+
+_TOOL_CALL_ITEM_TYPES: Final = ("function_call", "custom_tool_call")
+_TOOL_ARGUMENTS_DELTA_EVENTS: Final = (
+    ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA.value,
+    ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DELTA.value,
+)
+
+
+_STREAM_ITEM: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+
+def _tool_item_arguments(raw_item: object) -> str | None:
+    try:
+        item: Final = _STREAM_ITEM.validate_python(raw_item)
+    except ValidationError:
+        return None
+    if item.get("type") not in _TOOL_CALL_ITEM_TYPES:
+        return None
+    arguments: Final = item.get("input") if item.get("type") == "custom_tool_call" else item.get("arguments")
+    return arguments if isinstance(arguments, str) and arguments else None
+
+
+def _starts_streaming_tool_arguments(chunk: Mapping[str, object]) -> bool:
+    event_type: Final = _responses_event_type(chunk)
+    if event_type in _TOOL_ARGUMENTS_DELTA_EVENTS:
+        return bool(chunk.get("delta"))
+    if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED.value:
+        return bool(_tool_item_arguments(chunk.get("item")) or chunk.get("arguments"))
+    return False
+
+
+def _complete_tool_arguments(chunk: Mapping[str, object]) -> str | None:
+    event_type: Final = _responses_event_type(chunk)
+    if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE.value:
+        return _tool_item_arguments(chunk.get("item"))
+    if event_type == ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE.value:
+        arguments: Final = chunk.get("arguments")
+        return arguments if isinstance(arguments, str) and arguments else None
+    if event_type == ResponsesAPIStreamEvents.CUSTOM_TOOL_CALL_INPUT_DONE.value:
+        tool_input: Final = chunk.get("input")
+        return tool_input if isinstance(tool_input, str) and tool_input else None
+    return None
+
+
+def _tool_arguments_stream_chunk(arguments: str, tool_call_index: int) -> "ModelResponseStream":
+    from litellm.types.utils import ChatCompletionToolCallChunk, Delta, ModelResponseStream, StreamingChoices
+
+    return ModelResponseStream(
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    tool_calls=[
+                        ChatCompletionToolCallChunk(
+                            id=None,
+                            index=tool_call_index,
+                            type="function",
+                            function=ChatCompletionToolCallFunctionChunk(name=None, arguments=arguments),
+                        )
+                    ]
+                ),
+                finish_reason=None,
+            )
+        ]
+    )
 
 
 def _reasoning_done_thinking_blocks(
@@ -1746,6 +1813,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     converted = self._convert_content_str_to_input_text(item, role)
                     result.append(converted)
                     verbose_logger.debug("Chat provider:   -> %s", converted)
+                elif is_unrendered_block_without_text(item):
+                    verbose_logger.debug("Chat provider:   unrendered block has no text; skipped")
                 elif isinstance(item, dict):
                     # Handle multimodal content
                     original_type = item.get("type")
@@ -2063,6 +2132,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._structured_output: Final = structured_output
         self._first_message_item_done: bool = False
         self._summary_streamed_outputs: frozenset[int | None] = frozenset()
+        self._tool_arguments_streamed_outputs: frozenset[int] = frozenset()
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -2103,6 +2173,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def translate_responses_chunk_to_openai_stream(
         parsed_chunk: dict | BaseModel,
         tool_call_index_map: dict[int, int] | None = None,  # mutable-ok: per-stream state, remapped in place
+        reasoning_summary_streamed: bool = False,
     ) -> "ModelResponseStream":
         """
         Translate a Responses API streaming chunk to OpenAI chat completion streaming format.
@@ -2110,6 +2181,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         Args:
             parsed_chunk: Dict containing the Responses API event chunk
             tool_call_index_map: Per-stream output_index -> sequential tool_call index map
+            reasoning_summary_streamed: Whether earlier chunks already streamed reasoning summary text
 
         Returns:
             ModelResponseStream: OpenAI-formatted streaming chunk
@@ -2289,13 +2361,15 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
             else:
                 raise ValueError(f"Chat provider: Invalid text delta {parsed_chunk}")
+        elif event_type == "response.reasoning_summary_part.added" and reasoning_summary_streamed:
+            return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(reasoning_content=" "))])
         elif event_type == "response.reasoning_summary_text.delta":
             content_part = parsed_chunk.get("delta", None)
             if content_part:
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
-                            index=cast(int, parsed_chunk.get("summary_index")),
+                            index=0,
                             delta=Delta(reasoning_content=content_part),
                         )
                     ]
@@ -2382,15 +2456,27 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             if self._streams_reasoning_signatures
             else None
         )
+        output_index: Final = _stream_output_index(chunk) or 0
+        unstreamed_tool_arguments: Final = (
+            _complete_tool_arguments(chunk)
+            if output_index in self._tool_call_index_map and output_index not in self._tool_arguments_streamed_outputs
+            else None
+        )
         translated: Final = (
             self._empty_content_chunk()
             if self._is_text_delta_after_structured_answer(chunk)
             else reasoning_chunk
             if reasoning_chunk is not None
+            else _tool_arguments_stream_chunk(unstreamed_tool_arguments, self._tool_call_index_map[output_index])
+            if unstreamed_tool_arguments
             else OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
-                chunk, tool_call_index_map=self._tool_call_index_map
+                chunk,
+                tool_call_index_map=self._tool_call_index_map,
+                reasoning_summary_streamed=bool(self._summary_streamed_outputs),
             )
         )
+        if unstreamed_tool_arguments or _starts_streaming_tool_arguments(chunk):
+            self._tool_arguments_streamed_outputs = self._tool_arguments_streamed_outputs | {output_index}
         if self._structured_output and _is_message_item_done(chunk):
             self._first_message_item_done = True
         if _responses_event_type(chunk) == "response.reasoning_summary_text.delta" and chunk.get("delta"):

@@ -5,7 +5,8 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import is_beta_header_supported_by_bundled_config
-from litellm.exceptions import AuthenticationError
+from litellm.exceptions import AuthenticationError, UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -33,6 +34,7 @@ from ...common_utils import (
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
     strip_unsignable_thinking_blocks_for_claude,
 )
+from .api_versions import requested_api_version, sampling_params_to_drop, serves_anthropic_api_versions
 from .mid_conversation_system import (
     as_system_content_blocks,
     convert_mid_conversation_system_turns,
@@ -81,6 +83,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     @property
     def _resolved_provider(self) -> str:
         return self.custom_llm_provider or "anthropic"
+
+    def thinking_signature_rule_provider(self) -> str:
+        return self._resolved_provider
 
     def get_supported_anthropic_messages_params(self, model: str) -> list:
         return [
@@ -572,6 +577,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if thinking_enabled or effort_enabled:
             optional_params.pop("temperature", None)
 
+    def anthropic_api_version(self, headers: Mapping[str, object], api_base: str | None) -> str | None:
+        serves_anthropic_api: Final = self._resolved_provider == "anthropic" and serves_anthropic_api_versions(
+            AnthropicModelInfo.get_api_base(api_base)
+        )
+        return requested_api_version(headers) if serves_anthropic_api else None
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -626,6 +637,17 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             custom_llm_provider=self._resolved_provider,
         )
 
+        api_base: Final = getattr(litellm_params, "api_base", None)
+        dropped_sampling_params: Final = sampling_params_to_drop(
+            anthropic_messages_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # the base signature types this as a bare dict
+            self.anthropic_api_version(headers, api_base if isinstance(api_base, str) else None),  # pyright: ignore[reportUnknownArgumentType]  # the base signature types this as a bare dict
+            model=model,
+            provider=self._resolved_provider,
+            drop_params=drops_unsupported_params(getattr(litellm_params, "drop_params", None)),
+        )
+        if isinstance(dropped_sampling_params, UnsupportedParamsError):
+            raise dropped_sampling_params
+
         system_param: Final = anthropic_messages_optional_request_params.get("system")
         if self.should_strip_billing_metadata() and system_param is not None:
             filtered_system: Final = self._filter_billing_headers_from_system(system_param)
@@ -666,10 +688,16 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 strip_encrypted_reasoning_blocks_from_anthropic_messages(messages),
                 model=model,
                 base_model=base_model if isinstance(base_model, str) else None,
+                custom_llm_provider=self.thinking_signature_rule_provider(),
+                api_base=getattr(litellm_params, "api_base", None),
             ),
             max_tokens=max_tokens,
             model=model,
-            **anthropic_messages_optional_request_params,
+            **{
+                name: value
+                for name, value in anthropic_messages_optional_request_params.items()  # pyright: ignore[reportUnknownVariableType]  # the base signature types this as a bare dict
+                if name not in dropped_sampling_params
+            },
         )
         return dict(anthropic_messages_request)
 

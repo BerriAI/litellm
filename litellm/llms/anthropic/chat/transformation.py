@@ -1,7 +1,9 @@
 import json
 import re
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence, Set
+from dataclasses import dataclass
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, NoReturn, cast
 
@@ -23,10 +25,12 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
     RESPONSE_FORMAT_TOOL_NAME,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, map_finish_reason
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_mapping
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     defs_unpacked,
+    invalid_type_message,
     is_object_schema,
     sanitize_input_schema_for_anthropic,
     schema_fragment_ref,
@@ -42,6 +46,7 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     RemoteMedia,
     async_inline_remote_media,
     inline_remote_image_urls,
+    with_remote_media_placeholders,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     message_field,
@@ -107,6 +112,7 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import Message as LitellmMessage
 from litellm.utils import (
+    EXTRA_BODY_ROUTING_KEYS,
     ModelResponse,
     Usage,
     add_dummy_tool,
@@ -168,12 +174,167 @@ _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
 _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
 _TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _TOOLS_ADAPTER: Final = TypeAdapter(list[object])
+_REQUEST_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+EXTRA_BODY_GUARDED_KEYS: Final = EXTRA_BODY_ROUTING_KEYS | frozenset({"messages", "system", "tools", "stream"})
 _NATIVE_OUTPUT_STRING_FORMATS: Final = frozenset(
     ("date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid")
 )
 NATIVE_OUTPUT_MAX_UNION_PARAMETERS: Final = 16
 NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS: Final = 24
 NATIVE_OUTPUT_MAX_GRAMMAR_BRANCHES: Final = 2048
+
+
+def _is_non_list_collection(value: object) -> bool:
+    return isinstance(value, (str, bytes, bytearray, Set, Mapping))
+
+
+def _is_non_list_thinking_blocks(value: object) -> bool:
+    return isinstance(value, (int, float)) or (_is_non_list_collection(value) and bool(value))
+
+
+def _thinking_block_fault(field: str, block: object) -> tuple[str, object, str] | None:
+    if not isinstance(block, Mapping):
+        return (field, block, "an object")
+    block_type: Final = cast(Mapping[str, object], block).get("type")  # cast-ok: isinstance proved a mapping
+    if isinstance(block_type, str):
+        return None
+    return (f"{field}.type", block_type, "a string")
+
+
+def _thinking_blocks_faults(index: int, thinking_blocks: object) -> tuple[tuple[str, object, str], ...]:
+    if _is_non_list_thinking_blocks(thinking_blocks):
+        return ((f"messages[{index}].thinking_blocks", thinking_blocks, "a list"),)
+    faults: Final = (
+        _thinking_block_fault(f"messages[{index}].thinking_blocks[{position}]", block)
+        for position, block in enumerate(parts_of(thinking_blocks))
+    )
+    return tuple(fault for fault in faults if fault is not None)
+
+
+def malformed_thinking_blocks_error(messages: Sequence[object]) -> AnthropicError | None:
+    assistant_turns: Final = (
+        (index, message) for index, message in enumerate(messages) if message_field(message, "role") == "assistant"
+    )
+    fault: Final = next(
+        chain.from_iterable(
+            _thinking_blocks_faults(index, message_field(message, "thinking_blocks"))
+            for index, message in assistant_turns
+        ),
+        None,
+    )
+    if fault is None:
+        return None
+    return AnthropicError(status_code=400, message=invalid_type_message(*fault))
+
+
+def _with_thinking_blocks(message: AllMessageValues, thinking_blocks: Sequence[object] | None) -> AllMessageValues:
+    if isinstance(message, BaseModel):
+        return cast(  # cast-ok: a replayed response Message reads like a message dict
+            AllMessageValues, message.model_copy(update={"thinking_blocks": thinking_blocks})
+        )
+    return cast(  # cast-ok: dict spread keeps message shape
+        AllMessageValues, {**message, "thinking_blocks": thinking_blocks}
+    )
+
+
+def without_malformed_thinking_blocks(message: AllMessageValues) -> AllMessageValues:
+    thinking_blocks: Final = message_field(message, "thinking_blocks")
+    if not _thinking_blocks_faults(0, thinking_blocks):
+        return message
+    if _is_non_list_thinking_blocks(thinking_blocks):
+        return _with_thinking_blocks(message, None)
+    return _with_thinking_blocks(
+        message, tuple(block for block in parts_of(thinking_blocks) if _thinking_block_fault("", block) is None)
+    )
+
+
+def _is_non_sequence_iterable(value: object) -> bool:
+    return isinstance(value, Iterable) and not isinstance(value, (Sequence, Mapping, Set))
+
+
+def _repeatable_blocks_by_identity(turns: Iterable[object]) -> Mapping[int, tuple[object, ...]]:
+    values: Final = (
+        message_field(turn, "thinking_blocks") for turn in turns if message_field(turn, "role") == "assistant"
+    )
+    iterables: Final = {
+        id(value): cast(Iterable[object], value)  # cast-ok: _is_non_sequence_iterable proved it is iterable
+        for value in values
+        if _is_non_sequence_iterable(value)
+    }
+    return MappingProxyType({key: tuple(value) for key, value in iterables.items()})
+
+
+def _with_repeatable_thinking_blocks(
+    message: AllMessageValues, repeatable: Mapping[int, tuple[object, ...]]
+) -> AllMessageValues:
+    blocks: Final = repeatable.get(id(message_field(message, "thinking_blocks")))
+    return message if blocks is None else _with_thinking_blocks(message, blocks)
+
+
+def _is_unreadable_content_block(block: object) -> bool:
+    if not isinstance(block, Mapping):
+        return not callable(getattr(block, "get", None))
+    return not isinstance(cast(Mapping[str, object], block).get("type"), str)  # cast-ok: isinstance proved a mapping
+
+
+def _has_unreadable_content_block(messages: Sequence[object]) -> bool:
+    blocks: Final = chain.from_iterable(parts_of(message_field(message, "content")) for message in messages)
+    return any(_is_unreadable_content_block(block) for block in blocks)
+
+
+def _translates_cleanly(
+    translate: Callable[[Sequence[AllMessageValues]], Sequence[AllAnthropicPassThroughMessageValues]],
+    conversation: Sequence[AllMessageValues],
+) -> bool:
+    try:
+        return not _has_unreadable_content_block(translate(with_remote_media_placeholders(conversation)))
+    except Exception:  # noqa: BLE001  # the translator raises many types and any failure means this probe failed
+        return False
+
+
+@dataclass(frozen=True, slots=True)
+class _ThinkingBlocksTranslation:
+    messages: Sequence[AllAnthropicPassThroughMessageValues]
+    cleaned_conversation: Sequence[AllMessageValues] | None = None
+
+
+def _replays_thinking(messages: Sequence[object]) -> bool:
+    blocks: Final = chain.from_iterable(parts_of(message_field(message, "content")) for message in messages)
+    return any(message_field(block, "type") in ("thinking", "redacted_thinking") for block in blocks)
+
+
+def _thinking_param_lacks_replayed_blocks(thinking: object, messages: Sequence[AllMessageValues]) -> bool:
+    if not litellm.modify_params or thinking is None:
+        return False
+    turns: Final = list(messages)
+    return last_assistant_with_tool_calls_has_no_thinking_blocks(
+        turns
+    ) and not any_assistant_message_has_thinking_blocks(turns)
+
+
+def translated_without_malformed_thinking_blocks(
+    translate: Callable[[Sequence[AllMessageValues]], Sequence[AllAnthropicPassThroughMessageValues]],
+    conversation: Sequence[AllMessageValues],
+    messages: Sequence[AllMessageValues],
+    drop_params: bool,
+) -> _ThinkingBlocksTranslation | AnthropicError:
+    repeatable: Final = _repeatable_blocks_by_identity(chain(messages, conversation))
+    repeatable_conversation: Final = tuple(
+        _with_repeatable_thinking_blocks(message, repeatable) for message in conversation
+    )
+    thinking_blocks_error: Final = malformed_thinking_blocks_error(
+        tuple(_with_repeatable_thinking_blocks(message, repeatable) for message in messages)
+    )
+    if thinking_blocks_error is None or _translates_cleanly(translate, repeatable_conversation):
+        return _ThinkingBlocksTranslation(translate(repeatable_conversation))
+    cleaned_conversation: Final = tuple(
+        without_malformed_thinking_blocks(message) for message in repeatable_conversation
+    )
+    if not _translates_cleanly(translate, cleaned_conversation):
+        return _ThinkingBlocksTranslation(translate(repeatable_conversation))
+    if not drop_params:
+        return thinking_blocks_error
+    return _ThinkingBlocksTranslation(translate(cleaned_conversation), cleaned_conversation)
 
 
 def _tool_type(tool: object) -> str | None:
@@ -303,7 +464,8 @@ def _enum_conflicts_with_declared_type(schema: Mapping[str, object]) -> bool:
     if isinstance(declared_type, list):
         return True
     check: Final = _ENUM_TYPE_CHECKS.get(declared_type)
-    return check is not None and not all(check(value) for value in enum_values)
+    enum_items: Final = cast(list[object], enum_values)  # cast-ok: isinstance above proved it is a list
+    return check is not None and not all(check(value) for value in enum_items)
 
 
 # Single, internal-only key on ``litellm_params`` used to thread the per-
@@ -474,6 +636,56 @@ def _own_max_output_tokens(model: str) -> int | None:
         return get_max_tokens(model)
     except Exception:
         return None
+
+
+def admitted_extra_body(
+    extra_body: Mapping[str, object], request: Mapping[str, object], drop_params: bool
+) -> Mapping[str, object] | AnthropicError:
+    guarded: Final = sorted(EXTRA_BODY_GUARDED_KEYS.intersection(extra_body))
+    if guarded and not drop_params:
+        return AnthropicError(
+            status_code=400,
+            message=f"extra_body can't set {', '.join(guarded)}, since litellm builds them from the request. "
+            "Send them as request fields, or set drop_params to drop them",
+        )
+    if guarded:
+        litellm.verbose_logger.warning("drop_params dropped extra_body keys %s, since litellm builds them", guarded)
+    unguarded: Final = {key: value for key, value in extra_body.items() if key not in EXTRA_BODY_GUARDED_KEYS}
+    match unguarded.get("max_tokens"), request.get("max_tokens"):
+        case (int() as requested_cap, int() as admitted_cap) if requested_cap > admitted_cap and not drop_params:
+            return AnthropicError(
+                status_code=400,
+                message=f"extra_body can't raise max_tokens above the request's max_tokens ({admitted_cap}). "
+                "Send max_tokens as a request field, or set drop_params to cap it",
+            )
+        case (int() as requested_cap, int() as admitted_cap) if requested_cap > admitted_cap:
+            return MappingProxyType({**unguarded, "max_tokens": admitted_cap})
+        case _:
+            return MappingProxyType(unguarded)
+
+
+def with_extra_body_fields(params: Mapping[str, object]) -> Mapping[str, object]:
+    extra_body: Final = request_extra_body(params.get("extra_body"))
+    fields: Final[Mapping[str, object]] = MappingProxyType({}) if isinstance(extra_body, AnthropicError) else extra_body
+    return MappingProxyType(
+        {
+            **{key: value for key, value in params.items() if key != "extra_body"},
+            **{key: value for key, value in fields.items() if key not in EXTRA_BODY_GUARDED_KEYS},
+        }
+    )
+
+
+def request_extra_body(extra_body: object) -> Mapping[str, object] | AnthropicError:
+    match extra_body:
+        case None:
+            return MappingProxyType({})
+        case Mapping():
+            return _REQUEST_PARAMS_ADAPTER.validate_python(extra_body)
+        case _:
+            return AnthropicError(
+                status_code=400,
+                message=f"Invalid type for 'extra_body': expected an object, got {type(extra_body).__name__}",
+            )
 
 
 class AnthropicConfig(AnthropicModelInfo, BaseConfig):
@@ -1272,6 +1484,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             self._resolved_provider
         )
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "runs" if self.runs_hosted_mcp() else "drops"
+
     def _tools_param_with_openai_tool_search_mapped(
         self, non_default_params: Mapping[str, object], model: str, drop_params: bool
     ) -> Mapping[str, object]:
@@ -1857,7 +2072,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             model=model,
             route=self._resolved_provider,
             drop_params=drop_params,
-            runs_hosted_mcp=self.runs_hosted_mcp,
+            handling=self.hosted_mcp_tool_handling(model),
         )
         is_thinking_enabled: Final = self.is_thinking_enabled(non_default_params=request_params)
 
@@ -2307,6 +2522,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             anthropic_messages_pt,
         )
 
+        drop_params: Final = drops_unsupported_params(
+            _REQUEST_PARAMS_ADAPTER.validate_python(litellm_params).get("drop_params")
+        )
+
         if "tools" not in optional_params and messages is not None and has_tool_call_blocks(messages):
             optional_params["tools"], _ = self._map_tools(add_dummy_tool(custom_llm_provider="anthropic"))
 
@@ -2317,18 +2536,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # If any message has thinking_blocks, we must keep thinking enabled, otherwise
         # Anthropic errors with: "When thinking is disabled, an assistant message cannot contain thinking"
         # Related issue: https://github.com/BerriAI/litellm/issues/18926
-        if (
-            optional_params.get("thinking") is not None
-            and messages is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
-            and not any_assistant_message_has_thinking_blocks(messages)
-        ):
-            if litellm.modify_params:
+        def drop_thinking_without_replayed_blocks(turns: Sequence[AllMessageValues]) -> None:
+            thinking: Final = cast(object, optional_params.get("thinking"))  # cast-ok: optional_params is untyped
+            if _thinking_param_lacks_replayed_blocks(thinking, turns):
                 optional_params.pop("thinking", None)
                 litellm.verbose_logger.warning(
                     "Dropping 'thinking' param because the last assistant message with tool_calls "
                     "has no thinking_blocks. The model won't use extended thinking for this turn."
                 )
+
+        if messages is not None:
+            drop_thinking_without_replayed_blocks(messages)
 
         AnthropicConfig._maybe_drop_speed_param(
             model=model,
@@ -2387,19 +2605,37 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         # Format rest of message according to anthropic guidelines
         try:
-            anthropic_messages = anthropic_messages_pt(
-                model=model,
-                messages=list(conversation),
-                llm_provider=self._resolved_provider,
+            translation: Final = translated_without_malformed_thinking_blocks(
+                lambda turns: anthropic_messages_pt(
+                    model=model,
+                    messages=list(turns),
+                    llm_provider=self._resolved_provider,
+                ),
+                conversation,
+                messages,
+                drop_params,
             )
         except Exception as e:
             raise AnthropicError(
                 status_code=400,
                 message=f"{e}\nReceived Messages={messages}",
             )  # don't use verbose_logger.exception, if exception is raised
+        if isinstance(translation, AnthropicError):
+            raise translation
+        if translation.cleaned_conversation is not None and not _replays_thinking(translation.messages):
+            drop_thinking_without_replayed_blocks(translation.cleaned_conversation)
+        anthropic_messages = list(translation.messages)
 
+        request_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared transform signature
+            dict[str, object], optional_params
+        )
+        extra_body: Final = request_extra_body(request_params.get("extra_body"))
+        if isinstance(extra_body, AnthropicError):
+            raise extra_body
         self.update_headers_with_optional_anthropic_beta(
-            headers=headers, optional_params=optional_params, messages=anthropic_messages
+            headers=headers,
+            optional_params=dict(with_extra_body_fields(request_params)),
+            messages=anthropic_messages,
         )
 
         ## Auto-strip advisor blocks from history if advisor tool is absent.
@@ -2459,9 +2695,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Remove internal LiteLLM parameters that should not be sent to Anthropic API
         optional_params.pop("is_vertex_request", None)
         optional_params.pop("client_metadata", None)
-        request_params: Final = cast(  # cast-ok: optional_params is the untyped dict of the shared transform signature
-            dict[str, object], optional_params
-        )
         marked_tools: Final = tools_marked_for_a_tool_config_point(
             request_params.get("tools"), request_params.pop("cache_control_injection_points", None)
         )
@@ -2487,16 +2720,38 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 output_key="top_k",
             )
 
-        data: Final = {
+        request_body: Final = {
             "model": model,
             "messages": anthropic_messages,
-            **optional_params,
+            **{key: value for key, value in request_params.items() if key != "extra_body"},
             **({} if marked_tools is None else {"tools": list(marked_tools)}),
         }
+        self._apply_output_config(data=request_body, model=model, optional_params=optional_params)
+        admitted: Final = admitted_extra_body(
+            extra_body,
+            request_body,
+            drops_unsupported_params(_REQUEST_PARAMS_ADAPTER.validate_python(litellm_params).get("drop_params")),
+        )
+        if isinstance(admitted, AnthropicError):
+            raise admitted
+        return {**request_body, **admitted}
 
-        self._apply_output_config(data=data, model=model, optional_params=optional_params)
-
-        return data
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        fields: Final = request_extra_body(extra_body)
+        if isinstance(fields, AnthropicError):
+            raise fields
+        admitted: Final = admitted_extra_body(
+            fields, request, drops_unsupported_params(litellm_params.get("drop_params"))
+        )
+        if isinstance(admitted, AnthropicError):
+            raise admitted
+        return admitted
 
     def _apply_output_config(self, data: dict, model: str, optional_params: dict) -> None:
         """Validate and apply output_config to the request data.

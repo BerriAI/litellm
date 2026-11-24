@@ -1,15 +1,18 @@
 import copy
 import json
-from collections.abc import Mapping
+from collections import deque
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from dataclasses import dataclass
 from itertools import chain
 from typing import Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 from httpx import Headers
+import numpy as np
 import pytest
 import respx
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 import litellm
 from litellm.constants import (
@@ -25,7 +28,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.anthropic.chat import ModelResponseIterator
-from litellm.llms.anthropic.common_utils import process_anthropic_headers
+from litellm.llms.anthropic.common_utils import AnthropicError, process_anthropic_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.base_llm.base_utils import ResponseFormatSchema, response_format_schema
 from litellm.llms.anthropic.pass_through.messages.transformation import (
@@ -41,7 +44,7 @@ from litellm.llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation im
 )
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES, ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
 from litellm.types.llms.openai import ChatCompletionToolCallFunctionChunk
-from litellm.types.utils import ChatCompletionToolCallChunk, ModelResponse, ServerToolUse, Usage
+from litellm.types.utils import ChatCompletionToolCallChunk, Message, ModelResponse, ServerToolUse, Usage
 from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFUSAL_MESSAGE
 
 
@@ -10120,3 +10123,660 @@ def test_a_renamed_tool_leaves_tool_results_without_tool_references_as_claude_se
     sent: Final = request["messages"][1]["content"]
     assert [block for block in sent if block["type"].endswith("_tool_result")] == results
     assert [block["name"] for block in sent if block["type"] == "tool_use"] == ["weather_get"]
+
+
+def test_transform_request_leaves_the_callers_extra_body_for_a_repeat_call() -> None:
+    optional_params: Final = {"max_tokens": 16, "extra_body": {"top_k": 5}}
+
+    requests: Final = tuple(
+        AnthropicConfig().transform_request(
+            model="claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        for _ in range(2)
+    )
+
+    assert [request.get("top_k") for request in requests] == [5, 5]
+    assert all("extra_body" not in request for request in requests)
+
+
+_REPLAYED_THINKING: Final = {"type": "thinking", "thinking": "The user said hi.", "signature": "sig-1"}
+
+
+def _replayed_turn(thinking_blocks: object) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello", "thinking_blocks": thinking_blocks},
+        {"role": "user", "content": "Go on"},
+    ]
+
+
+_SECOND_REPLAYED_THINKING: Final = {"type": "thinking", "thinking": "They want more.", "signature": "sig-2"}
+
+
+def _two_replayed_turns(first: object, second: object) -> list[dict[str, object]]:
+    return [
+        *_replayed_turn(first),
+        {"role": "assistant", "content": "Sure", "thinking_blocks": second},
+        {"role": "user", "content": "Thanks"},
+    ]
+
+
+_CONTENT_BLOCKS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _replayed_blocks(converted: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    return _CONTENT_BLOCKS.validate_python(_CONTENT_BLOCKS.validate_python(converted["messages"])[1]["content"])
+
+
+def _replayed_signatures(converted: Mapping[str, object]) -> list[object]:
+    return [block.get("signature") for block in _replayed_blocks(converted) if block["type"] == "thinking"]
+
+
+_MALFORMED_THINKING_BLOCKS: Final = (
+    pytest.param("abc", "messages[1].thinking_blocks", "a list", "str", id="string"),
+    pytest.param(_REPLAYED_THINKING, "messages[1].thinking_blocks", "a list", "dict", id="unwrapped_block"),
+    pytest.param(0, "messages[1].thinking_blocks", "a list", "int", id="zero"),
+    pytest.param(b"abc", "messages[1].thinking_blocks", "a list", "bytes", id="bytes"),
+    pytest.param(bytearray(b"abc"), "messages[1].thinking_blocks", "a list", "bytearray", id="bytearray"),
+    pytest.param({"abc"}, "messages[1].thinking_blocks", "a list", "set", id="set"),
+    pytest.param(["abc"], "messages[1].thinking_blocks[0]", "an object", "str", id="string_block"),
+    pytest.param(
+        [_REPLAYED_THINKING, 5], "messages[1].thinking_blocks[1]", "an object", "int", id="number_after_a_block"
+    ),
+    pytest.param([["index"]], "messages[1].thinking_blocks[0]", "an object", "list", id="list_holding_a_stream_key"),
+    pytest.param(
+        [_REPLAYED_THINKING, ["index"]],
+        "messages[1].thinking_blocks[1]",
+        "an object",
+        "list",
+        id="stream_key_list_after_a_block",
+    ),
+)
+
+
+@pytest.mark.parametrize(("thinking_blocks", "field_path", "expected", "type_name"), _MALFORMED_THINKING_BLOCKS)
+@pytest.mark.parametrize("model", [UNFLAGGED_CLAUDE, FLAGGED_CLAUDE])
+def test_chat_transform_request_answers_400_naming_a_malformed_thinking_blocks(
+    local_model_cost_map, thinking_blocks: object, field_path: str, expected: str, type_name: str, model: str
+):
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(AnthropicConfig(), model, _replayed_turn(thinking_blocks))
+
+    assert (raised.value.status_code, raised.value.message) == (
+        400,
+        f"Invalid type for '{field_path}': expected {expected}, got {type_name}",
+    )
+
+
+@pytest.mark.parametrize(
+    ("malformed", "well_formed"),
+    [
+        pytest.param(_replayed_turn("abc"), _replayed_turn(None), id="string"),
+        pytest.param(_replayed_turn(_REPLAYED_THINKING), _replayed_turn(None), id="unwrapped_block"),
+        pytest.param(
+            _replayed_turn([_REPLAYED_THINKING, "abc"]), _replayed_turn([_REPLAYED_THINKING]), id="string_after_a_block"
+        ),
+        pytest.param(
+            _replayed_turn(["abc", _REPLAYED_THINKING, _SECOND_REPLAYED_THINKING]),
+            _replayed_turn([_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING]),
+            id="string_before_two_blocks",
+        ),
+        pytest.param(
+            _replayed_turn([_REPLAYED_THINKING, "abc", _SECOND_REPLAYED_THINKING]),
+            _replayed_turn([_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING]),
+            id="string_between_two_blocks",
+        ),
+        pytest.param(_replayed_turn((_REPLAYED_THINKING, "abc")), _replayed_turn([_REPLAYED_THINKING]), id="tuple"),
+        pytest.param(
+            _replayed_turn(deque([_REPLAYED_THINKING, "abc"])), _replayed_turn([_REPLAYED_THINKING]), id="deque"
+        ),
+        pytest.param(
+            _two_replayed_turns([_REPLAYED_THINKING], "abc"),
+            _two_replayed_turns([_REPLAYED_THINKING], None),
+            id="second_assistant_turn",
+        ),
+        pytest.param(_replayed_turn([["index"]]), _replayed_turn(None), id="list_holding_a_stream_key"),
+        pytest.param(_replayed_turn([["cache_control"]]), _replayed_turn(None), id="list_holding_a_cache_key"),
+        pytest.param(
+            _replayed_turn([_REPLAYED_THINKING, ["index"]]),
+            _replayed_turn([_REPLAYED_THINKING]),
+            id="stream_key_list_after_a_block",
+        ),
+    ],
+)
+def test_chat_transform_request_drops_a_malformed_thinking_blocks_under_drop_params(
+    local_model_cost_map, malformed: list[dict[str, object]], well_formed: list[dict[str, object]]
+):
+    def converted(messages: list[dict[str, object]]) -> object:
+        return AnthropicConfig().transform_request(
+            model=UNFLAGGED_CLAUDE,
+            messages=messages,
+            optional_params={},
+            litellm_params={"drop_params": True},
+            headers={},
+        )["messages"]
+
+    assert converted(malformed) == converted(well_formed)
+
+
+_ENABLED_THINKING: Final = {"type": "enabled", "budget_tokens": 1024}
+
+
+_TOOL_CALL_TURN: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [{"id": "toolu_01", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}],
+}
+
+
+def _replayed_tool_turn(assistant_fields: dict[str, object]) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "Weather?"},
+        {**_TOOL_CALL_TURN, **assistant_fields},
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "rain"},
+    ]
+
+
+def _dropped_request(messages: list[dict[str, object]]) -> Mapping[str, object]:
+    return AnthropicConfig().transform_request(
+        model=UNFLAGGED_CLAUDE,
+        messages=messages,
+        optional_params={"thinking": dict(_ENABLED_THINKING)},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize(
+    "thinking_blocks",
+    [
+        pytest.param("abc", id="string"),
+        pytest.param(["abc"], id="string_block"),
+        pytest.param([["index"]], id="list_holding_a_stream_key"),
+    ],
+)
+def test_chat_transform_request_drops_thinking_when_cleanup_leaves_a_tool_turn_without_blocks(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch, thinking_blocks: object
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    assert "thinking" not in _dropped_request(_replayed_tool_turn({"thinking_blocks": thinking_blocks}))
+
+
+def test_chat_transform_request_keeps_thinking_when_cleanup_leaves_a_block_on_the_tool_turn(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    converted: Final = _dropped_request(_replayed_tool_turn({"thinking_blocks": [_REPLAYED_THINKING, "abc"]}))
+
+    assert converted["thinking"] == _ENABLED_THINKING
+    assert _replayed_signatures(converted) == ["sig-1"]
+
+
+def test_chat_transform_request_keeps_thinking_when_cleanup_leaves_inline_thinking(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    inline_tool_turn: Final = _replayed_tool_turn({"content": [_REPLAYED_THINKING]})
+
+    converted: Final = _dropped_request(
+        [
+            *inline_tool_turn,
+            {"role": "assistant", "content": "Rainy", "thinking_blocks": "abc"},
+            {"role": "user", "content": "Weather in Paris?"},
+        ]
+    )
+
+    assert converted["thinking"] == _ENABLED_THINKING
+    assert _REPLAYED_THINKING["type"] in [block["type"] for block in _replayed_blocks(converted)]
+
+
+def test_chat_transform_request_keeps_thinking_when_cleanup_leaves_no_tool_turn(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    assert _dropped_request(_replayed_turn("abc"))["thinking"] == _ENABLED_THINKING
+
+
+def test_chat_transform_request_keeps_thinking_after_cleanup_without_modify_params(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(litellm, "modify_params", False)
+
+    assert _dropped_request(_replayed_tool_turn({"thinking_blocks": "abc"}))["thinking"] == _ENABLED_THINKING
+
+
+def test_chat_transform_request_ignores_thinking_blocks_on_a_turn_it_never_replays(local_model_cost_map):
+    converted: Final = _chat_request(
+        AnthropicConfig(), UNFLAGGED_CLAUDE, [{"role": "user", "content": "Hi", "thinking_blocks": "abc"}]
+    )
+
+    assert (
+        converted["messages"]
+        == _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, [{"role": "user", "content": "Hi"}])["messages"]
+    )
+
+
+@pytest.mark.parametrize(
+    "thinking_blocks",
+    [
+        pytest.param([_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING], id="list"),
+        pytest.param((_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING), id="tuple"),
+        pytest.param(deque([_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING]), id="deque"),
+    ],
+)
+def test_chat_transform_request_replays_every_well_formed_thinking_block(local_model_cost_map, thinking_blocks: object):
+    converted: Final = _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, _replayed_turn(thinking_blocks))
+
+    assert _replayed_signatures(converted) == ["sig-1", "sig-2"]
+
+
+@dataclass(frozen=True)
+class _ArrayLikeBlocks:
+    blocks: tuple[object, ...]
+
+    def __iter__(self) -> Iterator[object]:
+        return iter(self.blocks)
+
+    def __len__(self) -> int:
+        return len(self.blocks)
+
+    def __bool__(self) -> bool:
+        raise ValueError("The truth value of an array is ambiguous")
+
+
+@dataclass(frozen=True)
+class _IndexOnlyBlocks:
+    blocks: tuple[object, ...]
+
+    def __getitem__(self, position: int) -> object:
+        return self.blocks[position]
+
+    def __len__(self) -> int:
+        return len(self.blocks)
+
+
+@dataclass(frozen=True)
+class _OneShotBlocks:
+    blocks: Iterator[object]
+    size: int
+
+    def __iter__(self) -> Iterator[object]:
+        return self.blocks
+
+    def __len__(self) -> int:
+        return self.size
+
+    def __contains__(self, item: object) -> bool:
+        return False
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    "make_blocks",
+    [
+        pytest.param(lambda: {"a": _REPLAYED_THINKING, "b": _SECOND_REPLAYED_THINKING}.values(), id="dict_values"),
+        pytest.param(lambda: iter([_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING]), id="iterator"),
+        pytest.param(lambda: (block for block in (_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING)), id="generator"),
+        pytest.param(lambda: _ArrayLikeBlocks((_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING)), id="array_like"),
+        pytest.param(lambda: _IndexOnlyBlocks((_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING)), id="index_only"),
+        pytest.param(lambda: _OneShotBlocks(iter((_REPLAYED_THINKING, _SECOND_REPLAYED_THINKING)), 2), id="one_shot"),
+    ],
+)
+def test_chat_transform_request_replays_thinking_blocks_from_any_iterable(
+    local_model_cost_map, make_blocks: Callable[[], Iterable[object]], drop_params: bool
+):
+    converted: Final = AnthropicConfig().transform_request(
+        model=UNFLAGGED_CLAUDE,
+        messages=_replayed_turn(make_blocks()),
+        optional_params={},
+        litellm_params={"drop_params": drop_params},
+        headers={},
+    )
+
+    assert _replayed_signatures(converted) == ["sig-1", "sig-2"]
+
+
+@pytest.mark.parametrize(
+    "thinking_blocks",
+    [
+        pytest.param(None, id="none"),
+        pytest.param([], id="empty_list"),
+        pytest.param("", id="empty_string"),
+        pytest.param({}, id="empty_object"),
+        pytest.param(b"", id="empty_bytes"),
+        pytest.param(set(), id="empty_set"),
+    ],
+)
+def test_chat_transform_request_treats_no_thinking_blocks_as_absent(local_model_cost_map, thinking_blocks: object):
+    absent: Final = [
+        {key: value for key, value in message.items() if key != "thinking_blocks"} for message in _replayed_turn(None)
+    ]
+
+    assert (
+        _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, _replayed_turn(thinking_blocks))["messages"]
+        == _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, absent)["messages"]
+    )
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    "thinking_blocks",
+    [
+        pytest.param("abc", id="string"),
+        pytest.param(["abc"], id="string_block"),
+        pytest.param([_REPLAYED_THINKING, "abc"], id="string_after_the_inline_block"),
+    ],
+)
+def test_chat_transform_request_keeps_a_turn_whose_inline_thinking_replaces_malformed_blocks(
+    local_model_cost_map, thinking_blocks: object, drop_params: bool
+):
+    def converted(turn: dict[str, object]) -> object:
+        return AnthropicConfig().transform_request(
+            model=UNFLAGGED_CLAUDE,
+            messages=[{"role": "user", "content": "Hi"}, turn, {"role": "user", "content": "Go on"}],
+            optional_params={},
+            litellm_params={"drop_params": drop_params},
+            headers={},
+        )["messages"]
+
+    inline: Final = {
+        "role": "assistant",
+        "content": [_REPLAYED_THINKING, {"type": "text", "text": "Hello"}],
+    }
+
+    assert converted({**inline, "thinking_blocks": thinking_blocks}) == converted(inline)
+
+
+def test_chat_transform_request_keeps_the_real_field_error_behind_ignored_thinking_blocks(local_model_cost_map):
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(
+            AnthropicConfig(),
+            UNFLAGGED_CLAUDE,
+            [
+                {"role": "user", "content": "Hi"},
+                {
+                    "role": "assistant",
+                    "content": [_REPLAYED_THINKING, {"type": "text", "text": "Hello"}],
+                    "thinking_blocks": "abc",
+                },
+                {"role": "user", "content": "Go on"},
+                {**_TOOL_CALL_TURN, "tool_calls": [{**_TOOL_CALL_TURN["tool_calls"][0], "id": ["toolu_01"]}]},
+                {"role": "tool", "tool_call_id": "toolu_01", "content": "rain"},
+            ],
+        )
+
+    assert raised.value.status_code == 400
+    assert "messages[1].thinking_blocks" not in raised.value.message
+
+
+@pytest.mark.parametrize(
+    "make_blocks",
+    [
+        pytest.param(lambda: iter([_REPLAYED_THINKING]), id="iterator"),
+        pytest.param(lambda: _OneShotBlocks(iter((_REPLAYED_THINKING,)), 1), id="one_shot"),
+    ],
+)
+def test_chat_transform_request_keeps_one_shot_blocks_when_dropping_a_later_malformed_turn(
+    local_model_cost_map, make_blocks: Callable[[], Iterable[object]]
+):
+    def converted(messages: list[dict[str, object]]) -> object:
+        return AnthropicConfig().transform_request(
+            model=UNFLAGGED_CLAUDE,
+            messages=messages,
+            optional_params={},
+            litellm_params={"drop_params": True},
+            headers={},
+        )["messages"]
+
+    assert converted(_two_replayed_turns(make_blocks(), "abc")) == converted(
+        _two_replayed_turns([_REPLAYED_THINKING], None)
+    )
+
+
+def _replayed_response_turn(thinking_blocks: object) -> list[object]:
+    return [
+        {"role": "user", "content": "Hi"},
+        Message(role="assistant", content="Hello").model_copy(update={"thinking_blocks": thinking_blocks}),
+        {"role": "user", "content": "Go on"},
+    ]
+
+
+def test_chat_transform_request_names_malformed_thinking_blocks_on_a_response_message(local_model_cost_map):
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, _replayed_response_turn("abc"))
+
+    assert raised.value.message == "Invalid type for 'messages[1].thinking_blocks': expected a list, got str"
+
+
+def test_chat_transform_request_drops_malformed_thinking_blocks_on_a_response_message(local_model_cost_map):
+    def converted(messages: list[object]) -> object:
+        return AnthropicConfig().transform_request(
+            model=UNFLAGGED_CLAUDE,
+            messages=messages,
+            optional_params={},
+            litellm_params={"drop_params": True},
+            headers={},
+        )["messages"]
+
+    assert converted(_replayed_response_turn("abc")) == converted(_replayed_response_turn(None))
+
+
+def test_chat_transform_request_names_a_malformed_thinking_blocks_past_the_first_assistant_turn(local_model_cost_map):
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, _two_replayed_turns([_REPLAYED_THINKING], "abc"))
+
+    assert raised.value.message == "Invalid type for 'messages[3].thinking_blocks': expected a list, got str"
+
+
+@pytest.mark.parametrize(
+    "earlier_turns",
+    [
+        pytest.param([{"role": "user", "content": "Hi", "thinking_blocks": "abc"}], id="user_turn_with_a_string"),
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello", "thinking_blocks": ""},
+                {"role": "user", "content": "Next"},
+            ],
+            id="assistant_turn_with_an_empty_string",
+        ),
+    ],
+)
+def test_chat_transform_request_names_the_assistant_turn_that_broke_translation(
+    local_model_cost_map, earlier_turns: list[dict[str, object]]
+):
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(
+            AnthropicConfig(),
+            UNFLAGGED_CLAUDE,
+            [
+                *earlier_turns,
+                {"role": "assistant", "content": "Answer", "thinking_blocks": "abc"},
+                {"role": "user", "content": "Go on"},
+            ],
+        )
+
+    assert raised.value.message == (
+        f"Invalid type for 'messages[{len(earlier_turns)}].thinking_blocks': expected a list, got str"
+    )
+
+
+def test_chat_transform_request_keeps_the_generic_400_when_thinking_blocks_are_not_the_cause(local_model_cost_map):
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(
+            AnthropicConfig(),
+            UNFLAGGED_CLAUDE,
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello", "tool_calls": 5},
+                {"role": "user", "content": "Go on"},
+            ],
+        )
+
+    assert raised.value.status_code == 400
+    assert "thinking_blocks" not in raised.value.message
+
+
+_REMOTE_IMAGE: Final = {"type": "image_url", "image_url": {"url": "http://images.test/large.png"}}
+_REMOTE_FILE_DATA: Final = {"type": "file", "file": {"file_data": "http://files.test/report.pdf", "format": "application/pdf"}}
+_FETCHED_IMAGE: Final = "data:image/png;base64,ZmV0Y2hlZA=="
+_REMOTE_MEDIA_PARAMS: Final = (
+    pytest.param(_REMOTE_IMAGE, id="image_url"),
+    pytest.param(_REMOTE_FILE_DATA, id="file_data_url"),
+)
+
+
+def _turns_with_remote_media(media: Mapping[str, object], thinking_blocks: object) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": [{"type": "text", "text": "Hi"}, media]},
+        {"role": "assistant", "content": "Hello", "thinking_blocks": thinking_blocks},
+        {"role": "user", "content": "Go on"},
+    ]
+
+
+@pytest.mark.parametrize("media", _REMOTE_MEDIA_PARAMS)
+def test_chat_transform_request_fetches_no_media_for_a_request_it_rejects(
+    local_model_cost_map, media: Mapping[str, object]
+):
+    with patch(
+        "litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64", return_value=_FETCHED_IMAGE
+    ) as fetch, pytest.raises(AnthropicError, match=r"messages\[1\]\.thinking_blocks"):
+        _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, _turns_with_remote_media(media, "abc"))
+
+    fetch.assert_not_called()
+
+
+@pytest.mark.parametrize("media", _REMOTE_MEDIA_PARAMS)
+@pytest.mark.parametrize(
+    ("thinking_blocks", "drop_params"),
+    [
+        pytest.param("abc", True, id="dropped_string"),
+        pytest.param([_REPLAYED_THINKING, 5], True, id="dropped_block"),
+        pytest.param([_REPLAYED_THINKING], False, id="well_formed"),
+    ],
+)
+def test_chat_transform_request_fetches_remote_media_once_and_sends_it(
+    local_model_cost_map, media: Mapping[str, object], thinking_blocks: object, drop_params: bool
+):
+    with patch(
+        "litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64", return_value=_FETCHED_IMAGE
+    ) as fetch:
+        converted: Final = AnthropicConfig().transform_request(
+            model=UNFLAGGED_CLAUDE,
+            messages=_turns_with_remote_media(media, thinking_blocks),
+            optional_params={},
+            litellm_params={"drop_params": drop_params},
+            headers={},
+        )
+
+    assert fetch.call_count == 1
+    assert converted["messages"][0]["content"][1]["source"]["data"] == "ZmV0Y2hlZA=="
+
+
+@pytest.mark.parametrize("media", _REMOTE_MEDIA_PARAMS)
+def test_chat_transform_request_fetches_once_when_another_field_is_the_real_cause(
+    local_model_cost_map, media: Mapping[str, object]
+):
+    messages: Final = [
+        *_turns_with_remote_media(media, "abc")[:1],
+        {"role": "assistant", "content": "Hello", "thinking_blocks": "abc", "tool_calls": 5},
+        {"role": "user", "content": "Go on"},
+    ]
+
+    with patch(
+        "litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64", return_value=_FETCHED_IMAGE
+    ) as fetch, pytest.raises(AnthropicError) as raised:
+        _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, messages)
+
+    assert fetch.call_count == 1
+    assert raised.value.status_code == 400
+    assert "Invalid type for 'messages[1].thinking_blocks'" not in raised.value.message
+
+
+@pytest.mark.parametrize(
+    ("content", "block", "got"),
+    [
+        pytest.param("Hello", {"type": 5}, "int", id="number_type_string_content"),
+        pytest.param([{"type": "text", "text": "Hello"}], {"type": 5}, "int", id="number_type_list_content"),
+        pytest.param("Hello", {"thinking": "x", "signature": "sig"}, "NoneType", id="missing_type_string_content"),
+    ],
+)
+def test_chat_transform_request_names_a_thinking_block_whose_type_is_not_a_string(
+    local_model_cost_map, content: object, block: Mapping[str, object], got: str
+):
+    messages: Final = [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": content, "thinking_blocks": [block]},
+        {"role": "user", "content": "Go on"},
+    ]
+
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, messages)
+
+    assert raised.value.status_code == 400
+    assert raised.value.message == f"Invalid type for 'messages[1].thinking_blocks[0].type': expected a string, got {got}"
+
+    dropped: Final = AnthropicConfig().transform_request(
+        model=UNFLAGGED_CLAUDE,
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+    assert dropped["messages"][1]["content"] == [{"type": "text", "text": "Hello"}]
+
+
+_ITERATORS_HOLDING_A_BAD_BLOCK: Final = (
+    pytest.param(lambda: map(str, ["abc"]), id="map"),
+    pytest.param(lambda: (block for block in ("abc",)), id="generator"),
+    pytest.param(lambda: {"a": "abc"}.values(), id="dict_values"),
+    pytest.param(lambda: np.array(["abc"], dtype=object), id="numpy_array"),
+)
+
+
+@pytest.mark.parametrize("make_blocks", _ITERATORS_HOLDING_A_BAD_BLOCK)
+def test_chat_transform_request_names_a_bad_block_inside_an_iterator(
+    local_model_cost_map, make_blocks: Callable[[], Iterable[object]]
+):
+    with pytest.raises(AnthropicError) as raised:
+        _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, _replayed_turn(make_blocks()))
+
+    assert raised.value.status_code == 400
+    assert raised.value.message == "Invalid type for 'messages[1].thinking_blocks[0]': expected an object, got str"
+
+
+@pytest.mark.parametrize("make_blocks", _ITERATORS_HOLDING_A_BAD_BLOCK)
+def test_chat_transform_request_drops_a_bad_block_inside_an_iterator(
+    local_model_cost_map, make_blocks: Callable[[], Iterable[object]]
+):
+    converted: Final = AnthropicConfig().transform_request(
+        model=UNFLAGGED_CLAUDE,
+        messages=_replayed_turn(make_blocks()),
+        optional_params={},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert converted["messages"][1]["content"] == [{"type": "text", "text": "Hello"}]
+
+
+def test_chat_transform_request_leaves_the_callers_messages_alone_when_dropping_thinking_blocks(local_model_cost_map):
+    messages: Final = _two_replayed_turns([_REPLAYED_THINKING, "abc"], "abc")
+    before: Final = copy.deepcopy(messages)
+
+    AnthropicConfig().transform_request(
+        model=UNFLAGGED_CLAUDE,
+        messages=messages,
+        optional_params={},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert messages == before
