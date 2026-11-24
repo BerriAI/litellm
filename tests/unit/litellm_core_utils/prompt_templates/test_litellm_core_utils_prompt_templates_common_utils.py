@@ -941,6 +941,15 @@ def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_w
     assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)
 
 
+def test_get_str_from_messages_keeps_the_text_a_fallback_block_carries_like_a_text_block() -> None:
+    user_turn: Final = {"role": "user", "content": "Hi"}
+    reply: Final = {"type": "text", "text": "Hello"}
+    with_fallback: Final = [user_turn, {"role": "assistant", "content": [{"type": "fallback", "text": "carried"}, reply]}]
+    with_text: Final = [user_turn, {"role": "assistant", "content": [{"type": "text", "text": "carried"}, reply]}]
+
+    assert get_str_from_messages(with_fallback) == get_str_from_messages(with_text)
+
+
 def test_strip_litellm_response_only_fields_drops_nested_tool_call_provider_fields() -> None:
     message: Final = {
         "role": "assistant",

@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.core_helpers import (
     drops_unsupported_params,
     lax_bool,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import is_unrendered_block
 from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
 from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     get_file_ids_from_messages,
@@ -302,6 +303,45 @@ def carries_signed_compaction_block(messages: Sequence[object]) -> bool:
     return any(map(_is_signed_compaction_block, chain.from_iterable(map(_message_blocks, messages))))
 
 
+def _is_fallback_block(block: object) -> bool:
+    fields: Final = as_str_mapping(block)
+    return fields is not None and fields.get("type") == "fallback"
+
+
+def carries_fallback_block(messages: Sequence[object]) -> bool:
+    return any(map(_is_fallback_block, chain.from_iterable(map(_message_blocks, messages))))
+
+
+def _without_unrendered_content(message: Mapping[str, object]) -> Mapping[str, object]:
+    blocks: Final = as_object_list(message.get("content"))
+    if blocks is None:
+        return message
+    return {**message, "content": [block for block in blocks if not is_unrendered_block(block)]}
+
+
+def without_unrendered_blocks(messages: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    return tuple(map(_without_unrendered_content, messages))
+
+
+def _as_sent_text(block: JsonValue) -> tuple[JsonValue, ...]:
+    if not is_unrendered_block(block):
+        return (block,)
+    fields: Final = as_str_mapping(block)
+    text: Final = None if fields is None else fields.get("text")
+    return ({"type": "text", "text": text},) if isinstance(text, str) and text else ()
+
+
+def _with_unrendered_text_content(message: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+    content: Final = message.get("content")
+    if not isinstance(content, list):
+        return message
+    return {**message, "content": list(chain.from_iterable(map(_as_sent_text, content)))}
+
+
+def with_unrendered_blocks_as_text(messages: Sequence[Mapping[str, JsonValue]]) -> tuple[Mapping[str, JsonValue], ...]:
+    return tuple(map(_with_unrendered_text_content, messages))
+
+
 def requires_native_compaction_beta(
     custom_llm_provider: str,
     optional_params: Mapping[str, object],
@@ -365,6 +405,7 @@ def count_tokens_feature_betas(
                 ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
                 AnthropicModelInfo().is_mid_conversation_tool_change_used(messages),
             ),
+            (ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value, carries_fallback_block(messages)),
         )
         if used
     )
