@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import copy
+import inspect
 import json
 import time
 import traceback
@@ -2279,7 +2280,7 @@ async def _enforce_frame_project_quota(
             for callback in quota_callbacks
         ]
     )
-    return tuple(refund for refund in refunds if callable(refund))
+    return tuple(refund for refund in refunds if inspect.iscoroutinefunction(refund))
 
 
 async def _refund_frame_quota(refunds: Sequence[ResponsesWsQuotaRefund]) -> None:

@@ -3152,11 +3152,12 @@ class TestWebSocketTurnAdmission:
         assert [status for status, _ in _errors(websocket)] == [429]
 
     @pytest.mark.asyncio
-    async def test_a_quota_callback_returning_a_non_callable_yields_no_refund(self) -> None:
+    @pytest.mark.parametrize("returned", [True, lambda: None], ids=["truthy_value", "sync_callable"])
+    async def test_a_quota_callback_returning_no_async_refund_yields_no_refund(self, returned: object) -> None:
         from litellm.responses.streaming_iterator import _enforce_frame_project_quota
 
         quota_callback: Final = MagicMock()
-        quota_callback.enforce_project_io_token_quota_for_frame = AsyncMock(return_value=True)
+        quota_callback.enforce_project_io_token_quota_for_frame = AsyncMock(return_value=returned)
 
         refunds: Final = await _enforce_frame_project_quota([quota_callback], None, "gpt-4o", _turn_frames()[0])
 
