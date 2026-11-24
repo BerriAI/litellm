@@ -28,13 +28,15 @@ from ..common_utils import ElevenLabsException
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
 _FORM_ITEMS: Final = TypeAdapter(tuple[object, ...])
-_ANY_KEY_OBJECT: Final = TypeAdapter(dict[object, object])
+_JSON_KEYED_OBJECT: Final = TypeAdapter(
+    dict[str | int | float | bool | None, object], config=ConfigDict(hide_input_in_errors=True)
+)
 _CLIENT_BLOCKED_FIELDS: Final = frozenset({"model_id", "extra_body"})
 
 
 def _json_compatible(value: object) -> object:
     if isinstance(value, Mapping):
-        return _ANY_KEY_OBJECT.validate_python(value)
+        return _JSON_KEYED_OBJECT.validate_python(value)
     return str(value)
 
 
@@ -115,16 +117,16 @@ class ElevenLabsAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         extra_fields: Final = _JSON_OBJECT.validate_python(extra_body if isinstance(extra_body, Mapping) else {})
         form_data: Final = {
             "model_id": model,
+            **{
+                key: _form_value(value)
+                for key, value in extra_fields.items()
+                if key not in _CLIENT_BLOCKED_FIELDS and value is not None
+            },
             **{key: _form_value(value) for key, value in params.items() if key in openai_params and value is not None},
             **{
                 key: _form_value(value)
                 for key, value in provider_specific_params.items()
                 if key not in _CLIENT_BLOCKED_FIELDS
-            },
-            **{
-                key: _form_value(value)
-                for key, value in extra_fields.items()
-                if key not in _CLIENT_BLOCKED_FIELDS and value is not None
             },
         }
 
