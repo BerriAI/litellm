@@ -1,7 +1,7 @@
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Final, Protocol, TypeAlias, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, runtime_checkable
 
 from pydantic import ValidationError
 
@@ -11,8 +11,10 @@ from litellm.exceptions import RateLimitError, ServiceUnavailableError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.realtime_errors import realtime_error_event
 from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.utils import CallTypes, Usage
+
+if TYPE_CHECKING:
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 TURN_LIMIT_CHECK_FAILED_MESSAGE: Final = "The proxy could not check this response against its token rate limits"
 
@@ -20,25 +22,25 @@ TURN_LIMIT_CHECK_FAILED_MESSAGE: Final = "The proxy could not check this respons
 @runtime_checkable
 class RealtimeTurnLimiter(Protocol):
     async def enforce_token_limits_for_frame(
-        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, call_type: str = ...
+        self, user_api_key_dict: "UserAPIKeyAuth", requested_model: str | None, call_type: str = ...
     ) -> None: ...
 
     async def charge_realtime_turn_usage(
-        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
+        self, user_api_key_dict: "UserAPIKeyAuth", requested_model: str | None, usage: Usage
     ) -> None: ...
 
 
 @runtime_checkable
 class RealtimeCapacityCheck(Protocol):
     async def enforce_token_limits_for_frame(
-        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
+        self, user_api_key_dict: "UserAPIKeyAuth", requested_model: str | None
     ) -> None: ...
 
 
 @runtime_checkable
 class RealtimeCapacityCharge(Protocol):
     async def charge_realtime_capacity_turn(
-        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
+        self, user_api_key_dict: "UserAPIKeyAuth", requested_model: str | None, usage: Usage
     ) -> None: ...
 
 
@@ -109,7 +111,7 @@ class _UnchargedTurn:
 @dataclass(slots=True)
 class RealtimeTurnLimits:
     limiters: tuple[RealtimeTurnLimiter, ...]
-    user_api_key_dict: UserAPIKeyAuth
+    user_api_key_dict: "UserAPIKeyAuth"
     requested_model: str
     capacity_checks: tuple[RealtimeCapacityCheck, ...] = ()
     capacity_charges: tuple[RealtimeCapacityCharge, ...] = ()
@@ -193,6 +195,8 @@ def _session_model_group(model_call_details: object, model: str) -> str:
 def realtime_turn_limits(
     source: RealtimeTurnLimiterSource, user_api_key_dict: object, model_call_details: object, model: str
 ) -> RealtimeTurnLimits | None:
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+
     if not isinstance(user_api_key_dict, UserAPIKeyAuth):
         return None
     callbacks: Final = tuple(source())
