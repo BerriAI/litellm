@@ -15,10 +15,14 @@ from collections.abc import Callable, Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Final
 
+import httpx
+
 from litellm._logging import verbose_logger
 from litellm.proxy.mcp_server.oauth_identity_binding import credential_binding_matches
 from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import (
     AuthorizationCodeRefresher,
+    refusal_body,
+    refused_refresh_error,
 )
 from litellm.proxy.mcp_server.outbound_credentials.dual_cache_token_backend import (
     DualCacheTokenCacheBackend,
@@ -112,11 +116,30 @@ async def _post_token_endpoint(url: str, form: dict[str, str], headers: dict[str
         response: Final = await client.post(url, headers=request_headers, data=form)  # pyright: ignore
         response.raise_for_status()  # pyright: ignore
         body: Final[dict[str, object]] = response.json()  # pyright: ignore
+    except httpx.HTTPStatusError as exc:
+        verbose_logger.warning("MCP OAuth refresh request failed: %s", exc)
+        refusal: Final = refusal_body(exc.response)
+        refused: Final = None if refusal is None else refused_refresh_error(refusal)
+        return None if refused is None else {"error": refused}
     except Exception as exc:  # noqa: BLE001
         verbose_logger.warning("MCP OAuth refresh request failed: %s", exc)
         return None
     else:
         return body  # pyright: ignore
+
+
+async def _record_refresh_refusal(user_id: str, server_id: str, refused_refresh_token: str) -> None:
+    from litellm.proxy.mcp_server.db import (  # noqa: PLC0415  # db imports this package
+        record_oauth_refresh_refusal,
+    )
+    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime global, set after import
+
+    if prisma_client is None:
+        return
+    try:
+        await record_oauth_refresh_refusal(prisma_client, user_id, server_id, refused_refresh_token)
+    except Exception as exc:  # noqa: BLE001  # a failed mark must not turn the sign-in challenge into a 500
+        verbose_logger.warning("MCP OAuth refresh refusal for server %s was not recorded: %s", server_id, exc)
 
 
 def _redis_cache_is_available() -> bool:
@@ -162,7 +185,9 @@ def _build_per_user_oauth_token_store(
     server_lookup: ServerLookup,
 ) -> tuple[CachedOAuthTokenStore, bool]:
     backend, coordinator, uses_redis = _runtime_backend_and_coordinator()
-    refresher: Final = AuthorizationCodeRefresher(server_lookup, _post_token_endpoint, _persist_credential)
+    refresher: Final = AuthorizationCodeRefresher(
+        server_lookup, _post_token_endpoint, _persist_credential, record_refusal=_record_refresh_refusal
+    )
     refreshing: Final = RefreshingTokenStore(
         V2PerUserTokenStore(partial(_read_bound_credential, server_lookup)), refresher, coordinator=coordinator
     )

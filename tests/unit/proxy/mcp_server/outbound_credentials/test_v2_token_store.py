@@ -1,5 +1,8 @@
 """Tests for the v2-native per-user token read store: validate the decoded blob into a typed token."""
 
+from collections.abc import Mapping
+from typing import Final
+
 import pytest
 
 from litellm.proxy.mcp_server.outbound_credentials.v2_token_store import (
@@ -71,3 +74,12 @@ async def test_empty_user_short_circuits_without_reading():
 
     assert await V2PerUserTokenStore(read).fetch("", "srv") is None
     assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_refused_refresh_token_is_not_handed_to_the_refresher() -> None:
+    async def read_credential(_user_id: str, _server_id: str) -> Mapping[str, object]:
+        return {"access_token": "old", "refresh_token": "dead", "refresh_refused": True}
+
+    token: Final = await V2PerUserTokenStore(read_credential).fetch("alice", "srv")
+    assert token is not None and token.refresh_token is None

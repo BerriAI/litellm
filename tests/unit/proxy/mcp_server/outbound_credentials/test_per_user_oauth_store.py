@@ -1,5 +1,7 @@
 import asyncio
+from collections.abc import Mapping
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, Final
 
 import pytest
 
@@ -11,6 +13,9 @@ from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import (
     LazyPerUserOAuthTokenStore,
     ServerLookup,
 )
+
+if TYPE_CHECKING:
+    from respx import MockRouter
 
 
 class _RecordingStore:
@@ -97,6 +102,90 @@ async def test_native_refresh_persists_actual_grant_through_storage_adapter(
     assert payload is not None and payload.get("scopes") == expected
     assert payload["access_token"] == "rotated"
     assert payload["needs_scopes"] == ["gist"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status, body, marked",
+    [
+        (400, {"error": "invalid_grant"}, True),
+        (401, {"error": "invalid_grant"}, True),
+        (400, {"error": "invalid_client"}, False),
+        (200, {"error": "server_error"}, False),
+        (400, {"error": "invalid_request"}, True),
+        (401, {"error_description": "bad credentials"}, True),
+        (503, {"error": "invalid_grant"}, False),
+        (401, {"error": "invalid_grant", "access_token": "unusable", "refresh_token": "unusable"}, False),
+        (400, {"access_token": "unusable"}, False),
+    ],
+)
+async def test_a_refused_refresh_asks_for_sign_in_without_calling_the_provider_again(
+    credentials_prisma: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: "MockRouter",
+    status: int,
+    body: Mapping[str, object],
+    marked: bool,
+) -> None:
+    import httpx
+
+    from litellm.proxy.mcp_server.db import get_user_oauth_credential, oauth_grant_state, store_user_oauth_credential
+    from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import build_per_user_oauth_token_store
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    server: Final = MCPServer(
+        server_id="srv",
+        name="srv",
+        transport="http",
+        auth_type="oauth2",
+        token_url="https://idp.example/token",
+        client_id="client",
+        client_secret="secret",
+    )
+    route: Final = respx_mock.post("https://idp.example/token").mock(return_value=httpx.Response(status, json=body))
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv", "old", refresh_token="dead", expires_in=-60)
+    store: Final = build_per_user_oauth_token_store(lambda _: server)
+
+    assert await store.fetch("alice", "srv") is None
+    assert await store.fetch("alice", "srv") is None
+    saved: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv")
+    assert oauth_grant_state(saved) == ("absent" if marked else "refreshable")
+    assert saved is not None and saved["access_token"] == "old", "an error response never replaces the saved login"
+    assert route.call_count == (1 if marked else 2), "a refused refresh token must not be presented again"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("database", ["down", "absent"])
+async def test_a_refusal_that_cannot_be_recorded_still_asks_for_sign_in(
+    monkeypatch: pytest.MonkeyPatch, database: str
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeRefresher
+    from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import (
+        _persist_credential,
+        _record_refresh_refusal,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    table: Final = SimpleNamespace(find_unique=AsyncMock(side_effect=RuntimeError("database down")))
+    unreachable: Final = SimpleNamespace(db=SimpleNamespace(litellm_mcpusercredentials=table), writer_db=None)
+    monkeypatch.setattr(proxy_server, "prisma_client", unreachable if database == "down" else None)
+    server: Final = MCPServer(
+        server_id="srv", name="srv", transport="http", auth_type="oauth2", token_url="https://idp.example/token"
+    )
+
+    async def refused(url: str, form: Mapping[str, str], headers: Mapping[str, str]) -> Mapping[str, object]:
+        return {"error": "invalid_grant"}
+
+    refresher: Final = AuthorizationCodeRefresher(
+        lambda _: server, refused, _persist_credential, record_refusal=_record_refresh_refusal
+    )
+    token: Final = await refresher.refresh("alice", "srv", OAuthToken("old", refresh_token="dead"))
+
+    assert token is None, "a refusal must still end in the sign-in challenge, never a 500"
 
 
 class _BlockingStore:
