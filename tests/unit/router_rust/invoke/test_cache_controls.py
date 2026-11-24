@@ -120,3 +120,45 @@ def test_either_spelling_of_s_maxage_in_a_lock_and_a_fallback_list_is_the_same_c
     )
 
     assert locked == {"model": "openai/b", "cache": {"ttl": 60}, "allowed_cache_controls": ["s-maxage"]}
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+def test_a_control_the_virtual_key_enforces_survives_a_model_list_that_leaves_it_out(bucket: str) -> None:
+    request = {
+        "cache": {"no-store": True, "use-cache": True, "ttl": 5},
+        bucket: {"user_api_key_metadata": {"cache": {"no-store": True}}},
+    }
+
+    _, merged, ignored = with_model_cache_controls(
+        {"cache": {"ttl": 60}, "allowed_cache_controls": ["use-cache"]}, request
+    )
+
+    assert merged["cache"] == {"ttl": 60, "no-store": True, "use-cache": True}
+    assert ignored == ("ttl",)
+
+
+def test_a_fallback_with_its_own_list_keeps_the_strictest_of_its_lock_and_the_requested_models() -> None:
+    from litellm.router_rust.invoke.cache_controls import with_cache_lock
+
+    locked = with_cache_lock(
+        {"model": "openai/b", "cache": {"no-store": True, "ttl": 60}, "allowed_cache_controls": []},
+        {"cache": {"no-store": False, "ttl": 3600, "s-maxage": None}, "allowed_cache_controls": []},
+    )
+
+    assert locked == {
+        "model": "openai/b",
+        "cache": {"no-store": True, "ttl": 60, "s-maxage": None},
+        "allowed_cache_controls": [],
+    }
+
+
+def test_the_strictest_lock_keeps_a_lifetime_that_another_lock_leaves_null() -> None:
+    from litellm.router_rust.invoke.cache_controls import strictest_cache_lock
+
+    locks = [
+        {"cache": {"ttl": None}, "allowed_cache_controls": []},
+        {"cache": {"ttl": 60}, "allowed_cache_controls": []},
+    ]
+
+    assert strictest_cache_lock(locks) == {"cache": {"ttl": 60}, "allowed_cache_controls": []}
+    assert strictest_cache_lock(locks[::-1]) == {"cache": {"ttl": 60}, "allowed_cache_controls": []}
