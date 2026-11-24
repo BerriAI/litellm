@@ -60,6 +60,10 @@ from litellm.proxy.auth.auth_checks import (
     resolve_and_validate_end_user_id,
 )
 from litellm.proxy.auth.auth_object_prefetch import prefetch_identity_keys
+from litellm.proxy.auth.auth_utils import (
+    request_dispatched_to_pass_through_endpoint,
+    request_dispatched_to_provider_pass_through,
+)
 from litellm.proxy.auth.host.facts import (
     AliasMissing,
     EndUserRow,
@@ -93,6 +97,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     prefetch_referenced_auth_objects,
     update_key_budget_with_temp_budget_increase,
 )
+from litellm.proxy.common_utils.model_listing_utils import resolve_claude_picker_model
 from litellm.proxy.common_utils.user_api_key_cache import (
     AUTH_OBJECTS_TARGET,
     UserApiKeyCache,
@@ -640,9 +645,34 @@ class PythonAuthHost:
         )
 
     async def team_model_access(self, team: LiteLLM_TeamTable, model: str) -> bool:
+        req: Final = self.http.request if self.http is not None else None
+        is_pass_through: Final = req is not None and (
+            request_dispatched_to_pass_through_endpoint(req) or request_dispatched_to_provider_pass_through(req)
+        )
+        aliases: Final = team_model_aliases(team)
+        alias_maps: list[object] = [aliases] if aliases else []
+        router_settings: Final[object] = getattr(team, "router_settings", None)
+        if isinstance(router_settings, Mapping):
+            group_alias: Final[object] = router_settings.get("model_group_alias")
+            if isinstance(group_alias, Mapping) and group_alias:
+                alias_maps.append(group_alias)
+        resolved_model: Final = (
+            model
+            if is_pass_through
+            else resolve_claude_picker_model(
+                model,
+                route=self.route,
+                team_id=team.team_id,
+                llm_router=self.llm_router,
+                alias_maps=tuple(alias_maps),
+            )
+        )
         try:
             await can_team_access_model(
-                model=model, team_object=team, llm_router=self.llm_router, team_model_aliases=team_model_aliases(team)
+                model=resolved_model,
+                team_object=team,
+                llm_router=self.llm_router,
+                team_model_aliases=aliases,
             )
         except ProxyException:
             return False

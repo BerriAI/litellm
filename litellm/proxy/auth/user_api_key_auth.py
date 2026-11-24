@@ -314,7 +314,11 @@ async def _normalize_claude_model(
 
     if route not in _CLAUDE_MODEL_ROUTES or llm_router is None:
         return
-    if request is not None and request.scope.get(_CLAUDE_MODEL_NORMALIZED) is True:
+    if request is not None and (
+        request.scope.get(_CLAUDE_MODEL_NORMALIZED) is True
+        or request_dispatched_to_pass_through_endpoint(request)
+        or request_dispatched_to_provider_pass_through(request)
+    ):
         return
     requested: Final = get_model_from_request_context(request_data, route, request, llm_router, valid_token.team_id)
     if not isinstance(requested, str) or requested != request_data.get("model"):

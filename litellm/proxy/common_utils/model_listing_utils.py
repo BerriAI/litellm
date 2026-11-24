@@ -408,6 +408,23 @@ def claude_code_requested_group(
     return claude_code_group_name(requested, ClaudeCodeRoutingNames(llm_router, team_id, alias_maps))
 
 
+def resolve_claude_picker_model(
+    requested: str,
+    *,
+    route: str,
+    team_id: str | None,
+    llm_router: Router | None,
+    alias_maps: tuple[object, ...] = (),
+) -> str:
+    """Resolve a Claude Code compatibility picker ID against the caller's model namespace."""
+    if route not in CLAUDE_MODEL_ROUTES or llm_router is None:
+        return requested
+    if not requested.startswith(_CLAUDE_CODE_ALIAS_PREFIX) and not requested.lower().endswith(_ONE_MILLION_SUFFIX):
+        return requested
+    resolved: Final = claude_code_requested_group(requested, llm_router, team_id, alias_maps)
+    return resolved if resolved is not None else requested
+
+
 class TeamModelNameTranslator:
     """Translates internal team routing keys to their public names for the model
     listing/retrieve responses. Stateless; the live router and general_settings
