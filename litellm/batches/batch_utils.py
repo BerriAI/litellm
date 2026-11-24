@@ -218,25 +218,35 @@ def _classify_output_line_stats(
     the counts stay reconcilable with the provider's own ``request_counts``. A failed
     line that still reports usage was billed by the provider, so it is priced and
     counted as failed."""
-    for entry in entries:
-        if _batch_response_was_successful(entry, custom_llm_provider):
-            stats = _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
-            yield stats if stats is not None else _LineOutcome.UNCOSTABLE
-            continue
-        billed = (
-            _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
-            if _failed_line_reports_usage(entry, custom_llm_provider)
-            else None
-        )
-        yield _LineOutcome.PROVIDER_FAILED if billed is None else dataclasses_replace(billed, provider_failed=True)
+    return (
+        _classify_output_line(entry, custom_llm_provider, model_name, model_info, vertex_location) for entry in entries
+    )
+
+
+def _classify_output_line(
+    entry: Mapping[str, object],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    model_name: str | None,
+    model_info: ModelInfo | None,
+    vertex_location: str | None,
+) -> _BatchOutputLineStats | _LineOutcome:
+    if _batch_response_was_successful(entry, custom_llm_provider):
+        stats: Final = _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
+        return stats if stats is not None else _LineOutcome.UNCOSTABLE
+    billed: Final = (
+        _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
+        if _failed_line_reports_usage(entry, custom_llm_provider)
+        else None
+    )
+    return _LineOutcome.PROVIDER_FAILED if billed is None else dataclasses_replace(billed, provider_failed=True)
 
 
 def _failed_line_reports_usage(entry: Mapping[str, object], custom_llm_provider: str) -> bool:
     if custom_llm_provider in ("anthropic", "bedrock"):
         return False
-    envelope: Final = entry.get("response")
-    body: Final = envelope.get("body") if isinstance(envelope, Mapping) else None
-    return isinstance(body, Mapping) and isinstance(body.get("usage"), Mapping)
+    envelope: Final = as_str_mapping(entry.get("response"))
+    body: Final = None if envelope is None else as_str_mapping(envelope.get("body"))
+    return body is not None and as_str_mapping(body.get("usage")) is not None
 
 
 def _safe_output_line_stats(
