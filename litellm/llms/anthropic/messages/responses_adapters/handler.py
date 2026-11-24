@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils i
 )
 from litellm.litellm_core_utils.reasoning_effort_capability import deployment_rounds_reasoning_effort
 from litellm.litellm_core_utils.tool_fields import drop_policy, drops_mcp_servers, tools_without_mcp_servers
+from litellm.llms.base_llm.base_utils import optional_str
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.instructions_length import with_long_instructions_in_input
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -60,7 +61,7 @@ from ..context_management import AnthropicContextManagementError, PolyfillResult
 from ..context_management.constants import COMPACT_EDIT_TYPE
 from ..context_management.dispatcher import normalize_spec
 from ..convertible_blocks import reject_malformed_tool_result_text
-from ..deferred_tools import deferred_tools_mode, native_tool_search_name
+from ..deferred_tools import native_tool_search_name, usable_deferred_tools_mode
 from ..safeguards import with_safeguard_results
 from ..utils import (
     KNOWN_REASONING_EFFORTS,
@@ -540,7 +541,9 @@ def _build_responses_kwargs(
         auto_summary_level=auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider")),
         drop_params=drop_params,
         preserve_system_instructions=preserves_system_instructions(forwarded_kwargs),
-        deferred_tools=deferred_tools_mode(forwarded_kwargs.get("model_info")),
+        deferred_tools=usable_deferred_tools_mode(
+            forwarded_kwargs.get("model_info"), optional_str(forwarded_kwargs.get("custom_llm_provider"))
+        ),
     )
 
     caller_extra_body: Final = as_str_mapping(forwarded_kwargs.get("extra_body")) or {}
@@ -763,7 +766,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
             )
 
         safeguards_evaluator: Final = request_safeguards_evaluator(kwargs, messages)
-        tool_search_name: Final = native_tool_search_name(kwargs.get("model_info"), tools)
+        tool_search_name: Final = native_tool_search_name(
+            kwargs.get("model_info"), optional_str(kwargs.get("custom_llm_provider")), tools
+        )
         responses_kwargs, result = await _aresponses_without_rejected_reasoning(
             polyfill_result.messages if polyfill_result is not None else messages,
             responses_kwargs_for,
@@ -875,7 +880,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 extra_kwargs=kwargs,
             )
 
-        tool_search_name: Final = native_tool_search_name(kwargs.get("model_info"), tools)
+        tool_search_name: Final = native_tool_search_name(
+            kwargs.get("model_info"), optional_str(kwargs.get("custom_llm_provider")), tools
+        )
         responses_kwargs, result = _responses_without_rejected_reasoning(
             polyfill_result.messages if polyfill_result is not None else messages,
             responses_kwargs_for,

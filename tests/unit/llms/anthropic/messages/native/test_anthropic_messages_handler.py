@@ -3189,6 +3189,10 @@ async def test_azure_messages_send_no_tool_search_unless_deferred_tools_is_nativ
             "Remove tool_choice, or set drop_params",
         ),
         ("anthropic/claude-opus-5-5", {"deferred_tools": "loaded"}, {}, "passthrough, native, emulate, drop"),
+        ("openai/gpt-6.2-sol", {"deferred_tools": "passthrough"}, {}, "Pick native or emulate"),
+        ("deepseek/deepseek-chat", {"deferred_tools": "emulate"}, {}, "set it to passthrough"),
+        ("deepseek/deepseek-chat", {"deferred_tools": "native"}, {}, "set it to passthrough"),
+        ("anthropic/claude-opus-5-5", {"deferred_tools": "drop"}, {}, "set it to passthrough"),
     ],
     ids=[
         "unknown_value",
@@ -3196,6 +3200,10 @@ async def test_azure_messages_send_no_tool_search_unless_deferred_tools_is_nativ
         "native_without_client_tool_search",
         "native_with_a_forced_tool_search",
         "unknown_value_on_a_messages_api_route",
+        "passthrough_where_deferral_needs_tool_search",
+        "emulate_on_a_messages_api_route",
+        "native_on_a_messages_api_route",
+        "drop_on_a_messages_api_route",
     ],
 )
 async def test_unusable_deferred_tools_setting_is_a_400_before_any_upstream_call(
@@ -3225,6 +3233,64 @@ async def test_unusable_deferred_tools_setting_is_a_400_before_any_upstream_call
             )
 
     assert upstream.calls.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, deferral_flags",
+    [("fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro", {None, True}), ("openai/gpt-6.2-sol", {None})],
+    ids=["kept_where_the_provider_takes_it", "dropped_where_deferral_needs_tool_search"],
+)
+async def test_passthrough_deferred_tools_fall_back_to_drop_under_drop_params_only_where_the_provider_rejects_them(
+    model: str, deferral_flags: set[object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((openai.APIError, litellm.exceptions.APIConnectionError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+                model=model,
+                api_base="https://example-resource.openai.azure.com",
+                api_key="deployment-key",
+                api_version="2026-10-01-preview",
+                tools=_CLAUDE_CODE_TOOL_SEARCH_TOOLS,
+                model_info={"deferred_tools": "passthrough"},
+                drop_params=True,
+            )
+
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert {tool.get("defer_loading") for tool in chain.from_iterable(body["tools"] for body in bodies)} == (
+        deferral_flags
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_info", [{"deferred_tools": "emulate"}, {"deferred_tools": "native"}])
+async def test_a_messages_api_route_ignores_deferred_tools_under_drop_params(
+    model_info: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((litellm.exceptions.APIConnectionError, litellm.exceptions.InternalServerError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+                model="deepseek/deepseek-chat",
+                api_key="deployment-key",
+                tools=_CLAUDE_CODE_TOOL_SEARCH_TOOLS,
+                model_info=model_info,
+                drop_params=True,
+            )
+
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert [[tool.get("defer_loading") for tool in body["tools"]] for body in bodies][:1] == [[None, None, True]]
 
 
 @pytest.mark.asyncio
