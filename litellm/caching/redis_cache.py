@@ -45,6 +45,7 @@ from litellm.types.caching import (
 from litellm.types.services import ServiceTypes
 
 from .base_cache import BaseCache
+from .evicted_client_closer import running_loop_token
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -637,6 +638,7 @@ class RedisCache(BaseCache):
         self.redis_async_client: async_redis_client | async_redis_cluster_client | None = None
         self.redis_kwargs = redis_kwargs
         self.async_redis_conn_pool = get_redis_connection_pool(**redis_kwargs)
+        self._async_pool_loop_token = running_loop_token()
 
         # redis namespaces
         self.namespace = namespace
@@ -764,8 +766,10 @@ class RedisCache(BaseCache):
         if cached_client is not None:
             redis_async_client = cast(async_redis_client | async_redis_cluster_client, cached_client)
         else:
-            # Create new connection pool and client for current event loop
-            self.async_redis_conn_pool = get_redis_connection_pool(**self.redis_kwargs)
+            loop_token: Final = running_loop_token()
+            if loop_token != self._async_pool_loop_token:
+                self.async_redis_conn_pool = get_redis_connection_pool(**self.redis_kwargs)
+                self._async_pool_loop_token = loop_token
             redis_async_client = get_redis_async_client(connection_pool=self.async_redis_conn_pool, **self.redis_kwargs)
             in_memory_llm_clients_cache.set_cache(
                 key=cache_key,

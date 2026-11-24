@@ -39,7 +39,7 @@ from litellm.litellm_core_utils.url_utils import (
     provider_url_destination_candidates,
     validate_url,
 )
-from litellm.llms.azure.passthrough.transformation import azure_router_model_in_endpoint
+from litellm.llms.azure.passthrough.transformation import AZURE_DEPLOYMENT_SEGMENT, azure_router_model_in_endpoint
 from litellm.llms.nvidia_nim.passthrough.transformation import nvidia_nim_model_group_in_path
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -2894,7 +2894,10 @@ def get_model_from_request(
 
     if route.lower().startswith(("/azure/", "/azure_ai/")):
         azure_model: Final = _router_model_from_azure_route(route, llm_router)
-        return model if azure_model is None else azure_model
+        if azure_model is not None:
+            return azure_model
+        deployment: Final = _router_model_in_azure_deployment_segment(route, llm_router)
+        return model if deployment is None else deployment
 
     if route.lower().startswith("/nvidia_nim/"):
         nvidia_nim_model: Final = (
@@ -2959,8 +2962,19 @@ def _model_from_route_path(route: str) -> str | None:
 def _router_model_from_azure_route(route: str, llm_router: Router | None) -> str | None:
     if llm_router is None:
         return None
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import is_azure_router_model_group
+
     endpoint: Final = re.sub(r"^/azure(?:_ai)?/", "", route, flags=re.IGNORECASE)
-    return azure_router_model_in_endpoint(endpoint, frozenset(llm_router.registry().names()))
+    return azure_router_model_in_endpoint(
+        endpoint, frozenset(part for part in endpoint.split("/") if is_azure_router_model_group(llm_router, part))
+    )
+
+
+def _router_model_in_azure_deployment_segment(route: str, llm_router: Router | None) -> str | None:
+    match: Final = AZURE_DEPLOYMENT_SEGMENT.search(route)
+    if llm_router is None or match is None:
+        return None
+    return match.group(1) if match.group(1) in llm_router.registry().names() else None
 
 
 def _model_from_bedrock_route(route: str) -> str | None:

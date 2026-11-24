@@ -83,7 +83,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         api_key: str | None = None,
         optional_params: dict | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, str | None]:
         """
         Validate and set up authentication for Vertex AI Discovery Engine API
         """
@@ -116,7 +116,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         self,
         model: str,
         optional_rerank_params: dict,
-        headers: dict,
+        headers: Mapping[str, object],
         litellm_params: dict | None = None,
     ) -> dict:
         """
@@ -168,8 +168,8 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        optional_params: Mapping[str, object] = {},
+        litellm_params: Mapping[str, object] = {},
     ) -> RerankResponse:
         """
         Transform Vertex AI Discovery Engine response to Cohere format
@@ -209,7 +209,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
 
         # Create response in Cohere format
         # Convert results to proper RerankResponseResult objects
-        rerank_results: Final = []
+        rerank_results: Final[list[RerankResponseResult]] = []
         for result in results:
             rerank_results.append(
                 RerankResponseResult(index=result["index"], relevance_score=result["relevance_score"])
@@ -221,7 +221,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
 
         return RerankResponse(id=f"vertex_ai_rerank_{uuid.uuid4()}", results=rerank_results, meta=meta)
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return [
             "query",
             "documents",
@@ -231,7 +231,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         model: str,
         drop_params: bool,
         query: str,
@@ -243,11 +243,11 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map Cohere rerank params to Vertex AI format
         """
-        result: Final = {
+        result: Final[dict[str, object]] = {
             "query": query,
             "documents": documents,
             "top_n": top_n,

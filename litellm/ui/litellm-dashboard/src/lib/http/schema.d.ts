@@ -54075,6 +54075,12 @@ export interface components {
              * @default false
              */
             per_server_oauth_discovery: boolean;
+            /**
+             * Preserve Explicit Oauth Settings
+             * @description Keep explicitly supplied OAuth settings on upstream or auth changes, even when their values match the saved settings.
+             * @default false
+             */
+            preserve_explicit_oauth_settings: boolean;
             /** Registration Url */
             registration_url?: string | null;
             /** Rpm */
