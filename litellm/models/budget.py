@@ -76,7 +76,7 @@ def validate_budget_limits(limits: Sequence[BudgetLimit]) -> Sequence[BudgetLimi
         raise ValueError("Each budget duration may appear only once")
     validate_schedules(tuple(limit.schedule for limit in limits if limit.schedule is not None))
     for limit in limits:
-        if (error := budget_duration_error(limit.budget_duration)) is not None:
+        if limit.schedule is None and (error := budget_duration_error(limit.budget_duration)) is not None:
             raise ValueError(error)
         if not 0 <= limit.max_budget < float("inf"):
             raise ValueError("Window max_budget must be finite and non-negative")
@@ -90,10 +90,10 @@ def reject_budget_schedules(limits: Sequence[BudgetLimit]) -> Sequence[BudgetLim
 
 
 BudgetLimits: TypeAlias = Annotated[
-    tuple[BudgetLimit, ...], AfterValidator(validate_budget_limits), AfterValidator(reject_budget_schedules)
+    tuple[BudgetLimit, ...], AfterValidator(reject_budget_schedules), AfterValidator(validate_budget_limits)
 ]
 BudgetLimitList: TypeAlias = Annotated[
-    list[BudgetLimit], AfterValidator(validate_budget_limits), AfterValidator(reject_budget_schedules)
+    list[BudgetLimit], AfterValidator(reject_budget_schedules), AfterValidator(validate_budget_limits)
 ]
 TeamBudgetLimitList: TypeAlias = Annotated[list[BudgetLimit], AfterValidator(validate_budget_limits)]
 

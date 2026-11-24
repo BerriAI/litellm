@@ -211,3 +211,10 @@ def test_new_window_keeps_scheduled_start_once_reset_time_passed(duration: str) 
 def test_scheduled_window_reset_fields_follow_the_local_period(now: datetime, fields: dict[str, str]) -> None:
     label: Final = "sched:Europe/Berlin:mon,tue,wed,thu,fri:08:00-13:00"
     assert dict(get_budget_window_reset_fields(label, now=now)) == fields
+
+
+
+def test_schedule_labels_are_not_durations_for_scalar_or_per_model_budgets() -> None:
+    from litellm.proxy.common_utils.timezone_utils import budget_duration_error
+
+    assert budget_duration_error("sched:UTC:mon:08:00-13:00") is not None

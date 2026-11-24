@@ -11,7 +11,7 @@ from litellm.litellm_core_utils.duration_parser import (
     get_next_standardized_reset_time,
     normalize_budget_window_start,
 )
-from litellm.models.budget_schedule import BudgetSchedule, is_scheduled_duration
+from litellm.models.budget_schedule import BudgetSchedule
 from litellm.types.llms.base import LiteLLMBaseModel
 
 
@@ -151,10 +151,4 @@ def budget_duration_error(budget_duration: str | None) -> str | None:
     """
     if budget_duration is None or _is_persistable_budget_duration(budget_duration):
         return None
-    if is_scheduled_duration(budget_duration):
-        return (
-            None
-            if BudgetSchedule.from_label(budget_duration) is not None
-            else f"Invalid budget schedule '{budget_duration}'."
-        )
     return f"Invalid budget_duration '{budget_duration}'. Use a format like '1h', '24h', '7d', or '30d'."

@@ -6620,3 +6620,40 @@ async def test_a_row_without_a_caller_session_or_cost_adds_nothing(litellm_param
 
     assert await totals.read("hashed-key", "cc-session-1") is None
     assert await totals.read("hashed-key", "minted-1") is None
+
+
+@pytest.mark.asyncio
+async def test_ledger_window_keys_resolve_schedules_at_the_request_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.models.budget_schedule import schedule_clock
+    from litellm.proxy import proxy_server
+
+    seen: Final[list[datetime]] = []
+
+    async def window_keys(*args: object, **kwargs: object) -> tuple[()]:
+        seen.append(schedule_clock())
+        return ()
+
+    monkeypatch.setattr(proxy_server, "accounting_window_keys", window_keys)
+    monkeypatch.setattr(proxy_server, "prisma_client", _tool_usage_prisma())
+    monkeypatch.setattr(proxy_server, "general_settings", {"use_spend_logs_ledger": True})
+    monkeypatch.setattr(proxy_server, "disable_spend_logs", False)
+    started: Final = datetime(2026, 11, 25, 11, 59, tzinfo=timezone.utc)
+    await DBSpendUpdateWriter().update_database(
+        token="key",
+        user_id="user",
+        team_id="t",
+        org_id=None,
+        end_user_id=None,
+        kwargs={
+            "model": "ledger-test",
+            "call_type": "acompletion",
+            "litellm_call_id": "boundary-request",
+            "litellm_params": {"metadata": {"user_api_key": "key", "user_api_key_team_id": "t", "status": "success"}},
+        },
+        completion_response=None,
+        start_time=started,
+        end_time=datetime(2026, 11, 25, 12, 1, tzinfo=timezone.utc),
+        response_cost=0.5,
+    )
+    await drain_logging_tasks()
+    assert seen == [started]

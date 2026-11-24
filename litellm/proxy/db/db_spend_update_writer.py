@@ -41,6 +41,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping, finite_cost,
 from litellm.litellm_core_utils.litellm_logging import coerce_model_access_groups
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import guardrail_share_of_spend
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
+from litellm.models.budget_schedule import resolve_schedules_at
 from litellm.proxy._types import (
     DB_RETRY_SAFE_ERROR_TYPES,
     BaseDailySpendTransaction,
@@ -972,6 +973,21 @@ class DBSpendUpdateWriter:
             if use_ledger:
                 from litellm.proxy.spend_tracking.rust_spend_log_rows import LedgerRowInput, ledger_columns
 
+                with resolve_schedules_at(start_time):
+                    ledger_windows: Final = (
+                        await accounting_window_keys(
+                            hashed_token,
+                            team_id,
+                            customer_counters
+                            if customer_counters is not None
+                            else await customer_accounting_counters(
+                                customer_hierarchy, customer_budget_scopes_from_request(request_fields)
+                            ),
+                            user_id=user_id,
+                        )
+                        if billable_cost
+                        else ()
+                    )
                 columns: Final = ledger_columns(
                     payload,
                     LedgerRowInput(
@@ -991,18 +1007,7 @@ class DBSpendUpdateWriter:
                         model_access_groups=debitable_model_access_groups(
                             get_request_model_access_groups(request_fields), payload["model_id"], llm_router
                         ),
-                        windows=await accounting_window_keys(
-                            hashed_token,
-                            team_id,
-                            customer_counters
-                            if customer_counters is not None
-                            else await customer_accounting_counters(
-                                customer_hierarchy, customer_budget_scopes_from_request(request_fields)
-                            ),
-                            user_id=user_id,
-                        )
-                        if billable_cost
-                        else (),
+                        windows=ledger_windows,
                         router=get_llm_router,
                     ),
                 )

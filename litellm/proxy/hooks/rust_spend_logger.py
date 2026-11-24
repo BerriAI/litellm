@@ -22,6 +22,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_json_structure
 from litellm.litellm_core_utils.secret_redaction import (
     _token_redactor,  # pyright: ignore[reportPrivateUsage]  # the callback shares the process's compiled token redactor
 )
+from litellm.models.budget_schedule import resolve_schedules_at
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.db.db_spend_update_writer import (
     _turn_chains_through_the_db,  # pyright: ignore[reportPrivateUsage]  # the writer's own Responses chaining check
@@ -95,6 +96,13 @@ def _started_at(kwargs: Mapping[str, object]) -> datetime | None:
         return started
     logged: Final = getattr(kwargs.get("litellm_logging_obj"), "start_time", None)
     return logged if isinstance(logged, datetime) else None
+
+
+def _request_started_at(call: SpendLogCall | None) -> datetime | None:
+    starts: Final = tuple(
+        start for start in map(_started_at, call.rows if call is not None else ()) if start is not None
+    )
+    return min(starts, default=None)
 
 
 def _response() -> object:
@@ -360,9 +368,11 @@ class _SpendLogRustLogger(RustLogger):
         if not _on_async_line(hook):
             return None
         call: Final = getattr(view, Field.spend_log_input.value, None)
-        token: Final = _SPEND_LOG_CALL.set(call if isinstance(call, SpendLogCall) else None)
+        spend_log_call: Final = call if isinstance(call, SpendLogCall) else None
+        token: Final = _SPEND_LOG_CALL.set(spend_log_call)
         try:
-            return await super().run_rust(hook, reads, view, ctx)
+            with resolve_schedules_at(_request_started_at(spend_log_call)):
+                return await super().run_rust(hook, reads, view, ctx)
         finally:
             _SPEND_LOG_CALL.reset(token)
 

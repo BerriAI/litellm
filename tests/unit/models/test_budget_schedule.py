@@ -173,6 +173,7 @@ def test_full_workday_and_weekend_schedule_is_accepted() -> None:
             ],
             "derived from schedule",
         ),
+        ([{"max_budget": 1, "budget_duration": "sched:Europe/Berlin:mon:08:00-13:00"}], "Invalid budget_duration"),
     ],
     ids=[
         "same_hours_on_overlapping_days",
@@ -184,6 +185,7 @@ def test_full_workday_and_weekend_schedule_is_accepted() -> None:
         "repeated_day",
         "seconds_in_time",
         "conflicting_budget_duration",
+        "schedule_label_without_schedule",
     ],
 )
 def test_ambiguous_or_invalid_schedules_are_rejected(windows: list[dict[str, object]], message: str) -> None:
@@ -292,3 +294,48 @@ def test_overlap_error_names_both_windows() -> None:
         "Scheduled budget windows overlap: sched:Europe/Berlin:mon,tue,wed,thu,fri,sat,sun:08:00-13:00"
         " and sched:Europe/Berlin:mon,tue,wed,thu,fri,sat,sun:12:00-14:00"
     ) in str(error.value)
+
+
+def _minute_schedule(start_minute: int, length: int) -> dict[str, object]:
+    start: Final = f"{start_minute // 60:02d}:{start_minute % 60:02d}"
+    end_minute: Final = (start_minute + length) % (24 * 60)
+    end: Final = f"{end_minute // 60:02d}:{end_minute % 60:02d}"
+    return {"max_budget": 1, "schedule": {"timezone": "UTC", "days": ["mon"], "start": start, "end": end}}
+
+
+def test_hundreds_of_back_to_back_periods_are_accepted() -> None:
+    assert len(_team_limits(*(_minute_schedule(minute, 1) for minute in range(0, 600)))) == 600
+
+
+def test_an_overlap_among_many_periods_names_the_earlier_window_first() -> None:
+    windows: Final = [*(_minute_schedule(minute, 1) for minute in range(0, 600)), _minute_schedule(300, 2)]
+    with pytest.raises(
+        ValidationError,
+        match="Scheduled budget windows overlap: sched:UTC:mon:05:00-05:01 and sched:UTC:mon:05:00-05:02",
+    ):
+        _team_limits(*windows)
+
+
+def test_key_and_user_lists_reject_schedules_before_checking_them() -> None:
+    with pytest.raises(ValidationError) as error:
+        TypeAdapter(BudgetLimitList).validate_python([_minute_schedule(0, 10), _minute_schedule(5, 10)])
+    assert "only on teams" in str(error.value)
+    assert "overlap" not in str(error.value)
+
+
+
+@pytest.mark.parametrize(
+    "monday, overlaps",
+    [(("08:00", "09:00"), False), (("00:00", "00:01"), True)],
+    ids=["touches_the_end_of_sunday_night", "overlaps_the_first_minute_after_the_wrap"],
+)
+def test_sunday_night_wraps_into_monday_with_exact_edges(monday: tuple[str, str], overlaps: bool) -> None:
+    windows: Final = [
+        {"max_budget": 1, "schedule": {"timezone": BERLIN, "days": ["sun"], "start": "18:00", "end": "08:00"}},
+        {"max_budget": 1, "schedule": {"timezone": BERLIN, "days": ["mon"], "start": monday[0], "end": monday[1]}},
+    ]
+    if not overlaps:
+        assert len(_team_limits(*windows)) == 2
+        return
+    with pytest.raises(ValidationError, match="overlap"):
+        _team_limits(*windows)

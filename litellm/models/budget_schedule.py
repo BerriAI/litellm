@@ -2,7 +2,7 @@ from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime, time, timedelta, timezone
-from itertools import chain, combinations
+from itertools import chain, pairwise
 from typing import Final, Literal, TypeAlias
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -87,12 +87,16 @@ class BudgetSchedule(LiteLLMPydanticObjectBase):
     def _length_minutes(self) -> int:
         return (_minutes(self.end) - _minutes(self.start)) % _DAY_MINUTES or _DAY_MINUTES
 
-    def weekly_minutes(self) -> frozenset[int]:
-        return frozenset(minute % _WEEK_MINUTES for minute in chain.from_iterable(map(self._day_minutes, self.days)))
+    def weekly_intervals(self) -> tuple[tuple[int, int], ...]:
+        """The [start, end) minutes of the week this schedule covers, split where a period wraps past Sunday."""
+        return tuple(chain.from_iterable(map(self._day_intervals, self.days)))
 
-    def _day_minutes(self, day: Weekday) -> range:
+    def _day_intervals(self, day: Weekday) -> tuple[tuple[int, int], ...]:
         start: Final = WEEKDAYS.index(day) * _DAY_MINUTES + _minutes(self.start)
-        return range(start, start + self._length_minutes())
+        end: Final = start + self._length_minutes()
+        if end <= _WEEK_MINUTES:
+            return ((start, end),)
+        return ((start, _WEEK_MINUTES), (0, end - _WEEK_MINUTES))
 
     def _period_from(self, day: date) -> tuple[datetime, datetime]:
         zone: Final = ZoneInfo(self.timezone)
@@ -145,9 +149,15 @@ def window_counter_name(budget_duration: str, window_start: datetime | None) -> 
 def validate_schedules(schedules: Sequence[BudgetSchedule]) -> None:
     if len({schedule.timezone for schedule in schedules}) > 1:
         raise ValueError("All scheduled budget windows must use the same timezone")
-    overlapping: Final = next(
-        (pair for pair in combinations(schedules, 2) if pair[0].weekly_minutes() & pair[1].weekly_minutes()),
-        None,
-    )
-    if overlapping is not None:
-        raise ValueError(f"Scheduled budget windows overlap: {overlapping[0].label()} and {overlapping[1].label()}")
+    intervals: Final = sorted(chain.from_iterable(map(_indexed_intervals, enumerate(schedules))))
+    clash: Final = next((pair for pair in pairwise(intervals) if pair[1][0] < pair[0][1]), None)
+    if clash is not None:
+        first, second = sorted((clash[0][2], clash[1][2]))
+        raise ValueError(
+            f"Scheduled budget windows overlap: {schedules[first].label()} and {schedules[second].label()}"
+        )
+
+
+def _indexed_intervals(indexed: tuple[int, BudgetSchedule]) -> tuple[tuple[int, int, int], ...]:
+    index, schedule = indexed
+    return tuple((start, end, index) for start, end in schedule.weekly_intervals())

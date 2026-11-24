@@ -580,3 +580,32 @@ def test_each_attempt_carries_the_current_metadata_retention(
 
     assert call is not None
     assert _SETTINGS.validate_python(call.document["settings"])["spend_logs_metadata_fields"] == sent
+
+
+
+
+@pytest.mark.asyncio
+async def test_spend_log_windows_resolve_schedules_at_the_request_start(
+    proxy: Proxy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.models.budget_schedule import schedule_clock
+
+    seen: Final[list[datetime]] = []
+
+    async def window_keys(*args: object, **kwargs: object) -> tuple[()]:
+        seen.append(schedule_clock())
+        return ()
+
+    monkeypatch.setattr(ps, "accounting_window_keys", window_keys)
+    _ = await litellm.acompletion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="hello there",
+        mock_delay=0.2,
+        metadata=dict(_KEYED),
+    )
+    rows: Final = await proxy.rows()
+
+    started: Final = datetime.fromisoformat(str(rows[0]["startTime"])).astimezone(timezone.utc)
+    assert len(seen) == 1
+    assert abs((seen[0] - started).total_seconds()) < 0.05
