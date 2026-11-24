@@ -19,7 +19,7 @@ import queue
 import re
 import sys
 import threading
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, cast
@@ -692,6 +692,36 @@ async def test_a_model_dropped_from_the_openrouter_catalog_loses_its_limits(
     await _refresh_against(router, lambda request: httpx.Response(200, json={"data": []}))
 
     assert _group_limits(router, model_group) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("edited_params", "edited_model_info", "expected"),
+    (
+        ({"tpm": 5000}, {}, (4096, 1024)),
+        ({}, {"max_output_tokens": 512}, (4096, 512)),
+        ({"api_base": "https://relay.test/api/v1"}, {}, (None, None)),
+    ),
+)
+async def test_editing_an_openrouter_deployment_keeps_its_limits_while_it_reaches_the_same_backend(
+    edited_params: Mapping[str, object],
+    edited_model_info: Mapping[str, object],
+    expected: tuple[int | None, int | None],
+    openrouter_settings_cleared: None,
+) -> None:
+    router: Final = Router(model_list=[_openrouter_deployment("named", "openrouter/vendor/capped", "named-id")])
+    await _refresh_against(router, _openrouter_catalog_response)
+
+    _ = router.upsert_deployment(
+        Deployment.model_validate(
+            {
+                "model_name": "named",
+                "litellm_params": {"model": "openrouter/vendor/capped", "api_key": "openrouter-key", **edited_params},
+                "model_info": {"id": "named-id", **edited_model_info},
+            }
+        )
+    )
+
+    assert _group_limits(router, "named") == expected
 
 
 async def test_openrouter_discovery_without_a_key_makes_no_call(openrouter_settings_cleared: None) -> None:

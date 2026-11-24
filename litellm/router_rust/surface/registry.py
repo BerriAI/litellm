@@ -160,6 +160,9 @@ _PTUMemo: TypeAlias = tuple[
 ]
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_BACKEND_NEUTRAL_PARAMS: Final = frozenset(
+    {"tpm", "rpm", "max_parallel_requests", "input_cost_per_token", "output_cost_per_token"}
+)
 
 
 _CACHE_PRICING_FIELDS: Final = (
@@ -689,6 +692,20 @@ def _model_info_request_headers(params: LiteLLM_Params, api_key: str | None) -> 
     )
 
 
+def _backend_params(deployment: Deployment) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in deployment.litellm_params.model_dump(exclude_none=True).items()
+            if key not in _BACKEND_NEUTRAL_PARAMS
+        }
+    )
+
+
+def _same_backend(previous: Deployment, current: Deployment) -> bool:
+    return _backend_params(previous) == _backend_params(current)
+
+
 def _renamed(entry: UntypedEntry, model_name: str) -> UntypedEntry:
     return {**entry, "model_name": model_name}
 
@@ -939,6 +956,10 @@ class HostRegistry(HostModelInfo):
     def _last_discovered_model_info(self, model_id: str) -> DiscoveredDeploymentModelInfo | None:
         cached: Final[object] = self._discovered_model_info_cache.get_cache(model_id)
         return cached if isinstance(cached, DiscoveredDeploymentModelInfo) else None
+
+    def _live_discovered_model_info(self, model_id: str) -> DiscoveredDeploymentModelInfo | None:
+        cached: Final = self._last_discovered_model_info(model_id)
+        return cached if cached is not None and cached.deployment is self._core_get_model_info(model_id) else None
 
     async def _adiscover_openai_compatible_model_info(
         self,
@@ -1542,7 +1563,12 @@ class HostRegistry(HostModelInfo):
                 and deployment.model_info == on_router.model_info
             ):
                 return None
+            discovered: Final = self._live_discovered_model_info(model_id)
             self._install_deployment(deployment, replace_existing=True)
+            if discovered is not None and on_router is not None and _same_backend(on_router, served):
+                self._discovered_model_info_cache.set_cache(
+                    model_id, dataclasses.replace(discovered, deployment=self._core_get_model_info(model_id))
+                )
             if on_router is not None:
                 withdraw_shared_capabilities(
                     self._host,
