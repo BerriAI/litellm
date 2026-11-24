@@ -543,7 +543,7 @@ def _prepare_mcp_server_data(
         data_dict["is_byok"] = getattr(data, "is_byok", False)
 
     if "events" in data_dict:
-        return {**data_dict, "events": safe_dumps(data_dict["events"])}
+        return {**data_dict, "events": safe_dumps(_DECODED_JSON.validate_python(data_dict["events"]))}
     return data_dict
 
 
