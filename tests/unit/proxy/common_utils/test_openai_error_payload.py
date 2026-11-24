@@ -478,3 +478,32 @@ def test_relayed_provider_specific_fields_keep_a_plain_field_name(field: str) ->
     )
 
     assert relayed_provider_specific_fields(rejected) == {field: "kept"}
+
+
+def test_relayed_provider_specific_fields_redact_a_credential_inside_json_text() -> None:
+    raw: Final = json.dumps({"error": "blocked", "headers": {"Cookie": "session=opaque-upstream-credential"}})
+    rejected: Final = litellm.BadRequestError(
+        message="rejected",
+        model="m",
+        llm_provider="openrouter",
+        body={"message": "rejected", "code": 400, "metadata": {"raw": raw, "provider_name": "Upstream"}},
+    )
+
+    assert relayed_provider_specific_fields(rejected) == {
+        "metadata": {
+            "raw": json.dumps({"error": "blocked", "headers": {"Cookie": "REDACTED"}}, separators=(",", ":")),
+            "provider_name": "Upstream",
+        }
+    }
+
+
+def test_relayed_provider_specific_fields_keep_clean_json_text_byte_for_byte() -> None:
+    raw: Final = '{"error": "blocked",  "detail": [1, 2]}'
+    rejected: Final = litellm.BadRequestError(
+        message="rejected",
+        model="m",
+        llm_provider="openrouter",
+        body={"message": "rejected", "code": 400, "metadata": {"raw": raw}},
+    )
+
+    assert relayed_provider_specific_fields(rejected) == {"metadata": {"raw": raw}}
