@@ -691,34 +691,50 @@ def _real_logging_obj() -> LiteLLMLoggingObj:
     )
 
 
+_TOOL_TURN_INPUT_WITH_INJECTED_MARKER = [
+    {**_TOOL_TURN_INPUT[0], "cache_control": {"type": "ephemeral"}},
+    *_TOOL_TURN_INPUT[1:],
+]
+
+
+def _patch_native_responses_request():
+    return patch.object(
+        import_module("litellm.responses.main").base_llm_http_handler,
+        "response_api_handler",
+        return_value=MagicMock(),
+    )
+
+
 @pytest.mark.asyncio
 async def test_async_cache_control_injection_logs_role_less_input_items():
     logging_obj = _real_logging_obj()
 
-    patches = _patch_responses_dispatch()
-    with patches[0], patches[1], patches[2]:
+    with _patch_native_responses_request() as native_request:
         await litellm.aresponses(
             input=copy.deepcopy(_TOOL_TURN_INPUT),
             model="gpt-4o",
+            api_key="sk-test",
             cache_control_injection_points=[{"location": "message", "role": "system"}],
             litellm_logging_obj=logging_obj,
         )
 
-    assert logging_obj.model_call_details["messages"] == _TOOL_TURN_INPUT
-    assert logging_obj.messages == _TOOL_TURN_INPUT
+    assert native_request.call_count == 1
+    assert logging_obj.model_call_details["messages"] == _TOOL_TURN_INPUT_WITH_INJECTED_MARKER
+    assert logging_obj.messages == _TOOL_TURN_INPUT_WITH_INJECTED_MARKER
 
 
 def test_sync_cache_control_injection_logs_role_less_input_items():
     logging_obj = _real_logging_obj()
 
-    patches = _patch_responses_dispatch()
-    with patches[0], patches[1], patches[2]:
+    with _patch_native_responses_request() as native_request:
         litellm.responses(
             input=copy.deepcopy(_TOOL_TURN_INPUT),
             model="gpt-4o",
+            api_key="sk-test",
             cache_control_injection_points=[{"location": "message", "role": "system"}],
             litellm_logging_obj=logging_obj,
         )
 
-    assert logging_obj.model_call_details["messages"] == _TOOL_TURN_INPUT
-    assert logging_obj.messages == _TOOL_TURN_INPUT
+    assert native_request.call_count == 1
+    assert logging_obj.model_call_details["messages"] == _TOOL_TURN_INPUT_WITH_INJECTED_MARKER
+    assert logging_obj.messages == _TOOL_TURN_INPUT_WITH_INJECTED_MARKER
