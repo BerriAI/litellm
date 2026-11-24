@@ -28,7 +28,9 @@ def azure_anthropic_messages_url(api_base: str) -> str:
     return join_api_base(anthropic_root, "anthropic/v1/messages")
 
 
-def _promote_extra_body_to_optional_params(optional_params: dict, drop_params: object) -> AnthropicError | None:
+def _promote_extra_body_to_optional_params(
+    optional_params: dict[str, object], drop_params: object
+) -> AnthropicError | None:
     """Promote anthropic-native passthrough keys out of ``extra_body``.
 
     ``azure_ai`` is an OpenAI-compatible provider, so non-OpenAI kwargs like
@@ -120,7 +122,7 @@ class AzureAnthropicConfig(AnthropicConfig):
         )
 
         # Get anthropic headers (but we'll replace x-api-key with Azure auth)
-        anthropic_headers: Final = self.get_anthropic_headers(
+        anthropic_headers: Final[dict[str, str]] = self.get_anthropic_headers(
             computer_tool_used=computer_tool_used,
             prompt_caching_set=prompt_caching_set,
             pdf_used=pdf_used,
@@ -148,7 +150,7 @@ class AzureAnthropicConfig(AnthropicConfig):
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform request using parent AnthropicConfig, then remove unsupported params.
         Azure Anthropic doesn't support extra_body, max_retries, or stream_options parameters.
@@ -159,7 +161,7 @@ class AzureAnthropicConfig(AnthropicConfig):
         if promotion_error is not None:
             raise promotion_error
 
-        data: Final = super().transform_request(
+        data: Final[dict[str, object]] = super().transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params,

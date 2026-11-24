@@ -3663,7 +3663,7 @@ class ManagedResponsesWebSocketHandler:
             if chunk is None:
                 continue
             # Read type from the object before serializing to avoid double JSON parse
-            chunk_type = getattr(chunk, "type", None) or (chunk.get("type") if isinstance(chunk, dict) else None)
+            chunk_type = getattr(chunk, "type", None) or (chunk.get("type") if _is_json_object(chunk) else None)
             serialized = self._serialize_chunk(chunk)
             if serialized is None:
                 continue
