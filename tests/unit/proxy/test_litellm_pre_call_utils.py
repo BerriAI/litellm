@@ -12332,3 +12332,65 @@ def test_stale_team_alias_bypass_flag_is_read_once_per_process(monkeypatch: pyte
     monkeypatch.setenv("LITELLM_ENABLE_TEAM_STALE_ALIAS_BYPASS", "false")
 
     assert (first, pre_call_utils._stale_team_alias_bypass_enabled()) == (True, True)
+
+
+def test_key_disabled_callbacks_resolve_to_the_same_names_for_dispatch_and_otel_fan_out() -> None:
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+    from litellm.enterprise.litellm_enterprise.enterprise_callbacks.callback_controls import (
+        EnterpriseCallbackControls,
+    )
+    from litellm.constants import X_LITELLM_DISABLE_CALLBACKS
+    from litellm.proxy.litellm_pre_call_utils import (
+        _dynamically_disabled_backends,  # pyright: ignore[reportPrivateUsage]  # fan-out has no public seam
+    )
+
+    stored: Final = [" LangFuse", "Langsmith "]
+    key: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"litellm_disabled_callbacks": stored})
+    headers: Final = {X_LITELLM_DISABLE_CALLBACKS: "none"}
+    with patch("litellm.proxy.proxy_server.premium_user", True):
+        fan_out: Final = _dynamically_disabled_backends(key, headers)
+    request_params: Final[dict[str, object]] = {"proxy_server_request": {"headers": headers}}
+    dispatch: Final = EnterpriseCallbackControls.get_disabled_callbacks(  # pyright: ignore[reportUnknownMemberType]  # untyped
+        request_params, initialize_standard_callback_dynamic_params({"litellm_disabled_callbacks": stored})
+    )
+    assert dispatch is not None
+    assert fan_out == frozenset(dispatch) == {"none", "langfuse", "langsmith"}
+
+
+@pytest.mark.parametrize("allow_disabling, expect_suppressed", [(True, True), (False, False)])
+def test_allow_dynamic_callback_disabling_false_ignores_the_key_disabled_callbacks(
+    allow_disabling: bool, expect_suppressed: bool
+) -> None:
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy.litellm_pre_call_utils import (
+        _dynamically_disabled_backends,  # pyright: ignore[reportPrivateUsage]  # fan-out has no public seam
+        key_and_team_logging_fields,
+    )
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    key: Final = UserAPIKeyAuth(api_key="sk-test", metadata={"litellm_disabled_callbacks": ["langfuse"]})
+    request_params: Final[dict[str, object]] = {"proxy_server_request": {"headers": {}}}
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch.object(litellm, "allow_dynamic_callback_disabling", allow_disabling),
+    ):
+        logging_obj: Final = Logging(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="acompletion",
+            start_time=datetime.now(),
+            litellm_call_id="key-disabled-callbacks",
+            function_id="key-disabled-callbacks",
+            kwargs=dict(key_and_team_logging_fields(key, ProxyConfig())),
+        )
+        outcome: Final = (
+            not logging_obj.should_run_callback("langfuse", request_params, "success"),
+            logging_obj._v2_caller_opt_outs(request_params),  # pyright: ignore[reportPrivateUsage]  # v2 dispatch has no public seam
+            _dynamically_disabled_backends(key, {}),
+        )
+
+    expected_names: Final = frozenset({"langfuse"}) if expect_suppressed else frozenset[str]()
+    assert outcome == (expect_suppressed, expected_names, expected_names)

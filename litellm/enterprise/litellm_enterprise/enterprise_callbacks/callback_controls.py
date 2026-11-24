@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Final, List, Optional
 
 import litellm
 from litellm._logging import verbose_logger
@@ -64,24 +64,13 @@ class EnterpriseCallbackControls:
         Get the disabled callbacks from the standard callback dynamic params.
         """
 
-        #########################################################
-        # check if disabled via headers
-        #########################################################
-        request_headers = get_proxy_server_request_headers(litellm_params)
-        disabled_callbacks = request_headers.get(X_LITELLM_DISABLE_CALLBACKS, None)
-        if disabled_callbacks is not None:
-            disabled_callbacks = set([cb.strip().lower() for cb in disabled_callbacks.split(",")])
-            return list(disabled_callbacks)
-        
+        header: Final = get_proxy_server_request_headers(litellm_params).get(X_LITELLM_DISABLE_CALLBACKS, None)
+        stored: Final = standard_callback_dynamic_params.get("litellm_disabled_callbacks", None)
+        if header is None and stored is None:
+            return None
+        from_header: Final = [cb.strip().lower() for cb in header.split(",")] if header is not None else []
+        return list(dict.fromkeys([*from_header, *(stored or [])]))
 
-        #########################################################
-        # check if disabled via request body
-        #########################################################
-        if standard_callback_dynamic_params.get("litellm_disabled_callbacks", None) is not None:
-            return standard_callback_dynamic_params.get("litellm_disabled_callbacks", None)
-        
-        return None
-    
     @staticmethod
     def _should_allow_dynamic_callback_disabling():
         import litellm

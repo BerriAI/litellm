@@ -1607,10 +1607,11 @@ def _dynamically_disabled_backends(
     """The callbacks this request turned off, read the way dispatch reads them.
 
     Same sources, precedence, and premium gate ``EnterpriseCallbackControls`` applies
-    before it skips a callback: the ``x-litellm-disable-callbacks`` header wins over the
-    key's stored list, team settings are not a source, and a non-premium proxy honours
-    neither. A destination has to agree with that decision, or a backend the key turned
-    off would still be exported to, now through the fan-out instead of the callback.
+    before it skips a callback: the ``x-litellm-disable-callbacks`` header adds to the
+    key's stored list and can never re-enable what the key turned off, team settings are
+    not a source, and a non-premium proxy honours neither. A destination has to agree with
+    that decision, or a backend the key turned off would still be exported to, now through
+    the fan-out instead of the callback.
     """
     from litellm.proxy.proxy_server import premium_user
 
@@ -1619,13 +1620,14 @@ def _dynamically_disabled_backends(
     header: Final = (request_headers if request_headers is not None else _NO_REQUEST_HEADERS).get(
         X_LITELLM_DISABLE_CALLBACKS
     )
-    if header is not None:
-        return frozenset(name.strip().lower() for name in header.split(","))
+    from_header: Final = (
+        frozenset(name.strip().lower() for name in header.split(",")) if header is not None else frozenset[str]()
+    )
     metadata: Final = user_api_key_dict.metadata
     disabled: Final = metadata.get("litellm_disabled_callbacks") if metadata else None
     if not isinstance(disabled, list):
-        return frozenset()
-    return frozenset(name.lower() for name in disabled if isinstance(name, str))
+        return from_header
+    return from_header | frozenset(name.strip().lower() for name in disabled if isinstance(name, str))
 
 
 def bind_v2_request_scope(

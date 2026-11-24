@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import json
+import os
 import threading
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
@@ -21,6 +22,7 @@ from integration._support.client import (
     Scenario,
     eventually,
     gateway_from_environment,
+    held,
     object_value,
     string_value,
 )
@@ -326,6 +328,62 @@ def test_langfuse_callback_stored_in_the_db_through_config_update_delivers_the_g
         assert "langfuse" in callbacks, stored
         assert set(object_value(stored["environment_variables"])) >= set(LANGFUSE_ENVIRONMENT), stored
         assert secret_key not in json.dumps(stored["environment_variables"]), stored
+
+
+def test_key_metadata_disabled_callbacks_stops_the_global_langfuse_callback_for_that_key_only(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    assert os.environ.get("LITELLM_LICENSE"), (
+        "LITELLM_LICENSE must be set: disabling callbacks is an enterprise feature"
+    )
+    marker: Final = "keydisabled" + uuid.uuid4().hex
+
+    def upstream(request: Request) -> Reply:
+        return _completion(marker + "-answer")
+
+    def langfuse(request: Request) -> Reply:
+        if request.method == "GET" and request.target.startswith(PROJECTS_PATH):
+            return _projects()
+        return Reply(body=b"", content_type="application/x-protobuf")
+
+    with (
+        wire_server(upstream) as provider,
+        wire_server(langfuse) as destination,
+        owned_proxy(
+            gateway, tmp_path, _langfuse_environment(destination), config=_langfuse_config(tmp_path)
+        ) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic")
+        disabled_key: Final = scenario.key(metadata={"litellm_disabled_callbacks": ["langfuse"]})
+        control_key: Final = scenario.key()
+
+        def chat(key: str, name: str, headers: Mapping[str, str] | None = None) -> None:
+            response: Final = candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {
+                    "model": model,
+                    "messages": [{"role": "user", "content": name}],
+                    "metadata": {"generation_name": name},
+                    "cache": {"no-cache": True},
+                },
+                key=key,
+                headers=headers,
+            )
+            assert response.status_code == 200, response.text
+
+        chat(disabled_key, marker + "-disabled")
+        chat(disabled_key, marker + "-header-none", {"x-litellm-disable-callbacks": "none"})
+        chat(control_key, marker + "-control")
+        received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
+
+        def exported() -> tuple[str, ...]:
+            received.extend(destination.drain())
+            return tuple(span.name for span in _spans(received) if span.name.startswith(marker))
+
+        names: Final = held(exported, lambda values: sorted(values) == [marker + "-control"], holding=5, seconds=30)
+        assert sorted(names) == [marker + "-control"], names
 
 
 def test_prompt_fetch_encodes_the_name_retries_a_5xx_once_and_keeps_langfuse_headers_off_the_client(

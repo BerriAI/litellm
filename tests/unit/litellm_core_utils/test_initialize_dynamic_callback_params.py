@@ -423,6 +423,27 @@ def test_dynamic_key_extraction_from_litellm_params_metadata():
     assert params.get("langfuse_public_key") == "pk-litellm"
     assert params.get("langfuse_secret_key") == "sk-litellm"
 
+
+def test_top_level_disabled_callbacks_reach_standard_params_but_client_metadata_copies_do_not():
+    carried: Final = initialize_standard_callback_dynamic_params({"litellm_disabled_callbacks": [" LangFuse", 7]})
+    assert carried.get("litellm_disabled_callbacks") == ["langfuse"]
+
+    client_slots: Final = {
+        slot: initialize_standard_callback_dynamic_params({slot: {"litellm_disabled_callbacks": ["langfuse"]}}).get(
+            "litellm_disabled_callbacks"
+        )
+        for slot in ("metadata", "litellm_metadata")
+    }
+    assert client_slots == {"metadata": None, "litellm_metadata": None}
+
+
+def test_top_level_disabled_callbacks_survive_inherited_message_logging_privacy():
+    with inherit_message_logging_privacy(True):
+        params: Final = initialize_standard_callback_dynamic_params({"litellm_disabled_callbacks": ["langfuse"]})
+    assert params.get("litellm_disabled_callbacks") == ["langfuse"]
+    assert params.get("turn_off_message_logging") is True
+
+
 if __name__ == "__main__":
     test_dynamic_key_extraction_from_metadata()
     test_dynamic_key_extraction_from_litellm_params_metadata()
