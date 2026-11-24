@@ -57,11 +57,11 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict[str, object],
-        optional_params: dict[str, object],
+        non_default_params: dict,
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         optional_params = BedrockCohereEmbeddingConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -77,7 +77,7 @@ class SagemakerCohereEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: "AllEmbeddingInputValues",
-        optional_params: dict[str, object],
+        optional_params: dict,
         headers: Mapping[str, object],
     ) -> dict[str, object]:
         """

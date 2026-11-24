@@ -152,9 +152,9 @@ class AimGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict[str, object],
+        data: dict,
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict[str, object] | None:
+    ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
         # /embeddings carries ``input`` — documents being indexed, not a prompt — which
         # the flatten lifts into synthetic chat messages. A verdict on that text then
@@ -166,10 +166,10 @@ class AimGuardrail(CustomGuardrail):
 
     async def async_moderation_hook(
         self,
-        data: dict[str, object],
+        data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict[str, object] | None:
+    ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside AIM Moderation Hook")
         if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
             verbose_proxy_logger.debug("Aim: skipping non-conversational call type %s", call_type)
@@ -178,7 +178,7 @@ class AimGuardrail(CustomGuardrail):
         await self.call_aim_guardrail(data, hook="moderation", key_alias=user_api_key_dict.key_alias)
         return data
 
-    async def call_aim_guardrail(self, data: dict, hook: str, key_alias: str | None) -> dict[str, object]:
+    async def call_aim_guardrail(self, data: dict, hook: str, key_alias: str | None) -> dict:
         user_email: Final = data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
         call_id: Final = data.get("litellm_call_id")
         headers: Final = self._build_aim_headers(
@@ -377,7 +377,7 @@ class AimGuardrail(CustomGuardrail):
 
     async def async_post_call_success_hook(
         self,
-        data: dict[str, object],
+        data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ) -> LLMResponseTypes:
