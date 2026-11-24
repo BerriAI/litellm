@@ -3223,6 +3223,13 @@ def test_stream_chunk_builder_reads_every_choice_a_raw_frame_carries() -> None:
         ),
         *(
             pytest.param(
+                _data_line({**_SECRET_CHUNK, "choices": [{"index": 0, "delta": {}, field: value}]}),
+                id=f"delta_beside_a_choice_{field}",
+            )
+            for field, value in (("message", {"content": "LEAKED-SECRET"}), ("text", "LEAKED-SECRET"))
+        ),
+        *(
+            pytest.param(
                 _data_line({**_SECRET_CHUNK, "choices": [{"index": 0, "delta": {"content": content}}]}),
                 id=f"delta_content_{name}",
             )

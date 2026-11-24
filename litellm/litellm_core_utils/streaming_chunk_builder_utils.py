@@ -1886,6 +1886,8 @@ def _is_chat_chunk(payload: Mapping[str, object]) -> bool:
         and choices is not None
         and all(
             (choice := as_str_mapping(raw_choice)) is not None
+            and "message" not in choice
+            and "text" not in choice
             and (delta := as_str_mapping(choice.get("delta"))) is not None
             and isinstance(delta.get("content"), (str, type(None)))
             for raw_choice in choices
