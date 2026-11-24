@@ -18,6 +18,8 @@ from ..common_utils import BaseAzureLLM
 if TYPE_CHECKING:
     from aiohttp import ClientSession
 
+    from litellm.types.llms.openai import AllMessageValues
+
 
 class AzureOpenAIO1ChatCompletion(BaseAzureLLM, OpenAIChatCompletion):
     def completion(
@@ -28,7 +30,7 @@ class AzureOpenAIO1ChatCompletion(BaseAzureLLM, OpenAIChatCompletion):
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
         model: str | None = None,
-        messages: list | None = None,
+        messages: "list[AllMessageValues] | None" = None,
         print_verbose: Callable[..., object] | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
