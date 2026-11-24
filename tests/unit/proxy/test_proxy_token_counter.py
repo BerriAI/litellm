@@ -3678,8 +3678,20 @@ def _non_string_text_error(field: str) -> str:
             {"system": [{"type": "text", "text": "Answer in one word"}, {"type": "text", "text": None}]},
             _non_string_text_error("system.1.text"),
         ),
+        (
+            _prompt_beside({"type": "text", "text": None}),
+            {"system": [{"type": "text", "text": "Answer in one word"}, {"type": "text", "text": None}]},
+            _non_string_text_error("messages.0.content.1.text"),
+        ),
     ),
-    ids=("only-null-dropped", "null-beside-text", "number-beside-text", "blank-before-null", "null-system-text"),
+    ids=(
+        "only-null-dropped",
+        "null-beside-text",
+        "number-beside-text",
+        "blank-before-null",
+        "null-system-text",
+        "null-user-text-before-null-system-text",
+    ),
 )
 @pytest.mark.parametrize(
     "model",

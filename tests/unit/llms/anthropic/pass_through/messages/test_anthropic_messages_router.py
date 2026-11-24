@@ -816,6 +816,12 @@ _REJECTED_REQUESTS: Final = (
         _non_string_text_error("system.1.text"),
         id="null-system-text",
     ),
+    pytest.param(
+        _prompt_with_text(None),
+        {"system": [{"type": "text", "text": "Answer in one word"}, {"type": "text", "text": None}]},
+        _non_string_text_error("messages.0.content.1.text"),
+        id="null-user-text-before-null-system-text",
+    ),
 )
 _EVERY_MESSAGES_PATH: Final = (
     pytest.param("anthropic/claude-opus-5-5", "anthropic", id="native-anthropic"),
