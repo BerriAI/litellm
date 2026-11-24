@@ -198,6 +198,7 @@ export function PlaygroundChat({
     const info = modelList.find((option) => option.model_group === model);
     const switchTo =
       info?.mode && !isModelCompatibleWithEndpoint(info, settings.endpoint) ? getEndpointType(info.mode) : null;
+    if (model !== settings.model) chat.handleModelChange();
     update((current) => ({ ...(switchTo ? withEndpoint(current, switchTo) : current), model }));
   };
 

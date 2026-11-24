@@ -4,6 +4,7 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 
 import json
 import re
+import sys
 import uuid
 from collections import Counter
 from collections.abc import Awaitable, Callable, Container, Iterable, Iterator, Mapping, Sequence
@@ -40,7 +41,7 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
     REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
 )
-from litellm.exceptions import BadRequestError
+from litellm.exceptions import BadRequestError, UnresolvablePreviousResponseError
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     block_with_cache_control,
@@ -634,14 +635,24 @@ def _invalid_input_type(field_path: str, value: object) -> BadRequestError:
     return BadRequestError(message=invalid_type_message(field_path, value), model="", llm_provider="")
 
 
-def previous_response_not_found(client_response_id: str, model: str, provider: str | None) -> BadRequestError:
-    message: Final = (
-        f"Previous response with id '{client_response_id}' not found. LiteLLM rebuilds this model's conversation "
-        "from the LiteLLM proxy's spend logs, so the id must be a response this proxy served and already logged, "
-        "with a database, `disable_spend_logs` left off, and `store_prompts_in_spend_logs: true` in general_settings "
-        "and not turned off in the key's or team's metadata."
+_PROXY_REPLAY_REQUIREMENTS: Final = (
+    "LiteLLM rebuilds this model's conversation from the LiteLLM proxy's spend logs, so the id must be a response "
+    "this proxy served and already logged, with a database, `disable_spend_logs` left off, and "
+    "`store_prompts_in_spend_logs: true` in general_settings and not turned off in the key's or team's metadata."
+)
+_SDK_REPLAY_REQUIREMENTS: Final = (
+    "LiteLLM can rebuild this model's conversation only inside the LiteLLM proxy, so send the earlier turns in "
+    "`input` instead of `previous_response_id`."
+)
+
+
+def previous_response_not_found(
+    client_response_id: str, model: str, provider: str | None
+) -> UnresolvablePreviousResponseError:
+    message: Final = f"Previous response with id '{client_response_id}' not found. " + (
+        _PROXY_REPLAY_REQUIREMENTS if "litellm.proxy.proxy_server" in sys.modules else _SDK_REPLAY_REQUIREMENTS
     )
-    return BadRequestError(
+    return UnresolvablePreviousResponseError(
         message=message,
         model=model,
         llm_provider=provider,

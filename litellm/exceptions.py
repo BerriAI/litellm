@@ -408,6 +408,10 @@ class MissingMessageRoleError(MalformedRequestFieldError):
     pass
 
 
+class UnresolvablePreviousResponseError(MalformedRequestFieldError):
+    pass
+
+
 class UnsupportedEndpointError(BadRequestError):
     pass
 

@@ -11,7 +11,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.exceptions import BadRequestError
+from litellm.exceptions import UnresolvablePreviousResponseError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allowed_tools_tool_choice
 from litellm.litellm_core_utils.core_helpers import attribute_or_none, drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -67,13 +67,15 @@ def _proxy_database_connected() -> bool:
     return attribute_or_none(sys.modules.get("litellm.proxy.proxy_server"), "prisma_client") is not None
 
 
-def _stored_turns_need_aresponses(client_response_id: str, model: str, provider: str | None) -> BadRequestError:
+def _stored_turns_need_aresponses(
+    client_response_id: str, model: str, provider: str | None
+) -> UnresolvablePreviousResponseError:
     message: Final = (
         f"Previous response with id '{client_response_id}' can only be continued with `litellm.aresponses()` in "
         "this process. Its conversation is rebuilt from the LiteLLM proxy's database, which only the proxy's event "
         "loop can query."
     )
-    return BadRequestError(
+    return UnresolvablePreviousResponseError(
         message=message,
         model=model,
         llm_provider=provider,
@@ -81,7 +83,9 @@ def _stored_turns_need_aresponses(client_response_id: str, model: str, provider:
     )
 
 
-def _sync_follow_up_refusal(client_response_id: str, model: str, provider: str | None) -> BadRequestError:
+def _sync_follow_up_refusal(
+    client_response_id: str, model: str, provider: str | None
+) -> UnresolvablePreviousResponseError:
     return (
         _stored_turns_need_aresponses(client_response_id, model, provider)
         if _proxy_database_connected()

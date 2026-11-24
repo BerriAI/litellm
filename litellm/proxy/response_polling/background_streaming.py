@@ -34,6 +34,7 @@ from litellm.proxy.common_utils.responses_stream_errors import (
     frame_error_data,
     frame_payloads,
     responses_error_fields,
+    responses_failure_error,
     sse_error_object,
 )
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
@@ -615,9 +616,5 @@ async def _stream_into_polling_state(
             polling_id=polling_id,
             status="failed",
             timing=timing_snapshot(),
-            error={
-                "type": "internal_error",
-                "message": str(e),
-                "code": "background_streaming_error",
-            },
+            error=responses_failure_error(e),
         )

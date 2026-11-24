@@ -264,6 +264,11 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
     }
   };
 
+  const handleModelChange = () => {
+    setResponsesSessionId(null);
+    setResendsHistory(false);
+  };
+
   const handleToggleSessionManagement = (useApi: boolean) => {
     setUseApiSessionManagement(useApi);
     setResendsHistory(false);
@@ -391,6 +396,7 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
     updateSearchResults,
     handleResponseId,
     handleToggleSessionManagement,
+    handleModelChange,
     handleHistoryResent: () => setResendsHistory(true),
     handleMCPEvent,
     updateImageUI,
