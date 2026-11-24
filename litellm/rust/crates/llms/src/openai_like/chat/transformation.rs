@@ -273,7 +273,7 @@ fn host_usage(usage: Map<String, Value>) -> ChatCompletionsUsage {
     let parses = |fields: &Map<String, Value>| {
         ChatCompletionsUsage::deserialize(&Value::Object(fields.clone()))
     };
-    let readable: Map<String, Value> = usage
+    let normalized: Map<String, Value> = usage
         .into_iter()
         .filter_map(|(key, value)| match value {
             Value::Object(details) if DETAILS.contains(&key.as_str()) => {
@@ -281,19 +281,24 @@ fn host_usage(usage: Map<String, Value>) -> ChatCompletionsUsage {
             }
             value => Some((key, value)),
         })
-        .filter(|(key, value)| {
-            parses(
-                &counts
-                    .clone()
-                    .into_iter()
-                    .chain([(key.clone(), value.clone())])
-                    .collect(),
-            )
-            .is_ok()
-        })
         .chain(counts.clone())
         .collect();
-    parses(&readable).unwrap_or_default()
+    parses(&normalized).unwrap_or_else(|_| {
+        let readable: Map<String, Value> = normalized
+            .into_iter()
+            .filter(|(key, value)| {
+                parses(
+                    &counts
+                        .clone()
+                        .into_iter()
+                        .chain([(key.clone(), value.clone())])
+                        .collect(),
+                )
+                .is_ok()
+            })
+            .collect();
+        parses(&readable).unwrap_or_default()
+    })
 }
 
 const DETAILS: [&str; 2] = ["prompt_tokens_details", "completion_tokens_details"];
