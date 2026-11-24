@@ -103,10 +103,10 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool = False,
-    ) -> dict:
+    ) -> dict[str, object]:
         for key, value in non_default_params.items():
             if key == "dimensions":
                 # OCI API uses outputDimensions (cohere.embed-v4.0+)
@@ -115,14 +115,14 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         if optional_params.get("oci_signer") is None:
             creds: Final = resolve_oci_credentials(optional_params)
             missing: Final = [
@@ -162,15 +162,15 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
 
     def sign_request(
         self,
-        headers: dict,
-        optional_params: dict,
-        request_data: dict,
+        headers: dict[str, str],
+        optional_params: dict[str, object],
+        request_data: Mapping[str, object],
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
         stream: bool | None = None,
         fake_stream: bool | None = None,
-    ) -> tuple[dict, bytes]:
+    ) -> tuple[dict[str, str], bytes]:
         return sign_oci_request(
             headers=headers,
             optional_params=optional_params,

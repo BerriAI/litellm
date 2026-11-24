@@ -27,7 +27,7 @@ class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
     messages: ReadOnly[list]
     optional_params: ReadOnly[dict[str, object]]
     litellm_params: ReadOnly[dict[str, object]]
-    headers: ReadOnly[dict]
+    headers: ReadOnly[dict[str, object]]
     model_response: ReadOnly["ModelResponse"]
     logging_obj: ReadOnly["LiteLLMLoggingObj"]
     custom_llm_provider: ReadOnly[str]
@@ -62,7 +62,7 @@ class ResponsesToCompletionBridgeHandler:
     @staticmethod
     def _coerce_response_object(
         response_obj: object,
-        hidden_params: dict | None,
+        hidden_params: Mapping[object, object] | None,
     ) -> "ResponsesAPIResponse":
         if isinstance(response_obj, ResponsesAPIResponse):
             response = response_obj

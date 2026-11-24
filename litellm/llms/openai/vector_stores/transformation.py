@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -41,7 +42,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     ASSISTANTS_HEADER_KEY = "OpenAI-Beta"
     ASSISTANTS_HEADER_VALUE = "assistants=v2"
 
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         api_key: Final = litellm_params.get("api_key")
         if api_key is None:
             raise ValueError("api_key is required")
@@ -108,7 +109,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         base_url, query_separator, query_string = api_base.partition("?")
         url: Final = f"{join_api_base(base_url, f'{encoded_vector_store_id}/search')}{query_separator}{query_string}"
@@ -142,7 +143,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         url: Final = api_base  # Base URL for creating vector stores
         metadata: Final = vector_store_create_optional_params.get("metadata", None)
         metadata_payload: Final = add_openai_metadata(metadata)

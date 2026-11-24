@@ -333,7 +333,7 @@ _InputItemT = TypeVar("_InputItemT")
 _CACHED_CONTENT_ADAPTER: Final = TypeAdapter(ChatCompletionCachedContent)
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
-_RESPONSES_API_TOOL_CHOICE_ADAPTER: Final = TypeAdapter(ToolChoice)
+_RESPONSES_API_TOOL_CHOICE_ADAPTER: Final[TypeAdapter[ToolChoice]] = TypeAdapter(ToolChoice)
 
 
 def _tool_mapping(entry: object) -> Mapping[str, object] | None:

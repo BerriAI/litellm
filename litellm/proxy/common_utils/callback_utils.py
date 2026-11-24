@@ -153,7 +153,7 @@ def initialize_callbacks_on_proxy(
     premium_user: bool,
     config_file_path: str,
     litellm_settings: dict,
-    callback_specific_params: dict | None = None,
+    callback_specific_params: Mapping[str, object] | None = None,
 ):
     if not isinstance(callback_specific_params, dict):
         callback_specific_params = {}
@@ -531,7 +531,7 @@ def get_logging_caching_headers(request_data: Mapping[str, object]) -> dict[str,
         # Batch/file routes store proxy tracking in litellm_metadata while
         # user-facing metadata stays in metadata; merge both for headers.
         _metadata.update(litellm_metadata_bucket)
-    headers: Final = {}
+    headers: Final[dict[str, str]] = {}
     if "applied_guardrails" in _metadata:
         headers["x-litellm-applied-guardrails"] = ",".join(_metadata["applied_guardrails"])
 
