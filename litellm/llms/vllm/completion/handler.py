@@ -1,6 +1,6 @@
 import time
-from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Final
+from collections.abc import Callable, Mapping, Sequence, Sized
+from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx
 
@@ -16,6 +16,24 @@ if TYPE_CHECKING:
 llm = None
 
 
+class _VLLMCompletionOutput(Protocol):
+    @property
+    def text(self) -> str | None: ...
+    @property
+    def token_ids(self) -> Sized: ...
+
+
+class _VLLMRequestOutput(Protocol):
+    @property
+    def outputs(self) -> Sequence[_VLLMCompletionOutput]: ...
+    @property
+    def prompt_token_ids(self) -> Sized: ...
+
+
+class _VLLMEngine(Protocol):
+    def generate(self, prompts: object, sampling_params: object, /) -> Sequence[_VLLMRequestOutput]: ...
+
+
 class VLLMError(Exception):
     def __init__(self, status_code: int, message: str) -> None:
         self.status_code = status_code
@@ -26,7 +44,7 @@ class VLLMError(Exception):
 
 
 # check if vllm is installed
-def validate_environment(model: str):
+def validate_environment(model: str) -> tuple[_VLLMEngine, Callable[..., object]]:
     global llm
     try:
         from vllm import LLM, SamplingParams
