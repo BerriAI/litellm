@@ -5384,7 +5384,8 @@ def _raise_if_base_model_bridge_would_drop_a_param(
     raise litellm.UnsupportedParamsError(
         message=f"{custom_llm_provider}/{model} goes to the Responses API because its base_model {base_model} is a "
         f"gpt-5 model, and the Responses API has no `{param}` field. "
-        "To drop it, set `litellm.drop_params=True` or pass `drop_params=True`.",
+        "To drop it, set `litellm.drop_params=True`, pass `drop_params=True`, or for proxy: "
+        "`litellm_settings: drop_params: true`.",
         model=model,
         llm_provider=custom_llm_provider,
     )
