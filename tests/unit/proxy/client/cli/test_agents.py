@@ -1862,6 +1862,7 @@ class TestRunAgent:
             base_env={},
             which=lambda name: name,
             launcher=launcher,
+            preparers={},
         )
 
         binary, args, env = launcher.calls[0]
@@ -1891,6 +1892,7 @@ class TestRunAgent:
             base_env={},
             which=lambda name: name,
             launcher=launcher,
+            preparers={},
         )
         assert launcher.calls[0][1] == [
             "codex",
@@ -1926,6 +1928,7 @@ class TestRunAgent:
             base_env={},
             which=lambda name: name,
             launcher=launcher,
+            preparers={},
         )
         assert launcher.calls[0][1] == [
             "codex",
@@ -1943,6 +1946,7 @@ class TestRunAgent:
             base_env={},
             which=lambda name: name,
             launcher=launcher,
+            preparers={},
         )
         assert launcher.calls[0][1] == [
             "codex",
@@ -1965,6 +1969,7 @@ class TestRunAgent:
             base_env={},
             which=lambda name: name,
             launcher=launcher,
+            preparers={},
         )
         assert launcher.calls[0][1] == list(command)
 
