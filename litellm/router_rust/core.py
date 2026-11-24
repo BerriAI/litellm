@@ -4609,6 +4609,10 @@ def _params_base_model(core: RustCore, deployment_id: str) -> str | None:
     return base_model if isinstance(base_model, str) else None
 
 
+def _deployment_id(deployment: Mapping[str, object]) -> object:
+    return (as_str_mapping(deployment.get("model_info")) or {}).get("id")
+
+
 class _Driver:
     """Answers the attempt and fallback steps of one call, and shapes its result.
 
@@ -5492,26 +5496,29 @@ class _Driver:
         return attempt_inherited_request(
             self._request,
             target_params=as_str_mapping(step.get("params")) or {},
-            owner_provider=partial(self._caller_key_owner, shape),
+            owner_provider=partial(self._caller_key_owner, deployment),
             deployment_params=params,
             rechecks_header_scope=shape.is_fallback or self._cut_deployment is not None,
             header_forwarding_admits=partial(client_header_forwarding_admits, group, self._request, self._core),
         )
 
-    def _caller_key_owner(self, shape: "AttemptShape") -> str | None:
+    def _caller_key_owner(self, deployment: Mapping[str, object]) -> str | None:
         """Where the caller's key was meant to go: the requested group's provider when all its deployments share
         one, which holds for every attempt and for a stream recovered in a new walk, since that walk is built from
-        the same request. In a mixed group, the provider the call reached first, for fallback hops only."""
-        requested: Final = self._requested_group_provider()
-        if requested is not None:
-            return requested
-        return self._caller_key_origin if shape.is_fallback else None
+        the same request. In a mixed group, the provider the call reached first, for a deployment outside the group;
+        the group's own deployments (its order chain and retries) keep the key."""
+        requested_group: Final = self._requested_group_deployments()
+        requested_provider: Final = sole_provider(requested_group)
+        if requested_provider is not None:
+            return requested_provider
+        member_ids: Final = frozenset(_deployment_id(member) for member in requested_group)
+        return None if _deployment_id(deployment) in member_ids else self._caller_key_origin
 
-    def _requested_group_provider(self) -> str | None:
+    def _requested_group_deployments(self) -> Sequence[Mapping[str, object]]:
         model: Final = self._request.get("model")
         if not isinstance(model, str):
-            return None
-        return sole_provider(self._core.registry().deployments(model_name=model, source="group") or ())
+            return ()
+        return self._core.registry().deployments(model_name=model, source="group") or ()
 
     async def _slot_or_turn_back(
         self, port: "_EndpointPort", deployment: Mapping[str, object], call: "AttemptCall", admission: Admission | None

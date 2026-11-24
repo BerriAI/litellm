@@ -1582,12 +1582,13 @@ async def test_caller_api_base_keeps_the_caller_key_on_an_aws_fallback(respx_moc
         pytest.param(["claude"], "cli", (None, False, "trace-1"), id="fallback-group-out-of-scope"),
         pytest.param(["claude", "claude-aws"], "cli", ("cli", False, "trace-1"), id="fallback-group-in-scope"),
         pytest.param(["claude"], "set-by-hook", ("set-by-hook", False, "trace-1"), id="value-replaced-after-stamp"),
+        pytest.param(None, "cli", (None, False, "trace-1"), id="no-forwarding-scope-left"),
     ),
 )
 async def test_aws_fallback_drops_only_the_proxy_forwarded_headers_its_group_may_not_receive(
     respx_mock: respx.MockRouter,
     monkeypatch: pytest.MonkeyPatch,
-    forwarding_scope: list[str],
+    forwarding_scope: list[str] | None,
     x_app_at_fallback: str,
     expected_headers: tuple[str | None, bool, str | None],
 ) -> None:
@@ -1939,3 +1940,76 @@ async def test_iam_deployment_behind_a_custom_endpoint_still_gets_the_caller_bea
     )
 
     assert (response.choices[0].message.content, gateway.call_count) == (expected_content, 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
+async def test_malformed_forwarded_header_stamp_leaves_the_caller_headers_in_place(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.types.router import FORWARDED_CLIENT_HEADERS_KEY, ModelGroupSettings
+
+    monkeypatch.setattr(
+        litellm, "model_group_settings", ModelGroupSettings(forward_client_headers_to_llm_api=["claude"])
+    )
+    router: Final = _anthropic_to_aws_router("bedrock", [{"claude": ["claude-aws"]}])
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_overloaded())
+    aws: Final = respx_mock.post(host=_AWS_FALLBACK_TARGETS["bedrock"][1]).mock(return_value=_aws_answer("bedrock"))
+
+    await router.acompletion(
+        model="claude",
+        messages=[{"role": "user", "content": "hi"}],
+        api_key=_CALLER_ANTHROPIC_KEY,
+        headers={"x-app": "cli"},
+        proxy_server_request={FORWARDED_CLIENT_HEADERS_KEY: {"digests": "not-a-mapping", "model_group_scoped": True}},
+    )
+
+    sent: Final = aws.calls[0].request.headers
+    assert (sent.get("x-app"), sent["authorization"][:17]) == ("cli", "AWS4-HMAC-SHA256 ")
+
+
+_MIXED_GROUP_AWS_MEMBER: Final = "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0"
+_MIXED_GROUP_AWS_FALLBACK: Final = "bedrock/converse/anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+
+def _bedrock_member_fails_fallback_answers(request: httpx.Request) -> httpx.Response:
+    return _aws_unavailable() if "haiku" in request.url.path else _aws_answer("bedrock")
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_aws_without_env_bearers_or_endpoints")
+async def test_mixed_provider_group_keeps_the_caller_key_on_its_own_aws_member_and_drops_it_on_the_fallback(
+    respx_mock: respx.MockRouter,
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "sk-ant-deployment", "order": 1},
+            },
+            {
+                "model_name": "claude",
+                "litellm_params": {"model": _MIXED_GROUP_AWS_MEMBER, **_AWS_DEPLOYMENT_CREDENTIALS, "order": 2},
+            },
+            {
+                "model_name": "claude-aws",
+                "litellm_params": {"model": _MIXED_GROUP_AWS_FALLBACK, **_AWS_DEPLOYMENT_CREDENTIALS},
+            },
+        ],
+        fallbacks=[{"claude": ["claude-aws"]}],
+        num_retries=0,
+        disable_cooldowns=True,
+    )
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=_anthropic_overloaded())
+    aws: Final = respx_mock.post(host=_AWS_FALLBACK_TARGETS["bedrock"][1]).mock(
+        side_effect=_bedrock_member_fails_fallback_answers
+    )
+
+    await router.acompletion(
+        model="claude", messages=[{"role": "user", "content": "hi"}], api_key=_CALLER_ANTHROPIC_KEY
+    )
+
+    sent: Final = tuple(("haiku" in call.request.url.path, call.request.headers["authorization"]) for call in aws.calls)
+    assert len(sent) == 2, sent
+    assert sent[0] == (True, f"Bearer {_CALLER_ANTHROPIC_KEY}")
+    assert (sent[1][0], sent[1][1].startswith("AWS4-HMAC-SHA256 ")) == (False, True)
