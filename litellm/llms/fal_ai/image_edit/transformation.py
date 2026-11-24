@@ -90,7 +90,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         base_url: Final = (api_base or get_secret_str("FAL_AI_API_BASE") or DEFAULT_BASE_URL).rstrip("/")
         endpoint: Final = model if model.endswith(EDIT_SUFFIX) else f"{model}{EDIT_SUFFIX}"
@@ -101,7 +101,7 @@ class FalAIImageEditConfig(BaseImageEditConfig):
         model: str,
         prompt: str | None,
         image: FileTypes | Sequence[FileTypes | None] | None,
-        image_edit_optional_request_params: dict,
+        image_edit_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> tuple[dict[str, object], RequestFiles]:
