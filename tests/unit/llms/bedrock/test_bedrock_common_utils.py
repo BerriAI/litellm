@@ -6,6 +6,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 
 
 from litellm.llms.bedrock.common_utils import (
+    bedrock_converse_resolves_tool_schema_defs,
     AmazonBedrockGlobalConfig,
     BedrockModelInfo,
     NativeOutputFallback,
@@ -457,6 +458,33 @@ def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_fi
 
     assert supports_bedrock_prompt_cache_ttl(regional) is True
     assert bedrock_converse_supports_parallel_tool_use_config(regional) is True
+
+
+@pytest.mark.parametrize(
+    ("model", "entry_key", "flag", "expected"),
+    [
+        ("us.amazon.nova-defs-test", "us.amazon.nova-defs-test", True, True),
+        ("us.anthropic.claude-defs-test", "us.anthropic.claude-defs-test", False, False),
+        ("eu.amazon.nova-defs-test", "amazon.nova-defs-test", True, True),
+    ],
+)
+def test_bedrock_converse_resolves_tool_schema_defs_reads_the_cost_map_flag_before_the_name(
+    monkeypatch: pytest.MonkeyPatch, model: str, entry_key: str, flag: bool, expected: bool
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost, entry_key, {"litellm_provider": "bedrock_converse", "supports_tool_schema_defs": flag}
+    )
+
+    assert bedrock_converse_resolves_tool_schema_defs(model) is expected
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"), [("ca.anthropic.claude-unlisted-test", True), ("ca.amazon.nova-unlisted-test", False)]
+)
+def test_bedrock_converse_resolves_tool_schema_defs_falls_back_to_the_name_for_an_unlisted_model(
+    model: str, expected: bool
+) -> None:
+    assert bedrock_converse_resolves_tool_schema_defs(model) is expected
 
 
 def test_deprecated_is_claude_4_5_on_bedrock_warns_and_matches_new_name(monkeypatch):

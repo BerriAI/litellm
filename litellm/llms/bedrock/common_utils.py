@@ -363,10 +363,10 @@ def bedrock_supports_native_structured_output(
     )
 
 
-def _bedrock_map_native_output_flag(model: str) -> object:
+def _bedrock_map_flag(model: str, key: str) -> bool | None:
     routed: Final = strip_bedrock_routing_prefix(model)
     flags: Final = (
-        (entry or {}).get("supports_bedrock_native_structured_output")
+        (entry or {}).get(key)
         for entry in (
             _model_cost_entry(f"bedrock/{routed}"),
             _model_cost_entry(routed),
@@ -380,7 +380,7 @@ def _bedrock_native_output_opted_out(model: str, model_info: Mapping[str, object
     deployment_flag: Final = (model_info or {}).get("supports_bedrock_native_structured_output")
     if isinstance(deployment_flag, bool):
         return not deployment_flag
-    return _bedrock_map_native_output_flag(model) is False
+    return _bedrock_map_flag(model, "supports_bedrock_native_structured_output") is False
 
 
 def _bedrock_native_output_replaces_unforceable_tool(model: str, model_info: Mapping[str, object] | None) -> bool:
@@ -1644,7 +1644,13 @@ def _is_claude(model: str) -> bool:
 
 
 def bedrock_converse_resolves_tool_schema_defs(model: str | None) -> bool:
-    return model is not None and _is_claude_behind_any_region_prefix(model)
+    if model is None:
+        return False
+    listed: Final = (
+        _bedrock_map_flag(model, "supports_tool_schema_defs"),
+        _bedrock_map_flag(get_bedrock_base_model(model), "supports_tool_schema_defs"),
+    )
+    return next((flag for flag in listed if flag is not None), _is_claude_behind_any_region_prefix(model))
 
 
 def _is_claude_behind_any_region_prefix(model: str) -> bool:
