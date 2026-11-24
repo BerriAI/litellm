@@ -44,7 +44,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         region: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
@@ -66,11 +66,11 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -92,10 +92,10 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         # Strip the "mantle/" routing prefix to get the real model ID
         model_id: Final = model.replace("mantle/", "", 1)
 
@@ -119,10 +119,10 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         return self.transform_request(
             model=model,
             messages=await async_inline_remote_media(messages),
