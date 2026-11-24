@@ -46,7 +46,7 @@ def set_verbose_logger_level(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     orig_getaddrinfo: Final = socket.getaddrinfo
 
     def patched_getaddrinfo(host, port, *args, **kwargs):
-        if host == "owned-logger.invalid":
+        if host in {"owned-logger.invalid", "luca.example"}:
             return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", port or 443))]
         return orig_getaddrinfo(host, port, *args, **kwargs)
 
