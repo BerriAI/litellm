@@ -24,8 +24,8 @@ pub use callbacks::{
     parallel_request_limiter::{self, KeyLimiter},
 };
 pub use error::Error;
-pub use live::{Live, Served};
 pub use gateway_requests::{Category, GatewayRequests};
+pub use live::{Live, Served};
 pub use periodic::PeriodicJob;
 pub use redis::RedisClients;
 pub use reload::{Poller, Source, reload_every};
