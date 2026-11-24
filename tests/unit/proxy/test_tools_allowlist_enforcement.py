@@ -62,6 +62,19 @@ class TestExtractRequestToolNames:
             "get_current_weather"
         ]
 
+    def test_openai_responses_chat_completions_shaped_tools_yield_every_name(self):
+        data = {
+            "tools": [
+                {"type": "function", "function": {"name": "get_weather"}},
+                {"type": "function", "name": "decoy", "function": {"name": "run_sql"}},
+            ]
+        }
+        assert extract_request_tool_names("/v1/responses", data) == [
+            "get_weather",
+            "decoy",
+            "run_sql",
+        ]
+
     def test_openai_responses_mcp_tools(self):
         data = {
             "tools": [
@@ -241,6 +254,46 @@ class TestCheckToolsAllowlist:
             )
         assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
         assert "restricted_tool" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    async def test_disallowed_openai_format_tool_raises_on_responses_route(self):
+        token = _token(metadata={"allowed_tools": ["other_tool"]})
+        body = {"tools": [{"type": "function", "function": {"name": "get_weather"}}]}
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body=body,
+                valid_token=token,
+                team_object=None,
+                route="/v1/responses",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "get_weather" in str(exc_info.value.message)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "tool",
+        [
+            pytest.param(
+                {"type": "function", "name": "decoy", "function": {"name": "run_sql"}},
+                id="nested_name_behind_flat_decoy",
+            ),
+            pytest.param(
+                {"type": "function", "name": "run_sql", "function": {"name": "decoy"}},
+                id="flat_name_behind_nested_decoy",
+            ),
+        ],
+    )
+    async def test_hybrid_tool_with_decoy_name_raises_on_responses_route(self, tool):
+        token = _token(metadata={"allowed_tools": ["decoy"]})
+        with pytest.raises(ProxyException) as exc_info:
+            await check_tools_allowlist(
+                request_body={"tools": [tool]},
+                valid_token=token,
+                team_object=None,
+                route="/v1/responses",
+            )
+        assert exc_info.value.type == ProxyErrorTypes.tool_access_denied
+        assert "run_sql" in str(exc_info.value.message)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
