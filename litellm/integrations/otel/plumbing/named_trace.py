@@ -119,8 +119,9 @@ async def read_named_trace(scope: Scope, receive: Receive) -> tuple[int | None, 
     """The trace id an HTTP request's caller named, and the ``receive`` the app must read the request from.
 
     Only a JSON ``POST`` without a ``traceparent`` has its body read before the app runs, and only up to
-    ``_MAX_LOOKAHEAD_BYTES``. The app gets the same messages back in order, then the rest of the stream, so
-    it reads the body exactly as it would have.
+    ``_MAX_LOOKAHEAD_BYTES``. What was read is held as one buffer, so a body sent in many tiny pieces costs
+    its bytes and not a message per piece, and the app gets those bytes back as one message, then the rest of
+    the stream, so it reads the same body.
     """
     headers: Final = {
         name.decode("latin-1").lower(): value.decode("latin-1") for name, value in scope.get("headers", ())
@@ -131,23 +132,28 @@ async def read_named_trace(scope: Scope, receive: Receive) -> tuple[int | None, 
         return named_trace_id(headers, _NO_BODY), receive
     if _declared_length(headers) > _MAX_LOOKAHEAD_BYTES:
         return named_trace_id(headers, _NO_BODY), receive
-    read: Final[list[Message]] = []  # mutable-ok: the request's own messages, read here and replayed to the app
-    held = 0  # rebind-ok: bytes read so far, counted once per message so a body sent in tiny pieces costs no rescans
-    while True:
+    # The body bytes read so far: one buffer however many pieces carried them.
+    held: Final = bytearray()
+    more_body = True  # rebind-ok: whether the body goes on past what was read, as its last piece said
+    after: Message | None = None  # rebind-ok: a message that is not body, read while looking for the end of it
+    while more_body and len(held) <= _MAX_LOOKAHEAD_BYTES:
         message = await receive()
-        read.append(message)
-        held += len(message.get("body", b""))
-        if message["type"] != "http.request" or not message.get("more_body", False) or held > _MAX_LOOKAHEAD_BYTES:
+        if message["type"] != "http.request":
+            after = message
             break
-    replayed: Final = iter(read)
+        held.extend(message.get("body", b""))
+        more_body = message.get("more_body", False)
+    sent: Final = bytes(held)
+    held.clear()
+    whole: Final[Message] = {"type": "http.request", "body": sent, "more_body": more_body}
+    replayed: Final = iter((whole,) if after is None else (whole, after))
 
     async def replay() -> Message:
         message: Final = next(replayed, None)
         return message if message is not None else await receive()
 
-    if held > _MAX_LOOKAHEAD_BYTES:
+    if more_body or len(sent) > _MAX_LOOKAHEAD_BYTES:
         return named_trace_id(headers, _NO_BODY), _as_receive(replay)
-    sent: Final = b"".join(message.get("body", b"") for message in read if message["type"] == "http.request")
     coding: Final = headers.get("content-encoding", "").strip().lower()
     if not coding:
         return named_trace_id(headers, _json_object(sent)), _as_receive(replay)

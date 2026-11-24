@@ -268,7 +268,8 @@ async def test_reading_stops_at_the_lookahead_cap(monkeypatch):
 
     assert named is None
     assert len(pulled) == 2
-    assert [await replay() for _ in sent] == sent
+    assert await replay() == {"type": "http.request", "body": b"x" * 16, "more_body": True}
+    assert [await replay() for _ in sent[2:]] == sent[2:]
 
 
 @pytest.mark.parametrize("coding", ["gzip", "x-gzip", "zstd"])
@@ -328,29 +329,42 @@ def test_a_compressed_body_that_cannot_be_read_still_reaches_the_route(proxy, mo
 
 
 @pytest.mark.asyncio
-async def test_a_body_sent_in_many_tiny_pieces_is_counted_once_per_piece():
+async def test_a_body_sent_in_many_tiny_pieces_is_held_as_one_message():
     from litellm.integrations.otel.plumbing import named_trace
 
-    body_reads: Final = []
-
-    class Piece(dict):
-        def get(self, key, default=None):
-            if key == "body":
-                body_reads.append(key)
-            return super().get(key, default)
-
-    sent: Final = [Piece(type="http.request", body=b"x", more_body=index < 999) for index in range(1000)]
-    remaining: Final = iter(sent)
+    body: Final = b'{"metadata": {"trace_id": "%s"}}' % UUID.encode()
+    sent: Final = [
+        {"type": "http.request", "body": body[index : index + 1], "more_body": index < len(body) - 1}
+        for index in range(len(body))
+    ]
+    left: Final = iter([*sent, {"type": "http.disconnect"}])
 
     async def receive():
-        return next(remaining)
+        return next(left)
+
+    scope: Final = {"type": "http", "method": "POST", "headers": [(b"content-type", b"application/json")]}
+    named, replay = await named_trace.read_named_trace(scope, receive)
+
+    assert named == int(UUID_HEX, 16)
+    assert await replay() == {"type": "http.request", "body": body, "more_body": False}
+    assert await replay() == {"type": "http.disconnect"}
+
+
+@pytest.mark.asyncio
+async def test_a_client_that_leaves_mid_body_is_still_seen_leaving():
+    from litellm.integrations.otel.plumbing import named_trace
+
+    left: Final = iter([{"type": "http.request", "body": b"{", "more_body": True}, {"type": "http.disconnect"}])
+
+    async def receive():
+        return next(left)
 
     scope: Final = {"type": "http", "method": "POST", "headers": [(b"content-type", b"application/json")]}
     named, replay = await named_trace.read_named_trace(scope, receive)
 
     assert named is None
-    assert len(body_reads) == 2 * len(sent), "each piece is read once to count it and once to join the body"
-    assert [await replay() for _ in sent] == sent
+    assert await replay() == {"type": "http.request", "body": b"{", "more_body": True}
+    assert await replay() == {"type": "http.disconnect"}
 
 
 def test_a_plain_body_labelled_gzip_names_its_trace(proxy):
