@@ -85,6 +85,31 @@ def test_diagnostic_redaction_policy_matches_across_backends(monkeypatch: pytest
     assert redact_internal_details("failed at /etc/service/keys on db.internal") == "failed at REDACTED on REDACTED"
 
 
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+def test_an_mcp_authorization_token_is_redacted_by_its_key_name(monkeypatch: pytest.MonkeyPatch, native: bool) -> None:
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    body: Final = '{"mcp_servers": [{"name": "docs", "authorization_token": "opaque-mcp-credential"}]}'
+
+    assert redact_string(body) == '{"mcp_servers": [{"name": "docs", "REDACTED"}]}'
+    assert redact_structured_value("authorization_token", "opaque-mcp-credential") == "REDACTED"
+    assert redact_structured_value("authorization_note", "opaque-mcp-credential") == "opaque-mcp-credential"
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+@pytest.mark.parametrize("scheme", ("Bearer", "Basic", "bearer"))
+def test_a_value_with_an_auth_scheme_is_redacted_whole_under_a_secret_key_name(
+    monkeypatch: pytest.MonkeyPatch, native: bool, scheme: str
+) -> None:
+    if native:
+        pytest.importorskip("litellm.rust_bridge._native")
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    line: Final = f'data: "authorization_token": "{scheme} opaque-mcp-credential", "name": "docs"'
+
+    assert redact_string(line) == 'data: "REDACTED", "name": "docs"'
+
+
 @pytest.mark.parametrize(
     "connection_string",
     [
