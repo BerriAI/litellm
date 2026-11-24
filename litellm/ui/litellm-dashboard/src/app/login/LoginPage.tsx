@@ -7,7 +7,6 @@ import {
   exchangeLoginCode,
   getProxyBaseUrl,
   getRuntimeBackendBaseUrl,
-  getUiPageUrl,
   switchToWorkerUrl,
 } from "@/components/networking";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "@/components/shared/Alert";
@@ -24,13 +23,14 @@ import { useZodForm } from "@/lib/forms/useZodForm";
 import { clearTokenCookies, getCookieFromDocument } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { consumeReturnUrl, getLoginUrl, getReturnUrl, isValidReturnUrl } from "@/utils/returnUrlUtils";
+import { navigateToUiPage } from "@/utils/uiNavigation";
 import { CircleAlert, Info, TriangleAlert, X } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useEffect, useId, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { z } from "zod";
 import { useWorker } from "@/hooks/useWorker";
 import i18n from "@/i18n/i18n";
+import { uiHref } from "@/utils/uiHref";
 import { productNames } from "@/i18n/untranslated/productNames";
 
 const loginSchema = z.object({
@@ -39,6 +39,23 @@ const loginSchema = z.object({
 });
 
 type LoginFormValues = z.infer<typeof loginSchema>;
+
+function LoginLogo() {
+  return (
+    <div className="flex justify-center">
+      <img
+        src={uiHref("assets/logos/litellm_logo.png")}
+        alt={productNames.liteLLM}
+        className="h-10 w-auto dark:hidden"
+      />
+      <img
+        src={uiHref("assets/logos/litellm_logo_dark.png")}
+        alt={productNames.liteLLM}
+        className="hidden h-10 w-auto dark:block"
+      />
+    </div>
+  );
+}
 
 function SsoEnabledNotice() {
   const { t } = useTranslation();
@@ -80,7 +97,6 @@ function LoginPageContent() {
   const [isLoading, setIsLoading] = useState(true);
   const { data: uiConfig, isLoading: isConfigLoading } = useUIConfig();
   const loginMutation = useLogin();
-  const router = useRouter();
   const { workers, selectWorker } = useWorker();
   const [selectedWorkerId, setSelectedWorkerId] = useState<string | null>(null);
   const workerFieldId = useId();
@@ -122,7 +138,7 @@ function LoginPageContent() {
         params.delete("code");
         const cleanSearch = params.toString();
         window.history.replaceState(null, "", window.location.pathname + (cleanSearch ? `?${cleanSearch}` : ""));
-        router.replace("/ui/?login=success");
+        window.location.replace("/ui/?login=success");
       });
       return;
     }
@@ -138,12 +154,7 @@ function LoginPageContent() {
     const rawToken = getCookieFromDocument("token");
     if (rawToken && !isJwtExpired(rawToken)) {
       // User already logged in - redirect to return URL or default
-      const returnUrl = consumeReturnUrl(getRuntimeBackendBaseUrl());
-      if (returnUrl) {
-        router.replace(getUiPageUrl(returnUrl, true));
-      } else {
-        router.replace("/ui");
-      }
+      navigateToUiPage(consumeReturnUrl(getRuntimeBackendBaseUrl()) ?? "/ui", true);
       return;
     }
 
@@ -154,12 +165,12 @@ function LoginPageContent() {
       if (returnUrl && isValidReturnUrl(returnUrl)) {
         ssoUrl += `?redirect_to=${encodeURIComponent(returnUrl)}`;
       }
-      router.push(ssoUrl);
+      window.location.assign(ssoUrl);
       return;
     }
 
     setIsLoading(false);
-  }, [isConfigLoading, router, uiConfig]);
+  }, [isConfigLoading, uiConfig]);
 
   const handleSubmit = ({ username, password }: LoginFormValues) => {
     // If a worker is selected, point proxyBaseUrl at it before login
@@ -176,15 +187,10 @@ function LoginPageContent() {
           if (selectedWorker) {
             selectWorker(selectedWorker.worker_id);
             // Stay on the CP's UI — proxyBaseUrl already points at the worker
-            router.push("/ui/?login=success");
+            navigateToUiPage("/ui/?login=success");
           } else {
             // Normal (non-control-plane) login — follow the server's redirect
-            const returnUrl = consumeReturnUrl(getRuntimeBackendBaseUrl());
-            if (returnUrl) {
-              router.push(getUiPageUrl(returnUrl, true));
-            } else {
-              router.push(getUiPageUrl(data.redirect_url, true));
-            }
+            navigateToUiPage(consumeReturnUrl(getRuntimeBackendBaseUrl()) ?? data.redirect_url);
           }
         },
         onError: () => {
@@ -211,9 +217,7 @@ function LoginPageContent() {
         <Card className="w-full max-w-lg shadow-md">
           <CardContent>
             <div className="flex w-full flex-col gap-4">
-              <div className="text-center">
-                <h2 className="text-3xl font-semibold text-foreground">{productNames.liteLLMWithLogo}</h2>
-              </div>
+              <LoginLogo />
 
               <Alert variant="warning">
                 <TriangleAlert />
@@ -238,9 +242,7 @@ function LoginPageContent() {
         <CardContent>
           <TooltipProvider>
             <div className="flex w-full flex-col gap-4">
-              <div className="text-center">
-                <h2 className="text-3xl font-semibold text-foreground">{productNames.liteLLMWithLogo}</h2>
-              </div>
+              <LoginLogo />
 
               <div className="text-center">
                 <h3 className="text-2xl font-semibold text-foreground">{t("login.form.title")}</h3>
@@ -365,7 +367,7 @@ function LoginPageContent() {
                         // include return_to so the callback redirects back here
                         const ssoBase = selectedWorker?.url ?? getProxyBaseUrl();
                         const returnTo = encodeURIComponent(getLoginUrl(window.location.origin));
-                        router.push(`${ssoBase}/sso/key/generate?return_to=${returnTo}`);
+                        window.location.assign(`${ssoBase}/sso/key/generate?return_to=${returnTo}`);
                       }}
                       className="w-full"
                     >

@@ -30,6 +30,8 @@ export interface ModelGroupInfo {
   health_status?: string;
   health_response_time?: number;
   health_checked_at?: string;
+  pass_through_path?: string | null;
+  pass_through_methods?: string[] | null;
   description?: string;
   custom_tags?: string[] | null;
   custom_metadata?: Record<string, ModelCustomMetadataValue> | null;
@@ -90,6 +92,11 @@ const formatCapabilityName = (key: string) =>
 
 const formatCost = (cost: number) => `$${(cost * 1_000_000).toFixed(4)}`;
 
+const tokenCostLabel = (model: ModelGroupInfo, cost: number | null | undefined): string => {
+  if (model.pass_through_path) return "n/a";
+  return cost ? formatCost(cost) : i18n.t("aiHub.publicModelHubColumns.free");
+};
+
 const formatTokens = (tokens: number | undefined) => {
   if (!tokens) return i18n.t("aiHub.publicModelHubColumns.notAvailable");
   if (tokens >= 1000) return `${(tokens / 1000).toFixed(0)}K`;
@@ -112,6 +119,8 @@ const getModeIcon = (mode: string) => {
       return "🔄";
     case "embedding":
       return "📄";
+    case "passthrough":
+      return "🔀";
     default:
       return "🤖";
   }
@@ -304,25 +313,17 @@ export const getPublicModelHubColumns = ({
           <div className="flex flex-col gap-0.5 text-xs tabular-nums">
             <span>
               {i18n.t("aiHub.publicModelHubColumns.inputCost", {
-                cost: row.original.input_cost_per_token
-                  ? formatCost(row.original.input_cost_per_token)
-                  : i18n.t("aiHub.publicModelHubColumns.free"),
+                cost: tokenCostLabel(row.original, row.original.input_cost_per_token),
               })}
             </span>
             <span className="text-muted-foreground">
               {i18n.t("aiHub.publicModelHubColumns.outputCost", {
-                cost: row.original.output_cost_per_token
-                  ? formatCost(row.original.output_cost_per_token)
-                  : i18n.t("aiHub.publicModelHubColumns.free"),
+                cost: tokenCostLabel(row.original, row.original.output_cost_per_token),
               })}
             </span>
           </div>
         ) : (
-          <span className="text-sm">
-            {row.original.input_cost_per_token
-              ? formatCost(row.original.input_cost_per_token)
-              : i18n.t("aiHub.publicModelHubColumns.free")}
-          </span>
+          <span className="text-sm">{tokenCostLabel(row.original, row.original.input_cost_per_token)}</span>
         ),
     },
     {
@@ -334,11 +335,7 @@ export const getPublicModelHubColumns = ({
       ),
       size: 110,
       cell: ({ row }) => (
-        <span className="text-sm">
-          {row.original.output_cost_per_token
-            ? formatCost(row.original.output_cost_per_token)
-            : i18n.t("aiHub.publicModelHubColumns.free")}
-        </span>
+        <span className="text-sm">{tokenCostLabel(row.original, row.original.output_cost_per_token)}</span>
       ),
     },
     {

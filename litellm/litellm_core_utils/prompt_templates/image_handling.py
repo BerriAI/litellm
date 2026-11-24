@@ -318,6 +318,7 @@ class _BodyPrefixReader:
         headers: Mapping[str, str] | None = None,
         follow_redirects: bool = False,
         timeout: float | httpx.Timeout | None = None,
+        max_response_bytes: int | None = None,
     ) -> Response:
         with self.client.stream(
             "GET",
@@ -342,14 +343,17 @@ class _ImageBodyReader:
         headers: Mapping[str, str] | None = None,
         follow_redirects: bool = False,
         timeout: float | httpx.Timeout | None = None,
+        max_response_bytes: int | None = None,
     ) -> Response:
         with self.client.stream(
             "GET",
             url,
-            headers=headers,
+            headers={**(headers or {}), "Accept-Encoding": "identity"},
             follow_redirects=follow_redirects,
             timeout=USE_CLIENT_DEFAULT if timeout is None else timeout,
         ) as response:
+            if (response.headers.get("content-encoding") or "identity").lower() != "identity":
+                raise litellm.ImageFetchError("Error: A download with a size limit needs an uncompressed response")
             return _with_body_prefix(response, next(response.iter_bytes(self.max_bytes), b""))
 
 

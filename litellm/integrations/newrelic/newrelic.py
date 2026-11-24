@@ -54,7 +54,7 @@ from typing import Final, Protocol
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import has_attributes
+from litellm.litellm_core_utils.core_helpers import float_of, has_attributes, require_attributes
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
@@ -69,6 +69,10 @@ except ImportError:
 
 class _SupportsTimestamp(Protocol):
     def timestamp(self) -> float: ...
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 class NewRelicLogger(CustomLogger):
@@ -348,7 +352,7 @@ class NewRelicLogger(CustomLogger):
 
     def _get_model_names(
         self,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
         response_obj: ModelResponse,
         standard_logging_object: StandardLoggingPayload | None = None,
     ) -> tuple[str, str]:
@@ -373,7 +377,7 @@ class NewRelicLogger(CustomLogger):
         self,
         response_obj: ModelResponse,
         standard_logging_object: StandardLoggingPayload | None = None,
-    ) -> dict[str, int]:
+    ) -> Mapping[str, object]:
         """Extract usage statistics, preferring StandardLoggingPayload."""
         if standard_logging_object:
             prompt: Final = standard_logging_object.get("prompt_tokens")
@@ -386,14 +390,15 @@ class NewRelicLogger(CustomLogger):
                     "total_tokens": total or 0,
                 }
 
-        usage: Final = response_obj.get("usage", None)
+        usage: Final[object] = response_obj.get("usage", None)
         if not usage:
             return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
+        usage_fields: Final = require_attributes(usage, _SupportsGet, "get")
         return {
-            "prompt_tokens": usage.get("prompt_tokens") or 0,
-            "completion_tokens": usage.get("completion_tokens") or 0,
-            "total_tokens": usage.get("total_tokens") or 0,
+            "prompt_tokens": usage_fields.get("prompt_tokens") or 0,
+            "completion_tokens": usage_fields.get("completion_tokens") or 0,
+            "total_tokens": usage_fields.get("total_tokens") or 0,
         }
 
     def _get_finish_reason(self, response_obj: ModelResponse) -> str:
@@ -415,7 +420,7 @@ class NewRelicLogger(CustomLogger):
 
     def _get_duration(
         self,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
         start_time: datetime | float | None,
         end_time: datetime | float | None,
         standard_logging_object: StandardLoggingPayload | None = None,
@@ -435,7 +440,7 @@ class NewRelicLogger(CustomLogger):
 
         duration_ms: Final = kwargs.get("llm_api_duration_ms")
         if duration_ms is not None:
-            return float(duration_ms)
+            return float_of(duration_ms)
 
         if start_time is not None and end_time is not None:
             return self._to_epoch_ms(end_time) - self._to_epoch_ms(start_time)
@@ -444,7 +449,7 @@ class NewRelicLogger(CustomLogger):
 
     def _get_request_params(
         self,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
         standard_logging_object: StandardLoggingPayload | None = None,
     ) -> dict[str, object]:
         """
@@ -460,17 +465,19 @@ class NewRelicLogger(CustomLogger):
 
         params: Final[dict[str, object]] = {}
 
-        temperature: Final = source_params.get("temperature")
+        readable_params: Final = require_attributes(source_params, _SupportsGet, "get")
+
+        temperature: Final = readable_params.get("temperature")
         if temperature is not None:
             params["temperature"] = temperature
 
-        max_tokens: Final = source_params.get("max_tokens")
+        max_tokens: Final = readable_params.get("max_tokens")
         if max_tokens is not None:
             params["max_tokens"] = max_tokens
 
         return params
 
-    def _extract_message_content(self, message: Message | dict) -> str:
+    def _extract_message_content(self, message: Message | Mapping[str, object]) -> str:
         """
         Extract content from a message, handling various formats.
 
@@ -605,7 +612,7 @@ class NewRelicLogger(CustomLogger):
         vendor: str,
         finish_reason: str,
         num_messages: int,
-        usage: dict[str, int],
+        usage: Mapping[str, object],
         duration: float | None = None,
         request_params: Mapping[str, object] | None = None,
     ):
@@ -839,10 +846,10 @@ class NewRelicLogger(CustomLogger):
 
     # CustomLogger interface implementation
 
-    def log_pre_api_call(self, model, messages, kwargs):
+    def log_pre_api_call(self, model: object, messages: object, kwargs: object):
         """Unused per spec."""
 
-    def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+    def log_post_api_call(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         """Unused per spec."""
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -871,7 +878,7 @@ class NewRelicLogger(CustomLogger):
             verbose_logger.warning("Error in New Relic async_log_success_event: %s", e)
             self.handle_callback_failure("newrelic")
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         """
         Log error metric for failed LLM calls (sync).
 
@@ -884,7 +891,7 @@ class NewRelicLogger(CustomLogger):
             verbose_logger.warning("Error in New Relic log_failure_event: %s", e)
             self.handle_callback_failure("newrelic")
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         """
         Log error metric for failed LLM calls (async).
 

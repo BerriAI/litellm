@@ -15,6 +15,18 @@ if TYPE_CHECKING:
 
 class LedgerTransaction(Protocol):
     @property
+    def litellm_dailycustomermemberspend(self) -> TableActions[object]: ...
+
+    @property
+    def litellm_customerorganizationtable(self) -> TableActions[object]: ...
+
+    @property
+    def litellm_customerteamtable(self) -> TableActions[object]: ...
+
+    @property
+    def litellm_customermembertable(self) -> TableActions[object]: ...
+
+    @property
     def litellm_dailyguardrailusageunits(self) -> TableActions[object]: ...
 
     async def query_raw(self, query: str, *args: object) -> Sequence[Mapping[str, object]]: ...
@@ -81,21 +93,21 @@ _PAYLOAD: Final = TypeAdapter(dict[str, object])
 _TIMEOUT: Final = timedelta(seconds=60)
 _CLAIM: Final = """SELECT delivery_id, attempts, accounting_payload::text AS accounting_payload
 FROM "LiteLLM_SpendLogDelivery"
-WHERE state = 'pending' AND next_attempt_at <= CURRENT_TIMESTAMP
+WHERE state = 'pending' AND next_attempt_at <= (NOW() AT TIME ZONE 'UTC')
   AND (attempts > 0) = $2::boolean
 ORDER BY next_attempt_at, delivery_id LIMIT $1::integer FOR UPDATE SKIP LOCKED"""
 _APPLIED: Final = """UPDATE "LiteLLM_SpendLogDelivery"
-SET state = 'applied', applied_at = CURRENT_TIMESTAMP, last_error = NULL
+SET state = 'applied', applied_at = (NOW() AT TIME ZONE 'UTC'), last_error = NULL
 WHERE delivery_id = ANY($1::text[]) AND state = 'pending' """
 _FAILED: Final = """UPDATE "LiteLLM_SpendLogDelivery"
 SET attempts = attempts + 1, last_error = $3,
-    next_attempt_at = CURRENT_TIMESTAMP + make_interval(secs => LEAST(300, power(2, LEAST(attempts, 8)) * (0.5 + random()))),
+    next_attempt_at = (NOW() AT TIME ZONE 'UTC') + make_interval(secs => LEAST(300, power(2, LEAST(attempts, 8)) * (0.5 + random()))),
     state = $4::"AccountingDeliveryState"
 WHERE delivery_id = $1 AND state = 'pending' AND attempts = $2::integer
 RETURNING delivery_id, attempts"""
 _BACKLOG: Final = """SELECT COUNT(*) FILTER (WHERE state = 'pending') AS pending_count,
     COUNT(*) FILTER (WHERE state = 'parked') AS parked_count,
-    COALESCE(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP - MIN(created_at) FILTER (WHERE state = 'pending')), 0)
+    COALESCE(EXTRACT(EPOCH FROM (NOW() AT TIME ZONE 'UTC') - MIN(created_at) FILTER (WHERE state = 'pending')), 0)
         AS oldest_pending_seconds
 FROM "LiteLLM_SpendLogDelivery"
 WHERE state IN ('pending', 'parked')"""
@@ -142,7 +154,7 @@ class AccountingDeliveryRepository:
             return await transaction.execute_raw(
                 'DELETE FROM "LiteLLM_SpendLogDelivery" WHERE delivery_id IN ('
                 'SELECT delivery_id FROM "LiteLLM_SpendLogDelivery" '
-                "WHERE state = 'applied' AND NOT is_batch AND applied_at < CURRENT_TIMESTAMP - make_interval(days => $1::integer) "
+                "WHERE state = 'applied' AND NOT is_batch AND applied_at < (NOW() AT TIME ZONE 'UTC') - make_interval(days => $1::integer) "
                 "ORDER BY applied_at, delivery_id LIMIT $2::integer FOR UPDATE SKIP LOCKED)",
                 retention_days,
                 batch_size,

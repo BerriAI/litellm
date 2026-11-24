@@ -50,6 +50,8 @@ pub enum OutputUnit {
     Pixel,
     Second(Option<Resolution>),
     VideoSecond,
+    Video,
+    BillableUnit,
 }
 
 /// `Explicit` is a cache the caller created ahead of time, spelled `explicit_cache_read_*`. `Implicit` is every other read
@@ -82,6 +84,11 @@ pub enum Feature {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Deserialize),
+    serde(rename_all = "lowercase")
+)]
 pub enum SearchContextSize {
     Low,
     Medium,
@@ -99,43 +106,20 @@ pub struct Resolution(Box<str>);
 
 impl Meter {
     pub(crate) const TEXT_INPUT: Self = Self::Input(InputUnit::Token(TokenKind::Text));
-
-    pub(crate) fn sets_prompt_band(&self) -> bool {
-        matches!(
-            self,
-            Self::Input(InputUnit::Token(TokenKind::Text))
-                | Self::Output(OutputUnit::Token(TokenKind::Text))
-                | Self::CacheRead {
-                    kind: TokenKind::Text,
-                    mode: CacheReadMode::Implicit,
-                }
-                | Self::CacheWrite {
-                    kind: TokenKind::Text,
-                    ..
-                }
-        )
-    }
-
-    pub(crate) fn fallback(&self) -> Option<Self> {
-        match self {
-            Self::CacheRead {
-                kind: TokenKind::Text,
-                mode: CacheReadMode::Implicit,
-            }
-            | Self::CacheWrite {
-                kind: TokenKind::Text,
-                ttl: CacheTtl::Default,
-            } => Some(Self::TEXT_INPUT),
-            Self::CacheWrite {
-                kind: TokenKind::Text,
-                ttl: CacheTtl::OneHour | CacheTtl::TwelveHours,
-            } => Some(Self::CacheWrite {
-                kind: TokenKind::Text,
-                ttl: CacheTtl::Default,
-            }),
-            _ => None,
-        }
-    }
+    pub(crate) const TEXT_OUTPUT: Self = Self::Output(OutputUnit::Token(TokenKind::Text));
+    pub(crate) const REASONING: Self = Self::Output(OutputUnit::ReasoningToken);
+    pub(crate) const CACHE_READ: Self = Self::CacheRead {
+        kind: TokenKind::Text,
+        mode: CacheReadMode::Implicit,
+    };
+    pub(crate) const EXPLICIT_CACHE_READ: Self = Self::CacheRead {
+        kind: TokenKind::Text,
+        mode: CacheReadMode::Explicit,
+    };
+    pub(crate) const CACHE_WRITE: Self = Self::CacheWrite {
+        kind: TokenKind::Text,
+        ttl: CacheTtl::Default,
+    };
 }
 
 impl GuardrailUnit {

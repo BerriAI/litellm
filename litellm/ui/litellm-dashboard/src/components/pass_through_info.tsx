@@ -33,6 +33,8 @@ const endpointSettingsSchema = z.object({
   cost_per_request: z.number().optional(),
   timeout: z.number().optional(),
   auth: z.boolean(),
+  display_name: z.string().optional(),
+  show_in_model_hub: z.boolean(),
 });
 
 type EndpointSettingsValues = z.output<typeof endpointSettingsSchema>;
@@ -104,10 +106,12 @@ interface PassThroughEndpoint {
   headers: Record<string, any>;
   include_subpath?: boolean;
   cost_per_request?: number;
-  timeout?: number;
+  timeout?: number | null;
   auth?: boolean;
   methods?: string[];
   guardrails?: Record<string, { request_fields?: string[]; response_fields?: string[] } | null>;
+  display_name?: string | null;
+  show_in_model_hub?: boolean;
 }
 
 // Password field component for headers
@@ -159,8 +163,10 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
       methods: initialEndpointData.methods || [],
       include_subpath: initialEndpointData.include_subpath || false,
       cost_per_request: initialEndpointData.cost_per_request,
-      timeout: initialEndpointData.timeout,
+      timeout: initialEndpointData.timeout ?? undefined,
       auth: initialEndpointData.auth ?? true,
+      display_name: initialEndpointData.display_name ?? undefined,
+      show_in_model_hub: initialEndpointData.show_in_model_hub ?? false,
     },
   });
 
@@ -195,6 +201,8 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
         auth: values.auth,
         methods: values.methods.length > 0 ? values.methods : undefined,
         guardrails: guardrails && Object.keys(guardrails).length > 0 ? guardrails : undefined,
+        display_name: values.display_name?.trim() ?? "",
+        show_in_model_hub: values.show_in_model_hub,
       };
 
       await updatePassThroughEndpoint(accessToken, endpointData.id, updateData);
@@ -323,6 +331,11 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                       </p>
                     </div>
                   )}
+                  {endpointData.show_in_model_hub && (
+                    <div>
+                      <Badge variant="secondary">{t("passThroughModelHub.published")}</Badge>
+                    </div>
+                  )}
                 </div>
               </Card>
             </div>
@@ -419,6 +432,27 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                     <FormField control={form.control} name="target" label={t("passThroughInfo.form.targetUrl")}>
                       {({ value, ...field }) => (
                         <Input {...field} placeholder="https://api.example.com" value={value ?? ""} />
+                      )}
+                    </FormField>
+
+                    <FormField
+                      control={form.control}
+                      name="display_name"
+                      label={t("passThroughModelHub.displayName")}
+                      description={t("passThroughModelHub.displayNameHint")}
+                    >
+                      {({ value, ...field }) => (
+                        <Input
+                          {...field}
+                          placeholder={t("passThroughModelHub.displayNamePlaceholder")}
+                          value={value ?? ""}
+                        />
+                      )}
+                    </FormField>
+
+                    <FormField control={form.control} name="show_in_model_hub" label={t("passThroughModelHub.show")}>
+                      {({ value, onChange, ref: _ref, ...field }) => (
+                        <Switch {...field} checked={value} onCheckedChange={onChange} />
                       )}
                     </FormField>
 
@@ -543,6 +577,20 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
                     <div>
                       <p className="text-sm font-medium">{t("passThroughInfo.settings.targetUrl")}</p>
                       <div>{endpointData.target}</div>
+                    </div>
+                    {endpointData.display_name && (
+                      <div>
+                        <p className="text-sm font-medium">{t("passThroughModelHub.displayName")}</p>
+                        <div>{endpointData.display_name}</div>
+                      </div>
+                    )}
+                    <div>
+                      <p className="text-sm font-medium">{t("passThroughModelHub.show")}</p>
+                      <Badge variant={endpointData.show_in_model_hub ? "secondary" : "outline"}>
+                        {endpointData.show_in_model_hub
+                          ? t("passThroughInfo.settings.yes")
+                          : t("passThroughInfo.settings.no")}
+                      </Badge>
                     </div>
                     <div>
                       <p className="text-sm font-medium">{t("passThroughInfo.settings.includeSubpath")}</p>

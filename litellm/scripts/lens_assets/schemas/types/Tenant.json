@@ -1,26 +1,26 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tenant",
   "description": "Who sent a batch of spans. Always taken from the caller's authentication, never from span\nattributes.",
+  "type": "object",
   "properties": {
+    "team_id": {
+      "type": "string"
+    },
     "api_key_hash": {
       "type": "string"
     },
     "org_id": {
-      "default": "",
-      "type": "string"
-    },
-    "team_id": {
-      "type": "string"
+      "type": "string",
+      "default": ""
     },
     "user_id": {
-      "default": "",
-      "type": "string"
+      "type": "string",
+      "default": ""
     }
   },
   "required": [
     "team_id",
     "api_key_hash"
-  ],
-  "title": "Tenant",
-  "type": "object"
+  ]
 }

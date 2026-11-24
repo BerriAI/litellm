@@ -42,11 +42,15 @@ class _ArgillaDatasetsResponse(Protocol):
     def json(self) -> _ArgillaDatasetsBody: ...
 
 
+class _ArgillaLoggingKwargs(TypedDict, total=False, extra_items=object):
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
+
+
 def _datasets_body(response: _ArgillaDatasetsResponse) -> _ArgillaDatasetsBody:
     return response.json()
 
 
-def is_serializable(value):
+def is_serializable(value: object):
     non_serializable_types: Final = (
         types.CoroutineType,
         types.FunctionType,
@@ -159,7 +163,9 @@ class ArgillaLogger(CustomBatchLogger):
         else:
             raise Exception(f"Invalid response format: {response}")
 
-    def _prepare_log_data(self, kwargs, response_obj, start_time, end_time) -> ArgillaItem | None:
+    def _prepare_log_data(
+        self, kwargs: _ArgillaLoggingKwargs, response_obj: object, start_time: object, end_time: object
+    ) -> ArgillaItem | None:
         try:
             # Ensure everything in the payload is converted to str
             payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
@@ -211,7 +217,9 @@ class ArgillaLogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Argilla Layer Error - Error sending batch.")
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self, kwargs: _ArgillaLoggingKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         try:
             sampling_rate: Final = (
                 float(os.getenv("LANGSMITH_SAMPLING_RATE"))
@@ -243,7 +251,9 @@ class ArgillaLogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Langsmith Layer Error - log_success_event error")
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: _ArgillaLoggingKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         try:
             sampling_rate: Final = self.sampling_rate
             random_sample: Final = random.random()
@@ -285,7 +295,9 @@ class ArgillaLogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Argilla Layer Error - error logging async success event.")
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: _ArgillaLoggingKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         sampling_rate: Final = self.sampling_rate
         random_sample: Final = random.random()
         if random_sample > sampling_rate:

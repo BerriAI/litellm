@@ -766,17 +766,17 @@ async def test_wildcard_route_resolves_underlying_model_minimum(local_model_cost
 
 @pytest.mark.asyncio
 async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
     warm_tokenizer("anthropic/claude-fable-5")
     check = PromptCachingDeploymentCheck(cache=DualCache())
     deployments = _deployments("anthropic/claude-fable-5", "anthropic/claude-fable-5")
-    messages = cast(list[AllMessageValues], [{"role": "user", "content": text * 100}])
+    messages = cast(list[AllMessageValues], [{"role": "user", "content": uncounted_text()}])
 
     result, took, lags = await timed_with_loop_lags(
         lambda: check.async_filter_deployments(
@@ -790,10 +790,10 @@ async def test_async_filter_deployments_counts_the_prompt_off_the_event_loop():
 
 @pytest.mark.asyncio
 async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -802,7 +802,14 @@ async def test_async_log_success_event_counts_the_prompt_off_the_event_loop():
     check = PromptCachingDeploymentCheck(cache=cache)
     messages = cast(
         list[AllMessageValues],
-        [{"role": "user", "content": [{"type": "text", "text": text * 100, "cache_control": {"type": "ephemeral"}}]}],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": uncounted_text(), "cache_control": {"type": "ephemeral"}}
+                ],
+            }
+        ],
     )
     standard_logging_object = {
         "call_type": "acompletion",
@@ -1632,21 +1639,25 @@ def _responses_router(model: str) -> litellm.Router:
     )
 
 
-async def _serve_response(router: litellm.Router, request_input: object) -> str:
+async def _serve_response(
+    router: litellm.Router, request_input: object, tools: tuple[object, ...] = (_RESPONSES_TOOL,)
+) -> str:
     response = await router.aresponses(
         model=MODEL_GROUP_ALIAS,
         input=copy.deepcopy(request_input),
         instructions="Be terse.",
-        tools=[_RESPONSES_TOOL],
+        tools=copy.deepcopy(list(tools)),
         mock_response="ok",
     )
     return response._hidden_params["model_id"]
 
 
-async def _deployments_serving_repeats(router: litellm.Router, request_input: object) -> set[str]:
-    await _serve_response(router, request_input)
+async def _deployments_serving_repeats(
+    router: litellm.Router, request_input: object, tools: tuple[object, ...] = (_RESPONSES_TOOL,)
+) -> set[str]:
+    await _serve_response(router, request_input, tools)
     assert await _eventually(lambda: router.prompt_caching_pin_cache.in_memory_cache.cache_dict)
-    return {await _serve_response(router, request_input) for _ in range(8)}
+    return {await _serve_response(router, request_input, tools) for _ in range(8)}
 
 
 @pytest.mark.asyncio
@@ -2513,3 +2524,18 @@ async def test_responses_request_with_a_malformed_tool_is_left_to_the_provider(b
     pinned = await _read_responses_pin(PromptCachingDeploymentCheck(cache=DualCache()), request)
 
     assert pinned == ("dep-1", "dep-2")
+
+
+@pytest.mark.asyncio
+async def test_native_responses_request_whose_flattened_tool_names_collide_still_pins():
+    colliding_tools: Final = (
+        {"type": "function", "name": "admin__run", "parameters": {"type": "object"}},
+        {
+            "type": "namespace",
+            "name": "admin",
+            "tools": [{"type": "function", "name": "run", "parameters": {"type": "object"}}],
+        },
+    )
+    router: Final = _responses_router(RESPONSES_NATIVE_MODEL)
+
+    assert len(await _deployments_serving_repeats(router, _marked_responses_input(), colliding_tools)) == 1

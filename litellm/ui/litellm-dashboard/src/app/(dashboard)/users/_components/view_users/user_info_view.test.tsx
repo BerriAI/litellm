@@ -65,6 +65,9 @@ vi.mock("@/components/networking", () => {
     getUiPageUrl: (url: string) => url,
     fetchMCPServers: (...args: unknown[]) => mockFetchMCPServers(...args),
     fetchMCPToolsets: vi.fn().mockResolvedValue([]),
+    getClaudeCodePluginsList: vi
+      .fn()
+      .mockResolvedValue({ plugins: [{ id: "private-skill", name: "private-skill", enabled: false, source: {} }] }),
     listMCPTools: (...args: unknown[]) => mockListMCPTools(...args),
   };
 });
@@ -130,6 +133,46 @@ describe("UserInfoView", () => {
 
     const aliases = await screen.findAllByText("Test Alias");
     expect(aliases.length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    ["internal_user_viewer", "Internal User Viewer"],
+    ["proxy_admin_viewer", "Proxy Admin Viewer"],
+  ])("labels the read-only Details role %s", async (user_role, label) => {
+    mockUserGetInfoV2.mockResolvedValue({ ...MOCK_USER_DATA, user_role });
+    render(<UserInfoView {...defaultProps} initialTab={1} />);
+
+    expect(await screen.findByText(label)).toBeVisible();
+  });
+
+  it("shows the saved role in Details without reloading", async () => {
+    const user = userEvent.setup();
+    mockUserGetInfoV2.mockResolvedValue({ ...MOCK_USER_DATA, user_role: "internal_user" });
+    render(
+      <UserInfoView
+        {...defaultProps}
+        userRole="proxy_admin"
+        initialTab={1}
+        possibleUIRoles={{
+          internal_user: { ui_label: "Internal User", description: "" },
+          proxy_admin: { ui_label: "Admin", description: "" },
+        }}
+      />,
+    );
+
+    expect(await screen.findByText("Internal User", { exact: true })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /edit settings/i }));
+    await user.click(screen.getByRole("combobox", { name: /global proxy role/i }));
+    await user.click(await screen.findByRole("option", { name: "Admin", exact: true }));
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await screen.findByRole("button", { name: /edit settings/i });
+    expect(mockUserUpdateUserCall).toHaveBeenCalledWith(
+      "test-token",
+      expect.objectContaining({ user_role: "proxy_admin" }),
+      null,
+    );
+    expect(screen.getByText("Admin", { exact: true })).toBeVisible();
   });
 
   it("seeds the user rate limits when opening the edit form", async () => {
@@ -368,6 +411,7 @@ describe("UserInfoView", () => {
         mcp_access_groups: ["dev-group"],
         mcp_toolsets: [],
         mcp_tool_permissions: { "srv-1": ["list_issues"] },
+        skills: [],
       };
       expect(payload.object_permission).toEqual(expectedObjectPermission);
       expect(payload).not.toHaveProperty("mcp_servers_and_groups");

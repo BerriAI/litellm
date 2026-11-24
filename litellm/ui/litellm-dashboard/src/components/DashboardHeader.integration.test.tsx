@@ -45,6 +45,16 @@ beforeEach(() => {
       if (url.endsWith("/management/v1/users/me")) {
         return Response.json({ user_id: "example-admin", user_role: role });
       }
+      if (url.endsWith("/alerts/monitoring")) {
+        const monitoring = {
+          enabled: true,
+          model_deprecations_enabled: true,
+          alerts_used: 0,
+          alert_limit: 5,
+          disabled_by_config: false,
+        };
+        return Response.json(monitoring);
+      }
       if (url.endsWith("/model/deprecations?warn_within_days=30")) {
         if (rejectDeprecations) return Response.json({ detail: "Unavailable" }, { status: 503 });
         return Response.json({ deprecated: [], imminent: [] });

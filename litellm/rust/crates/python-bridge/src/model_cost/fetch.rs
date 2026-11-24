@@ -1,13 +1,16 @@
 use std::time::Duration;
 
 use litellm_http::{ClientVariant, HttpClientConfig};
-use litellm_model_catalog_refresh::{Failed, Fetched, RetryPolicy, S3Access, Start};
+use litellm_model_catalog_refresh::{
+    Access, Failed, Fetched, GcsAccess, RemoteSource, RetryPolicy, S3Access, Source,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 /// A cost map URL and how to connect to it. An `s3://` URL reaches S3 as an AWS SDK finds it in the environment,
-/// with LiteLLM's `AWS_REGION_NAME` winning over the region it finds
+/// with LiteLLM's `AWS_REGION_NAME` winning over the region it finds. A `gs://` URL reaches Cloud Storage with Google
+/// application default credentials
 #[pyclass(
     frozen,
     name = "NativeCostMapSource",
@@ -38,14 +41,8 @@ impl NativeCostMapSource {
         let client = crate::http::pool()
             .client(&self.http, ClientVariant::Provider)
             .map_err(crate::http::client_error)?;
-        let url = self.url.clone();
-        let policy = policy.0;
-        crate::execution::run_async_value(py, async move {
-            Ok(Outcome(
-                litellm_model_catalog_refresh::fetch(&client, &s3(), &url, policy, Start::Fresh)
-                    .await,
-            ))
-        })
+        let source = RemoteSource::new(self.url.clone(), client, access(), policy.0);
+        crate::execution::run_async_value(py, async move { Ok(Outcome(source.fetch().await)) })
     }
 
     /// Fetches on a throwaway runtime with a client of its own. `resume_from` continues a fetch whose first attempt
@@ -57,7 +54,7 @@ impl NativeCostMapSource {
         policy: PyRef<'_, NativeFetchPolicy>,
         resume_from: Option<PyRef<'_, NativeFetchFailed>>,
     ) -> PyResult<Py<PyAny>> {
-        let start = resume_from.map_or(Start::Fresh, |failed| Start::After(failed.0.clone()));
+        let resumed = resume_from.map(|failed| failed.0.clone());
         let (config, url, policy) = (self.http.clone(), self.url.clone(), policy.0);
         let logger = crate::logger::capture(py);
         let fetched = litellm_host_python::release_gil(py, move || {
@@ -65,23 +62,24 @@ impl NativeCostMapSource {
                 let client = crate::http::pool()
                     .unpooled(&config, ClientVariant::Provider)
                     .map_err(crate::http::client_error)?;
-                litellm_host_python::run_isolated(litellm_model_catalog_refresh::fetch(
-                    &client,
-                    &s3(),
-                    &url,
-                    policy,
-                    start,
-                ))
-                .map_err(PyErr::from)
+                let source = RemoteSource::new(url, client, access(), policy);
+                let source = match resumed {
+                    Some(failed) => source.resuming(failed),
+                    None => source,
+                };
+                litellm_host_python::run_isolated(source.fetch()).map_err(PyErr::from)
             })
         })?;
         Outcome(fetched).into_pyobject(py).map(Bound::unbind)
     }
 }
 
-fn s3() -> S3Access {
-    S3Access::Environment {
-        region: std::env::var("AWS_REGION_NAME").ok(),
+fn access() -> Access {
+    Access {
+        s3: S3Access::Environment {
+            region: std::env::var("AWS_REGION_NAME").ok(),
+        },
+        gcs: GcsAccess::Environment,
     }
 }
 

@@ -3,6 +3,7 @@ import enum
 from pydantic import Field
 
 from litellm.proxy._types import WebhookEvent
+from litellm.types.integrations.key_expiring_email import VIRTUAL_KEY_EXPIRING_EMAIL_EVENT
 from litellm.types.integrations.model_deprecation_email import MODEL_DEPRECATION_EMAIL_EVENT
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -35,9 +36,11 @@ class SendKeyRotatedEmailEvent(WebhookEvent):
 
 class EmailEvent(str, enum.Enum):
     model_deprecations = MODEL_DEPRECATION_EMAIL_EVENT
+    performance_alerts = "Performance Alerts"
     virtual_key_created = "Virtual Key Created"
     new_user_invitation = "New User Invitation"
     virtual_key_rotated = "Virtual Key Rotated"
+    virtual_key_expiring = VIRTUAL_KEY_EXPIRING_EMAIL_EVENT
     soft_budget_crossed = "Soft Budget Crossed"
     max_budget_alert = "Max Budget Alert"
 
@@ -60,10 +63,12 @@ class DefaultEmailSettings(LiteLLMBaseModel):
 
     settings: dict[EmailEvent, bool] = Field(
         default_factory=lambda: {
-            EmailEvent.model_deprecations: False,  # Explicit opt-in for owner retirement reminders.
+            EmailEvent.model_deprecations: False,
+            EmailEvent.performance_alerts: False,
             EmailEvent.virtual_key_created: True,  # On by default
             EmailEvent.new_user_invitation: True,  # On by default
             EmailEvent.virtual_key_rotated: True,  # On by default
+            EmailEvent.virtual_key_expiring: False,
             EmailEvent.soft_budget_crossed: True,  # On by default
             EmailEvent.max_budget_alert: True,  # On by default
         }

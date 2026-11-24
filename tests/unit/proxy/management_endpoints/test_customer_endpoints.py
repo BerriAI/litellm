@@ -13,6 +13,7 @@ from pydantic import BaseModel
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
+    BudgetWriteRequest,
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
     LitellmUserRoles,
@@ -95,6 +96,8 @@ def test_should_update_field(
 @pytest.fixture
 def mock_prisma_client():
     with patch("litellm.proxy.proxy_server.prisma_client") as mock:
+        mock.writer_db = mock.db
+        mock.db.litellm_budgettable.find_unique = AsyncMock(return_value=LiteLLM_BudgetTable(budget_id="existing"))
         yield mock
 
 
@@ -108,6 +111,17 @@ def mock_user_api_key_auth():
         yield
     finally:
         app.dependency_overrides = original_overrides
+
+
+@pytest.mark.parametrize("path", ("/customer/new", "/customer/update"))
+def test_customer_rejects_an_attached_budget_with_windows(
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: object, path: str,
+) -> None:
+    mock_prisma_client.db.litellm_budgettable.find_unique.return_value = BudgetWriteRequest.model_validate({
+        "budget_id": "combined", "budget_limits": [{"budget_duration": "1mo", "max_budget": 0}],
+    })
+    response: Final = client.post(path, json={"user_id": "customer", "budget_id": "combined"})
+    assert response.status_code == 400, response.text
 
 
 def test_update_customer_success(mock_prisma_client, mock_user_api_key_auth):
@@ -225,6 +239,28 @@ def test_info_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
     assert response_json["error"]["type"] == "not_found"
     assert response_json["error"]["param"] == "end_user_id"
     assert response_json["error"]["code"] == "404"
+
+
+@pytest.mark.parametrize("path", ["/customer/info", "/end_user/info"])
+@pytest.mark.parametrize(
+    "user_role",
+    [LitellmUserRoles.ORG_ADMIN, LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY],
+)
+def test_info_customer_refuses_a_caller_who_is_not_a_proxy_admin(
+    mock_prisma_client: MagicMock, path: str, user_role: LitellmUserRoles
+) -> None:
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(
+        return_value=LiteLLM_EndUserTable(user_id="another-customer", alias="private alias", blocked=False)
+    )
+    original_overrides: Final = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id="caller", user_role=user_role)
+    try:
+        response: Final = client.get(path, params={"end_user_id": "another-customer"})
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 401, response.text
+    assert "private alias" not in response.text, response.text
 
 
 def test_delete_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
@@ -1005,6 +1041,7 @@ _EXPECTED_CUSTOMER = {
         "search_tools": [],
         "mcp_tool_search_enabled": None,
         "skills": None,
+        "apps": None,
     },
 }
 
@@ -1331,7 +1368,7 @@ def _end_user_cache_doubles():
     with (
         patch("litellm.proxy.proxy_server.user_api_key_cache", recording_cache),
         patch(
-            "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.publish_auth_cache_invalidation",
+            "litellm.proxy.common_utils.cache_invalidation_pubsub.publish_cache_invalidation",
             mock_publish,
         ),
     ):

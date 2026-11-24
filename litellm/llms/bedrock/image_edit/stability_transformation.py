@@ -22,13 +22,14 @@ API Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parame
 """
 
 import base64
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, runtime_checkable
 
 import httpx
 from httpx._types import RequestFiles
 from pydantic import TypeAdapter
 
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, iter_items, json_contains
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, has_attributes, iter_items, json_contains
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -47,6 +48,10 @@ else:
     LiteLLMLoggingObj = Any
 
 _DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _BinaryReadable(Protocol):
+    def read(self) -> bytes: ...
 
 
 @runtime_checkable
@@ -116,7 +121,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
     ) -> BedrockError:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Return list of OpenAI params supported by Bedrock Stability.
         """
@@ -132,7 +137,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI parameters to Bedrock Stability parameters.
 
@@ -184,11 +189,11 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
+        image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+        headers: Mapping[str, object],
+    ) -> tuple[dict[str, object], RequestFiles]:
         """
         Transform OpenAI-style request to Bedrock Stability request format.
 
@@ -206,7 +211,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         # Convert image to base64 if provided
         if image is not None:
             image_b64: str
-            if hasattr(image, "read") and callable(getattr(image, "read", None)):
+            if has_attributes(image, _BinaryReadable, "read") and callable(getattr(image, "read", None)):
                 # File-like object (e.g., BufferedReader from open())
                 image_bytes: Final = image.read()
                 image_b64 = base64.b64encode(image_bytes).decode("utf-8")
@@ -381,7 +386,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the complete URL for the Bedrock Image Edit API.

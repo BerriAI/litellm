@@ -33,10 +33,49 @@ describe("model snippets", () => {
     expect(snippet).not.toContain("ui.example.com");
   });
 
-  it("offers cURL only for chat models", () => {
+  it("offers cURL for chat models but not embeddings", () => {
     expect(curlSnippet(model({ mode: "chat" }))).toContain("curl https://gateway.example.com/v1/chat/completions");
     expect(curlSnippet(model({ mode: undefined }))).not.toBeNull();
     expect(curlSnippet(model({ mode: "embedding" }))).toBeNull();
+  });
+
+  it.each([null, undefined, [], ["POST"], ["GET", "POST"]])(
+    "uses the pass-through route with a JSON body when its methods are %j",
+    (methods) => {
+      const endpoint = model({
+        mode: "passthrough",
+        pass_through_path: "/clinical-ner",
+        pass_through_methods: methods,
+      });
+      const expected = [
+        'curl -X "POST" "https://gateway.example.com/clinical-ner" \\',
+        '  -H "Authorization: Bearer your_api_key" \\',
+        '  -H "Content-Type: application/json" \\',
+        `  -d '{"input": "Hello, how are you?"}'`,
+      ].join("\n");
+      expect(curlSnippet(endpoint)).toBe(expected);
+      expect(modelSnippet(endpoint)).toBe(expected);
+    },
+  );
+
+  it.each([["GET"], ["PUT", "GET"]])("uses the first non-POST method with no body for %j", (...methods) => {
+    const endpoint = model({
+      mode: "passthrough",
+      pass_through_path: "/lpr-catalog",
+      pass_through_methods: methods,
+    });
+    const expected = [
+      `curl -X "${methods[0]}" "https://gateway.example.com/lpr-catalog" \\`,
+      '  -H "Authorization: Bearer your_api_key"',
+    ].join("\n");
+    expect(curlSnippet(endpoint)).toBe(expected);
+    expect(modelSnippet(endpoint)).toBe(expected);
+  });
+
+  it("does not offer a chat SDK example for a pass-through row without its route", () => {
+    const endpoint = model({ mode: "passthrough" });
+    expect(curlSnippet(endpoint)).toBeNull();
+    expect(modelSnippet(endpoint)).toBe("");
   });
 });
 

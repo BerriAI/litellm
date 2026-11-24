@@ -13,7 +13,7 @@ use crate::{
     RedisBatch, RedisConfig, RedisEvents,
     commands::{self, Op, Plan, Trips},
     connection::Connection,
-    pubsub::Subscriber,
+    pubsub::{self, Subscriber},
 };
 
 /// One Redis client. Clones share the connection, the breaker and the subscriber.
@@ -155,12 +155,38 @@ impl RedisClient {
         self.0.subscriber.clone().messages(channel.to_owned())
     }
 
+    /// `PUBLISH`es every payload on `channel`, sent as given, without the namespace: one alone and
+    /// several as one pipeline. The circuit breaker neither refuses nor counts a publish, like the
+    /// redis-py pub/sub client main published through, so one goes out the moment Redis is back.
+    pub async fn publish(&self, channel: &str, payloads: &[Vec<u8>]) -> Result<(), Error> {
+        let operation = match payloads {
+            [] => return Ok(()),
+            [_] => Operation::Command("PUBLISH"),
+            _ => Operation::Pipeline {
+                ops: payloads.len(),
+            },
+        };
+        let started = Instant::now();
+        self.check_health().await;
+        let result = pubsub::publish(&self.0.connection, channel, payloads)
+            .await
+            .map_err(|error| Error::classify(error, self.0.connection.deployment()));
+        self.observe(operation, started, Outcome::of(&result));
+        result
+    }
+
     pub fn pipeline(&self) -> Pipeline {
         Pipeline::new(self.0.namespace.clone())
     }
 
-    pub(crate) fn namespace(&self) -> &Namespace {
+    /// The prefix this client puts on every key, which a pub/sub channel shared with other
+    /// processes is prefixed with by hand.
+    pub fn namespace(&self) -> &Namespace {
         &self.0.namespace
+    }
+
+    pub fn sibling_key(&self, key: &str, label: &str) -> Option<String> {
+        self.0.namespace.sibling(key, label)
     }
 
     pub fn is_cluster(&self) -> bool {

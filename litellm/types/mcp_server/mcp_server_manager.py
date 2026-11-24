@@ -1,9 +1,10 @@
 import json
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Annotated, Any, Final, Literal
+from typing import Annotated, Any, Final, Literal, TypeAlias
+from urllib.parse import urlsplit
 
-from pydantic import AfterValidator, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+from pydantic import AfterValidator, ConfigDict, Field, HttpUrl, TypeAdapter, field_validator, model_validator
 from typing_extensions import Self
 
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -18,6 +19,11 @@ from litellm.types.mcp import (
     validate_mcp_protocol_transport,
 )
 
+MAX_TOOLS_LIST_CACHE_TTL_SECONDS: Final = 365 * 24 * 60 * 60
+_TOOLS_LIST_CACHE_TTL_SECONDS: Final = TypeAdapter[int](
+    Annotated[int, Field(ge=0, le=MAX_TOOLS_LIST_CACHE_TTL_SECONDS)]
+)
+
 
 # MCPInfo now allows arbitrary additional fields for custom metadata
 def _validate_mcp_protocol_metadata(value: dict[str, object]) -> dict[str, object]:
@@ -25,10 +31,28 @@ def _validate_mcp_protocol_metadata(value: dict[str, object]) -> dict[str, objec
         TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(value["protocol_version"])
     if "skip_tool_output_validation" in value:
         TypeAdapter[bool](bool).validate_python(value["skip_tool_output_validation"], strict=True)
+    if "tools_list_cache_ttl_seconds" in value:
+        _TOOLS_LIST_CACHE_TTL_SECONDS.validate_python(value["tools_list_cache_ttl_seconds"], strict=True)
     return value
 
 
 MCPInfo = Annotated[dict[str, Any], AfterValidator(_validate_mcp_protocol_metadata)]
+
+
+def _validate_event_callback_base(value: str) -> str:
+    url: Final = HttpUrl(value)
+    if (
+        url.scheme != "https"
+        or not urlsplit(value).netloc
+        or any(part is not None for part in (url.username, url.password, url.query, url.fragment))
+    ):
+        raise ValueError(
+            "MCP Events callback base must be an absolute HTTPS URL without credentials, query or fragment"
+        )
+    return str(url).rstrip("/")
+
+
+MCPEventCallbackBase: TypeAlias = Annotated[str, AfterValidator(_validate_event_callback_base)]
 
 
 class MCPOAuthMetadata(LiteLLMBaseModel):
@@ -74,6 +98,19 @@ class MCPOAuthIdentityBinding(LiteLLMBaseModel):
     principal_claim: str = "email"
     caller_field: Literal["user_email", "user_id"] = "user_email"
     require_email_verified: bool = True
+
+
+class MCPServerEventsConfig(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = False
+    allowed_events: tuple[str, ...] | None = Field(
+        default=None,
+        min_length=1,
+        description="Event names or globs this server may publish. Omit for every event; set enabled false for none.",
+    )
+    min_poll_interval_ms: int = Field(default=1000, ge=0)
+    legacy_webhook_id_equals_event_id: bool = False
 
 
 class PinnedMCPTool(LiteLLMBaseModel):
@@ -264,6 +301,7 @@ class MCPServer(LiteLLMBaseModel):
     short_prefix: str | None = None
     allow_sampling: bool = False
     allow_elicitation: bool = False
+    events: MCPServerEventsConfig | None = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __repr__(self) -> str:
@@ -302,6 +340,11 @@ class MCPServer(LiteLLMBaseModel):
     @property
     def skip_tool_output_validation(self) -> bool:
         return (self.mcp_info or {}).get("skip_tool_output_validation") is True
+
+    @property
+    def tools_list_cache_ttl_seconds(self) -> int | None:
+        configured: Final[object] = (self.mcp_info or {}).get("tools_list_cache_ttl_seconds")
+        return configured if isinstance(configured, int) else None
 
     @model_validator(mode="after")
     def resolve_protocol_version(self) -> Self:

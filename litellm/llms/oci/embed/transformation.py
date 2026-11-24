@@ -102,7 +102,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool = False,
@@ -118,8 +118,8 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -153,8 +153,8 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         base: Final = get_oci_base_url(optional_params, api_base or litellm.api_base)
@@ -164,7 +164,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         optional_params: dict,
-        request_data: dict,
+        request_data: Mapping[str, object],
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
@@ -187,8 +187,8 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         model: str,
         input: AllEmbeddingInputValues,
         optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         creds: Final = resolve_oci_credentials(optional_params)
         compartment_id: Final = creds["oci_compartment_id"]
         if not compartment_id:
@@ -262,9 +262,9 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> EmbeddingResponse:
         if raw_response.status_code != 200:
             raise OCIError(
@@ -319,7 +319,7 @@ class OCIEmbedConfig(BaseEmbeddingConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,
+        headers: Mapping[str, object] | httpx.Headers,
     ) -> BaseLLMException:
         return OCIError(status_code=status_code, message=error_message)
 

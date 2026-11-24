@@ -9,8 +9,10 @@ import { DataTable } from "@/components/shared/DataTable";
 import { SkillHubSkill } from "@/components/claude_code_plugins/types";
 
 import { getPluginTableColumns } from "./PluginTableColumns";
+import type { UserIdentityLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
 interface PluginTableProps {
+  users?: UserIdentityLookup;
   pluginsList: SkillHubSkill[];
   sorting: SortingState;
   onSortingChange: OnChangeFn<SortingState>;
@@ -39,6 +41,7 @@ function EmptyState({ filtered }: { filtered: boolean }) {
 }
 
 const PluginTable: React.FC<PluginTableProps> = ({
+  users,
   pluginsList,
   sorting,
   onSortingChange,
@@ -50,10 +53,10 @@ const PluginTable: React.FC<PluginTableProps> = ({
 }) => {
   const { t } = useTranslation();
 
-  const columns = useMemo(
-    () => getPluginTableColumns({ isAdmin, onPluginClick, onDeleteClick }),
-    [isAdmin, onPluginClick, onDeleteClick],
-  );
+  const columns = useMemo(() => {
+    const dependencies = { isAdmin, onPluginClick, onDeleteClick, users };
+    return getPluginTableColumns(dependencies);
+  }, [isAdmin, onPluginClick, onDeleteClick, users]);
 
   return (
     <DataTable

@@ -30,7 +30,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
-from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object
+from litellm.litellm_core_utils.core_helpers import as_object_list, decoded_json_object, require_attributes
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.ptu_pricing import (
@@ -187,6 +187,7 @@ from litellm.types.router import (
     GenericLiteLLMParams,
     LiteLLM_Params,
     ModelInfo,
+    server_owned_param_kind,
     updateDeployment,
     updateLiteLLMParams,
 )
@@ -221,6 +222,57 @@ class KubernetesPodsResponse(BaseModel):
 CLEARABLE_LITELLM_PARAMS: Final = frozenset({"cache_control_injection_points", "litellm_credential_name"})
 NULL_CLEARABLE_LITELLM_PARAMS: Final = frozenset((*SPECIAL_MODEL_INFO_PARAMS, *CLEARABLE_LITELLM_PARAMS))
 _STR_OBJECT_DICT: Final = TypeAdapter(dict[str, object])
+_OBJECT_LIST: Final = TypeAdapter(list[object])
+
+
+_Node: TypeAlias = tuple[tuple[object, ...], object]
+
+
+def _child_nodes(node: _Node) -> tuple[_Node, ...]:
+    path, value = node
+    if is_str_keyed_mapping(value):
+        return tuple(((*path, key), child) for key, child in value.items())
+    if isinstance(value, list):
+        return tuple(((*path, index), child) for index, child in enumerate(_OBJECT_LIST.validate_python(value)))
+    return ()
+
+
+def _next_level(level: tuple[_Node, ...], _: None) -> tuple[_Node, ...]:
+    return tuple(itertools.chain.from_iterable(map(_child_nodes, level)))
+
+
+def _string_leaves(value: object) -> Mapping[tuple[object, ...], str]:
+    levels: Final = itertools.takewhile(
+        bool, itertools.accumulate(itertools.repeat(None), _next_level, initial=(((), value),))
+    )
+    return MappingProxyType(
+        {path: leaf for path, leaf in itertools.chain.from_iterable(levels) if isinstance(leaf, str)}
+    )
+
+
+def _adds_environment_reference(value: object, stored: object) -> bool:
+    kept: Final = _string_leaves(stored)
+    return any(
+        leaf.startswith("os.environ/") and kept.get(path) != leaf for path, leaf in _string_leaves(value).items()
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _EnvironmentReferenceDenied:
+    field: str
+
+
+def _raise_environment_reference_denied(denial: _EnvironmentReferenceDenied | None) -> None:
+    match denial:
+        case None:
+            return
+        case _EnvironmentReferenceDenied(field=field):
+            raise ProxyException(
+                message=f"Only proxy admins can set an os.environ/ reference on a model ({field!r}).",
+                type=ProxyErrorTypes.auth_error.value,
+                code=status.HTTP_403_FORBIDDEN,
+                param=field,
+            )
 
 
 async def update_team(*args, **kwargs):
@@ -343,6 +395,16 @@ class _TeamTable(_TeamLookupTable, Protocol):
     ) -> Awaitable[LiteLLM_TeamTable]: ...
 
 
+class _TeamTableDatabase(Protocol):
+    @property
+    def litellm_teamtable(self) -> _TeamTable: ...
+
+
+class _TeamTableClient(Protocol):
+    @property
+    def db(self) -> _TeamTableDatabase: ...
+
+
 def _proxy_model_table(prisma_client: PrismaClient) -> _ProxyModelTable:
     return ModelRepository(prisma_client).table
 
@@ -352,11 +414,22 @@ def _repo_team_table(prisma_client: PrismaClient) -> _TeamLookupTable:
 
 
 def _db_team_table(prisma_client: PrismaClient) -> _TeamTable:
-    return prisma_client.db.litellm_teamtable
+    return require_attributes(prisma_client, _TeamTableClient, "db").db.litellm_teamtable
 
 
 def _model_alias_table(prisma_client: PrismaClient) -> "TableActions[prisma_models.LiteLLM_ModelTable]":
     return ModelTableRepository(prisma_client).table
+
+
+@dataclass(frozen=True, slots=True)
+class _DumpedModelRow:
+    fields: Mapping[str, object]
+    deployment: Deployment
+
+
+def _dump_model_row(row: BaseModel, *, exclude_none: bool = False) -> _DumpedModelRow:
+    fields: Final = row.model_dump(exclude_none=True) if exclude_none else row.model_dump()
+    return _DumpedModelRow(fields=fields, deployment=Deployment(**fields))
 
 
 async def get_db_model(model_id: str, prisma_client: PrismaClient) -> Deployment | None:
@@ -365,7 +438,7 @@ async def get_db_model(model_id: str, prisma_client: PrismaClient) -> Deployment
     if not db_model:
         return None
 
-    deployment_pydantic_obj: Final = Deployment(**db_model.model_dump(exclude_none=True))
+    deployment_pydantic_obj: Final = _dump_model_row(db_model, exclude_none=True).deployment
     return deployment_pydantic_obj
 
 
@@ -1480,13 +1553,13 @@ async def _locked_legacy_update_model_info_json(
     row: Final = await table.find_unique(where={"model_id": model_id})
     if row is None:
         return None
-    payload: Final = row.model_dump()
+    dumped: Final = _dump_model_row(row)
     writes: Final = _legacy_update_model_info_writes(
-        Deployment(**payload), incoming_model_info, discovered_model_info, member_marker, listed_row
+        dumped.deployment, incoming_model_info, discovered_model_info, member_marker, listed_row
     )
     if not writes:
         return None
-    stored_model_info: Final[object] = payload.get("model_info")
+    stored_model_info: Final[object] = dumped.fields.get("model_info")
     stored: Final = (
         _STR_OBJECT_DICT.validate_json(stored_model_info)
         if isinstance(stored_model_info, str)
@@ -1576,8 +1649,10 @@ def update_db_model(
                 merged_litellm_params.pop(field, None)
     if updated_patch.model_info:
         for field in updated_patch.model_info.model_fields_set:
-            if field in SPECIAL_MODEL_INFO_PARAMS and getattr(updated_patch.model_info, field) is None:
-                merged_model_info.pop(field, None)
+            if field not in SPECIAL_MODEL_INFO_PARAMS or getattr(updated_patch.model_info, field) is not None:
+                continue
+            merged_model_info.pop(field, None)
+            if updated_patch.litellm_params is None or field not in updated_patch.litellm_params.model_fields_set:
                 merged_litellm_params.pop(field, None)
         for field in _explicitly_cleared_ptu_fields(updated_patch.model_info):
             merged_model_info.pop(field, None)
@@ -2437,7 +2512,7 @@ async def _get_team_deployments(
         return []
 
     # Confirm team_id in model_info (defensive check)
-    result: Final = []
+    result: Final[list[_ProxyModelRow]] = []
     for row in response:
         model_info = model_info_as_mapping(row.model_info)
         if model_info is not None and model_info.get("team_id") == team_id:
@@ -2799,7 +2874,7 @@ class ModelManagementAuthChecks:
             raise ProxyException(
                 message=(
                     f"Only proxy admins can change the credentials of a deployment configured for "
-                    f"workload identity federation or OAuth token exchange, or holding an oidc/ api_key secret "
+                    f"{server_owned_param_kind(wif_fields[0])}, or holding an oidc/ api_key secret "
                     f"reference ({wif_fields[0]!r})."
                 ),
                 type=ProxyErrorTypes.auth_error.value,
@@ -2842,6 +2917,27 @@ class ModelManagementAuthChecks:
             type=ProxyErrorTypes.bad_request_error.value,
             code=status.HTTP_400_BAD_REQUEST,
             param="api_key",
+        )
+
+    @staticmethod
+    def _non_admin_environment_reference(
+        *,
+        incoming_params: Mapping[str, object] | None,
+        stored_params: GenericLiteLLMParams | None,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> _EnvironmentReferenceDenied | None:
+        if incoming_params is None or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+            return None
+        stored: Final[Mapping[str, object]] = (
+            MappingProxyType({}) if stored_params is None else _decrypted_litellm_params(stored_params)
+        )
+        return next(
+            (
+                _EnvironmentReferenceDenied(name)
+                for name, value in incoming_params.items()
+                if _adds_environment_reference(value, stored.get(name))
+            ),
+            None,
         )
 
     @staticmethod
@@ -2925,12 +3021,20 @@ class ModelManagementAuthChecks:
                     llm_router=llm_router,
                 )
 
-            return ModelManagementAuthChecks.can_user_make_team_model_call(
+            team_write: Final = ModelManagementAuthChecks.can_user_make_team_model_call(
                 team_id=model_params.model_info.team_id,
                 user_api_key_dict=user_api_key_dict,
                 team_obj=team_obj,
                 premium_user=premium_user,
             )
+            _raise_environment_reference_denied(
+                ModelManagementAuthChecks._non_admin_environment_reference(
+                    incoming_params=incoming_params,
+                    stored_params=model_params.litellm_params if member_operation == "update" else None,
+                    user_api_key_dict=user_api_key_dict,
+                )
+            )
+            return team_write
         ## Check non-team model auth
         elif user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
             raise HTTPException(
@@ -2993,7 +3097,7 @@ async def delete_model(
                 detail={"error": f"Model with id={model_info.id} not found in db"},
             )
 
-        model_params: Final = Deployment(**model_in_db.model_dump())
+        model_params: Final = _dump_model_row(model_in_db).deployment
         await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=model_params,
             user_api_key_dict=user_api_key_dict,
@@ -3408,7 +3512,7 @@ async def update_model(
                 )
             else:
                 raise Exception("model not found")
-        deployment: Final = Deployment(**_existing_litellm_params.model_dump())
+        deployment: Final = _dump_model_row(_existing_litellm_params).deployment
 
         write_authorization: Final = await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=deployment,
@@ -4076,8 +4180,8 @@ async def clear_cache() -> ReconcileOutcome:
 
             # Get current models and filter out DB models
             current_models: Final = llm_router.registry().all().copy()
-            config_models: Final = []
-            db_model_ids: Final = []
+            config_models: Final[list[object]] = []
+            db_model_ids: Final[list[object]] = []
 
             for model in as_object_list(current_models) or ():
                 deployment = decoded_json_object(model)

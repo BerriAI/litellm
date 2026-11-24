@@ -158,7 +158,7 @@ class BedrockBatchesHandler:
             aws_external_id=aws_external_id,
             aws_session_tags=aws_session_tags,
         )
-        creds: Final = BedrockBatchesConfig().resolve_credentials(auth_params, region)
+        creds: Final = BedrockBatchesConfig().resolve_credentials(auth_params, region, kwargs)
         control_plane_endpoint: Final = configured_bedrock_control_plane_endpoint(
             kwargs.get("aws_bedrock_control_plane_endpoint")
         )
@@ -196,7 +196,9 @@ class BedrockBatchesHandler:
         return job_status()
 
     @staticmethod
-    def handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
+    def handle_async_invoke_status(
+        batch_id: str, aws_region_name: str, logging_obj: "LiteLLMLoggingObj | None" = None, **kwargs: object
+    ) -> "LiteLLMBatch":
         """
         Handle async invoke status check for AWS Bedrock.
 
@@ -278,7 +280,7 @@ class BedrockBatchesHandler:
     def handle_model_invocation_job_status(
         batch_id: str,
         aws_region_name: str | None = None,
-        logging_obj=None,
+        logging_obj: "LiteLLMLoggingObj | None" = None,
         **kwargs: object,
     ) -> "LiteLLMBatch":
         """
@@ -329,7 +331,7 @@ class BedrockBatchesHandler:
         # BaseAWSLLM) lazily to avoid a circular import at module load.
         from litellm.llms.bedrock.batches.transformation import BedrockBatchesConfig
 
-        creds: Final = BedrockBatchesConfig().resolve_credentials(AwsAuthParams.model_validate(kwargs), region)
+        creds: Final = BedrockBatchesConfig().resolve_credentials(AwsAuthParams.model_validate(kwargs), region, kwargs)
         control_plane_endpoint: Final = configured_bedrock_control_plane_endpoint(
             kwargs.get("aws_bedrock_control_plane_endpoint")
         )

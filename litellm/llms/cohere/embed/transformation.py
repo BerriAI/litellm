@@ -10,10 +10,13 @@ Convers
 Docs - https://docs.cohere.com/v2/reference/embed
 """
 
+import os
+import re
 from collections.abc import Iterable, Iterator, Mapping, Sequence, Sized
 from enum import Enum
 from itertools import chain, starmap
 from typing import Final, Protocol, TypeAlias, cast
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
@@ -35,6 +38,16 @@ from ..common_utils import CohereError
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _DECODED_JSON: Final = TypeAdapter(object)
+COHERE_DEFAULT_EMBED_URL: Final = "https://api.cohere.ai/v2/embed"
+_COHERE_ROUTE_SUFFIX: Final = re.compile(r"(?:/v\d+)?(?:/(?:chat|rerank))?/*$", re.IGNORECASE)
+
+
+def _embed_url_from_cohere_api_base(cohere_api_base: str) -> str:
+    parts: Final = urlsplit(cohere_api_base)
+    if parts.path.rstrip("/").lower().endswith("/embed"):
+        return cohere_api_base
+    prefix: Final = _COHERE_ROUTE_SUFFIX.sub("", parts.path, count=1)
+    return urlunsplit(parts._replace(path=f"{prefix}/v2/embed"))
 
 
 class _SupportsEncode(Protocol):
@@ -160,11 +173,11 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool = False,
-    ) -> dict:
+    ) -> dict[str, object]:
         for k, v in non_default_params.items():
             if k == "encoding_format":
                 if isinstance(v, list):
@@ -177,14 +190,14 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         default_headers: Final = {
             "Content-Type": "application/json",
         }
@@ -201,11 +214,16 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
-        return api_base or "https://api.cohere.ai/v2/embed"
+        if api_base:
+            return api_base
+        cohere_api_base: Final = os.getenv("COHERE_API_BASE")
+        if not cohere_api_base:
+            return COHERE_DEFAULT_EMBED_URL
+        return _embed_url_from_cohere_api_base(cohere_api_base)
 
     def _transform_request(
         self, model: str, input: list[str], inference_params: dict
@@ -236,9 +254,9 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         self,
         model: str,
         input: AllEmbeddingInputValues,
-        optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         if isinstance(input, list) and (isinstance(input[0], list) or isinstance(input[0], int)):
             raise ValueError("Input must be a list of strings")
         return cast(
@@ -285,9 +303,9 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> EmbeddingResponse:
         return self.transform_native_embed_response(
             response=raw_response,
@@ -300,7 +318,9 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
             row_shape=CohereEmbeddingRowShape.OPENAI,
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Mapping[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return CohereError(
             status_code=status_code,
             message=error_message,

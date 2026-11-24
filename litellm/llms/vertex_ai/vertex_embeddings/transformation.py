@@ -1,10 +1,11 @@
 import types
 from collections.abc import Mapping
-from typing import Final, Literal
+from typing import Final, Literal, cast  # noqa: TID251  # extra_body carries raw fields the TypedDict lacks
 
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.llms.base_llm.embedding.transformation import split_extra_body
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import EmbeddingResponse, PromptTokensDetailsWrapper, Usage
@@ -98,7 +99,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
     def get_supported_openai_params(self):
         return ["dimensions"]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict, kwargs: dict):
+    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict, kwargs: dict):
         for param, value in non_default_params.items():
             if param == "dimensions":
                 optional_params["outputDimensionality"] = value
@@ -107,13 +108,13 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
             optional_params["task_type"] = kwargs.pop("input_type")
         return optional_params, kwargs
 
-    def get_mapped_special_auth_params(self) -> dict:
+    def get_mapped_special_auth_params(self) -> dict[str, str]:
         """
         Common auth params across bedrock/vertex_ai/azure/watsonx
         """
         return {"project": "vertex_project", "region_name": "vertex_location"}
 
-    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict):
         mapped_params: Final = self.get_mapped_special_auth_params()
 
         for param, value in non_default_params.items():
@@ -164,14 +165,19 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
             vertex_text_embedding_input_list.append(embedding_input)
 
         vertex_request["instances"] = vertex_text_embedding_input_list
-        vertex_request["parameters"] = EmbeddingParameters(**optional_params)
+        body_params, extra_body = split_extra_body(optional_params)
+        vertex_request["parameters"] = (
+            cast(  # cast-ok: extra_body carries raw Vertex fields the TypedDict does not list
+                EmbeddingParameters, {**extra_body, **body_params}
+            )
+        )
         if labels:
             vertex_request["labels"] = labels
 
         return vertex_request
 
     def _transform_openai_request_to_fine_tuned_embedding_request(
-        self, input: list | str, optional_params: dict, model: str
+        self, input: list[str] | str, optional_params: Mapping[str, object], model: str
     ) -> VertexEmbeddingRequest:
         """
         Transforms an openai request to a vertex fine-tuned embedding request.
@@ -205,7 +211,12 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
             vertex_text_embedding_input_list.append(embedding_input)
 
         vertex_request["instances"] = vertex_text_embedding_input_list
-        vertex_request["parameters"] = TextEmbeddingFineTunedParameters(**optional_params)
+        body_params, extra_body = split_extra_body(optional_params)
+        vertex_request["parameters"] = (
+            cast(  # cast-ok: extra_body carries raw Vertex fields the TypedDict does not list
+                TextEmbeddingFineTunedParameters, {**extra_body, **body_params}
+            )
+        )
         # Remove 'shared_session' from parameters if present
         if vertex_request["parameters"] is not None and "shared_session" in vertex_request["parameters"]:
             del vertex_request["parameters"]["shared_session"]

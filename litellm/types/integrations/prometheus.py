@@ -5,6 +5,10 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, ClassVar, Final, Literal, cast
 
+from pydantic import TypeAdapter
+
+_METRIC_LABELS: Final = TypeAdapter(Sequence[object])
+
 
 def sanitize_prometheus_label_name(label: str) -> str:
     """
@@ -217,6 +221,8 @@ class UserAPIKeyLabelNames(Enum):
     EXCEPTION_CLASS = EXCEPTION_CLASS
     RATE_LIMIT_CATEGORY = RATE_LIMIT_CATEGORY
     RATE_LIMIT_TYPE = RATE_LIMIT_TYPE
+    REASON = "reason"
+    PRIORITY = "priority"
     STATUS_CODE = "status_code"
     FALLBACK_MODEL = "fallback_model"
     ROUTE = "route"
@@ -227,6 +233,8 @@ class UserAPIKeyLabelNames(Enum):
     STREAM = "stream"
     ORG_ID = "org_id"
     ORG_ALIAS = "org_alias"
+    CUSTOMER_ORG_ID = "customer_org_id"
+    CUSTOMER_ORG_ALIAS = "customer_org_alias"
     MCP_TOOL_NAME = "mcp_tool_name"
     MCP_SERVER_NAME = "mcp_server_name"
     SERVICE_TIER = "service_tier"
@@ -258,6 +266,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_images_generated_metric",
     "litellm_deployment_successful_fallbacks",
     "litellm_deployment_failed_fallbacks",
+    "litellm_dynamic_limiter_share_tokens",
+    "litellm_dynamic_limiter_borrowed_tokens",
+    "litellm_dynamic_limiter_throttled_total",
     "litellm_remaining_team_budget_metric",
     "litellm_team_max_budget_metric",
     "litellm_team_budget_remaining_hours_metric",
@@ -716,6 +727,25 @@ class PrometheusMetricLabels:
 
     litellm_deployment_failed_fallbacks = litellm_deployment_successful_fallbacks
 
+    litellm_dynamic_limiter_share_tokens: ClassVar[tuple[str, ...]] = (
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.CUSTOMER_ORG_ID.value,
+        UserAPIKeyLabelNames.CUSTOMER_ORG_ALIAS.value,
+        UserAPIKeyLabelNames.PRIORITY.value,
+    )
+
+    litellm_dynamic_limiter_borrowed_tokens = litellm_dynamic_limiter_share_tokens
+
+    litellm_dynamic_limiter_throttled_total: ClassVar[tuple[str, ...]] = (
+        *litellm_dynamic_limiter_share_tokens,
+        UserAPIKeyLabelNames.RATE_LIMIT_TYPE.value,
+        UserAPIKeyLabelNames.REASON.value,
+    )
+
     litellm_remaining_team_budget_metric = [
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
@@ -986,7 +1016,7 @@ class PrometheusMetricLabels:
 
         default_labels: Final = _resolve_deployment_and_latency_caller_identity_labels(
             metric_name=label_name,
-            labels=getattr(PrometheusMetricLabels, label_name),
+            labels=_METRIC_LABELS.validate_python(getattr(PrometheusMetricLabels, label_name)),
         )
         custom_labels: Final = []
 
@@ -1095,6 +1125,8 @@ class UserAPIKeyLabelValues:
     exception_class: str | None = None
     rate_limit_category: str | None = None
     rate_limit_type: str | None = None
+    reason: str | None = None
+    priority: str | None = None
     status_code: str | None = None
     fallback_model: str | None = None
     route: str | None = None
@@ -1103,6 +1135,8 @@ class UserAPIKeyLabelValues:
     stream: str | None = None
     org_id: str | None = None
     org_alias: str | None = None
+    customer_org_id: str | None = None
+    customer_org_alias: str | None = None
     mcp_tool_name: str | None = None
     mcp_server_name: str | None = None
     service_tier: str | None = None
@@ -1122,7 +1156,7 @@ class UserAPIKeyLabelValues:
             else:
                 merged[f.name] = f.default
 
-        for k, v in kwargs.items():
+        for k, v in dict[str, object](kwargs).items():
             if k in field_names:
                 merged[k] = v
                 continue

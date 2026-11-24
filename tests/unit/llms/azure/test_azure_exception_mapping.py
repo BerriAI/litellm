@@ -757,8 +757,13 @@ async def test_azure_error_keeps_the_upstream_body_without_the_api_key(
     respx.post(url__regex=r"https://azure-upstream\.openai\.azure\.com/.*").mock(
         return_value=httpx.Response(status_code, content=body, headers={"content-type": "application/json"})
     )
+    expected_error: Final = (
+        litellm.PermissionDeniedError
+        if status_code == 403 and route in (_azure_atext_completion, _azure_atext_completion_stream)
+        else mapped_error
+    )
 
-    with pytest.raises(mapped_error) as raised:
+    with pytest.raises(expected_error) as raised:
         await route()
 
     error_response: Final = getattr(raised.value, "response")

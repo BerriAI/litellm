@@ -2,152 +2,177 @@
 
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { Building2, Plus } from "lucide-react";
 import { parseAsString, useQueryState } from "nuqs";
-import { Plus } from "lucide-react";
-import { toast } from "sonner";
+import { queryOptions, skipToken, useQuery } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { useCustomers, type EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
-import { $api } from "@/lib/http/api";
+import { overviewTotals } from "@/app/(dashboard)/usage/_components/components/overview/overviewData";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import CustomerDetail from "./_components/CustomerDetail";
+import { CustomerUsageDatePicker, CustomerUsageStats } from "./_components/CustomerUsageSummary";
+import { DataTablePagination, useUrlTableState } from "@/components/shared/DataTable";
+import { ErrorState } from "@/components/shared/ErrorState";
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+import { isProxyAdminRole } from "@/utils/roles";
 import CreateCustomerDialog from "./_components/CreateCustomerDialog";
-import StatusBadge from "./_components/StatusBadge";
-import { rankBySpend, useCustomerUsage } from "./_components/customerPortalData";
+import CustomerDetail from "./_components/CustomerDetail";
+import CustomerEntityBudgetDialog from "./_components/CustomerEntityBudgetDialog";
+import CustomerOrganizationsTable from "./_components/CustomerOrganizationsTable";
+import {
+  CUSTOMER_ORGANIZATION_TABLE,
+  customerOrganizationsCall,
+  customerOrganizationsUsageCall,
+  customerOrganizationRows,
+  sortCustomerOrganizations,
+} from "./_components/customerOrganizations";
+import { mergeCustomerActivityPages } from "./_components/customerUsageData";
+import { customerUsageTotals } from "./_components/customerUsageTotals";
+import { calendarDate, customerPresetRange, useCustomerUsageRange } from "./_components/customerUsageRange";
+
+const EMPTY_USAGE = mergeCustomerActivityPages([]);
 
 export default function CustomersPage() {
-  const { t } = useTranslation();
-  const { accessToken } = useAuthorized();
   const [selectedId, setSelectedId] = useQueryState("id", parseAsString);
-  const [search, setSearch] = useState("");
-  const [createOpen, setCreateOpen] = useState(false);
-  const customersQuery = useCustomers(100, search || undefined);
-  const usageQuery = useCustomerUsage(accessToken);
-  const customers: EndUser[] = useMemo(() => customersQuery.data?.pages.flat() ?? [], [customersQuery.data]);
-  const rows = useMemo(() => rankBySpend(customers, usageQuery.data), [customers, usageQuery.data]);
-  const block = $api.useMutation("post", "/customer/block", {
-    onSuccess: () => {
-      toast.success(t("customerPortal.toasts.blocked"));
-      customersQuery.refetch();
-    },
-  });
-  const unblock = $api.useMutation("post", "/customer/update", {
-    onSuccess: () => {
-      toast.success(t("customerPortal.toasts.unblocked"));
-      customersQuery.refetch();
-    },
-  });
+  if (selectedId) return <CustomerDetail customerId={selectedId} onBack={() => void setSelectedId(null)} />;
+  return <CustomerOrganizations />;
+}
 
-  if (selectedId) return <CustomerDetail customerId={selectedId} onBack={() => setSelectedId(null)} />;
+function CustomerOrganizations() {
+  const { t } = useTranslation();
+  const { accessToken, userId, userRole, isViewOnly, isLoading } = useAuthorized();
+  const authenticatedAdmin = Boolean(accessToken && isProxyAdminRole(userRole) && !isLoading);
+  const canManage = authenticatedAdmin && !isViewOnly;
+  const [createOpen, setCreateOpen] = useState(false);
+  const [editingOrganizationId, setEditingOrganizationId] = useState<string | null>(null);
+  const { dateValue, onDateChange, preset } = useCustomerUsageRange();
+  const { search, setSearch, sorting, onSortingChange, pagination, onPaginationChange } =
+    useUrlTableState(CUSTOMER_ORGANIZATION_TABLE);
+  const organizations = useQuery({
+    queryKey: ["customer-organizations", userId],
+    queryFn: accessToken ? ({ signal }) => customerOrganizationsCall(accessToken, signal) : skipToken,
+  });
+  const ids = useMemo(
+    () => organizations.data?.map((organization) => organization.customer_org_id).sort(),
+    [organizations.data],
+  );
+  const startDate = calendarDate(dateValue.from);
+  const endDate = calendarDate(dateValue.to);
+  const month = customerPresetRange("month");
+  const monthStartDate = calendarDate(month.from);
+  const monthEndDate = calendarDate(month.to);
+  const usageRequest = (from: string, to: string) =>
+    queryOptions({
+      queryKey: ["customer-organizations", "usage", userId, ids, from, to],
+      queryFn:
+        accessToken && ids
+          ? ({ signal }: { signal: AbortSignal }) => {
+              const request = { accessToken, ids, startDate: from, endDate: to, signal };
+              return customerOrganizationsUsageCall(request);
+            }
+          : skipToken,
+    });
+  const usage = useQuery(usageRequest(startDate, endDate));
+  const monthlyUsage = useQuery(usageRequest(monthStartDate, monthEndDate));
+  const rows = useMemo(
+    () => customerOrganizationRows(organizations.data ?? [], monthlyUsage.data ?? EMPTY_USAGE),
+    [organizations.data, monthlyUsage.data],
+  );
+  const sorted = useMemo(() => sortCustomerOrganizations(rows, search, sorting), [rows, search, sorting]);
+  const lastPage = Math.max(0, Math.ceil(sorted.length / pagination.pageSize) - 1);
+  const page = Math.min(pagination.pageIndex, lastPage);
+  const start = page * pagination.pageSize;
+  const loading = organizations.isPending || monthlyUsage.isPending || usage.isPending;
+  const activity = usage.data ?? EMPTY_USAGE;
+  const totals = useMemo(() => overviewTotals(activity.metadata, null), [activity]);
+  const usageTotals = useMemo(() => (usage.data ? customerUsageTotals(usage.data.results) : null), [usage.data]);
+
+  const onCreated = () => {
+    setSearch("");
+    onSortingChange([CUSTOMER_ORGANIZATION_TABLE.defaultSort]);
+    void organizations.refetch();
+  };
 
   return (
-    <div className="w-full space-y-4 px-6 py-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-baseline gap-3">
-          <h1 className="text-lg font-semibold tracking-tight">{t("customerPortal.list.title")}</h1>
-          <p className="truncate text-sm text-muted-foreground">{t("customerPortal.list.subtitle")}</p>
-        </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="size-4" /> {t("customerPortal.list.create")}
-        </Button>
-      </div>
-      <p className="text-xs text-muted-foreground">{t("customerPortal.common.blockHint")}</p>
-      <div className="rounded-lg border bg-card">
-        <div className="border-b p-3">
-          <Input
-            className="max-w-xs"
-            placeholder={t("customerPortal.list.searchPlaceholder")}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+    <>
+      <PageHeader>
+        <PageHeaderTitle>
+          <Building2 />
+          {t("customerPortal.list.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("customerPortal.list.description")}</PageHeaderDescription>
+        <PageHeaderControls className="flex-wrap">
+          <CustomerUsageDatePicker value={dateValue} onValueChange={onDateChange} presetShortLabel={preset} />
+        </PageHeaderControls>
+      </PageHeader>
+      <PageContent>
+        <section className="space-y-3" aria-label={t("customerPortal.list.overallUsage")}>
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <h2 className="pb-2.5 text-sm font-semibold">{t("customerPortal.list.overallUsage")}</h2>
+          </div>
+          {organizations.isError || usage.isError ? (
+            <ErrorState
+              message={t("customerPortal.list.error")}
+              onRetry={() => void (organizations.isError ? organizations.refetch() : usage.refetch())}
+            />
+          ) : (
+            <CustomerUsageStats
+              results={activity.results}
+              totals={totals}
+              loading={organizations.isPending || usage.isPending}
+            />
+          )}
+        </section>
+        <div className="rounded-lg border bg-card">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b p-3">
+            <Input
+              className="max-w-xs"
+              aria-label={t("customerPortal.list.searchPlaceholder")}
+              placeholder={t("customerPortal.list.searchPlaceholder")}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+            <Button className="ml-auto" onClick={() => setCreateOpen(true)}>
+              <Plus className="size-4" /> {t("customerPortal.list.create")}
+            </Button>
+          </div>
+          {organizations.isError || monthlyUsage.isError ? (
+            <ErrorState
+              message={t("customerPortal.list.error")}
+              onRetry={() => void (organizations.isError ? organizations.refetch() : monthlyUsage.refetch())}
+            />
+          ) : (
+            <CustomerOrganizationsTable
+              rows={sorted.slice(start, start + pagination.pageSize)}
+              sorting={sorting}
+              onSort={onSortingChange}
+              loading={loading}
+              searching={Boolean(search)}
+              startDate={startDate}
+              endDate={endDate}
+              usageTotals={usageTotals}
+              canManage={canManage}
+              onEdit={setEditingOrganizationId}
+            />
+          )}
+          <DataTablePagination
+            page={page}
+            pageSize={pagination.pageSize}
+            rowCount={sorted.length}
+            onPageChange={(pageIndex) => onPaginationChange({ ...pagination, pageIndex })}
+            onPageSizeChange={(pageSize) => onPaginationChange({ pageSize, pageIndex: 0 })}
+            isLoading={organizations.isFetching || monthlyUsage.isFetching}
           />
         </div>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="pl-4">{t("customerPortal.list.columns.customer")}</TableHead>
-              <TableHead className="text-right">{t("customerPortal.list.columns.spend")}</TableHead>
-              <TableHead className="text-right">{t("customerPortal.list.columns.budget")}</TableHead>
-              <TableHead className="text-right">{t("customerPortal.list.columns.keys")}</TableHead>
-              <TableHead>{t("customerPortal.list.columns.status")}</TableHead>
-              <TableHead className="w-28" />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {customersQuery.isLoading && (
-              <TableRow>
-                <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                  {t("customerPortal.list.loading")}
-                </TableCell>
-              </TableRow>
-            )}
-            {!customersQuery.isLoading && rows.length === 0 && (
-              <TableRow>
-                <TableCell colSpan={6} className="py-8 text-center text-muted-foreground">
-                  {t("customerPortal.list.empty")}
-                </TableCell>
-              </TableRow>
-            )}
-            {rows.map(({ c, spend, keys, status }) => {
-              const max = c.litellm_budget_table?.max_budget ?? null;
-              return (
-                <TableRow
-                  key={c.user_id}
-                  className="cursor-pointer"
-                  onClick={() => setSelectedId(c.user_id, { history: "push" })}
-                >
-                  <TableCell className="pl-4">
-                    <p className="font-medium">{c.alias || c.user_id}</p>
-                    <p className="font-mono text-[11px] text-muted-foreground">{c.user_id}</p>
-                  </TableCell>
-                  <TableCell className="text-right font-medium tabular-nums">
-                    {t("format.usd", { val: spend })}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground">
-                    {max === null
-                      ? t("customerPortal.common.noBudget")
-                      : t("customerPortal.list.budgetUsage", {
-                          spend: t("format.usd", { val: spend }),
-                          max: t("format.usd", { val: max }),
-                        })}
-                  </TableCell>
-                  <TableCell className="text-right tabular-nums">{keys}</TableCell>
-                  <TableCell>
-                    <StatusBadge status={status} />
-                  </TableCell>
-                  <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
-                    {c.blocked ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => unblock.mutate({ body: { user_id: c.user_id, blocked: false } })}
-                      >
-                        {t("customerPortal.common.unblock")}
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => block.mutate({ body: { user_ids: [c.user_id] } })}
-                      >
-                        {t("customerPortal.common.block")}
-                      </Button>
-                    )}
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
-      </div>
-      <CreateCustomerDialog
-        open={createOpen}
-        onOpenChange={setCreateOpen}
-        onCreated={(id) => {
-          customersQuery.refetch();
-          setSelectedId(id, { history: "push" });
-        }}
-      />
-    </div>
+      </PageContent>
+      <CreateCustomerDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={onCreated} />
+      {canManage && editingOrganizationId && (
+        <CustomerEntityBudgetDialog
+          key={editingOrganizationId}
+          organizationId={editingOrganizationId}
+          onClose={() => setEditingOrganizationId(null)}
+        />
+      )}
+    </>
   );
 }

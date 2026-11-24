@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, future::BoxFuture};
 use litellm_inference_messages::{
-    Delivered, MessagesCallResponse, Transport, TransportBody, TransportRequest, TransportResponse,
+    Delivered, MessagesCallResponse, Transport, TransportRequest, TransportResponse,
 };
 use litellm_inference_testing::RecordingSecrets;
 use rstest::rstest;
@@ -28,6 +28,7 @@ struct Sent {
     url: String,
     headers: Vec<(String, String)>,
     body: Value,
+    raw_body: Bytes,
     stream: bool,
 }
 
@@ -55,13 +56,11 @@ impl Transport for ScriptedTransport {
         &self,
         request: TransportRequest,
     ) -> BoxFuture<'static, Result<TransportResponse, Error>> {
-        let TransportBody::Json(body) = request.body else {
-            panic!("an unsigned request hands the host its JSON body");
-        };
         self.sent.lock().unwrap().push(Sent {
             url: request.url,
             headers: request.headers,
-            body,
+            body: serde_json::from_slice(&request.body).expect("the host is handed JSON bytes"),
+            raw_body: request.body,
             stream: request.stream,
         });
         let next = self
@@ -113,10 +112,16 @@ async fn execute(
     transport: Arc<ScriptedTransport>,
     call: MessagesCall,
 ) -> Result<(MessagesCallResponse, Vec<Bytes>), Error> {
-    let host = RecordingCall::<Messages>::new(call);
+    execute_recorded(transport, &RecordingCall::<Messages>::new(call)).await
+}
+
+async fn execute_recorded(
+    transport: Arc<ScriptedTransport>,
+    host: &RecordingCall<Messages>,
+) -> Result<(MessagesCallResponse, Vec<Bytes>), Error> {
     let route = messages_route(Arc::new(RecordingSecrets::empty())).with_transport(transport);
     match route
-        .execute(host.request()?, &host, Some(host.events.0.sender.clone()))
+        .execute(host.request()?, host, Some(host.events.0.sender.clone()))
         .await?
     {
         MessagesCallResponse::Stream { head, chunks } => Ok((
@@ -228,6 +233,85 @@ async fn a_recoverable_rejection_is_retried_through_the_host_transport(call: Mes
     };
     assert!(first.body.get("thinking").is_some());
     assert!(second.body.get("thinking").is_none());
+}
+
+#[rstest]
+#[case::anthropic("https://api.anthropic.com", false)]
+#[case::foundry("https://team.services.ai.azure.com/anthropic", false)]
+#[case::anthropic_compatible_host("https://api.deepseek.com/anthropic", true)]
+#[tokio::test]
+async fn unsigned_thinking_is_sent_only_to_a_host_that_does_not_check_claude_signatures(
+    call: MessagesCall,
+    #[case] api_base: &str,
+    #[case] kept: bool,
+) {
+    let transport = ScriptedTransport::new([Scripted::Complete(message_body())]);
+    let unsigned = json!({"type": "thinking", "thinking": "Gemini's plan", "signature": ""});
+    let replayed = json!({
+        "max_tokens": 4096,
+        "thinking": {"type": "enabled", "budget_tokens": 2048},
+        "messages": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [unsigned.clone(), {"type": "text", "text": "hello"}]},
+            {"role": "user", "content": "again"}
+        ]
+    });
+
+    execute(
+        transport.clone(),
+        MessagesCall {
+            api_base: Some(api_base.into()),
+            ..hosted_call(call, replayed)
+        },
+    )
+    .await
+    .expect("the first call succeeds");
+
+    let sent = transport.sent();
+    let [request] = sent.as_slice() else {
+        panic!("one request");
+    };
+    assert_eq!(request.url, format!("{api_base}/v1/messages"));
+    assert_eq!(
+        request.body["messages"][1]["content"]
+            .as_array()
+            .expect("the assistant turn is sent")
+            .contains(&unsigned),
+        kept
+    );
+    assert!(request.body.get("thinking").is_some());
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_raw_head_carries_the_bytes_the_host_transport_last_sent(
+    call: MessagesCall,
+    #[values(false, true)] stream: bool,
+) {
+    let frames: &'static [&'static str] =
+        &["event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"];
+    let success = if stream {
+        Scripted::Stream(frames)
+    } else {
+        Scripted::Complete(message_body())
+    };
+    let transport = ScriptedTransport::new([Scripted::Rejected(400, INVALID_SIGNATURE), success]);
+    let fields = json!({"stream": stream, "temperature": 1e-7, "system": "caf\u{e9}"});
+    let host =
+        RecordingCall::<Messages>::new(hosted_call(with_fields(call, replayed_thinking()), fields));
+
+    execute_recorded(transport.clone(), &host)
+        .await
+        .expect("the retry succeeds");
+
+    let sent = transport.sent();
+    let [_, retried] = sent.as_slice() else {
+        panic!("two requests");
+    };
+    let [raw] = <[_; 1]>::try_from(host.events.0.raw_heads()).unwrap();
+    let head = raw.head.expect("the head is forwarded");
+    assert_eq!(head.sent_body, retried.raw_body);
+    assert_eq!(head.streamed, stream);
 }
 
 #[rstest]

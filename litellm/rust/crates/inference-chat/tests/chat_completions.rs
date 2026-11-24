@@ -5,7 +5,10 @@ use litellm_host::{
 };
 use std::time::Duration;
 
-use litellm_inference_chat::{Error, types::ChatCompletionsRequest};
+use litellm_inference_chat::{
+    Error,
+    types::{ChatCompletionsRequest, OptionalParams},
+};
 use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
@@ -40,7 +43,7 @@ fn request() -> ChatCompletionsRequest<'static> {
     ChatCompletionsRequest {
         model: "anthropic/claude-sonnet-4-5",
         messages: hi(),
-        optional_params: object(json!({"max_tokens": 16})),
+        optional_params: OptionalParams::ProviderMapped(object(json!({"max_tokens": 16}))),
         api_key: Some("sk-test"),
         api_base: None,
         custom_llm_provider: None,
@@ -125,11 +128,11 @@ async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsReq
 
     let response = complete(ChatCompletionsRequest {
         model: "bedrock/anthropic.claude-sonnet-4-5",
-        optional_params: object(json!({
+        optional_params: OptionalParams::ProviderMapped(object(json!({
             "aws_access_key_id": "access-key",
             "aws_secret_access_key": "secret-key",
             "aws_region_name": "eu-west-1"
-        })),
+        }))),
         api_key: None,
         api_base: Some(&base),
         ..request
