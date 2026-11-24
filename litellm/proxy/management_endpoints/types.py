@@ -96,3 +96,4 @@ class CustomOpenID(OpenID):
     team_id_to_upsert: str | None = None
     user_role: LitellmUserRoles | None = None
     extra_fields: dict[str, object] | None = None
+    email_verified: bool | None = None

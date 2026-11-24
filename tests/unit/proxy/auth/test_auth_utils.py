@@ -6,7 +6,7 @@ import base64
 import logging
 import time
 from collections.abc import Callable, Mapping
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final, Optional
 from unittest.mock import MagicMock, patch
 
@@ -14,7 +14,14 @@ import pytest
 from fastapi import HTTPException, Request
 
 import litellm
-from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_UserTable,
+    LitellmUserRoles,
+    ModelAccessDeniedProxyException,
+    ProxyException,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.auth.auth_checks import common_checks
 from litellm.proxy.auth.auth_utils import (
     _allow_model_level_clientside_configurable_parameters,
     _get_customer_id_from_standard_headers,
@@ -39,6 +46,9 @@ from litellm.proxy.auth.auth_utils import (
     is_request_body_safe,
     pre_db_read_auth_checks,
 )
+from litellm.proxy.common_utils.http_parsing_utils import populate_request_with_path_params, read_request_body
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.types.utils import oauth_token_exchange_litellm_params, server_owned_wif_litellm_params
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
@@ -59,7 +69,7 @@ def test_token_exchange_settings_in_request_body_are_rejected(field: str) -> Non
         match="server-owned workload identity federation or OAuth token exchange parameter",
     ) as error:
         is_request_body_safe(
-            request_body={"model": "microsoft_365_copilot/chat", field: "attacker-chosen"},
+            request_body={"model": "microsoft_365_copilot/chat", field: "caller-chosen"},
             general_settings={"allow_client_side_credentials": True},
             llm_router=None,
             model="microsoft_365_copilot/chat",
@@ -151,6 +161,302 @@ def test_model_opt_in_cannot_allow_a_token_exchange_endpoint_in_a_request_body()
         )
 
 
+_AZURE_ENTRA_CREDENTIAL_PARAMS: Final = (
+    "tenant_id",
+    "client_id",
+    "client_secret",
+    "azure_username",
+    "azure_password",
+    "azure_scope",
+)
+
+
+def _azure_entra_router(configurable_clientside_auth_params: tuple[str, ...] = ()) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "azure-group",
+                "litellm_params": {
+                    "model": "azure/gpt-4o",
+                    "api_base": "https://admin-endpoint.example.com",
+                    "tenant_id": "admin-tenant",
+                    "client_id": "admin-client",
+                    "client_secret": "admin-secret",
+                    "configurable_clientside_auth_params": list(configurable_clientside_auth_params),
+                },
+            }
+        ]
+    )
+
+
+@pytest.mark.parametrize("param", _AZURE_ENTRA_CREDENTIAL_PARAMS)
+@pytest.mark.parametrize("container", (None, "extra_body", "litellm_embedding_config"))
+def test_azure_entra_credential_params_in_request_body_are_rejected(param: str, container: str | None) -> None:
+    override: Final = {param: "caller-chosen"}
+    with pytest.raises(ValueError, match=f"{param} is not allowed in request body"):
+        is_request_body_safe(
+            request_body={"model": "azure-group", **({container: override} if container else override)},
+            general_settings={},
+            llm_router=_azure_entra_router(),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+
+
+@pytest.mark.parametrize("param", _AZURE_ENTRA_CREDENTIAL_PARAMS)
+@pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
+def test_azure_entra_credential_names_are_allowed_as_request_metadata(param: str, metadata_key: str) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model": "azure-group", metadata_key: {param: "caller-tag"}},
+            general_settings={},
+            llm_router=_azure_entra_router(),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+        is True
+    )
+
+
+def test_deployment_opt_in_allows_only_the_named_azure_entra_credential_param() -> None:
+    router: Final = _azure_entra_router(configurable_clientside_auth_params=("client_id",))
+
+    assert (
+        is_request_body_safe(
+            request_body={"model": "azure-group", "client_id": "caller-client"},
+            general_settings={},
+            llm_router=router,
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+        is True
+    )
+    with pytest.raises(ValueError, match="client_secret"):
+        is_request_body_safe(
+            request_body={"model": "azure-group", "client_id": "caller-client", "client_secret": "caller-secret"},
+            general_settings={},
+            llm_router=router,
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+
+
+@pytest.mark.parametrize("param", (*_AZURE_ENTRA_CREDENTIAL_PARAMS, "api_key", "aws_access_key_id", "azure_ad_token"))
+@pytest.mark.parametrize("reference", ("os.environ/LITELLM_MASTER_KEY", "oidc/env/LITELLM_MASTER_KEY"))
+@pytest.mark.parametrize("container", (None, "extra_body"))
+def test_secret_reference_in_a_credential_param_is_rejected_despite_client_side_opt_in(
+    param: str, reference: str, container: str | None
+) -> None:
+    override: Final = {param: reference}
+    with pytest.raises(ValueError, match=f"{param} holds an? (oidc/ )?secret reference"):
+        is_request_body_safe(
+            request_body={"model": "azure-group", **({container: override} if container else override)},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=_azure_entra_router(),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+
+
+def test_secret_reference_is_rejected_for_a_param_the_deployment_opted_in() -> None:
+    with pytest.raises(ValueError, match="client_id holds a secret reference"):
+        is_request_body_safe(
+            request_body={"model": "azure-group", "client_id": "os.environ/LITELLM_MASTER_KEY"},
+            general_settings={},
+            llm_router=_azure_entra_router(configurable_clientside_auth_params=("client_id",)),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+
+
+@pytest.mark.parametrize(
+    "body",
+    (
+        {"prompt": "os.environ/PATH is what in Python?"},
+        {"input": "oidc/env/ tokens explained"},
+        {"api_key": "sk-caller-own-key"},
+        {"client_id": "an os.environ/ mention that is not a prefix"},
+    ),
+)
+def test_values_that_are_not_secret_references_in_credential_params_are_allowed(body: Mapping[str, str]) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model": "azure-group", **body},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=_azure_entra_router(),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+        is True
+    )
+
+
+def test_deployment_management_body_may_carry_a_secret_reference() -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model_name": "azure-group", "api_key": "os.environ/AZURE_API_KEY"},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route="/model/new",
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize("field", ("client_id", "client_secret"))
+def test_mcp_oauth_token_form_may_carry_oauth_client_fields(field: str) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"grant_type": "authorization_code", "code": "abc", field: "mcp-oauth-client"},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route="/v1/mcp/server/oauth/abc123/token",
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize("field", ("tenant_id", "azure_username", "azure_password", "azure_scope"))
+def test_mcp_server_routes_still_reject_non_oauth_azure_entra_params(field: str) -> None:
+    with pytest.raises(ValueError, match=field):
+        is_request_body_safe(
+            request_body={"grant_type": "authorization_code", "code": "abc", field: "caller-chosen"},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route="/v1/mcp/server/oauth/abc123/token",
+        )
+
+
+@pytest.mark.parametrize("body", ({"client_id": "gateway-1"}, {"client_id": "gateway-1", "client_secret": "gw-secret"}))
+def test_token_introspection_form_may_carry_oauth_client_fields(body: Mapping[str, str]) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"token": "llm_session_abc", **body},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route="/introspect",
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize("body", ({"tenant_id": "caller-tenant"}, {"client_id": "os.environ/LITELLM_MASTER_KEY"}))
+def test_token_introspection_still_rejects_other_entra_params_and_secret_references(body: Mapping[str, str]) -> None:
+    with pytest.raises(ValueError, match=next(iter(body))):
+        is_request_body_safe(
+            request_body={"token": "llm_session_abc", **body},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route="/introspect",
+        )
+
+
+_TRANSCRIPTION_SESSION_ROUTES: Final = (
+    "/v1/realtime/transcription_sessions",
+    "/realtime/transcription_sessions",
+    "/openai/v1/realtime/transcription_sessions",
+)
+
+
+@pytest.mark.parametrize("route", _TRANSCRIPTION_SESSION_ROUTES)
+def test_transcription_session_body_may_carry_its_client_secret_config(route: str) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={
+                "model": "gpt-4o-transcribe",
+                "client_secret": {"expires_at": {"anchor": "created_at", "seconds": 600}},
+            },
+            general_settings={},
+            llm_router=None,
+            model="",
+            route=route,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize("route", _TRANSCRIPTION_SESSION_ROUTES)
+@pytest.mark.parametrize("body", ({"tenant_id": "caller-tenant"}, {"client_secret": "os.environ/LITELLM_MASTER_KEY"}))
+def test_transcription_session_routes_still_reject_other_entra_params_and_secret_references(
+    route: str, body: Mapping[str, str]
+) -> None:
+    with pytest.raises(ValueError, match=next(iter(body))):
+        is_request_body_safe(
+            request_body={"model": "gpt-4o-transcribe", **body},
+            general_settings={},
+            llm_router=None,
+            model="",
+            route=route,
+        )
+
+
+@pytest.mark.parametrize("param", _AZURE_ENTRA_CREDENTIAL_PARAMS)
+@pytest.mark.parametrize("metadata_key", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("value", ("os.environ/HOME", "oidc/azure/team-a"))
+def test_metadata_tags_whose_value_looks_like_a_secret_reference_are_allowed(
+    param: str, metadata_key: str, value: str
+) -> None:
+    assert (
+        is_request_body_safe(
+            request_body={"model": "azure-group", metadata_key: {param: value}},
+            general_settings={},
+            llm_router=_azure_entra_router(),
+            model="azure-group",
+            route="/v1/chat/completions",
+        )
+        is True
+    )
+
+
+_USER_CONFIG_SECRET_REFERENCE_PARAMS: Final = (
+    {"model": "openai/gpt-4o", "api_base": "https://caller.example.com", "api_key": "os.environ/LITELLM_MASTER_KEY"},
+    {"model": "openai/gpt-4o", "organization": "os.environ/LITELLM_MASTER_KEY"},
+    {"model": "openai/gpt-4o", "extra_body": {"api_key": "oidc/env/LITELLM_MASTER_KEY"}},
+    {"model": "azure/gpt-4o", "dataSources": [{"parameters": {"key": "os.environ/LITELLM_MASTER_KEY"}}]},
+)
+
+
+def _user_config(slot: str, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    if slot == "default_litellm_params":
+        return {"default_litellm_params": dict(litellm_params)}
+    return {"model_list": [{"model_name": "caller-model", "litellm_params": dict(litellm_params)}]}
+
+
+@pytest.mark.parametrize("litellm_params", _USER_CONFIG_SECRET_REFERENCE_PARAMS)
+@pytest.mark.parametrize("slot", ("model_list", "default_litellm_params"))
+def test_user_config_secret_references_are_rejected_despite_client_side_opt_in(
+    litellm_params: Mapping[str, object], slot: str
+) -> None:
+    with pytest.raises(ValueError, match="holds a secret reference"):
+        is_request_body_safe(
+            request_body={"model": "caller-model", "user_config": _user_config(slot, litellm_params)},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="caller-model",
+            route="/v1/chat/completions",
+        )
+
+
+def test_user_config_with_literal_credentials_is_allowed_with_client_side_opt_in() -> None:
+    litellm_params: Final = {"model": "openai/gpt-4o", "api_base": "https://caller.example.com", "api_key": "sk-own"}
+
+    assert (
+        is_request_body_safe(
+            request_body={"model": "caller-model", "user_config": _user_config("model_list", litellm_params)},
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="caller-model",
+            route="/v1/chat/completions",
+        )
+        is True
+    )
+
+
 @pytest.mark.parametrize(
     "param",
     sorted(ANTHROPIC_WIF_KWARGS_KEYS | OPENAI_WIF_KWARGS_KEYS | set(oauth_token_exchange_litellm_params)),
@@ -178,10 +484,7 @@ def _client_router_config(placement: str, litellm_params: dict[str, str]) -> dic
 @pytest.mark.parametrize("placement", ["model_list", "default_litellm_params"])
 def test_every_server_owned_auth_param_is_refused_from_a_client_router_config(param: str, placement: str):
     user_config: Final = _client_router_config(placement, {"model": "openai/gpt-5.4-nano", param: "attacker-chosen"})
-    with pytest.raises(
-        ValueError,
-        match="server-owned workload identity federation or OAuth token exchange parameter",
-    ):
+    with pytest.raises(ValueError, match=f"{param} is a server-owned .* parameter and cannot be set in a request body"):
         is_request_body_safe(
             request_body={"model": "gpt-5.4-nano", "user_config": user_config},
             general_settings={"allow_client_side_credentials": True},
@@ -1014,6 +1317,37 @@ def test_get_model_from_request_no_request_extracts_model():
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compliance_route", ["/compliance/gdpr", "/compliance/eu-ai-act"])
+async def test_compliance_check_of_a_log_ignores_the_logged_model_for_model_access(compliance_route: str) -> None:
+    user: Final = LiteLLM_UserTable(
+        user_id="restricted-user", models=["allowed-model"], user_role=LitellmUserRoles.INTERNAL_USER
+    )
+    token: Final = UserAPIKeyAuth(user_id="restricted-user", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    async def run_common_checks(route: str, request_body: dict[str, object]) -> bool:
+        return await common_checks(
+            request_body=request_body,
+            team_object=None,
+            user_object=user,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            valid_token=token,
+            request=Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""}),
+        )
+
+    assert await run_common_checks(compliance_route, {"request_id": "log-1", "model": "openai/some-deployment"})
+    with pytest.raises(ModelAccessDeniedProxyException):
+        await run_common_checks(
+            "/chat/completions",
+            {"model": "openai/some-deployment", "messages": [{"role": "user", "content": "hi"}]},
+        )
+
+
 @pytest.mark.parametrize(
     "provider,model",
     [
@@ -1377,6 +1711,141 @@ def test_get_model_from_request_supports_google_model_names_with_slashes():
         )
         == "hosted_vllm/gpt-oss-20b"
     )
+    assert (
+        get_model_from_request(request_data={}, route="/gemini/v1beta/models/gemini-text:v1:generateContent")
+        == "gemini-text:v1"
+    )
+
+
+_URL_SELECTED_MODEL_ROUTES: Final = (
+    ("/v1beta/models/premium-model:generateContent", "premium-model"),
+    ("/models/premium-model:generateContent", "premium-model"),
+    ("/v1beta/models/premium-model:streamGenerateContent", "premium-model"),
+    ("/models/provider/premium-model:7b:streamGenerateContent", "provider/premium-model:7b"),
+    ("/v1beta/models/premium-model:countTokens", "premium-model"),
+    ("/v1beta/models/premium-model:7b:countTokens", "premium-model:7b"),
+    ("/openai/deployments/premium-model/images/generations", "premium-model"),
+    ("/openai/deployments/provider/premium-model/images/edits", "provider/premium-model"),
+)
+
+
+@pytest.fixture
+def no_inference_model_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_model", None)
+
+
+@pytest.mark.usefixtures("no_inference_model_override")
+@pytest.mark.parametrize("route, url_model", _URL_SELECTED_MODEL_ROUTES)
+@pytest.mark.parametrize(
+    "request_data",
+    [
+        {"model": "cheap-model"},
+        {"target_model_names": ["cheap-model"]},
+        {"model": "cheap-model", "target_model_names": "cheap-model"},
+    ],
+)
+def test_get_model_from_request_checks_the_url_model_on_routes_served_from_the_url(
+    route: str, url_model: str, request_data: dict[str, object]
+) -> None:
+    assert get_model_from_request(request_data=request_data, route=route) == url_model
+
+
+@pytest.mark.parametrize(
+    "route, url_model",
+    [
+        ("/v1beta/models/premium-model:countTokens", "premium-model"),
+        ("/models/premium-model:7b:countTokens", "premium-model:7b"),
+    ],
+)
+def test_get_model_from_request_checks_count_tokens_on_the_url_model_over_proxy_wide_models(
+    monkeypatch: pytest.MonkeyPatch, route: str, url_model: str
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"completion_model": "forced-model"})
+    monkeypatch.setattr(proxy_server, "user_model", "cli-model")
+
+    assert get_model_from_request(request_data={"model": "body-model"}, route=route) == url_model
+
+
+@pytest.mark.usefixtures("no_inference_model_override")
+@pytest.mark.parametrize(
+    "route, path_params",
+    [
+        ("/v1beta/models/premium-model:generateContent", {"model_name": "cheap-model"}),
+        ("/models/premium-model:streamGenerateContent", {"model_name": "cheap-model"}),
+        ("/openai/deployments/premium-model/images/generations", {"model": "cheap-model"}),
+        ("/openai/deployments/premium-model/images/edits", {"model": "cheap-model"}),
+    ],
+)
+def test_get_model_from_request_follows_the_handlers_path_param_over_route_and_body(
+    route: str, path_params: dict[str, str]
+) -> None:
+    request: Final = Request(scope={"type": "http", "path": route, "path_params": path_params, "headers": []})
+    body: Final = {"model": "body-model"}
+
+    assert get_model_from_request(request_data=body, route=route, request=request) == "cheap-model"
+    assert get_model_from_request(request_data=body, route=route, path_params=path_params) == "cheap-model"
+    assert get_model_from_request(request_data=body, route=route, path_params={"other": "x"}) == "premium-model"
+
+
+@pytest.mark.parametrize(
+    "route, settings, cli_model, expected",
+    [
+        ("/v1beta/models/url-model:generateContent", {"completion_model": "configured"}, None, "configured"),
+        ("/models/url-model:streamGenerateContent", {}, "cli", "cli"),
+        ("/v1beta/models/:generateContent", {"completion_model": "configured"}, None, "configured"),
+        ("/models/:streamGenerateContent", {}, "cli", "cli"),
+        ("/v1beta/models/:generateContent", {}, None, "body-model"),
+        ("/v1beta/models/:countTokens", {"completion_model": "configured"}, "cli", "body-model"),
+        ("/v1beta/models/url-model:generateContent", {"image_generation_model": "configured"}, None, "url-model"),
+        ("/openai/deployments/url-model/images/generations", {}, "cli", "cli"),
+        ("/openai/deployments/url-model/images/generations", {"completion_model": "configured"}, None, "url-model"),
+        (
+            "/openai/deployments/url-model/images/generations",
+            {"image_generation_model": "configured"},
+            None,
+            "url-model",
+        ),
+        ("/openai/deployments/url-model/images/edits", {"completion_model": "configured"}, "cli", "configured"),
+        ("/openai/deployments/url-model/images/edits", {}, "cli", "cli"),
+        ("/openai/deployments/url-model/images/edits", {"image_generation_model": "configured"}, None, "url-model"),
+    ],
+)
+def test_get_model_from_request_applies_the_handlers_server_model_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    settings: dict[str, str],
+    cli_model: str | None,
+    expected: str,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", settings)
+    monkeypatch.setattr(proxy_server, "user_model", cli_model)
+
+    assert get_model_from_request(request_data={"model": "body-model"}, route=route) == expected
+
+
+@pytest.mark.usefixtures("no_inference_model_override")
+@pytest.mark.parametrize("route", ["/v1/images/generations", "/images/edits", "/v1/chat/completions"])
+def test_get_model_from_request_keeps_the_body_model_where_the_url_names_none(route: str) -> None:
+    assert get_model_from_request(request_data={"model": "cheap-model"}, route=route) == "cheap-model"
+
+
+@pytest.mark.usefixtures("no_inference_model_override")
+@pytest.mark.parametrize("route", ["/v1beta/models/:generateContent", "/models/:countTokens"])
+def test_get_model_from_request_finds_no_model_when_neither_url_nor_body_names_one(route: str) -> None:
+    assert get_model_from_request(request_data={}, route=route) is None
+
+
+@pytest.mark.parametrize("route, url_model", _URL_SELECTED_MODEL_ROUTES)
+def test_get_model_from_request_skips_url_model_on_configured_pass_through(route: str, url_model: str) -> None:
+    request: Final = _request_dispatched_to(_pass_through_endpoint())
+    assert get_model_from_request(request_data={"model": url_model}, route=route, request=request) is None
 
 
 def test_get_model_from_request_vertex_passthrough_still_works():
@@ -1530,6 +1999,38 @@ def test_get_model_from_request_azure_relay_routes_use_the_model_group_in_the_pa
     assert get_model_from_request(request_data=request_data, route=route, llm_router=_azure_relay_router()) == expected
 
 
+def _azure_route_router_with_an_openai_group_named_like_a_path_segment():
+    from litellm.router import Router
+
+    return Router(
+        model_list=[
+            {"model_name": "openai", "litellm_params": {"model": "openai/gpt-4o", "api_key": "k"}},
+            {
+                "model_name": "private-azure",
+                "litellm_params": {"model": "azure/gpt-5.4", "api_base": "https://b.openai.azure.com", "api_key": "k"},
+            },
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    "route, request_data, expected",
+    [
+        ("/azure/openai/deployments/private-azure/chat/completions", {}, "private-azure"),
+        ("/azure/openai/deployments/private-azure/chat/completions", {"model": "openai"}, "private-azure"),
+        ("/azure/openai/v1/responses", {"model": "private-azure"}, "private-azure"),
+        ("/azure/openai/v1/responses", {"model": "openai"}, "openai"),
+        ("/azure/openai/deployments/openai/chat/completions", {}, "openai"),
+        ("/azure/openai/deployments/openai/chat/completions", {"model": "private-azure"}, "openai"),
+    ],
+)
+def test_get_model_from_request_azure_routes_authorize_the_group_the_request_is_relayed_to(
+    route, request_data, expected
+):
+    router = _azure_route_router_with_an_openai_group_named_like_a_path_segment()
+    assert get_model_from_request(request_data=request_data, route=route, llm_router=router) == expected
+
+
 def _nvidia_nim_relay_router():
     from litellm.router import Router
 
@@ -1604,6 +2105,38 @@ def test_get_model_from_request_nvidia_nim_relay_routes_use_the_model_group_in_t
 
 def test_get_model_from_request_nvidia_nim_relay_without_a_router_has_no_model():
     assert get_model_from_request(request_data=NIM_INFER_BODY, route="/nvidia_nim/nim-page-elements/v1/infer") is None
+
+
+@pytest.mark.parametrize(
+    ("route", "selector", "authorized_as"),
+    [
+        pytest.param("/v1beta/interactions/abc", "beta-id", "beta", id="deployment-id-authorizes-its-group"),
+        pytest.param("/v1beta/interactions/abc/cancel", "beta", "beta", id="group-name-wins-over-a-same-named-id"),
+        pytest.param("/interactions/abc", "no-such-id", "no-such-id", id="unknown-id-stays-as-sent"),
+        pytest.param("/v1/files", "beta-id", "beta-id", id="other-routes-keep-the-raw-selector"),
+    ],
+)
+def test_get_model_from_request_authorizes_an_interaction_deployment_id_selector_as_its_group(
+    route: str, selector: str, authorized_as: str
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {"model_name": "alpha", "litellm_params": {"model": "openai/gpt-6-astra"}, "model_info": {"id": "beta"}},
+            {"model_name": "beta", "litellm_params": {"model": "openai/gpt-6-astra"}, "model_info": {"id": "beta-id"}},
+        ]
+    )
+
+    for body, params, headers in (
+        ({}, {"model": selector}, None),
+        ({}, None, {"x-litellm-model": selector}),
+        ({"model": selector}, {"model": selector}, None),
+    ):
+        assert (
+            get_model_from_request(
+                request_data=body, route=route, request_query_params=params, request_headers=headers, llm_router=router
+            )
+            == authorized_as
+        )
 
 
 def test_get_model_from_request_includes_file_endpoint_header_model():
@@ -2207,6 +2740,9 @@ def test_get_model_from_request_handles_managed_id_decoder_failures():
         "/realtime/calls",
         "/v1/realtime/calls",
         "/openai/v1/realtime/calls",
+        "/live/sessions",
+        "/v1/live/sessions",
+        "/openai/v1/live/sessions",
     ],
 )
 def test_get_model_from_request_extracts_realtime_session_model(route):
@@ -3536,6 +4072,98 @@ class TestIsRequestBodySafeBlocksFallbackSmuggle:
             )
 
 
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        pytest.param({"extra_body": {"fallbacks": "default"}}, id="default"),
+        pytest.param({"extra_body": {"fallbacks": [{"model": "claude-opus-5-5"}]}}, id="list"),
+        pytest.param({"extra_body": '{"fallbacks": [{"model": "claude-opus-5-5"}]}'}, id="stringified"),
+        pytest.param(
+            {"fallbacks": [{"model": "claude-sonnet-5", "extra_body": {"fallbacks": [{"model": "claude-opus-5-5"}]}}]},
+            id="inside_a_fallback_target",
+        ),
+        pytest.param(
+            {"context_window_fallbacks": [{"model": "claude-sonnet-5", "extra_body": '{"fallbacks": "default"}'}]},
+            id="inside_a_stringified_context_window_fallback_target",
+        ),
+    ],
+)
+def test_client_chosen_server_side_fallbacks_in_extra_body_are_rejected(request_fields: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="fallbacks is not allowed in request body"):
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-5-5", **request_fields},
+            general_settings={},
+            llm_router=None,
+            model="claude-sonnet-5-5",
+        )
+
+
+_EXTRA_BODY_FALLBACKS_REQUESTS: Final = (
+    pytest.param({"extra_body": {"fallbacks": [{"model": "claude-opus-5-5"}]}}, id="extra_body"),
+    pytest.param(
+        {"fallbacks": [{"model": "claude-sonnet-5", "extra_body": {"fallbacks": [{"model": "claude-opus-5-5"}]}}]},
+        id="inside_a_fallback_target",
+    ),
+)
+
+
+@pytest.mark.parametrize("request_fields", _EXTRA_BODY_FALLBACKS_REQUESTS)
+def test_extra_body_fallbacks_are_allowed_with_the_proxy_wide_opt_in(request_fields: dict[str, object]) -> None:
+    assert is_request_body_safe(
+        request_body={"model": "claude-sonnet-5-5", **request_fields},
+        general_settings={"allow_client_side_credentials": True},
+        llm_router=None,
+        model="claude-sonnet-5-5",
+    )
+
+
+def _claude_router(configurable_clientside_auth_params: list[str]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": model_name,
+                "litellm_params": {
+                    "model": f"anthropic/{model_name}",
+                    "configurable_clientside_auth_params": configurable_clientside_auth_params,
+                },
+            }
+            for model_name in ("claude-sonnet-5-5", "claude-sonnet-5")
+        ]
+    )
+
+
+@pytest.mark.parametrize("request_fields", _EXTRA_BODY_FALLBACKS_REQUESTS)
+def test_extra_body_fallbacks_are_allowed_when_every_deployment_opts_in(request_fields: dict[str, object]) -> None:
+    assert is_request_body_safe(
+        request_body={"model": "claude-sonnet-5-5", **request_fields},
+        general_settings={},
+        llm_router=_claude_router(["fallbacks"]),
+        model="claude-sonnet-5-5",
+    )
+
+
+@pytest.mark.parametrize("request_fields", _EXTRA_BODY_FALLBACKS_REQUESTS)
+def test_extra_body_fallbacks_stay_rejected_when_deployments_opt_in_to_another_param(
+    request_fields: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match="fallbacks is not allowed in request body"):
+        is_request_body_safe(
+            request_body={"model": "claude-sonnet-5-5", **request_fields},
+            general_settings={},
+            llm_router=_claude_router(["api_base"]),
+            model="claude-sonnet-5-5",
+        )
+
+
+def test_extra_body_without_fallbacks_is_allowed() -> None:
+    assert is_request_body_safe(
+        request_body={"model": "claude-sonnet-5-5", "extra_body": {"stop_sequences": ["5"]}},
+        general_settings={},
+        llm_router=None,
+        model="claude-sonnet-5-5",
+    )
+
+
 class TestIsRequestBodySafeRejectsUrlValuedFallback:
     @pytest.mark.parametrize("fallback_field", ["fallbacks", "context_window_fallbacks", "content_policy_fallbacks"])
     def test_url_valued_string_fallback_is_rejected(self, fallback_field):
@@ -4539,6 +5167,7 @@ class TestPricingInjectionBlocked:
             ("output_cost_per_second", -1.0),
             ("cache_read_input_token_cost", 0.0),
             ("cache_creation_input_token_cost", -0.05),
+            ("pricing_currency", "EUR"),
         ],
     )
     def test_pricing_field_rejected_by_default(self, field, value):
@@ -5720,7 +6349,7 @@ def test_per_user_credential_slots_in_request_body_are_rejected(field: str) -> N
     connection by proxy-injected secret_fields; a body-supplied value could only spoof either."""
     with pytest.raises(ValueError, match="Rejected Request") as error:
         is_request_body_safe(
-            request_body={"model": "github_copilot/gpt-4o", field: "attacker-chosen"},
+            request_body={"model": "github_copilot/gpt-4o", field: "caller-chosen"},
             general_settings={},
             llm_router=None,
             model="github_copilot/gpt-4o",
@@ -6153,6 +6782,96 @@ async def test_auth_still_rejects_other_blocked_fields_on_the_upload_and_batch_c
         )
 
 
+_OAUTH_AUTHORIZE_PATH: Final = "/MS_Office/upstream/authorize"
+
+
+def _asgi_request(
+    path: str, query_string: bytes, body: bytes, *, extra_scope: Mapping[str, object] = MappingProxyType({})
+) -> Request:
+    async def receive() -> dict[str, object]:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST" if body else "GET",
+            "path": path,
+            "headers": [(b"content-type", b"application/json")] if body else [],
+            "query_string": query_string,
+            **extra_scope,
+        },
+        receive,
+    )
+
+
+async def _initial_body_check_admits(request: Request, monkeypatch: pytest.MonkeyPatch) -> bool:
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"allow_client_side_credentials": False})
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    request_data: Final = populate_request_with_path_params(
+        request_data=await read_request_body(request), request=request
+    )
+    return await _auth_admits(request, request_data, request.url.path)
+
+
+@pytest.mark.asyncio
+async def test_auth_admits_oauth_query_credentials_on_a_user_defined_pass_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request: Final = _asgi_request(
+        _OAUTH_AUTHORIZE_PATH,
+        b"response_type=code&client_id=test-client",
+        b"",
+        extra_scope={"endpoint": _pass_through_endpoint()},
+    )
+    assert await _initial_body_check_admits(request, monkeypatch)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "query_string,body,extra_scope",
+    [
+        pytest.param(b"", b'{"client_id": "body-client"}', {}, id="body"),
+        pytest.param(b"client_id=query-client", b'{"client_id": "body-client"}', {}, id="body-and-query"),
+        pytest.param(b"", b"", {"path_params": {"client_id": "path-client"}}, id="path-param"),
+    ],
+)
+async def test_auth_still_rejects_non_query_credentials_on_a_user_defined_pass_through(
+    monkeypatch: pytest.MonkeyPatch, query_string: bytes, body: bytes, extra_scope: Mapping[str, object]
+) -> None:
+    request: Final = _asgi_request(
+        _OAUTH_AUTHORIZE_PATH, query_string, body, extra_scope={**extra_scope, "endpoint": _pass_through_endpoint()}
+    )
+    assert not await _initial_body_check_admits(request, monkeypatch)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,query_string",
+    [
+        ("/v1/chat/completions", b"client_id=test-client"),
+        ("/v1/vector_stores/vs_test/files", b"api_base=http://attacker.invalid/v1"),
+    ],
+)
+async def test_auth_still_rejects_query_credentials_on_native_routes(
+    monkeypatch: pytest.MonkeyPatch, path: str, query_string: bytes
+) -> None:
+    assert not await _initial_body_check_admits(_asgi_request(path, query_string, b""), monkeypatch)
+
+
+@pytest.mark.asyncio
+async def test_auth_rejects_query_credentials_on_a_pass_through_whose_body_was_never_parsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"allow_client_side_credentials": False})
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    request: Final = _asgi_request(
+        _OAUTH_AUTHORIZE_PATH, b"client_id=test-client", b"", extra_scope={"endpoint": _pass_through_endpoint()}
+    )
+    request_data: Final = populate_request_with_path_params(request_data={}, request=request)
+    assert not await _auth_admits(request, request_data, _OAUTH_AUTHORIZE_PATH)
+
+
+@pytest.mark.parametrize("metadata_key", ["allowed_s3_buckets", "required_customer_headers"])
 @pytest.mark.parametrize(
     "role,stored,sent,refused",
     [
@@ -6163,15 +6882,15 @@ async def test_auth_still_rejects_other_blocked_fields_on_the_upload_and_batch_c
         (LitellmUserRoles.INTERNAL_USER, ["team-a-bucket"], ["team-a-bucket"], False),
     ],
 )
-def test_only_proxy_admins_change_a_teams_s3_bucket_list(
-    role: LitellmUserRoles, stored: list[str] | None, sent: list[str] | None, refused: bool
+def test_only_proxy_admins_change_protected_team_metadata(
+    metadata_key: str, role: LitellmUserRoles, stored: list[str] | None, sent: list[str] | None, refused: bool
 ) -> None:
     from litellm.proxy._types import UpdateTeamRequest
     from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
 
-    existing: Final = None if stored is None else {"allowed_s3_buckets": stored, "project": "x"}
+    existing: Final = None if stored is None else {metadata_key: stored, "project": "x"}
     request: Final = UpdateTeamRequest(
-        team_id="t1", metadata={"project": "x"} if sent is None else {"allowed_s3_buckets": sent, "project": "x"}
+        team_id="t1", metadata={"project": "x"} if sent is None else {metadata_key: sent, "project": "x"}
     )
     caller: Final = UserAPIKeyAuth(user_role=role, user_id="u1")
 
@@ -6185,7 +6904,43 @@ def test_only_proxy_admins_change_a_teams_s3_bucket_list(
             data=request, existing_metadata=existing, user_api_key_dict=caller, entity="team"
         )
     assert rejection.value.status_code == 403
-    assert "Only proxy admins can set allowed_s3_buckets on a team." in str(rejection.value.detail)
+    assert f"Only proxy admins can set {metadata_key} on a team." in str(rejection.value.detail)
+
+
+@pytest.mark.parametrize(
+    "role, stored, sent, refused",
+    [
+        (LitellmUserRoles.INTERNAL_USER, 2, None, True),
+        (LitellmUserRoles.INTERNAL_USER, 2, 10, True),
+        (LitellmUserRoles.INTERNAL_USER, None, 10, True),
+        (LitellmUserRoles.INTERNAL_USER, 2, 2, False),
+        (LitellmUserRoles.PROXY_ADMIN, 2, None, False),
+    ],
+    ids=["removes_the_cap", "raises_the_cap", "sets_a_cap", "resends_the_stored_cap", "proxy_admin_removes_the_cap"],
+)
+def test_only_a_proxy_admin_changes_a_keys_model_limit_max_borrow_multiple(
+    role: LitellmUserRoles, stored: int | None, sent: int | None, refused: bool
+) -> None:
+    from litellm.proxy._types import UpdateKeyRequest
+    from litellm.proxy.auth.auth_utils import enforce_batch_limits_are_admin_only
+
+    def metadata(multiple: int | None) -> dict[str, object]:
+        return {"project": "x"} if multiple is None else {"model_limit_max_borrow_multiple": multiple, "project": "x"}
+
+    request: Final = UpdateKeyRequest(key="sk-1", metadata=metadata(sent))
+    caller: Final = UserAPIKeyAuth(user_role=role, user_id="u1")
+
+    if not refused:
+        enforce_batch_limits_are_admin_only(
+            data=request, existing_metadata=metadata(stored), user_api_key_dict=caller, entity="key"
+        )
+        return
+    with pytest.raises(HTTPException) as rejection:
+        enforce_batch_limits_are_admin_only(
+            data=request, existing_metadata=metadata(stored), user_api_key_dict=caller, entity="key"
+        )
+    assert rejection.value.status_code == 403
+    assert "Only proxy admins can set model_limit_max_borrow_multiple on a key." in str(rejection.value.detail)
 
 
 def _request_with_content_length(content_length: int) -> Request:

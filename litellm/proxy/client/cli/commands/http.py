@@ -76,7 +76,7 @@ def request(
         litellm http request GET /health/test_connection -H "X-Custom-Header:value"
     """
     # Parse headers from key:value format
-    headers: Final = {}
+    headers: Final[dict[str, str]] = {}
     for h in header:
         try:
             key, value = h.split(":", 1)
@@ -96,7 +96,7 @@ def request(
     request_data = None
     if data:
         try:
-            request_data = json_lib.loads(data)
+            request_data = _DECODED_JSON.validate_python(json_lib.loads(data))
         except ValueError:
             # If not JSON, use as raw data
             request_data = data

@@ -4,7 +4,7 @@ Base repository class with common functionality.
 
 from abc import ABC, abstractmethod
 from collections.abc import Hashable, Iterable, Mapping, Sequence
-from typing import Any, Final, Generic, Protocol, TypeVar, runtime_checkable
+from typing import Final, Generic, Protocol, TypeVar, runtime_checkable
 
 from pydantic import BaseModel
 
@@ -51,7 +51,7 @@ class BaseRepository(ABC, Generic[T]):
         return self._prisma_client
 
     @property
-    def prisma_client(self) -> Any:  # any-ok: PrismaClient is an untyped runtime wrapper
+    def prisma_client(self) -> object:
         return self._connected_client()
 
     @property

@@ -2,7 +2,7 @@ import json
 import os
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final, Protocol
 from urllib.parse import urlparse
 
 import httpx
@@ -15,6 +15,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.litellm_core_utils.litellm_logging import (
     Logging as LiteLLMLoggingObj,
 )
@@ -43,6 +44,10 @@ _GUARD_ENDPOINT: Final = "/api/v1/ai-gateway/litellm-v2"
 _DEFAULT_TIMEOUT: Final = 30.0
 _EMPTY_MAPPING: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _MCP_MODEL_PREFIX: Final = "MCP:"
+
+
+class _MetadataContainer(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
@@ -102,7 +107,7 @@ class SingulrGuardrail(CustomGuardrail):
         self.timeout = _DEFAULT_TIMEOUT if timeout is None else timeout
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["GuardrailConfigModel[pydantic.BaseModel]"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
             SingulrGuardrailConfigModel,
         )
@@ -110,8 +115,10 @@ class SingulrGuardrail(CustomGuardrail):
         return SingulrGuardrailConfigModel
 
     @staticmethod
-    def _metadata_containers(request_data: Mapping[str, Any]) -> tuple[Mapping[str, object], ...]:
-        litellm_params: Final = request_data.get("litellm_params") or _EMPTY_MAPPING
+    def _metadata_containers(request_data: Mapping[str, object]) -> tuple[object, ...]:
+        litellm_params: Final = require_attributes(
+            request_data.get("litellm_params") or _EMPTY_MAPPING, _MetadataContainer, "get"
+        )
         return tuple(
             container
             for container in (
@@ -126,7 +133,7 @@ class SingulrGuardrail(CustomGuardrail):
     @classmethod
     def _resolve_metadata_value(cls, request_data: Mapping[str, object], key: str) -> object:
         for container in cls._metadata_containers(request_data=request_data):
-            value = container.get(key)
+            value = require_attributes(container, _MetadataContainer, "get").get(key)
             if value:
                 return value
         return None
@@ -134,7 +141,7 @@ class SingulrGuardrail(CustomGuardrail):
     @classmethod
     def _resolve_user_role_from_request_data(cls, request_data: Mapping[str, object]) -> str | None:
         for container in cls._metadata_containers(request_data=request_data):
-            auth = container.get("user_api_key_auth")
+            auth = require_attributes(container, _MetadataContainer, "get").get("user_api_key_auth")
             if isinstance(auth, UserAPIKeyAuth) and auth.user_role:
                 return auth.user_role.value
         return None
@@ -417,7 +424,7 @@ class SingulrGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: required by CustomGuardrail.apply_guardrail override signature
+        request_data: dict[str, object],  # mutable-ok: required by CustomGuardrail.apply_guardrail override signature
         input_type: str,
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:

@@ -3,6 +3,7 @@ import contextvars
 import functools
 import inspect
 import itertools
+import json
 import logging
 import os
 import re
@@ -10,8 +11,8 @@ import sys
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from logging import Formatter
-from types import FrameType
-from typing import Final, TextIO
+from types import FrameType, MappingProxyType, TracebackType
+from typing import Final, Protocol, TextIO
 from urllib.parse import unquote
 
 from pydantic import TypeAdapter
@@ -19,10 +20,15 @@ from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
+    CREDENTIAL_FIELD_NAME_FRAGMENTS,
+    CREDENTIAL_FIELD_NAME_WORDS,
+    CREDENTIAL_HEADER_NAMES,
+    DEFAULT_MAX_RECURSE_DEPTH,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITELLM_TRUNCATION_STDOUT_SAFEGUARD_NOTE,
     MAX_BASE64_LENGTH_STDOUT_LOG,
     MAX_STRING_LENGTH_STDOUT_LOG,
+    QUANTITY_FIELD_NAME_WORDS,
 )
 from litellm.litellm_core_utils.env_utils import get_env_int
 from litellm.litellm_core_utils.safe_json_dumps import UNSERIALIZABLE_OBJECT, safe_dumps, safe_json_structure
@@ -91,6 +97,8 @@ _redact_string = redact_string
 
 _REDACTED_RECORD_ATTR: Final = "litellm_redacted"
 _REDACTED_STAMP: Final = object()
+_CALLER_ERROR_RECORD_ATTR: Final = "litellm_caller_error"
+CALLER_ERROR_LOG_EXTRA: Final = MappingProxyType({_CALLER_ERROR_RECORD_ATTR: True})
 _DECODED_LOG_PAYLOAD: Final = TypeAdapter(object)
 _UNREDACTED_SCALAR_TYPES: Final = (bool, int, float, type(None))
 
@@ -144,28 +152,81 @@ def redact_internal_details_from_client_message(value: str) -> str:
 
 _CLIENT_FIELDS: Final = TypeAdapter(dict[str, object])
 _CLIENT_ITEMS: Final = TypeAdapter(list[object])
+_CREDENTIAL_KEY_PROBE: Final = "key-name-probe"
+_FIELD_NAME_BOUNDARY: Final = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|[^A-Za-z]+")
 
 
-def _redacted_client_field(key: str | None, value: object) -> object:
+def _redacted_client_key(key: str) -> str:
+    return redact_internal_details(redact_structured_value(None, key))
+
+
+def _names_a_credential(key: str | None) -> bool:
+    return redact_structured_value(key, _CREDENTIAL_KEY_PROBE) != _CREDENTIAL_KEY_PROBE
+
+
+def _names_a_credential_header(key: str | None) -> bool:
+    return key is not None and key.strip().lower().replace("_", "-") in CREDENTIAL_HEADER_NAMES
+
+
+def _names_a_credential_field(key: str | None) -> bool:
+    if key is None:
+        return False
+    words: Final = frozenset(_FIELD_NAME_BOUNDARY.sub(" ", key).lower().split())
+    if words & QUANTITY_FIELD_NAME_WORDS:
+        return False
+    compact: Final = "".join(character for character in key.lower() if character.isalnum())
+    return bool(words & CREDENTIAL_FIELD_NAME_WORDS) or any(
+        fragment in compact for fragment in CREDENTIAL_FIELD_NAME_FRAGMENTS
+    )
+
+
+def _embedded_json(value: str) -> object:
+    adapter: Final = _CLIENT_FIELDS if value.lstrip().startswith("{") else _CLIENT_ITEMS
+    try:
+        return adapter.validate_json(value)
+    except (ValueError, RecursionError):
+        return None
+
+
+def _redacted_embedded_json(key: str | None, value: str, depth: int) -> str:
+    """A string holding a JSON object or array has its fields redacted like the structured form."""
+    if not value.lstrip().startswith(("{", "[")):
+        return value
+    embedded: Final = _embedded_json(value)
+    if embedded is None:
+        return value
+    redacted: Final = _redacted_client_field(key, embedded, depth + 1)
+    return value if redacted == embedded else json.dumps(redacted, separators=(",", ":"))
+
+
+def _redacted_client_field(key: str | None, value: object, depth: int = 0) -> object:
+    if _names_a_credential_header(key) or _names_a_credential_field(key):
+        return REDACTED
     if isinstance(value, str):
-        return redact_internal_details(redact_structured_value(key, value))
+        return redact_internal_details(redact_structured_value(key, _redacted_embedded_json(key, value, depth)))
+    if isinstance(value, (dict, list, tuple)) and (depth > DEFAULT_MAX_RECURSE_DEPTH or _names_a_credential(key)):
+        return REDACTED
     if isinstance(value, dict):
         return {
-            child_key: _redacted_client_field(child_key, child)
+            _redacted_client_key(child_key): _redacted_client_field(child_key, child, depth + 1)
             for child_key, child in _CLIENT_FIELDS.validate_python(value).items()
         }
     if isinstance(value, (list, tuple)):
-        return [_redacted_client_field(key, child) for child in _CLIENT_ITEMS.validate_python(value)]
+        return [_redacted_client_field(key, child, depth + 1) for child in _CLIENT_ITEMS.validate_python(value)]
     if not isinstance(value, (int, float)):
         return value
     text: Final = str(value)
     return value if redact_structured_value(key, text) == text else REDACTED
 
 
-def redact_internal_details_from_client_fields(fields: Mapping[str, object]) -> object:
+def redact_internal_details_from_client_value(value: object) -> object:
     if not _ENABLE_SECRET_REDACTION:
-        return fields
-    return _redacted_client_field(None, dict(fields))
+        return value
+    return _redacted_client_field(None, value)
+
+
+def redact_internal_details_from_client_fields(fields: Mapping[str, object]) -> object:
+    return redact_internal_details_from_client_value(dict(fields))
 
 
 def _substituted_color_message(record: logging.LogRecord) -> str | None:
@@ -668,15 +729,20 @@ def _plain_log_format(stdout: TextIO | None, stderr: TextIO | None) -> str:
 
 
 class LevelRoutingStreamHandler(logging.StreamHandler):
-    """Writes records below WARNING and invalid-key warnings to stdout, others to stderr.
+    """Writes records below WARNING and caller-error warnings to stdout, others to stderr.
 
     Collectors that derive severity from the stream report every stderr line as an error.
-    Invalid-key warnings route to stdout so LITELLM_LOG=ERROR can suppress them.
+    Caller-error warnings (a malformed virtual key, a token count the provider refused) route
+    to stdout so LITELLM_LOG=ERROR can suppress them.
     """
 
     def emit(self, record: logging.LogRecord) -> None:
         is_stdout_record: Final = record.levelno < logging.WARNING or (
-            record.levelno == logging.WARNING and record.name == verbose_proxy_stdout_logger.name
+            record.levelno == logging.WARNING
+            and (
+                record.name == verbose_proxy_stdout_logger.name
+                or getattr(record, _CALLER_ERROR_RECORD_ATTR, False) is True
+            )
         )
         preferred: Final = sys.stdout if is_stdout_record else sys.stderr
         if preferred is None or getattr(preferred, "closed", False):
@@ -689,7 +755,7 @@ class LevelRoutingStreamHandler(logging.StreamHandler):
 def _parse_env_flag(value: str | None) -> bool:
     """Strict opt-in parse for a boolean env var such as JSON_LOGS: only "true" (any case) enables it.
 
-    Matches the reader in litellm-proxy-extras/_logging.py. The previous
+    Matches the reader in litellm/proxy-extras/_logging.py. The previous
     bool(os.getenv(...)) treated any non-empty value, including "false" and "0",
     as enabled.
     """
@@ -774,13 +840,13 @@ def _try_parse_embedded_python_dict(message: str) -> dict[str, object] | None:
 
 # Standard LogRecord attribute names - used to identify 'extra' fields.
 # Derived at runtime so we automatically include version-specific attrs (e.g. taskName).
-def _get_standard_record_attrs() -> frozenset:
+def _get_standard_record_attrs() -> frozenset[str]:
     """Standard LogRecord attribute names - excludes extra keys from logger.debug(..., extra={...})."""
     return frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys())
 
 
 _STANDARD_RECORD_ATTRS: Final = _get_standard_record_attrs()
-_NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR}
+_NON_EXTRA_RECORD_ATTRS: Final = _STANDARD_RECORD_ATTRS | {_REDACTED_RECORD_ATTR, _CALLER_ERROR_RECORD_ATTR}
 
 # CorrelationContextFilter is the only legitimate source for these two JSON fields;
 # see JsonFormatter.format() for why they're excluded from the generic message-content
@@ -792,12 +858,12 @@ class JsonFormatter(Formatter):
     def __init__(self):
         super().__init__()
 
-    def formatTime(self, record, datefmt=None):
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None):
         # Use datetime to format the timestamp in ISO 8601 format
         dt: Final = datetime.fromtimestamp(record.created)
         return dt.isoformat()
 
-    def format(self, record):
+    def format(self, record: logging.LogRecord):
         message_str: Final = _ANSI_ESCAPE.sub("", record.getMessage())
         json_record: Final[dict[str, object]] = {
             "message": message_str,
@@ -850,6 +916,25 @@ class JsonFormatter(Formatter):
         )
 
 
+RUST_FIELDS_RECORD_ATTR: Final = "rust_fields"
+_RUST_FIELDS: Final = TypeAdapter(dict[str, object])
+
+
+def _rust_fields_suffix(record: logging.LogRecord) -> str:
+    """The fields as ``[name=value ...]``. Each value is JSON, so a newline or control code in it cannot start a
+    line, and the fields together are held to the base64 and length limits a message is."""
+    fields: Final = _record_attributes(record).get(RUST_FIELDS_RECORD_ATTR)
+    if not isinstance(fields, dict) or not fields:
+        return ""
+    named: Final = _RUST_FIELDS.validate_python(fields)
+    rendered: Final = " ".join(f"{name}={safe_dumps(value)}" for name, value in named.items())
+    base64_limit: Final = _get_max_base64_length_stdout_log()
+    collapsed: Final = _collapse_base64_runs(rendered, base64_limit) if base64_limit > 0 else rendered
+    text_limit: Final = _get_max_string_length_stdout_log() if record.levelno >= logging.INFO else 0
+    bounded: Final = _truncate_for_stdout_log(collapsed, text_limit) if 0 < text_limit < len(collapsed) else collapsed
+    return f" [{bounded}]"
+
+
 class CorrelationPlainFormatter(logging.Formatter):
     """Appends trace_id/session_id to plain-text log lines stamped by CorrelationContextFilter.
 
@@ -861,7 +946,8 @@ class CorrelationPlainFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         rendered: Final = super().format(record)
         uncolored: Final = rendered if self._fmt == _COLOR_LOG_FORMAT else _ANSI_ESCAPE.sub("", rendered)
-        formatted: Final = uncolored if _is_redacted(record) else redact_string(uncolored)
+        with_fields: Final = uncolored + _rust_fields_suffix(record)
+        formatted: Final = with_fields if _is_redacted(record) else redact_string(with_fields)
         trace_id: Final = getattr(record, "trace_id", None)
         session_id: Final = getattr(record, "session_id", None)
         if not trace_id and not session_id:
@@ -875,7 +961,7 @@ class CorrelationPlainFormatter(logging.Formatter):
 
 
 # Function to set up exception handlers for JSON logging
-def _setup_json_exception_handlers(formatter):
+def _setup_json_exception_handlers(formatter: Formatter):
     # Create a handler with JSON formatting for exceptions
     error_handler: Final = logging.StreamHandler()
     error_handler.setFormatter(formatter)
@@ -884,7 +970,7 @@ def _setup_json_exception_handlers(formatter):
     error_handler.addFilter(_correlation_filter)
 
     # Setup excepthook for uncaught exceptions
-    def json_excepthook(exc_type, exc_value, exc_traceback):
+    def json_excepthook(exc_type: type[BaseException], exc_value: BaseException, exc_traceback: TracebackType | None):
         record: Final = logging.LogRecord(
             name="LiteLLM",
             level=logging.ERROR,
@@ -902,7 +988,7 @@ def _setup_json_exception_handlers(formatter):
     try:
         import asyncio
 
-        def async_json_exception_handler(loop, context):
+        def async_json_exception_handler(loop: asyncio.AbstractEventLoop, context):
             exception: Final = context.get("exception")
             if exception:
                 exc_type: Final = type(exception)
@@ -936,9 +1022,12 @@ else:
 
     handler.setFormatter(formatter)
 
+
+class WarningLogger(Protocol):
+    def warning(self, msg: str, /, *args: object) -> None: ...
+
+
 verbose_proxy_logger = logging.getLogger("LiteLLM Proxy")
-# Malformed virtual key rejections log through this child; LevelRoutingStreamHandler
-# writes its WARNING records to stdout. It has no handler or level of its own.
 verbose_proxy_stdout_logger: Final = verbose_proxy_logger.getChild("stdout")
 verbose_router_logger = logging.getLogger("LiteLLM Router")
 verbose_logger = logging.getLogger("LiteLLM")
@@ -1122,7 +1211,7 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
         logging.getLogger().setLevel(resolve_log_level(configured_level))
 
 
-def _get_uvicorn_json_log_config():
+def _get_uvicorn_json_log_config() -> Mapping[str, object]:
     """
     Generate a uvicorn log_config dictionary that applies JSON formatting to all loggers.
 

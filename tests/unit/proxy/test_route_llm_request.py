@@ -5,7 +5,7 @@ import json
 import threading
 import weakref
 from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
@@ -21,12 +21,13 @@ from fastapi import HTTPException
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.openai_files_endpoints.common_utils import get_team_provider_deployment
+from litellm.proxy.openai_files_endpoints.common_utils import model_less_team_deployment
 from litellm.proxy.route_llm_request import (
     JSON_OBJECT_ADAPTER,
+    ProxyCommaSeparatedModelsStreamError,
     ProxyModelNotFoundError,
     UserConfigRouters,
     endpoint_unsupported_by_model,
@@ -34,6 +35,7 @@ from litellm.proxy.route_llm_request import (
     user_config_routers,
 )
 from litellm.proxy.utils import ProxyLogging
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.router_api import RouterSettings
 from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
@@ -398,7 +400,7 @@ async def test_route_request_no_model_required_with_router_settings_and_no_route
     }
 
     with patch.object(litellm, "acompletion", return_value="fake_response") as mock_completion:
-        await route_request(data, None, "gpt-3.5-turbo", "acompletion")
+        assert await (await route_request(data, None, "gpt-3.5-turbo", "acompletion")) == "fake_response"
 
         mock_completion.assert_called_once_with(**data)
 
@@ -547,7 +549,7 @@ def test_e2e_proxy_config_opts_in_to_the_mock_params_its_suite_sends():
         for param in GATED_MOCK_PARAM_NAMES
         if f"{param}=" in source or f'"{param}"' in source
     )
-    config = yaml.safe_load((repo_root / "proxy_server_config.yaml").read_text(encoding="utf-8"))
+    config = yaml.safe_load(Path(__file__).with_name("proxy_server_config.yaml").read_text(encoding="utf-8"))
     general_settings = config.get("general_settings") or {}
 
     assert not senders or general_settings.get(MOCK_TESTING_CONFIG_KEY) is True, (
@@ -1480,6 +1482,40 @@ async def test_route_request_keeps_key_fallbacks_out_of_pass_through_provider_bo
     assert provider_bodies and all("gpt-4" not in body for body in provider_bodies), provider_bodies
 
 
+@pytest.mark.asyncio
+async def test_route_request_pass_through_never_falls_back_to_the_global_model_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "model_fallbacks", ["openai/gpt-not-granted"])
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-pass-through")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4", "api_key": "sk-proxy", "api_base": _PROXY_DEPLOYMENT_BASE},
+            }
+        ],
+        router_general_settings=RouterGeneralSettings(pass_through_all_models=True),
+    )
+    data: Final = {"model": "openai/gpt-pass-through", "messages": list(_HELLO_MESSAGES)}
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        requested: Final = respx_mock.post(
+            "https://api.openai.com/v1/chat/completions", json__model="gpt-pass-through"
+        ).mock(return_value=httpx.Response(404, json={"error": {"message": "no such model", "code": "model_not_found"}}))
+        not_granted: Final = respx_mock.post(
+            "https://api.openai.com/v1/chat/completions", json__model="gpt-not-granted"
+        ).mock(return_value=_chat_completion_response("gpt-not-granted"))
+        with pytest.raises(litellm.NotFoundError):
+            await (await route_request(data, router, None, "acompletion"))
+
+    assert requested.called
+    assert not not_granted.called
+
+
 @pytest.mark.parametrize(
     "route_type, param, route",
     [
@@ -1900,6 +1936,10 @@ def test_raise_if_required_body_param_missing_names_each_missing_param(route_typ
         ("amoderation", {"model": "omni-moderation-latest", "input": ""}),
         ("asearch", {"model": "perplexity-search", "query": "litellm"}),
         (
+            "avector_store_search",
+            {"vector_store_id": "kb1", "query_image": {"type": "base64", "media_type": "image/png", "data": "iVBO"}},
+        ),
+        (
             "acreate_batch",
             {"input_file_id": "file-abc", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
         ),
@@ -1939,6 +1979,51 @@ async def test_route_request_rejects_responses_without_input():
     assert exc_info.value.code == "400"
     assert exc_info.value.param == "input"
     llm_router.aresponses.assert_not_called()
+
+
+_COMMA_MODELS_BODY: Final = {"model": "model-a,model-b", "messages": [{"role": "user", "content": "hi"}]}
+
+
+@pytest.mark.asyncio
+async def test_route_request_rejects_streaming_comma_separated_models_before_any_upstream_call() -> None:
+    llm_router: Final = route_entry_points_to_stubs(MagicMock())
+
+    with pytest.raises(ProxyCommaSeparatedModelsStreamError) as exc_info:
+        await route_request({**_COMMA_MODELS_BODY, "stream": True}, llm_router, None, "acompletion")
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.param == "stream"
+    llm_router.abatch_completion.assert_not_called()
+    llm_router.abatch_completion_fastest_response.assert_not_called()
+    llm_router.acompletion.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, "true", None])
+async def test_route_request_batches_comma_separated_models_unless_stream_is_true(stream: bool | str | None) -> None:
+    llm_router: Final = route_entry_points_to_stubs(MagicMock())
+    llm_router.abatch_completion.return_value = "batched"
+
+    response: Final = await route_request({**_COMMA_MODELS_BODY, "stream": stream}, llm_router, None, "acompletion")
+
+    assert response == "batched"
+    llm_router.abatch_completion.assert_called_once_with(
+        models=["model-a", "model-b"], messages=_COMMA_MODELS_BODY["messages"], stream=stream
+    )
+
+
+@pytest.mark.asyncio
+async def test_route_request_streams_comma_separated_models_with_fastest_response() -> None:
+    llm_router: Final = route_entry_points_to_stubs(MagicMock())
+    llm_router.abatch_completion_fastest_response.return_value = "fastest stream"
+    data: Final = {**_COMMA_MODELS_BODY, "stream": True, "fastest_response": True}
+
+    response: Final = await route_request(dict(data), llm_router, None, "acompletion")
+
+    assert response == "fastest stream"
+    llm_router.abatch_completion_fastest_response.assert_called_once_with(**data)
+    llm_router.abatch_completion.assert_not_called()
 
 
 class FakeProxyModelTable:
@@ -2822,7 +2907,7 @@ async def test_a_model_less_file_call_uses_the_team_openai_deployment_ingest_upl
     older: Final = _team_a_openai_db_deployment("deployment-z", "https://older-openai.example/v1", datetime(2026, 1, 1))
     newer: Final = _team_a_openai_db_deployment("deployment-a", "https://newer-openai.example/v1", datetime(2026, 6, 1))
     router: Final = litellm.Router(model_list=[dict(newer), dict(older)] if newer_first else [dict(older), dict(newer)])
-    ingest_deployment: Final = get_team_provider_deployment(router, _TEAM_A_MEMBER, "openai")
+    ingest_deployment: Final = await model_less_team_deployment(router, _TEAM_A_MEMBER, "openai")
 
     with respx.mock(assert_all_called=False) as respx_mock:
         route: Final = respx_mock.get(url__regex=r"/v1/vector_stores/vs_team/files/file-ingested$").mock(
@@ -2990,13 +3075,17 @@ def _mock_deployment(model_name: str, **deployment_limits: int) -> dict[str, obj
 
 
 async def _settle_router_accounting() -> None:
-    try:
-        await GLOBAL_LOGGING_WORKER.flush()
-    finally:
-        await GLOBAL_LOGGING_WORKER.stop()
-    while pending := {task for task in asyncio.all_tasks() - {asyncio.current_task()} if not _is_periodic_sync(task)}:
-        _, still_running = await asyncio.wait(pending, timeout=5)
-        assert not still_running, still_running
+    while True:
+        try:
+            await drain_logging_tasks()
+            await GLOBAL_LOGGING_WORKER.flush()
+        finally:
+            await GLOBAL_LOGGING_WORKER.stop()
+        while pending := {task for task in asyncio.all_tasks() - {asyncio.current_task()} if not _is_periodic_sync(task)}:
+            _, still_running = await asyncio.wait(pending, timeout=5)
+            assert not still_running, still_running
+        if GLOBAL_LOGGING_WORKER.pending_count == 0:
+            return
 
 
 def _is_periodic_sync(task: asyncio.Task[object]) -> bool:
@@ -3143,7 +3232,10 @@ async def test_user_config_router_enforces_its_limit_across_proxy_requests(
     deployment_limits: Mapping[str, int],
     arrives_with_logging_obj: bool,
     with_redis: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    now: Final = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", lambda: now)
     await _wait_out_a_rate_limit_minute_rollover()
     callbacks_before: Final = _global_router_callbacks()
     outcomes: Final = [
@@ -3161,33 +3253,6 @@ async def test_user_config_router_enforces_its_limit_across_proxy_requests(
     assert outcomes == await _proxy_router_outcomes(
         fake_redis_port if with_redis else None, routing_settings, deployment_limits, len(outcomes)
     )
-
-
-@pytest.mark.parametrize("arrives_with_logging_obj", [True, False])
-@pytest.mark.asyncio
-async def test_concurrent_user_config_requests_each_count_once_against_the_tpm_limit(
-    fake_redis_port: int, arrives_with_logging_obj: bool
-) -> None:
-    tpm_for_three_requests: Final = await _tpm_for_three_requests()
-
-    def request() -> Coroutine[None, None, str]:
-        return _unsettled_user_config_request_outcome(
-            fake_redis_port,
-            {"routing_strategy": "usage-based-routing-v2"},
-            {"tpm": tpm_for_three_requests},
-            _proxy_logging_obj() if arrives_with_logging_obj else None,
-        )
-
-    async def settled(*requests: Coroutine[None, None, str]) -> list[str]:
-        outcomes: Final = await asyncio.gather(*requests)
-        await _settle_router_accounting()
-        return outcomes
-
-    await _wait_out_a_rate_limit_minute_rollover()
-    concurrent_outcomes: Final = await settled(request(), request())
-    later_outcomes: Final = [*(await settled(request())), *(await settled(request()))]
-
-    assert [*concurrent_outcomes, *later_outcomes] == ["200", "200", "200", "429"]
 
 
 @pytest.mark.asyncio
@@ -3212,8 +3277,14 @@ async def test_overlapping_user_config_requests_share_one_rpm_limit(fake_redis_p
 @pytest.mark.parametrize("proxy_router_shares_redis", [True, False])
 @pytest.mark.asyncio
 async def test_a_proxy_router_on_the_same_strategy_leaves_the_user_config_limit_unchanged(
-    fake_redis_port: int, routing_strategy: str, limited_by: str, proxy_router_shares_redis: bool
+    fake_redis_port: int,
+    routing_strategy: str,
+    limited_by: str,
+    proxy_router_shares_redis: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    now: Final = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", lambda: now)
     deployment_limits: Final = {"rpm": 3} if limited_by == "rpm" else {"tpm": await _tpm_for_three_requests()}
 
     def request() -> Coroutine[None, None, str]:

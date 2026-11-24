@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -59,28 +60,43 @@ async def test_credential_persistence_preserves_known_and_unknown_scopes(credent
     [((), None, []), (("read", "write"), "", []), (("read", "write"), None, ["read", "write"])],
 )
 async def test_native_refresh_persists_actual_grant_through_storage_adapter(
-    credential_database, prior_scopes, response_scope, expected,
+    credentials_prisma: SimpleNamespace,
+    prior_scopes,
+    response_scope,
+    expected,
 ):
-    from litellm.proxy.mcp_server.db import decode_oauth_payload
+    from litellm.proxy.mcp_server.db import (
+        get_user_oauth_credential,
+        record_oauth_scope_refusal,
+        store_user_oauth_credential,
+    )
     from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import AuthorizationCodeRefresher
     from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import _persist_credential
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     server = MCPServer(
-        server_id="srv", name="srv", transport="http", auth_type="oauth2",
-        token_url="https://idp.example/token", client_id="client", client_secret="secret",
+        server_id="srv",
+        name="srv",
+        transport="http",
+        auth_type="oauth2",
+        token_url="https://idp.example/token",
+        client_id="client",
+        client_secret="secret",
     )
 
     async def token_endpoint(url, form, headers):
         assert url == server.token_url and form["grant_type"] == "refresh_token"
         return {"access_token": "rotated", **({"scope": response_scope} if response_scope is not None else {})}
 
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv", "old", refresh_token="refresh")
+    await record_oauth_scope_refusal(credentials_prisma, "alice", "srv", "gist")
     refresher = AuthorizationCodeRefresher(lambda _: server, token_endpoint, _persist_credential)
     refreshed = await refresher.refresh("alice", "srv", OAuthToken("old", refresh_token="refresh", scopes=prior_scopes))
     assert refreshed is not None and refreshed.scopes == tuple(expected)
-    payload = decode_oauth_payload(credential_database.upsert.call_args.kwargs["data"]["create"]["credential_b64"])
+    payload = await get_user_oauth_credential(credentials_prisma, "alice", "srv")
     assert payload is not None and payload.get("scopes") == expected
     assert payload["access_token"] == "rotated"
+    assert payload["needs_scopes"] == ["gist"]
 
 
 class _BlockingStore:

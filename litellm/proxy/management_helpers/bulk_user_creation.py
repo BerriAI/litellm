@@ -48,6 +48,7 @@ from litellm.proxy.management_endpoints.common_utils import validate_budget_dura
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     _update_internal_new_user_params,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # /user/new defaults; result validated below
     check_if_default_team_set,
+    enforce_user_semantic_cache_admin,
 )
 from litellm.proxy.management_endpoints.key_management_endpoints import (  # noqa: F401  # legacy module exports
     _check_permissions_caller_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -87,7 +88,7 @@ BULK_NEW_USER_CONCURRENCY: Final = 10
 
 TeamRole: TypeAlias = Literal["user", "admin"]
 KeyGenerator: TypeAlias = Callable[..., Awaitable[object]]
-_T: Final = TypeVar("_T")
+_T = TypeVar("_T")
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +223,7 @@ def _row_error(item: BulkNewUserItem, user_api_key_dict: UserAPIKeyAuth) -> str 
             f"Attempted to create user with role: {item.user_role}. Your role: {user_api_key_dict.user_role}"
         )
     try:
+        enforce_user_semantic_cache_admin(user_api_key_dict, item.metadata, None)
         validate_budget_duration(item.budget_duration)
         check_permissions_caller_permission(data=item, user_api_key_dict=user_api_key_dict)
         raise_on_logging_metadata_env_reference(item.metadata)
@@ -356,13 +358,15 @@ def _db_failure(
     return None
 
 
-async def _prepare_user(user: _PendingUser, prisma_client: PrismaClient) -> _PreparedUser | _RowFailure:
+async def _prepare_user(
+    user: _PendingUser, prisma_client: PrismaClient, can_grant_apps: bool
+) -> _PreparedUser | _RowFailure:
     try:
         dumped: Final = user.request.model_dump(exclude={"user_id"})
         data: Final = {**dumped, "user_id": user.user_id}
         data_json: Final = _JSON_OBJECT.validate_python(_update_internal_new_user_params(data, user.request))
         with_permission: Final = _JSON_OBJECT.validate_python(
-            await set_object_permission(data_json=data_json, prisma_client=prisma_client)
+            await set_object_permission(data_json=data_json, prisma_client=prisma_client, can_grant_apps=can_grant_apps)
         )
         return _PreparedUser(user, _USER_ROW.validate_python(with_permission))
     except Exception as exc:  # noqa: BLE001  # any preparation failure is reported on this row only
@@ -818,7 +822,12 @@ async def bulk_create_users(
             )
         )
 
-    prepared_outcomes: Final = tuple([await _prepare_user(user, prisma_client) for user in creatable])
+    prepared_outcomes: Final = tuple(
+        [
+            await _prepare_user(user, prisma_client, user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN)
+            for user in creatable
+        ]
+    )
     prepare_failures: Final = tuple(o for o in prepared_outcomes if isinstance(o, _RowFailure))
     created, insert_failures = await _insert_users(
         prisma_client, tuple(o for o in prepared_outcomes if isinstance(o, _PreparedUser))

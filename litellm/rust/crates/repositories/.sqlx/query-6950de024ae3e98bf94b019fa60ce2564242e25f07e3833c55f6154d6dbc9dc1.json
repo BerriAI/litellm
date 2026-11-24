@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH failed AS (\n    INSERT INTO \"LiteLLM_DailyGatewayFailedRequests\" (\n        \"date\", \"category\", \"route\", \"status_code\", \"failed_requests\", \"created_at\", \"updated_at\"\n    )\n    SELECT\n        row.\"date\", row.\"category\", row.\"route\", row.\"status_code\", row.\"failed_requests\",\n        NOW() AT TIME ZONE 'UTC', NOW() AT TIME ZONE 'UTC'\n    FROM UNNEST($1::text[], $2::text[], $3::text[], $4::integer[], $5::bigint[])\n        WITH ORDINALITY AS row (\"date\", \"category\", \"route\", \"status_code\", \"failed_requests\", \"position\")\n    ORDER BY row.\"position\"\n    ON CONFLICT (\"date\", \"category\", \"route\", \"status_code\") DO UPDATE SET\n        \"failed_requests\" = \"LiteLLM_DailyGatewayFailedRequests\".\"failed_requests\" + EXCLUDED.\"failed_requests\",\n        \"updated_at\" = NOW() AT TIME ZONE 'UTC'\n    RETURNING \"status_code\"\n)\nINSERT INTO \"LiteLLM_DailyGatewayRequests\" (\n    \"date\", \"category\", \"route\", \"successful_requests\", \"failed_requests\", \"created_at\", \"updated_at\"\n)\nSELECT\n    row.\"date\", row.\"category\", row.\"route\", row.\"successful_requests\", row.\"failed_requests\",\n    NOW() AT TIME ZONE 'UTC', NOW() AT TIME ZONE 'UTC'\nFROM UNNEST($6::text[], $7::text[], $8::text[], $9::bigint[], $10::bigint[])\n    WITH ORDINALITY AS row (\"date\", \"category\", \"route\", \"successful_requests\", \"failed_requests\", \"position\")\nORDER BY row.\"position\"\nON CONFLICT (\"date\", \"category\", \"route\") DO UPDATE SET\n    \"successful_requests\" = \"LiteLLM_DailyGatewayRequests\".\"successful_requests\" + EXCLUDED.\"successful_requests\",\n    \"failed_requests\" = \"LiteLLM_DailyGatewayRequests\".\"failed_requests\" + EXCLUDED.\"failed_requests\",\n    \"updated_at\" = NOW() AT TIME ZONE 'UTC'\n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "Int4Array",
+        "Int8Array",
+        "TextArray",
+        "TextArray",
+        "TextArray",
+        "Int8Array",
+        "Int8Array"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6950de024ae3e98bf94b019fa60ce2564242e25f07e3833c55f6154d6dbc9dc1"
+}

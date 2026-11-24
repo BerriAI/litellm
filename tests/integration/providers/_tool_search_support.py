@@ -149,6 +149,11 @@ def request_messages(request: Request) -> tuple[Event, ...]:
     return tuple(JSON_OBJECT.validate_python(message) for message in messages)
 
 
+def request_tool_names(request: Request) -> list[JsonValue]:
+    tools: Final = JSON_LIST.validate_python(JSON_OBJECT.validate_json(request.body).get("tools") or [])
+    return [JSON_OBJECT.validate_python(tool).get("name") for tool in tools]
+
+
 def answer_reply(request: Request) -> Reply:
     marker: Final = marker_of(request)
     return turn_reply(request, f"msg_{marker}_answer", ({"type": "text", "text": answer(marker)},), "end_turn")

@@ -25,13 +25,14 @@ Python behavior Rust needs but does not own, behind one module per question. Rus
   - `logger`: where native diagnostics are emitted
   - `preflight`: the SDK globals the native preflight borrows
   - `secret_manager`: the configured secret manager, its native config and the error text Python's managers produce
-  - `http_transport`: which async transport is in use
+  - `http_transport`: which async transport is in use, and whether a call must send through Python's `AsyncHTTPHandler`
   - `timeouts`: timeout to seconds
   - `tokenizers`: bundled tiktoken files and Hugging Face tokenizer downloads
   - `randomness`: the process `random` generator the Python router draws from
   - `redis_events`: reporting native Redis calls and breaker transitions to `ServiceLogging`
   - `redis_credentials`: what a caller's redis-py `CredentialProvider` authenticates with
-  - `model_cost`: where a `register_model` entry lands in the published table and the row it writes
+  - `model_cost`: where a `register_model` entry lands in the published table and the row it writes, and the generation, cost configs, generalization rules and provider names a pricing snapshot reads
+  - `route_groups`: the proxy's `LiteLLMRoutes` groups by name, which the auth core reads at settings build
 - `routes/<route>.py` holds the questions one route asks, under the same function names on every route (`response`, `map_failure`, `connection_defaults`), so Rust names only the module. A question two routes ask goes in a top-level module here instead
 - Each module reuses the Python implementation the Python route runs (`AnthropicModelInfo`, `Logging`). Do not re-derive those rules here or in Rust; one resolver, two callers
 
@@ -43,6 +44,6 @@ Python behavior Rust needs but does not own, behind one module per question. Rus
 
 ## model_cost
 
-- `model_cost` answers what Rust needs while registering models: `entry`, `published`, `write`, `resolve`, `merged` and `kept`. The live table, its version and every Python writer belong to `litellm_core_utils/model_cost_table.py`
+- `model_cost` answers what Rust needs while registering models (`entry`, `published`, `write`, `resolve`, `merged` and `kept`) and pricing calls (`generation`, `known_names`, and `inputs`, the `NativeModelCostMap` a route's pricing snapshot comes from). The live table, its version and every Python writer belong to `litellm_core_utils/model_cost_table.py`
 - `resolve`, `merged` and `kept` are shims until `get_model_info` and a merge generic over Python values move to Rust. Then their bodies become native calls and the signatures stay
 - `resolve` returns `None` when it was handed a table that is no longer published. That is how a pass learns a reload swapped the table

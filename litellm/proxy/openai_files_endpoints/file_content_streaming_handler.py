@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from fastapi.responses import StreamingResponse
 
@@ -71,7 +71,7 @@ class FileContentStreamingHandler:
         stream_iterator: AsyncIterator[bytes],
         proxy_logging_obj: "ProxyLogging",
         user_api_key_dict: "UserAPIKeyAuth",
-        data: dict[str, Any],
+        data: dict[str, object],
     ):
         try:
             async for chunk in stream_iterator:

@@ -10,10 +10,12 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_retry_headers_to_response,
     complexity_router_decision_headers,
     ensure_response_additional_headers,
+    get_fallback_error_info,
     get_fallback_errors_from_headers,
     get_hidden_params_dict,
     replace_complexity_router_headers,
 )
+from litellm.exceptions import AuthenticationError, Timeout, UnsupportedParamsError
 from litellm.types.decisions import DecisionsResponse
 
 
@@ -206,6 +208,41 @@ def test_add_fallback_headers_serializes_fallback_errors():
         )
         == fallback_errors
     )
+
+
+class _ProviderTypedError(Exception):
+    type = "invalid_request_error"
+
+
+class _UntypedError(Exception):
+    pass
+
+
+def test_get_fallback_error_info_names_an_unsupported_params_error_by_its_class():
+    error: Final = UnsupportedParamsError(
+        message="mistral does not support parameters: ['presence_penalty']",
+        llm_provider="mistral",
+        model="mistral-large-latest",
+    )
+
+    assert get_fallback_error_info(error)["type"] == "UnsupportedParamsError"
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _ProviderTypedError("bad request"),
+        Timeout(message="timed out", model="gpt-5.6", llm_provider="openai"),
+        AuthenticationError(message="bad key", llm_provider="openai", model="gpt-5.6"),
+    ],
+    ids=["provider-type", "timeout-without-provider-type", "auth-without-provider-type"],
+)
+def test_get_fallback_error_info_keeps_the_type_other_errors_carry(error: Exception):
+    assert get_fallback_error_info(error)["type"] == str(getattr(error, "type", None))
+
+
+def test_get_fallback_error_info_names_an_error_without_a_type_by_its_class():
+    assert get_fallback_error_info(_UntypedError("boom"))["type"] == "_UntypedError"
 
 
 def test_add_retry_headers_to_streaming_wrapper():

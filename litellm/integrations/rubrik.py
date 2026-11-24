@@ -324,7 +324,7 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: dict[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -675,8 +675,6 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
         else:
             tools = optional_params.get("tools")
 
-        # The response moderation service consumes only messages/model/tools
-        # (plus metadata.rac_agent_id when set).
         # Don't forward proxy_server_request -- in litellm >=1.83 its ``body``
         # snapshot carries a UserAPIKeyAuth instance that breaks json.dumps,
         # silently fail-opening the guardrail.
@@ -847,7 +845,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
                 exc_info=True,
             )
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: _LogEventKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         # Blocked requests are logged via async_post_call_failure_hook;
         # skip here to avoid double-logging the pre-block response.
         if kwargs.get("_rubrik_blocked"):
@@ -858,7 +858,9 @@ class RubrikLogger(CustomGuardrail, CustomBatchLogger):
             return
         await self._enqueue_log_event(kwargs, "success")
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: _LogEventKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         # Log regular LLM failures (timeouts, upstream errors, etc.) to Rubrik.
         # NOTE: ``ModifyResponseException`` blocks are NOT routed here; they
         # bypass ``Logging.async_failure_handler`` entirely and reach

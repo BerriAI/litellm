@@ -35,7 +35,7 @@ from collections.abc import Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
 import httpx
 from pydantic import ValidationError
@@ -43,7 +43,7 @@ from pydantic import ValidationError
 import litellm
 from litellm.interactions.agents.http_handler import agents_http_handler
 from litellm.interactions.agents.utils import get_provider_agents_api_config
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, require_attributes
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.types.agents import (
     AgentCreateRequest,
@@ -77,14 +77,16 @@ def _get_agents_api_config(custom_llm_provider: str):
 
 
 def _make_logging_obj(
-    kwargs: dict[str, Any],
+    kwargs: dict[str, object],
     model: str,
     custom_llm_provider: str,
     call_type: str,
     optional_params: dict[str, object],
 ) -> LiteLLMLoggingObj:
-    litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
-    litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
+    litellm_logging_obj: Final = require_attributes(
+        kwargs.get("litellm_logging_obj"), LiteLLMLoggingObj, "update_from_kwargs"
+    )
+    litellm_call_id: Final = kwargs.get("litellm_call_id", None)
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
         model=model,
@@ -222,7 +224,7 @@ async def acreate(
     system_instruction: str | None = None,
     description: str | None = None,
     tools: Sequence[Mapping[str, object]] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentCreateResponse:
     """Async: Create a managed agent on the provider side."""
     local_vars: Final = locals()
@@ -277,7 +279,7 @@ def create(
     system_instruction: str | None = None,
     description: str | None = None,
     tools: Sequence[Mapping[str, object]] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentCreateResponse | Coroutine[object, object, AgentCreateResponse]:
     """
     Sync: Create a managed agent on the provider side.
@@ -353,7 +355,7 @@ async def alist(
     custom_llm_provider: str | None = None,
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentListResponse:
     """Async: List all agents on the provider side."""
     local_vars: Final = locals()
@@ -387,7 +389,7 @@ def list(
     custom_llm_provider: str | None = None,
     extra_headers: dict[str, str] | None = None,
     timeout: float | httpx.Timeout | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentListResponse | Coroutine[object, object, AgentListResponse]:
     """Sync: List all agents on the provider side."""
     local_vars: Final = locals()
@@ -429,7 +431,7 @@ async def aget(
     timeout: float | httpx.Timeout | None = None,
     *,
     name: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentCreateResponse:
     """Async: Get a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
@@ -468,7 +470,7 @@ def get(
     timeout: float | httpx.Timeout | None = None,
     *,
     name: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentCreateResponse | Coroutine[object, object, AgentCreateResponse]:
     """Sync: Get a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
@@ -512,7 +514,7 @@ async def adelete(
     timeout: float | httpx.Timeout | None = None,
     *,
     name: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentDeleteResult:
     """Async: Delete a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
@@ -551,7 +553,7 @@ def delete(
     timeout: float | httpx.Timeout | None = None,
     *,
     name: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentDeleteResult | Coroutine[object, object, AgentDeleteResult]:
     """Sync: Delete a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
@@ -597,7 +599,7 @@ async def alist_versions(
     timeout: float | httpx.Timeout | None = None,
     *,
     name: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentVersionsResponse:
     """Async: List versions of a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()
@@ -636,7 +638,7 @@ def list_versions(
     timeout: float | httpx.Timeout | None = None,
     *,
     name: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> AgentVersionsResponse | Coroutine[object, object, AgentVersionsResponse]:
     """Sync: List versions of a specific agent by id (``name`` is an alias of ``id``)."""
     local_vars: Final = locals()

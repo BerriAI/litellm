@@ -300,7 +300,7 @@ def test_a_failed_edit_rolls_back_to_the_serving_router_even_above_a_tightened_l
     assert restored.litellm_params.tags is None
 
 
-def test_a_failed_edit_without_ignore_invalid_deployments_raises_and_leaves_the_router_removed(
+def test_a_failed_edit_without_ignore_invalid_deployments_raises_and_keeps_the_router_serving(
     make_core: MakeCore,
 ) -> None:
     limit: Final = {"value": 2}
@@ -319,8 +319,8 @@ def test_a_failed_edit_without_ignore_invalid_deployments_raises_and_leaves_the_
             ChangeSet(upsert=[Deployment(**complexity_marker("two", "m2", config=HEURISTIC_V2, tags=["edited"]))])  # pyright: ignore[reportArgumentType]
         )
     assert str(raised.value) == HEURISTIC_V2_LIMIT_MESSAGE
-    assert model_ids(core) == ["s", "b", "m1"]
-    assert registered_tags(core, "complexity") == {"one": [()]}
+    assert model_ids(core) == ["s", "b", "m1", "m2"]
+    assert registered_tags(core, "complexity") == {"one": [()], "two": [()]}
 
 
 # --- the adaptive router -------------------------------------------------------------------------------

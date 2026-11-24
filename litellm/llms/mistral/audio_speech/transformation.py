@@ -57,7 +57,9 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
         }
     )
 
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: base class contract returns a plain list
+    def get_supported_openai_params(
+        self, model: str
+    ) -> list[str]:  # mutable-ok: base class contract returns a plain list
         return ["voice", "response_format"]
 
     def _map_openai_voice(self, voice_id: str) -> str:
@@ -82,7 +84,7 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
         voice: object = None,
         drop_params: bool = False,
         kwargs: Mapping[str, object] | None = None,
-    ) -> tuple[str | None, dict]:  # mutable-ok: base class contract returns a plain dict
+    ) -> tuple[str | None, dict[str, str]]:  # mutable-ok: base class contract returns a plain dict
         response_format: Final = optional_params.get("response_format")
         ref_audio: Final = kwargs.get("ref_audio") if kwargs else None
         voice_id_kwarg: Final = kwargs.get("voice_id") if kwargs else None
@@ -100,7 +102,7 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: base class contract returns a plain dict
+    ) -> dict[str, str]:  # mutable-ok: base class contract returns a plain dict
         resolved_key: Final = api_key or get_secret_str("MISTRAL_API_KEY")
         if resolved_key is None:
             raise MistralTextToSpeechException(
@@ -205,7 +207,7 @@ class MistralTextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         error_message: str,
         status_code: int,
-        headers: dict | httpx.Headers,  # mutable-ok: BaseLLMException takes a plain dict or httpx.Headers
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: BaseLLMException takes a plain dict or httpx.Headers
     ) -> BaseLLMException:
         return MistralTextToSpeechException(
             message=error_message,

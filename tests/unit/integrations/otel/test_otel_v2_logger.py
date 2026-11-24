@@ -411,6 +411,44 @@ def test_async_log_failure_event_marks_error_status():
     assert span.attributes["error.type"] == "RateLimitError"
 
 
+@pytest.mark.parametrize("boundary", [True, False])
+def test_retried_call_emits_distinct_failure_spans_with_each_destination(boundary: bool) -> None:
+    logger, exporter = _logger()
+    root: Final = logger._emitter.start_span(SpanRole.PROXY_REQUEST, "test root")
+    for index in range(3):
+        start: Final = 100.0 + index
+        kwargs: Final = {
+            **_kwargs(
+                _payload(
+                    status="failure",
+                    api_base=f"https://region-{index}.example/v1",
+                    error_information={"error_class": "ServiceUnavailableError", "error_message": f"outage-{index}"},
+                )
+            ),
+            "api_call_start_time": start,
+        }
+        if boundary:
+            with trace.use_span(root, end_on_exit=False):
+                logger.log_pre_api_call("gpt-4o", [], kwargs)
+        asyncio.run(logger.async_log_failure_event(kwargs, None, start, start + 0.5))
+        asyncio.run(logger.async_log_failure_event(kwargs, None, start, start + 0.5))
+    spans: Final = exporter.get_finished_spans()
+    assert len(spans) == 3
+    assert len({s.context.span_id for s in spans}) == 3
+    assert [s.attributes["server.address"] for s in spans] == [f"region-{i}.example" for i in range(3)]
+    assert [s.attributes["error.message"] for s in spans] == [f"outage-{i}" for i in range(3)]
+    assert all(s.status.status_code is StatusCode.ERROR for s in spans)
+    success_start: Final = 104.0
+    success_kwargs: Final = {**_kwargs(), "api_call_start_time": success_start}
+    with trace.use_span(root, end_on_exit=False):
+        logger.log_pre_api_call("gpt-4o", [], success_kwargs)
+    asyncio.run(logger.async_log_success_event(success_kwargs, None, success_start, success_start + 0.5))
+    success: Final = exporter.get_finished_spans()[-1]
+    assert success.start_time == to_ns(success_start)
+    assert success.status.status_code is not StatusCode.ERROR
+    root.end()
+
+
 def _logger_with_events(enable_events):
     from opentelemetry.sdk._logs.export import InMemoryLogExporter
 
@@ -3537,20 +3575,21 @@ _REDIS_CACHE_MODULES = (
     "litellm/caching/redis_cluster_cache.py",
     "litellm/caching/redis_semantic_cache.py",
     "litellm/caching/dual_cache.py",
-    "litellm/caching/redis_batch.py",
 )
+_NATIVE_REQUEST_BATCHES = "litellm/rust/crates/python-bridge/src/redis/store/request.rs"
 
 
 def _redis_call_types_emitted_by_the_cache_layer():
     """Every ``call_type`` literal the Redis cache layer hands to the service logger, plus the
-    two ``RedisBatch`` names it passes as ``call_type=self.name``."""
+    names the native request batches report their flushes under."""
     import re
     from pathlib import Path
 
     repo = Path(__file__).resolve().parents[4]
     sources = "\n".join((repo / module).read_text() for module in _REDIS_CACHE_MODULES)
     literal = frozenset(re.findall(r'call_type="([a-z_]+)"', sources))
-    batch_names = frozenset(re.findall(r'RedisBatch\([^)]*name="([a-z_]+)"', sources))
+    native_request = (repo / _NATIVE_REQUEST_BATCHES).read_text()
+    batch_names = frozenset(re.findall(r'call\(py, "([a-z_]+)"\)', native_request))
     return sorted(literal | batch_names)
 
 
@@ -3571,31 +3610,6 @@ def test_no_call_type_the_redis_cache_layer_emits_can_fall_back_to_the_raw_metho
         if not service_span_name(ServiceSpanData(service_name="redis", call_type=call_type)).startswith("redis.")
     ]
     assert fallbacks == []
-
-
-def test_mixed_pipeline_families_land_on_their_own_bounded_attribute():
-    """A flush that carried several owners' ops is ``redis.pipeline mixed``; the sorted family
-    list goes to ``litellm.redis.families`` (not under ``litellm.metadata.``) while ``op_count``
-    stays an int on ``litellm.metadata.op_count``, and the legacy vocabulary keeps the bare keys."""
-    logger, exporter = _logger()
-    parent = _service_parent(logger)
-    try:
-        asyncio.run(
-            logger.async_service_success_hook(
-                payload=_ServicePayload("redis", "request_redis_batch", target="mixed"),
-                parent_otel_span=parent,
-                event_metadata={"op_count": 3, "families": "auth_objects,spend_counters"},
-            )
-        )
-    finally:
-        parent.end()
-    (span,) = [s for s in exporter.get_finished_spans() if s.name.startswith("redis")]
-    assert span.name == "redis.pipeline mixed"
-    assert span.attributes[LiteLLM.REDIS_FAMILIES] == "auth_objects,spend_counters"
-    assert span.attributes["families"] == "auth_objects,spend_counters"
-    assert f"{LiteLLM.METADATA_PREFIX}families" not in span.attributes
-    assert span.attributes[f"{LiteLLM.METADATA_PREFIX}op_count"] == 3
-    assert type(span.attributes[f"{LiteLLM.METADATA_PREFIX}op_count"]) is int
 
 
 def test_deferred_close_starts_at_the_provider_handoff_not_the_logging_objects_birth():
@@ -3733,7 +3747,8 @@ def test_every_prisma_crud_call_site_names_a_known_table_so_no_half_named_postgr
     repo = Path(__file__).resolve().parents[4]
     per_file = (_crud_call_sites_in(path, repo) for path in _source_files(repo))
     sites = tuple(site for sites_in_file in per_file for site in sites_in_file)  # comprehension-ok: flatten
-    assert len(sites) >= 40, f"the scan lost the PrismaClient call sites: {sites}"
+    found_helpers: Final = {site.call_type for site in sites}
+    assert found_helpers == _GENERIC_CRUD_HELPERS, f"the scan lost the PrismaClient call sites: {sites}"
 
     unresolved = [site for site in sites if site.table_name not in _PRISMA_MODEL_BY_TABLE_NAME]
     assert unresolved == [], f"PrismaClient CRUD calls whose table the schema cannot resolve: {unresolved}"
@@ -3752,3 +3767,46 @@ def test_every_prisma_crud_call_site_names_a_known_table_so_no_half_named_postgr
         if re.fullmatch(r"postgres\.(select|insert|update|delete) LiteLLM_\w+", name) is None
     }
     assert half_named == {}, half_named
+
+
+def test_the_prisma_crud_scan_finds_every_receiver_and_table_form_and_reports_a_missing_table(tmp_path: Path) -> None:
+    from litellm.integrations.otel.model.spans import _PRISMA_MODEL_BY_TABLE_NAME
+
+    sources: Final = {
+        "litellm/proxy/calls.py": (
+            'prisma_client.get_data(token="t")\n'
+            'self.update_data(team_id="t", data={})\n'
+            'db.delete_data(user_id="u")\n'
+            'proxy_server.prisma_client.insert_data(data={}, table_name="spend")\n'
+            'prisma_client.get_generic_data(key="k", value="v", table_name="config")\n'
+            "prisma_client.insert_data(data={})\n"
+            'self.get_data(query_type="find_all")\n'
+            'cache.get_data(token="t")\n'
+            "prisma_client.connect()\n"
+        ),
+        "enterprise/hooks.py": 'prisma_client.get_data(user_id="u")\n',
+        "litellm-proxy-extras/extras.py": 'db.update_data(token="t", data={})\n',
+        "litellm/tests/ignored.py": "prisma_client.insert_data(data={})\n",
+        "litellm/ui/node_modules/ignored.py": "prisma_client.insert_data(data={})\n",
+    }
+    for relative, text in sources.items():
+        path: Final = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    per_file: Final = (_crud_call_sites_in(path, tmp_path) for path in _source_files(tmp_path))
+    sites: Final = tuple(site for sites_in_file in per_file for site in sites_in_file)  # comprehension-ok: flatten
+
+    assert {(site.location, site.call_type, site.table_name) for site in sites} == {
+        ("litellm/proxy/calls.py:1", "get_data", "key"),
+        ("litellm/proxy/calls.py:2", "update_data", "team"),
+        ("litellm/proxy/calls.py:3", "delete_data", "user"),
+        ("litellm/proxy/calls.py:4", "insert_data", "spend"),
+        ("litellm/proxy/calls.py:5", "get_generic_data", "config"),
+        ("litellm/proxy/calls.py:6", "insert_data", None),
+        ("litellm/proxy/calls.py:7", "get_data", None),
+        ("enterprise/hooks.py:1", "get_data", "user"),
+        ("litellm-proxy-extras/extras.py:1", "update_data", "key"),
+    }
+    unresolved: Final = sorted(site.location for site in sites if site.table_name not in _PRISMA_MODEL_BY_TABLE_NAME)
+    assert unresolved == ["litellm/proxy/calls.py:6", "litellm/proxy/calls.py:7"]
