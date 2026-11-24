@@ -16,7 +16,10 @@ pub use router::{NativeRouterHost, answers};
 use std::sync::Arc;
 
 use litellm_gateway_auth::Authenticated;
-use litellm_gateway_auth_core::{Caller, authz::Layer};
+use litellm_gateway_auth_core::{
+    Caller,
+    authz::{Layer, ModelList},
+};
 use litellm_gateway_inference::routing::{Host, RouteAttempt};
 
 use crate::{Gateway, callbacks, callbacks::Callbacks};
@@ -27,9 +30,19 @@ use crate::{Gateway, callbacks, callbacks::Callbacks};
 pub(crate) fn layers(identity: &Authenticated<NativeRows>) -> impl Iterator<Item = Layer<'_>> {
     let key = match &**identity {
         Caller::MasterKey => None,
-        Caller::Key(key) => Some(Layer::Key(key.key.models())),
+        Caller::Key(key) => Some(Layer::Key(ModelList::read(key.key.models()))),
     };
     key.into_iter()
+}
+
+/// Every entry of the model lists the native host read for `identity`, as their rows hold them.
+/// The router narrows a caller that reaches a model only through an access group by these, as
+/// Python's does by a key's `models` plus its `team_models`, sentinels included.
+pub(crate) fn allowed_models(identity: &Authenticated<NativeRows>) -> Vec<String> {
+    match &**identity {
+        Caller::MasterKey => Vec::new(),
+        Caller::Key(key) => key.key.models().to_vec(),
+    }
 }
 
 /// The host the gateway's routes are served through.
@@ -54,6 +67,10 @@ impl Host for NativeHost {
         identity: &'a Authenticated<NativeRows>,
     ) -> impl Iterator<Item = Layer<'a>> {
         layers(identity)
+    }
+
+    fn allowed_models(&self, identity: &Authenticated<NativeRows>) -> Vec<String> {
+        allowed_models(identity)
     }
 
     fn hooks(&self, identity: &Authenticated<NativeRows>) -> callbacks::Call {

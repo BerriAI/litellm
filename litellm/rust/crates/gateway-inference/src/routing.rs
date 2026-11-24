@@ -13,7 +13,7 @@ use litellm_config::LitellmRole;
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{
     Rows, StoredKey,
-    authz::{self, Denied, Layer, ModelAsk},
+    authz::{self, AuthzDenial, Layer, ModelAsk},
 };
 use litellm_inference::Error as InferenceError;
 use litellm_router_core::{
@@ -54,6 +54,11 @@ pub trait Host: Send + Sync + Sized + 'static {
         &self,
         identity: &'a Authenticated<Self::Rows>,
     ) -> impl Iterator<Item = Layer<'a>>;
+
+    /// Every entry of the model lists this host read for `identity`, as their rows hold them.
+    /// The router narrows a caller that reaches a model only through an access group by these,
+    /// as Python's does by a key's `models` plus its `team_models`, sentinels included.
+    fn allowed_models(&self, identity: &Authenticated<Self::Rows>) -> Vec<String>;
 
     /// The callback hooks of one call `identity` makes, which read and write the call's record.
     fn hooks(&self, identity: &Authenticated<Self::Rows>) -> Self::Hooks;
@@ -132,15 +137,16 @@ fn authorize<H: Host>(
     gateway: &Gateway<H>,
     identity: &Authenticated<H::Rows>,
     name: &str,
-) -> Result<(), Denied> {
+) -> Result<(), AuthzDenial> {
     let registry = gateway.router.registry();
     let access_groups: Vec<String> = resolve::model_access_groups(&registry, name, None)
         .into_iter()
         .collect();
     let ask = ModelAsk {
         name,
-        group: registry.alias_of(name).unwrap_or(name),
+        candidates: &[name, registry.alias_of(name).unwrap_or(name)],
         access_groups: &access_groups,
+        team_alias: false,
     };
     authz::authorize(gateway.host.layers(identity), &ask)
 }
@@ -212,26 +218,22 @@ pub fn allows<H: Host>(
     identity: &Authenticated<H::Rows>,
     target: &str,
 ) -> bool {
-    let request = caller_request(identity, gateway.host.layers(identity), target);
+    let request = caller_request(identity, gateway.host.allowed_models(identity), target);
     !known(gateway, &request) || authorize(gateway, identity, target).is_ok()
 }
 
 /// A request for `model` by `identity`: an admin by the role the auth core gives it, never by
-/// the kind of credential it presented, with the names its `layers` hold, which the router
-/// narrows access groups by as Python's reads the key's `models`.
-fn caller_request<'a, R: Rows<Key: StoredKey>>(
+/// the kind of credential it presented, with the `allowed_models` its host read, which the
+/// router narrows access groups by as Python's reads the key's `models`.
+fn caller_request<R: Rows<Key: StoredKey>>(
     identity: &Authenticated<R>,
-    layers: impl Iterator<Item = Layer<'a>>,
+    allowed_models: Vec<String>,
     model: &str,
 ) -> RouterRequest {
     RouterRequest {
         model: model.to_owned(),
         proxy_admin: identity.role() == LitellmRole::ProxyAdmin,
-        allowed_models: layers
-            .flat_map(|layer| match layer {
-                Layer::Key(models) => models.iter().cloned(),
-            })
-            .collect(),
+        allowed_models,
         ..RouterRequest::default()
     }
 }
@@ -246,7 +248,7 @@ pub(crate) async fn call<H: Host, A: RouteAttempt>(
     model: &str,
     route: &A,
 ) -> Result<RouterResponse<A::Outcome>, Ended> {
-    let request = caller_request(identity, gateway.host.layers(identity), model);
+    let request = caller_request(identity, gateway.host.allowed_models(identity), model);
     if !known(gateway, &request) {
         return Err(Error::UnknownModel {
             route: path,
@@ -492,19 +494,9 @@ mod tests {
         #[case] caller: Caller<Held>,
         #[case] proxy_admin: bool,
     ) {
-        let request = caller_request(&Authenticated::from(caller), [].into_iter(), "public/model");
+        let request = caller_request(&Authenticated::from(caller), Vec::new(), "public/model");
 
         assert_eq!(request.proxy_admin, proxy_admin);
-    }
-
-    #[rstest]
-    fn the_router_narrows_access_groups_by_the_names_the_key_layer_holds() {
-        let models = ["claude".to_owned(), "fast".to_owned()];
-        let caller = Authenticated::from(key("stored", false));
-
-        let request = caller_request(&caller, [Layer::Key(&models)].into_iter(), "claude");
-
-        assert_eq!(request.allowed_models, models);
     }
 
     fn attempt(params: Value, router_timeout: Option<u64>) -> Attempt {
