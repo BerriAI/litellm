@@ -646,22 +646,27 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return supported_params
 
-    def map_tool_choice_values(self, model: str, tool_choice: str | dict) -> ToolConfig | None:
+    def map_tool_choice_values(
+        self, model: str, tool_choice: str | dict, drop_params: bool = False
+    ) -> ToolConfig | None:
         if tool_choice == "none":
             return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="NONE"))
         elif tool_choice == "required":
             return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="ANY"))
         elif tool_choice == "auto":
             return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="AUTO"))
+        elif tool_choice == "validated":
+            return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="VALIDATED"))
         elif isinstance(tool_choice, dict):
             # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             name: Final = tool_choice.get("function", {}).get("name", "")
             return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="ANY", allowed_function_names=[name]))
-        else:
-            raise litellm.utils.UnsupportedParamsError(
-                message=f"VertexAI doesn't support tool_choice={tool_choice}. Supported tool_choice values=['auto', 'required', json object]. To drop it from the call, set `litellm.drop_params = True.",
-                status_code=400,
-            )
+        if drops_unsupported_params(drop_params):
+            return None
+        raise litellm.utils.UnsupportedParamsError(
+            message=f"VertexAI doesn't support tool_choice={tool_choice}. Supported tool_choice values=['auto', 'none', 'required', 'validated', json object]. To drop it from the call, set `litellm.drop_params = True`.",
+            status_code=400,
+        )
 
     def _map_web_search_options(self, value: dict) -> Tools:
         """
@@ -1682,6 +1687,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 _tool_choice_value = self.map_tool_choice_values(
                     model=model,
                     tool_choice=value,
+                    drop_params=drop_params,
                 )
                 if _tool_choice_value is not None:
                     optional_params["tool_choice"] = _tool_choice_value
