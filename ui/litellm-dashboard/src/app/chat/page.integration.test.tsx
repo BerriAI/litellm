@@ -216,6 +216,31 @@ describe("/ui/chat request metrics", () => {
     expect(continued[0]).toEqual([{ role: "user", content: "Thanks" }]);
   });
 
+  it("keeps the session when the model already in use is picked again", async () => {
+    mockMakeOpenAIResponsesRequest
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        (args[1] as (role: string, delta: string) => void)("assistant", "About a cent.");
+        (args[ON_RESPONSE_ID_INDEX] as (id: string) => void)("resp_first");
+      })
+      .mockResolvedValueOnce(undefined);
+
+    await sendOneMessage();
+    expect(await screen.findByText("About a cent.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /gpt-5\.4-mini/ }));
+    expect(await screen.findByPlaceholderText("Search models...")).toBeInTheDocument();
+    const [, pickedAgain] = screen.getAllByRole("button", { name: /gpt-5\.4-mini/ });
+    fireEvent.click(pickedAgain);
+    fireEvent.change(screen.getByPlaceholderText("Send a message..."), { target: { value: "And yesterday?" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).toBeEnabled());
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(mockMakeOpenAIResponsesRequest).toHaveBeenCalledTimes(2));
+
+    const [, followUp] = mockMakeOpenAIResponsesRequest.mock.calls;
+    expect(followUp[PREVIOUS_RESPONSE_ID_INDEX]).toBe("resp_first");
+    expect(followUp[0]).toEqual([{ role: "user", content: "And yesterday?" }]);
+  });
+
   it("puts the new conversation ID in the URL after the first message is sent", async () => {
     mockMakeOpenAIResponsesRequest.mockResolvedValue(undefined);
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();

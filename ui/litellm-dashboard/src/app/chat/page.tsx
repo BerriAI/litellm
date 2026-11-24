@@ -126,14 +126,19 @@ export default function ChatConversationPage() {
     setResendsHistory(false);
   }
 
-  const selectModel = useCallback((model: string) => {
-    setSelectedModel(model);
-    setResponsesSessionId(null);
-    setResendsHistory(false);
-    localStorage.setItem(LOCALSTORAGE_MODEL_KEY, model);
-    setModelSelectorOpen(false);
-    setModelSearchText("");
-  }, []);
+  const selectModel = useCallback(
+    (model: string) => {
+      if (model !== selectedModel) {
+        setResponsesSessionId(null);
+        setResendsHistory(false);
+      }
+      setSelectedModel(model);
+      localStorage.setItem(LOCALSTORAGE_MODEL_KEY, model);
+      setModelSelectorOpen(false);
+      setModelSearchText("");
+    },
+    [selectedModel],
+  );
 
   const handleSend = useCallback(
     async (text: string, historyOverride?: Array<{ role: "user" | "assistant"; content: string }>) => {
