@@ -11,7 +11,7 @@ request carries one.
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Generator, Mapping
+from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from itertools import product
@@ -31,7 +31,11 @@ _named_trace_id: Final[ContextVar[int | None]] = ContextVar("litellm_otel_named_
 _METADATA_KEYS: Final = ("metadata", "litellm_metadata")
 _TRACE_KEYS: Final = ("existing_trace_id", "trace_id")
 _LOOKUPS: Final = tuple(product(_METADATA_KEYS, _TRACE_KEYS))
+_TRACE_KEY_MARKER: Final = b"trace_id"  # also inside ``existing_trace_id``
 _HEADER_PREFIX: Final = "langfuse_"
+# The body is read ahead of the proxy's request size limit, admission control and auth, so what is held here is
+# capped: a larger body is handed to the app unread past the cap and the request gets a trace of its own.
+_MAX_LOOKAHEAD_BYTES: Final = 16 * 1024 * 1024
 _NO_BODY: Final[Mapping[str, object]] = MappingProxyType({})
 
 
@@ -90,33 +94,50 @@ def _named(headers: Mapping[str, str], body: Mapping[str, object], metadata_key:
 
 
 def _json_object(body: bytes) -> Mapping[str, object]:
-    if not any(key.encode() in body for key in _TRACE_KEYS):
+    """The request's JSON object, parsed only when the body spells a trace key, so a request naming no trace
+    pays one substring scan. A body that does not parse names no trace and is left for the route to reject."""
+    if _TRACE_KEY_MARKER not in body:
         return _NO_BODY
     try:
-        parsed: Final[object] = json.loads(body)
-    except ValueError:
+        parsed: Final[object] = _loads(body)
+    except (ValueError, RecursionError):
         return _NO_BODY
     return as_str_mapping(parsed) or _NO_BODY
+
+
+def _loads(body: bytes) -> object:
+    try:
+        import orjson
+    except ImportError:
+        return json.loads(body)
+    return orjson.loads(body)
 
 
 async def read_named_trace(scope: Scope, receive: Receive) -> tuple[int | None, Receive]:
     """The trace id an HTTP request's caller named, and the ``receive`` the app must read the request from.
 
-    Only a JSON ``POST`` without a ``traceparent`` has its body read, whole, before the app runs. The app
-    gets the same messages back in order, so it reads the body exactly as it would have.
+    Only a JSON ``POST`` without a ``traceparent`` has its body read before the app runs, and only up to
+    ``_MAX_LOOKAHEAD_BYTES``. The app gets the same messages back in order, then the rest of the stream, so
+    it reads the body exactly as it would have.
     """
     headers: Final = {
         name.decode("latin-1").lower(): value.decode("latin-1") for name, value in scope.get("headers", ())
     }
     if "traceparent" in headers:
         return None, receive
-    if scope.get("method") != "POST" or not headers.get("content-type", "").startswith("application/json"):
+    if scope.get("method") != "POST" or not headers.get("content-type", "").lower().startswith("application/json"):
+        return named_trace_id(headers, _NO_BODY), receive
+    if _declared_length(headers) > _MAX_LOOKAHEAD_BYTES:
         return named_trace_id(headers, _NO_BODY), receive
     read: Final[list[Message]] = []  # mutable-ok: the request's own messages, read here and replayed to the app
     while True:
         message = await receive()
         read.append(message)
-        if message["type"] != "http.request" or not message.get("more_body", False):
+        if (
+            message["type"] != "http.request"
+            or not message.get("more_body", False)
+            or _held(read) > _MAX_LOOKAHEAD_BYTES
+        ):
             break
     replayed: Final = iter(read)
 
@@ -124,8 +145,19 @@ async def read_named_trace(scope: Scope, receive: Receive) -> tuple[int | None, 
         message: Final = next(replayed, None)
         return message if message is not None else await receive()
 
+    if _held(read) > _MAX_LOOKAHEAD_BYTES:
+        return named_trace_id(headers, _NO_BODY), _as_receive(replay)
     body: Final = b"".join(message.get("body", b"") for message in read if message["type"] == "http.request")
     return named_trace_id(headers, _json_object(body)), _as_receive(replay)
+
+
+def _held(read: Sequence[Message]) -> int:
+    return sum(len(message.get("body", b"")) for message in read)
+
+
+def _declared_length(headers: Mapping[str, str]) -> int:
+    declared: Final = headers.get("content-length", "")
+    return int(declared) if declared.isascii() and declared.isdigit() else 0
 
 
 def _as_receive(replay: Callable[[], Awaitable[Message]]) -> Receive:

@@ -190,3 +190,80 @@ def test_a_body_sent_in_chunks_reaches_the_route_whole(proxy):
 
     assert response.content == payload
     assert _trace_ids(exporter) == [UUID_HEX]
+
+
+def test_a_body_too_deep_to_parse_still_reaches_the_route(proxy):
+    client, exporter = proxy
+    payload = b'{"metadata": {"trace_id": "%s"}, "input": %s' % (UUID.encode(), b"[" * 200_000)
+
+    response = client.post(PATHS[0], content=payload, headers={"content-type": "application/json"})
+
+    assert response.status_code == 200
+    assert response.content == payload
+    assert UUID_HEX not in _trace_ids(exporter)
+
+
+def test_a_body_naming_no_trace_is_never_parsed(proxy, monkeypatch):
+    from litellm.integrations.otel.plumbing import named_trace
+
+    def never_called(body: bytes) -> object:
+        raise AssertionError("parsed a body that names no trace")
+
+    monkeypatch.setattr(named_trace, "_loads", never_called)
+    client, exporter = proxy
+
+    response = client.post(PATHS[1], json={"model": "m", "input": "x" * 10_000})
+
+    assert response.status_code == 200
+    assert len(_trace_ids(exporter)) == 1
+
+
+def test_the_json_content_type_is_matched_in_any_case(proxy):
+    client, exporter = proxy
+    payload = b'{"litellm_metadata": {"trace_id": "%s"}}' % UUID.encode()
+
+    client.post(PATHS[1], content=payload, headers={"content-type": "Application/JSON; charset=utf-8"})
+
+    assert _trace_ids(exporter) == [UUID_HEX]
+
+
+@pytest.mark.parametrize("declare_length", [True, False])
+def test_a_body_over_the_lookahead_cap_is_not_held_and_reaches_the_route_whole(proxy, monkeypatch, declare_length):
+    from litellm.integrations.otel.plumbing import named_trace
+
+    monkeypatch.setattr(named_trace, "_MAX_LOOKAHEAD_BYTES", 10_000)
+    client, exporter = proxy
+    payload = b'{"metadata": {"trace_id": "%s"}, "input": "%s"}' % (UUID.encode(), b"x" * 50_000)
+
+    def chunks():
+        for start in range(0, len(payload), 4096):
+            yield payload[start : start + 4096]
+
+    response = client.post(
+        PATHS[1],
+        content=payload if declare_length else chunks(),
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.content == payload
+    assert UUID_HEX not in _trace_ids(exporter)
+
+
+@pytest.mark.asyncio
+async def test_reading_stops_at_the_lookahead_cap(monkeypatch):
+    from litellm.integrations.otel.plumbing import named_trace
+
+    monkeypatch.setattr(named_trace, "_MAX_LOOKAHEAD_BYTES", 10)
+    sent = [{"type": "http.request", "body": b"x" * 8, "more_body": True} for _ in range(5)]
+    pulled = []
+
+    async def receive():
+        pulled.append(sent[len(pulled)])
+        return pulled[-1]
+
+    scope = {"type": "http", "method": "POST", "headers": [(b"content-type", b"application/json")]}
+    named, replay = await named_trace.read_named_trace(scope, receive)
+
+    assert named is None
+    assert len(pulled) == 2
+    assert [await replay() for _ in sent] == sent
