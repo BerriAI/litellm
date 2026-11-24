@@ -9,10 +9,10 @@ import urllib.parse
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from functools import cache, partial
+from functools import cache, lru_cache, partial
 from threading import Lock
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, ParamSpec, TypeVar, cast, get_args, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, ParamSpec, TypeAlias, TypeVar, cast, get_args, overload
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -66,6 +66,32 @@ SIGV4_COMPUTED_HEADERS: Final = frozenset({"authorization", "x-amz-date", "x-amz
 
 _AWS_SESSION_TAGS_ADAPTER: Final[TypeAdapter[tuple[AwsSessionTag, ...]]] = TypeAdapter(tuple[AwsSessionTag, ...])
 _AWS_REQUEST_PARAMS: Final = TypeAdapter(Mapping[str, object])
+
+
+_RegionConfigFile: TypeAlias = tuple[str, tuple[int, int, int, int, int] | None]
+
+
+def _region_config_file(path: str) -> _RegionConfigFile:
+    expanded: Final = os.path.abspath(os.path.expanduser(os.path.expandvars(path)))
+    try:
+        stat: Final = os.stat(expanded)
+    except OSError:
+        return expanded, None
+    return expanded, (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
+
+
+@lru_cache(maxsize=16)
+def _boto3_default_region(
+    profile: str | None,
+    default_region: str | None,
+    _config_file: _RegionConfigFile,
+    _credentials_file: _RegionConfigFile,
+) -> str | None:
+    ensure_optional_import("boto3")
+    import boto3
+
+    with tracer.trace("boto3.Session()"):
+        return boto3.Session(profile_name=profile, region_name=default_region).region_name
 
 
 def _canonical_aws_session_tags(raw_tags: object) -> tuple[AwsSessionTag, ...] | None:
@@ -786,12 +812,12 @@ class BaseAWSLLM(SignsRequestsWithAWS):
                 aws_region_name = standard_aws_region_name
         if aws_region_name is None:
             try:
-                ensure_optional_import("boto3")
-                import boto3
-
-                with tracer.trace("boto3.Session()"):
-                    session: Final = boto3.Session()
-                configured_region: Final = session.region_name
+                configured_region: Final = _boto3_default_region(
+                    os.getenv("AWS_DEFAULT_PROFILE", os.getenv("AWS_PROFILE")),
+                    os.getenv("AWS_DEFAULT_REGION"),
+                    _region_config_file(os.getenv("AWS_CONFIG_FILE", "~/.aws/config")),
+                    _region_config_file(os.getenv("AWS_SHARED_CREDENTIALS_FILE", "~/.aws/credentials")),
+                )
                 if configured_region:
                     aws_region_name = configured_region
                 else:

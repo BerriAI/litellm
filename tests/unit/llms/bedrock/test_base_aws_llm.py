@@ -30,6 +30,7 @@ from litellm.llms.bedrock.base_aws_llm import (
     AwsAuthError,
     BaseAWSLLM,
     Boto3CredentialsInfo,
+    _boto3_default_region,
     run_aws_signing,
     run_off_loop_if_aws,
 )
@@ -54,6 +55,7 @@ BASE_AWS_LLM_PATH = os.path.join(
 def flush_shared_bedrock_iam_cache():
     """Process-wide IAM cache must not leak static/env credential entries across tests."""
     BaseAWSLLM._shared_iam_cache.flush_cache()
+    _boto3_default_region.cache_clear()
     yield
 
 
@@ -566,6 +568,7 @@ def test_get_aws_region_name_boto3_fallback():
             mock_boto3_session.assert_called_once()
 
     # Test case 2: boto3.Session() returns None for region (should default to us-west-2)
+    _boto3_default_region.cache_clear()
     with patch("litellm.llms.bedrock.base_aws_llm.get_secret") as mock_get_secret:
         mock_get_secret.return_value = None  # No region in env vars
 
@@ -581,6 +584,7 @@ def test_get_aws_region_name_boto3_fallback():
             mock_boto3_session.assert_called_once()
 
     # Test case 3: boto3 import/session creation raises exception (should default to us-west-2)
+    _boto3_default_region.cache_clear()
     with patch("litellm.llms.bedrock.base_aws_llm.get_secret") as mock_get_secret:
         mock_get_secret.return_value = None  # No region in env vars
 
