@@ -14,11 +14,10 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+import litellm
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.utils import query_raw_within_statement_timeout
-from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.utils import CallTypes
 
 router: Final = APIRouter(prefix="/what_if", tags=["what-if"])
@@ -101,7 +100,8 @@ class LostFields(_Frozen):
 def _provider_request(body: Mapping[str, object]) -> Mapping[str, object]:
     from litellm.utils import return_raw_request
 
-    return _as_dict(return_raw_request(CallTypes.completion, body).get("raw_request_body"))
+    raw: Final = dict[str, object](return_raw_request(CallTypes.completion, body))
+    return _as_dict(raw.get("raw_request_body"))
 
 
 def _client_params(body: Mapping[str, object]) -> tuple[str, ...]:
@@ -434,6 +434,7 @@ async def _play(
         base + exchange.path,
         headers={"Authorization": f"Bearer {api_key}", **(upstream_headers if exchange.upstream_credential else {})},
         json=exchange.body,
+        timeout=30.0,
     )
     return exchange.model_copy(
         update={
@@ -446,10 +447,8 @@ async def _play(
 async def _play_all(
     base: str, api_key: str, upstream_headers: Mapping[str, str], exchanges: Sequence[Exchange]
 ) -> tuple[str, tuple[Exchange, ...]]:
-    client: Final = get_async_httpx_client(
-        llm_provider=httpxSpecialProvider.PassThroughEndpoint, params={"timeout": 30.0}
-    ).client
-    spec: Final = await client.get(base + "/openapi.json")
+    client: Final = litellm.module_level_aclient.client
+    spec: Final = await client.get(base + "/openapi.json", timeout=30.0)
     played: Final = await asyncio.gather(*(_play(client, base, api_key, upstream_headers, e) for e in exchanges))
     return str(_as_dict(_as_dict(spec.text).get("info")).get("version", "unknown")), tuple(played)
 
