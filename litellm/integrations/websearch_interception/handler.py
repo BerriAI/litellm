@@ -48,7 +48,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     is_allowed_tools_tool_choice,
 )
 from litellm.litellm_core_utils.core_helpers import qualify_provider_stripped_model
-from litellm.llms.anthropic.messages.convertible_blocks import malformed_text_error
+from litellm.llms.anthropic.messages.convertible_blocks import non_string_user_text_error
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
@@ -576,7 +576,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         )
 
         chat_messages: Final = cast(list[AllMessageValues], messages)
-        if malformed_text_error(chat_messages) is not None:
+        if non_string_user_text_error(chat_messages) is not None:
             return None
         last_user_message: Final = get_last_user_message(chat_messages) or ""
         query: Final = last_user_message.removeprefix(_CLAUDE_CODE_WEB_SEARCH_PROMPT_PREFIX).strip()

@@ -16,7 +16,6 @@ from litellm.llms.anthropic.common_utils import (
 )
 from litellm.llms.anthropic.messages.convertible_blocks import (
     drop_non_string_texts,
-    malformed_text_error,
     reject_emptied_messages,
     reject_non_string_user_text,
 )
@@ -269,10 +268,6 @@ def normalize_native_messages(messages: Sequence[object]) -> list[dict[str, obje
 def native_messages_to_send(
     messages: Sequence[object], drop_params: object
 ) -> list[dict[str, object]]:  # mutable-ok: cache-control injection and token counters take list[dict]
-    if not drops_unsupported_params(drop_params) and malformed_text_error(messages) is not None:
-        return flatten_unencrypted_web_search_results_in_anthropic_messages(
-            sanitize_tool_use_ids_in_anthropic_messages(messages)
-        )
     return list(drop_non_string_texts(normalize_native_messages(messages), drop_params))
 
 
