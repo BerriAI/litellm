@@ -118,6 +118,10 @@ DROP_SERVER_SIDE_FALLBACK_BETA_WARNING: Final = (
     "server-side fallback support for it. Set model_info.supports_server_side_fallback: true on a deployment whose "
     "model supports it."
 )
+DROP_UNPAIRED_ADVISOR_BLOCKS_WARNING: Final = (
+    "Dropping %d advisor blocks from the message history (drop_params=True): their id is not a non-empty string "
+    "or matches no other advisor block, so the provider would reject them."
+)
 
 # Anthropic error `type` (both the JSON error body and SSE `event: error`
 # payloads use this field) mapped to the HTTP status code it corresponds to.
@@ -1996,48 +2000,70 @@ def strip_advisor_blocks_from_messages(
             the provider as sent.
     """
     drops_unpaired: Final = drops_unsupported_params(drop_params)
-    return [_message_without_advisor_blocks(message, replace_with_text, drops_unpaired) for message in messages]
+    stripped: Final = [
+        _message_without_advisor_blocks(message, replace_with_text, drops_unpaired) for message in messages
+    ]
+    dropped: Final = sum(unpaired for _, unpaired in stripped)
+    if dropped:
+        litellm.verbose_logger.warning(DROP_UNPAIRED_ADVISOR_BLOCKS_WARNING, dropped)
+    return [message for message, _ in stripped]
 
 
-def _message_without_advisor_blocks(message: _MessageT, replace_with_text: bool, drops_unpaired: bool) -> _MessageT:
+def _message_without_advisor_blocks(
+    message: _MessageT, replace_with_text: bool, drops_unpaired: bool
+) -> tuple[_MessageT, int]:
     fields: Final = as_str_mapping(message)
     content: Final = as_object_list(fields.get("content")) if fields and fields.get("role") == "assistant" else None
-    new_content: Final = (
-        None if content is None else _without_advisor_blocks(content, replace_with_text, drops_unpaired)
-    )
-    if new_content is None:
-        return message
-    stripped: Final = copy.copy(message)
-    if isinstance(stripped, dict):
-        stripped["content"] = new_content
-    return stripped
-
-
-def _without_advisor_blocks(
-    blocks: Sequence[object], replace_with_text: bool, drops_unpaired: bool
-) -> Sequence[object] | None:
-    paired: Final = _without_advisor_exchanges(blocks, replace_with_text)
-    if not drops_unpaired:
-        return paired
-    return list(filterfalse(_is_advisor_block, blocks if paired is None else paired))
-
-
-def _without_advisor_exchanges(blocks: Sequence[object], replace_with_text: bool) -> list[object] | None:
-    advisor_ids: Final = frozenset(filter(None, map(_advisor_use_id, blocks)))
-    if not advisor_ids:
-        return None
+    if not content:
+        return message, 0
+    positions: Final = [
+        position
+        for position, block in enumerate(content)
+        if not isinstance(block, dict) or ("type" in block and block["type"] in _ADVISOR_BLOCK_TYPES)
+    ]
+    if not positions:
+        return message, 0
+    advisor_blocks: Final = [content[position] for position in positions]
+    advisor_ids: Final = frozenset(filter(None, map(_advisor_use_id, advisor_blocks)))
+    if not advisor_ids and not drops_unpaired:
+        return message, 0
     advice_by_id: Final[Mapping[str, str]] = (
         MappingProxyType(
             {
                 result_id: _advisor_result_text(block)
-                for block in blocks
+                for block in advisor_blocks
                 if (result_id := _advisor_result_id(block)) in advisor_ids
             }
         )
         if replace_with_text
         else MappingProxyType({})
     )
-    return list(chain.from_iterable(_without_advisor_exchange(block, advisor_ids, advice_by_id) for block in blocks))
+    outputs: Final = MappingProxyType(
+        {
+            position: _advisor_block_output(block, advisor_ids, advice_by_id, drops_unpaired)
+            for position, block in zip(positions, advisor_blocks)
+        }
+    )
+    kept: Final = list(
+        chain.from_iterable(
+            [outputs[position][0] if position in outputs else (block,) for position, block in enumerate(content)]
+        )
+    )
+    stripped: Final = copy.copy(message)
+    if isinstance(stripped, dict):
+        stripped["content"] = kept
+    return stripped, sum(unpaired for _, unpaired in outputs.values())
+
+
+_ADVISOR_BLOCK_TYPES: Final = frozenset({"server_tool_use", "advisor_tool_result"})
+
+
+def _advisor_block_output(
+    block: object, advisor_ids: frozenset[str], advice_by_id: Mapping[str, str], drops_unpaired: bool
+) -> tuple[tuple[object, ...], int]:
+    paired: Final = _without_advisor_exchange(block, advisor_ids, advice_by_id)
+    kept: Final = tuple(filterfalse(_is_advisor_block, paired)) if drops_unpaired else paired
+    return kept, len(paired) - len(kept)
 
 
 def _is_advisor_block(block: object) -> bool:
@@ -2054,14 +2080,16 @@ def _advisor_use_id(block: object) -> str | None:
     mapping: Final = as_str_mapping(block)
     if mapping is None or mapping.get("type") != "server_tool_use" or mapping.get("name") != "advisor":
         return None
-    return string_field(mapping, "id")
+    use_id: Final = mapping.get("id")
+    return use_id if isinstance(use_id, str) else None
 
 
 def _advisor_result_id(block: object) -> str | None:
     mapping: Final = as_str_mapping(block)
     if mapping is None or mapping.get("type") != "advisor_tool_result":
         return None
-    return string_field(mapping, "tool_use_id")
+    result_id: Final = mapping.get("tool_use_id")
+    return result_id if isinstance(result_id, str) else None
 
 
 def _advisor_result_text(block: object) -> str:

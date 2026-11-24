@@ -29,6 +29,7 @@ import respx
 
 import litellm
 from litellm.llms.anthropic.common_utils import (
+    DROP_UNPAIRED_ADVISOR_BLOCKS_WARNING,
     ToolsWithoutStrict,
     is_claude_tool_target,
     strip_advisor_blocks_from_messages,
@@ -5117,6 +5118,57 @@ def test_strip_advisor_blocks_under_drop_params_leaves_the_callers_messages_as_s
     stripped: Final = strip_advisor_blocks_from_messages(messages, drop_params=True)
 
     assert (messages, stripped) == (sent, [{"role": "assistant", "content": [_OK_TEXT]}])
+
+
+def _advisor_drop_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if "advisor blocks" in record.getMessage()]
+
+
+def test_strip_advisor_blocks_warns_once_with_how_many_unpaired_blocks_drop_params_dropped(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    messages: Final = [
+        {"role": "assistant", "content": [_advisor_use("srvtoolu_1"), _advisor_result("srvtoolu_1"), _OK_TEXT]},
+        {"role": "assistant", "content": [_advisor_use(["srvtoolu_2"]), _advisor_result(["srvtoolu_2"]), _OK_TEXT]},
+        {"role": "assistant", "content": [_advisor_result("srvtoolu_3"), _OK_TEXT]},
+    ]
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        strip_advisor_blocks_from_messages(messages, drop_params=True)
+
+    assert _advisor_drop_warnings(caplog) == [DROP_UNPAIRED_ADVISOR_BLOCKS_WARNING % 3]
+
+
+@pytest.mark.parametrize(
+    ("content", "drop_params"),
+    [
+        pytest.param(
+            [_advisor_use(["srvtoolu_1"]), _advisor_result(["srvtoolu_1"]), _OK_TEXT], None, id="without-drop-params"
+        ),
+        pytest.param(
+            [_advisor_use("srvtoolu_1"), _advisor_result("srvtoolu_1"), _OK_TEXT], True, id="only-paired-blocks"
+        ),
+    ],
+)
+def test_strip_advisor_blocks_stays_quiet_when_drop_params_drops_nothing(
+    caplog: pytest.LogCaptureFixture, content: list[dict[str, object]], drop_params: object
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        strip_advisor_blocks_from_messages([{"role": "assistant", "content": content}], drop_params=drop_params)
+
+    assert _advisor_drop_warnings(caplog) == []
+
+
+@pytest.mark.parametrize("drop_params", [None, True], ids=["without-drop-params", "drop-params"])
+def test_strip_advisor_blocks_returns_a_message_without_advisor_blocks_as_the_same_object(drop_params: object) -> None:
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [_OK_TEXT, {"type": "tool_use", "id": "toolu_1", "name": "f", "input": {}}]},
+    ]
+
+    stripped: Final = strip_advisor_blocks_from_messages(messages, drop_params=drop_params)
+
+    assert [message is sent for message, sent in zip(stripped, messages, strict=True)] == [True, True]
 
 
 def test_a_stale_tool_search_is_left_out_beside_blocks_with_list_ids() -> None:

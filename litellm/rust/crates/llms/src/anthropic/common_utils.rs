@@ -668,7 +668,51 @@ fn is_advisor_block(block: &ContentBlock) -> bool {
         || block.is_type(ContentBlockType::AdvisorToolResult)
 }
 
-pub fn drop_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
+pub fn drop_unpaired_advisor_blocks(
+    messages: Vec<Recognized<Message>>,
+) -> Vec<Recognized<Message>> {
+    let stripped = map_messages(messages, strip_advisor_blocks, strip_raw_advisor_blocks);
+    let unpaired = count_advisor_blocks(&stripped);
+    if unpaired == 0 {
+        return stripped;
+    }
+    tracing::warn!(
+        "Dropping {unpaired} advisor blocks from the message history (drop_params=True): their id is not a non-empty string or matches no other advisor block, so the provider would reject them."
+    );
+    map_messages(stripped, drop_advisor_blocks, drop_raw_advisor_blocks)
+}
+
+fn count_advisor_blocks(messages: &[Recognized<Message>]) -> usize {
+    messages
+        .iter()
+        .map(|message| match message {
+            Recognized::Known(Message {
+                role,
+                content: MessageContent::Blocks(blocks),
+                ..
+            }) if role == "assistant" => blocks
+                .iter()
+                .filter(|block| is_advisor_block(block))
+                .count(),
+            Recognized::Unrecognized(message)
+                if message.get("role").and_then(Value::as_str) == Some("assistant") =>
+            {
+                message
+                    .get(CONTENT)
+                    .and_then(Value::as_array)
+                    .map_or(0, |blocks| {
+                        blocks
+                            .iter()
+                            .filter(|block| is_raw_advisor_block(block))
+                            .count()
+                    })
+            }
+            _ => 0,
+        })
+        .sum()
+}
+
+fn drop_advisor_blocks(messages: Vec<Message>) -> Vec<Message> {
     messages
         .into_iter()
         .map(|message| {
@@ -1081,7 +1125,7 @@ fn is_raw_advisor_block(block: &Value) -> bool {
     is_raw_advisor_use(block) || raw_block_type(block) == Some("advisor_tool_result")
 }
 
-pub fn drop_raw_advisor_blocks(message: Value) -> Option<Value> {
+fn drop_raw_advisor_blocks(message: Value) -> Option<Value> {
     if message.get("role").and_then(Value::as_str) != Some("assistant") {
         return Some(message);
     }
