@@ -41,9 +41,11 @@ from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
 from litellm.litellm_core_utils.allowed_tools_tool_choice import (
+    allowed_tools_tool_choice_in_auto_mode,
     allowed_tools_tool_choice_kept_on_follow_up,
     allowed_tools_tool_choice_with_builtin_as_function,
     allowed_tools_tool_choice_without,
+    is_allowed_tools_tool_choice,
 )
 from litellm.litellm_core_utils.core_helpers import qualify_provider_stripped_model
 from litellm.llms.base_llm.search.transformation import SearchResponse
@@ -247,7 +249,11 @@ _PROVIDERS_VERIFIED_TO_ANSWER_WITHOUT_SEARCH: Final = frozenset(
 )
 
 _SEARCH_LIMIT_REACHED: Final = SearchFailed(
-    error_code="max_uses_exceeded", message="this turn has used its maximum number of web searches (max_uses_exceeded)"
+    error_code="max_uses_exceeded",
+    message=(
+        "this turn has used its maximum number of web searches (max_uses_exceeded). "
+        "Web search is no longer available in this turn, so answer now using only the search results above."
+    ),
 )
 
 _TOOL_MAPPINGS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
@@ -419,9 +425,10 @@ class WebSearchInterceptionLogger(CustomLogger):
     def answers_tool_calls_at_agentic_loop_cap(self, custom_llm_provider: str) -> bool:
         return custom_llm_provider in _PROVIDERS_VERIFIED_TO_ANSWER_WITHOUT_SEARCH
 
-    def _is_capped_call(self, kwargs: Mapping[str, object]) -> bool:
-        provider: Final = kwargs.get("custom_llm_provider")
-        if not isinstance(provider, str) or not self.answers_tool_calls_at_agentic_loop_cap(provider):
+    def _is_capped_call(self, custom_llm_provider: object, kwargs: Mapping[str, object]) -> bool:
+        if not isinstance(custom_llm_provider, str) or not self.answers_tool_calls_at_agentic_loop_cap(
+            custom_llm_provider
+        ):
             return False
         return self._followup_loop_position(kwargs).is_past_cap
 
@@ -433,7 +440,24 @@ class WebSearchInterceptionLogger(CustomLogger):
         return {**kwargs, "max_agentic_loops": self.max_agentic_loops}
 
     @classmethod
-    def _tool_choice_within(cls, tool_choice: object, remaining_tools: Sequence[Mapping[str, object]]) -> object:
+    def _tool_choice_within(
+        cls,
+        tool_choice: object,
+        remaining_tools: Sequence[Mapping[str, object]],
+        auto_choice: str | Mapping[str, str],
+    ) -> object:
+        match tool_choice:
+            case "required" | {"type": "any"}:
+                return auto_choice
+            case _ if is_allowed_tools_tool_choice(tool_choice):
+                return allowed_tools_tool_choice_in_auto_mode(tool_choice)
+            case _:
+                return cls._tool_choice_naming_a_remaining_tool(tool_choice, remaining_tools)
+
+    @classmethod
+    def _tool_choice_naming_a_remaining_tool(
+        cls, tool_choice: object, remaining_tools: Sequence[Mapping[str, object]]
+    ) -> object:
         choice: Final = _as_str_mapping(tool_choice)
         chosen_name: Final = None if choice is None else cls._tool_name(choice)
         if chosen_name is None or chosen_name in {cls._tool_name(tool) for tool in remaining_tools}:
@@ -447,6 +471,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         tool_choice: object,
         is_search_tool: Callable[[Mapping[str, object]], bool],
         no_tools_choice: str | Mapping[str, str],
+        auto_choice: str | Mapping[str, str],
     ) -> Mapping[str, object]:
         remaining_tools: Final = _tools_without_search(tools, is_search_tool)
         remaining_choice: Final = allowed_tools_tool_choice_without(tool_choice, is_search_tool)
@@ -455,7 +480,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         return MappingProxyType(
             {
                 "tools": [dict(tool) for tool in remaining_tools],
-                "tool_choice": cls._tool_choice_within(remaining_choice, remaining_tools),
+                "tool_choice": cls._tool_choice_within(remaining_choice, remaining_tools, auto_choice),
             }
         )
 
@@ -997,7 +1022,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         # Check if tools include any web search tool (strict check for chat completions)
         has_websearch_tool: Final = any(is_web_search_tool_chat_completion(t) for t in (tools or []))
-        if not has_websearch_tool:
+        if not has_websearch_tool and not self._is_capped_call(custom_llm_provider, kwargs):
             verbose_logger.debug("WebSearchInterception: No litellm_web_search tool in request")
             return False, {}
 
@@ -1049,7 +1074,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             return False, {}
 
         has_websearch_tool: Final = any(is_web_search_tool_responses(t) for t in (tools or []))
-        if not has_websearch_tool:
+        if not has_websearch_tool and not self._is_capped_call(custom_llm_provider, kwargs):
             verbose_logger.debug("WebSearchInterception: No litellm_web_search tool in responses request")
             return False, {}
 
@@ -1367,7 +1392,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         logging_obj: "LiteLLMLoggingObj | None",
     ) -> AgenticLoopRequestPatch:
         """Execute litellm.asearch() and build a Responses API rerun patch."""
-        capped: Final = self._is_capped_call(_STR_KEYED_MAPPING.validate_python(kwargs))
+        call_kwargs: Final = _STR_KEYED_MAPPING.validate_python(kwargs)
+        capped: Final = self._is_capped_call(call_kwargs.get("custom_llm_provider"), call_kwargs)
         search_outcomes: Final = await self._search_outcomes(tool_calls, kwargs, capped)
         search_texts: Final = [WebSearchTransformation.search_outcome_text(outcome) for outcome in search_outcomes]
 
@@ -1433,7 +1459,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 {
                     **optional_params_clean,
                     **self._final_followup_tool_params(
-                        tools_param, optional_params.get("tool_choice"), is_web_search_tool_responses, "none"
+                        tools_param, optional_params.get("tool_choice"), is_web_search_tool_responses, "none", "auto"
                     ),
                 }
                 if capped
@@ -1570,7 +1596,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         """
         Execute litellm.search() and build follow-up request patch.
         """
-        capped: Final = self._is_capped_call(_STR_KEYED_MAPPING.validate_python(kwargs))
+        call_kwargs: Final = _STR_KEYED_MAPPING.validate_python(kwargs)
+        capped: Final = self._is_capped_call(call_kwargs.get("custom_llm_provider"), call_kwargs)
         search_outcomes: Final = await self._search_outcomes(tool_calls, kwargs, capped)
         final_search_results: Final = tuple(
             WebSearchTransformation.search_outcome_text(outcome) for outcome in search_outcomes
@@ -1624,6 +1651,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                         anthropic_params.get("tool_choice"),
                         is_web_search_tool,
                         {"type": "none"},
+                        {"type": "auto"},
                     ),
                 }
                 if capped
@@ -2024,7 +2052,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         response_format: str = "openai",
     ) -> AgenticLoopRequestPatch:
         """Execute litellm.search() and build chat-completion rerun patch."""
-        capped: Final = self._is_capped_call(kwargs)
+        capped: Final = self._is_capped_call(kwargs.get("custom_llm_provider"), kwargs)
         search_outcomes: Final = await self._search_outcomes(tool_calls, kwargs, capped)
         final_search_results: Final = [
             WebSearchTransformation.search_outcome_text(outcome) for outcome in search_outcomes
@@ -2095,7 +2123,11 @@ class WebSearchInterceptionLogger(CustomLogger):
         }
         tool_params: Final = (
             self._final_followup_tool_params(
-                tools_param, optional_params_clean.get("tool_choice"), is_web_search_tool_chat_completion, "none"
+                tools_param,
+                optional_params_clean.get("tool_choice"),
+                is_web_search_tool_chat_completion,
+                "none",
+                "auto",
             )
             if capped
             else ({} if tools_param is None else {"tools": tools_param})

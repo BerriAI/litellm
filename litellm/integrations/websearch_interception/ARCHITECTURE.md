@@ -210,10 +210,11 @@ response = await litellm.messages.acreate(
 ## Loop Ceiling
 
 One intercepted request can chain several follow-up model calls, since the model often searches again after
-reading the first set of results. `max_agentic_loops` caps how many of those follow-ups run, and it defaults
+reading the first set of results. `max_agentic_loops` caps how many searches one turn runs, and it defaults
 to 3. LiteLLM also breaks the loop early when the model asks for the exact same tool call twice in a row.
 
-Set the ceiling on the feature, which the interceptor applies to `/v1/messages` requests:
+Set the ceiling on the feature, which the interceptor applies on `/v1/messages`, `/v1/chat/completions` and
+`/v1/responses`:
 
 ```yaml
 litellm_settings:
@@ -240,11 +241,17 @@ from starting rather than surfacing later. The per-deployment one is checked whi
 not on `LiteLLM_Params`, because the proxy builds its router with `ignore_invalid_deployments=True` and a
 validator down there would drop the deployment silently instead of refusing to start.
 
-When the ceiling is reached on a non-streaming `/v1/messages` request, the turn ends there and the client gets
-the last response back with the internal `litellm_web_search` tool call removed and `stop_reason: end_turn`.
-The client never declared that tool, so leaving the block in would hand it a tool call it has no way to answer.
-The answer can be less complete than it would have been with more loops, which is the tradeoff the ceiling
-buys. Where the refused call was the only block left, the turn comes back with no text in it at all.
+When the model asks for one more search at the ceiling on Anthropic, Azure AI, Gemini, OpenAI or Vertex AI,
+the interceptor answers that search with a `max_uses_exceeded` result and makes one last model call without the
+search tool, so the turn ends with an answer built from the results it already has. A `tool_choice` that forces
+some tool (`"required"`, `{"type": "any"}`, or `allowed_tools` in required mode) is relaxed to auto on that call,
+so the model is never pushed into a client tool instead of answering. A choice that names one client tool stays.
+
+Every other case ends the turn at the ceiling. That covers Bedrock, which was not checked live to answer once
+the search tool is gone, and a last call that still asks for a search. The client gets the last response back with the
+internal `litellm_web_search` call removed and a normal stop reason. The client never declared that tool, so
+leaving the call in would hand it a tool call it has no way to answer. Where the refused call was the only
+block left, the turn comes back with no text in it at all.
 
 Non-streaming is not a limitation on the client here, because a client that asked for a stream gets the same
 treatment. Interception converts an intercepted `stream=True` request to non-streaming before the loop runs and
@@ -252,11 +259,6 @@ rebuilds the SSE stream from the finalized turn afterwards, so the ceiling is al
 client has not seen yet. `AgenticStreamingIterator` is the one caller that reaches the loop with its events
 already on the wire, and it keeps raising, because a finalized turn would arrive there as a second message
 rather than as a replacement.
-
-Two other surfaces do not get that treatment yet. `/v1/responses` returns its own shape that the finalizer does
-not rewrite, so it still hands back the internal call. And `/v1/chat/completions` runs its own copy of these
-rails in `litellm_core_utils/chat_completion_agentic_loop.py`, which still raises rather than ending the turn.
-Both are tracked separately
 
 ---
 

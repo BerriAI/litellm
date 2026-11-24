@@ -1286,6 +1286,15 @@ class TestACappedTurnEndsWithTheModelAnswer:
         assert anthropic_messages_upstream.bodies[-1]["tool_choice"] == {"type": "tool", "name": "get_weather"}
 
     @pytest.mark.asyncio
+    async def test_a_choice_forcing_some_tool_lets_the_last_call_answer(
+        self, anthropic_messages_upstream, perplexity_search
+    ):
+        response = await self._ask(tools=[get_litellm_web_search_tool(), WEATHER_TOOL], tool_choice={"type": "any"})
+
+        assert anthropic_messages_upstream.bodies[-1]["tool_choice"] == {"type": "auto"}
+        assert [block.get("text") for block in response["content"] if block["type"] == "text"] == [FINAL_ANSWER]
+
+    @pytest.mark.asyncio
     async def test_a_turn_that_ends_before_the_cap_makes_no_extra_call(
         self, monkeypatch, anthropic_messages_upstream, perplexity_search
     ):
@@ -1436,6 +1445,103 @@ async def test_openai_chat_completion_stops_searching_at_the_agentic_loop_cap(
     assert {call.request.headers["authorization"] for call in openai_route.calls} == {"Bearer sk-test"}
 
 
+GEMINI_GENERATE_CONTENT_URL: Final = r"^https://generativelanguage\.googleapis\.com/.+:generateContent"
+
+
+def _gemini_reply(searches: bool) -> httpx.Response:
+    part: Final = (
+        {"functionCall": {"name": INTERNAL_TOOL_NAME, "args": {"query": "world cup winner"}}}
+        if searches
+        else {"text": WORLD_CUP_ANSWER}
+    )
+    return httpx.Response(
+        200,
+        json={
+            "candidates": [{"content": {"role": "model", "parts": [part]}, "finishReason": "STOP", "index": 0}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15},
+        },
+    )
+
+
+def _gemini_reply_that_keeps_searching_until_told_to_answer(request: httpx.Request) -> httpx.Response:
+    """
+    Gemini 3.8 Flash called the undeclared search function at the capped call in 6 of 18
+    live replays (2026-11-23) unless the refused search result told it to answer now.
+    """
+    content: Final = request.content.decode()
+    search_offered: Final = INTERNAL_TOOL_NAME in json.dumps(json.loads(content).get("tools") or [])
+    return _gemini_reply(searches=search_offered or "answer now" not in content)
+
+
+def _gemini_reply_that_always_searches(request: httpx.Request) -> httpx.Response:
+    return _gemini_reply(searches=True)
+
+
+@pytest.fixture
+def gemini_upstream(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, perplexity_search: respx.Route
+) -> respx.Route:
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["gemini"])])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return respx_mock.post(url__regex=GEMINI_GENERATE_CONTENT_URL)
+
+
+@pytest.mark.asyncio
+async def test_gemini_chat_completion_answers_instead_of_searching_again_at_the_agentic_loop_cap(
+    gemini_upstream: respx.Route,
+):
+    gemini_upstream.mock(side_effect=_gemini_reply_that_keeps_searching_until_told_to_answer)
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[{"type": "web_search"}],
+        api_key="test-gemini-key",
+        max_agentic_loops=1,
+    )
+
+    assert gemini_upstream.call_count == _model_calls_in_a_turn_that_reaches_the_cap(1)
+    assert response.choices[0].message.content == WORLD_CUP_ANSWER
+    assert not response.choices[0].message.tool_calls
+
+
+@pytest.mark.asyncio
+async def test_gemini_chat_completion_never_hands_the_client_a_search_call_the_capped_call_still_made(
+    gemini_upstream: respx.Route,
+):
+    gemini_upstream.mock(side_effect=_gemini_reply_that_always_searches)
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[{"type": "web_search"}],
+        api_key="test-gemini-key",
+        max_agentic_loops=1,
+    )
+
+    assert gemini_upstream.call_count == _model_calls_in_a_turn_that_reaches_the_cap(1)
+    assert response.choices[0].finish_reason == "stop"
+    assert not response.choices[0].message.tool_calls
+
+
+@pytest.mark.asyncio
+async def test_gemini_responses_never_hands_the_client_a_search_call_the_capped_call_still_made(
+    gemini_upstream: respx.Route,
+):
+    gemini_upstream.mock(side_effect=_gemini_reply_that_always_searches)
+
+    response: Final = await litellm.aresponses(
+        model="gemini/gemini-3.8-flash",
+        input="Who won the last World Cup?",
+        tools=[{"type": "web_search"}],
+        api_key="test-gemini-key",
+        max_agentic_loops=1,
+    )
+
+    assert gemini_upstream.call_count == _model_calls_in_a_turn_that_reaches_the_cap(1)
+    assert [item.type for item in response.output if item.type == "function_call"] == []
+
+
 def _chat_function_tool(name: str) -> dict[str, object]:
     return {"type": "function", "function": {"name": name, "parameters": {"type": "object", "properties": {}}}}
 
@@ -1579,6 +1685,37 @@ async def test_openai_chat_completion_bridged_to_the_responses_api_stops_searchi
     assert perplexity_search.call_count == loops_allowed
     assert all("_agentic_loop_api_surface" not in json.loads(call.request.content) for call in model_calls)
     assert response.choices[0].message.content == WORLD_CUP_ANSWER
+
+
+@pytest.mark.asyncio
+async def test_responses_last_call_at_the_cap_does_not_force_a_client_tool(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    perplexity_search: respx.Route,
+):
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["openai"])])
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    responses_route: Final = respx_mock.post(f"{OPENAI_COMPATIBLE_API_BASE}/responses").mock(
+        side_effect=_responses_reply_asking_for_another_search_until_enough_results
+    )
+
+    response: Final = await litellm.aresponses(
+        model="openai/gpt-5.6",
+        input=[{"role": "user", "content": "Who won the last World Cup?"}],
+        tools=[
+            {"type": "web_search"},
+            {"type": "function", "name": "delete_records", "parameters": {"type": "object", "properties": {}}},
+        ],
+        tool_choice="required",
+        api_key="sk-test",
+        api_base=OPENAI_COMPATIBLE_API_BASE,
+        max_agentic_loops=1,
+    )
+
+    last_call: Final = json.loads(responses_route.calls.last.request.content)
+    assert offered_tool_names(last_call) == ["delete_records"]
+    assert last_call["tool_choice"] == "auto"
+    assert response.output_text == WORLD_CUP_ANSWER
 
 
 @pytest.mark.asyncio

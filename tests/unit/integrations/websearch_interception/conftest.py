@@ -4,7 +4,7 @@ import threading
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Final
+from typing import Final, TypeAlias
 
 import httpx
 import pytest
@@ -20,6 +20,8 @@ OPENAI_RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
 FINAL_ANSWER: Final = "Here is what the searches found."
 RUNAWAY_LOOP_LIMIT: Final = 8
 SEARCH_LIMIT_ERROR_CODE: Final = "max_uses_exceeded"
+
+ModelReply: TypeAlias = Callable[[Mapping[str, object], int, bool, str], Mapping[str, object]]
 
 
 @pytest.fixture
@@ -41,7 +43,7 @@ def offered_tool_names(body: Mapping[str, object]) -> list[str]:
     return [tool.get("function", {}).get("name") or tool.get("name") for tool in tools]
 
 
-def _searching_model_reply(reply: Callable[[dict, int, bool, str], dict]) -> Callable[[bytes], dict]:
+def _searching_model_reply(reply: ModelReply) -> Callable[[bytes], Mapping[str, object]]:
     """
     Searches while the search tool is offered. Once it is not, answers only if the
     history says the search limit was reached, and otherwise ends the turn with no
@@ -49,7 +51,7 @@ def _searching_model_reply(reply: Callable[[dict, int, bool, str], dict]) -> Cal
     """
     counter: Final[Iterator[int]] = itertools.count(1)
 
-    def respond(content: bytes) -> dict:
+    def respond(content: bytes) -> Mapping[str, object]:
         body: Final = json.loads(content)
         call_number: Final = next(counter)
         searches: Final = LITELLM_WEB_SEARCH_TOOL_NAME in offered_tool_names(body) and call_number < RUNAWAY_LOOP_LIMIT
@@ -60,13 +62,13 @@ def _searching_model_reply(reply: Callable[[dict, int, bool, str], dict]) -> Cal
 
 
 def _searching_model(
-    reply: Callable[[dict, int, bool, str], dict],
+    reply: ModelReply,
 ) -> Callable[[httpx.Request], httpx.Response]:
     respond: Final = _searching_model_reply(reply)
     return lambda request: httpx.Response(200, json=respond(request.content))
 
 
-def _anthropic_reply(body: dict, call_number: int, searches: bool, answer: str) -> dict:
+def _anthropic_reply(body: Mapping[str, object], call_number: int, searches: bool, answer: str) -> Mapping[str, object]:
     content: Final = (
         [
             {
@@ -90,7 +92,7 @@ def _anthropic_reply(body: dict, call_number: int, searches: bool, answer: str) 
     }
 
 
-def _openai_chat_reply(body: dict, call_number: int, searches: bool, answer: str) -> dict:
+def _openai_chat_reply(body: Mapping[str, object], call_number: int, searches: bool, answer: str) -> Mapping[str, object]:
     message: Final = (
         {
             "role": "assistant",
@@ -119,7 +121,9 @@ def _openai_chat_reply(body: dict, call_number: int, searches: bool, answer: str
     }
 
 
-def _openai_responses_reply(body: dict, call_number: int, searches: bool, answer: str) -> dict:
+def _openai_responses_reply(
+    body: Mapping[str, object], call_number: int, searches: bool, answer: str
+) -> Mapping[str, object]:
     output: Final = (
         [
             {
