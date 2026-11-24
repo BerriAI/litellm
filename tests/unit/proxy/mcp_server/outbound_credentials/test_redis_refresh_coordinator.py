@@ -1,6 +1,8 @@
 """Tests for the cross-replica refresh coordinator: winner refreshes, losers wait then re-read."""
 
 import asyncio
+from collections.abc import Callable
+from typing import Final
 
 import pytest
 
@@ -268,3 +270,77 @@ async def test_winner_stops_renewing_after_the_refresh_budget():
     assert result is not None and result.access_token == "new"
     assert extends_during_budget == 4  # renewed at clock 5, 10, 15, 20 then stopped
     assert len(lock.extend_calls) == 4  # no further renewals after the budget
+
+
+async def _until(condition: Callable[[], object]) -> None:
+    for _ in range(100):
+        if condition():
+            return
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("acquisition", [LockAcquisition.ACQUIRED, LockAcquisition.ERROR])
+async def test_refresh_finishes_and_persists_after_the_caller_hangs_up(acquisition: LockAcquisition) -> None:
+    lock: Final = _FakeLock(acquired=acquisition)
+    started: Final = asyncio.Event()
+    upstream_answered: Final = asyncio.Event()
+    persisted: Final = []
+
+    async def refresh():
+        started.set()
+        await upstream_answered.wait()
+        persisted.append("rotated")
+        return OAuthToken(access_token="rotated")
+
+    async def reread():
+        return None
+
+    coord: Final = RedisRefreshCoordinator(lock, new_token=lambda: "tok")
+    caller: Final = asyncio.create_task(coord.run("u", "s", refresh, reread))
+    await started.wait()
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    released_while_refreshing: Final = list(lock.released)
+    upstream_answered.set()
+    expected_release: Final = [(_KEY, "tok")] if acquisition is LockAcquisition.ACQUIRED else []
+    await _until(lambda: persisted and lock.released == expected_release)
+
+    assert persisted == ["rotated"], "a hung-up caller must not abort a refresh the IdP may have rotated"
+    assert released_while_refreshing == [], "the lock must stay held until the rotated token is saved"
+    assert lock.released == expected_release
+
+
+@pytest.mark.asyncio
+async def test_winner_keeps_renewing_its_lease_after_the_caller_hangs_up() -> None:
+    clock: Final = _Clock()
+    lock: Final = _FakeLock(acquired=LockAcquisition.ACQUIRED)
+    started: Final = asyncio.Event()
+    upstream_answered: Final = asyncio.Event()
+
+    async def sleep(seconds: float) -> None:
+        clock.t += seconds
+        await asyncio.sleep(0)
+
+    async def refresh() -> OAuthToken:
+        started.set()
+        await upstream_answered.wait()
+        return OAuthToken(access_token="rotated")
+
+    async def reread():
+        return None
+
+    coord: Final = RedisRefreshCoordinator(lock, new_token=lambda: "tok", clock=clock, sleep=sleep)
+    caller: Final = asyncio.create_task(coord.run("u", "s", refresh, reread))
+    await started.wait()
+    caller.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await caller
+    renewals_at_hang_up: Final = len(lock.extend_calls)
+    await _until(lambda: len(lock.extend_calls) > renewals_at_hang_up + 1)
+    upstream_answered.set()
+    await _until(lambda: lock.released)
+
+    assert len(lock.extend_calls) > renewals_at_hang_up + 1, "the lease must outlive a hung-up caller"
+    assert lock.released == [(_KEY, "tok")]

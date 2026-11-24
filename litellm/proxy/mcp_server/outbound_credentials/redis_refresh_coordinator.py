@@ -30,6 +30,7 @@ from typing import Final, Protocol
 
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
+    run_to_completion,
 )
 
 
@@ -93,11 +94,11 @@ class RedisRefreshCoordinator:
         token: Final = self.new_token()
         match await self.lock.acquire(key, token, self.lock_ttl_seconds):
             case LockAcquisition.ACQUIRED:
-                return await self._refresh_with_lease_renewal(key, token, refresh)
+                return await run_to_completion(self._refresh_with_lease_renewal(key, token, refresh))
             case LockAcquisition.ERROR:
                 # No election happened (lock backend down), so waiting would just re-read the
                 # still-expired token. Refresh anyway; worst case is an extra refresh, not a stale bearer.
-                return await refresh()
+                return await run_to_completion(refresh())
             case LockAcquisition.HELD:
                 # Another worker holds the lock; wait for it to finish (release or PX-expiry), then read
                 # the token it persisted - the winner wrote the fresh token to the store, so a plain

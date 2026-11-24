@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
@@ -44,6 +45,12 @@ from litellm.proxy.mcp_server.oauth_identity_binding import (
 from litellm.proxy.mcp_server.oauth_utils import (
     build_upstream_oauth2_token_request,
 )
+from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
+    InProcessRefreshCoordinator,
+    OAuthToken,
+    RefreshCoordinator,
+)
+from litellm.proxy.mcp_server.outbound_credentials.runtime_refresh_coordinator import runtime_refresh_coordinator
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.config_repository import ConfigRepository
@@ -2327,11 +2334,15 @@ async def refresh_user_oauth_token(
     return await get_user_oauth_credential(prisma_client, user_id, server_id, use_writer=True)
 
 
+_V1_REFRESHES: Final = InProcessRefreshCoordinator()
+
+
 async def resolve_valid_user_oauth_token(
     user_id: str,
     server: "MCPServer",
     cred: OAuthCredentialPayload | None,
     prisma_client: PrismaClient | None = None,
+    refresh_coordinator: RefreshCoordinator | None = None,
 ) -> OAuthCredentialPayload | None:
     """Return an OAuth2 credential whose access_token is good for the next request.
 
@@ -2359,15 +2370,48 @@ async def resolve_valid_user_oauth_token(
         from litellm.proxy.utils import get_prisma_client_or_throw
 
         prisma_client = get_prisma_client_or_throw("Database not connected. Cannot refresh OAuth token.")
-    refreshed: Final = await refresh_user_oauth_token(
-        prisma_client=prisma_client,
-        user_id=user_id,
-        server=server,
-        cred=cred,
-    )
-    if not refreshed or not refreshed.get("access_token"):
+    db: Final = prisma_client
+    own_refresh: Final[asyncio.Future[OAuthCredentialPayload | None]] = asyncio.get_running_loop().create_future()
+
+    async def refresh() -> OAuthToken | None:
+        current: Final = await get_user_oauth_credential(db, user_id, server.server_id, use_writer=True)
+        refreshed: Final = (
+            await refresh_user_oauth_token(prisma_client=db, user_id=user_id, server=server, cred=current)
+            if current is not None and oauth_grant_state(current) == "refreshable"
+            else None
+        )
+        usable: Final = (
+            refreshed
+            if refreshed
+            else current
+            if current is not None and oauth_grant_state(current) == "valid" and await bound(current)
+            else None
+        )
+        own_refresh.set_result(usable)
+        access_token: Final = usable.get("access_token") if usable else None
+        return OAuthToken(access_token) if access_token else None
+
+    async def reread() -> OAuthToken | None:
+        latest: Final = await get_user_oauth_credential(db, user_id, server.server_id, use_writer=True)
+        return OAuthToken(latest["access_token"]) if latest is not None and await usable_after_waiting(latest) else None
+
+    async def bound(row: OAuthCredentialPayload) -> bool:
+        if binding is None or binding.mode != "enforce":
+            return True
+        return await credential_binding_matches(binding, user_id, server.server_id, row)
+
+    async def usable_after_waiting(latest: OAuthCredentialPayload) -> bool:
+        renewed: Final = latest.get("access_token") != cred.get("access_token")
+        fresh: Final = oauth_grant_state(latest) == "valid" or (renewed and not is_oauth_credential_expired(latest))
+        return fresh and await bound(latest)
+
+    coordinator: Final = refresh_coordinator or runtime_refresh_coordinator() or _V1_REFRESHES
+    if await coordinator.run(user_id, server.server_id, refresh=refresh, reread=reread) is None:
         return None
-    return refreshed
+    if own_refresh.done():
+        return own_refresh.result()
+    latest: Final = await get_user_oauth_credential(db, user_id, server.server_id, use_writer=True)
+    return latest if latest is not None and await usable_after_waiting(latest) else None
 
 
 async def resolve_user_oauth_access_token(

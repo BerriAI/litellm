@@ -16,9 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import time
+import weakref
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Final, Protocol
+from typing import Final, Protocol, TypeVar
+
+from litellm._logging import verbose_logger
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -47,6 +50,43 @@ class OAuthToken:
     def __repr__(self) -> str:
         has_refresh: Final = self.refresh_token is not None
         return f"OAuthToken(access_token=***, expires_at={self.expires_at!r}, has_refresh_token={has_refresh}, scopes={self.scopes!r})"
+
+
+_T = TypeVar("_T")
+
+_detached_refreshes: Final[set[object]] = set()  # mutable-ok: loop keeps weak task refs
+_orphan_watched: Final[weakref.WeakSet[object]] = weakref.WeakSet()
+
+
+def _forget_refresh(task: asyncio.Future[_T]) -> None:
+    _detached_refreshes.discard(task)
+    if not task.cancelled():
+        _ = task.exception()
+
+
+def _report_orphaned_failure(task: asyncio.Future[_T]) -> None:
+    error: Final = None if task.cancelled() else task.exception()
+    if error is not None:
+        verbose_logger.warning(
+            "MCP OAuth refresh failed after its caller disconnected: %s: %s", type(error).__name__, error
+        )
+
+
+async def _await_detached(task: asyncio.Future[_T]) -> _T:
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        if task not in _orphan_watched:
+            _orphan_watched.add(task)
+            task.add_done_callback(_report_orphaned_failure)
+        raise
+
+
+async def run_to_completion(refresh: Awaitable[_T]) -> _T:
+    task: Final = asyncio.ensure_future(refresh)
+    _detached_refreshes.add(task)
+    task.add_done_callback(_forget_refresh)
+    return await _await_detached(task)
 
 
 class TokenStoreUnavailable(Exception):
@@ -234,11 +274,11 @@ class InProcessRefreshCoordinator:
         key: Final = (user_id, server_id)
         task = self._inflight.get(key)
         if task is None:
-            # The task is detached from the caller, so a cancelled caller does not abort the refresh.
             task = asyncio.ensure_future(refresh())
             self._inflight[key] = task
             task.add_done_callback(lambda _t, k=key: self._inflight.pop(k, None))
-        return await task
+            task.add_done_callback(_forget_refresh)
+        return await _await_detached(task)
 
 
 class RefreshingTokenStore:
