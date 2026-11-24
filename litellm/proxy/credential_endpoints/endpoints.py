@@ -405,7 +405,9 @@ async def create_credential(
             credential_info=credential_info,
         )
         _reject_unowned_chatgpt_login(processed_credential)
-        await _require_new_chatgpt_login_owner_exists(prisma_client, processed_credential, (None, None))
+        await _require_new_chatgpt_login_owner_exists(
+            WriterPinnedClient(prisma_client.db), processed_credential, (None, None)
+        )
         encrypted_credential: Final = CredentialHelperUtils.encrypt_credential_values(processed_credential)
         credentials_dict: Final = encrypted_credential.model_dump(exclude_none=True)
         credentials_dict_jsonified: Final = cast(  # cast-ok: deep-copies a model_dump, so keys are str
@@ -886,27 +888,24 @@ def _chatgpt_login_owner(body: ChatGPTLoginStartRequest) -> tuple[str | None, st
 
 
 async def _require_chatgpt_login_owner_exists(
-    prisma_client: object, owner_team_id: str | None, owner_key_hash: str | None
+    writer: WriterPinnedClient, owner_team_id: str | None, owner_key_hash: str | None
 ) -> None:
     from litellm.repositories.team_repository import TeamRepository
     from litellm.repositories.verification_token_repository import VerificationTokenRepository
 
-    if owner_team_id is not None and await TeamRepository(prisma_client).find_by_id(owner_team_id) is None:
+    if owner_team_id is not None and await TeamRepository(writer).find_by_id(owner_team_id) is None:
         raise HTTPException(status_code=400, detail=f"Team '{owner_team_id}' not found")
-    if (
-        owner_key_hash is not None
-        and await VerificationTokenRepository(prisma_client).find_by_id(owner_key_hash) is None
-    ):
+    if owner_key_hash is not None and await VerificationTokenRepository(writer).find_by_id(owner_key_hash) is None:
         raise HTTPException(status_code=400, detail="Virtual key not found. Send the key's hashed token (Key ID)")
 
 
 async def _require_new_chatgpt_login_owner_exists(
-    prisma_client: object, credential: CredentialItem, previous_owner: tuple[str | None, str | None]
+    writer: WriterPinnedClient, credential: CredentialItem, previous_owner: tuple[str | None, str | None]
 ) -> None:
     owner: Final = chatgpt_login_owner(credential)
     if not is_chatgpt_subscription_login(credential) or owner == previous_owner:
         return
-    await _require_chatgpt_login_owner_exists(prisma_client, *owner)
+    await _require_chatgpt_login_owner_exists(writer, *owner)
 
 
 def _reject_unowned_chatgpt_login(credential: CredentialItem) -> None:
@@ -983,7 +982,7 @@ async def start_chatgpt_login(
             )
         owner_team_id, owner_key_hash = _chatgpt_login_owner(body)
         display_name: Final = _normalized_display_name(body.display_name)
-        await _require_chatgpt_login_owner_exists(prisma_client, owner_team_id, owner_key_hash)
+        await _require_chatgpt_login_owner_exists(WriterPinnedClient(prisma_client.db), owner_team_id, owner_key_hash)
         await _reject_non_chatgpt_credential(
             CredentialsRepository(WriterPinnedClient(prisma_client.db)), credential_name
         )
@@ -1049,6 +1048,9 @@ async def poll_chatgpt_login(
         except ChatGPTAuthError as e:
             raise _chatgpt_upstream_error(e) from None
         _reject_config_defined_name(credential_name)
+        await _require_chatgpt_login_owner_exists(
+            WriterPinnedClient(prisma_client.db), handle.owner_team_id, handle.owner_key_hash
+        )
         login_values: Final = chatgpt_login_values(tokens)
         saved: Final = await save_chatgpt_login(
             CredentialsRepository(WriterPinnedClient(prisma_client.db)),
@@ -1295,7 +1297,9 @@ async def update_credential(
             )
             merged_credential: Final = update_db_credential(db_credential, normalized_patch)
             _reject_unowned_chatgpt_login(merged_credential)
-            await _require_new_chatgpt_login_owner_exists(prisma_client, merged_credential, stored_owner)
+            await _require_new_chatgpt_login_owner_exists(
+                WriterPinnedClient(prisma_client.db), merged_credential, stored_owner
+            )
             _validate_github_app_values(
                 _CREDENTIAL_DICT_ADAPTER.validate_python(decrypted_credential(merged_credential).credential_values)
             )

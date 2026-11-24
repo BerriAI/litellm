@@ -3,7 +3,7 @@ import json
 import math
 import time
 from collections.abc import Awaitable, Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from enum import Enum
 from functools import partial
@@ -50,6 +50,7 @@ _IN_PROCESS_COORDINATOR: Final = InProcessRefreshCoordinator()
 
 
 _REFRESH_TOKEN_KEY: Final = "chatgpt_refresh_token"
+_REFUSED_REFRESH_STATUSES: Final = frozenset({400, 401})
 _SAVE_RETRY_DELAYS_SECONDS: Final = (1.0, 2.0)
 _REFRESH_LOCK_TIMEOUT: Final = timedelta(seconds=TOKEN_REFRESH_TIMEOUT_SECONDS + sum(_SAVE_RETRY_DELAYS_SECONDS) + 15)
 
@@ -221,6 +222,20 @@ def _in_memory_login(credential_name: str) -> _InMemoryLogin | None:
     return MappingProxyType(dict(current.credential_values)), MappingProxyType(dict(chatgpt_credential_info(current)))
 
 
+@dataclass(slots=True)
+class RefusedRefreshTokens:
+    by_login: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+
+    def holds(self, credential_name: str, refresh_token: str) -> bool:
+        return self.by_login.get(credential_name) == refresh_token
+
+    def remember(self, credential_name: str, refresh_token: str) -> None:
+        self.by_login = MappingProxyType({**self.by_login, credential_name: refresh_token})
+
+
+_REFUSED_REFRESH_TOKENS: Final = RefusedRefreshTokens()
+
+
 @dataclass(frozen=True, slots=True)
 class ChatGPTLoginRefresher:
     rows: CredentialRows
@@ -231,6 +246,7 @@ class ChatGPTLoginRefresher:
     encrypt: Callable[[str], str] = encrypt_value_helper
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
     save_retry_delays: tuple[float, ...] = _SAVE_RETRY_DELAYS_SECONDS
+    refused: RefusedRefreshTokens = field(default_factory=RefusedRefreshTokens)
 
     async def access_token(self, owned: CredentialItem) -> str | None:
         owner: Final = chatgpt_login_owner(owned)
@@ -315,11 +331,13 @@ class ChatGPTLoginRefresher:
             return fresh
         refresh_token: Final = _non_empty_str(values.get(_REFRESH_TOKEN_KEY))
         stored_refresh_token: Final = _non_empty_str(stored.credential_values.get(_REFRESH_TOKEN_KEY))
-        if refresh_token is None or stored_refresh_token is None:
+        if refresh_token is None or stored_refresh_token is None or self.refused.holds(credential_name, refresh_token):
             return None
         try:
             tokens: Final = await arefresh_chatgpt_tokens(self.oauth_client, refresh_token)
         except ChatGPTAuthError as exc:
+            if exc.status_code in _REFUSED_REFRESH_STATUSES:
+                self.refused.remember(credential_name, refresh_token)
             verbose_proxy_logger.warning(
                 "ChatGPT subscription login %s could not be refreshed (status %s). Sign in again for it.",
                 credential_name,
@@ -419,6 +437,7 @@ def runtime_chatgpt_login_refresher() -> ChatGPTLoginRefresher | None:
         oauth_client=new_chatgpt_oauth_client(),
         coordinator=_IN_PROCESS_COORDINATOR,
         shared_refresh=CoordinatedRefresh(redis_coordinator, locked) if redis_coordinator is not None else locked,
+        refused=_REFUSED_REFRESH_TOKENS,
     )
 
 

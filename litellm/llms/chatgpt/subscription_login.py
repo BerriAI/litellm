@@ -111,7 +111,9 @@ def locked_chatgpt_credential_name(deployment_params: object) -> str | None:
     credential_name: Final = params.get("litellm_credential_name") if params is not None else None
     if params is None or not isinstance(credential_name, str) or not credential_name:
         return None
-    if names_chatgpt_subscription_login(credential_name) or _is_chatgpt_call(params, params.get("model")):
+    if names_chatgpt_subscription_login(credential_name):
+        return credential_name
+    if _is_chatgpt_call(params, params.get("model")) and CredentialAccessor.find_credential(credential_name) is None:
         return credential_name
     return None
 

@@ -20,6 +20,7 @@ from litellm.proxy.credential_endpoints.chatgpt_subscription_logins import (
     ChatGPTLoginRefresher,
     CoordinatedRefresh,
     LockedRefresh,
+    RefusedRefreshTokens,
     blocks_chatgpt_login,
     fresh_chatgpt_subscription_logins,
     owned_chatgpt_subscription_access_token,
@@ -363,6 +364,7 @@ def _refresher(
     coordinator: InProcessRefreshCoordinator | _LosingCoordinator | None = None,
     shared_refresh: CoordinatedRefresh | LockedRefresh | None = None,
     waits: list[float] | None = None,
+    refused: RefusedRefreshTokens | None = None,
 ) -> ChatGPTLoginRefresher:
     return ChatGPTLoginRefresher(
         rows=rows,
@@ -371,6 +373,7 @@ def _refresher(
         shared_refresh=shared_refresh,
         clock=_now,
         sleep=_recording_sleep(waits if waits is not None else []),
+        refused=refused or RefusedRefreshTokens(),
     )
 
 
@@ -576,6 +579,41 @@ async def test_a_failed_redeem_serves_no_login_and_logs_no_secret(monkeypatch, p
     for secret in (stale_access_token, "rt-memory-copy", "rt-row-revoked", leaked_in_body, "already used"):
         assert secret not in logged
         assert secret not in repr(resolved)
+
+
+@pytest.mark.parametrize(
+    ("status", "posts_after_two_requests"),
+    [(400, 1), (401, 1), (429, 2), (503, 2)],
+    ids=["refused-400", "refused-401", "rate-limited", "unavailable"],
+)
+async def test_a_refused_refresh_token_is_not_sent_again(monkeypatch, status, posts_after_two_requests):
+    values: Final = _login_values(_access_token("stale"), "rt-revoked", STALE_EXPIRES_AT)
+    _serve(monkeypatch, _login("login-a", values, team_id="team-a"))
+    rows: Final = _CredentialRows(_stored(_login("login-a", values, team_id="team-a")))
+    oauth: Final = _TokenEndpoint(status=status, body={"error": "invalid_grant"})
+    refused: Final = RefusedRefreshTokens()
+
+    first: Final = await _resolve("team-a", None, _refresher(rows, oauth, refused=refused))
+    second: Final = await _resolve("team-a", None, _refresher(rows, oauth, refused=refused))
+
+    assert first == second == {}
+    assert len(oauth.posts) == posts_after_two_requests
+
+
+async def test_signing_in_again_after_a_refused_refresh_serves_the_new_login(monkeypatch):
+    values: Final = _login_values(_access_token("stale"), "rt-revoked", STALE_EXPIRES_AT)
+    _serve(monkeypatch, _login("login-a", values, team_id="team-a"))
+    rows: Final = _CredentialRows(_stored(_login("login-a", values, team_id="team-a")))
+    refused: Final = RefusedRefreshTokens()
+    await _resolve("team-a", None, _refresher(rows, _TokenEndpoint(status=400), refused=refused))
+    signed_in_again: Final = _login_values(_access_token("stale-again"), "rt-new-sign-in", STALE_EXPIRES_AT)
+    rows.put(_stored(_login("login-a", signed_in_again, team_id="team-a")))
+    oauth, new_access_token = _refreshed("new")
+
+    resolved: Final = await _resolve("team-a", None, _refresher(rows, oauth, refused=refused))
+
+    assert resolved == {"login-a": new_access_token}
+    assert len(oauth.posts) == 1
 
 
 async def test_a_save_that_keeps_failing_is_retried_then_serves_the_refreshed_token(monkeypatch, proxy_log):

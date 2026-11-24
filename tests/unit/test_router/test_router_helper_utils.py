@@ -2473,7 +2473,10 @@ _LOCKED_CHATGPT_DEPLOYMENTS: Final = {
         "custom_llm_provider": "chatgpt",
         "litellm_credential_name": "team-a-chatgpt",
     },
-    "chatgpt_naming_a_credential": {"model": "chatgpt/gpt-5.5", "litellm_credential_name": "plain-key"},
+}
+_CHATGPT_DEPLOYMENT_NAMING_A_MISSING_CREDENTIAL: Final = {
+    "model": "chatgpt/gpt-5.5",
+    "litellm_credential_name": "deleted-login",
 }
 _CREDENTIAL_NAME_OVERRIDES: Final = ("", None, "team-b-chatgpt", "plain-key", "unknown-credential")
 
@@ -2491,7 +2494,11 @@ def _owned_logins() -> dict[str, object]:
     [
         pytest.param(deployment, override, id=f"{name}-{override!r}")
         for (name, deployment), override in itertools.product(
-            _LOCKED_CHATGPT_DEPLOYMENTS.items(), _CREDENTIAL_NAME_OVERRIDES
+            {
+                **_LOCKED_CHATGPT_DEPLOYMENTS,
+                "chatgpt_naming_a_missing_credential": _CHATGPT_DEPLOYMENT_NAMING_A_MISSING_CREDENTIAL,
+            }.items(),
+            _CREDENTIAL_NAME_OVERRIDES,
         )
         if override != deployment["litellm_credential_name"]
     ],
@@ -2530,6 +2537,32 @@ async def test_a_chatgpt_deployment_runs_when_the_request_leaves_its_credential_
         num_retries=0,
         **own_name,
     )
+
+    assert response.choices[0].message.content == "ran"
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("chatgpt_logins")
+async def test_a_chatgpt_deployment_naming_a_plain_credential_still_takes_an_owned_login_from_the_request() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "plain-chatgpt",
+                "litellm_params": {"model": "chatgpt/gpt-5.5", "litellm_credential_name": "plain-key"},
+            }
+        ]
+    )
+    request: Final = {
+        "model": "plain-chatgpt",
+        "messages": [{"role": "user", "content": "hi"}],
+        "mock_response": "ran",
+        "secret_fields": _owned_logins(),
+        "num_retries": 0,
+    }
+
+    response: Final = await router.acompletion(**request, litellm_credential_name="team-a-chatgpt")
+    with pytest.raises(litellm.AuthenticationError, match="'team-b-chatgpt' does not exist or is not available"):
+        await router.acompletion(**request, litellm_credential_name="team-b-chatgpt")
 
     assert response.choices[0].message.content == "ran"
 

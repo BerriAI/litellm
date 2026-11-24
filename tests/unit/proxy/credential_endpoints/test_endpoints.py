@@ -93,11 +93,48 @@ def _list_credentials():
     return _call_as("GET", "/credentials")
 
 
+class _RowsById:
+    def __init__(self, id_field: str, *ids: str) -> None:
+        self._id_field = id_field
+        self._ids = frozenset(ids)
+
+    def delete(self, row_id: str) -> None:
+        self._ids = self._ids - {row_id}
+
+    async def find_unique(self, where: dict) -> dict | None:
+        row_id: Final = where[self._id_field]
+        return {self._id_field: row_id} if row_id in self._ids else None
+
+    async def find_many(self, where: dict) -> list[dict]:
+        return [{self._id_field: row_id} for row_id in sorted(self._ids)]
+
+    async def create(self, data: dict) -> dict:
+        raise AssertionError(f"owner rows are read-only here, got {data}")
+
+
+def _db_whose_replica_lags_behind_the_owners(
+    inner: Callable[..., object], teams: _RowsById | None = None, **tables: object
+) -> object:
+    from litellm.proxy.db.prisma_client import PrismaWrapper
+    from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+    writer: Final = inner(
+        **tables,
+        litellm_teamtable=teams or _RowsById("team_id", "team-a", "team-b"),
+        litellm_verificationtoken=_RowsById("token", "hash-k"),
+    )
+    reader: Final = inner(**tables, litellm_teamtable=_RowsById("team_id"), litellm_verificationtoken=_RowsById("token"))
+    return RoutingPrismaWrapper(
+        writer=PrismaWrapper(original_prisma=writer, iam_token_db_auth=False),
+        reader=PrismaWrapper(original_prisma=reader, iam_token_db_auth=False),
+    )
+
+
 def _prisma_without_credential_rows() -> MagicMock:
     prisma_client = MagicMock()
-    prisma_client.db.litellm_credentialstable.find_unique = AsyncMock(return_value=None)
-    prisma_client.db.litellm_teamtable = _RowsById("team_id", "team-a", "team-b")
-    prisma_client.db.litellm_verificationtoken = _RowsById("token", "hash-k")
+    prisma_client.db = _db_whose_replica_lags_behind_the_owners(
+        MagicMock, litellm_credentialstable=SimpleNamespace(find_unique=AsyncMock(return_value=None))
+    )
     return prisma_client
 
 
@@ -3517,16 +3554,6 @@ class _ChatGPTAuthServer:
         return response
 
 
-class _RowsById:
-    def __init__(self, id_field: str, *ids: str) -> None:
-        self._id_field = id_field
-        self._ids = frozenset(ids)
-
-    async def find_unique(self, where: dict) -> dict | None:
-        row_id: Final = where[self._id_field]
-        return {self._id_field: row_id} if row_id in self._ids else None
-
-
 class _CredentialsTable:
     """The Prisma credentials table: rows as Prisma hands them back, with the JSON columns parsed."""
 
@@ -3572,18 +3599,17 @@ def chatgpt_sign_in(monkeypatch):
     monkeypatch.setattr(litellm, "credential_list", [])
     credentials: Final = _CredentialsTable()
     auth_server: Final = _ChatGPTAuthServer()
+    teams: Final = _RowsById("team_id", "team-a", "team-b")
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.prisma_client",
         SimpleNamespace(
-            db=SimpleNamespace(
-                litellm_credentialstable=credentials,
-                litellm_teamtable=_RowsById("team_id", "team-a", "team-b"),
-                litellm_verificationtoken=_RowsById("token", "hash-k"),
+            db=_db_whose_replica_lags_behind_the_owners(
+                SimpleNamespace, teams=teams, litellm_credentialstable=credentials
             )
         ),
     )
     app.dependency_overrides[get_chatgpt_oauth_client] = lambda: auth_server
-    yield SimpleNamespace(credentials=credentials, auth_server=auth_server)
+    yield SimpleNamespace(credentials=credentials, auth_server=auth_server, teams=teams)
     app.dependency_overrides.pop(get_chatgpt_oauth_client, None)
 
 
@@ -3724,6 +3750,19 @@ def test_signing_in_again_on_the_same_name_updates_that_credential(chatgpt_sign_
     row = chatgpt_sign_in.credentials.rows["login-a"]
     assert _stored_login(row) == _expected_login(second_tokens, "acct-second")
     assert row["credential_info"] == {"custom_llm_provider": "chatgpt", "chatgpt_owner_team_id": "team-b"}
+
+
+def test_chatgpt_sign_in_saves_nothing_when_the_owner_team_was_deleted_before_approval(chatgpt_sign_in):
+    flow_handle = _started_chatgpt_login("login-a", {"owner_team_id": "team-a"})
+    chatgpt_sign_in.teams.delete("team-a")
+    chatgpt_sign_in.auth_server.approve("first", "acct-a")
+
+    response = _poll_chatgpt_login("login-a", flow_handle)
+
+    assert response.status_code == 400, response.text
+    assert "team-a" in response.json()["error"]["message"]
+    assert chatgpt_sign_in.credentials.rows == {}
+    assert CredentialAccessor.get_credential_values("login-a") == {}
 
 
 def test_a_flow_handle_minted_for_another_name_is_rejected(chatgpt_sign_in):
