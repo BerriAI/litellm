@@ -18,6 +18,7 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    pin::Pin,
     sync::Arc,
     time::Duration,
 };
@@ -95,10 +96,11 @@ impl Source {
             loop {
                 let polled = async {
                     ticks.tick().await;
-                    source
-                        .reading
-                        .reload(&source.database, &live, &rebuild)
-                        .await;
+                    // Boxed so the spawned task's type does not nest the whole rebuild: release
+                    // builds overflow the compiler's layout query depth otherwise.
+                    let reload: Pin<Box<dyn Future<Output = Reloaded> + Send + '_>> =
+                        Box::pin(source.reading.reload(&source.database, &live, &rebuild));
+                    reload.await;
                 };
                 tokio::select! {
                     _ = &mut stopped => return source,
