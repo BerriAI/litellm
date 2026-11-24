@@ -382,7 +382,7 @@ mod tests {
                 self.manifest.selection.name,
                 input.hook,
                 nth.unwrap_or(0),
-                statuses.map_or_else(|| "-".to_owned(), ToString::to_string),
+                statuses.map_or_else(|| "-".to_owned(), |statuses| statuses.to_string()),
             ));
             Box::pin(async move { (self.answer)(input) })
         }

@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     ffi::CString,
     path::Path,
     sync::{Arc, Mutex, PoisonError},
@@ -191,7 +192,12 @@ impl Callback for Panicking {
         _state: Option<&'a ()>,
     ) -> BoxFuture<'a, HookOutput> {
         Box::pin(async move {
-            let usage = input.fields.raw(Field::Usage).ok().flatten().cloned();
+            let usage = input
+                .fields
+                .raw(Field::Usage)
+                .ok()
+                .flatten()
+                .map(Cow::into_owned);
             panic!("usage was {usage:?}")
         })
     }

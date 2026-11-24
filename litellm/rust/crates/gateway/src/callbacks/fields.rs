@@ -4,11 +4,10 @@
 
 use litellm_callbacks::{
     CallFacts, CallKind, CallTarget, CallTiming, Field, FieldSet, FieldValues, Hook, HookInput,
-    LoggedModelGroup, Outcome, PatchOp, Scalar, Usage, UsageRecord,
+    LoggedModelGroup, Outcome, PatchOp, Scalar, Usage, UsageRecord, typed,
 };
 use litellm_gateway_inference::record::{Ended, Entries};
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
-use serde::Serialize;
 use serde_json::{Map, Value};
 
 const MODEL: &str = "model";
@@ -26,10 +25,6 @@ pub enum Unwritable {
     Model(Value),
     #[error("{0:?} is part of the request body, which the route already has")]
     Routed(Field),
-}
-
-fn record(value: impl Serialize) -> Option<Value> {
-    serde_json::to_value(value).ok()
 }
 
 fn count(tokens: u64) -> Option<Scalar> {
@@ -61,20 +56,26 @@ fn outcome(ended: Ended) -> Outcome {
     }
 }
 
-fn read(entries: &Entries, field: Field) -> Option<Value> {
+/// Puts `field` into `fields` as the record holds it, typed, unless the record has none yet.
+fn read(entries: &Entries, field: Field, fields: &mut FieldValues) -> Option<()> {
     match field {
-        Field::Model => entries.model().map(Value::from),
-        Field::RequestBody => entries.body().cloned().map(Value::Object),
-        Field::RateLimitStatuses => entries.rate_limit_statuses().cloned(),
-        Field::ResponseHeaders => Some(Value::Object(entries.response_headers().clone())),
-        Field::Outcome => record(outcome(entries.ended()?)),
-        Field::Usage => record(usage(entries.served()?.usage.as_ref()?)),
-        Field::LoggedModelGroup => record(LoggedModelGroup {
+        Field::Model => fields.put::<typed::Model>(entries.model()?.to_owned()),
+        Field::RequestBody => {
+            fields.put::<typed::RequestBody>(Value::Object(entries.body()?.clone()));
+        }
+        Field::RateLimitStatuses => fields.insert(field, entries.rate_limit_statuses()?.clone()),
+        Field::ResponseHeaders => {
+            fields.put::<typed::ResponseHeaders>(Value::Object(entries.response_headers().clone()))
+        }
+        Field::Outcome => fields.put::<typed::Outcome>(outcome(entries.ended()?)),
+        Field::Usage => fields.put::<typed::Usage>(usage(entries.served()?.usage.as_ref()?)),
+        Field::LoggedModelGroup => fields.put::<typed::LoggedModelGroup>(LoggedModelGroup {
             value: Some(Scalar::Text(entries.served()?.model_group.clone())),
             ..LoggedModelGroup::default()
         }),
-        _ => None,
+        _ => {}
     }
+    Some(())
 }
 
 fn facts(entries: &Entries) -> CallFacts {
@@ -103,12 +104,12 @@ fn facts(entries: &Entries) -> CallFacts {
 
 /// What a callback that reads `reads` is handed on `hook`.
 pub fn input(entries: &Entries, hook: Hook, reads: FieldSet) -> HookInput {
-    let fields = reads
+    let mut fields = FieldValues::new(reads);
+    reads
         .iter()
         .filter(|field| !field.by_reference())
-        .filter_map(|field| Some((field, read(entries, field)?)))
-        .fold(FieldValues::new(reads), |fields, (field, value)| {
-            fields.with(field, value)
+        .for_each(|field| {
+            read(entries, field, &mut fields);
         });
     HookInput {
         hook,
@@ -167,6 +168,8 @@ pub fn write(entries: &mut Entries, op: PatchOp) -> Result<(), Unwritable> {
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use litellm_gateway_inference::{
         CallType,
         record::{self, CallRecord},
@@ -230,7 +233,7 @@ mod tests {
         let input = input(entries, hook, FieldSet::of(&[Field::Model]));
         let call = input.call.unwrap();
         (
-            input.fields.raw(Field::Model).unwrap().cloned(),
+            input.fields.raw(Field::Model).unwrap().map(Cow::into_owned),
             call.target.model,
             call.kind.stream,
         )

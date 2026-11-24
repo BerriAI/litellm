@@ -482,7 +482,8 @@ impl KeyLimiter {
             .call
             .as_ref()
             .map_or("", |call| call.kind.call_type.as_str());
-        let sent = match input.fields.raw(Field::RequestBody)? {
+        let body = input.fields.get_ref::<typed::RequestBody>()?;
+        let sent = match body.as_deref() {
             Some(Value::Object(sent)) if admission.caller.limits.counts_tokens() => Some(sent),
             _ => None,
         };

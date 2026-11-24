@@ -108,7 +108,7 @@ impl Callback for Recording {
         let read: Map<String, Value> = ENDED
             .into_iter()
             .filter_map(|field| {
-                let value = input.fields.raw(field).ok()??.clone();
+                let value = input.fields.raw(field).ok()??.into_owned();
                 Some((format!("{field:?}"), value))
             })
             .collect();
