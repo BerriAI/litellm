@@ -1,6 +1,6 @@
 # Auth store
 
-Database reads for `gateway-auth-core`'s store ports. `KeyDatabase` reads an auth object through the `repositories` readers and shapes it into the record the auth cache holds for it. Every host of the core reads a key's row through this crate, so no host shapes the row on its own
+Database reads for `gateway-auth-core`'s store ports. `KeyDatabase` and `TeamDatabase` each read an auth object through the `repositories` readers and shape it into the record the auth cache holds for it. Every host of the core reads a key's row through this crate, so no host shapes the row on its own
 
 ## Boundary
 
@@ -14,6 +14,7 @@ Database reads for `gateway-auth-core`'s store ports. `KeyDatabase` reads an aut
 
 - `KeyDatabase::key` is the key's one query, shaped into `CachedKey` with nothing nested. `KeyDatabase::read` adds the object permission it points at, for a host with no bound of its own to put between the two reads
   - The Python proxy bounds each read on its own: its lookup gate and deadline go around `RustKeyRepository.find`, which is `KeyDatabase::key`. It then nests the permission through its own `get_object_permission`, under that read's own deadline, and caches the key with `cache_key_object`. A permission table that stalls must leave that key served without the permission
+- `TeamDatabase::team` is a team's one query, shaped into `CachedTeam` with its model alias table and nothing else nested. The object permission it points at is not read, and `last_refreshed_at` is unset, since the host that caches a team stamps it. Only the gateway reads a team here so far. The Python proxy still shapes its own from the same repository row, so `tests/team.rs` pins the record to the bytes Python's model dumps for the same row
 - Nothing is returned for an id no row has
 
 ## The cached shape

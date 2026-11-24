@@ -275,11 +275,18 @@ mod tests {
         let database = held
             .as_ref()
             .map_or_else(keys::unreachable, keys::Held::database);
+        let teams = held
+            .as_ref()
+            .map_or_else(keys::unreachable_teams, keys::Held::teams);
         let config = Config::from_yaml(CONFIG).unwrap();
         let admit = Arc::new(Admit {
             auth: host::auth::auth(
                 &config,
-                Some(Arc::new(AuthStore::new(keys::memory_cache(), database))),
+                Some(Arc::new(AuthStore::new(
+                    keys::memory_cache(),
+                    database,
+                    teams,
+                ))),
             ),
             ..Admit::over(
                 &config,

@@ -93,7 +93,7 @@ impl KeyDatabase {
 }
 
 /// A JSON column as the record's field `V`, or the column the model would refuse the row for.
-fn column<V: FromValue>(name: &'static str, raw: &RawJson) -> Result<V, Error> {
+pub(crate) fn column<V: FromValue>(name: &'static str, raw: &RawJson) -> Result<V, Error> {
     json::loads(raw.get())
         .ok()
         .and_then(|value| V::from_value(&value).ok())
@@ -115,7 +115,7 @@ pub(crate) fn nullable<V: FromValue>(
 }
 
 /// [`nullable`] for a field that is a list of `V`.
-fn nullable_list<V: FromValue>(
+pub(crate) fn nullable_list<V: FromValue>(
     name: &'static str,
     raw: Option<&RawJson>,
 ) -> Result<Option<Vec<V>>, Error> {
@@ -130,7 +130,10 @@ fn nullable_list<V: FromValue>(
     }
 }
 
-fn time(column: &'static str, at: Option<NaiveDateTime>) -> Result<Option<Timestamp>, Error> {
+pub(crate) fn time(
+    column: &'static str,
+    at: Option<NaiveDateTime>,
+) -> Result<Option<Timestamp>, Error> {
     at.map(|at| Timestamp::from_microsecond(at.and_utc().timestamp_micros()))
         .transpose()
         .map_err(|_| Error::Row { column })
@@ -287,7 +290,10 @@ fn cached_key(
         team_blocked: *team_blocked,
         soft_budget: *soft_budget,
         team_model_aliases: nullable("team_model_aliases", team_model_aliases.as_ref())?,
-        team_member: team_member.as_ref().map(member).transpose()?,
+        team_member: team_member
+            .as_ref()
+            .map(|entry| column("team_member", entry).and_then(member))
+            .transpose()?,
         team_metadata: nullable("team_metadata", team_metadata.as_ref())?,
         team_object_permission_id: team_object_permission_id.clone(),
         team_member_spend: *team_member_spend,
@@ -335,8 +341,7 @@ fn cached_key(
 
 /// The roster entry as `Member` dumps it: its three fields, whatever else the entry holds. The
 /// model refuses an entry that names neither a user id nor an email.
-fn member(entry: &RawJson) -> Result<CachedMember, Error> {
-    let member: CachedMember = column("team_member", entry)?;
+pub(crate) fn member(member: CachedMember) -> Result<CachedMember, Error> {
     if member.user_id.is_none() && member.user_email.is_none() {
         return Err(Error::Row {
             column: "team_member",

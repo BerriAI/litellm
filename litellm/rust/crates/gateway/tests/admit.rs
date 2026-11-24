@@ -21,18 +21,28 @@ struct Scenario {
     /// The `tpm_limit` of each key that holds one.
     #[serde(default)]
     tpm_limits: BTreeMap<String, i64>,
+    /// Each team by its id, a plain row with the columns it gives.
+    #[serde(default)]
+    teams: BTreeMap<String, serde_json::Value>,
+    /// The team of each key that is in one.
+    #[serde(default)]
+    key_teams: BTreeMap<String, String>,
     requests: Vec<Sent>,
 }
 
-/// The database holding each key of the scenario, a plain row with the model list and the token
-/// limit it gives.
-async fn listed(
-    keys: &BTreeMap<String, Vec<String>>,
-    tpm_limits: &BTreeMap<String, i64>,
-) -> keys::Held {
+/// The database holding each team and key of the scenario: a plain team row with its columns,
+/// and a plain key row with the model list, the token limit and the team it gives.
+async fn listed(scenario: &Scenario) -> keys::Held {
     let held = keys::Held::start().await;
-    for (token, models) in keys {
-        let columns = serde_json::json!({"models": models, "tpm_limit": tpm_limits.get(token)});
+    for (team_id, columns) in &scenario.teams {
+        held.team(team_id, columns.clone()).await;
+    }
+    for (token, models) in &scenario.keys {
+        let columns = serde_json::json!({
+            "models": models,
+            "tpm_limit": scenario.tpm_limits.get(token),
+            "team_id": scenario.key_teams.get(token),
+        });
         held.key(token, columns).await;
     }
     held
@@ -108,6 +118,8 @@ impl Sent {
 #[case::callers("callers")]
 #[case::virtual_key_models("virtual_key_models")]
 #[case::virtual_key_token_limits("virtual_key_token_limits")]
+#[case::virtual_key_team("virtual_key_team")]
+#[case::virtual_key_team_model_capacity("virtual_key_team_model_capacity")]
 #[case::dynamic_rate_limiter("dynamic_rate_limiter")]
 #[case::dynamic_rate_limiter_borrowing("dynamic_rate_limiter_borrowing")]
 #[tokio::test(flavor = "multi_thread")]
@@ -117,7 +129,7 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     let text = std::fs::read_to_string(&path).unwrap();
     let scenario: Scenario =
         serde_yaml_ng::from_value(litellm_yaml::from_str(&text).unwrap()).unwrap();
-    let config = Config::from_value(scenario.config).unwrap();
+    let config = Config::from_value(scenario.config.clone()).unwrap();
     let resources =
         litellm_gateway::Resources::over(&config, Arc::new(|_: &str| None::<String>)).unwrap();
     let state = litellm_gateway::AppState::over(&config, &Environment::default(), &resources)
@@ -125,7 +137,7 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
         .unwrap();
     let held = match scenario.keys.is_empty() {
         true => None,
-        false => Some(listed(&scenario.keys, &scenario.tpm_limits).await),
+        false => Some(listed(&scenario).await),
     };
     let state = match &held {
         None => state,
@@ -133,6 +145,7 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
             keys: Some(Arc::new(AuthStore::new(
                 keys::memory_cache(),
                 held.database(),
+                held.teams(),
             ))),
             ..state
         },
