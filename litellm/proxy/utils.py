@@ -973,7 +973,7 @@ def _partition_post_call_callbacks() -> tuple[tuple[CustomGuardrail, ...], tuple
     return (guardrails, others)
 
 
-def _merge_pipeline_metadata_bucket(data: dict, bucket_key: str, modified_bucket_value: object) -> None:
+def _merge_pipeline_metadata_bucket(data: dict[str, object], bucket_key: str, modified_bucket_value: object) -> None:
     if not isinstance(modified_bucket_value, dict):
         return
     modified_bucket: Final = cast("dict[str, object]", modified_bucket_value)  # cast-ok: metadata buckets are str-keyed
@@ -985,7 +985,7 @@ def _merge_pipeline_metadata_bucket(data: dict, bucket_key: str, modified_bucket
         data[bucket_key] = surviving_writes
 
 
-def _merge_pipeline_metadata_writes(data: dict, modified_data: Mapping[str, object]) -> None:
+def _merge_pipeline_metadata_writes(data: dict[str, object], modified_data: Mapping[str, object]) -> None:
     """
     Copy metadata-bucket writes from a pipeline's working copy back onto the request.
 
@@ -1732,7 +1732,7 @@ def _failure_usage_to_lift(
     return _billed_across_attempts(failed_attempts, current_usage, current_cost)
 
 
-_EMPTY_LIFT: Final = MappingProxyType({})
+_EMPTY_LIFT: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _reached_deployment(litellm_logging_obj: Logging) -> bool:
@@ -2354,7 +2354,7 @@ class ProxyLogging:
         self.alerting: list[str] | None = None
         self.alerting_threshold: float = 300  # default to 5 min. threshold
         self.alert_types: list[AlertType] = DEFAULT_ALERT_TYPES
-        self.alert_to_webhook_url: dict | None = None
+        self.alert_to_webhook_url: dict[AlertType, list[str] | str] | None = None
         self.slack_alerting_instance: SlackAlerting = SlackAlerting(
             alerting_threshold=self.alerting_threshold,
             alerting=self.alerting,
@@ -2635,7 +2635,7 @@ class ProxyLogging:
                 return user_api_key_auth_obj.__dict__
         return {}
 
-    def _convert_mcp_to_llm_format(self, request_obj, kwargs: Mapping[str, object]) -> dict:
+    def _convert_mcp_to_llm_format(self, request_obj: MCPPreCallRequestObject, kwargs: Mapping[str, object]) -> dict:
         """
         Convert MCP tool call to LLM message format for existing guardrail validation.
         """
@@ -2720,7 +2720,9 @@ class ProxyLogging:
     ) -> dict[str, object]:
         return self._convert_mcp_to_llm_format(request_obj, kwargs)
 
-    def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> MCPPreCallResponseObject | None:
+    def _convert_llm_result_to_mcp_response(
+        self, llm_result: object, request_obj: MCPPreCallRequestObject
+    ) -> MCPPreCallResponseObject | None:
         """
         Convert LLM guardrail result back to MCP response format.
         """
@@ -2782,7 +2784,9 @@ class ProxyLogging:
 
         return None
 
-    def _extract_modified_arguments_from_content(self, masked_content: str, request_obj) -> object:
+    def _extract_modified_arguments_from_content(
+        self, masked_content: str, request_obj: MCPPreCallRequestObject
+    ) -> object:
         """
         Extract modified/masked arguments from the guardrail response content.
         """
@@ -2819,7 +2823,7 @@ class ProxyLogging:
             verbose_proxy_logger.error("Error extracting modified arguments: %s", e)
             return None
 
-    def _parse_arguments_manually(self, args_text: str, original_args: dict) -> dict | None:
+    def _parse_arguments_manually(self, args_text: str, original_args: dict[str, object]) -> dict[str, object] | None:
         """
         Try to manually parse arguments when JSON parsing fails.
         This is a fallback for cases where the guardrail modifies the format.
@@ -2848,7 +2852,9 @@ class ProxyLogging:
             verbose_proxy_logger.error("Error in manual argument parsing: %s", e)
             return None
 
-    def _convert_llm_result_to_mcp_during_response(self, llm_result, request_obj) -> MCPDuringCallResponseObject | None:
+    def _convert_llm_result_to_mcp_during_response(
+        self, llm_result: object, request_obj
+    ) -> MCPDuringCallResponseObject | None:
         """
         Convert LLM guardrail result back to MCP during call response format.
         """
@@ -2962,7 +2968,7 @@ class ProxyLogging:
 
     _convert_mcp_hook_response_to_kwargs = convert_mcp_hook_response_to_kwargs
 
-    async def process_pre_call_hook_response(self, response, data, call_type):
+    async def process_pre_call_hook_response(self, response: object, data, call_type: str):
         if isinstance(response, Exception):
             raise response
         if isinstance(response, dict):
@@ -3003,7 +3009,7 @@ class ProxyLogging:
         self,
         callback: "CustomGuardrail",
         hook_type: str,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
         response: LLMResponseTypes | None = None,
@@ -3058,7 +3064,7 @@ class ProxyLogging:
         self,
         guardrail_name: str,
         hook_type: str,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
         response: LLMResponseTypes | None = None,
@@ -3105,7 +3111,7 @@ class ProxyLogging:
     async def _process_guardrail_callback(
         self,
         callback: CustomGuardrail,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
         event_type: GuardrailEventHooks,
@@ -3200,7 +3206,7 @@ class ProxyLogging:
     async def _run_sequential_guardrail_callback(
         self,
         callback: CustomGuardrail,
-        data: dict,  # mutable-ok: matches _process_guardrail_callback's own request-payload typing
+        data: dict[str, object],  # mutable-ok: matches _process_guardrail_callback's own request-payload typing
         raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
@@ -4385,7 +4391,9 @@ class ProxyLogging:
                 raise Exception("Missing SENTRY_DSN from environment")
             sentry.capture_message(formatted_message)
 
-    async def failure_handler(self, original_exception: Exception, duration: float, call_type: str, traceback_str=""):
+    async def failure_handler(
+        self, original_exception: Exception, duration: float, call_type: str, traceback_str: object = ""
+    ):
         """
         Log failed db read/writes
 
@@ -5194,7 +5202,7 @@ class ProxyLogging:
             "model_id": hidden_params.get("model_id"),
         }
 
-    def is_a2a_streaming_response(self, response: dict) -> bool:
+    def is_a2a_streaming_response(self, response: Mapping[str, object]) -> bool:
         expected_keys: Final = ["jsonrpc", "id", "result"]
         return all(key in response for key in expected_keys)
 
@@ -5723,7 +5731,7 @@ class ProxyLogging:
         return _deferred_cb(*_args)
 
     @staticmethod
-    def fire_deferred_stream_logging(request_data: dict) -> None:
+    def fire_deferred_stream_logging(request_data: Mapping[str, object]) -> None:
         """
         Fire the deferred streaming logging callback after the full streaming
         pipeline (including guardrail end-of-stream blocks) has completed.
@@ -5806,7 +5814,7 @@ class ProxyLogging:
             return
         await _enforce_mcp_server_rate_limits(limiter, user_api_key_dict, server)
 
-    def _init_response_taking_too_long_task(self, data: dict | None = None):
+    def _init_response_taking_too_long_task(self, data: dict[str, object] | None = None):
         """
         Initialize the response taking too long task if user is using slack alerting
 
@@ -5822,7 +5830,7 @@ class ProxyLogging:
 ### DB CONNECTOR ###
 # Define the retry decorator with backoff strategy
 # Function to be called whenever a retry is about to happen
-def on_backoff(details):
+def on_backoff(details: Mapping[str, object]):
     # The 'tries' key in the details dictionary contains the number of completed tries
     print_verbose(f"Backing off... this was attempt #{details['tries']}")
 
@@ -6231,7 +6239,7 @@ class PrismaClient:
         self._closing: bool = False
         self._engine_exit_wait_seconds: Final = engine_exit_wait_seconds
         self._engine_tasks: frozenset[asyncio.Task[object]] = frozenset()
-        self._db_health_watchdog_task: asyncio.Task | None = None
+        self._db_health_watchdog_task: asyncio.Task[None] | None = None
         self._view_setup_task: asyncio.Task[_ViewSetupOutcome] | None = None
         self._db_last_reconnect_attempt_ts: float = 0.0
         self._db_reconnect_cooldown_seconds: int = max(1, get_env_int("PRISMA_RECONNECT_COOLDOWN_SECONDS", 15))
@@ -7433,7 +7441,7 @@ class PrismaClient:
             return True
 
     @staticmethod
-    def _reap_all_zombies() -> set:
+    def _reap_all_zombies() -> set[int]:
         """Reap ALL zombie child processes via waitpid(-1, WNOHANG).
 
         Returns a set of reaped PIDs.  As PID 1 in Docker (or any
@@ -7444,7 +7452,7 @@ class PrismaClient:
         """
         if sys.platform == "win32":
             return set()
-        reaped: Final[set] = set()
+        reaped: Final[set[int]] = set()
         while True:
             try:
                 pid, _ = os.waitpid(-1, os.WNOHANG)
@@ -8535,7 +8543,7 @@ class PrismaClient:
             verbose_proxy_logger.warning("Invalid response_time_ms value: %s", response_time_ms)
             return None
 
-    def _clean_details(self, details: dict | None) -> object:
+    def _clean_details(self, details: Mapping[str, object] | None) -> object:
         """Clean and validate details JSON"""
         if not isinstance(details, dict):
             return None
@@ -8553,7 +8561,7 @@ class PrismaClient:
         unhealthy_count: int = 0,
         error_message: str | None = None,
         response_time_ms: float | None = None,
-        details: dict | None = None,
+        details: Mapping[str, object] | None = None,
         checked_by: str | None = None,
         model_id: str | None = None,
     ):
@@ -8834,7 +8842,7 @@ async def run_off_loop_if_fips(kdf: Callable[..., _T], *args: str) -> _T:
     return await asyncio.get_running_loop().run_in_executor(_FIPS_KDF_POOL, kdf, *args)
 
 
-async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
+async def migrate_passwords_to_scrypt_async(prisma_client: "PrismaClient") -> str:
     """
     Migrate plaintext passwords in the DB to scrypt. SHA256 passwords
     are left alone (they migrate on next login via the SHA256 fallback).
