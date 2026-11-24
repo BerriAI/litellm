@@ -2620,7 +2620,11 @@ class AmazonConverseConfig(BaseConfig):
         sent_betas: Final = active_beta_values({}, body_betas)  # pyright: ignore[reportUnknownArgumentType]  # same bare dict
         safeguards_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
         if SAFEGUARDS in additional_request_params and drops_safeguards_bedrock_rejects(
-            model, model_info, drop_params, "bedrock_converse", sends_beta=safeguards_beta in sent_betas
+            bedrock_capability_model(model, self._deployment_base_model(litellm_params or {})),
+            model_info,
+            drop_params,
+            "bedrock_converse",
+            sends_beta=safeguards_beta in sent_betas,
         ):
             del additional_request_params[SAFEGUARDS]
             kept_betas: Final = sorted(sent_betas - {safeguards_beta})

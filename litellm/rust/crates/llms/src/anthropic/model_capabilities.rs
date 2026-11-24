@@ -211,8 +211,15 @@ pub fn bedrock_model_capabilities(
         supports_tool_search: probe.supports("supports_tool_search"),
         supports_per_turn_control: declared(PER_TURN_CONTROL)
             .unwrap_or_else(|| probe.supports(PER_TURN_CONTROL)),
-        supports_safeguards: declared(SAFEGUARDS)
-            .unwrap_or_else(|| !is_claude_model(model) || probe.supports(SAFEGUARDS)),
+        supports_safeguards: declared(SAFEGUARDS).unwrap_or_else(|| {
+            match base_model.map(strip_bedrock_routing_prefix) {
+                Some(base) if is_bedrock_application_inference_profile_arn(model) => {
+                    !is_claude_model(base)
+                        || Probe::new(catalog, base, base, BEDROCK, &|_| None).supports(SAFEGUARDS)
+                }
+                _ => !is_claude_model(model) || probe.supports(SAFEGUARDS),
+            }
+        }),
         supports_server_side_fallback: declared(SERVER_SIDE_FALLBACK).unwrap_or_else(|| {
             match base_model.map(strip_bedrock_routing_prefix) {
                 Some(base) if is_bedrock_application_inference_profile_arn(model) => {
@@ -929,6 +936,22 @@ mod tests {
 
         assert_eq!(
             bedrock_model_capabilities(&bundled, model, None, &lookup).supports_safeguards,
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::old_base_model(Some("us.anthropic.claude-opus-4-1-20250805-v1:0"), false)]
+    #[case::prefixed_flagged_base_model(Some(SONNET_4_5), true)]
+    #[case::no_base_model(None, true)]
+    fn application_profile_safeguards_follow_its_base_model_as_python_does(
+        bundled: Catalog,
+        #[case] base_model: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(
+            bedrock_model_capabilities(&bundled, APPLICATION, base_model, &|_| None)
+                .supports_safeguards,
             expected
         );
     }

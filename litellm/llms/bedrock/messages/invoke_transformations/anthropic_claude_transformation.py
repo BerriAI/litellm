@@ -722,7 +722,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             {key: value for key, value in params.items() if key != SAFEGUARDS}
             if SAFEGUARDS in params
             and drops_safeguards_bedrock_rejects(
-                model,
+                bedrock_capability_model(model, getattr(litellm_params, "base_model", None)),
                 _MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None)),
                 getattr(litellm_params, "drop_params", None),
                 "bedrock_invoke",
