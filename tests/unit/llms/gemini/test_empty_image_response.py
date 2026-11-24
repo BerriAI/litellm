@@ -399,6 +399,55 @@ async def test_refusal_after_a_failed_fallback_names_no_model_group(monkeypatch:
     assert "backup-group" not in str(refused.value)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("reply", "error"),
+    (
+        pytest.param(
+            {"candidates": [{"finishReason": "IMAGE_SAFETY", "content": {"role": "model"}}]},
+            litellm.ContentPolicyViolationError,
+            id="refused",
+        ),
+        pytest.param(
+            {"candidates": [{"finishReason": "NO_IMAGE", "content": {"parts": [{"text": "no"}]}}]},
+            litellm.UnprocessableEntityError,
+            id="no-image",
+        ),
+    ),
+)
+async def test_fallback_answer_without_an_image_after_a_provider_failure_is_the_error_the_client_gets(
+    monkeypatch: pytest.MonkeyPatch,
+    reply: Mapping[str, object],
+    error: type[litellm.ContentPolicyViolationError | litellm.UnprocessableEntityError],
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{host}.invalid/v1",
+                },
+            }
+            for group, host in (("image-group", "first"), ("backup-group", "second"))
+        ],
+        fallbacks=[{"image-group": ["backup-group"]}],
+        num_retries=0,
+    )
+
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post(url__startswith="https://first.invalid/").mock(
+            side_effect=lambda request: httpx.Response(503, json={"error": {"code": 503}})
+        )
+        upstream.post(url__startswith="https://second.invalid/").mock(
+            side_effect=lambda request: httpx.Response(200, json=reply)
+        )
+        with pytest.raises(error):
+            await router.aimage_generation(model="image-group", prompt="a single small red dot")
+
+
 _USAGE: Final = {"promptTokenCount": 9, "candidatesTokenCount": 7, "totalTokenCount": 16}
 _SERVED: Final = {
     "candidates": [{"finishReason": "STOP", "content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1n"}}]}}],

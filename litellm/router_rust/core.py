@@ -4648,6 +4648,7 @@ class _Driver:
             (stream_failure,) if stream_failure else ()
         )
         self._queue_rejection: QueueRejectedError | None = None
+        self._answer_without_an_image: BaseException | None = None
         # The retry counts an exhausted retry loop stamps on the pick error its level then raises.
         self._pending_stamps: Final[dict[int, tuple[object, object]]] = {}  # mutable-ok: filled as the call runs
         # Each level's current hop's first failure, once it retries: the error its retry loop raises
@@ -4683,6 +4684,7 @@ class _Driver:
     def clear_errors(self) -> None:
         self._last_error = None
         self._queue_rejection = None
+        self._answer_without_an_image = None
         self._level_errors.clear()
         self._hop_first.clear()
         self._level_picks.clear()
@@ -5229,6 +5231,8 @@ class _Driver:
         stamp_error(self._plan, error, deployment, served)  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
         self._core._endpoints.attempt_failed(self._plan, error, deployment, call, str(step.get("model")))  # pyright: ignore[reportPrivateUsage]  # see above
         self._last_error = error
+        if _answered_without_an_image(error):
+            self._answer_without_an_image = error
         level: Final = step.get("fallback_level")
         retry: Final = step.get("retry")
         if isinstance(retry, int) and retry > 0:
@@ -5858,7 +5862,7 @@ class _Driver:
         if self._queue_rejection is not None:
             return self._queue_rejection
         model: Final = str(self._request.get("model"))
-        primary: Final = self._level_errors.get(self._base_level)
+        primary: Final = self._error_the_client_gets()
         if primary is None:
             return self._core._failure_error(  # pyright: ignore[reportPrivateUsage]  # see above
                 step, model, self._last_error, request=self._request, has_input=self._has_input(), tags=not self._sync
@@ -5871,6 +5875,13 @@ class _Driver:
         ):
             primary.message += self._explanation(primary, model)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # checked above
         return primary
+
+    def _error_the_client_gets(self) -> BaseException | None:
+        primary: Final = self._level_errors.get(self._base_level)
+        billed_answer: Final = self._answer_without_an_image
+        if primary is None or billed_answer is None or _answered_without_an_image(primary):
+            return primary
+        return billed_answer
 
     def _hop_failure_explainer(
         self, step: Mapping[str, object]
