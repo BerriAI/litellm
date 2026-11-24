@@ -733,20 +733,16 @@ def _global_safety_settings() -> object:
     return litellm.vertex_ai_safety_settings  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # module global is an untyped dict
 
 
+def _named_safety_settings(params: Mapping[str, object]) -> object:
+    return next((params[key] for key in _SAFETY_SETTING_KEYS if params.get(key) is not None), None)
+
+
 def requested_safety_settings(*param_sources: Mapping[str, object] | None) -> object:
     if _global_safety_settings() is not None:
         return _global_safety_settings()
     sources: Final = tuple(source or {} for source in param_sources)
-    extra_bodies: Final = (str_keyed_mapping(source.get("extra_body")) or {} for source in sources)
-    return next(
-        (
-            params[key]
-            for params in (*sources, *extra_bodies)
-            for key in _SAFETY_SETTING_KEYS
-            if params.get(key) is not None
-        ),
-        None,
-    )
+    extra_bodies: Final = tuple(str_keyed_mapping(source.get("extra_body")) or {} for source in sources)
+    return next(filter(None, map(_named_safety_settings, (*sources, *extra_bodies))), None)
 
 
 def interactions_safety_settings(requested: object, custom_llm_provider: str) -> Sequence[Mapping[str, str]] | None:
