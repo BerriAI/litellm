@@ -143,7 +143,7 @@ def _fields(value: object) -> Mapping[str, object]:
 def _deployment_prices(logging_obj: "LiteLLMLoggingObj") -> Mapping[str, object] | None:
     if not logging_obj.custom_pricing_for(None):
         return None
-    params: Final = _fields(logging_obj.litellm_params)
+    params: Final = _fields(vars(logging_obj).get("litellm_params"))
     declared: Final = {k: v for k, v in params.items() if v is not None}
     return {
         **_fields(_fields(params.get("litellm_metadata")).get("model_info")),
