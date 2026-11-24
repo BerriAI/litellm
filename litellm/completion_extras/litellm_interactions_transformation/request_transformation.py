@@ -1097,7 +1097,7 @@ def transform_chat_to_interactions_request(
         model=model,
         model_info=litellm_params.get("model_info"),
     )
-    safety_settings: Final[list[JsonValue]] = [
+    safety_settings: Final[list[JsonValue]] = [  # mutable-ok: JSON body
         {**setting}
         for setting in interactions_safety_settings(requested_safety_settings(normalized_params), custom_llm_provider)
         or ()

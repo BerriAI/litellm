@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.llms.custom_httpx.http_handler import (
@@ -56,7 +57,7 @@ from .continuation import (
 from .request_transformation import MediaFetcher, transform_chat_to_interactions_request
 from .response_transformation import transform_interactions_response_to_chat_response
 from .streaming_iterator import (
-    RECITATION_ERROR_CODE,
+    BLOCKED_ANSWER_ERROR_CODES,
     InteractionsChatStreamingIterator,
     build_stream_exception,
     extract_stream_error_code_and_message,
@@ -486,7 +487,7 @@ def _is_recitation_block(error_body: str) -> bool:
     except ValueError:
         return False
     error: Final = parsed.get("error") if isinstance(parsed, dict) else None
-    return isinstance(error, dict) and error.get("code") == RECITATION_ERROR_CODE
+    return isinstance(error, dict) and error.get("code") in BLOCKED_ANSWER_ERROR_CODES
 
 
 def _recitation_block_response(
@@ -502,6 +503,26 @@ def _recitation_block_response(
     ]
     _attach_response_metadata(blocked, blocked_response, url)
     return blocked
+
+
+def _blocked_answer(
+    model: str,
+    model_response: ModelResponse,
+    blocked_response: httpx.Response,
+    wire: _PreparedWireCall,
+    logging_obj: LiteLLMLoggingObj,
+) -> ModelResponse | CustomStreamWrapper:
+    blocked: Final = _recitation_block_response(model, model_response, blocked_response, wire.url)
+    if not wire.is_stream:
+        return blocked
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=MockResponseIterator(model_response=blocked),
+        model=model,
+        logging_obj=logging_obj,
+        stream_options=wire.stream_options,
+    )
+    _attach_response_metadata(wrapper, blocked_response, wire.url)
+    return wrapper
 
 
 _FAILED_STATUSES: Final = frozenset({"failed", "cancelled"})
@@ -738,14 +759,14 @@ class InteractionsToCompletionBridgeHandler:
             if isinstance(exc, httpx.HTTPStatusError):
                 with contextlib.suppress(httpx.HTTPError):
                     exc.response.read()
-                if not wire.is_stream and _is_recitation_block(blocked_text := _safe_response_text(exc.response)):
+                if _is_recitation_block(blocked_text := _safe_response_text(exc.response)):
                     call_logger.post_call(
                         input=list(messages),
                         api_key=api_key or "",
                         original_response=blocked_text,
                         additional_args={"complete_input_dict": wire.body},
                     )
-                    return _recitation_block_response(model, model_response, exc.response, wire.url)
+                    return _blocked_answer(model, model_response, exc.response, wire, logging_obj)
             _handle_httpx_error(
                 exc=exc,
                 model=model,
@@ -767,8 +788,8 @@ class InteractionsToCompletionBridgeHandler:
                 original_response=error_body,
                 additional_args={"complete_input_dict": wire.body},
             )
-            if not wire.is_stream and _is_recitation_block(error_body):
-                return _recitation_block_response(model, model_response, raw_response, wire.url)
+            if _is_recitation_block(error_body):
+                return _blocked_answer(model, model_response, raw_response, wire, logging_obj)
             provider_err: Final = _build_provider_http_error(
                 custom_llm_provider,
                 raw_response.status_code,
@@ -917,14 +938,14 @@ class InteractionsToCompletionBridgeHandler:
             if isinstance(exc, httpx.HTTPStatusError):
                 with contextlib.suppress(httpx.HTTPError):
                     await exc.response.aread()
-                if not wire.is_stream and _is_recitation_block(blocked_text := _safe_response_text(exc.response)):
+                if _is_recitation_block(blocked_text := _safe_response_text(exc.response)):
                     call_logger.post_call(
                         input=list(messages),
                         api_key=api_key or "",
                         original_response=blocked_text,
                         additional_args={"complete_input_dict": wire.body},
                     )
-                    return _recitation_block_response(model, model_response, exc.response, wire.url)
+                    return _blocked_answer(model, model_response, exc.response, wire, logging_obj)
             _handle_httpx_error(
                 exc=exc,
                 model=model,
@@ -946,8 +967,8 @@ class InteractionsToCompletionBridgeHandler:
                 original_response=error_body,
                 additional_args={"complete_input_dict": wire.body},
             )
-            if not wire.is_stream and _is_recitation_block(error_body):
-                return _recitation_block_response(model, model_response, raw_response, wire.url)
+            if _is_recitation_block(error_body):
+                return _blocked_answer(model, model_response, raw_response, wire, logging_obj)
             provider_err: Final = _build_provider_http_error(
                 custom_llm_provider,
                 raw_response.status_code,

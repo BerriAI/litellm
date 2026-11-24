@@ -451,3 +451,84 @@ async def test_answer_blocked_for_recitation_comes_back_as_a_content_filter_fini
         assert answer.choices[0].message.content is None
         assert answer._hidden_params["headers"]["x-goog-request-id"] == "blocked-1"
         assert "recitation" in str(log.model_call_details["original_response"])
+
+
+_SAFETY_BLOCK: Final = {"error": {"message": "Request blocked due to safety violations.", "code": "safety"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked_body", [_RECITATION_BLOCK, _SAFETY_BLOCK], ids=["recitation", "safety"])
+async def test_stream_refused_before_it_opens_ends_with_a_content_filter_finish_sync_and_async(
+    blocked_body: Mapping[str, object],
+) -> None:
+    def blocked(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json=blocked_body)
+
+    bridge: Final = InteractionsToCompletionBridgeHandler()
+    sync_client: Final = HTTPHandler()
+    sync_client.client = httpx.Client(transport=httpx.MockTransport(blocked))
+    async_client: Final = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(blocked))
+    sync_stream: Final = bridge.completion(
+        model="gemini-3-flash-preview",
+        messages=[{"role": "user", "content": "say it"}],
+        model_response=ModelResponse(id="fallback"),
+        logging_obj=_logging_stub("gemini-3-flash-preview"),
+        api_key="test-gemini-key",
+        client=sync_client,
+        custom_llm_provider="gemini",
+        optional_params={"stream": True},
+    )
+    async_stream: Final = await bridge.acompletion(
+        model="gemini-3-flash-preview",
+        messages=[{"role": "user", "content": "say it"}],
+        model_response=ModelResponse(id="fallback"),
+        logging_obj=_logging_stub("gemini-3-flash-preview"),
+        api_key="test-gemini-key",
+        client=async_client,
+        custom_llm_provider="gemini",
+        optional_params={"stream": True},
+    )
+
+    assert isinstance(sync_stream, CustomStreamWrapper)
+    assert isinstance(async_stream, CustomStreamWrapper)
+    sync_chunks: Final = tuple(sync_stream)
+    async_chunks: Final = tuple([chunk async for chunk in async_stream])
+    for chunks in (sync_chunks, async_chunks):
+        assert [c.choices[0].finish_reason for c in chunks if c.choices[0].finish_reason] == ["content_filter"]
+        assert "".join(c.choices[0].delta.content or "" for c in chunks) == ""
+
+
+@pytest.mark.asyncio
+async def test_answer_blocked_for_safety_comes_back_as_a_content_filter_finish_sync_and_async() -> None:
+    def blocked(_req: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json=_SAFETY_BLOCK)
+
+    bridge: Final = InteractionsToCompletionBridgeHandler()
+    sync_client: Final = HTTPHandler()
+    sync_client.client = httpx.Client(transport=httpx.MockTransport(blocked))
+    async_client: Final = AsyncHTTPHandler()
+    async_client.client = httpx.AsyncClient(transport=httpx.MockTransport(blocked))
+    sync_answer: Final = bridge.completion(
+        model="gemini-3-flash-preview",
+        messages=[{"role": "user", "content": "say it"}],
+        model_response=ModelResponse(id="fallback"),
+        logging_obj=_logging_stub("gemini-3-flash-preview"),
+        api_key="test-gemini-key",
+        client=sync_client,
+        custom_llm_provider="gemini",
+    )
+    async_answer: Final = await bridge.acompletion(
+        model="gemini-3-flash-preview",
+        messages=[{"role": "user", "content": "say it"}],
+        model_response=ModelResponse(id="fallback"),
+        logging_obj=_logging_stub("gemini-3-flash-preview"),
+        api_key="test-gemini-key",
+        client=async_client,
+        custom_llm_provider="gemini",
+    )
+
+    for answer in (sync_answer, async_answer):
+        assert isinstance(answer, ModelResponse)
+        assert answer.choices[0].finish_reason == "content_filter"
+        assert answer.choices[0].message.content is None

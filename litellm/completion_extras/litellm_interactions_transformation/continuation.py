@@ -165,7 +165,7 @@ def _is_recitation_body(body: str) -> bool:
     except ValueError:
         return False
     error: Final = parsed.get("error") if isinstance(parsed, dict) else None
-    return isinstance(error, dict) and error.get("code") == "recitation"
+    return isinstance(error, dict) and error.get("code") in ("recitation", "safety")
 
 
 def is_recitation_block(error: Exception) -> bool:
