@@ -79344,6 +79344,33 @@
         "source": "https://console.nace.ai/docs/drex/guides/drex-max",
         "supports_vision": true
     },
+    "nace/parse-high": {
+        "litellm_provider": "nace",
+        "mode": "ocr",
+        "ocr_cost_per_page": 0.007,
+        "source": "https://console.nace.ai/docs/perception/pricing",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
+    },
+    "nace/parse-low": {
+        "litellm_provider": "nace",
+        "mode": "ocr",
+        "ocr_cost_per_page": 0.0035,
+        "source": "https://console.nace.ai/docs/perception/pricing",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
+    },
+    "nace/parse-medium": {
+        "litellm_provider": "nace",
+        "mode": "ocr",
+        "ocr_cost_per_page": 0.005,
+        "source": "https://console.nace.ai/docs/perception/pricing",
+        "supported_endpoints": [
+            "/v1/ocr"
+        ]
+    },
     "typesafe/jev-1.13.0": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",
