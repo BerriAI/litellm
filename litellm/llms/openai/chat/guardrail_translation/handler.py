@@ -972,8 +972,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 else:
                     continue
 
-                refusal = choice_refusal(choice)
-                if refusal is not None:
+                if (refusal := choice_refusal(choice)) is not None:
                     refusal_key: tuple[int, int | None] = (choice.index, _REFUSAL_CONTENT_POSITION)
                     combined_texts[refusal_key] = combined_texts.get(refusal_key, "") + refusal
 
@@ -1524,8 +1523,8 @@ def _choice_rewritable_texts(choice: Choices | StreamingChoices) -> Iterator[tup
     content: Final = stream_item_field(choice_payload(choice), "content")
     if isinstance(content, str):
         yield (choice.index, None), content
-    refusal: Final = choice_refusal(choice)
-    if refusal is not None:
+    refusal: Final = stream_item_field(choice_payload(choice), _REFUSAL_FIELD)
+    if isinstance(refusal, str):
         yield (choice.index, _REFUSAL_CONTENT_POSITION), refusal
 
 

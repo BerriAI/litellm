@@ -594,8 +594,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     qualifier="guard_content" if has_grounding else None,
                 )
                 items.append(self._build_content_item(block))
-            refusal = choice_refusal(choice)
-            if refusal is not None:
+            if (refusal := choice_refusal(choice)) is not None:
                 items.append(
                     self._build_content_item(
                         QualifiedTextBlock(text=refusal, qualifier="guard_content" if has_grounding else None)

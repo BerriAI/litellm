@@ -6375,6 +6375,61 @@ async def test_post_call_scans_and_sanitizes_a_chat_refusal():
 
 
 @pytest.mark.asyncio
+async def test_post_call_masks_a_chat_answer_and_refusal_into_one_field():
+    guardrail = _model_armor_post_call_guardrail(mask_response_content=True)
+    masked = "Card [REDACTED]. I cannot repeat [REDACTED]"
+    post = AsyncMock(return_value=_armor_http_response(_armor_redaction(masked)))
+    llm_response = litellm.ModelResponse()
+    llm_response.choices = [
+        litellm.Choices(
+            message=litellm.Message(
+                content="Card 4111-1111-1111-1111.", refusal=" I cannot repeat 4111-1111-1111-1111"
+            )
+        )
+    ]
+
+    with patch.object(guardrail.async_handler, "post", post):
+        await guardrail.async_post_call_success_hook(
+            data=dict(_POST_CALL_REQUEST), user_api_key_dict=UserAPIKeyAuth(), response=llm_response
+        )
+
+    message = llm_response.choices[0].message
+    assert (message.content, message.refusal) == (masked, "")
+
+
+@pytest.mark.asyncio
+async def test_post_call_masking_keeps_the_answer_of_a_bridged_reasoning_response_in_place():
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+
+    reasoning = "The user wants card 4111-1111-1111-1111 repeated."
+    guardrail = _model_armor_post_call_guardrail(mask_response_content=True)
+    post = AsyncMock(return_value=_armor_http_response(_armor_redaction("Your card is [REDACTED]")))
+    response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="What's my credit card?",
+        responses_api_request={},
+        chat_completion_response=litellm.ModelResponse(
+            choices=[
+                litellm.Choices(
+                    finish_reason="stop",
+                    message=litellm.Message(content="Your card is 4111-1111-1111-1111", reasoning_content=reasoning),
+                )
+            ]
+        ),
+    )
+
+    with patch.object(guardrail.async_handler, "post", post):
+        await guardrail.async_post_call_success_hook(
+            data=dict(_POST_CALL_REQUEST), user_api_key_dict=UserAPIKeyAuth(), response=response
+        )
+
+    reasoning_item, answer_item = response.output
+    assert [part.text for part in reasoning_item.content] == [reasoning]
+    assert [part.text for part in answer_item.content] == ["Your card is [REDACTED]"]
+
+
+@pytest.mark.asyncio
 async def test_post_call_blocks_on_a_flagged_responses_refusal():
     guardrail = _model_armor_post_call_guardrail(mask_response_content=False)
     post = AsyncMock(return_value=_armor_http_response(_armor_block()))
@@ -6431,29 +6486,50 @@ async def test_post_call_masks_every_part_of_a_responses_body_through_the_first(
     assert [part.text for part in response.output[0].content] == ["card [REDACTED] and more", ""]
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("mask_response_content", "flagged"),
-    [(True, _armor_redaction("saving [REDACTED]")), (False, _armor_block())],
-)
-async def test_post_call_answers_a_tool_call_beside_responses_text_unchanged(mask_response_content, flagged):
+def _responses_body_with_a_card_tool_call():
     from litellm.types.llms.openai import ResponsesAPIResponse
 
+    body = _responses_body({"type": "output_text", "text": "saving it", "annotations": []}).model_dump()
+    return ResponsesAPIResponse.model_validate({**body, "output": [*body["output"], _TOOL_CALL_ITEM]})
+
+
+def _armor_flagging_the_card(flagged: dict) -> AsyncMock:
     async def flag_the_card(**kwargs):
         verdict = flagged if "4111" in str(kwargs["json"]) else {"filterMatchState": "NO_MATCH_FOUND"}
         return _armor_http_response(verdict)
 
-    guardrail = _model_armor_post_call_guardrail(mask_response_content=mask_response_content)
-    body = _responses_body({"type": "output_text", "text": "saving it", "annotations": []}).model_dump()
-    response = ResponsesAPIResponse.model_validate({**body, "output": [*body["output"], _TOOL_CALL_ITEM]})
+    return AsyncMock(side_effect=flag_the_card)
 
-    with patch.object(guardrail.async_handler, "post", AsyncMock(side_effect=flag_the_card)):
+
+@pytest.mark.asyncio
+async def test_post_call_masking_answers_a_tool_call_beside_responses_text_unchanged():
+    guardrail = _model_armor_post_call_guardrail(mask_response_content=True)
+    response = _responses_body_with_a_card_tool_call()
+
+    with patch.object(guardrail.async_handler, "post", _armor_flagging_the_card(_armor_redaction("saving [REDACTED]"))):
         await guardrail.async_post_call_success_hook(
             data=dict(_POST_CALL_REQUEST), user_api_key_dict=UserAPIKeyAuth(), response=response
         )
 
     assert response.output[0].content[0].text == "saving it"
     assert response.output[1].arguments == _TOOL_CALL_ITEM["arguments"]
+
+
+@pytest.mark.asyncio
+async def test_post_call_blocking_blocks_a_flagged_tool_call_beside_responses_text():
+    guardrail = _model_armor_post_call_guardrail(mask_response_content=False)
+
+    with (
+        patch.object(guardrail.async_handler, "post", _armor_flagging_the_card(_armor_block())),
+        pytest.raises(HTTPException) as blocked,
+    ):
+        await guardrail.async_post_call_success_hook(
+            data=dict(_POST_CALL_REQUEST),
+            user_api_key_dict=UserAPIKeyAuth(),
+            response=_responses_body_with_a_card_tool_call(),
+        )
+
+    assert blocked.value.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -6505,6 +6581,46 @@ async def test_streaming_masks_every_event_that_spells_out_a_responses_part(part
     assert "4111" not in str(released)
     assert "".join(event.delta for event in released[:2]) == "I cannot help card [REDACTED]"
     assert getattr(released[2], field) == "I cannot help card [REDACTED]"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stray_text_event", ["reasoning_summary", "unknown_message_part"])
+async def test_streaming_blocks_a_responses_stream_whose_text_events_a_mask_cannot_reach(stray_text_event):
+    from litellm.types.llms.openai import (
+        OutputTextDeltaEvent,
+        ReasoningSummaryTextDeltaEvent,
+        ResponsesAPIStreamEvents,
+    )
+
+    stray = (
+        ReasoningSummaryTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
+            item_id="rs_1",
+            output_index=1,
+            delta="4111-1111-1111-1111",
+        )
+        if stray_text_event == "reasoning_summary"
+        else OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=1,
+            delta="4111-1111-1111-1111",
+        )
+    )
+    guardrail = _surface_guardrail(mask_response_content=True)
+    first_delta, terminal = _responses_api_events()
+    request_data = {
+        "model": "gpt-4o-mini",
+        "input": "show me a card",
+        "metadata": {"guardrails": ["model-armor-test"]},
+    }
+
+    with patch.object(guardrail.async_handler, "post", _armor_post_mock(_MODEL_ARMOR_DEIDENTIFIED)):
+        delivered = await _drain_surface_hook(guardrail, (first_delta, stray, terminal), request_data)
+
+    assert b"4111-1111-1111-1111" not in _delivered_bytes(delivered)
+    assert request_data["metadata"]["_model_armor_status"] == "blocked"
 
 
 @pytest.mark.asyncio

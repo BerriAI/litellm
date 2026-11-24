@@ -2793,6 +2793,17 @@ class _EmailMaskingGuardrail(CustomGuardrail):
         return {**inputs, "texts": [text.replace("alice@example.com", "<EMAIL>") for text in inputs.get("texts", [])]}
 
 
+class _EmailClearingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {**inputs, "texts": ["" if "alice@example.com" in text else text for text in inputs.get("texts", [])]}
+
+
 class _EmailBlockingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
@@ -2883,6 +2894,20 @@ class TestRefusalText:
 
         delivered = (getattr(chunk.choices[0].delta, "refusal", None) or "" for chunk in chunks)
         assert "".join(delivered) == "I cannot help <EMAIL>"
+        assert "alice@example.com" not in "".join(chunk.model_dump_json() for chunk in chunks)
+
+    @pytest.mark.asyncio
+    async def test_an_ended_stream_clears_a_refusal_the_guardrail_empties(self):
+        chunks = self._ended_stream()
+
+        await OpenAIChatCompletionsHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=_EmailClearingGuardrail(guardrail_name="clear"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert "".join(getattr(chunk.choices[0].delta, "refusal", None) or "" for chunk in chunks) == ""
         assert "alice@example.com" not in "".join(chunk.model_dump_json() for chunk in chunks)
 
     @pytest.mark.asyncio

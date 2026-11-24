@@ -578,6 +578,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         armor_response: _ModelArmorResponse,
         assembled_response: object,
         content: str,
+        stream_events: Sequence[object],
     ) -> tuple[bool, str | None]:
         """Whether to block the buffered stream, and the rewrite to emit when it is not blocked.
 
@@ -598,16 +599,24 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return self._has_deidentify_match(armor_response), None
         if sanitized_content == content:
             return False, None
-        if isinstance(assembled_response, ModelResponse) or (
-            isinstance(assembled_response, ResponsesAPIResponse)
-            and self._responses_message_text(assembled_response) == content
-        ):
+        if self._stream_rewrite_is_placeable(assembled_response, content, stream_events):
             return False, sanitized_content
         verbose_proxy_logger.warning(
             "Model Armor: sanitized content cannot be re-emitted on this streaming endpoint, "
             "blocking the response instead"
         )
         return True, None
+
+    def _stream_rewrite_is_placeable(
+        self, assembled_response: object, content: str, stream_events: Sequence[object]
+    ) -> bool:
+        if isinstance(assembled_response, ModelResponse):
+            return True
+        return (
+            isinstance(assembled_response, ResponsesAPIResponse)
+            and self._responses_message_text(assembled_response) == content
+            and self._responses_handler().stream_text_fits_message_parts(assembled_response, stream_events)
+        )
 
     @staticmethod
     def _append_armor_response(existing: object, armor_response: object) -> object:
@@ -972,7 +981,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         # Extract content from response
         content: Final = (
-            self._responses_message_text(response)
+            self._responses_post_call_text(response)
             if isinstance(response, ResponsesAPIResponse)
             else self._extract_content_from_response(response)
         )
@@ -1097,6 +1106,11 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         return OpenAIResponsesHandler()
 
+    def _responses_post_call_text(self, response: ResponsesAPIResponse) -> str:
+        if self.mask_response_content:
+            return self._responses_message_text(response)
+        return self._responses_api_response_text(response)
+
     @staticmethod
     def _responses_message_text(response: ResponsesAPIResponse) -> str:
         """Message text of a Responses API response, every part joined as Model Armor scans it."""
@@ -1176,10 +1190,10 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         """Replace every non-empty choice message with the Model Armor sanitized text."""
         message_choices: Final = tuple(choice for choice in assembled_response.choices if isinstance(choice, Choices))
         for choice in message_choices:
+            if choice_refusal(choice):
+                choice.message.refusal = "" if choice.message.content else sanitized_content
             if choice.message.content:
                 choice.message.content = sanitized_content
-            if choice_refusal(choice):
-                choice.message.refusal = sanitized_content
 
     @staticmethod
     def _assemble_chat_completion_stream(
@@ -1341,6 +1355,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 armor_response=armor_response,
                 assembled_response=assembled_response,
                 content=content,
+                stream_events=all_chunks,
             )
 
             # Attach Model Armor response & status to this request's metadata to avoid race conditions

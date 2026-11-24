@@ -2158,7 +2158,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         """Text of every message content part, keyed by its position in ``response.output``."""
         texts: Final[list[str]] = []  # mutable-ok: the shared extractor below appends into caller-owned lists
         positions: Final[list[_OutputPosition]] = []  # mutable-ok: the same extractor's position sink
-        for output_idx, output_item in enumerate(stream_item_items(response, "output")):
+        for output_idx, output_item in _answer_output_items(stream_item_items(response, "output")):
             self._extract_output_text_and_images(
                 output_item=output_item,
                 output_idx=output_idx,
@@ -2172,6 +2172,16 @@ class OpenAIResponsesHandler(BaseTranslation):
                 for position, text in zip(positions, texts)
                 if isinstance(position, _MessageContentPosition)
             }
+        )
+
+    def stream_text_fits_message_parts(self, response: "ResponsesAPIResponse", stream_events: Sequence[object]) -> bool:
+        message_positions: Final = frozenset(self.message_part_texts(response))
+        return all(
+            stream_item_field(event, "type") in _OUTPUT_TEXT_EVENT_TYPES
+            and (stream_item_field(event, "output_index"), stream_item_field(event, "content_index"))
+            in message_positions
+            for event in stream_events
+            if _carries_stream_text(event)
         )
 
     async def spread_text_rewrite(
