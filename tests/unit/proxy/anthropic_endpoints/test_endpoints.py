@@ -3,6 +3,7 @@ Test for anthropic_endpoints/endpoints.py, focusing on handling dictionary objec
 """
 
 import asyncio
+import dataclasses
 import datetime
 import json
 import logging
@@ -31,8 +32,10 @@ from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.endpoints import router as messages_router
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -1668,18 +1671,51 @@ def _anthropic_upstream_reply(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json=dict(_UPSTREAM_MESSAGE))
 
 
+class _ScriptedAnthropic:
+    def __init__(self) -> None:
+        self.sent: Final[list[httpx.Request]] = []  # mutable-ok: records each request the proxy sends upstream
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.sent.append(request)
+        return _anthropic_upstream_reply(request)
+
+
+class _SendsThroughClient(CustomLogger):
+    def __init__(self, client: AsyncHTTPHandler) -> None:
+        super().__init__()
+        self.client: Final = client
+
+    async def async_pre_call_hook(
+        self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache, data: Mapping[str, object], call_type: str
+    ) -> dict[str, object]:  # mutable-ok: the proxy only replaces its request with a returned dict
+        return {**data, "client": self.client}
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _CachedProxy:
+    store: InMemoryCache
+    upstream: _ScriptedAnthropic
+
+    def upstream_paths(self) -> tuple[str, ...]:
+        return tuple(str(request.url) for request in self.upstream.sent)
+
+
 @pytest_asyncio.fixture
-async def response_cache(monkeypatch: pytest.MonkeyPatch, httpx_transport: None) -> AsyncIterator[InMemoryCache]:
+async def cached_proxy(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_CachedProxy]:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
     assert isinstance(cache.cache, InMemoryCache)
+    upstream: Final = _ScriptedAnthropic()
+    client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(upstream))
     monkeypatch.setattr(litellm, "cache", cache)
+    monkeypatch.setattr(litellm, "callbacks", [_SendsThroughClient(client)])
     monkeypatch.setattr(proxy_server, "llm_router", _claude_router(cache_responses=True))
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", ProxyLogging(user_api_key_cache=DualCache()))
     try:
-        yield cache.cache
+        yield _CachedProxy(store=cache.cache, upstream=upstream)
     finally:
         await asyncio.gather(*_PENDING_CACHE_WRITES)
         await GLOBAL_LOGGING_WORKER.flush()
+        await client.close()
 
 
 async def _answer_messages(body: Mapping[str, object], call_id: str) -> tuple[Mapping[str, str], object]:
@@ -1710,7 +1746,7 @@ _HIT_TEST_BODY: Final = MappingProxyType(
 @pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
 @pytest.mark.parametrize("caller_cache_key", [None, "caller-chosen-key"], ids=["derived_cache_key", "caller_cache_key"])
 async def test_repeated_messages_request_answers_the_cache_key_it_was_served_from(
-    response_cache: InMemoryCache, stream: bool, caller_cache_key: str | None
+    cached_proxy: _CachedProxy, stream: bool, caller_cache_key: str | None
 ) -> None:
     body: Final = {
         **_HIT_TEST_BODY,
@@ -1718,14 +1754,10 @@ async def test_repeated_messages_request_answers_the_cache_key_it_was_served_fro
         **({} if caller_cache_key is None else {"cache_key": caller_cache_key}),
     }
 
-    with respx.mock(assert_all_called=True) as upstream:
-        provider: Final = upstream.post("https://api.anthropic.com/v1/messages").mock(
-            side_effect=_anthropic_upstream_reply
-        )
-        replies: Final = [await _answer_messages(body, f"cache-hit-{turn}") for turn in range(3)]
+    replies: Final = [await _answer_messages(body, f"cache-hit-{turn}") for turn in range(3)]
 
-    stored_keys: Final = tuple(response_cache.cache_dict)
-    assert provider.call_count == 1
+    stored_keys: Final = tuple(cached_proxy.store.cache_dict)
+    assert cached_proxy.upstream_paths() == ("https://api.anthropic.com/v1/messages",)
     assert len(stored_keys) == 1
     if caller_cache_key is not None:
         assert stored_keys == (caller_cache_key,)
@@ -1747,18 +1779,14 @@ async def test_repeated_messages_request_answers_the_cache_key_it_was_served_fro
     ids=["repeat_skips_the_cache_read", "caching_disabled"],
 )
 async def test_messages_request_not_served_from_cache_sends_no_cache_key(
-    response_cache: InMemoryCache,
+    cached_proxy: _CachedProxy,
     stream: bool,
     first_extra: Mapping[str, object],
     repeat_extra: Mapping[str, object],
 ) -> None:
-    with respx.mock(assert_all_called=True) as upstream:
-        provider: Final = upstream.post("https://api.anthropic.com/v1/messages").mock(
-            side_effect=_anthropic_upstream_reply
-        )
-        first: Final = await _answer_messages({**_HIT_TEST_BODY, "stream": stream, **first_extra}, "cache-miss-0")
-        repeat: Final = await _answer_messages({**_HIT_TEST_BODY, "stream": stream, **repeat_extra}, "cache-miss-1")
+    first: Final = await _answer_messages({**_HIT_TEST_BODY, "stream": stream, **first_extra}, "cache-miss-0")
+    repeat: Final = await _answer_messages({**_HIT_TEST_BODY, "stream": stream, **repeat_extra}, "cache-miss-1")
 
-    assert provider.call_count == 2
+    assert cached_proxy.upstream_paths() == ("https://api.anthropic.com/v1/messages",) * 2
     assert first[0].get("x-litellm-cache-key") is None
     assert repeat[0].get("x-litellm-cache-key") is None
