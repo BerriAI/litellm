@@ -30,6 +30,7 @@ from typing import Final, Literal
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_object_list
 from litellm.proxy.a2a.agent_card import normalize_protocol_version
 
 A2AVersion = Literal["0.3", "1.0"]
@@ -205,8 +206,8 @@ def _convert_task(result: JsonDict, target: A2AVersion) -> JsonDict:
 
 
 def _detect_list_tasks_version(result: JsonDict) -> A2AVersion | None:
-    tasks: Final = result.get("tasks")
-    if not isinstance(tasks, list) or not tasks:
+    tasks: Final = as_object_list(result.get("tasks"))
+    if not tasks:
         return None
     first: Final = tasks[0]
     if not isinstance(first, dict):

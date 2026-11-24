@@ -12,6 +12,7 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.vertex_ai.gemini.grounding_requests import GroundingRequests, calculate_grounding_requests
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
@@ -45,7 +46,11 @@ _AGGREGATED_FIELDS: Final = frozenset(
 
 def _detail_entries(raw: object) -> tuple[Mapping[str, object], ...]:
     """Narrow one turn's ``*TokensDetails`` value to the entries that are actually shaped like one."""
-    return tuple(entry for entry in raw if isinstance(entry, Mapping)) if isinstance(raw, Sequence) else ()
+    return (
+        tuple(shaped for entry in raw if (shaped := as_str_mapping(entry)) is not None)
+        if isinstance(raw, Sequence)
+        else ()
+    )
 
 
 def _grounding_metadata(websocket_messages: Sequence[object]) -> tuple[Mapping[str, object], ...]:
@@ -57,11 +62,12 @@ def _grounding_metadata(websocket_messages: Sequence[object]) -> tuple[Mapping[s
     return tuple(
         metadata
         for message in websocket_messages
-        if isinstance(message, Mapping)
-        for server_content in (message.get("serverContent"),)
-        if isinstance(server_content, Mapping)
-        for metadata in (server_content.get("groundingMetadata"),)
-        if isinstance(metadata, Mapping)
+        for frame in (as_str_mapping(message),)
+        if frame is not None
+        for server_content in (as_str_mapping(frame.get("serverContent")),)
+        if server_content is not None
+        for metadata in (as_str_mapping(server_content.get("groundingMetadata")),)
+        if metadata is not None
     )
 
 
@@ -70,7 +76,7 @@ def _turns(websocket_messages: Sequence[object]) -> tuple[tuple[object, ...], ..
     closes: Final = tuple(
         index + 1
         for index, message in enumerate(websocket_messages)
-        if isinstance(message, Mapping) and isinstance(message.get("usageMetadata"), dict)
+        if (frame := as_str_mapping(message)) is not None and isinstance(frame.get("usageMetadata"), dict)
     )
     return tuple(tuple(websocket_messages[start:end]) for start, end in pairwise((0, *closes)))
 
@@ -206,8 +212,9 @@ class VertexAILivePassthroughLoggingHandler(BasePassthroughLoggingHandler):
         snapshots: Final = tuple(
             metadata
             for message in websocket_messages
-            if isinstance(message, Mapping)
-            for metadata in (message.get("usageMetadata"),)
+            for frame in (as_str_mapping(message),)
+            if frame is not None
+            for metadata in (frame.get("usageMetadata"),)
             if isinstance(metadata, dict)
         )
 

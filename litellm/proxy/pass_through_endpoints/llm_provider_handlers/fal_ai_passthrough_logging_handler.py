@@ -6,6 +6,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.fal_ai.cost_calculator import fal_ai_passthrough_cost, fal_ai_queue_base
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
@@ -15,10 +16,13 @@ FAL_AI_PROVIDER: Final[str] = litellm.LlmProviders.FAL_AI.value
 
 
 def _url_parts(value: object) -> tuple[Mapping[str, object], ...]:
-    if isinstance(value, Mapping):
-        return (value,) if isinstance(value.get("url"), str) else ()
+    mapping: Final = as_str_mapping(value)
+    if mapping is not None:
+        return (mapping,) if isinstance(mapping.get("url"), str) else ()
     if isinstance(value, Sequence) and not isinstance(value, str):
-        return tuple(item for item in value if isinstance(item, Mapping) and isinstance(item.get("url"), str))
+        return tuple(
+            part for item in value if (part := as_str_mapping(item)) is not None and isinstance(part.get("url"), str)
+        )
     return ()
 
 

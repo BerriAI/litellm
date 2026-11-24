@@ -7,6 +7,8 @@ from typing import Final
 
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import as_object_list
+
 _TOP_LEVEL_SCHEMA_COMBINATORS: Final = ("allOf", "anyOf", "oneOf")
 _OPENAI_REJECTED_TOP_LEVEL_SCHEMA_KEYS: Final = ("enum", "const", "not")
 _LOCAL_SCHEMA_REF_PREFIXES: Final = (("#/$defs/", "$defs"), ("#/definitions/", "definitions"))
@@ -20,13 +22,13 @@ def _schema_properties(schema: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def _schema_branches(schema: Mapping[str, object], combinator: str) -> tuple[object, ...]:
-    branches: Final = schema.get(combinator)
-    return tuple(branches) if isinstance(branches, list) else ()
+    branches: Final = as_object_list(schema.get(combinator))
+    return () if branches is None else tuple(branches)
 
 
 def _schema_required_names(schema: Mapping[str, object]) -> frozenset[str]:
-    required: Final = schema.get("required")
-    if not isinstance(required, list):
+    required: Final = as_object_list(schema.get("required"))
+    if required is None:
         return frozenset()
     return frozenset(name for name in required if isinstance(name, str))
 
@@ -420,9 +422,10 @@ def _keyword_value_rebuilt(
             if key != "patternProperties" or not isinstance(name, str) or not rejected(name)
         }
         return value if len(kept) == len(value) and all(kept[name] is value[name] for name in kept) else kept
-    if key in _SUBSCHEMA_LIST_KEYWORDS and isinstance(value, list):
-        items: Final = [rebuilt.get(id(sub), sub) for sub in value]
-        return value if all(new is old for new, old in zip(items, value, strict=True)) else items
+    listed: Final = as_object_list(value)
+    if key in _SUBSCHEMA_LIST_KEYWORDS and listed is not None:
+        items: Final = [rebuilt.get(id(sub), sub) for sub in listed]
+        return value if all(new is old for new, old in zip(items, listed, strict=True)) else items
     if key in _SUBSCHEMA_KEYWORDS and isinstance(value, dict):
         return rebuilt.get(id(value), value)
     return value

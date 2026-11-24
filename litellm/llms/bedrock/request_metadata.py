@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import Final, Literal
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 BEDROCK_REQUEST_METADATA_HEADER: Final = "X-Amzn-Bedrock-Request-Metadata"
 BEDROCK_REQUEST_METADATA_MAX_PAIRS: Final = 16
@@ -80,8 +81,8 @@ def _metadata_sources(litellm_params: Mapping[str, object] | None) -> tuple[Mapp
     return tuple(
         source
         for name in _METADATA_PARAM_NAMES
-        for source in (litellm_params.get(name),)
-        if isinstance(source, Mapping)
+        for source in (as_str_mapping(litellm_params.get(name)),)
+        if source is not None
     )
 
 
@@ -220,7 +221,7 @@ def _longest_fitting_prefix(resolved: Mapping[str, str]) -> dict[str, str]:
     pairs: Final = tuple(resolved.items())
     return next(
         (dict(pairs[:count]) for count in range(len(pairs), 0, -1) if _fits_header(dict(pairs[:count]))),
-        {},
+        dict[str, str](),
     )
 
 
