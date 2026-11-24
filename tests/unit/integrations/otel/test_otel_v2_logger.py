@@ -3747,7 +3747,8 @@ def test_every_prisma_crud_call_site_names_a_known_table_so_no_half_named_postgr
     repo = Path(__file__).resolve().parents[4]
     per_file = (_crud_call_sites_in(path, repo) for path in _source_files(repo))
     sites = tuple(site for sites_in_file in per_file for site in sites_in_file)  # comprehension-ok: flatten
-    assert len(sites) >= 40, f"the scan lost the PrismaClient call sites: {sites}"
+    found_helpers: Final = {site.call_type for site in sites}
+    assert found_helpers == _GENERIC_CRUD_HELPERS, f"the scan lost the PrismaClient call sites: {sites}"
 
     unresolved = [site for site in sites if site.table_name not in _PRISMA_MODEL_BY_TABLE_NAME]
     assert unresolved == [], f"PrismaClient CRUD calls whose table the schema cannot resolve: {unresolved}"
