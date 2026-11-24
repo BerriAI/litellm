@@ -3929,3 +3929,47 @@ async def test_a_repeat_of_a_request_whose_max_tokens_was_clamped_is_served_from
     repeat: Final = await send({})
 
     assert repeat.id == first.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cache_controls, served_from_cache",
+    [
+        pytest.param(None, True, id="without-cache-controls-the-old-entry-is-served"),
+        pytest.param({"s-maxage": 60}, False, id="s-maxage-refuses-the-old-entry"),
+        pytest.param({"s-maxage": 600}, True, id="s-maxage-serves-an-entry-younger-than-it"),
+    ],
+)
+async def test_embedding_lookup_refuses_an_entry_older_than_the_request_s_maxage(
+    cache_controls: dict[str, int] | None, served_from_cache: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: _FIXED_START.timestamp() + 120)
+    cache: Final = setup_cache()
+    model: Final = "text-embedding-3-small"
+    text: Final = "an embedding input aged past s-maxage"
+    handler: Final = LLMCachingHandler(original_function=aembedding, request_kwargs={}, start_time=_FIXED_START)
+    await handler.async_set_cache(
+        result=EmbeddingResponse(model=model, data=[Embedding(embedding=[0.1, 0.2], index=0, object="embedding")]),
+        original_function=aembedding,
+        kwargs={"model": model, "input": [text], "caching": True},
+    )
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    key: Final = cache.get_cache_key(model=model, input=text)
+    fresh_entry: Final = await cache.cache.async_get_cache(key)
+    await cache.cache.async_set_cache(key, {**fresh_entry, "timestamp": _FIXED_START.timestamp()})
+
+    lookup: Final = await handler.async_get_cache(
+        model=model,
+        original_function=aembedding,
+        logging_obj=_build_logging_obj(CallTypes.aembedding.value, stream=False),
+        start_time=_FIXED_START,
+        call_type=CallTypes.aembedding.value,
+        kwargs={
+            "model": model,
+            "input": [text],
+            "caching": True,
+            **({} if cache_controls is None else {"cache": cache_controls}),
+        },
+    )
+
+    assert (lookup.final_embedding_cached_response is not None) is served_from_cache

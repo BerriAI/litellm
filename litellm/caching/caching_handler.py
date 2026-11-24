@@ -1084,6 +1084,7 @@ class LLMCachingHandler:
                     litellm.cache.async_get_cache(
                         cache_key=preset_cache_key,
                         dynamic_cache_object=self.dual_cache,
+                        cache=new_kwargs.get("cache") or {},
                     )
                 )
             with response_cache_phase("get"):
