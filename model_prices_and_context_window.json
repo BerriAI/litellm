@@ -126268,5 +126268,46 @@
             "/v1/images/generations"
         ],
         "supports_vision": true
+    },
+
+    "unst33r/unst33r-flash": {
+        "litellm_provider": "unst33r",
+        "mode": "chat",
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 1.5e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://unst33r.si/pricing"
+    },
+    "unst33r/unst33r-deepseek": {
+        "litellm_provider": "unst33r",
+        "mode": "chat",
+        "input_cost_per_token": 1.5e-07,
+        "cache_read_input_token_cost": 3.125e-08,
+        "output_cost_per_token": 5.625e-07,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_tool_choice": true,
+        "source": "https://unst33r.si/pricing"
+    },
+    "unst33r/unst33r-kimi": {
+        "litellm_provider": "unst33r",
+        "mode": "chat",
+        "input_cost_per_token": 1.875e-06,
+        "cache_read_input_token_cost": 1.875e-07,
+        "output_cost_per_token": 3.75e-06,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_tool_choice": true,
+        "source": "https://unst33r.si/pricing"
+    },
+    "unst33r/unst33r-pro": {
+        "litellm_provider": "unst33r",
+        "mode": "chat",
+        "input_cost_per_token": 2.5e-06,
+        "output_cost_per_token": 4.5e-06,
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://unst33r.si/pricing"
     }
 }

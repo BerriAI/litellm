@@ -393,4 +393,12 @@
       "/v1/completions"
     ]
   }
+,
+  "unst33r": {
+    "base_url": "https://api.unst33r.si/v1",
+    "api_key_env": "UNST33R_API_KEY",
+    "supported_endpoints": [
+      "/v1/chat/completions"
+    ]
+  }
 }
