@@ -210,8 +210,9 @@ response = await litellm.messages.acreate(
 ## Loop Ceiling
 
 One intercepted request can chain several follow-up model calls, since the model often searches again after
-reading the first set of results. `max_agentic_loops` caps how many searches one turn runs, and it defaults
-to 3. LiteLLM also breaks the loop early when the model asks for the exact same tool call twice in a row.
+reading the first set of results. `max_agentic_loops` caps how many rounds of searching one turn runs, and it
+defaults to 3. A round runs every search the model asked for in one response, so one round can run more than one
+search. LiteLLM also breaks the loop early when the model asks for the exact same tool call twice in a row.
 
 Set the ceiling on the feature, which the interceptor applies on `/v1/messages`, `/v1/chat/completions` and
 `/v1/responses`:
