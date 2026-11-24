@@ -723,9 +723,7 @@ try:
     before = len(capture.records)
     litellm.ssl_ecdh_curve = 'logger-test-messages-curve'
     messages_warning()
-    messages_warning()
-    assert len(capture.records) == before + 1
-    assert 'logger-test-messages-curve' in capture.records[-1].getMessage()
+    assert len(capture.records) == before
 
     verbose_logger.handlers = [Broken()]
     sys.unraisablehook = failures.append

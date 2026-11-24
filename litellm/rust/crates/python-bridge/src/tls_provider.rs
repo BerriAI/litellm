@@ -6,11 +6,12 @@ use rustls::{
     pki_types::{AlgorithmIdentifier, InvalidSignature, SignatureVerificationAlgorithm, alg_id},
 };
 
-/// The RSA key sizes, in bits, that ring's signature verifiers accept.
+/// The RSA key sizes, in bits, whose signatures the FIPS build verifies: the FIPS module's 2048-bit floor and ring's
+/// 8192-bit ceiling.
 const RSA_KEY_BITS: std::ops::RangeInclusive<i32> = 2048..=8192;
 
-/// rustls-openssl's provider, with RSA signatures from keys outside ring's size range refused as ring refuses them.
-/// rustls-openssl leaves the key size to OpenSSL, which also verifies with 1024-bit keys.
+/// rustls-openssl's provider, with RSA signatures from keys outside `RSA_KEY_BITS` refused.
+/// rustls-openssl leaves the key size to OpenSSL, which outside FIPS mode also verifies with 1024-bit keys.
 pub(crate) fn openssl_provider() -> CryptoProvider {
     let provider = rustls_openssl::default_provider();
     let algorithms = provider.signature_verification_algorithms;
@@ -95,13 +96,11 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::rsa_1024_like_ring(1024, false)]
+    #[case::rsa_1024(1024, false)]
+    #[case::rsa_2047_under_the_fips_floor(2047, false)]
     #[case::rsa_2048(2048, true)]
     #[case::rsa_4096(4096, true)]
-    fn verifies_rsa_signatures_only_from_keys_ring_accepts(
-        #[case] bits: u32,
-        #[case] verified: bool,
-    ) {
+    fn verifies_rsa_signatures_only_from_keys_in_range(#[case] bits: u32, #[case] verified: bool) {
         let rsa = Rsa::generate(bits).expect("OpenSSL generates the RSA key");
         let public_key = rsa
             .public_key_to_der_pkcs1()
