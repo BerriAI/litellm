@@ -89,6 +89,8 @@ def _invoke_tool_choice(
             return error
         case None:
             return _NO_OPTIONS
+        case {"type": "auto" | "none"} as choice if not choice.get("disable_parallel_tool_use"):
+            return _NO_OPTIONS
         case _ if drops_params and not tools:
             return _NO_OPTIONS
         case _:

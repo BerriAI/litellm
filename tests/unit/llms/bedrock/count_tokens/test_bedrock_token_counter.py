@@ -268,7 +268,14 @@ def _invoke_body(request: httpx.Request) -> dict[str, JsonValue]:
 
 
 @pytest.mark.asyncio
-async def test_claude_runtime_count_carries_the_forced_tool_choice_inference_sends() -> None:
+@pytest.mark.parametrize(
+    "tool_choice",
+    [{"type": "any"}, {"type": "auto", "disable_parallel_tool_use": True}],
+    ids=["anthropic_any", "anthropic_auto_parallel_off"],
+)
+async def test_claude_runtime_count_carries_the_forced_tool_choice_inference_sends(
+    tool_choice: dict[str, JsonValue],
+) -> None:
     bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 675}), mantle=(200, {"input_tokens": 1}))
 
     result: Final = await _counter(bedrock).count_tokens(
@@ -279,15 +286,40 @@ async def test_claude_runtime_count_carries_the_forced_tool_choice_inference_sen
         request_model="claude-opus-4-8",
         tools=[{"name": "get_weather", "input_schema": {"type": "object"}}],
         messages_format="anthropic",
-        count_options={"tool_choice": {"type": "any"}},
+        count_options={"tool_choice": tool_choice},
     )
 
     assert result is not None
     assert (result.error, result.total_tokens) == (False, 675)
     assert bedrock.posted_hosts() == (RUNTIME_HOST,)
     invoke_body: Final = _invoke_body(bedrock.requests[0])
-    assert invoke_body["tool_choice"] == {"type": "any"}
+    assert invoke_body["tool_choice"] == tool_choice
     assert invoke_body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Weather in Paris?"}]}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tool_choice", [{"type": "auto"}, {"type": "none"}], ids=["auto", "none"])
+async def test_claude_runtime_count_sends_a_choice_that_adds_no_tokens_like_no_choice(
+    tool_choice: dict[str, JsonValue],
+) -> None:
+    request: Final = {
+        "model_to_use": "anthropic.claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": "Weather in Paris?"}],
+        "contents": None,
+        "deployment": DEPLOYMENT,
+        "request_model": "claude-sonnet-4-6",
+        "tools": [{"name": "get_weather", "input_schema": {"type": "object"}}],
+        "messages_format": "anthropic",
+    }
+    unset: Final = _Bedrock(runtime=(200, {"inputTokens": 579}), mantle=(200, {"input_tokens": 1}))
+    chosen: Final = _Bedrock(runtime=(200, {"inputTokens": 579}), mantle=(200, {"input_tokens": 1}))
+    await _counter(unset).count_tokens(**request)
+
+    result: Final = await _counter(chosen).count_tokens(**request, count_options={"tool_choice": tool_choice})
+
+    assert result is not None
+    assert (result.error, result.total_tokens) == (False, 579)
+    assert _JSON_BODY.validate_json(chosen.requests[0].content) == _JSON_BODY.validate_json(unset.requests[0].content)
 
 
 @pytest.mark.asyncio
