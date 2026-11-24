@@ -27,6 +27,8 @@ RUN npm run build
 # ---------- runtime ----------
 FROM nginx:${NGINX_VERSION} AS runtime
 
+RUN apk add --no-cache 'zlib=1.4-r0'
+
 # Drop the upstream default :80 server; we own the config.
 RUN rm -f /etc/nginx/conf.d/default.conf
 
