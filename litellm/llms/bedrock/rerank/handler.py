@@ -6,6 +6,7 @@ import httpx
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.aws_partition import is_bedrock_arn
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.url_utils import join_api_base
@@ -168,6 +169,26 @@ class BedrockRerankHandler(BaseAWSLLM):
         )
         proxy_endpoint_url = proxy_endpoint_url.replace("bedrock-runtime", "bedrock-agent-runtime")
         proxy_endpoint_url = join_api_base(proxy_endpoint_url, "rerank")
+
+        rerank_config: Final = (data.get("rerankingConfiguration") or {}) if isinstance(data, dict) else {}
+        bedrock_config: Final = (
+            (rerank_config.get("bedrockRerankingConfiguration") or {})
+            if isinstance(rerank_config, dict)
+            else {}
+        )
+        model_config: Final = (
+            bedrock_config.get("modelConfiguration")
+            if isinstance(bedrock_config, dict)
+            else None
+        )
+        if isinstance(model_config, dict):
+            current_arn: Final = model_config.get("modelArn")
+            if current_arn and not is_bedrock_arn(str(current_arn)):
+                resolved_arn: Final = BedrockRerankConfig.resolve_model_arn(
+                    model=str(current_arn),
+                    aws_region_name=boto3_credentials_info.aws_region_name,
+                )
+                model_config["modelArn"] = resolved_arn  # mutable-ok: update modelArn
 
         body: Final = json.dumps(data).encode("utf-8")
         headers = {"Content-Type": "application/json"}

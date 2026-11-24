@@ -439,6 +439,95 @@ def test_rerank_infer_region_from_model_arn(monkeypatch):
         assert "us-east-1" not in mock_post.call_args.kwargs["url"]
 
 
+def test_provider_config_manager_bedrock_rerank():
+    config: Final = litellm.ProviderConfigManager.get_provider_rerank_config(
+        model="amazon.rerank-v1:0",
+        provider=litellm.LlmProviders.BEDROCK,
+        api_base=None,
+        present_version_params=[],
+    )
+    assert isinstance(config, litellm.BedrockRerankConfig)
+    assert isinstance(config, litellm.llms.base_llm.rerank.transformation.BaseRerankConfig)
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_rerank_bedrock_short_model_name(monkeypatch):
+    mock_response = MagicMock()
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    args = {
+        "model": "bedrock/amazon.rerank-v1:0",
+        "query": "hello",
+        "documents": ["hello", "world"],
+    }
+
+    def return_val():
+        return {
+            "results": [
+                {"index": 0, "relevanceScore": 0.85},
+                {"index": 1, "relevanceScore": 0.15},
+            ]
+        }
+
+    mock_response.json = return_val
+    mock_response.headers = {"key": "value"}
+    mock_response.status_code = 200
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        litellm.rerank(
+            model=args["model"],
+            query=args["query"],
+            documents=args["documents"],
+            client=client,
+        )
+
+        mock_post.assert_called_once()
+        assert "us-west-2" in mock_post.call_args.kwargs["url"]
+        sent_body: Final = json.loads(mock_post.call_args.kwargs["data"])
+        model_config: Final = (
+            sent_body["rerankingConfiguration"]["bedrockRerankingConfiguration"]["modelConfiguration"]
+        )
+        assert model_config["modelArn"] == "arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0"
+
+
+def test_bedrock_rerank_filters_unsupported_credentials_params():
+    config: Final = litellm.BedrockRerankConfig()
+    mapped: Final = config.map_cohere_rerank_params(
+        non_default_params={
+            "top_n": 5,
+            "aws_secret_access_key": "sensitive-secret-token",
+            "aws_session_token": "sensitive-session",
+            "unsupported_extra": "drop_me",
+        },
+        model="amazon.rerank-v1:0",
+        drop_params=False,
+        query="test query",
+        documents=["doc 1"],
+    )
+    assert mapped["top_n"] == 5
+    assert "aws_secret_access_key" not in mapped
+    assert "aws_session_token" not in mapped
+    assert "unsupported_extra" not in mapped
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_bedrock_rerank_prepare_request_handles_none_config(monkeypatch):
+    monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
+    handler: Final = litellm.llms.bedrock.rerank.handler.BedrockRerankHandler()
+    data_with_none: Final = {
+        "rerankingConfiguration": None,
+    }
+    prepared: Final = handler._prepare_request(
+        model="amazon.rerank-v1:0",
+        api_base=None,
+        extra_headers=None,
+        data=data_with_none,
+        optional_params={},
+    )
+    assert "us-west-2" in prepared["endpoint_url"]
+
+
 @pytest.mark.respx(assert_all_called=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("sync_mode", [True, False])

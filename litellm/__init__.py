@@ -1786,6 +1786,9 @@ if TYPE_CHECKING:
     from .llms.hosted_vllm.rerank.transformation import (
         HostedVLLMRerankConfig as HostedVLLMRerankConfig,
     )
+    from .llms.bedrock.rerank.transformation import (
+        BedrockRerankConfig as BedrockRerankConfig,
+    )
     from .llms.perplexity.decisions.transformation import (
         PerplexityDecisionsConfig as PerplexityDecisionsConfig,
     )
