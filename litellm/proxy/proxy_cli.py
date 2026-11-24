@@ -815,7 +815,7 @@ class ProxyInitializationHelpers:
                 self.application = app  # FastAPI app
                 super().__init__()
 
-                _endpoint_str: Final = f"curl --location 'http://0.0.0.0:{port}/chat/completions' \\"
+                _endpoint_str: Final = f"curl --location --noproxy '*' 'http://0.0.0.0:{port}/chat/completions' \\"
                 curl_command: Final = (
                     _endpoint_str
                     + """
