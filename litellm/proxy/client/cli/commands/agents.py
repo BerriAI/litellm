@@ -540,12 +540,17 @@ def _codex_launch_args(user_args: Sequence[str], extra_args: Sequence[str]) -> t
     # defaults and earlier user overrides at the last config option's scope.
     groups: Final = tuple(_codex_arg_groups(user_args))
     last_config: Final = max((index for index, (is_config, _) in enumerate(groups) if is_config), default=0)
+    earlier: Final = groups[:last_config]
     return (
-        *(arg for _, args in groups[:last_config] for arg in args),
+        *_flatten_arg_groups(earlier),
         *extra_args,
-        *(arg for is_config, args in groups[:last_config] if is_config for arg in args),
-        *(arg for _, args in groups[last_config:] for arg in args),
+        *_flatten_arg_groups(group for group in earlier if group[0]),
+        *_flatten_arg_groups(groups[last_config:]),
     )
+
+
+def _flatten_arg_groups(groups: Iterable[tuple[bool, tuple[str, ...]]]) -> Iterator[str]:
+    return chain.from_iterable(args for _, args in groups)
 
 
 class ListedModel(LiteLLMBaseModel):
