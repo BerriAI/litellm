@@ -118,7 +118,7 @@ class BaseSecretManager(ABC):
         new_secret_value: str,
         optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Async function to rotate a secret by creating a new one and deleting the old one.
         This allows for both value and name changes during rotation.

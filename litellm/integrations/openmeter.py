@@ -53,7 +53,7 @@ class OpenMeterLogger(CustomLogger):
 
         in the environment
         """
-        missing_keys: Final = []
+        missing_keys: Final[list[str]] = []
         if os.getenv("OPENMETER_API_KEY", None) is None:
             missing_keys.append("OPENMETER_API_KEY")
 

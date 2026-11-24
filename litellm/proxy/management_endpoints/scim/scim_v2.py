@@ -2292,7 +2292,13 @@ def _is_group_path(path: str | None) -> bool:
     return isinstance(path, str) and path.lower().startswith("groups")
 
 
+def _removes_every_value(op: SCIMPatchOperation, attribute: str) -> bool:
+    return op.op == "remove" and op.value is None and (op.path or "").lower() == attribute
+
+
 def _apply_group_operation(teams: tuple[str, ...], op: SCIMPatchOperation) -> tuple[str, ...]:
+    if _removes_every_value(op, "groups"):
+        return ()
     listed: Final = _extract_group_values(op.value)
     group_values: Final = listed if listed or op.value is not None else _extract_ids_from_path_filter(op.path, "groups")
     if op.op == "replace":
@@ -3207,7 +3213,9 @@ def _group_patch_attribute_values(op: SCIMPatchOperation) -> tuple[tuple[str, ob
     )
 
 
-def _replaces_members(op: SCIMPatchOperation) -> bool:
+def _sets_member_roster(op: SCIMPatchOperation) -> bool:
+    if _removes_every_value(op, "members"):
+        return True
     if op.op != "replace":
         return False
     return any(attribute.startswith("members") for attribute, _ in _group_patch_attribute_values(op))
@@ -3242,13 +3250,13 @@ async def _process_group_patch_operations(
     patch_ops: SCIMPatchOp, existing_team: LiteLLM_TeamTable, prisma_client: PrismaClient
 ) -> tuple[dict[str, object], set[str], set[str] | None]:
     """Process patch operations for a group and return update data, final members
-    and, when the request contained a member ``replace`` op, the absolute target
-    roster it declared (``None`` otherwise).
+    and, when the request contained a member ``replace`` op or a ``remove`` of every
+    member, the absolute target roster it declared (``None`` otherwise).
 
     ``add``/``remove`` are deltas relative to the current roster, but ``replace``
-    is absolute: it declares the roster is exactly this set, so the caller must
-    reconcile against it as a set-to-target rather than rebasing it onto a
-    concurrently-mutated roster.
+    and a ``remove`` on ``members`` with no value or filter are absolute: they
+    declare the roster is exactly this set, so the caller must reconcile against it
+    as a set-to-target rather than rebasing it onto a concurrently-mutated roster.
 
     A ``remove`` drops the ids it names without resolving them first. Removal is
     idempotent and cannot put anything on a roster, while resolving would make it
@@ -3306,8 +3314,11 @@ async def _process_group_patch_operations(
                 )
 
                 if op_type == "remove":
-                    final_members = final_members - await _member_ids_to_drop(
-                        patched_members, frozenset(final_members), prisma_client
+                    final_members = (
+                        set[str]()
+                        if _removes_every_value(op, "members")
+                        else final_members
+                        - await _member_ids_to_drop(patched_members, frozenset(final_members), prisma_client)
                     )
                 else:
                     member_result = await _resolve_group_member_ids(
@@ -3344,8 +3355,8 @@ async def _process_group_patch_operations(
 
     update_data["metadata"] = metadata
 
-    member_replace_present: Final = any(map(_replaces_members, patch_ops.Operations))
-    replace_target: Final = set(final_members) if member_replace_present else None
+    roster_set_present: Final = any(map(_sets_member_roster, patch_ops.Operations))
+    replace_target: Final = set(final_members) if roster_set_present else None
 
     return update_data, final_members, replace_target
 

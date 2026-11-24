@@ -4,6 +4,7 @@ Support for Scaleway's OpenAI-compatible `/v1/audio/transcriptions` endpoint.
 API reference: https://www.scaleway.com/en/developers/api/generative-apis/#path-audio-create-an-audio-transcription
 """
 
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -43,7 +44,7 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -59,8 +60,8 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         return join_api_base("https://api.scaleway.ai/v1" if api_base is None else api_base, "audio/transcriptions")
@@ -77,8 +78,8 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -105,12 +106,12 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> AudioTranscriptionRequestData:
         processed_audio: Final = process_audio_file(audio_file)
 
-        form_fields: Final[dict] = {"model": model}
+        form_fields: Final[dict[str, object]] = {"model": model}
         for key in self.get_supported_openai_params(model):
             value = optional_params.get(key)
             if value is not None:

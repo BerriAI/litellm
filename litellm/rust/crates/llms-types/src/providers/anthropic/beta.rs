@@ -338,7 +338,6 @@ impl AnthropicBeta {
             | Self::PromptCaching20240731
             | Self::PromptCachingScope20260105
             | Self::RedactThinking20260212
-            | Self::ServerSideFallback20260601
             | Self::SpendLimitReads20260926
             | Self::StructuredOutputs20251215
             | Self::TaskBudgets20260313
@@ -394,7 +393,8 @@ impl AnthropicBeta {
             ],
             Self::Compact20260112
             | Self::ContextManagement20250627
-            | Self::DangerousToolUse20260903 => &[BetaProvider::BedrockConverse],
+            | Self::DangerousToolUse20260903
+            | Self::ServerSideFallback20260601 => &[BetaProvider::BedrockConverse],
             Self::ComputerUse20250124
             | Self::ComputerUse20251124
             | Self::Context1m20250807

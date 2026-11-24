@@ -1,5 +1,6 @@
 import json
 import traceback
+from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Final
 
@@ -7,7 +8,7 @@ import litellm
 
 
 class GreenscaleLogger:
-    def __init__(self):
+    def __init__(self) -> None:
         import os
 
         self.greenscale_api_key = os.getenv("GREENSCALE_API_KEY")
@@ -17,7 +18,14 @@ class GreenscaleLogger:
         }
         self.greenscale_logging_url = os.getenv("GREENSCALE_ENDPOINT")
 
-    def log_event(self, kwargs, response_obj, start_time, end_time, print_verbose):
+    def log_event(
+        self,
+        kwargs,
+        response_obj,
+        start_time: object,
+        end_time: object,
+        print_verbose: Callable[[str], object],
+    ) -> None:
         try:
             response_json: Final = response_obj.model_dump() if response_obj else {}
             data: Final = {

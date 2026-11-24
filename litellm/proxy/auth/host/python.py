@@ -554,8 +554,8 @@ class PythonAuthHost:
 
     @with_service_target(AUTH_OBJECTS_TARGET)
     async def cached_key_mapping(self, claim_field: str, claim_value: str, issuer: str | None) -> object:
-        return await self.user_api_key_cache.async_get_cache(
-            AuthObject.jwt_key_mapping(claim_field, claim_value, issuer)
+        return _DECODED_JSON.validate_python(
+            await self.user_api_key_cache.async_get_cache(AuthObject.jwt_key_mapping(claim_field, claim_value, issuer))
         )
 
     @with_service_target(AUTH_OBJECTS_TARGET)
