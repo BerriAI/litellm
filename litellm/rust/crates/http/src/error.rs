@@ -89,6 +89,7 @@ pub(crate) enum Repr {
         status: u16,
         body: UpstreamBody,
         headers: Vec<(String, String)>,
+        stream_event: bool,
     },
 
     #[error("invalid WebSocket URL")]
@@ -180,8 +181,29 @@ impl Error {
             status,
             body: UpstreamBody(body),
             headers,
+            stream_event: false,
         }
         .into()
+    }
+
+    /// An upstream failure the provider sent as an error event inside a response stream it had
+    /// opened with a success status, kept apart from the failures a stream decoder makes up.
+    pub fn upstream_stream_event(
+        status: u16,
+        body: String,
+        headers: Vec<(String, String)>,
+    ) -> Self {
+        Repr::Status {
+            status,
+            body: UpstreamBody(body),
+            headers,
+            stream_event: true,
+        }
+        .into()
+    }
+
+    pub fn is_upstream_stream_event(&self) -> bool {
+        matches!(&*self.0, Repr::Status { stream_event: true, .. })
     }
 
     /// The provider's response headers on an upstream failure; empty for every other error.
@@ -810,6 +832,28 @@ mod tests {
         assert!(!format!("{error:#?}").contains("private-tail"));
         assert_eq!(error.upstream_response(), Some((429, body.as_str())));
         assert_eq!(error.status(), Some(429));
+    }
+
+    #[test]
+    fn a_stream_error_event_reads_as_the_same_upstream_failure_and_only_it_is_marked() {
+        let headers = vec![("x-amzn-requestid".to_owned(), "req-1".to_owned())];
+        let body = r#"throttlingException {"message":"slow down"}"#.to_owned();
+        let event = crate::Error::upstream_stream_event(429, body.clone(), headers.clone());
+        let synthesized = crate::Error::upstream_with_headers(429, body.clone(), headers.clone());
+
+        assert!(event.is_upstream_stream_event());
+        assert!(!synthesized.is_upstream_stream_event());
+        assert!(!crate::Error::upstream(429, body.clone()).is_upstream_stream_event());
+        assert_eq!(event.to_string(), synthesized.to_string());
+        assert_eq!(
+            Report::new(&event).to_string(),
+            Report::new(&synthesized).to_string()
+        );
+        assert_eq!(event.upstream_response(), Some((429, body.as_str())));
+        assert_eq!(event.upstream_headers(), headers.as_slice());
+        assert_eq!(event.status(), synthesized.status());
+        assert_eq!(event.dispatched(), synthesized.dispatched());
+        assert_eq!(event.is_response(), synthesized.is_response());
     }
 
     #[rstest]

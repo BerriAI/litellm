@@ -176,6 +176,14 @@ impl Error {
         }
     }
 
+    /// The provider sent this failure as an error event inside a stream it had opened.
+    pub fn is_upstream_stream_event(&self) -> bool {
+        matches!(
+            self,
+            Self::Http(error) | Self::Llm(LlmError::Http(error)) if error.is_upstream_stream_event()
+        )
+    }
+
     /// A read of a streamed body timed out after the response head arrived.
     pub fn body_read_timeout(&self) -> bool {
         match self {
@@ -479,5 +487,36 @@ mod tests {
         assert!(report.contains("test payload"), "{report}");
         assert_eq!(report.matches(&source_message).count(), 1, "{report}");
         assert!(litellm_error::find::<serde_json::Error>(&error).is_some());
+    }
+
+    fn stream_event() -> litellm_http::Error {
+        litellm_http::Error::upstream_stream_event(
+            500,
+            "internalServerException {}".into(),
+            Vec::new(),
+        )
+    }
+
+    #[rstest]
+    #[case::converted_from_the_transformation(Error::from(LlmError::Http(stream_event())), true)]
+    #[case::held_by_the_transformation(Error::Llm(LlmError::Http(stream_event())), true)]
+    #[case::after_send(Error::from(LlmError::Http(stream_event())).after_send(), true)]
+    #[case::synthesized_status(
+        Error::from(LlmError::Http(litellm_http::Error::upstream(502, "no events".into()))),
+        false
+    )]
+    #[case::response_refusal(
+        LlmError::InvalidResponse(ErrorDetail::MissingField {
+            subject: "response",
+            field: "usage",
+        })
+        .into(),
+        false
+    )]
+    fn only_a_provider_stream_error_event_reads_as_one(
+        #[case] error: Error,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(error.is_upstream_stream_event(), expected);
     }
 }

@@ -181,6 +181,8 @@ fn json_messages(messages: &Bound<'_, PyAny>) -> PyResult<Value> {
 
 pub(super) const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.host.routes.messages";
 const MESSAGES_STREAM_FAILURE: &str = "messages_stream_failure";
+/// A stream failure the provider sent as an error event, unlike the ones the decoder makes up.
+const MESSAGES_STREAM_EVENT: &str = "messages_stream_event";
 /// The model id a Mantle config hands the Bedrock invoke transform, which names it in its errors.
 const MESSAGES_PROVIDER_MODEL: &str = "messages_provider_model";
 /// The model a refusal names when it differs from the call's, as for a missing Claude Platform region.
@@ -1116,6 +1118,7 @@ impl MessagesPythonHost {
         }
         let unresolved_provider = refused_resolving_provider(&error);
         let bad_request = raises_bad_request(&error);
+        let stream_event = self.stream_opened && error.is_upstream_stream_event();
         let missing_platform_region = matches!(
             &error,
             Error::Auth(auth) | Error::Llm(litellm_llms::Error::Auth(auth)) if is_missing_region(auth)
@@ -1123,6 +1126,9 @@ impl MessagesPythonHost {
         route_failure(py, error, RequestMarker::Messages, |native| {
             if self.stream_opened {
                 native.value(py).setattr(MESSAGES_STREAM_FAILURE, true)?;
+            }
+            if stream_event {
+                native.value(py).setattr(MESSAGES_STREAM_EVENT, true)?;
             }
             if unresolved_provider {
                 // Python never resolved the provider, so its error names the model as requested.

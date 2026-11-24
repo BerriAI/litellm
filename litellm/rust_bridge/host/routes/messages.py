@@ -1317,6 +1317,8 @@ def map_failure(
     secrets the host read to send the call, such as azure_ai's `AZURE_API_BASE`."""
     if request_provider == "bedrock" and getattr(error, "messages_stream_failure", False):
         stream_error: Final = _bedrock_stream_error(error, request)
+        if stream_error is not None and getattr(error, "messages_stream_event", False):
+            return _public_provider_error(stream_error, error, request, request_provider)
         if stream_error is not None:
             return stream_error
     if getattr(error, "messages_timeout", None) == "Body":
