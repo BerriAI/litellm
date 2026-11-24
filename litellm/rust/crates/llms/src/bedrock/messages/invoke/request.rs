@@ -586,7 +586,7 @@ pub(crate) fn transform_anthropic_messages_request(
         &shared_params,
         headers,
         &model,
-        capabilities,
+        context,
         injected_thinking,
         settings,
     )?;

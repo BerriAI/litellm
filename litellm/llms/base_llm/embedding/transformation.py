@@ -80,7 +80,7 @@ class BaseEmbeddingConfig(BaseConfig, ABC):
         input: AllEmbeddingInputValues,
         optional_params: dict,
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         return {}
 
     @abstractmethod
@@ -122,7 +122,7 @@ class BaseEmbeddingConfig(BaseConfig, ABC):
         optional_params: dict,
         litellm_params: dict,
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         raise NotImplementedError("EmbeddingConfig does not need a request transformation for chat models")
 
     def transform_response(

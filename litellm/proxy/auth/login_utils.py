@@ -355,6 +355,7 @@ async def _sign_in(
                 llm_router=None,
                 request_type="key",
                 actor=None,
+                key_writer=None,
                 **{
                     "user_role": LitellmUserRoles.PROXY_ADMIN,
                     "duration": LITELLM_UI_SESSION_DURATION,

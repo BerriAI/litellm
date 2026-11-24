@@ -143,8 +143,10 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         )
 
     @staticmethod
-    def _restore_mantle_body_fields(request: dict, model_id: str, optional_params: dict) -> dict:
-        stream_fields: Final[dict] = {"stream": True} if optional_params.get("stream") is True else {}
+    def _restore_mantle_body_fields(
+        request: Mapping[str, object], model_id: str, optional_params: Mapping[str, object]
+    ) -> dict[str, object]:
+        stream_fields: Final[dict[str, bool]] = {"stream": True} if optional_params.get("stream") is True else {}
         return {**request, "model": model_id, **stream_fields}
 
     @property

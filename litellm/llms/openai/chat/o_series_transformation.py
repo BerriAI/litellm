@@ -51,13 +51,13 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         """
         return messages
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the supported OpenAI params for the given model
 
         """
 
-        all_openai_params: Final = super().get_supported_openai_params(model=model)
+        all_openai_params: Final[list[str]] = super().get_supported_openai_params(model=model)
         non_supported_params: Final = [
             "logprobs",
             "top_p",
