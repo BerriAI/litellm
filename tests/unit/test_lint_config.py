@@ -657,17 +657,22 @@ def test_a_provider_key_under_its_alternate_environment_name_is_not_reported_mis
     ] == [[needs_key], []]
 
 
-def test_openai_workload_identity_settings_count_as_authentication(tmp_path: Path) -> None:
+def test_openai_workload_identity_counts_as_authentication_only_when_complete(tmp_path: Path) -> None:
+    needs_key: Final = (
+        "config.yaml:3: warning: model_list[0].litellm_params: openai/gpt-4o needs OPENAI_API_KEY "
+        "in the environment or litellm_params.api_key"
+    )
+    token_file: Final = ", openai_identity_token_file: /var/run/token"
+    ids: Final = ", openai_identity_provider_id: idp_1, openai_service_account_id: sa_1"
     assert [
-        _lint(tmp_path, _model_entry(f"{{model: openai/gpt-4o{extra}}}"), {})
-        for extra in ("", ", openai_identity_token_file: /var/run/token")
-    ] == [
-        [
-            "config.yaml:3: warning: model_list[0].litellm_params: openai/gpt-4o needs OPENAI_API_KEY "
-            "in the environment or litellm_params.api_key"
-        ],
-        [],
-    ]
+        _lint(tmp_path, _model_entry(f"{{model: openai/gpt-4o{extra}}}"), environ)
+        for extra, environ in (
+            ("", {}),
+            (token_file, {}),
+            (token_file + ids, {}),
+            (token_file, {"OPENAI_IDENTITY_PROVIDER_ID": "idp_1", "OPENAI_SERVICE_ACCOUNT_ID": "sa_1"}),
+        )
+    ] == [[needs_key], [needs_key], [], []]
 
 
 def test_an_empty_declared_environment_variable_does_not_count_as_set(tmp_path: Path) -> None:

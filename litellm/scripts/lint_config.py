@@ -315,7 +315,19 @@ def _model_info_findings(
         )
 
 
-_AZURE_CLIENT_LOGIN: Final = ("tenant_id", "client_id", "client_secret")
+_PROVIDER_LOGINS: Final = {
+    "azure": (
+        ("tenant_id", "AZURE_TENANT_ID"),
+        ("client_id", "AZURE_CLIENT_ID"),
+        ("client_secret", "AZURE_CLIENT_SECRET"),
+    ),
+    "openai": (
+        ("openai_identity_provider_id", "OPENAI_IDENTITY_PROVIDER_ID"),
+        ("openai_service_account_id", "OPENAI_SERVICE_ACCOUNT_ID"),
+        ("openai_identity_token_file", "OPENAI_IDENTITY_TOKEN_FILE"),
+    ),
+}
+_LOGIN_PARAMS: Final = frozenset(param for login in _PROVIDER_LOGINS.values() for param, _ in login)
 
 
 def _with_declared(environ: Mapping[str, str], item: tuple[object, object]) -> Mapping[str, str]:
@@ -360,9 +372,11 @@ def _credential_findings(
     provider: Final = prefixes | {prefix.removesuffix("ai") for prefix in prefixes}
     fields: Final = [name for name in GenericLiteLLMParams.model_fields if name.partition("_")[0] in provider | {"api"}]
     set_params: Final = {key for key, value in params.items() if value is not None}
-    has_other_auth: Final = any(_ALTERNATIVE_AUTH.search(key) for key in set_params.intersection(fields)) or (
-        "azure" in provider
-        and all(name in set_params or environ.get(f"AZURE_{name.upper()}") for name in _AZURE_CLIENT_LOGIN)
+    has_other_auth: Final = any(
+        _ALTERNATIVE_AUTH.search(key) for key in set_params.intersection(fields) - _LOGIN_PARAMS
+    ) or any(
+        name in provider and all(param in set_params or environ.get(env_name) for param, env_name in login)
+        for name, login in _PROVIDER_LOGINS.items()
     )
     for name in missing:
         setting: Final = name.lower().partition("_")[2]
