@@ -1436,6 +1436,105 @@ class TestBedrockMantleGemma4SchemaKeywords:
         assert body["tools"][0] == "not-a-tool"
         assert "propertyNames" not in json.dumps(body["tools"][1])
 
+    def test_a_model_registered_without_full_schema_support_loses_the_refused_keywords(self, local_cost_map) -> None:
+        litellm.register_model(
+            {
+                "bedrock_mantle/acme.next-model": {
+                    "litellm_provider": "bedrock_mantle",
+                    "mode": "chat",
+                    "supports_all_json_schema_keywords": False,
+                }
+            }
+        )
+        schema: Final = _ask_user_question_parameters()
+
+        body: Final = BedrockMantleChatConfig().transform_request(
+            model="us-east-1/acme.next-model",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={"tools": [{"type": "function", "function": {"name": "ask", "parameters": schema}}]},
+            litellm_params={},
+            headers={},
+        )
+
+        assert "propertyNames" not in json.dumps(body["tools"])
+        assert body["tools"][0]["function"]["parameters"]["properties"].keys() == schema["properties"].keys()
+
+    def test_a_gemma_4_model_registered_with_full_schema_support_keeps_every_keyword(self, local_cost_map) -> None:
+        litellm.register_model({"bedrock_mantle/google.gemma-4-31b": {"supports_all_json_schema_keywords": True}})
+
+        body: Final = BedrockMantleChatConfig().transform_request(
+            model="google.gemma-4-31b",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={
+                "tools": [{"type": "function", "function": {"name": "ask", "parameters": _ask_user_question_parameters()}}]
+            },
+            litellm_params={},
+            headers={},
+        )
+
+        assert body["tools"][0]["function"]["parameters"] == _ask_user_question_parameters()
+
+    @pytest.mark.parametrize(
+        "model, declared, keeps_every_keyword",
+        [("google.gemma-4-31b", True, True), ("openai.gpt-oss-120b", False, False)],
+    )
+    def test_deployment_model_info_overrides_the_cost_map(
+        self, model: str, declared: bool, keeps_every_keyword: bool
+    ) -> None:
+        body: Final = BedrockMantleChatConfig().transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={
+                "tools": [{"type": "function", "function": {"name": "ask", "parameters": _ask_user_question_parameters()}}]
+            },
+            litellm_params={"model_info": {"supports_all_json_schema_keywords": declared}},
+            headers={},
+        )
+
+        assert (body["tools"][0]["function"]["parameters"] == _ask_user_question_parameters()) is keeps_every_keyword
+
+    @pytest.mark.parametrize(
+        "model, keeps_every_keyword",
+        [("google.gemma-4-next", False), ("openai.gpt-oss-next", True)],
+    )
+    def test_a_mantle_model_missing_from_the_cost_map_falls_back_to_its_family(
+        self, model: str, keeps_every_keyword: bool
+    ) -> None:
+        assert f"bedrock_mantle/{model}" not in litellm.model_cost
+        body: Final = BedrockMantleChatConfig().transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={
+                "tools": [{"type": "function", "function": {"name": "ask", "parameters": _ask_user_question_parameters()}}]
+            },
+            litellm_params={},
+            headers={},
+        )
+
+        assert (body["tools"][0]["function"]["parameters"] == _ask_user_question_parameters()) is keeps_every_keyword
+
+    @pytest.mark.parametrize("model, drops", [("google.gemma-4-31b", True), ("openai.gpt-oss-120b", False)])
+    def test_schemas_sent_through_extra_body_follow_the_same_rule(self, monkeypatch, model: str, drops: bool) -> None:
+        _use_mantle_bearer(monkeypatch)
+        handler: Final = Mock(side_effect=_reply_by_route)
+        schema: Final = _ask_user_question_parameters()
+
+        litellm.completion(
+            model=f"bedrock_mantle/{model}",
+            messages=[{"role": "user", "content": "hello"}],
+            aws_region_name="us-east-1",
+            extra_body={
+                "tools": [{"type": "function", "function": {"name": "AskUserQuestion", "parameters": schema}}],
+                "response_format": {"type": "json_schema", "json_schema": {"name": "reply", "schema": schema}},
+            },
+            client=_recording_client(handler),
+        )
+
+        sent: Final = json.loads(handler.call_args_list[0].args[0].content)
+        sent_schemas: Final = (sent["tools"][0]["function"]["parameters"], sent["response_format"]["json_schema"]["schema"])
+        assert all(("propertyNames" in json.dumps(each)) is not drops for each in sent_schemas)
+        assert all(each["properties"].keys() == schema["properties"].keys() for each in sent_schemas)
+
 
 def _replayed_tool_history(tool_call_ids: tuple[str, ...]) -> list[dict[str, object]]:
     return [

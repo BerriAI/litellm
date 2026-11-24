@@ -65689,6 +65689,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_all_json_schema_keywords": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_reasoning": true,
@@ -65714,6 +65715,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_all_json_schema_keywords": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_reasoning": true,
@@ -65739,6 +65741,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_all_json_schema_keywords": false,
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_reasoning": true,

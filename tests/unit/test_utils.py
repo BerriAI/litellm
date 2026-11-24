@@ -1329,6 +1329,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             },
             "bedrock_converse_supports_strict_tools": {"type": "boolean"},
             "supports_regex_lookaround": {"type": "boolean"},
+            "supports_all_json_schema_keywords": {"type": "boolean"},
             "tpm": {"type": "number"},
             "supported_endpoints": {
                 "type": "array",

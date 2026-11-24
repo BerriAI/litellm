@@ -25,6 +25,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils import model_cost_table
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import with_sanitized_schema_at
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
@@ -40,7 +41,7 @@ from litellm.llms.bedrock_mantle.common_utils import (
     MANTLE_HOST_RE,
     BedrockMantleAuthMixin,
     drop_schema_keywords_gemma_4_rejects,
-    is_mantle_gemma_4_model,
+    mantle_supports_all_json_schema_keywords,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
@@ -280,9 +281,26 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
                 headers=headers,
             )
         )
-        if not is_mantle_gemma_4_model(model):
-            return request
-        return {key: self._value_gemma_4_accepts(key, value) for key, value in request.items()}
+        return dict(self._with_schemas_model_accepts(request, model, litellm_params))
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        return self._with_schemas_model_accepts(
+            super().transform_extra_body(extra_body, request, model, litellm_params), model, litellm_params
+        )
+
+    @classmethod
+    def _with_schemas_model_accepts(
+        cls, params: Mapping[str, object], model: str, litellm_params: GenericLiteLLMParams
+    ) -> Mapping[str, object]:
+        if mantle_supports_all_json_schema_keywords(model, litellm_params, model_cost_table.published()):
+            return params
+        return MappingProxyType({key: cls._value_gemma_4_accepts(key, value) for key, value in params.items()})
 
     @classmethod
     def _value_gemma_4_accepts(cls, key: str, value: object) -> object:
