@@ -45,7 +45,7 @@ from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_local
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec, CacheValue
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_team
-from litellm.redis.stores.spend_counters import user_window_counter
+from litellm.redis.stores.spend_counters import team_window_counter, user_window_counter
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
 from litellm.proxy.utils import hash_token
 from litellm.redis.stores.auth_cache import AuthObject
@@ -513,6 +513,74 @@ async def test_user_spend_increments_both_windows(monkeypatch: pytest.MonkeyPatc
     windows: Final = await ps.accounting_window_keys(None, None, user_id="u")
     assert {window["window_duration"] for window in windows} == {"1h", "30d"}
 
+
+
+_MORNING: Final = "sched:Europe/Berlin:mon,tue,wed,thu,fri:08:00-13:00"
+_AFTERNOON: Final = "sched:Europe/Berlin:mon,tue,wed,thu,fri:13:00-18:00"
+_MORNING_COUNTER: Final = team_window_counter("t", f"{_MORNING}@2026-11-25T07:00:00+00:00")
+_AFTERNOON_COUNTER: Final = team_window_counter("t", f"{_AFTERNOON}@2026-11-25T12:00:00+00:00")
+
+
+async def _cache_scheduled_team() -> UserApiKeyCache:
+    cache: Final = UserApiKeyCache()
+    weekdays: Final = ["mon", "tue", "wed", "thu", "fri"]
+    await cache.async_set_cache(
+        key=AuthObject.team("t"),
+        value=LiteLLM_TeamTable.model_validate(
+            {
+                "team_id": "t",
+                "budget_limits": [
+                    {
+                        "max_budget": 10.0,
+                        "reset_at": "2026-11-25T12:00:00Z",
+                        "schedule": {"timezone": "Europe/Berlin", "days": weekdays, "start": "08:00", "end": "13:00"},
+                    },
+                    {
+                        "max_budget": 10.0,
+                        "reset_at": "2026-11-25T17:00:00Z",
+                        "schedule": {"timezone": "Europe/Berlin", "days": weekdays, "start": "13:00", "end": "18:00"},
+                    },
+                ],
+            }
+        ),
+    )
+    return cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "started_at, morning_spend, accounted",
+    [
+        (datetime.fromisoformat("2026-11-25T11:59:00+00:00"), 2.0, {f"{_MORNING}@2026-11-25T07:00:00+00:00"}),
+        (datetime.fromisoformat("2026-11-25T19:00:00+00:00"), 0.0, set()),
+    ],
+    ids=["started_in_the_morning_period", "started_outside_every_period"],
+)
+async def test_scheduled_team_windows_charge_only_the_period_the_request_started_in(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    started_at: datetime,
+    morning_spend: float,
+    accounted: set[str],
+) -> None:
+    from litellm.models.budget_schedule import resolve_schedules_at
+
+    spend: Final = _spend_counters(
+        monkeypatch, redis={"spend:team:t": 0.0, _MORNING_COUNTER: 0.0, _AFTERNOON_COUNTER: 0.0}
+    )
+    monkeypatch.setattr(ps, "user_api_key_cache", await _cache_scheduled_team())
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    with caplog.at_level("WARNING"):
+        await ps.increment_spend_counters(
+            token=None, team_id="t", user_id=None, response_cost=2.0, request_started_at=started_at
+        )
+
+    assert spend.redis == {"spend:team:t": 2.0, _MORNING_COUNTER: morning_spend, _AFTERNOON_COUNTER: 0.0}
+    assert "invalid budget window" not in caplog.text
+    with resolve_schedules_at(started_at):
+        windows: Final = await ps.accounting_window_keys(None, "t")
+    assert {str(window["window_duration"]) for window in windows} == accounted
 
 class _ConcurrencyProbe:
     """Stand-in for the per-counter warm-check read that pins concurrency.

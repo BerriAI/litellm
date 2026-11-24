@@ -1,4 +1,5 @@
 from collections import Counter
+from datetime import datetime
 from collections.abc import Sequence
 from typing import Final
 from types import SimpleNamespace
@@ -385,57 +386,43 @@ async def test_a_budgeted_team_whose_id_names_a_window_keeps_its_charge_and_gets
     assert store.snapshot() == {team_counter_key: 1.5}
 
 
+
 @pytest.mark.asyncio
-async def test_scheduled_team_window_charges_the_period_the_request_started_in(monkeypatch: pytest.MonkeyPatch) -> None:
-    from datetime import datetime, timezone
+@pytest.mark.parametrize(
+    "started_at, morning_spend, accounted",
+    [
+        (datetime.fromisoformat("2026-11-25T11:59:00+00:00"), 2.0, {f"{scenarios._MORNING}@2026-11-25T07:00:00+00:00"}),
+        (datetime.fromisoformat("2026-11-25T19:00:00+00:00"), 0.0, set()),
+    ],
+    ids=["started_in_the_morning_period", "started_outside_every_period"],
+)
+async def test_scheduled_team_windows_charge_only_the_period_the_request_started_in(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    started_at: datetime,
+    morning_spend: float,
+    accounted: set[str],
+) -> None:
+    """A request that started at 12:59 Berlin and finishes after 13:00 is charged to the morning, never the afternoon."""
+    from litellm.models.budget_schedule import resolve_schedules_at
 
-    from litellm.models.team import LiteLLM_TeamTable
-    from litellm.redis.stores.spend_counters import team_window_counter
-
-    morning: Final = "sched:Europe/Berlin:mon,tue,wed,thu,fri:08:00-13:00"
-    afternoon: Final = "sched:Europe/Berlin:mon,tue,wed,thu,fri:13:00-18:00"
-    morning_counter: Final = team_window_counter("t", f"{morning}@2026-11-25T07:00:00+00:00")
-    afternoon_counter: Final = team_window_counter("t", f"{afternoon}@2026-11-25T12:00:00+00:00")
-    redis: Final = RespRedis(values={"spend:team:t": 0.0, morning_counter: 0.0, afternoon_counter: 0.0})
-    cache: Final = UserApiKeyCache()
-    await cache.async_set_cache(
-        key=AuthObject.team("t"),
-        value=LiteLLM_TeamTable.model_validate(
-            {
-                "team_id": "t",
-                "budget_limits": [
-                    {
-                        "max_budget": 10.0,
-                        "schedule": {
-                            "timezone": "Europe/Berlin",
-                            "days": ["mon", "tue", "wed", "thu", "fri"],
-                            "start": "08:00",
-                            "end": "13:00",
-                        },
-                    },
-                    {
-                        "max_budget": 10.0,
-                        "schedule": {
-                            "timezone": "Europe/Berlin",
-                            "days": ["mon", "tue", "wed", "thu", "fri"],
-                            "start": "13:00",
-                            "end": "18:00",
-                        },
-                    },
-                ],
-            }
-        ),
+    redis: Final = RespRedis(
+        values={"spend:team:t": 0.0, scenarios._MORNING_COUNTER: 0.0, scenarios._AFTERNOON_COUNTER: 0.0}
     )
-    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    monkeypatch.setattr(ps, "user_api_key_cache", await scenarios._cache_scheduled_team())
     monkeypatch.setattr(ps, "prisma_client", None)
 
-    with rust_redis_store(monkeypatch, redis):
+    with rust_redis_store(monkeypatch, redis), caplog.at_level("WARNING"):
         await ps.increment_spend_counters(
-            token=None,
-            team_id="t",
-            user_id=None,
-            response_cost=2.0,
-            request_started_at=datetime(2026, 11, 25, 11, 59, tzinfo=timezone.utc),
+            token=None, team_id="t", user_id=None, response_cost=2.0, request_started_at=started_at
         )
 
-    assert redis.values == {"spend:team:t": 2.0, morning_counter: 2.0, afternoon_counter: 0.0}
+    assert redis.values == {
+        "spend:team:t": 2.0,
+        scenarios._MORNING_COUNTER: morning_spend,
+        scenarios._AFTERNOON_COUNTER: 0.0,
+    }
+    assert "invalid budget window" not in caplog.text
+    with resolve_schedules_at(started_at):
+        windows: Final = await ps.accounting_window_keys(None, "t")
+    assert {str(window["window_duration"]) for window in windows} == accounted

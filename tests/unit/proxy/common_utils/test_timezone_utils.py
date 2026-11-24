@@ -191,3 +191,23 @@ def test_new_window_keeps_scheduled_start_once_reset_time_passed(duration: str) 
     now: Final = datetime(2025, 6, 10, 7, 0, tzinfo=timezone.utc)
     fields: Final = get_budget_window_reset_fields(duration, settings=settings, now=now)
     assert datetime.fromisoformat(fields["window_start"]) < now
+
+
+
+@pytest.mark.parametrize(
+    "now, fields",
+    [
+        (
+            datetime(2026, 11, 25, 9, 0, tzinfo=timezone.utc),
+            {"reset_at": "2026-11-25T12:00:00+00:00", "window_start": "2026-11-25T07:00:00+00:00"},
+        ),
+        (
+            datetime(2026, 11, 27, 13, 0, tzinfo=timezone.utc),
+            {"reset_at": "2026-11-30T07:00:00+00:00", "window_start": "2026-11-30T07:00:00+00:00"},
+        ),
+    ],
+    ids=["inside_the_period", "after_friday_waits_for_monday"],
+)
+def test_scheduled_window_reset_fields_follow_the_local_period(now: datetime, fields: dict[str, str]) -> None:
+    label: Final = "sched:Europe/Berlin:mon,tue,wed,thu,fri:08:00-13:00"
+    assert dict(get_budget_window_reset_fields(label, now=now)) == fields

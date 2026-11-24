@@ -143,7 +143,7 @@ def test_full_workday_and_weekend_schedule_is_accepted() -> None:
                 {"max_budget": 1, "schedule": {"timezone": BERLIN, "start": "08:00", "end": "13:00"}},
                 {"max_budget": 1, "schedule": {"timezone": "UTC", "start": "13:00", "end": "18:00"}},
             ],
-            "same timezone",
+            r"Value error, All scheduled budget windows must use the same timezone \[",
         ),
         (
             [{"max_budget": 1, "schedule": {"timezone": "Mars/Base", "start": "08:00", "end": "13:00"}}],
@@ -215,3 +215,80 @@ def test_charged_at_reads_naive_times_as_local_and_restores_the_clock() -> None:
     with resolve_schedules_at(naive_local):
         assert schedule_clock() == naive_local.astimezone(timezone.utc)
     assert schedule_clock() != naive_local.astimezone(timezone.utc)
+
+
+@pytest.mark.parametrize("request_type", ["NewTeamRequest", "UpdateTeamRequest"])
+def test_team_requests_accept_scheduled_windows(request_type: str) -> None:
+    from litellm.proxy import _types
+
+    request: Final = getattr(_types, request_type).model_validate(
+        {
+            "team_id": "t",
+            "budget_limits": [{"max_budget": 10, "schedule": WORKDAY_MORNING.model_dump(mode="json")}],
+        }
+    )
+    assert request.budget_limits[0].budget_duration == WORKDAY_MORNING.label()
+
+
+@pytest.fixture
+def host_clock_25_hours_ahead_of_samoa(monkeypatch: pytest.MonkeyPatch):
+    import time
+
+    monkeypatch.setenv("TZ", "Pacific/Kiritimati")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+@pytest.mark.usefixtures("host_clock_25_hours_ahead_of_samoa")
+def test_local_day_comes_from_the_schedule_timezone_not_the_host() -> None:
+    late_wednesday: Final = BudgetSchedule(timezone="Pacific/Pago_Pago", days=("wed",), start="22:00", end="23:59")
+    at: Final = _utc("2026-11-26T10:30:00")
+    assert late_wednesday.period_at(at) == (_utc("2026-11-26T09:00:00"), _utc("2026-11-26T10:59:00"))
+    assert late_wednesday.next_start(at) == _utc("2026-12-03T09:00:00")
+    assert late_wednesday.next_start(_utc("2026-11-26T08:00:00")) == _utc("2026-11-26T09:00:00")
+
+
+def test_next_start_called_at_a_start_returns_the_following_one() -> None:
+    assert WORKDAY_MORNING.next_start(_utc("2026-11-25T07:00:00")) == _utc("2026-11-26T07:00:00")
+
+
+def test_default_clock_compares_with_period_boundaries() -> None:
+    from litellm.models.budget_schedule import schedule_clock
+
+    now: Final = schedule_clock()
+    assert WORKDAY_MORNING.next_start(now) > now
+
+
+@pytest.mark.parametrize(
+    "first, second, overlaps",
+    [
+        (("08:30", "09:15"), ("09:10", "10:00"), True),
+        (("08:30", "09:15"), ("09:15", "10:00"), False),
+        (("23:40", "00:20"), ("00:10", "01:00"), True),
+    ],
+    ids=["minutes_overlap", "minutes_touch", "overnight_minutes_overlap"],
+)
+def test_overlap_check_counts_minutes(first: tuple[str, str], second: tuple[str, str], overlaps: bool) -> None:
+    windows: Final = [
+        {"max_budget": 1, "schedule": {"timezone": BERLIN, "start": start, "end": end}}
+        for start, end in (first, second)
+    ]
+    if not overlaps:
+        assert len(_team_limits(*windows)) == 2
+        return
+    with pytest.raises(ValidationError, match="overlap"):
+        _team_limits(*windows)
+
+
+def test_overlap_error_names_both_windows() -> None:
+    with pytest.raises(ValidationError) as error:
+        _team_limits(
+            {"max_budget": 1, "schedule": {"timezone": BERLIN, "start": "08:00", "end": "13:00"}},
+            {"max_budget": 1, "schedule": {"timezone": BERLIN, "start": "12:00", "end": "14:00"}},
+        )
+    assert (
+        "Scheduled budget windows overlap: sched:Europe/Berlin:mon,tue,wed,thu,fri,sat,sun:08:00-13:00"
+        " and sched:Europe/Berlin:mon,tue,wed,thu,fri,sat,sun:12:00-14:00"
+    ) in str(error.value)

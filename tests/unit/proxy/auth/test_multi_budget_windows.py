@@ -257,3 +257,28 @@ async def test_team_scheduled_windows_give_each_period_a_fresh_allowance(
                 await auth_checks._team_multi_budget_check(_scheduled_team())
             return
         await auth_checks._team_multi_budget_check(_scheduled_team())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "now, blocked",
+    [("2026-11-25T20:00:00+00:00", True), ("2026-11-25T09:00:00+00:00", False)],
+    ids=["inside_the_closed_period", "outside_the_closed_period"],
+)
+async def test_zero_cap_period_blocks_only_inside_its_hours(
+    monkeypatch: pytest.MonkeyPatch, now: str, blocked: bool
+) -> None:
+    monkeypatch.setattr(proxy_server, "spend_counter_store", FakeSpendCounters().store())
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    closed_at_night: Final = LiteLLM_TeamTable(
+        team_id="t",
+        budget_limits=[
+            {"max_budget": 0.0, "schedule": {"timezone": "Europe/Berlin", "start": "18:00", "end": "08:00"}}
+        ],
+    )
+    with resolve_schedules_at(datetime.fromisoformat(now)):
+        if blocked:
+            with pytest.raises(litellm.BudgetExceededError):
+                await auth_checks._team_multi_budget_check(closed_at_night)
+            return
+        await auth_checks._team_multi_budget_check(closed_at_night)
