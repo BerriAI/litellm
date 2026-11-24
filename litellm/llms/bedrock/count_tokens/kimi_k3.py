@@ -10,6 +10,7 @@ import base64
 import copy
 import hashlib
 import json
+import math
 import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -59,16 +60,21 @@ _CHUNK: Final = regex.compile(
 )
 
 
+def hugging_face_downloads_allowed() -> bool:
+    return litellm.disable_hf_tokenizer_download is not True and not is_offline_mode()
+
+
 @dataclass(frozen=True, slots=True)
 class KimiK3TokenizerSource:
     ranks_path: Callable[[], str]
     sha256: str
+    downloads_allowed: Callable[[], bool] = hugging_face_downloads_allowed
 
 
 def _hugging_face_ranks_path() -> str:
     import huggingface_hub
 
-    if litellm.disable_hf_tokenizer_download is True or is_offline_mode():
+    if not hugging_face_downloads_allowed():
         cached: Final = huggingface_hub.try_to_load_from_cache(
             repo_id=KIMI_K3_REPO, filename=KIMI_K3_RANKS_FILE, revision=KIMI_K3_REVISION
         )
@@ -102,8 +108,8 @@ def load_kimi_k3_encoding(source: KimiK3TokenizerSource) -> tiktoken.Encoding | 
     if isinstance(loaded, tiktoken.Encoding):
         return loaded
     verbose_logger.warning(
-        "Kimi K3 tokenizer unavailable (%s), so Kimi K3 token counts are estimated until a later count loads it. "
-        "Allow downloads of %s from Hugging Face repo %s at revision %s, or put it in the Hugging Face cache",
+        "Kimi K3 tokenizer unavailable (%s), so until a later count loads it, Kimi K3 token counts are estimated, "
+        "or answer 503 on proxy count endpoints. Allow downloads of %s from Hugging Face repo %s at revision %s, or put it in the Hugging Face cache",
         loaded,
         KIMI_K3_RANKS_FILE,
         KIMI_K3_REPO,
@@ -146,6 +152,12 @@ class KimiK3Encodings:
         self.current = load
         return load
 
+    def retry_in_seconds(self) -> int | None:
+        current: Final = self.current
+        if current is None or not current.encoding.done():
+            return None
+        return max(math.ceil(current.started_at + self.retry_after_seconds - self.clock()), 1)
+
     async def encoding(self, wait_seconds: float) -> tiktoken.Encoding | None:
         load: Final = self._load()
         remaining: Final = 0 if load.is_retry else load.started_at + wait_seconds - self.clock()
@@ -155,7 +167,8 @@ class KimiK3Encodings:
         if load.encoding.done():
             return load.encoding.result()
         verbose_logger.warning(
-            "Kimi K3 tokenizer still loading after %s s, so Kimi K3 token counts are estimated until it loads. "
+            "Kimi K3 tokenizer still loading after %s s, so until it loads, Kimi K3 token counts are estimated, "
+            "or answer 503 on proxy count endpoints. "
             "Check that %s can be downloaded from Hugging Face repo %s at revision %s, or put it in the Hugging Face cache",
             wait_seconds,
             KIMI_K3_RANKS_FILE,

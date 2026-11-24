@@ -3206,7 +3206,7 @@ _BUNDLED_TOKENIZER_LOAD_LOCKS: Final[Mapping[HuggingFaceTokenizerKind, threading
     {"anthropic": threading.Lock(), "deepseek": threading.Lock()}
 )
 
-_HUGGINGFACE_TOKENIZER_NAMES: Final[Mapping[HuggingFaceTokenizerKind, str]] = MappingProxyType(
+HUGGINGFACE_TOKENIZER_NAMES: Final[Mapping[HuggingFaceTokenizerKind, str]] = MappingProxyType(
     {
         "cohere": "Xenova/c4ai-command-r-v01-tokenizer",
         "anthropic": "anthropic_tokenizer.json",
@@ -3347,7 +3347,9 @@ def _warn_huggingface_tokenizer_fallback(model: str, reason: str) -> None:
         "Could not load the Hugging Face tokenizer for %s. Until it loads, its token counts fall back to tiktoken, "
         "or answer 503 on proxy count endpoints. LiteLLM retries the load after "
         "HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS (%ss). "
-        "For Python Hugging Face tokenization, install tokenizers and huggingface-hub. Error: %s",
+        "For Python Hugging Face tokenization, install tokenizers and huggingface-hub. "
+        "To count with tiktoken without downloading, set litellm_settings.disable_hf_tokenizer_download to true. "
+        "Error: %s",
         json.dumps(redact_secrets(model)),
         HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
         json.dumps(redact_secrets(reason)),
@@ -3384,7 +3386,7 @@ def _return_huggingface_tokenizer(
 @dataclass(frozen=True, slots=True)
 class HuggingFaceTokenizerUnavailable:
     tokenizer: str
-    retry_in_seconds: int
+    retry_in_seconds: int | None
 
 
 def select_tokenizer_or_unavailable(
@@ -3398,10 +3400,12 @@ def select_tokenizer_or_unavailable(
     match _return_huggingface_tokenizer(model, outcomes):
         case None:
             return _return_openai_tokenizer(model)
-        case _HuggingFaceTokenizerLoadFailure(retry_at=retry_at):
+        case _HuggingFaceTokenizerLoadFailure(retry_at=retry_at, retry_pid=retry_pid):
             return HuggingFaceTokenizerUnavailable(
-                tokenizer=_HUGGINGFACE_TOKENIZER_NAMES[kind],
-                retry_in_seconds=max(math.ceil(retry_at - outcomes.clock()), 1),
+                tokenizer=HUGGINGFACE_TOKENIZER_NAMES[kind],
+                retry_in_seconds=None
+                if retry_pid == outcomes.pid()
+                else max(math.ceil(retry_at - outcomes.clock()), 1),
             )
         case loaded:
             return loaded
@@ -3417,7 +3421,7 @@ def huggingface_tokenizer_may_download(
 
 
 def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> HuggingFace:
-    name: Final = _HUGGINGFACE_TOKENIZER_NAMES[kind]
+    name: Final = HUGGINGFACE_TOKENIZER_NAMES[kind]
     match kind:
         case "cohere" | "llama2" | "llama3":
             return tokenizer_dispatch.from_pretrained(name)

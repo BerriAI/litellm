@@ -7,6 +7,7 @@ import inspect
 import io
 import itertools
 import logging
+import math
 import os
 import random
 import re
@@ -135,6 +136,7 @@ from litellm.litellm_core_utils.token_counter import (
 )
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
     HUGGING_FACE_SOURCE,
+    KIMI_K3_REPO,
     KimiK3Encodings,
     kimi_k3_anthropic_tokens,
     kimi_k3_template_tokens,
@@ -235,6 +237,7 @@ from litellm.types.utils import (
     pricing_override_fields,
 )
 from litellm.utils import (
+    HUGGINGFACE_TOKENIZER_NAMES,
     HuggingFaceTokenizerKind,
     HuggingFaceTokenizerUnavailable,
     acredential_updates,
@@ -15661,6 +15664,25 @@ class _TokenizerLoadOutcome:
     tokenizer: SelectTokenizerResponse | HuggingFaceTokenizerUnavailable | BaseException
     finished_at: float
 
+    def tokenizer_at(self, now: float) -> SelectTokenizerResponse | HuggingFaceTokenizerUnavailable | BaseException:
+        match self.tokenizer:
+            case HuggingFaceTokenizerUnavailable(retry_in_seconds=int() as retry_in_seconds) as unavailable:
+                return replace(
+                    unavailable,
+                    retry_in_seconds=max(math.ceil(retry_in_seconds - (now - self.finished_at)), 1),
+                )
+            case tokenizer:
+                return tokenizer
+
+    def reusable_at(self, now: float) -> bool:
+        match self.tokenizer:
+            case HuggingFaceTokenizerUnavailable(retry_in_seconds=None):
+                return False
+            case HuggingFaceTokenizerUnavailable(retry_in_seconds=int() as retry_in_seconds):
+                return now - self.finished_at < min(retry_in_seconds, TOKENIZER_LOAD_REUSE_SECONDS)
+            case _:
+                return now - self.finished_at < TOKENIZER_LOAD_REUSE_SECONDS
+
 
 @dataclass(frozen=True, slots=True)
 class _SharedTokenizerLoad:
@@ -15668,7 +15690,7 @@ class _SharedTokenizerLoad:
     started_at: float
 
     def reusable(self, now: float) -> bool:
-        return not self.outcome.done() or now - self.outcome.result().finished_at < TOKENIZER_LOAD_REUSE_SECONDS
+        return not self.outcome.done() or self.outcome.result().reusable_at(now)
 
 
 async def _loaded_tokenizer(
@@ -15788,7 +15810,7 @@ async def _tokenizer_within_load_wait(
         )
     except Exception as e:  # noqa: BLE001  # each caller decides what a tokenizer that cannot be read, loaded in time, or loaded at all answers
         return e
-    return outcome.tokenizer
+    return outcome.tokenizer_at(loop.time())
 
 
 async def _tokenizer_or_provider_error(
@@ -15802,13 +15824,7 @@ async def _tokenizer_or_provider_error(
     )
     match tokenizer:
         case HuggingFaceTokenizerUnavailable():
-            raise _provider_error_after_failed_estimate(
-                provider_failure.with_hint(
-                    f"Could not load the Hugging Face tokenizer {tokenizer.tokenizer} to count tokens locally. "
-                    f"LiteLLM retries the load in {tokenizer.retry_in_seconds}s"
-                ),
-                f"Hugging Face tokenizer {tokenizer.tokenizer} is unavailable",
-            )
+            raise _tokenizer_unavailable_error(tokenizer, provider_failure)
         case BaseException() if not _answers_provider_error(tokenizer):
             raise tokenizer.with_traceback(None)
         case BaseException():
@@ -15817,7 +15833,9 @@ async def _tokenizer_or_provider_error(
             return tokenizer
 
 
-async def _tokenizer_model(model: str, base_model: str | None) -> str:
+async def _tokenizer_model(
+    model: str, base_model: str | None, call_endpoint: bool, provider_failure: ProviderCountFailure | None
+) -> str:
     kind: Final = litellm.utils.huggingface_tokenizer_kind
     base_kind: Final = None if base_model is None or kind(model) is not None else kind(base_model)
     if base_model is None or base_kind is None:
@@ -15830,17 +15848,47 @@ async def _tokenizer_model(model: str, base_model: str | None) -> str:
         _tokenizer_loads_for_this_loop(_BASE_MODEL_TOKENIZER_LOADS),
         partial(_base_model_tokenizer_load_slot, base_kind),
     )
-    return model if isinstance(loaded, BaseException) else base_model
+    match loaded:
+        case asyncio.TimeoutError() | _TokenizerLoadsBusy() if call_endpoint:
+            raise _tokenizer_unavailable_error(
+                HuggingFaceTokenizerUnavailable(
+                    tokenizer=HUGGINGFACE_TOKENIZER_NAMES[base_kind], retry_in_seconds=None
+                ),
+                provider_failure,
+            )
+        case BaseException():
+            return model
+        case _:
+            return base_model
 
 
-def _tokenizer_unavailable_error(unavailable: HuggingFaceTokenizerUnavailable) -> ProxyException:
-    return ProxyException(
-        message=f"Could not load the Hugging Face tokenizer {unavailable.tokenizer} to count tokens for this model. "
-        f"LiteLLM retries the load in {unavailable.retry_in_seconds}s",
-        type="token_counting_error",
-        param="model",
-        code=503,
+def _tokenizer_unavailable_message(unavailable: HuggingFaceTokenizerUnavailable) -> str:
+    status: Final = (
+        f"The Hugging Face tokenizer {unavailable.tokenizer} to count tokens for this model is still loading. "
+        "Try again in a few seconds"
+        if unavailable.retry_in_seconds is None
+        else f"Could not load the Hugging Face tokenizer {unavailable.tokenizer} to count tokens for this model. "
+        f"LiteLLM retries the load in {unavailable.retry_in_seconds}s"
     )
+    return (
+        f"{status}. To count with tiktoken without downloading, "
+        "set litellm_settings.disable_hf_tokenizer_download to true"
+    )
+
+
+def _tokenizer_unavailable_error(
+    unavailable: HuggingFaceTokenizerUnavailable, provider_failure: ProviderCountFailure | None
+) -> ProxyException:
+    message: Final = _tokenizer_unavailable_message(unavailable)
+    if provider_failure is None:
+        return ProxyException(message=message, type="token_counting_error", param="model", code=503)
+    verbose_proxy_logger.warning(
+        "Local token estimate failed after the provider's count error %s, answering 503: "
+        "Hugging Face tokenizer %s is unavailable",
+        provider_failure.status_code,
+        unavailable.tokenizer,
+    )
+    return replace(provider_failure.with_hint(message), status_code=503).to_proxy_exception()
 
 
 async def _estimate_tokenizer(
@@ -15857,7 +15905,7 @@ async def _estimate_tokenizer(
         model=model, custom_tokenizer=custom_tokenizer
     )
     if isinstance(selected, HuggingFaceTokenizerUnavailable):
-        raise _tokenizer_unavailable_error(selected)
+        raise _tokenizer_unavailable_error(selected, None)
     return selected
 
 
@@ -15899,8 +15947,17 @@ async def _kimi_k3_count(
     messages: Sequence[AllMessageValues],
     tools: Sequence[ChatCompletionToolParam] | None,
     tool_choice: str | Mapping[str, object] | None,
+    call_endpoint: bool,
+    provider_failure: ProviderCountFailure | None,
 ) -> int | None:
     encoding: Final = await _KIMI_K3_ENCODINGS.encoding(TOKENIZER_LOAD_WAIT_SECONDS)
+    if encoding is None and call_endpoint and _KIMI_K3_ENCODINGS.source.downloads_allowed():
+        raise _tokenizer_unavailable_error(
+            HuggingFaceTokenizerUnavailable(
+                tokenizer=KIMI_K3_REPO, retry_in_seconds=_KIMI_K3_ENCODINGS.retry_in_seconds()
+            ),
+            provider_failure,
+        )
     if encoding is None:
         return None
     match messages_format:
@@ -16807,6 +16864,8 @@ async def _count_request_tokens(
             kimi_k3_messages,
             counted_tools,
             counted_tool_choice,
+            call_endpoint,
+            ladder,
         )
         if kimi_k3_messages is not None and custom_tokenizer is None
         else None
@@ -16820,7 +16879,8 @@ async def _count_request_tokens(
             count_source="local_estimate",
         )
     estimate: Final = await _local_token_estimate(
-        model=openai_model or await _tokenizer_model(model_to_use, _tokenizer_base_model(deployment_view)),
+        model=openai_model
+        or await _tokenizer_model(model_to_use, _tokenizer_base_model(deployment_view), call_endpoint, ladder),
         template_model=template_model,
         prompt=prompt if counted_messages is None else None,
         messages=counted_messages,

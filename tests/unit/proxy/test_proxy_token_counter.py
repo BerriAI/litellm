@@ -65,6 +65,7 @@ from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockToken
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.llms.bedrock.count_tokens.kimi_k3 import (
     KIMI_K3_RANKS_SHA256,
+    KIMI_K3_REPO,
     KimiK3Encodings,
     KimiK3TokenizerSource,
     kimi_k3_template_tokens,
@@ -108,7 +109,7 @@ from litellm.types.utils import (
     TokenCountMessagesFormat,
     TokenCountResponse,
 )
-from litellm.utils import _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES
+from litellm.utils import _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES, HuggingFaceTokenizerUnavailable
 
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
@@ -123,7 +124,9 @@ def _kimi_k3_tokenizer_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
         litellm.proxy.proxy_server,
         "_KIMI_K3_ENCODINGS",
         KimiK3Encodings(
-            source=KimiK3TokenizerSource(ranks_path=_hugging_face_offline, sha256=KIMI_K3_RANKS_SHA256),
+            source=KimiK3TokenizerSource(
+                ranks_path=_hugging_face_offline, sha256=KIMI_K3_RANKS_SHA256, downloads_allowed=lambda: False
+            ),
             retry_after_seconds=60,
         ),
     )
@@ -4307,6 +4310,98 @@ async def test_bedrock_kimi_k3_without_its_tokenizer_adds_the_template_offsets_t
     assert counted.total_tokens == estimate + template_tokens + _shipped_kimi_k3_framing()
 
 
+def _kimi_k3_tokenizer_hub_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
+    _framed_kimi(monkeypatch)
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "_KIMI_K3_ENCODINGS",
+        KimiK3Encodings(
+            source=KimiK3TokenizerSource(ranks_path=_hugging_face_offline, sha256=KIMI_K3_RANKS_SHA256),
+            retry_after_seconds=60,
+        ),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("offline_mode", "disable_hf_tokenizer_download", "expected"),
+    [
+        pytest.param("", False, "503", id="hub_allowed"),
+        pytest.param("true", False, "local_estimate", id="offline_mode"),
+        pytest.param("", True, "local_estimate", id="downloads_disabled"),
+    ],
+)
+async def test_bedrock_kimi_k3_count_answers_503_only_while_its_tokenizer_may_be_downloaded(
+    monkeypatch: pytest.MonkeyPatch, offline_mode: str, disable_hf_tokenizer_download: bool, expected: str
+) -> None:
+    _kimi_k3_tokenizer_hub_unreachable(monkeypatch)
+    monkeypatch.setenv("LITELLM_OFFLINE_MODE", offline_mode)
+    monkeypatch.setattr(litellm, "disable_hf_tokenizer_download", disable_hf_tokenizer_download)
+
+    assert await _count_status("kimi") == expected
+
+
+@pytest.mark.asyncio
+async def test_bedrock_kimi_k3_count_names_its_tokenizer_and_retry_time_while_the_hub_cannot_serve_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _kimi_k3_tokenizer_hub_unreachable(monkeypatch)
+    request: Final = TokenCountRequest(model="kimi", messages=[{"role": "user", "content": "What is new?"}])
+
+    with pytest.raises(ProxyException) as raised:
+        await count_request_tokens(request=request, call_endpoint=True)
+    without_call_endpoint: Final = await count_request_tokens(request=request, call_endpoint=False)
+
+    retry_in: Final = re.fullmatch(
+        f"scripted 400 for kimi\\. Could not load the Hugging Face tokenizer {re.escape(KIMI_K3_REPO)} to count "
+        r"tokens for this model\. LiteLLM retries the load in (\d+)s\. To count with tiktoken without "
+        r"downloading, set litellm_settings\.disable_hf_tokenizer_download to true",
+        raised.value.message,
+    )
+    assert raised.value.code == "503"
+    assert retry_in is not None and 1 <= int(retry_in[1]) <= 60
+    assert without_call_endpoint.count_source == "local_estimate"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_kimi_k3_count_says_still_loading_while_its_tokenizer_download_runs_past_the_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _framed_kimi(monkeypatch)
+    download_released: Final = threading.Event()
+
+    def hanging_download() -> NoReturn:
+        download_released.wait(timeout=5)
+        raise OSError("unit tests never download the Kimi K3 tokenizer")
+
+    ticks: Final = itertools.count(0.0, 1000.0)
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "_KIMI_K3_ENCODINGS",
+        KimiK3Encodings(
+            source=KimiK3TokenizerSource(ranks_path=hanging_download, sha256=KIMI_K3_RANKS_SHA256),
+            retry_after_seconds=60,
+            clock=lambda: next(ticks),
+        ),
+    )
+
+    try:
+        with pytest.raises(ProxyException) as raised:
+            await count_request_tokens(
+                request=TokenCountRequest(model="kimi", messages=[{"role": "user", "content": "What is new?"}]),
+                call_endpoint=True,
+            )
+    finally:
+        download_released.set()
+
+    assert raised.value.code == "503"
+    assert raised.value.message == (
+        f"scripted 400 for kimi. The Hugging Face tokenizer {KIMI_K3_REPO} to count tokens for this model is still "
+        "loading. Try again in a few seconds. To count with tiktoken without downloading, set "
+        "litellm_settings.disable_hf_tokenizer_download to true"
+    )
+
+
 @pytest.mark.asyncio
 async def test_slow_cost_map_lookup_does_not_stall_other_requests_on_the_worker(monkeypatch: pytest.MonkeyPatch):
     real_get_model_info: Final = litellm.get_model_info
@@ -7204,7 +7299,7 @@ async def test_framed_count_still_estimates_while_base_model_tokenizer_downloads
 
 
 @pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
-def test_framed_custom_named_deployment_counts_like_before_while_its_base_model_tokenizer_download_hangs(
+def test_framed_custom_named_deployment_answers_503_while_its_base_model_tokenizer_download_hangs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     counter: Final = _ScriptedCounter({"us.moonshotai.kimi-k3": _provider_reply("kimi", status_code=400)})
@@ -7241,7 +7336,7 @@ def test_framed_custom_named_deployment_counts_like_before_while_its_base_model_
         finally:
             hub_released.set()
 
-    assert _run_on_skippable_clock(count_past_the_wait) == ("local_estimate",)
+    assert _run_on_skippable_clock(count_past_the_wait) == ("503",)
 
 
 def _hub_unreachable(identifier: str) -> None:
@@ -7277,7 +7372,8 @@ async def test_count_answers_503_naming_the_next_load_without_a_retry_after_head
 
     retry_in: Final = re.fullmatch(
         f"Could not load the Hugging Face tokenizer {re.escape(_LLAMA_3_HUB_TOKENIZER)} to count tokens for this "
-        r"model\. LiteLLM retries the load in (\d+)s",
+        r"model\. LiteLLM retries the load in (\d+)s\. To count with tiktoken without downloading, set "
+        r"litellm_settings\.disable_hf_tokenizer_download to true",
         raised.value.message,
     )
     assert (raised.value.code, raised.value.type, raised.value.param) == ("503", "token_counting_error", "model")
@@ -7288,7 +7384,7 @@ async def test_count_answers_503_naming_the_next_load_without_a_retry_after_head
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
-async def test_framed_count_answers_the_provider_status_naming_the_tokenizer_while_the_hub_tokenizer_cannot_load(
+async def test_framed_count_answers_503_with_the_provider_message_naming_the_tokenizer_while_it_cannot_load(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     counter: Final = _ScriptedCounter(
@@ -7307,12 +7403,106 @@ async def test_framed_count_answers_the_provider_status_naming_the_tokenizer_whi
 
     retry_in: Final = re.fullmatch(
         f"scripted 400 for llama\\. Could not load the Hugging Face tokenizer {re.escape(_LLAMA_3_HUB_TOKENIZER)} "
-        r"to count tokens locally\. LiteLLM retries the load in (\d+)s",
+        r"to count tokens for this model\. LiteLLM retries the load in (\d+)s\. To count with tiktoken without "
+        r"downloading, set litellm_settings\.disable_hf_tokenizer_download to true",
         raised.value.message,
     )
-    assert raised.value.code == "400"
+    assert raised.value.code == "503"
     assert retry_in is not None and 1 <= int(retry_in[1]) <= HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
     assert len(counter.calls) == 1
+
+
+async def _retry_in_from_the_count_error() -> str:
+    with pytest.raises(ProxyException) as raised:
+        await count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=True)
+    retry_in: Final = re.search(r"LiteLLM retries the load in (\d+)s", raised.value.message)
+    assert retry_in is not None
+    return retry_in[1]
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+def test_framed_count_counts_the_retry_time_down_while_it_reuses_a_failed_hub_tokenizer_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = _ScriptedCounter(
+        {"databricks-meta-llama-3-3-70b-instruct": _provider_reply("llama", status_code=400)}
+    )
+
+    def scripted_databricks_counter(deployment: object, model: str) -> tuple[BaseTokenCounter, str, str]:
+        return counter, model, "databricks"
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _hub_llama_router({"token_count_framing": 100}))
+    monkeypatch.setattr("litellm.proxy.proxy_server._get_provider_token_counter", scripted_databricks_counter)
+    _stub_hub_downloads(monkeypatch, _hub_unreachable)
+
+    async def retry_times_30s_apart(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        first: Final = await _retry_in_from_the_count_error()
+        loop.skip(30)
+        return first, await _retry_in_from_the_count_error()
+
+    first, later = _run_on_skippable_clock(retry_times_30s_apart)
+
+    assert int(later) == max(int(first) - 30, 1)
+    assert len(counter.calls) == 2
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+def test_framed_count_stops_reusing_a_failed_hub_tokenizer_load_once_its_retry_time_passes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = _ScriptedCounter(
+        {"databricks-meta-llama-3-3-70b-instruct": _provider_reply("llama", status_code=400)}
+    )
+
+    def scripted_databricks_counter(deployment: object, model: str) -> tuple[BaseTokenCounter, str, str]:
+        return counter, model, "databricks"
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _hub_llama_router({"token_count_framing": 100}))
+    monkeypatch.setattr("litellm.proxy.proxy_server._get_provider_token_counter", scripted_databricks_counter)
+    monkeypatch.setattr(litellm.utils, "HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS", 20)
+    _stub_hub_downloads(monkeypatch, _hub_unreachable)
+
+    async def retry_times_past_the_retry(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        first: Final = await _retry_in_from_the_count_error()
+        loop.skip(21)
+        return first, await _retry_in_from_the_count_error()
+
+    first, later = _run_on_skippable_clock(retry_times_past_the_retry)
+
+    assert 1 < int(first) <= 20
+    assert int(later) > 1
+
+
+@pytest.mark.asyncio
+async def test_framed_count_loads_the_hub_tokenizer_again_right_after_answering_that_it_is_still_loading(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = _ScriptedCounter(
+        {"databricks-meta-llama-3-3-70b-instruct": _provider_reply("llama", status_code=400)}
+    )
+
+    def scripted_databricks_counter(deployment: object, model: str) -> tuple[BaseTokenCounter, str, str]:
+        return counter, model, "databricks"
+
+    hub_loads: Final = iter(
+        (
+            HuggingFaceTokenizerUnavailable(tokenizer=_LLAMA_3_HUB_TOKENIZER, retry_in_seconds=None),
+            litellm.utils.select_tokenizer(model="gpt-4o"),
+        )
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _hub_llama_router({"token_count_framing": 100}))
+    monkeypatch.setattr("litellm.proxy.proxy_server._get_provider_token_counter", scripted_databricks_counter)
+    monkeypatch.setattr(
+        litellm.utils, "select_tokenizer_or_unavailable", lambda model, custom_tokenizer: next(hub_loads)
+    )
+
+    with pytest.raises(ProxyException) as still_loading:
+        await count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=True)
+    once_loaded: Final = await count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=True)
+
+    assert still_loading.value.code == "503"
+    assert "is still loading. Try again in a few seconds" in still_loading.value.message
+    assert (once_loaded.count_source, once_loaded.tokenizer_type) == ("local_estimate", "openai_tokenizer")
 
 
 _COUNTED_HELLO: Final[Mapping[str, JsonValue]] = MappingProxyType(

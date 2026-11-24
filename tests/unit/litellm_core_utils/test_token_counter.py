@@ -1495,7 +1495,7 @@ def test_unloadable_hub_tokenizer_is_reported_unavailable_with_the_seconds_until
     )
 
 
-def test_unavailable_hub_tokenizer_says_retry_in_one_second_while_its_retry_runs_then_counts_once_loaded():
+def test_unavailable_hub_tokenizer_says_still_loading_while_its_retry_runs_then_counts_once_loaded():
     model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
     clock: Final = MagicMock(return_value=100.0)
     retries: Final[list[Callable[[], None]]] = []
@@ -1512,7 +1512,7 @@ def test_unavailable_hub_tokenizer_says_retry_in_one_second_while_its_retry_runs
 
     assert (
         while_retrying
-        == (HuggingFaceTokenizerUnavailable(tokenizer="Xenova/llama-3-tokenizer", retry_in_seconds=1),) * 2
+        == (HuggingFaceTokenizerUnavailable(tokenizer="Xenova/llama-3-tokenizer", retry_in_seconds=None),) * 2
     )
     assert after_the_retry == {"type": "huggingface_tokenizer", "tokenizer": hub_tokenizer}
 
