@@ -4115,6 +4115,7 @@ dependencies = [
 name = "litellm-gateway"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "axum",
  "envy",
  "flate2",
