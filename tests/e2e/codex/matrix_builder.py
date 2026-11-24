@@ -8,15 +8,14 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, FilePath, TypeAdapter
 
 from codex.compat_results import CellResult, Failed, KnownGap, NotTested, Outcome, Passed, read_results
 from codex.setups import SETUPS
 
 SCHEMA_VERSION: Final = "1"
-CODEX_PACKAGE: Final = "@openai/codex"
-PACKAGE_JSON: Final = Path(__file__).resolve().parent / "package.json"
 REGRESSION_EXIT_CODE: Final = 3
+MISSING: Final = "missing"
 
 
 class _Frozen(BaseModel):
@@ -47,33 +46,24 @@ class Regression(_Frozen):
     error: str
 
 
-class _PackageJson(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    dependencies: Mapping[str, str]
-
-
 class BuildArgs(_Frozen):
     command: Literal["build"]
-    results: Path
+    results: FilePath
     out: Path
     litellm_version: str
+    codex_version: str
 
 
 class RegressionArgs(_Frozen):
     command: Literal["regressions"]
-    old: Path
-    new: Path
+    old: FilePath
+    new: FilePath
 
 
 CLI_ARGS: Final = TypeAdapter[BuildArgs | RegressionArgs](
     Annotated[BuildArgs | RegressionArgs, Field(discriminator="command")]
 )
 REGRESSIONS: Final = TypeAdapter(tuple[Regression, ...])
-
-
-def pinned_codex_version(package_json: Path = PACKAGE_JSON) -> str:
-    return _PackageJson.model_validate_json(package_json.read_bytes()).dependencies[CODEX_PACKAGE]
 
 
 def setup_columns(results: tuple[CellResult, ...]) -> tuple[str, ...]:
@@ -137,28 +127,32 @@ def _cells(matrix: Matrix) -> Iterator[tuple[MatrixRow, str, Outcome]]:
 
 
 def find_regressions(old: Matrix, new: Matrix) -> tuple[Regression, ...]:
-    old_cells: Final = MappingProxyType({(row.id, column): outcome for row, column, outcome in _cells(old)})
+    new_cells: Final = MappingProxyType({(row.id, column): outcome for row, column, outcome in _cells(new)})
     return tuple(
         Regression(
             feature_id=row.id,
             feature_name=row.name,
             provider=column,
             old_status="pass",
-            new_status=outcome.status,
-            error=_detail(outcome),
+            new_status=_status(new_cells.get((row.id, column))),
+            error=_detail(new_cells.get((row.id, column))),
         )
-        for row, column, outcome in _cells(new)
-        if isinstance(old_cells.get((row.id, column)), Passed) and not isinstance(outcome, Passed)
+        for row, column, outcome in _cells(old)
+        if isinstance(outcome, Passed) and not isinstance(new_cells.get((row.id, column)), Passed)
     )
 
 
-def _detail(outcome: Outcome) -> str:
+def _status(outcome: Outcome | None) -> str:
+    return MISSING if outcome is None else outcome.status
+
+
+def _detail(outcome: Outcome | None) -> str:
     match outcome:
         case Failed(error=error):
             return error
         case KnownGap(reason=reason) | NotTested(reason=str() as reason):
             return reason
-        case Passed() | NotTested():
+        case Passed() | NotTested() | None:
             return ""
 
 
@@ -168,7 +162,7 @@ def _build(args: BuildArgs) -> int:
         results,
         columns=setup_columns(results),
         litellm_version=args.litellm_version,
-        codex_version=pinned_codex_version(),
+        codex_version=args.codex_version,
         generated_at=datetime.now(timezone.utc),
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -177,8 +171,6 @@ def _build(args: BuildArgs) -> int:
 
 
 def _regressions(args: RegressionArgs) -> int:
-    if not args.old.exists():
-        return 0
     regressions: Final = find_regressions(
         Matrix.model_validate_json(args.old.read_bytes()), Matrix.model_validate_json(args.new.read_bytes())
     )
@@ -193,6 +185,7 @@ def main(argv: tuple[str, ...]) -> int:
     _ = build.add_argument("--results", required=True)
     _ = build.add_argument("--out", required=True)
     _ = build.add_argument("--litellm-version", dest="litellm_version", required=True)
+    _ = build.add_argument("--codex-version", dest="codex_version", required=True)
     regressions: Final = commands.add_parser("regressions")
     _ = regressions.add_argument("--old", required=True)
     _ = regressions.add_argument("--new", required=True)

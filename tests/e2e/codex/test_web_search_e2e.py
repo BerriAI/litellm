@@ -10,8 +10,8 @@ pytestmark = pytest.mark.e2e
 
 LIVE_WEB_SEARCH: Final = ("--config", 'web_search="live"')
 CODE_MODE_GPT_GAP: Final = (
-    "Codex sends no web search tool for this code-mode GPT model through a custom provider,"
-    " though it searches when it talks to OpenAI directly."
+    "LiteLLM's model list gives Codex the bundled entry for this GPT model, which turns on use_responses_lite,"
+    " and in that mode Codex sends no web search tool."
 )
 IDENTITY_MAY_NOT_SEARCH: Final = "web search is not authorized for this identity"
 SETUPS_WITHOUT_WEB_SEARCH: Final = with_expected_failures(

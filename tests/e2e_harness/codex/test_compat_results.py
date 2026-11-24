@@ -1,13 +1,24 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from datetime import datetime, timezone
+from itertools import chain
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
 import pytest
-from codex.compat_results import RESULTS_PATH_ENV, Failed, KnownGap, NotTested, Outcome, Passed, read_results
-from codex.matrix_builder import build_matrix
+from codex.compat_results import (
+    RESULTS_PATH_ENV,
+    Failed,
+    KnownGap,
+    NotTested,
+    Outcome,
+    Passed,
+    read_results,
+    row_name,
+)
+from codex.matrix_builder import MatrixRow, build_matrix
 
 pytest_plugins = ("pytester",)
 
@@ -130,9 +141,11 @@ def _cells(results: Path) -> MappingProxyType[tuple[str, str], Outcome]:
         codex_version="0.1.0",
         generated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
     )
-    return MappingProxyType(
-        {(row.id, column): outcome for row in matrix.features for column, outcome in row.providers.items()}
-    )
+    return MappingProxyType(dict(chain.from_iterable(_row_cells(row) for row in matrix.features)))
+
+
+def _row_cells(row: MatrixRow) -> Iterator[tuple[tuple[str, str], Outcome]]:
+    return (((row.id, column), outcome) for column, outcome in row.providers.items())
 
 
 def test_every_row_cell_records_its_outcome_and_a_rerun_keeps_the_last_attempt(
@@ -169,3 +182,15 @@ def test_nothing_is_written_without_the_results_path(
     _ = pytester.runpytest_inprocess(*INNER_PLUGINS_OFF)
 
     assert not results.parent.exists()
+
+
+@pytest.mark.parametrize(
+    ("class_name", "expected"),
+    (
+        ("TestCodexWebSearch", "Web search"),
+        ("TestCodexMCPTool", "MCP tool"),
+        ("TestCodexUnderTheRealModelName", "Under the real model name"),
+    ),
+)
+def test_a_row_name_is_its_class_name_in_words_with_acronyms_kept(class_name: str, expected: str) -> None:
+    assert row_name(class_name) == expected

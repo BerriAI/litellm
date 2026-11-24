@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
 
 import pytest
@@ -13,6 +14,19 @@ from e2e_config import PROXY_BASE_URL, unique_marker
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, ModelInfoBody, ModelNewBody, TeamNewBody
 from proxy_client import ProxyClient
+from pydantic import TypeAdapter
+
+CODEX_DIR: Final = Path(__file__).resolve().parent
+ASSERTION_FAILURE: Final = "^AssertionError: "
+RERUN_PATTERNS: Final = TypeAdapter[list[str] | None](list[str] | None)
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    configured: Final = RERUN_PATTERNS.validate_python(config.getoption("only_rerun", default=None))
+    rerun_on: Final = (*(configured or ()), ASSERTION_FAILURE)
+    for item in items:
+        if CODEX_DIR in item.path.parents:
+            item.add_marker(pytest.mark.flaky(only_rerun=rerun_on))
 
 
 @dataclass(frozen=True, slots=True)

@@ -15,7 +15,7 @@ DETAIL_LIMIT: Final = 500
 _ROW_FILE_PREFIX: Final = "test_"
 _ROW_FILE_SUFFIX: Final = "_e2e.py"
 _ROW_CLASS_PREFIX: Final = "TestCodex"
-_WORD_START: Final = re.compile(r"(?<!^)(?=[A-Z])")
+_WORD_BOUNDARY: Final = re.compile(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
 
 class _Frozen(BaseModel):
@@ -83,7 +83,9 @@ def cell_result(item: pytest.Item, call: pytest.CallInfo[None], report: pytest.T
 
 
 def row_name(class_name: str) -> str:
-    return _WORD_START.sub(" ", class_name.removeprefix(_ROW_CLASS_PREFIX)).capitalize()
+    words: Final = _WORD_BOUNDARY.split(class_name.removeprefix(_ROW_CLASS_PREFIX))
+    name: Final = " ".join(word if word.isupper() else word.lower() for word in words)
+    return name[:1].upper() + name[1:]
 
 
 def append_result(path: Path, result: CellResult) -> None:

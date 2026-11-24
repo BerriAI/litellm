@@ -136,15 +136,6 @@ SETUPS: Final = (
 )
 
 
-def with_expected_failure(setup_id: SetupId, *, reason: str) -> tuple[ParameterSet, ...]:
-    return tuple(
-        pytest.param(*setup.values, id=setup.id, marks=(*setup.marks, pytest.mark.xfail(strict=True, reason=reason)))
-        if setup.id == setup_id
-        else setup
-        for setup in SETUPS
-    )
-
-
 def with_expected_failures(reasons: Mapping[SetupId, str]) -> tuple[ParameterSet, ...]:
     return tuple(_expected_to_fail(setup, reasons) for setup in SETUPS)
 
@@ -153,4 +144,5 @@ def _expected_to_fail(setup: ParameterSet, reasons: Mapping[SetupId, str]) -> Pa
     reason: Final = next((reason for setup_id, reason in reasons.items() if setup_id == setup.id), None)
     if reason is None:
         return setup
-    return pytest.param(*setup.values, id=setup.id, marks=(*setup.marks, pytest.mark.xfail(strict=True, reason=reason)))
+    expected_failure: Final = pytest.mark.xfail(strict=True, raises=AssertionError, reason=reason)
+    return pytest.param(*setup.values, id=setup.id, marks=(*setup.marks, expected_failure))

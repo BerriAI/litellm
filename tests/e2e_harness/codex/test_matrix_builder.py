@@ -7,7 +7,7 @@ from types import MappingProxyType
 from typing import Final
 
 import pytest
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from codex.compat_results import CellResult, Failed, KnownGap, NotTested, Outcome, Passed, append_result
 from codex.matrix_builder import (
     REGRESSION_EXIT_CODE,
@@ -103,6 +103,7 @@ def test_regressions_are_cells_that_were_green_and_are_not_anymore() -> None:
                 ("vision", "vertex_ai"): Passed(),
                 ("vision", "azure_openai"): Passed(),
                 ("vision", "bedrock_runtime"): Passed(),
+                ("vision", "bedrock_mantle"): Passed(),
                 ("web_search", "openai"): Failed(error="old"),
                 ("web_search", "vertex_ai"): NotTested(),
                 ("web_search", "azure_openai"): KnownGap(reason="no route"),
@@ -132,6 +133,8 @@ def test_regressions_are_cells_that_were_green_and_are_not_anymore() -> None:
             ("vision", "openai", "fail", "no image"),
             ("vision", "vertex_ai", "known_gap", "drops images"),
             ("vision", "azure_openai", "not_tested", "no credentials"),
+            ("vision", "bedrock_mantle", "missing", ""),
+            ("removed_row", "openai", "missing", ""),
         )
     )
 
@@ -164,18 +167,24 @@ def test_cli_builds_the_matrix_and_fails_on_a_regression(tmp_path: Path, capsys:
     red: Final = tmp_path / "red.json"
 
     built: Final = tuple(
-        main(("build", "--results", str(results), "--out", str(out), "--litellm-version", "1.2.3"))
+        main(
+            (
+                "build",
+                *("--results", str(results), "--out", str(out)),
+                *("--litellm-version", "1.2.3", "--codex-version", "0.166.0"),
+            )
+        )
         for results, out in ((green_results, green), (red_results, red))
     )
     _ = capsys.readouterr()
-    no_baseline: Final = main(("regressions", "--old", str(tmp_path / "missing.json"), "--new", str(red)))
     steady: Final = main(("regressions", "--old", str(green), "--new", str(green)))
     _ = capsys.readouterr()
     regressed: Final = main(("regressions", "--old", str(green), "--new", str(red)))
 
     assert built == (0, 0)
-    assert Matrix.model_validate_json(red.read_bytes()).litellm_version == "1.2.3"
-    assert (no_baseline, steady, regressed) == (0, 0, REGRESSION_EXIT_CODE)
+    red_matrix: Final = Matrix.model_validate_json(red.read_bytes())
+    assert (red_matrix.litellm_version, red_matrix.codex_version) == ("1.2.3", "0.166.0")
+    assert (steady, regressed) == (0, REGRESSION_EXIT_CODE)
     assert JSON_OBJECTS.validate_json(capsys.readouterr().out) == (
         {
             "feature_id": "vision",
@@ -186,3 +195,11 @@ def test_cli_builds_the_matrix_and_fails_on_a_regression(tmp_path: Path, capsys:
             "error": "no image",
         },
     )
+
+
+def test_cli_refuses_a_baseline_table_that_does_not_exist(tmp_path: Path) -> None:
+    new: Final = tmp_path / "new.json"
+    _ = new.write_text(_matrix(MappingProxyType({("vision", "openai"): Passed()})).model_dump_json())
+
+    with pytest.raises(ValidationError, match="old"):
+        _ = main(("regressions", "--old", str(tmp_path / "missing.json"), "--new", str(new)))
