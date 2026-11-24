@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_image_mime_type_from_url,
+    is_blank_content,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     MAX_VIDEO_DOWNLOAD_BYTES,
@@ -789,6 +790,21 @@ def _collect_tool_call_thought_signatures(
     return frozenset(signatures)
 
 
+def _is_blank_user_message(message: AllMessageValues) -> bool:
+    fields: Final = as_str_mapping(message)
+    return fields is not None and is_blank_content(fields.get("content"))
+
+
+def _gemini_blank_last_user_turn(
+    last_user_span: Sequence[AllMessageValues], contents: Sequence[ContentType]
+) -> ContentType | None:
+    if not last_user_span or not all(map(_is_blank_user_message, last_user_span)):
+        return None
+    if contents and contents[-1].get("role") == "user":
+        return None
+    return ContentType(role="user", parts=[PartType(text=" ")])
+
+
 @dataclass(frozen=True, slots=True)
 class _AssistantImageSource:
     url: str
@@ -1016,6 +1032,7 @@ def gemini_convert_messages_with_history(
     model: str | None = None,
     litellm_params: dict | None = None,
     custom_llm_provider: str | None = None,
+    ends_request: bool = True,
 ) -> list[ContentType]:
     """
     Converts given messages from OpenAI format to Gemini format
@@ -1192,7 +1209,13 @@ def gemini_convert_messages_with_history(
 
                 msg_i += 1
 
-            if user_content:
+            if (
+                ends_request
+                and msg_i == len(messages)
+                and (blank_user_turn := _gemini_blank_last_user_turn(messages[init_msg_i:], contents)) is not None
+            ):
+                contents.append(blank_user_turn)
+            elif user_content:
                 """
                 check that user_content has 'text' parameter.
                     - Known Vertex Error: Unable to submit request because it must have a text parameter.
