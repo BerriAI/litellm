@@ -5121,7 +5121,7 @@ def create_vertex_ai_live_websocket_endpoint():
 def create_generic_websocket_passthrough_endpoint(
     provider: str,
     target_url: str,
-    custom_headers: dict | None = None,
+    custom_headers: dict[str, object] | None = None,
     forward_headers: bool = False,
     cost_per_request: float | None = None,
 ):

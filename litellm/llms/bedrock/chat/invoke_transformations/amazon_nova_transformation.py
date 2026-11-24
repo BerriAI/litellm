@@ -86,16 +86,16 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
     Config for sending `nova` requests to `/bedrock/invoke/`
     """
 
-    def __init__(self, **kwargs: object):
+    def __init__(self, **kwargs):
         super().__init__(**kwargs)
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
+    def get_supported_openai_params(self, model: str) -> list:
         return AmazonConverseConfig.get_supported_openai_params(self, model)
 
     def map_openai_params(
         self,
-        non_default_params: dict[str, object],
-        optional_params: dict[str, object],
+        non_default_params: dict,
+        optional_params: dict,
         model: str,
         drop_params: bool,
         model_info: Mapping[str, object] | None = None,
@@ -114,8 +114,8 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict[str, object],
-        litellm_params: dict[str, object],
-        headers: dict,
+        litellm_params: dict,
+        headers: dict[str, object],
     ) -> dict:
         _transformed_nova_request: Final = AmazonConverseConfig.transform_request(
             self,
@@ -142,10 +142,10 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: Logging,
-        request_data: dict[str, object],
+        request_data: dict,
         messages: list[AllMessageValues],
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -195,7 +195,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
             "messages": list(messages_with_guard_content_as_text(request.get("messages", ()))),
         }
 
-    def _filter_allowed_fields(self, bedrock_invoke_nova_request: BedrockInvokeNovaRequest) -> dict[str, object]:
+    def _filter_allowed_fields(self, bedrock_invoke_nova_request: BedrockInvokeNovaRequest) -> dict:
         """
         Filter out fields that are not allowed in the `BedrockInvokeNovaRequest` dataclass.
         """

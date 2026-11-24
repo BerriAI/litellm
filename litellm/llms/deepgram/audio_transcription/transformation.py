@@ -61,7 +61,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
+        non_default_params: Mapping[str, object],
         optional_params: dict,
         model: str,
         drop_params: bool,
@@ -72,15 +72,17 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 optional_params[k] = v
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return DeepgramException(message=error_message, status_code=status_code, headers=headers)
 
     def transform_audio_transcription_request(
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> AudioTranscriptionRequestData:
         """
         Processes the audio file input based on its type and returns AudioTranscriptionRequestData.
@@ -173,7 +175,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         if not words:
             return ""
 
-        segments: Final = []
+        segments: Final[list[str]] = []
         current_speaker = None
         current_words: list[str] = []
 
@@ -204,7 +206,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         if api_base is None:
@@ -224,7 +226,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
         return url
 
-    def _format_param_value(self, value) -> str:
+    def _format_param_value(self, value: object) -> str:
         """
         Formats a parameter value for use in query string.
 
@@ -238,7 +240,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             return str(value).lower()
         return str(value)
 
-    def _build_query_params(self, optional_params: dict, model: str) -> dict:
+    def _build_query_params(self, optional_params: Mapping[str, object], model: str) -> dict[str, str]:
         """
         Builds a dictionary of query parameters from optional_params.
 
@@ -249,7 +251,7 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         Returns:
             Dictionary of filtered and formatted query parameters
         """
-        query_params: Final = {}
+        query_params: Final[dict[str, str]] = {}
         provider_specific_params: Final = self.get_provider_specific_params(
             optional_params=optional_params,
             model=model,
@@ -265,14 +267,14 @@ class DeepgramAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         api_key = api_key or get_secret_str("DEEPGRAM_API_KEY")
         return {
             "Authorization": f"Token {api_key}",

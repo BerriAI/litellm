@@ -232,7 +232,7 @@ def _with_served_service_tier(chunk: _StreamChunk, served_tier: str | None) -> _
 async def make_call(
     client: AsyncHTTPHandler | None,
     api_base: str,
-    headers: dict,
+    headers: dict[str, object],
     data: str,
     model: str,
     messages: list,
@@ -333,7 +333,7 @@ async def make_call(
 def make_sync_call(
     client: HTTPHandler | None,
     api_base: str,
-    headers: dict,
+    headers: dict[str, object],
     data: str,
     signed_json_body: bytes | None,
     model: str,

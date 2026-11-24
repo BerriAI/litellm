@@ -35,7 +35,7 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
     def custom_llm_provider(self) -> str | None:
         return "vercel_ai_gateway"
 
-    def get_supported_openai_params(self, model: str) -> list[str]:
+    def get_supported_openai_params(self, model: str) -> list:
         base_params: Final = super().get_supported_openai_params(model)
         if "extra_body" not in base_params:
             base_params.append("extra_body")
@@ -57,11 +57,11 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict[str, object],
-        optional_params: dict[str, object],
+        non_default_params: dict,
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         mapped_openai_params: Final = super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
         # Vercel AI Gateway-only parameters
@@ -78,10 +78,10 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict[str, object],
-        litellm_params: dict[str, object],
+        optional_params: dict,
+        litellm_params: dict,
         headers: dict[str, object],
-    ) -> dict[str, object]:
+    ) -> dict:
         """
         Transform the overall request to be sent to the API.
 
@@ -90,7 +90,9 @@ class VercelAIGatewayConfig(OpenAIGPTConfig):
         """
         return super().transform_request(model, messages, optional_params, litellm_params, headers)
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return VercelAIGatewayException(
             message=error_message,
             status_code=status_code,

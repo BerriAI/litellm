@@ -1,5 +1,5 @@
 import ssl
-from collections.abc import AsyncIterable, Callable, Iterable
+from collections.abc import AsyncIterable, Callable, Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import aiohttp
@@ -23,7 +23,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_ssl_configuration,
 )
 from litellm.llms.custom_httpx.sse_lines import iter_sse_lines
-from litellm.types.llms.openai import AllMessageValues, FileTypes
+from litellm.types.llms.openai import FileTypes
 from litellm.types.utils import HttpHandlerRequestFields, ImageResponse, LlmProviders
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
 
@@ -163,7 +163,7 @@ class BaseLLMAIOHTTPHandler:
         async_client_session: ClientSession | None,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict[str, str],
+        headers: Mapping[str, str],
         data: dict | None,
         timeout: float | httpx.Timeout,
         litellm_params: dict,
@@ -260,13 +260,13 @@ class BaseLLMAIOHTTPHandler:
         custom_llm_provider: str,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
+        headers: Mapping[str, str],
         data: dict,
         timeout: float | httpx.Timeout,
         model: str,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        messages: list[AllMessageValues],
+        messages: list,
         optional_params: dict,
         litellm_params: dict,
         encoding: "Tokenizer | None",
@@ -300,7 +300,7 @@ class BaseLLMAIOHTTPHandler:
     def completion(
         self,
         model: str,
-        messages: list[AllMessageValues],
+        messages: list,
         api_base: str,
         custom_llm_provider: str,
         model_response: ModelResponse,
@@ -433,16 +433,16 @@ class BaseLLMAIOHTTPHandler:
         self,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: dict,
         model: str,
-        messages: list[AllMessageValues],
+        messages: list,
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
         timeout: float | httpx.Timeout,
         fake_stream: bool = False,
         client: HTTPHandler | None = None,
-    ) -> tuple[object, dict[str, str]]:
+    ) -> tuple[object, dict]:
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = get_httpx_client()
         else:
@@ -486,7 +486,7 @@ class BaseLLMAIOHTTPHandler:
         client: ClientSession | None,
         provider_config: BaseImageVariationConfig,
         api_base: str,
-        headers: dict,
+        headers: Mapping[str, str],
         data: HttpHandlerRequestFields,
         timeout: float,
         litellm_params: dict,
@@ -560,7 +560,7 @@ class BaseLLMAIOHTTPHandler:
         logger_fn: object = None,
         client=None,
         organization: str | None = None,
-        headers: dict | None = None,
+        headers: dict[str, object] | None = None,
     ) -> ImageResponse:
         provider_config: Final = ProviderConfigManager.get_provider_image_variation_config(
             model=model or "",

@@ -99,7 +99,7 @@ class TextCompletionCodestralError(Exception):
 async def make_call(
     client: AsyncHTTPHandler,
     api_base: str,
-    headers: dict,
+    headers: dict[str, object],
     data: str,
     model: str,
     messages: Sequence[object],

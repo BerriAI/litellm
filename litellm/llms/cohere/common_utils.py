@@ -90,7 +90,7 @@ class CohereModelInfo(BaseLLMModelInfo):
 
 
 def validate_environment(
-    headers: dict,
+    headers: dict[str, object],
     model: str,
     messages: list[AllMessageValues],
     optional_params: dict,
