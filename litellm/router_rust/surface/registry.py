@@ -52,7 +52,7 @@ from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, TypeAlias, cast  # noqa: TID251  # entries as a caller wrote them
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from litellm import exceptions as litellm_exceptions
 from litellm import get_secret_str
@@ -749,6 +749,12 @@ def _has_non_str_keys(value: object) -> bool:
     return False
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
+class _DiscoveredMetadata:
+    deployment: Mapping[str, object]
+    fields: Mapping[str, JsonValue]
+
+
 class HostRegistry(HostModelInfo):
     """The live model_list and its indexes, kept the way the Python router core keeps them."""
 
@@ -820,6 +826,9 @@ class HostRegistry(HostModelInfo):
         self._discovered_model_info_cache: InMemoryCache = InMemoryCache(
             max_size_in_memory=1, default_ttl=2 * MODEL_INFO_REFRESH_SECONDS
         )
+        self._discovered_metadata_cache: InMemoryCache = InMemoryCache(
+            max_size_in_memory=1, default_ttl=2 * MODEL_INFO_REFRESH_SECONDS
+        )
         # The PTU share teams and team ceilings, until the model list next changes.
         self._ptu_cache: _PTUMemo | None = None
         self._cached_get_model_group_info: Callable[[str], ModelGroupInfo | None] = lru_cache(  # pyright: ignore[reportIncompatibleMethodOverride]  # the per-router cache shadows the uncached method, as the core keeps it
@@ -857,8 +866,7 @@ class HostRegistry(HostModelInfo):
                 self._core_deployment_latency_map[str(params["model"])] = 0
 
     async def arefresh_model_info(self, client: "AsyncHTTPHandler | None") -> None:
-        """``_core_arefresh_model_info``: token limits the served OpenAI-compatible deployments
-        advertise on their models endpoint, read with a few workers over a snapshot of the list."""
+        """Refresh token limits and selected metadata from the upstream models endpoints."""
         import asyncio
 
         from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_CONCURRENCY
@@ -881,7 +889,9 @@ class HostRegistry(HostModelInfo):
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
         from litellm.llms.openai_like.model_info import (
             MODEL_INFO_DISCOVERY_PROVIDERS,
-            get_openai_compatible_model_info,
+            UPSTREAM_MODEL_INFO_FIELDS,
+            discover_openai_compatible_model_info,
+            upstream_model_info_fields,
         )
         from litellm.types.router import DiscoveredDeploymentModelInfo
         from litellm.utils import aresolve_api_key_secret_reference
@@ -917,7 +927,10 @@ class HostRegistry(HostModelInfo):
         auth_headers: Final = (
             MappingProxyType({"authorization": f"Bearer {api_key}"}) if api_key else MappingProxyType({})
         )
-        limits: Final = await get_openai_compatible_model_info(
+        fields: Final = upstream_model_info_fields(
+            (deployment.model_info.model_extra or {}).get(UPSTREAM_MODEL_INFO_FIELDS)
+        )
+        limits, metadata = await discover_openai_compatible_model_info(
             model=model,  # pyright: ignore[reportAny]  # see above
             api_base=api_base,  # pyright: ignore[reportAny]  # see above
             headers=MappingProxyType(
@@ -925,9 +938,17 @@ class HostRegistry(HostModelInfo):
             ),
             client=client or get_async_httpx_client(llm_provider=LlmProviders.OPENAI),
             cache=self._core_cache.in_memory_cache,
+            fields=fields,
         )
         model_id: Final = deployment.model_info.id
-        if not limits or model_id is None or self._core_get_model_info(model_id) is not raw_deployment:
+        if model_id is None or self._core_get_model_info(model_id) is not raw_deployment:
+            return
+        if fields and metadata is not None:
+            self._discovered_metadata_cache.max_size_in_memory = max(len(self._core_model_list), 1)
+            self._discovered_metadata_cache.delete_cache(model_id)
+            if metadata:
+                self._discovered_metadata_cache.set_cache(model_id, _DiscoveredMetadata(raw_deployment, metadata))
+        if not limits:
             return
         self._discovered_model_info_cache.max_size_in_memory = max(len(self._core_model_list), 1)
         self._discovered_model_info_cache.delete_cache(model_id)
@@ -936,6 +957,16 @@ class HostRegistry(HostModelInfo):
             DiscoveredDeploymentModelInfo(deployment=raw_deployment, limits=limits),  # pyright: ignore[reportArgumentType]  # the model_list entry, as the core keeps it
         )
         self._invalidate_model_group_info_cache()
+
+    def _core_get_discovered_model_metadata(self, model_id: str | None) -> Mapping[str, object]:
+        cached: Final[object] = self._discovered_metadata_cache.get_cache(model_id)
+        if (
+            model_id is not None
+            and isinstance(cached, _DiscoveredMetadata)
+            and cached.deployment is self._core_get_model_info(model_id)
+        ):
+            return copy.deepcopy(dict(cached.fields))
+        return MappingProxyType({})
 
     def _deployment_tracks_usage(self, deployment_id: str, model_group: str) -> bool:
         """``_deployment_tracks_usage``: a limit on the deployment or in its merged model info, where
@@ -999,6 +1030,7 @@ class HostRegistry(HostModelInfo):
 
     def _replace_model_list(self, build: _Build) -> None:
         self._discovered_model_info_cache.flush_cache()
+        self._discovered_metadata_cache.flush_cache()
         original_model_list: Final = build.raw
         if self.strategies is not None:
             self.strategies.reset()

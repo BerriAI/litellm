@@ -444,6 +444,8 @@ class _RegistryHost(Protocol):
 
     def _core_get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]: ...
 
+    def _core_get_discovered_model_metadata(self, model_id: str | None) -> Mapping[str, object]: ...
+
     def _core_get_model_list(
         self, model_name: str | None = None, team_id: str | None = None
     ) -> Sequence[Mapping[str, object]] | None: ...
@@ -644,6 +646,9 @@ class RouterRegistry:
     def discovered_model_info(self, id: str | None) -> Mapping[str, int]:
         """Limits discovered from the provider for a deployment (was ``get_discovered_model_info``)."""
         return self._router._core_get_discovered_model_info(id)
+
+    def discovered_model_metadata(self, id: str | None) -> Mapping[str, object]:
+        return self._router._core_get_discovered_model_metadata(id)
 
     def zero_cost(self) -> Mapping[str, bool] | None:
         """The per-deployment zero-cost lookup the auth checks read (was ``_zero_cost_cache``)."""
