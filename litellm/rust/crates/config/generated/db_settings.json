@@ -261,6 +261,101 @@
     {
       "file": {
         "general_settings": {
+          "forward_llm_provider_auth_headers": false,
+          "master_key": "sk-file"
+        }
+      },
+      "merged": {
+        "general_settings": {
+          "forward_client_headers_to_llm_api": true,
+          "forward_llm_provider_auth_headers": false,
+          "master_key": "sk-file",
+          "max_parallel_requests": 5,
+          "team_admin_editable_team_fields": [
+            "team_alias"
+          ]
+        }
+      },
+      "name": "ui_settings_object",
+      "rows": {
+        "general_settings": {
+          "disable_custom_api_keys": true,
+          "forward_client_headers_to_llm_api": false,
+          "max_parallel_requests": 5
+        },
+        "ui_settings": {
+          "disable_model_add_for_internal_users": null,
+          "enable_chat_ui": true,
+          "forward_client_headers_to_llm_api": true,
+          "forward_llm_provider_auth_headers": true,
+          "team_admin_editable_team_fields": [
+            "team_alias"
+          ],
+          "usage_default_time_range": "7d"
+        }
+      },
+      "shadowed": [
+        [
+          "general_settings",
+          "forward_llm_provider_auth_headers"
+        ]
+      ]
+    },
+    {
+      "file": {
+        "model_list": []
+      },
+      "merged": {
+        "general_settings": {
+          "forward_client_headers_to_llm_api": true
+        },
+        "model_list": []
+      },
+      "name": "ui_settings_json_text",
+      "rows": {
+        "ui_settings": "{\"forward_client_headers_to_llm_api\": true, \"disable_aria\": true}"
+      },
+      "shadowed": []
+    },
+    {
+      "file": {
+        "general_settings": {
+          "master_key": "sk-file"
+        }
+      },
+      "merged": {
+        "general_settings": {
+          "master_key": "sk-file"
+        }
+      },
+      "name": "ui_settings_unreadable",
+      "rows": {
+        "ui_settings": "not json"
+      },
+      "shadowed": []
+    },
+    {
+      "file": {
+        "general_settings": {
+          "master_key": "sk-file"
+        }
+      },
+      "merged": {
+        "general_settings": {
+          "master_key": "sk-file"
+        }
+      },
+      "name": "ui_settings_not_an_object",
+      "rows": {
+        "ui_settings": [
+          "forward_client_headers_to_llm_api"
+        ]
+      },
+      "shadowed": []
+    },
+    {
+      "file": {
+        "general_settings": {
           "master_key": "sk-file"
         },
         "litellm_settings": null

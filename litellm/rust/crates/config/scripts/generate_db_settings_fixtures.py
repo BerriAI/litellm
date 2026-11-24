@@ -5,7 +5,9 @@
 
 Run it from the repository root. Each case drives the real ProxyConfig._update_config_from_db with
 in-memory rows in place of the database, then _config_with_resolved_settings as get_config does, and
-records the merged config and the keys each SettingsStore reports as shadowed.
+records the merged config and the keys each SettingsStore reports as shadowed. A case's `ui_settings` row is
+the LiteLLM_UISettings column as Prisma hands it back, which the real sync_ui_settings_to_general_settings reads
+through a stand-in client after the LiteLLM_Config rows, as the proxy does at startup.
 
 Two inputs are narrowed before Python sees them, so the fixture holds what the proxy acts on rather
 than what get_config returns. The litellm_settings row keeps only the keys a stored row changes
@@ -27,6 +29,7 @@ os.environ.setdefault("LITELLM_SALT_KEY", "sk-fixture-salt")
 from litellm.constants import LITELLM_SETTINGS_SAFE_DB_OVERRIDES  # noqa: E402
 from litellm.proxy import proxy_server  # noqa: E402
 from litellm.proxy.config_resolvers.settings_rules import _UI_SETTINGS_FIELDS  # noqa: E402
+from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import sync_ui_settings_to_general_settings  # noqa: E402
 
 STORED_LITELLM_SETTINGS = sorted(
     {*LITELLM_SETTINGS_SAFE_DB_OVERRIDES, *proxy_server._DB_CONFIG_CALLBACK_EVENT_TYPES, "responses"}
@@ -117,6 +120,40 @@ CASES = [
         },
     },
     {
+        "name": "ui_settings_object",
+        "file": {"general_settings": {"forward_llm_provider_auth_headers": False, "master_key": "sk-file"}},
+        "rows": {
+            "general_settings": {
+                "forward_client_headers_to_llm_api": False,
+                "disable_custom_api_keys": True,
+                "max_parallel_requests": 5,
+            },
+            "ui_settings": {
+                "forward_client_headers_to_llm_api": True,
+                "forward_llm_provider_auth_headers": True,
+                "disable_model_add_for_internal_users": None,
+                "team_admin_editable_team_fields": ["team_alias"],
+                "enable_chat_ui": True,
+                "usage_default_time_range": "7d",
+            },
+        },
+    },
+    {
+        "name": "ui_settings_json_text",
+        "file": {"model_list": []},
+        "rows": {"ui_settings": json.dumps({"forward_client_headers_to_llm_api": True, "disable_aria": True})},
+    },
+    {
+        "name": "ui_settings_unreadable",
+        "file": {"general_settings": {"master_key": "sk-file"}},
+        "rows": {"ui_settings": "not json"},
+    },
+    {
+        "name": "ui_settings_not_an_object",
+        "file": {"general_settings": {"master_key": "sk-file"}},
+        "rows": {"ui_settings": ["forward_client_headers_to_llm_api"]},
+    },
+    {
         "name": "no_rows",
         "file": {"general_settings": {"master_key": "sk-file"}, "litellm_settings": None},
         "rows": {},
@@ -142,13 +179,24 @@ async def layered(case):
             return None
         return SimpleNamespace(param_name=section, param_value=copy.deepcopy(rows[section]), reload_revision=None)
 
+    async def find_unique(where):
+        if "ui_settings" not in rows or where != {"id": "ui_settings"}:
+            return None
+        return SimpleNamespace(id="ui_settings", ui_settings=copy.deepcopy(rows["ui_settings"]))
+
+    ui_settings_client = SimpleNamespace(
+        db=SimpleNamespace(litellm_uisettings=SimpleNamespace(find_unique=find_unique))
+    )
+
     proxy_server.get_config_param = get_config_param
     config = proxy_server.ProxyConfig()
+    proxy_server._bind_general_settings_store(config.settings)
     file = copy.deepcopy(case["file"])
     config._load_yaml_settings_stores(file)
     environment = dict(os.environ)
     try:
         merged = await config._update_config_from_db(prisma_client=object(), config=file, store_model_in_db=True)
+        await sync_ui_settings_to_general_settings(ui_settings_client)
         merged = config._config_with_resolved_settings(merged)
     finally:
         os.environ.clear()
