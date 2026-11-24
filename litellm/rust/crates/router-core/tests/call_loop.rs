@@ -452,6 +452,16 @@ fn agentic_followup() -> AttemptError {
     failed
 }
 
+fn unresolvable_follow_up() -> AttemptError {
+    let mut failed = failure(FailureKind::Declined, 400);
+    failed.classes = vec![
+        "UnresolvablePreviousResponseError".into(),
+        "MalformedRequestFieldError".into(),
+        "BadRequestError".into(),
+    ];
+    failed
+}
+
 fn over_every_tpm_limit() -> AttemptError {
     let mut failed = failure(FailureKind::RateLimit, 429);
     failed.classes = vec![
@@ -1832,6 +1842,28 @@ async fn a_failure_no_retry_clears_is_not_retried_but_still_falls_back(
     assert_eq!(response.deployment_id, "b1");
     assert_eq!(host.retries(), 0);
     assert_eq!(host.selected().len(), 2);
+}
+
+#[rstest]
+#[case::fallbacks(json!({"num_retries": 3, "fallbacks": [{"primary": ["backup"]}]}))]
+#[case::default_fallbacks(json!({"num_retries": 3, "default_fallbacks": ["backup"]}))]
+#[tokio::test]
+async fn an_unresolvable_follow_up_is_neither_retried_nor_falls_back(
+    config: RouterConfig,
+    #[case] dynamic: Value,
+) {
+    let mut config = config;
+    config.retry_policy = serde_json::from_value(json!({"BadRequestErrorRetries": 2})).unwrap();
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![unresolvable_follow_up()],
+    ));
+    let router = router(config, dynamic, host.clone());
+    let refused = router.call(Op::from("acompletion"), request()).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt { failure: failed, .. }) if failed.is_a("UnresolvablePreviousResponseError"))
+    );
+    assert_eq!((host.retries(), host.selected().len()), (0, 1));
 }
 
 #[rstest]

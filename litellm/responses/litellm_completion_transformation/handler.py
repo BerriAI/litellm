@@ -34,6 +34,7 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 from litellm.responses.litellm_completion_transformation.tool_search import has_client_tool_search
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
+    holds_an_earlier_reply,
     previous_response_ids_metadata,
     previous_response_not_found,
     with_compaction_items_as_params,
@@ -253,7 +254,11 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
-        if previous_response_id and not holds_compaction_summary(with_compaction_items_as_params(bridged_input)):
+        if (
+            previous_response_id
+            and not holds_compaction_summary(with_compaction_items_as_params(bridged_input))
+            and not holds_an_earlier_reply(bridged_input)
+        ):
             raise _sync_follow_up_refusal(
                 previous_response_client_ids[-1] if previous_response_client_ids else previous_response_id,
                 model,

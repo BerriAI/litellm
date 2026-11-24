@@ -556,6 +556,7 @@ def tool_output_to_chat_content(
 TOOL_CALL_OUTPUT_ITEM_TYPES: Final = frozenset(
     {"function_call_output", "custom_tool_call_output", "computer_call_output", "tool_result"}
 )
+_TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
 
 
 def _read_positions(
@@ -670,6 +671,13 @@ def previous_response_not_found(
 
 def _input_item_role(input_item: Mapping[str, object]) -> str:
     return cast(str, input_item.get("role") or "user")  # cast-ok: client-supplied role forwarded verbatim, unvalidated
+
+
+def holds_an_earlier_reply(request_input: str | ResponseInputParam | None) -> bool:
+    return isinstance(request_input, list) and any(
+        _input_item_role(input_item) == "assistant" or input_item.get("type") in _TOOL_CALL_ITEM_TYPES
+        for input_item in request_input
+    )
 
 
 def _starts_a_turn(input_item: Mapping[str, object]) -> bool:
@@ -1826,7 +1834,8 @@ class LiteLLMCompletionResponsesConfig:
         _messages: Final = litellm_completion_request.get("messages") or []
         route: Final = CompletionRoute(model=model, custom_llm_provider=provider)
         session_history: Final = chat_completion_session.get("messages") or []
-        if previous_response_id and not session_history and not input_replaces_history:
+        input_stands_alone: Final = input_replaces_history or holds_an_earlier_reply(request_input)
+        if previous_response_id and not session_history and not input_stands_alone:
             raise previous_response_not_found(
                 previous_response_client_ids[-1] if previous_response_client_ids else previous_response_id,
                 model,
@@ -2943,7 +2952,7 @@ class LiteLLMCompletionResponsesConfig:
         Both need to be reconstructed as assistant tool_calls for Chat
         Completions providers.
         """
-        return input_item.get("type") in ("function_call", "custom_tool_call")
+        return input_item.get("type") in _TOOL_CALL_ITEM_TYPES
 
     @staticmethod
     def _transform_responses_api_tool_call_output_to_chat_completion_message(

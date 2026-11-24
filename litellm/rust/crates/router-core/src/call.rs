@@ -737,8 +737,8 @@ impl<H: RouterHost> Call<'_, H> {
     }
 
     /// `async_function_with_fallbacks_common_utils` raises before looking for any fallback:
-    /// fallbacks are off, the error is a guardrail's, a bad request without
-    /// `fallback_on_unsupported_params`, or no fallback serves the error at all.
+    /// fallbacks are off, the error is a guardrail's or an unresolvable follow-up's, a bad request
+    /// without `fallback_on_unsupported_params`, or no fallback serves the error at all.
     fn raises_without_fallback(
         &self,
         snapshot: &RouterStateSnapshot,
@@ -754,6 +754,7 @@ impl<H: RouterHost> Call<'_, H> {
         retried_failure(error).is_none_or(|failure| {
             failure.kind == FailureKind::GuardrailIntervention
                 || failure.queue_rejected()
+                || failure.is_unresolvable_follow_up()
                 || (!snapshot.settings.fallback_on_unsupported_params
                     && is_bad_request_without_fallback(&failure))
         })

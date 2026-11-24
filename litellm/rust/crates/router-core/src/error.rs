@@ -474,10 +474,18 @@ impl AttemptError {
 
     /// No retry can clear the failure: a failed agentic follow-up reruns every paid round, a
     /// request alone over every deployment's tpm limit (`RequestOverDeploymentTpmError`) stays
-    /// over it, and a queue rejection ends the request. Its fallbacks still run, except a queue
-    /// rejection's.
+    /// over it, a follow-up whose earlier turns cannot be found stays unanswerable, and a queue
+    /// rejection ends the request. Its fallbacks still run, except a queue rejection's and an
+    /// unresolvable follow-up's.
     pub fn ends_retries(&self) -> bool {
-        self.agentic_followup || self.is_a("RequestOverDeploymentTpmError") || self.queue_rejected()
+        self.agentic_followup
+            || self.is_a("RequestOverDeploymentTpmError")
+            || self.is_unresolvable_follow_up()
+            || self.queue_rejected()
+    }
+
+    pub fn is_unresolvable_follow_up(&self) -> bool {
+        self.is_a("UnresolvablePreviousResponseError")
     }
 
     /// The dynamic queue refused the attempt: the request ends with this error and runs no fallback.
