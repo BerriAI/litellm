@@ -60,7 +60,7 @@ class RouteStreamingLogging(Protocol):
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        request_body: dict[str, object],
+        request_body: dict,
         endpoint_type: EndpointType,
         start_time: datetime,
         raw_bytes: list[bytes],
@@ -179,7 +179,7 @@ class PassThroughStreamingHandler:
     @staticmethod
     async def chunk_processor(
         response: httpx.Response,
-        request_body: dict[str, object] | None,
+        request_body: dict | None,
         litellm_logging_obj: LiteLLMLoggingObj,
         endpoint_type: EndpointType,
         start_time: datetime,
@@ -428,7 +428,7 @@ class PassThroughStreamingHandler:
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        request_body: dict[str, object],
+        request_body: dict,
         endpoint_type: EndpointType,
         start_time: datetime,
         raw_bytes: Sequence[bytes],
