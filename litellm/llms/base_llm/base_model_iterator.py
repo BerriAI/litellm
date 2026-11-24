@@ -123,7 +123,7 @@ class BaseModelResponseIterator:
         if self.http_response is not None:
             self.http_response.close()
 
-    def chunk_parser(self, chunk: dict[str, object]) -> GenericStreamingChunk | ModelResponseStream:
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:
         return GenericStreamingChunk(
             text="",
             is_finished=False,
