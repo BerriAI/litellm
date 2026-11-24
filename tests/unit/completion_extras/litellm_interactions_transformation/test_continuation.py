@@ -820,6 +820,63 @@ def test_unary_grounded_answer_carries_the_search_and_url_context_fields_generat
     assert (details.web_search_requests, details.google_maps_grounding_requests) == (2, 3)
 
 
+_RECITED: Final = {"type": "url_citation", "start_index": 0, "end_index": 5, "url": ""}
+_RECITED_AS_READ: Final = {"startIndex": 0, "endIndex": 5, "uri": ""}
+
+
+@pytest.mark.parametrize(
+    ("tool_steps", "cites", "expected_recited", "expected_grounding"),
+    [
+        pytest.param(
+            (),
+            (_RECITED, *_GROUNDED_CITES),
+            [
+                _RECITED_AS_READ,
+                {"startIndex": 17, "endIndex": 22, "uri": "https://a.example", "title": "a"},
+                {"startIndex": 17, "endIndex": 22, "uri": "https://b.example", "title": "b"},
+            ],
+            [],
+            id="no_search_ran_so_every_cited_span_is_a_recitation",
+        ),
+        pytest.param(
+            _GROUNDED_CALLS,
+            ({**_RECITED, "end_index": 3}, _RECITED, *_GROUNDED_CITES),
+            [_RECITED_AS_READ],
+            _EXPECTED_GROUNDING,
+            id="search_ran_so_only_the_longest_span_with_no_url_is_a_recitation",
+        ),
+    ],
+)
+def test_unary_recited_passages_are_returned_as_citation_metadata(
+    tool_steps: tuple[dict[str, object], ...],
+    cites: tuple[dict[str, object], ...],
+    expected_recited: list[dict[str, object]],
+    expected_grounding: list[dict[str, object]],
+) -> None:
+    recited: Final = {
+        "id": "v1_recited",
+        "status": "completed",
+        "steps": [
+            *tool_steps,
+            {"type": "model_output", "content": [{"type": "text", "text": _GROUNDED_TEXT, "annotations": list(cites)}]},
+        ],
+        "usage": _GROUNDED_USAGE,
+    }
+    _, responder = _scripted((httpx.Response(200, json=recited),))
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        response: Final = litellm.completion(
+            model=MODEL,
+            messages=list(MESSAGES),
+            api_key="k",
+            api_base=API_BASE,
+            client=HTTPHandler(client=raw_client),
+        )
+
+    assert isinstance(response, ModelResponse)
+    assert response.vertex_ai_citation_metadata == [{"citations": expected_recited}]
+    assert response.vertex_ai_grounding_metadata == expected_grounding
+
+
 @pytest.mark.parametrize("whole_steps_on_start", [False, True])
 def test_streamed_grounded_answer_carries_the_search_and_url_context_fields_on_its_last_chunk(
     whole_steps_on_start: bool,

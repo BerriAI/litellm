@@ -21,6 +21,7 @@ GROUNDING_STEP_TYPES: Final = frozenset({_SEARCH_CALL, _SEARCH_RESULT, _URL_CONT
 class VertexMetadata:
     grounding: tuple[JsonMapping, ...]
     url_context: tuple[JsonMapping, ...]
+    citations: tuple[JsonMapping, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,11 +45,16 @@ def _queries(arguments: JsonValue | None) -> tuple[str, ...]:
     return _strings(arguments.get("queries")) if isinstance(arguments, dict) else ()
 
 
-def _block_citations(block: JsonMapping, byte_offset: int) -> tuple[_Citation, ...]:
+def _is_recitation(anno: JsonMapping, is_grounded: bool) -> bool:
+    return anno.get("type") == "url_citation" and not (is_grounded and anno.get("url"))
+
+
+def _block_citations(block: JsonMapping, byte_offset: int, is_grounded: bool) -> tuple[_Citation, ...]:
     encoded: Final = str(block.get("text") or "").encode()
     spans: Final = tuple(
         (anno, anno.get("start_index"), anno.get("end_index"), anno.get("url") or anno.get("uri") or anno.get("source"))
         for anno in _dicts(block.get("annotations"))
+        if not _is_recitation(anno, is_grounded)
     )
     return tuple(
         _Citation(
@@ -71,12 +77,51 @@ def _flat(groups: Iterable[Sequence[_Item]]) -> tuple[_Item, ...]:
     return tuple(chain.from_iterable(groups))
 
 
-def _citations(steps: Sequence[JsonMapping]) -> tuple[_Citation, ...]:
+def _placed_text_blocks(steps: Sequence[JsonMapping]) -> tuple[tuple[JsonMapping, int], ...]:
     content: Final = _flat(_dicts(step.get("content")) for step in _typed(steps, "model_output"))
     blocks: Final = _typed(content, "text")
     lengths: Final = tuple(len(str(block.get("text") or "").encode()) for block in blocks)
-    offsets: Final = tuple(accumulate(lengths, initial=0))
-    return _flat(_block_citations(block, offset) for block, offset in zip(blocks, offsets))
+    return tuple(zip(blocks, accumulate(lengths, initial=0)))
+
+
+def _is_grounded(steps: Sequence[JsonMapping]) -> bool:
+    return any(step.get("type") in GROUNDING_STEP_TYPES for step in steps)
+
+
+def _citations(steps: Sequence[JsonMapping]) -> tuple[_Citation, ...]:
+    is_grounded: Final = _is_grounded(steps)
+    return _flat(_block_citations(block, offset, is_grounded) for block, offset in _placed_text_blocks(steps))
+
+
+def _block_recitations(block: JsonMapping, byte_offset: int, is_grounded: bool) -> tuple[JsonMapping, ...]:
+    return tuple(
+        {
+            "startIndex": start + byte_offset,
+            "endIndex": end + byte_offset,
+            "uri": url if isinstance(url := anno.get("url"), str) else "",
+            **({"title": title} if isinstance(title := anno.get("title"), str) and title else {}),
+        }
+        for anno in _dicts(block.get("annotations"))
+        if _is_recitation(anno, is_grounded)
+        and isinstance(start := anno.get("start_index"), int)
+        and isinstance(end := anno.get("end_index"), int)
+    )
+
+
+def _passage_span(passage: JsonMapping) -> tuple[int, int]:
+    start, end = passage["startIndex"], passage["endIndex"]
+    return (start if isinstance(start, int) else 0, end if isinstance(end, int) else 0)
+
+
+def _recitations(steps: Sequence[JsonMapping]) -> Mapping[str, object]:
+    is_grounded: Final = _is_grounded(steps)
+    recited: Final = _flat(
+        _block_recitations(block, offset, is_grounded) for block, offset in _placed_text_blocks(steps)
+    )
+    longest_by_start: Final = {
+        (passage["startIndex"], passage["uri"]): passage for passage in sorted(recited, key=_passage_span)
+    }
+    return {"citations": tuple(longest_by_start.values())} if recited else {}
 
 
 def _support(
@@ -137,7 +182,9 @@ def vertex_metadata_of(steps: Sequence[JsonValue]) -> VertexMetadata:
     as_json: Final = TypeAdapter(dict[str, JsonValue])
     grounding: Final = as_json.validate_python(to_jsonable_python(_grounding(step_maps)))
     url_context: Final = as_json.validate_python(to_jsonable_python(_url_context(step_maps)))
+    recited: Final = as_json.validate_python(to_jsonable_python(_recitations(step_maps)))
     return VertexMetadata(
         grounding=(grounding,) if grounding else (),
         url_context=(url_context,) if url_context else (),
+        citations=(recited,) if recited else (),
     )

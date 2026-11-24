@@ -416,7 +416,8 @@ def attach_vertex_metadata(
     fields: Final = {
         "vertex_ai_grounding_metadata": list(metadata.grounding),
         "vertex_ai_url_context_metadata": list(metadata.url_context),
-        **({"vertex_ai_safety_results": [], "vertex_ai_citation_metadata": []} if keeps_empty else {}),
+        "vertex_ai_citation_metadata": list(metadata.citations),
+        **({"vertex_ai_safety_results": []} if keeps_empty else {}),
     }
     for name, value in fields.items():
         if value or keeps_empty:
