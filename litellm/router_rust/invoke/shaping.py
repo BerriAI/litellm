@@ -531,7 +531,7 @@ def leaves_caller_key_behind(
 
 
 def _resolves_its_own_openai_key(deployment: Mapping[str, object]) -> bool:
-    """Whether the OpenAI deployment has a key without the caller's, as the OpenAI handlers resolve it."""
+    """Whether the OpenAI deployment has a static key without the caller's, as the OpenAI handlers resolve one."""
     from litellm.llms.openai.workload_identity import openai_static_api_key
 
     key: Final = deployment.get("api_key")

@@ -5168,7 +5168,7 @@ class _Driver:
                 error.max_retries = event.get("max")  # pyright: ignore[reportAttributeAccessIssue]  # Python's router stamps the same attributes
                 error.num_retries = event.get("attempted")  # pyright: ignore[reportAttributeAccessIssue]  # same
 
-    def _call(self, step: Mapping[str, object]) -> "tuple[Mapping[str, object], AttemptCall]":
+    def _call(self, step: Mapping[str, object]) -> "tuple[Mapping[str, object], AttemptCall, Mapping[str, object]]":
         name: Final = step.get("model")
         requested: Final = str(name) if name is not None else str(self._request.get("model"))
         deployment: Mapping[str, object] = (  # rebind-ok: given its live params below
@@ -5186,10 +5186,11 @@ class _Driver:
         shape: Final = step.get("shape")
         if not isinstance(shape, AttemptShape):
             raise TypeError(f"the attempt step carries no AttemptShape: {shape!r}")
+        request: Final = self._attempt_request(step, self._inherited_request(step, deployment, shape, requested))
         call: Final = attempt_call(
             self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
             self._plan,
-            self._attempt_request(step, self._inherited_request(step, deployment, shape, requested)),
+            request,
             deployment,
             group=requested,
             requested=requested,
@@ -5206,7 +5207,7 @@ class _Driver:
         self._latest_call = (deployment, call)
         if call.refused is None:
             self._core._endpoints.counters.started(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-        return deployment, call
+        return deployment, call, request
 
     def _strip_undecryptable_reasoning(
         self,
@@ -5493,7 +5494,7 @@ class _Driver:
         return tuple(release for release in releases if release is not None)
 
     async def _admit(
-        self, step: Mapping[str, object], deployment: Mapping[str, object], call: "AttemptCall"
+        self, request: Mapping[str, object], deployment: Mapping[str, object], call: "AttemptCall"
     ) -> Admission | None:
         """Only an async non-streaming chat attempt waits, on the deployment its ordinary pick chose."""
         request_queue: Final = current_request_queue()
@@ -5502,7 +5503,7 @@ class _Driver:
             return None
         if self._plan.sync or self._plan.kind != "chat" or call.kwargs.get("stream"):
             return None
-        if not self._core.queues_on(self._attempt_request(step))(deployment):
+        if not self._core.queues_on(request)(deployment):
             return None
         own_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
         admitted: Final = await request_queue.admit(capacity, call.model_name, partial(self._cooldown_left_s, own_id))
@@ -5639,7 +5640,7 @@ class _Driver:
         if refused_call is not None:
             return {**self._failed(step, self._default_copy(step), None, refused_call), "recorded": True}
         try:
-            deployment, call = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
+            deployment, call, request = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
             enforce_total_timeout_scope(call.kwargs)
             if call.refused is not None:
                 await log_refused_call(call, call.refused)
@@ -5649,7 +5650,7 @@ class _Driver:
                 compacted: Final = await compacted_attempt(self._core._port, self._plan, deployment, call)  # pyright: ignore[reportPrivateUsage]  # see above
             except Exception as refused:  # noqa: BLE001  # raised before the provider call, so no cooldown reads it
                 return {**self._failed(step, deployment, call, refused), "recorded": True}
-            admission = await self._admit(step, deployment, call)  # rebind-ok: see above
+            admission = await self._admit(request, deployment, call)  # rebind-ok: see above
             # The deployment's max_parallel_requests slot; an open chat or speech stream takes it along.
             port = self._core._port  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core  # rebind-ok: the same port on every attempt
             with await self._slot_or_turn_back(port, deployment, call, admission) as slot:
@@ -5740,7 +5741,7 @@ class _Driver:
         if refused_call is not None:
             return {**self._failed(step, self._default_copy(step), None, refused_call), "recorded": True}
         try:
-            deployment, call = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
+            deployment, call, _ = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
             if call.refused is not None:
                 log_refused_call_sync(call, call.refused)
                 raise call.refused
