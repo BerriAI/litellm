@@ -15,6 +15,7 @@ from litellm.llms.base_llm.auth import provider_oauth
 from litellm.llms.base_llm.auth.provider_oauth import provider_oauth_token
 from litellm.llms.base_llm.auth.token_exchange import MAX_RESPONSE_BYTES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from tests.unit.llms.base_llm.auth.test_token_exchange import FakeClock
 
 _TOKEN_URL: Final = "https://idp.example.com/oauth2/token"
 _PROVIDER_URL: Final = "https://provider.example.com/v1"
@@ -29,22 +30,24 @@ _PARAMS: Final = {
 
 def test_oauth_posts_credentials_and_caches_only_for_the_same_connection() -> None:
     with respx.mock as upstream:
-        token_route = upstream.post(_TOKEN_URL).mock(
+        token_route: Final = upstream.post(_TOKEN_URL).mock(
             side_effect=(
                 httpx.Response(200, json={"access_token": "initial-token", "expires_in": "300"}),
                 httpx.Response(200, json={"access_token": "rotated-token", "expires_in": 300}),
                 httpx.Response(200, json={"access_token": "other-origin-token", "expires_in": 300}),
             )
         )
-        initial = provider_oauth_token(_PARAMS, api_base=_PROVIDER_URL, provider="openai", model="test")
-        cached = provider_oauth_token(_PARAMS, api_base=_PROVIDER_URL, provider="anthropic", model="other")
-        rotated = provider_oauth_token(
+        initial: Final = provider_oauth_token(_PARAMS, api_base=_PROVIDER_URL, provider="openai", model="test")
+        cached: Final = provider_oauth_token(_PARAMS, api_base=_PROVIDER_URL, provider="anthropic", model="other")
+        rotated: Final = provider_oauth_token(
             {**_PARAMS, "oauth_client_secret": "rotated-secret"},
             api_base=_PROVIDER_URL,
             provider="openai",
             model="test",
         )
-        other = provider_oauth_token(_PARAMS, api_base="https://other.example.com/v1", provider="openai", model="test")
+        other: Final = provider_oauth_token(
+            _PARAMS, api_base="https://other.example.com/v1", provider="openai", model="test"
+        )
 
     assert (initial, cached, rotated, other) == (
         "initial-token",
@@ -72,10 +75,10 @@ def test_oauth_posts_credentials_and_caches_only_for_the_same_connection() -> No
     ids=("redirect", "error", "malformed-bearer", "unsupported-type"),
 )
 def test_oauth_does_not_forward_client_credentials_or_expose_endpoint_response(response: httpx.Response) -> None:
-    token_url = "https://idp.example.com/invalid"
+    token_url: Final = "https://idp.example.com/invalid"
     with respx.mock as upstream:
-        token_route = upstream.post(token_url).mock(return_value=response)
-        redirect = upstream.post("https://redirect.example.com/token").mock(return_value=httpx.Response(204))
+        token_route: Final = upstream.post(token_url).mock(return_value=response)
+        redirect: Final = upstream.post("https://redirect.example.com/token").mock(return_value=httpx.Response(204))
         with pytest.raises(AuthenticationError, match="OAuth client credentials") as error:
             provider_oauth_token(
                 {**_PARAMS, "oauth_token_url": token_url}, api_base=_PROVIDER_URL, provider="openai", model="test"
@@ -93,7 +96,7 @@ def test_oauth_stops_reading_an_oversized_token_response() -> None:
                 yield b" " * 65536
             pytest.fail("Read past the first chunk above the response limit")
 
-    token_url = "https://idp.example.com/oversized"
+    token_url: Final = "https://idp.example.com/oversized"
     with respx.mock as upstream:
         upstream.post(token_url).mock(return_value=httpx.Response(200, stream=OversizedResponse()))
         with pytest.raises(AuthenticationError, match="valid Bearer access token"):
@@ -104,21 +107,17 @@ def test_oauth_stops_reading_an_oversized_token_response() -> None:
 
 @pytest.mark.parametrize("provider", ("openai", "custom_openai"))
 def test_openai_compatible_completion_sends_refreshed_bearer(provider: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    now = 0.0
-
-    def clock() -> float:
-        return now
-
+    clock: Final = FakeClock(start=0.0)
     monkeypatch.setattr(provider_oauth, "monotonic", clock)
     monkeypatch.setattr(provider_oauth, "_TOKENS", InMemoryCache(clock=clock))
     with respx.mock as upstream:
-        token_route = upstream.post(_TOKEN_URL).mock(
+        token_route: Final = upstream.post(_TOKEN_URL).mock(
             side_effect=(
                 httpx.Response(200, json={"access_token": "first-token", "expires_in": 30}),
                 httpx.Response(200, json={"access_token": "fresh-token", "expires_in": 30}),
             ),
         )
-        inference = upstream.post(f"{_PROVIDER_URL}/chat/completions").mock(
+        inference: Final = upstream.post(f"{_PROVIDER_URL}/chat/completions").mock(
             return_value=httpx.Response(
                 200,
                 json={
@@ -132,7 +131,8 @@ def test_openai_compatible_completion_sends_refreshed_bearer(provider: str, monk
                 },
             )
         )
-        for now in (0.0, 5.0, 31.0):
+        for elapsed in (0.0, 5.0, 26.0):
+            clock.advance(elapsed)
             litellm.completion(
                 model=f"{provider}/gpt-6-luna",
                 messages=[{"role": "user", "content": "Hello"}],
@@ -152,7 +152,7 @@ def test_openai_compatible_completion_sends_refreshed_bearer(provider: str, monk
 
 
 def test_oauth_completion_preserves_the_supplied_openai_transport() -> None:
-    token_url = "https://idp.example.com/sdk-token"
+    token_url: Final = "https://idp.example.com/sdk-token"
 
     def infer(request: httpx.Request) -> httpx.Response:
         assert str(request.url) == f"{_PROVIDER_URL}/chat/completions"
@@ -179,10 +179,10 @@ def test_oauth_completion_preserves_the_supplied_openai_transport() -> None:
             default_headers={"X-API-Key": "sdk-key", "X-Connection-Marker": "custom-client"},
         ) as client,
     ):
-        token_route = upstream.post(token_url).mock(
+        token_route: Final = upstream.post(token_url).mock(
             return_value=httpx.Response(200, json={"access_token": "sdk-token"})
         )
-        response = litellm.completion(
+        response: Final = litellm.completion(
             model="openai/gpt-6-luna",
             messages=[{"role": "user", "content": "Hello"}],
             client=client,
@@ -197,13 +197,13 @@ def test_oauth_completion_preserves_the_supplied_openai_transport() -> None:
 
 @pytest.mark.asyncio
 async def test_native_messages_sends_bearer_without_static_api_key() -> None:
-    token_url = "https://idp.example.com/messages-token"
-    api_base = "https://provider.example.com"
-    client = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+    token_url: Final = "https://idp.example.com/messages-token"
+    api_base: Final = "https://provider.example.com"
+    client: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
     async with client.client:
         with respx.mock as upstream:
             upstream.post(token_url).mock(return_value=httpx.Response(200, json={"access_token": "messages-token"}))
-            inference = upstream.post(f"{api_base}/v1/messages").mock(
+            inference: Final = upstream.post(f"{api_base}/v1/messages").mock(
                 return_value=httpx.Response(
                     200,
                     json={
