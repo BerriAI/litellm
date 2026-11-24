@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from itertools import accumulate
 from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -539,6 +540,86 @@ async def test_post_call_success_hook_keeps_token_data_of_a_new_answer_a_callbac
     assert choice["message"]["content"] == "The capital of Italy is Rome."
     assert choice["provider_specific_fields"]["token_ids"] == list(_ROME_TOKEN_IDS)
     assert [entry["token"] for entry in choice["logprobs"]["content"]] == ["The capital of Italy is Rome."]
+
+
+def _openai_chat_response(*tokens: str) -> litellm.ModelResponse:
+    return litellm.ModelResponse(
+        id="chatcmpl-openai",
+        model="gpt-4.1-mini",
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {"role": "assistant", "content": "".join(tokens)},
+                "logprobs": {
+                    "content": [
+                        {"token": token, "logprob": 0.0, "bytes": list(token.encode()), "top_logprobs": []}
+                        for token in tokens
+                    ]
+                },
+            }
+        ],
+    )
+
+
+def _together_text_completion_response(*tokens: str) -> litellm.TextCompletionResponse:
+    return litellm.TextCompletionResponse(
+        id="cmpl-together",
+        object="text_completion",
+        created=1,
+        model="Qwen/Qwen3.5-9B",
+        choices=[
+            {
+                "index": 0,
+                "text": "".join(tokens),
+                "finish_reason": "stop",
+                "logprobs": {
+                    "tokens": list(tokens),
+                    "token_logprobs": [0.0 for _ in tokens],
+                    "top_logprobs": None,
+                    "text_offset": list(accumulate((len(token) for token in tokens[:-1]), initial=0)),
+                },
+            }
+        ],
+    )
+
+
+class _FreshAnswerLogger(CustomLogger):
+    def __init__(self, fresh: object) -> None:
+        super().__init__()
+        self.fresh: Final = fresh
+
+    async def async_post_call_success_hook(
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: object
+    ) -> object:
+        return self.fresh
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("original", "fresh"),
+    [
+        (
+            _openai_chat_response("The", " capital", " of", " Germany", " is", " Berlin", "."),
+            _openai_chat_response("The", " capital", " of", " Spain", " is", " Madrid", "."),
+        ),
+        (_together_text_completion_response(" Berlin", "."), _together_text_completion_response(" Rome", ".")),
+    ],
+    ids=["chat", "completions"],
+)
+async def test_post_call_success_hook_keeps_logprobs_of_a_new_answer_whose_logprob_values_equal_the_original(
+    proxy_logging, make_user_api_key_auth, monkeypatch, original, fresh
+):
+    monkeypatch.setattr(litellm, "callbacks", [_FreshAnswerLogger(fresh)])
+    fresh_logprobs = fresh.model_dump()["choices"][0]["logprobs"]
+
+    served = await proxy_logging.post_call_success_hook(
+        data={"model": "m", "messages": [{"role": "user", "content": "a capital?"}], "logprobs": True},
+        response=original,
+        user_api_key_dict=make_user_api_key_auth(),
+    )
+
+    assert served.model_dump()["choices"][0]["logprobs"] == fresh_logprobs
 
 
 class _InPlaceRomeMaskingLogger(CustomLogger):

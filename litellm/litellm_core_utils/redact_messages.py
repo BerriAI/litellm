@@ -371,10 +371,15 @@ def _logprob_entries(logprobs: object) -> tuple[object, ...]:
     return (*stream_item_items(logprobs, "content"), *stream_item_items(logprobs, "refusal"))
 
 
+def _logprob_entry_key(entry: object) -> tuple[object, object]:
+    return stream_item_field(entry, "logprob"), stream_item_field(entry, "bytes")
+
+
 def _logprobs_key(logprobs: object) -> tuple[object, ...]:
     values: Final = (
-        *(stream_item_field(entry, "logprob") for entry in _logprob_entries(logprobs)),
+        *map(_logprob_entry_key, _logprob_entries(logprobs)),
         *stream_item_items(logprobs, "token_logprobs"),
+        *stream_item_items(logprobs, "text_offset"),
     )
     return values if values or logprobs in (None, []) else (logprobs,)
 
