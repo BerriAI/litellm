@@ -188,17 +188,17 @@ class OpenAIConfig(BaseConfig):
     def __init__(
         self,
         frequency_penalty: int | None = None,
-        function_call: str | dict | None = None,
-        functions: list | None = None,
-        logit_bias: dict | None = None,
+        function_call: str | Mapping[str, object] | None = None,
+        functions: Sequence[object] | None = None,
+        logit_bias: Mapping[str, object] | None = None,
         max_completion_tokens: int | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
-        response_format: dict | None = None,
+        response_format: Mapping[str, object] | None = None,
     ) -> None:
         locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
@@ -726,7 +726,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         self,
         response: object,
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         optional_params: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         stream: bool,
@@ -1564,7 +1564,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client: OpenAI | AsyncOpenAI | None = None,
         max_retries: int | None = None,
         organization: str | None = None,
-        headers: dict | None = None,
+        headers: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ):
         try:
@@ -1640,7 +1640,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         client: OpenAI | AsyncOpenAI | None = None,
         aimg_generation: bool | None = None,
         organization: str | None = None,
-        headers: dict | None = None,
+        headers: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ) -> ImageResponse | ImageStream:
         data = {}

@@ -2772,3 +2772,29 @@ def test_a_gpt_5_base_model_keeps_the_params_a_known_foundry_deployment_name_lis
     )
     assert by_name is not None and with_base_model is not None
     assert set(by_name) <= set(with_base_model)
+
+
+_GET_TIME_TOOL: Final = {"type": "function", "function": {"name": "get_time", "parameters": {"type": "object"}}}
+
+
+@pytest.mark.parametrize(
+    ("tool_params", "expected_tool_choice"),
+    [
+        ({"tool_choice": "none"}, None),
+        ({"tools": [], "tool_choice": "auto"}, None),
+        ({"tools": [_GET_TIME_TOOL], "tool_choice": "none"}, "none"),
+        ({"functions": [_GET_TIME_TOOL["function"]], "tool_choice": "auto"}, "auto"),
+    ],
+)
+def test_azure_ai_sends_tool_choice_only_with_tools(
+    _local_model_cost_map, tool_params: Mapping[str, object], expected_tool_choice: str | None
+):
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="grok-4.7",
+        messages=[{"role": "user", "content": "What time is it?"}],
+        optional_params=dict(tool_params),
+        litellm_params={},
+        headers={},
+    )
+
+    assert request.get("tool_choice") == expected_tool_choice

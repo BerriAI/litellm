@@ -8,13 +8,34 @@ This file only contains param mapping logic
 API calling is done using the OpenAI SDK with an api_base
 """
 
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Collection, Mapping
+from typing import Final, cast  # noqa: TID251  # litellm.model_cost is an untyped module global
 
+import litellm
+from litellm.exceptions import UnsupportedParamsError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.llms.openai_like.dynamic_config import MapsAllowedOpenAIParams
 
 
-class NvidiaNimConfig(OpenAIGPTConfig):
+def _serves_logprobs(model: str) -> bool:
+    catalog: Final = cast(Mapping[str, object], litellm.model_cost)  # cast-ok: validating the map per call is slow
+    row: Final = as_str_mapping(catalog.get(f"nvidia_nim/{model.removeprefix('nvidia_nim/')}"))
+    return row is None or row.get("supports_logprobs") is not False
+
+
+def _malformed_logprobs_params(non_default_params: Mapping[str, object]) -> frozenset[str]:
+    logprobs: Final = non_default_params.get("logprobs")
+    non_boolean_logprobs: Final = "logprobs" in non_default_params and not isinstance(logprobs, bool)
+    top_logprobs_without_logprobs: Final = "top_logprobs" in non_default_params and logprobs is not True
+    return frozenset(
+        param
+        for param, malformed in (("logprobs", non_boolean_logprobs), ("top_logprobs", top_logprobs_without_logprobs))
+        if malformed
+    )
+
+
+class NvidiaNimConfig(OpenAIGPTConfig, MapsAllowedOpenAIParams):
     """
     Reference: https://docs.api.nvidia.com/nim/reference/databricks-dbrx-instruct-infer
 
@@ -96,19 +117,43 @@ class NvidiaNimConfig(OpenAIGPTConfig):
                 "tool_choice",
                 "parallel_tool_calls",
                 "response_format",
+                *(("logprobs", "top_logprobs") if _serves_logprobs(model) else ()),
             ]
 
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict[str, object],
+        optional_params: dict[str, object],  # mutable-ok: filled in place for get_optional_params
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict[str, object]:  # mutable-ok: get_optional_params keeps building on the mapped params
+        return self.map_openai_params_allowing(non_default_params, optional_params, model, drop_params, ())
+
+    def map_openai_params_allowing(
+        self,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],  # mutable-ok: filled in place like map_openai_params
+        model: str,
+        drop_params: bool,
+        allowed_openai_params: Collection[str],
+    ) -> dict[str, object]:  # mutable-ok: get_optional_params keeps building on the mapped params
         supported_openai_params: Final = self.get_supported_openai_params(model=model)
+        malformed_params: Final = _malformed_logprobs_params(non_default_params) - frozenset(allowed_openai_params)
+        if malformed_params and not drops_unsupported_params(drop_params):
+            raise UnsupportedParamsError(
+                message=(
+                    f"nvidia_nim does not support parameters: {sorted(malformed_params)}, for model={model}. "
+                    "NVIDIA takes logprobs as true or false, and returns top_logprobs only with logprobs=true. "
+                    "To drop these, set `litellm.drop_params=True`, "
+                    "or on the proxy `litellm_settings: drop_params: true`. "
+                    f"To pass them as is, send allowed_openai_params={sorted(malformed_params)}."
+                ),
+                llm_provider="nvidia_nim",
+                model=model,
+            )
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
-            elif param in supported_openai_params:
+            elif param in supported_openai_params and param not in malformed_params:
                 optional_params[param] = value
         return optional_params

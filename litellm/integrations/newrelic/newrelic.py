@@ -737,8 +737,8 @@ class NewRelicLogger(CustomLogger):
         self,
         kwargs: dict,
         response_obj: ModelResponse,
-        start_time: float | None = None,
-        end_time: float | None = None,
+        start_time: datetime | float | None = None,
+        end_time: datetime | float | None = None,
     ):
         """
         Core logic for processing successful LLM calls.
@@ -852,7 +852,13 @@ class NewRelicLogger(CustomLogger):
     def log_post_api_call(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         """Unused per spec."""
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self,
+        kwargs,
+        response_obj,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ):
         """
         Main success path for non-streaming requests.
 
@@ -865,7 +871,13 @@ class NewRelicLogger(CustomLogger):
             verbose_logger.warning("Error in New Relic log_success_event: %s", e)
             self.handle_callback_failure("newrelic")
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self,
+        kwargs,
+        response_obj,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ):
         """
         Main success path for async/streaming requests.
 

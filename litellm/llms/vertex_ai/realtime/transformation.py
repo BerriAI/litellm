@@ -92,10 +92,10 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,  # noqa: ARG002
         api_key: str | None = None,  # noqa: ARG002
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Return headers with a Bearer token for Vertex AI.
 

@@ -226,7 +226,7 @@ class CohereEmbeddingConfig(BaseEmbeddingConfig):
         return _embed_url_from_cohere_api_base(cohere_api_base)
 
     def _transform_request(
-        self, model: str, input: list[str], inference_params: dict
+        self, model: str, input: list[str], inference_params: Mapping[str, object]
     ) -> CohereEmbeddingRequestWithModel:
         is_encoded = False
         for input_str in input:

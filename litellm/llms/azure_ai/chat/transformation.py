@@ -345,6 +345,12 @@ def _chat_param_the_responses_api_lacks(optional_params: Mapping[str, object]) -
     return "seed" if optional_params.get("seed") is not None else None
 
 
+def _without_tool_choice_when_no_tools(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    if optional_params.get("tools") or optional_params.get("functions"):
+        return optional_params
+    return {key: value for key, value in optional_params.items() if key != "tool_choice"}
+
+
 class AzureAIStudioConfig(OpenAIConfig):
     @staticmethod
     def gpt_5_base_model(model: str, base_model: str | None) -> str | None:
@@ -695,8 +701,8 @@ class AzureAIStudioConfig(OpenAIConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict[str, object],
-        litellm_params: dict,
-        headers: dict,
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict[str, object]:
         extra_body: Final = optional_params.pop("extra_body", {})
         if extra_body and isinstance(extra_body, dict):
@@ -713,7 +719,7 @@ class AzureAIStudioConfig(OpenAIConfig):
                 bool(litellm_params.get("drop_params") or litellm.drop_params),
                 base_model if isinstance(base_model, str) else None,
             ),
-            **optional_params,
+            **_without_tool_choice_when_no_tools(optional_params),
         }
 
     def transform_response(
