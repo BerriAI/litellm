@@ -149,6 +149,8 @@ class _TurnsPage(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     data: tuple[_Turn, ...]
+    has_more: bool = False
+    last_id: str | None = None
 
 
 class _Subagent(BaseModel):
@@ -820,7 +822,8 @@ class OpenAIAgentsTurnBiller:
         if root is not None and root.settled:
             return root
         turns_path: Final = f"agents/sessions/{turn_start.session_id}/turns"
-        page: Final = await self._fetch_turns(turn_start, turns_path)
+        since: Final = turn_start.earliest_turn_created_at if root is None else root.turn.created_at
+        page: Final = await self._fetch_turns(turn_start, turns_path, since)
         if isinstance(page, _FetchFailed):
             return page
         if root is None:
@@ -870,7 +873,9 @@ class OpenAIAgentsTurnBiller:
             subagent for subagent in subagents if subagent.closed_at is None or subagent.closed_at >= root_created_at
         )
         turns_paths: Final = tuple(f"{session_path}/subagents/{subagent.id}/turns" for subagent in open_during_turn)
-        pages: Final = await asyncio.gather(*(self._fetch_turns(turn_start, turns_path) for turns_path in turns_paths))
+        pages: Final = await asyncio.gather(
+            *(self._fetch_turns(turn_start, turns_path, root_created_at) for turns_path in turns_paths)
+        )
         failure: Final = next((page for page in pages if isinstance(page, _FetchFailed)), None)
         if failure is not None:
             return failure
@@ -910,7 +915,7 @@ class OpenAIAgentsTurnBiller:
         return older if isinstance(older, _FetchFailed) else (*page.data, *older)
 
     async def _next_root_created_at(self, turn_start: AgentsTurnStart, root: _ClaimedTurn) -> float | _FetchFailed:
-        roots: Final = await self._fetch_turns(turn_start, root.turns_path)
+        roots: Final = await self._fetch_turns(turn_start, root.turns_path, root.turn.created_at)
         if isinstance(roots, _FetchFailed):
             return roots
         return min((turn.created_at for turn in roots.data if turn.created_at > root.turn.created_at), default=math.inf)
@@ -962,10 +967,19 @@ class OpenAIAgentsTurnBiller:
             turn_start, path, page_type, attempts_left - 1, min(delay * 2, OPENAI_AGENTS_TURN_POLL_MAX_DELAY_SECONDS)
         )
 
-    async def _fetch_turns(self, turn_start: AgentsTurnStart, turns_path: str) -> _TurnsPage | _FetchFailed:
-        return await self._fetch_page(
-            turn_start, f"{turns_path}?order=desc&limit={OPENAI_AGENTS_LIST_PAGE_LIMIT}", _TurnsPage
+    async def _fetch_turns(
+        self, turn_start: AgentsTurnStart, turns_path: str, since: int, after: str | None = None
+    ) -> _TurnsPage | _FetchFailed:
+        cursor: Final = "" if after is None else f"&after={after}"
+        page: Final = await self._fetch_page(
+            turn_start, f"{turns_path}?order=desc&limit={OPENAI_AGENTS_LIST_PAGE_LIMIT}{cursor}", _TurnsPage
         )
+        if isinstance(page, _FetchFailed):
+            return page
+        if not page.has_more or page.last_id is None or any(turn.created_at < since for turn in page.data):
+            return page
+        older: Final = await self._fetch_turns(turn_start, turns_path, since, page.last_id)
+        return older if isinstance(older, _FetchFailed) else _TurnsPage(data=(*page.data, *older.data))
 
     async def _web_search_calls(self, turn_start: AgentsTurnStart, items_path: str, after: str | None = None) -> int:
         cursor: Final = "" if after is None else f"&after={after}"

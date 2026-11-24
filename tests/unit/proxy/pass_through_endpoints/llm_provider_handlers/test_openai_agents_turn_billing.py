@@ -1581,6 +1581,84 @@ async def test_an_open_subagent_listed_on_a_later_subagents_page_is_billed(local
 
 
 @pytest.mark.asyncio
+async def test_a_subagent_turn_listed_on_a_later_turns_page_is_billed(local_model_cost_map: None):
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),),
+        session=_session(),
+        replies={
+            SUBAGENTS_URL: (_page({"id": "subagent_1", "object": "agent.session.subagent", "closed_at": None}),),
+            SUBAGENT_TURNS_URL: (
+                {
+                    **_page(_turn("subturn_2", CALL_STARTED_AT + 4, "completed", SECOND_TURN_USAGE)),
+                    "has_more": True,
+                    "last_id": "subturn_2",
+                },
+            ),
+            f"{SUBAGENT_TURNS_URL}&after=subturn_2": (
+                _page(_turn("subturn_1", CALL_STARTED_AT + 3, "completed", SECOND_TURN_USAGE)),
+            ),
+        },
+    )
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "2b4d6f8b-0d2f-4b4d-8f6b-8d0f2b4d6f01",
+    )
+
+    assert (await rows.only_row())["total_tokens"] == TURN_USAGE["total_tokens"] + 2 * SECOND_TURN_USAGE["total_tokens"]
+
+
+@pytest.mark.asyncio
+async def test_the_calls_turn_listed_on_a_later_turns_page_is_billed_without_reading_older_pages(
+    local_model_cost_map: None,
+):
+    older_than_the_call_url: Final = f"{TURNS_URL}&after=turn_0"
+    api: Final = _AgentsApi(
+        turn_pages=((),),
+        session=_session(),
+        turn_texts={"turn_2": ("a later call's message",)},
+        replies={
+            TURNS_URL: (
+                {
+                    **_page(_turn("turn_2", CALL_STARTED_AT + 5, "completed", SECOND_TURN_USAGE)),
+                    "has_more": True,
+                    "last_id": "turn_2",
+                },
+            ),
+            f"{TURNS_URL}&after=turn_2": (
+                {
+                    **_page(
+                        _turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),
+                        _turn("turn_0", CALL_STARTED_AT - 600, "completed", SECOND_TURN_USAGE),
+                    ),
+                    "has_more": True,
+                    "last_id": "turn_0",
+                },
+            ),
+        },
+    )
+    rows: Final = _SpendRows()
+
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "2b4d6f8b-0d2f-4b4d-8f6b-8d0f2b4d6f02",
+    )
+    row: Final = await rows.only_row()
+
+    assert row["total_tokens"] == TURN_USAGE["total_tokens"]
+    assert older_than_the_call_url not in api.urls
+
+
+@pytest.mark.asyncio
 async def test_a_turn_row_counts_toward_the_keys_tpm_limit_on_the_legacy_limiter(local_model_cost_map: None):
     limiter: Final = PROXY_MaxParallelRequestsHandler(
         internal_usage_cache=InternalUsageCache(DualCache()), clock=lambda: CALL_TIME
