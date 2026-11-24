@@ -1,23 +1,10 @@
 use serde_json::{Map, Value};
 
-use crate::{formats::messages::MessagesErrorType, recognized::Recognized};
-
-#[macro_rules_attribute::apply(crate::wire_type)]
-#[derive(Default)]
-pub struct MessagesStreamUsage {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_creation_input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_read_input_tokens: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub server_tool_use: Option<Value>,
-    #[serde(flatten)]
-    pub extra: Map<String, Value>,
-}
+use crate::{
+    as_sent::AsSent,
+    formats::messages::{MessagesErrorType, MessagesUsage},
+    recognized::Recognized,
+};
 
 /// Only the fields Anthropic always sends are named, and a host may leave any of them out.
 #[macro_rules_attribute::apply(crate::wire_type)]
@@ -36,7 +23,7 @@ pub struct MessagesStreamMessage {
     pub stop_reason: Option<String>,
     pub stop_sequence: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<MessagesStreamUsage>,
+    pub usage: Option<AsSent<MessagesUsage>>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -158,13 +145,13 @@ pub enum MessagesStreamEvent {
     MessageDelta {
         delta: MessagesDelta,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        usage: Option<MessagesStreamUsage>,
+        usage: Option<AsSent<MessagesUsage>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         context_management: Option<Value>,
     },
     MessageStop {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        usage: Option<MessagesStreamUsage>,
+        usage: Option<AsSent<MessagesUsage>>,
         #[serde(flatten)]
         extra: Map<String, Value>,
     },

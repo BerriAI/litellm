@@ -16,6 +16,7 @@ use litellm_auth_aws::{
 };
 use litellm_host::interceptors::RetriedRequest;
 use litellm_llms_types::{
+    as_sent::AsSent,
     formats::messages::{MessagesOptionalParams, MessagesRequest, MessagesResponse},
     providers::anthropic::BetaProvider,
     recognized::Recognized,
@@ -873,9 +874,9 @@ impl MessagesReply for BedrockMantleMessagesConfig {
         _model: &str,
         response: MessagesResponse,
     ) -> Result<MessagesResponse, Error> {
-        let usage = usage_value(billed_usage(response.usage.clone())?)?;
+        let usage = usage_value(billed_usage(response.usage.clone().map(AsSent::into_sent))?)?;
         Ok(MessagesResponse {
-            usage: Some(usage),
+            usage: Some(AsSent::new(usage)),
             ..response
         })
     }
@@ -1599,7 +1600,8 @@ mod tests {
             .transform_anthropic_messages_response("claude-test", replied_usage(usage))
             .unwrap()
             .usage
-            .unwrap();
+            .unwrap()
+            .into_sent();
         assert_eq!(usage, expected);
         assert_eq!(
             usage
@@ -1640,7 +1642,10 @@ mod tests {
             "stop_sequence": null,
         }))
         .unwrap();
-        MessagesResponse { usage, ..response }
+        MessagesResponse {
+            usage: usage.map(AsSent::new),
+            ..response
+        }
     }
 
     struct Warnings(std::sync::mpsc::Sender<String>);

@@ -12,7 +12,10 @@ use litellm_cost::query::TokenUsage;
 use litellm_cost::receipt::Receipt;
 use litellm_framer::sse::{SseCodec, SseEvent};
 use litellm_host::interceptors::{Cost, PricedCost, StreamMeter};
-use litellm_llms_types::formats::messages::{MessagesResponse, MessagesUsage};
+use litellm_llms_types::{
+    as_sent::AsSent,
+    formats::messages::{MessagesResponse, MessagesUsage},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tokio_util::codec::Decoder;
@@ -155,9 +158,9 @@ impl CallPricing {
         let thinking = message.content.iter().any(is_thinking_block);
         message
             .usage
-            .clone()
-            .and_then(|usage| serde_json::from_value::<MessagesUsage>(usage).ok())
-            .and_then(|usage| metered(&usage, self.context(thinking)))
+            .as_ref()
+            .and_then(AsSent::read)
+            .and_then(|usage| metered(usage, self.context(thinking)))
             .and_then(|metered| self.priced(metered, Some(message.model.clone())))
             .map_or(Cost::Deferred, |priced| Cost::Priced(Box::new(priced)))
     }

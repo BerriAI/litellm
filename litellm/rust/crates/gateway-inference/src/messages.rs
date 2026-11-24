@@ -9,10 +9,10 @@ use litellm_host_http::Sse;
 use litellm_inference_messages::{
     MessagesBody, MessagesCall, MessagesRoute, MessagesShaping, messages_body, route::Messages,
 };
+use litellm_llms_types::as_sent::AsSent;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use litellm_llms_types::formats::messages::{
-    MessagesOptionalParams,
-    streaming::{MessagesStreamEvent, MessagesStreamUsage},
+    MessagesOptionalParams, MessagesUsage, streaming::MessagesStreamEvent,
 };
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use litellm_router_core::{Attempt, Deployment, Op};
@@ -110,14 +110,10 @@ impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
     }
 
     fn counts((ran, _): &Self::Outcome) -> Option<Counts> {
-        let usage = match ran {
-            CallOutput::Complete(MessagesBody::Message(message)) => message.usage.as_ref(),
-            CallOutput::Complete(MessagesBody::Unchecked(fields)) => fields.get("usage"),
+        match ran {
+            CallOutput::Complete(body) => body.usage().as_deref().map(Counts::from),
             CallOutput::Stream { .. } => None,
-        }?;
-        serde_json::from_value::<MessagesStreamUsage>(usage.clone())
-            .ok()
-            .map(Counts::from)
+        }
     }
 
     fn usage(counts: Counts) -> Option<ChatCompletionsUsage> {
@@ -162,7 +158,9 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
 
     fn total_tokens((ran, _): &Self::Outcome) -> u64 {
         let usage = match ran {
-            CallOutput::Complete(MessagesBody::Message(message)) => message.usage.as_ref(),
+            CallOutput::Complete(MessagesBody::Message(message)) => {
+                message.usage.as_ref().map(AsSent::sent)
+            }
             CallOutput::Complete(MessagesBody::Unchecked(fields)) => fields.get("usage"),
             CallOutput::Stream { .. } => None,
         };
@@ -266,11 +264,13 @@ fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders>
 /// data as the body (`parse_anthropic_error_event`).
 pub(crate) fn read_event(data: &str) -> Reading {
     match serde_json::from_str(data) {
-        Ok(MessagesStreamEvent::MessageStart { message }) => Reading::lifecycle(message.usage),
+        Ok(MessagesStreamEvent::MessageStart { message }) => {
+            Reading::lifecycle(message.usage.as_ref().and_then(AsSent::read))
+        }
         Ok(
             MessagesStreamEvent::MessageDelta { usage, .. }
             | MessagesStreamEvent::MessageStop { usage, .. },
-        ) => Reading::lifecycle(usage),
+        ) => Reading::lifecycle(usage.as_ref().and_then(AsSent::read)),
         Ok(MessagesStreamEvent::ContentBlockDelta { .. }) => Reading::of(Kind::Content),
         Ok(MessagesStreamEvent::Error { error }) => Reading::of(Kind::Failed {
             status: error.error_type.status(),
@@ -286,8 +286,8 @@ pub(crate) fn read_event(data: &str) -> Reading {
     }
 }
 
-impl From<MessagesStreamUsage> for Counts {
-    fn from(usage: MessagesStreamUsage) -> Self {
+impl From<&MessagesUsage> for Counts {
+    fn from(usage: &MessagesUsage) -> Self {
         Self {
             input_tokens: usage.input_tokens,
             output_tokens: usage.output_tokens,

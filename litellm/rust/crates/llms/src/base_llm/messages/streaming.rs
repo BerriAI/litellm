@@ -34,7 +34,7 @@ pub fn encode(event: &MessagesStreamEvent) -> Result<Bytes, Error> {
 mod tests {
     use futures_util::{StreamExt, TryStreamExt, stream};
     use litellm_llms_types::{
-        formats::messages::streaming::{MessagesContentBlockDelta, MessagesStreamUsage},
+        as_sent::AsSent, formats::messages::streaming::MessagesContentBlockDelta,
         recognized::Recognized,
     };
     use rstest::rstest;
@@ -61,10 +61,7 @@ mod tests {
             },
             MessagesStreamEvent::ContentBlockStop { index: 1 },
             MessagesStreamEvent::MessageStop {
-                usage: Some(MessagesStreamUsage {
-                    output_tokens: Some(7),
-                    ..MessagesStreamUsage::default()
-                }),
+                usage: Some(AsSent::new(serde_json::json!({"output_tokens": 7}))),
                 extra: Map::new(),
             },
         ]
