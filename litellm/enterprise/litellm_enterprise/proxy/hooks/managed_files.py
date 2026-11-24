@@ -9,7 +9,8 @@ import time
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from itertools import chain
+from functools import reduce
+from itertools import accumulate, chain, repeat, starmap, takewhile
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -296,6 +297,97 @@ def _gemini_file_ids_from_responses_input(input_data: object) -> Iterator[str]:
                     yield file_id
 
 
+_PROXY_ADDED_REQUEST_FIELDS: Final = frozenset(
+    {"metadata", "litellm_metadata", "proxy_server_request", "secret_fields"}
+)
+
+
+def _child_entries(path: tuple[str | int, ...], node: object) -> Iterator[tuple[tuple[str | int, ...], object]]:
+    fields: Final = as_str_mapping(node)
+    entries: Final[Iterable[tuple[str | int, object]]] = (
+        fields.items() if fields is not None else enumerate(as_object_list(node) or ())
+    )
+    return (((*path, key), child) for key, child in entries)
+
+
+def _next_body_level(
+    level: tuple[tuple[tuple[str | int, ...], object], ...], _: None
+) -> tuple[tuple[tuple[str | int, ...], object], ...]:
+    return tuple(chain.from_iterable(starmap(_child_entries, level)))
+
+
+def _own_file_id(value: object) -> str | None:
+    fields: Final = as_str_mapping(value)
+    file_id: Final = fields.get("file_id") if fields is not None else None
+    return file_id if isinstance(file_id, str) and file_id else None
+
+
+def _file_id_locations(request_body: Mapping[str, object]) -> Iterator[tuple[tuple[str | int, ...], str]]:
+    caller_fields: Final = tuple(
+        ((key,), value) for key, value in request_body.items() if key not in _PROXY_ADDED_REQUEST_FIELDS
+    )
+    levels: Final = accumulate(repeat(None), _next_body_level, initial=caller_fields)
+    nodes: Final = chain.from_iterable(takewhile(bool, levels))
+    return ((path, file_id) for path, node in nodes if (file_id := _own_file_id(node)) is not None)
+
+
+def _nested_file_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(file_id for _, file_id in _file_id_locations(request_body)))
+
+
+def _child_at(node: object, key: str | int) -> object:
+    return (as_object_list(node) or ())[key] if isinstance(key, int) else (as_str_mapping(node) or {})[key]
+
+
+def _with_child(child: object, parent_and_key: tuple[object, str | int]) -> object:
+    parent, key = parent_and_key
+    if isinstance(key, int):
+        items: Final = as_object_list(parent) or ()
+        return [*items[:key], child, *items[key + 1 :]]
+    return {**(as_str_mapping(parent) or {}), key: child}
+
+
+def _with_value_at(root: object, path: tuple[str | int, ...], value: object) -> object:
+    ancestors: Final = tuple(accumulate(path[:-1], _child_at, initial=root))
+    return reduce(_with_child, reversed(tuple(zip(ancestors, path))), value)
+
+
+def _with_swap(body: object, swap: tuple[tuple[str | int, ...], str]) -> object:
+    return _with_value_at(body, *swap)
+
+
+def _deployment_model_id(kwargs: Mapping[str, object]) -> str | None:
+    top_level_id: Final = _keyed_get(kwargs.get("model_info", {}), "id")
+    model_id: Final = (
+        _keyed_get(_keyed_get(kwargs.get("litellm_metadata", {}), "model_info", {}), "id")
+        if top_level_id is None
+        else top_level_id
+    )
+    return model_id if isinstance(model_id, str) else None
+
+
+def _with_deployment_file_ids(kwargs: dict[str, object]) -> dict[str, object]:
+    model_id: Final = _deployment_model_id(kwargs)
+    if model_id is None:
+        return kwargs
+    model_file_id_mapping: Final = _MODEL_FILE_ID_MAPPINGS.validate_python(kwargs.get("model_file_id_mapping") or {})
+    provider_file_ids: Final = {
+        file_id: file_id_by_model[model_id]
+        for file_id, file_id_by_model in model_file_id_mapping.items()
+        if model_id in file_id_by_model
+    }
+    if not provider_file_ids:
+        return kwargs
+    swaps: Final = (
+        ((*path, "file_id"), provider_file_ids[file_id])
+        for path, file_id in _file_id_locations(kwargs)
+        if file_id in provider_file_ids
+    )
+    unswapped: Final[object] = kwargs
+    swapped: Final = reduce(_with_swap, swaps, unswapped)
+    return dict(as_str_mapping(swapped) or kwargs)
+
+
 def _is_object_iterable(value: object) -> TypeIs[Iterable[object]]:
     return isinstance(value, Iterable)
 
@@ -498,6 +590,7 @@ class _RouterFileCallKwargs(TypedDict, total=False):
 
 
 _MODEL_FILE_ID_MAPPING: Final = TypeAdapter(dict[str, str])
+_MODEL_FILE_ID_MAPPINGS: Final = TypeAdapter(dict[str, dict[str, str]])
 _FILE_UPLOAD_ONLY_FIELDS: Final = frozenset({"file", "purpose", "expires_after", "extra_body"})
 _FILE_DELETE_RESERVED_FIELDS: Final = frozenset({"model", "file_id"})
 
@@ -1909,6 +2002,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     data["model"] = model_id
                     data["file_id"] = provider_file_id
                     data.update(stored_s3_bucket_kwargs(provider_file_id))
+        elif call_type == CallTypes.aimage_edit.value or call_type == CallTypes.image_edit.value:
+            image_edit_file_ids: Final = _nested_file_ids(data)
+            await self.check_file_ids_access(image_edit_file_ids, user_api_key_dict)
+            if image_edit_file_ids:
+                data["model_file_id_mapping"] = await self.get_model_file_id_mapping(
+                    image_edit_file_ids, user_api_key_dict.parent_otel_span
+                )
         elif call_type == CallTypes.acreate_batch.value:
             input_file_id = cast(Optional[str], data.get("input_file_id"))
             if input_file_id:
@@ -2015,19 +2115,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         Allow modifying the request just before it's sent to the deployment.
         """
+        if call_type is CallTypes.aimage_edit or call_type is CallTypes.image_edit:
+            return _with_deployment_file_ids(kwargs)
         accessor_keys: Final = _PROVIDER_FILE_ID_KWARGS.get(call_type) if call_type else None
         if accessor_keys is None:
             return kwargs
 
         model_file_id_mapping = cast(Optional[Dict[str, Dict[str, str]]], kwargs.get("model_file_id_mapping"))
-        # model_info may be at top-level or nested under litellm_metadata
-        # (batch/file operations use litellm_metadata)
-        model_id = cast(Optional[str], _keyed_get(kwargs.get("model_info", {}), "id"))
-        if model_id is None:
-            model_id = cast(
-                Optional[str],
-                _keyed_get(_keyed_get(kwargs.get("litellm_metadata", {}), "model_info", {}), "id"),
-            )
+        model_id: Final = _deployment_model_id(kwargs)
         for accessor_key in accessor_keys:
             input_file_id = cast(Optional[str], kwargs.get(accessor_key))
             mapped_file_id: Optional[str] = None
