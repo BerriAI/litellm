@@ -3280,6 +3280,23 @@ class _HuggingFaceTokenizerLoadOutcomes:
     def known(
         self, key: _HuggingFaceTokenizerKey, retry_when_due: Callable[[], None]
     ) -> _HuggingFaceTokenizerLoadOutcome | None:
+        retrying: Final = self._claim_due_retry(key)
+        if retrying is None:
+            return self.by_tokenizer.get(key)
+        try:
+            self.start_retry(retry_when_due)
+        except RuntimeError as error:
+            return self.remember_failed_retry(key, str(error))
+        return retrying
+
+    def known_after_any_due_retry(
+        self, key: _HuggingFaceTokenizerKey, retry_when_due: Callable[[], None]
+    ) -> _HuggingFaceTokenizerLoadOutcome | None:
+        if self._claim_due_retry(key) is not None:
+            retry_when_due()
+        return self.by_tokenizer.get(key)
+
+    def _claim_due_retry(self, key: _HuggingFaceTokenizerKey) -> _HuggingFaceTokenizerLoadFailure | None:
         with self.lock:
             known: Final = self.by_tokenizer.get(key)
             if (
@@ -3287,14 +3304,10 @@ class _HuggingFaceTokenizerLoadOutcomes:
                 or known.retry_pid == self.pid()
                 or self.clock() < known.retry_at
             ):
-                return known
+                return None
             retrying: Final = replace(known, retry_pid=self.pid())
             self._remember(key, retrying)
-        try:
-            self.start_retry(retry_when_due)
-        except RuntimeError as error:
-            return self.remember_failed_retry(key, str(error))
-        return retrying
+            return retrying
 
     def remember_loaded(self, key: _HuggingFaceTokenizerKey, tokenizer: HuggingFace) -> _HuggingFaceTokenizerLoaded:
         loaded: Final = _HuggingFaceTokenizerLoaded(tokenizer)
@@ -3358,7 +3371,9 @@ def _warn_huggingface_tokenizer_fallback(model: str, reason: str) -> None:
 
 
 def _return_huggingface_tokenizer(
-    model: str, outcomes: _HuggingFaceTokenizerLoadOutcomes = _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES
+    model: str,
+    outcomes: _HuggingFaceTokenizerLoadOutcomes = _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES,
+    wait_for_due_retry: bool = False,
 ) -> SelectTokenizerResponse | _HuggingFaceTokenizerLoadFailure | None:
     kind: Final = huggingface_tokenizer_kind(model)
     if kind is None or (kind not in _BUNDLED_TOKENIZER_LOAD_LOCKS and is_offline_mode()):
@@ -3371,7 +3386,10 @@ def _return_huggingface_tokenizer(
     ):
         return None
     with _BUNDLED_TOKENIZER_LOAD_LOCKS.get(kind, nullcontext()):
-        known: Final = outcomes.known(key, partial(_retry_huggingface_tokenizer_load, model, key, outcomes))
+        retry: Final = partial(_retry_huggingface_tokenizer_load, model, key, outcomes)
+        known: Final = (
+            outcomes.known_after_any_due_retry(key, retry) if wait_for_due_retry else outcomes.known(key, retry)
+        )
         outcome: Final = (
             known
             if known is not None
@@ -3398,7 +3416,7 @@ def select_tokenizer_or_unavailable(
     kind: Final = huggingface_tokenizer_kind(model)
     if custom_tokenizer is not None or litellm.disable_hf_tokenizer_download is True or kind is None:
         return select_tokenizer(model, custom_tokenizer)
-    match _return_huggingface_tokenizer(model, outcomes):
+    match _return_huggingface_tokenizer(model, outcomes, wait_for_due_retry=True):
         case None:
             return _return_openai_tokenizer(model)
         case _HuggingFaceTokenizerLoadFailure(retry_at=retry_at, retry_pid=retry_pid):
@@ -3412,13 +3430,16 @@ def select_tokenizer_or_unavailable(
             return loaded
 
 
+def huggingface_hub_tokenizer_kind(model: str) -> HuggingFaceTokenizerKind | None:
+    kind: Final = huggingface_tokenizer_kind(model)
+    return None if kind is None or kind in _BUNDLED_TOKENIZER_LOAD_LOCKS else kind
+
+
 def huggingface_tokenizer_may_download(
     model: str, outcomes: _HuggingFaceTokenizerLoadOutcomes = _HUGGINGFACE_TOKENIZER_LOAD_OUTCOMES
 ) -> bool:
-    kind: Final = huggingface_tokenizer_kind(model)
-    if kind is None or kind in _BUNDLED_TOKENIZER_LOAD_LOCKS:
-        return False
-    return (kind, _huggingface_tokenizer_backend()) not in outcomes.by_tokenizer
+    kind: Final = huggingface_hub_tokenizer_kind(model)
+    return kind is not None and (kind, _huggingface_tokenizer_backend()) not in outcomes.by_tokenizer
 
 
 def _load_huggingface_tokenizer(kind: HuggingFaceTokenizerKind) -> HuggingFace:

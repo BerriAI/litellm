@@ -30,6 +30,25 @@ class _UpstreamErrorEnvelope(BaseModel):
     error: _UpstreamErrorDetail
 
 
+class _NestedUpstreamError(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="allow")
+    error: _UpstreamErrorDetail
+
+
+def provider_error_json(raw_message: str) -> str:
+    start: Final = raw_message.find("{")
+    return raw_message if start == -1 else raw_message[start:]
+
+
+def provider_error_message(raw_message: str) -> str:
+    error_json: Final = provider_error_json(raw_message)
+    try:
+        return _NestedUpstreamError.model_validate_json(error_json).error.message
+    except ValidationError:
+        flat_message: Final = AnthropicExceptionMapping.extract_error_message(error_json)
+        return raw_message if flat_message == error_json else flat_message
+
+
 def _joined(message: str, hint: str) -> str:
     return f"{message.rstrip().rstrip('.')}. {hint}"
 
@@ -98,7 +117,10 @@ class ProviderCountFailure:
             self,
             message=_rewritten(
                 self.message,
-                lambda message: _joined(cause, f"Counting with the provider failed with {self.status_code}: {message}"),
+                lambda message: _joined(
+                    cause,
+                    f"Counting with the provider failed with {self.status_code}: {provider_error_message(message)}",
+                ),
             ),
         )
 

@@ -158,9 +158,10 @@ class KimiK3Encodings:
             return None
         return max(math.ceil(current.started_at + self.retry_after_seconds - self.clock()), 1)
 
-    async def encoding(self, wait_seconds: float) -> tiktoken.Encoding | None:
+    async def encoding(self, wait_seconds: float, wait_for_due_retry: bool = False) -> tiktoken.Encoding | None:
         load: Final = self._load()
-        remaining: Final = 0 if load.is_retry else load.started_at + wait_seconds - self.clock()
+        skips_wait: Final = load.is_retry and not wait_for_due_retry
+        remaining: Final = 0 if skips_wait else load.started_at + wait_seconds - self.clock()
         if load.encoding.done() or remaining <= 0:
             return load.encoding.result() if load.encoding.done() else None
         await asyncio.wait((asyncio.wrap_future(load.encoding),), timeout=remaining)

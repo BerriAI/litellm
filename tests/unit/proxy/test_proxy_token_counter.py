@@ -11,6 +11,7 @@ import logging
 import re
 import socket
 import threading
+import time
 import traceback
 import uuid
 from collections.abc import Callable, Coroutine, Iterator, Mapping
@@ -4386,6 +4387,36 @@ async def test_bedrock_kimi_k3_count_names_its_tokenizer_and_retry_time_while_th
 
 
 @pytest.mark.asyncio
+async def test_bedrock_kimi_k3_count_that_finds_the_retry_due_counts_with_the_tokenizer_once_the_hub_is_back(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _framed_kimi(monkeypatch)
+    served: Final = _byte_level_kimi_k3(tmp_path / "tiktoken.model")
+    hub_back: Final = threading.Event()
+
+    def slow_hub_download() -> str:
+        if not hub_back.is_set():
+            raise OSError("the hub is unreachable")
+        time.sleep(0.2)
+        return served.ranks_path()
+
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "_KIMI_K3_ENCODINGS",
+        KimiK3Encodings(
+            source=KimiK3TokenizerSource(ranks_path=slow_hub_download, sha256=served.sha256),
+            retry_after_seconds=60,
+            clock=lambda: 61.0 if hub_back.is_set() else 0.0,
+        ),
+    )
+
+    while_down: Final = await _count_status("kimi")
+    hub_back.set()
+
+    assert (while_down, await _count_status("kimi")) == ("503", "local_estimate")
+
+
+@pytest.mark.asyncio
 async def test_bedrock_kimi_k3_count_says_still_loading_while_its_tokenizer_download_runs_past_the_wait(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -7438,6 +7469,63 @@ async def test_framed_count_answers_503_with_the_provider_message_naming_the_tok
     assert len(counter.calls) == 1
 
 
+_OPENAI_SHAPED_COUNT_ERROR: Final = json.dumps(
+    {"error": {"message": "model llama not found", "type": "invalid_request_error", "param": None, "code": None}}
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+@pytest.mark.parametrize(
+    "provider_message", [_OPENAI_SHAPED_COUNT_ERROR, f"Error code: 404 - {_OPENAI_SHAPED_COUNT_ERROR}"]
+)
+async def test_framed_responses_count_names_the_tokenizer_when_the_provider_error_is_json(
+    monkeypatch: pytest.MonkeyPatch, provider_message: str
+) -> None:
+    from litellm.proxy.response_api_endpoints.endpoints import responses_input_tokens
+
+    counter: Final = _ScriptedCounter(
+        {
+            "databricks-meta-llama-3-3-70b-instruct": TokenCountResponse(
+                total_tokens=0,
+                request_model="llama",
+                model_used="databricks-meta-llama-3-3-70b-instruct",
+                tokenizer_type="openai_api",
+                error=True,
+                error_message=provider_message,
+                status_code=404,
+            )
+        }
+    )
+
+    def scripted_counter(deployment: object, model: str) -> tuple[BaseTokenCounter, str, str]:
+        return counter, model, "databricks"
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _hub_llama_router({"token_count_framing": 100}))
+    monkeypatch.setattr("litellm.proxy.proxy_server._get_provider_token_counter", scripted_counter)
+    _stub_hub_downloads(monkeypatch, _hub_unreachable)
+
+    response: Final = await responses_input_tokens(
+        request=_json_request({"model": "llama", "input": "What is new?"}, "python-httpx/0.28.1"),
+        fastapi_response=Response(),
+        general_settings=MappingProxyType({}),
+        token_counter=count_request_tokens,
+        llm_router=litellm.proxy.proxy_server.llm_router,
+        user_api_key_dict=UserAPIKeyAuth(),
+        response_id_security=None,
+        managed_files=None,
+    )
+
+    assert isinstance(response, JSONResponse) and response.status_code == 503
+    assert re.fullmatch(
+        f"Could not load the Hugging Face tokenizer {re.escape(_LLAMA_3_HUB_TOKENIZER)} to count tokens for this "
+        r"model\. LiteLLM retries the load in \d+s\. To count every model with tiktoken without downloading, set "
+        r"litellm_settings\.disable_hf_tokenizer_download to true\. Counting with the provider failed with 404: "
+        r"model llama not found",
+        json.loads(bytes(response.body))["error"]["message"],
+    )
+
+
 async def _retry_in_from_the_count_error() -> str:
     with pytest.raises(ProxyException) as raised:
         await count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=True)
@@ -7569,6 +7657,106 @@ def test_framed_count_says_still_loading_before_the_provider_error_while_its_tok
         "litellm_settings.disable_hf_tokenizer_download to true. Counting with the provider failed with 400: "
         "scripted 400 for llama",
     )
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+def test_framed_claude_count_answers_the_provider_error_while_its_bundled_tokenizer_load_runs_past_the_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counter: Final = _ScriptedCounter({"claude-sonnet-5-5": _provider_reply("sonnet", status_code=400)})
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "claude",
+                    "litellm_params": {"model": "anthropic/claude-sonnet-5-5", "api_key": "sk-ant-test"},
+                    "model_info": {"token_count_framing": 100},
+                }
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server._get_provider_token_counter",
+        lambda deployment, model: (counter, model, "anthropic"),
+    )
+    load_started: Final = threading.Event()
+    load_released: Final = threading.Event()
+    bundled_load: Final = litellm.utils.tokenizer_dispatch.anthropic
+
+    def slow_bundled_load() -> HuggingFace:
+        load_started.set()
+        load_released.wait(10)
+        return bundled_load()
+
+    monkeypatch.setattr(litellm.utils.tokenizer_dispatch, "anthropic", slow_bundled_load)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+
+    async def count_past_the_wait(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        try:
+            count: Final = asyncio.ensure_future(_count_status("claude"))
+            await asyncio.to_thread(load_started.wait, 10)
+            loop.skip(31)
+            return (await asyncio.wait_for(count, 8),)
+        finally:
+            load_released.set()
+
+    assert _run_on_skippable_clock(count_past_the_wait) == ("400",)
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+def test_count_says_still_loading_while_its_hub_tokenizer_download_runs_past_the_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _hub_llama_router({}))
+    download_started: Final = threading.Event()
+    hub_released: Final = threading.Event()
+    _hanging_llama_download(monkeypatch, download_started, hub_released)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "TOKENIZER_LOAD_WAIT_SECONDS", 30)
+
+    async def count_past_the_wait(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        async def count_error() -> tuple[str, str]:
+            with pytest.raises(ProxyException) as raised:
+                await count_request_tokens(request=_LLAMA_COUNT_REQUEST, call_endpoint=True)
+            return raised.value.code, raised.value.message
+
+        try:
+            count: Final = asyncio.ensure_future(count_error())
+            await asyncio.to_thread(download_started.wait, 10)
+            loop.skip(31)
+            return await asyncio.wait_for(count, 8)
+        finally:
+            hub_released.set()
+
+    assert _run_on_skippable_clock(count_past_the_wait) == (
+        "503",
+        f"The Hugging Face tokenizer {_LLAMA_3_HUB_TOKENIZER} to count tokens for this model is still loading. Try "
+        "again in a few seconds. To count every model with tiktoken without downloading, set "
+        "litellm_settings.disable_hf_tokenizer_download to true",
+    )
+
+
+@pytest.mark.usefixtures("no_huggingface_tokenizer_loaded")
+def test_count_that_finds_the_hub_tokenizer_retry_due_loads_it_once_the_hub_is_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", _hub_llama_router({}))
+    monkeypatch.setattr(litellm.utils, "HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS", 0)
+    hub_back: Final = threading.Event()
+
+    def download(identifier: str) -> None:
+        if not hub_back.is_set():
+            _hub_unreachable(identifier)
+
+    _stub_hub_downloads(monkeypatch, download)
+
+    async def counts_across_the_retry(loop: _SkippableClockLoop) -> tuple[str, ...]:
+        while_unreachable: Final = await _count_status("llama")
+        hub_back.set()
+        loop.skip(2)
+        return while_unreachable, await _count_status("llama")
+
+    assert _run_on_skippable_clock(counts_across_the_retry) == ("503", "local_estimate")
 
 
 _CUSTOM_NAMED_LLAMA_BASE_MODEL: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"

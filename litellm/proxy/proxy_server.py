@@ -15814,8 +15814,8 @@ async def _tokenizer_within_load_wait(
     return outcome.tokenizer_at(loop.time())
 
 
-async def _tokenizer_or_provider_error(
-    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, provider_failure: ProviderCountFailure
+async def _tokenizer_loaded_within_wait(
+    model: str, custom_tokenizer: CustomHuggingfaceTokenizer | None, provider_failure: ProviderCountFailure | None
 ) -> SelectTokenizerResponse:
     tokenizer: Final = await _tokenizer_within_load_wait(
         model,
@@ -15823,16 +15823,16 @@ async def _tokenizer_or_provider_error(
         _tokenizer_loads_for_this_loop(_TOKENIZER_LOADS),
         partial(_model_tokenizer_load_slot, model, custom_tokenizer),
     )
-    kind: Final = None if custom_tokenizer is not None else litellm.utils.huggingface_tokenizer_kind(model)
+    hub_kind: Final = None if custom_tokenizer is not None else litellm.utils.huggingface_hub_tokenizer_kind(model)
     match tokenizer:
         case HuggingFaceTokenizerUnavailable():
             raise _tokenizer_unavailable_error(tokenizer, provider_failure)
-        case asyncio.TimeoutError() | _TokenizerLoadsBusy() if kind is not None:
-            raise _tokenizer_still_loading_error(HUGGINGFACE_TOKENIZER_NAMES[kind], provider_failure)
-        case BaseException() if not _answers_provider_error(tokenizer):
-            raise tokenizer.with_traceback(None)
-        case BaseException():
+        case asyncio.TimeoutError() | _TokenizerLoadsBusy() if hub_kind is not None:
+            raise _tokenizer_still_loading_error(HUGGINGFACE_TOKENIZER_NAMES[hub_kind], provider_failure)
+        case BaseException() if provider_failure is not None and _answers_provider_error(tokenizer):
             raise _provider_error_after_failed_estimate(provider_failure, type(tokenizer).__name__) from tokenizer
+        case BaseException():
+            raise tokenizer.with_traceback(None)
         case _:
             return tokenizer
 
@@ -15908,8 +15908,11 @@ async def _estimate_tokenizer(
     provider_failure: ProviderCountFailure | None,
     call_endpoint: bool,
 ) -> SelectTokenizerResponse:
-    if provider_failure is not None:
-        return await _tokenizer_or_provider_error(model, custom_tokenizer, provider_failure)
+    downloads_from_the_hub: Final = (
+        custom_tokenizer is None and litellm.utils.huggingface_hub_tokenizer_kind(model) is not None
+    )
+    if provider_failure is not None or (call_endpoint and downloads_from_the_hub):
+        return await _tokenizer_loaded_within_wait(model, custom_tokenizer, provider_failure)
     if not call_endpoint:
         return await asyncify(litellm.utils.select_tokenizer)(model=model, custom_tokenizer=custom_tokenizer)
     selected: Final = await asyncify(litellm.utils.select_tokenizer_or_unavailable)(
@@ -15961,7 +15964,7 @@ async def _kimi_k3_count(
     call_endpoint: bool,
     provider_failure: ProviderCountFailure | None,
 ) -> int | None:
-    encoding: Final = await _KIMI_K3_ENCODINGS.encoding(TOKENIZER_LOAD_WAIT_SECONDS)
+    encoding: Final = await _KIMI_K3_ENCODINGS.encoding(TOKENIZER_LOAD_WAIT_SECONDS, wait_for_due_retry=call_endpoint)
     if encoding is None and call_endpoint and _KIMI_K3_ENCODINGS.source.downloads_allowed():
         raise _tokenizer_unavailable_error(
             HuggingFaceTokenizerUnavailable(

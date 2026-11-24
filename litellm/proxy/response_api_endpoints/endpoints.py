@@ -34,7 +34,6 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.anthropic_interface.exceptions.exception_mapping_utils import AnthropicExceptionMapping
 from litellm.caching.dual_cache import DualCache
 from litellm.constants import (
     CALLER_SESSION_ID_METADATA_KEY,
@@ -95,7 +94,11 @@ from litellm.proxy.common_utils.openai_error_payload import (
     with_litellm_call_id,
 )
 from litellm.proxy.common_utils.token_count_log import answered_with_litellm_call_id, rejected_token_count
-from litellm.proxy.common_utils.token_count_settings import count_source_fields
+from litellm.proxy.common_utils.token_count_settings import (
+    count_source_fields,
+    provider_error_json,
+    provider_error_message,
+)
 from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
 from litellm.proxy.hooks.responses_id_security import ResponsesIDSecurity, decrypted_response_id
 from litellm.proxy.litellm_pre_call_utils import (
@@ -1719,14 +1722,6 @@ def _responses_invalid_request_response(
     return JSONResponse(status_code=400, content={"error": with_call_id({**body["error"]}, body_call_id)})
 
 
-class _ProviderErrorMessage(TypedDict):
-    message: ReadOnly[str]
-
-
-class _NestedProviderError(TypedDict):
-    error: ReadOnly[_ProviderErrorMessage]
-
-
 @with_config(ConfigDict(extra="ignore"))
 class _ProviderOpenAIErrorDetail(TypedDict):
     message: ReadOnly[str]
@@ -1742,30 +1737,15 @@ class _ProviderOpenAIError(TypedDict):
 
 _PROVIDER_COUNT_ERROR_TYPE: Final = "token_counting_error"
 _PROVIDER_OPENAI_ERROR: Final = TypeAdapter(_ProviderOpenAIError)
-_NESTED_PROVIDER_ERROR: Final = TypeAdapter(_NestedProviderError)
-
-
-def _provider_error_json(raw_message: str) -> str:
-    start: Final = raw_message.find("{")
-    return raw_message if start == -1 else raw_message[start:]
-
-
-def _provider_error_message(raw_message: str) -> str:
-    error_json: Final = _provider_error_json(raw_message)
-    try:
-        return _NESTED_PROVIDER_ERROR.validate_json(error_json)["error"]["message"]
-    except ValidationError:
-        flat_message: Final = AnthropicExceptionMapping.extract_error_message(error_json)
-        return raw_message if flat_message == error_json else flat_message
 
 
 def _provider_count_error_body(raw_message: str, status_code: int) -> _ResponsesApiErrorBody:
     try:
-        provider_error: Final = _PROVIDER_OPENAI_ERROR.validate_json(_provider_error_json(raw_message))["error"]
+        provider_error: Final = _PROVIDER_OPENAI_ERROR.validate_json(provider_error_json(raw_message))["error"]
     except ValidationError:
         return {
             "error": {
-                "message": _provider_error_message(raw_message),
+                "message": provider_error_message(raw_message),
                 "type": openai_error_type_for_status(status_code),
                 "param": None,
                 "code": None,

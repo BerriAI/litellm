@@ -1495,7 +1495,7 @@ def test_unloadable_hub_tokenizer_is_reported_unavailable_with_the_seconds_until
     )
 
 
-def test_unavailable_hub_tokenizer_says_still_loading_while_its_retry_runs_then_counts_once_loaded():
+def test_unavailable_hub_tokenizer_says_still_loading_while_another_counts_retry_runs_then_counts_once_loaded():
     model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
     clock: Final = MagicMock(return_value=100.0)
     retries: Final[list[Callable[[], None]]] = []
@@ -1504,6 +1504,7 @@ def test_unavailable_hub_tokenizer_says_still_loading_while_its_retry_runs_then_
     with patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=OSError("hub unreachable")):
         select_tokenizer_or_unavailable(model, outcomes=outcomes)
     clock.return_value = 100.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS + 30
+    _return_huggingface_tokenizer(model, outcomes)
     while_retrying: Final = tuple(select_tokenizer_or_unavailable(model, outcomes=outcomes) for _ in range(2))
     hub_tokenizer: Final = object()
     with patch("litellm.utils.tokenizer_dispatch.from_pretrained", return_value=hub_tokenizer):
@@ -1515,6 +1516,38 @@ def test_unavailable_hub_tokenizer_says_still_loading_while_its_retry_runs_then_
         == (HuggingFaceTokenizerUnavailable(tokenizer="Xenova/llama-3-tokenizer", retry_in_seconds=None),) * 2
     )
     assert after_the_retry == {"type": "huggingface_tokenizer", "tokenizer": hub_tokenizer}
+
+
+@pytest.mark.parametrize(
+    ("hub", "expected"),
+    [
+        (
+            {"return_value": sentinel.hub_tokenizer},
+            {"type": "huggingface_tokenizer", "tokenizer": sentinel.hub_tokenizer},
+        ),
+        (
+            {"side_effect": OSError("hub still unreachable")},
+            HuggingFaceTokenizerUnavailable(
+                tokenizer="Xenova/llama-3-tokenizer", retry_in_seconds=HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+            ),
+        ),
+    ],
+    ids=["hub back", "hub still down"],
+)
+def test_count_that_finds_the_retry_due_answers_what_the_retry_loaded(
+    hub: Mapping[str, object], expected: object
+):
+    model: Final = "databricks/databricks-meta-llama-3-3-70b-instruct"
+    clock: Final = MagicMock(return_value=100.0)
+    outcomes: Final = _HuggingFaceTokenizerLoadOutcomes(clock=clock, start_retry=lambda retry: None)
+
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", side_effect=OSError("hub unreachable")):
+        select_tokenizer_or_unavailable(model, outcomes=outcomes)
+    clock.return_value = 100.0 + HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS
+    with patch("litellm.utils.tokenizer_dispatch.from_pretrained", **hub):
+        at_the_retry: Final = select_tokenizer_or_unavailable(model, outcomes=outcomes)
+
+    assert at_the_retry == expected
 
 
 @pytest.mark.parametrize(
