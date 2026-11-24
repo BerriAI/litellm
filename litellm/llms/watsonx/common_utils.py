@@ -20,7 +20,7 @@ class WatsonXAIError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: dict[str, object] | httpx.Headers | None = None,
+        headers: dict | httpx.Headers | None = None,
     ):
         super().__init__(status_code=status_code, message=message, headers=headers)
 
@@ -295,9 +295,7 @@ class IBMWatsonXMixin:
 
         return url
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return WatsonXAIError(status_code=status_code, message=error_message, headers=headers)
 
     @staticmethod
