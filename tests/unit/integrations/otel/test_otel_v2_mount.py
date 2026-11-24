@@ -374,6 +374,70 @@ def _server_spans_by_route(exporter):
     return {(s.attributes or {})["http.route"]: s for s in exporter.get_finished_spans() if s.kind is SpanKind.SERVER}
 
 
+class _OuterTracer:
+    def __init__(self, app):
+        self.app = app
+        self.paths = []
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            self.paths.append(scope["path"])
+        await self.app(scope, receive, send)
+
+
+class _AppWrappedByAnotherTracer(fastapi.FastAPI):
+    def build_middleware_stack(self):
+        self.outer_tracer = _OuterTracer(super().build_middleware_stack())
+        return self.outer_tracer
+
+
+def _app_with_error_handler(monkeypatch, app, provider):
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    is_otel_v2_enabled.cache_clear()
+    handled = []
+
+    async def on_error(request, exc):
+        handled.append(request.url.path)
+        return fastapi.Response(status_code=500)
+
+    app.add_exception_handler(Exception, on_error)
+
+    @app.get("/ok")
+    async def ok():
+        return {"ok": True}
+
+    @app.get("/crash")
+    async def crash():
+        raise RuntimeError("unhandled")
+
+    instrument_fastapi_app(app, tracer_provider=provider)
+    return TestClient(app, raise_server_exceptions=False), handled
+
+
+def test_server_spans_survive_another_tracer_wrapping_the_middleware_stack(monkeypatch):
+    provider, exporter = _exporting_provider()
+    app = _AppWrappedByAnotherTracer()
+    client, handled = _app_with_error_handler(monkeypatch, app, provider)
+
+    assert client.get("/ok").status_code == 200
+    assert client.get("/crash").status_code == 500
+
+    assert set(_server_spans_by_route(exporter)) == {"/ok", "/crash"}
+    assert app.outer_tracer.paths == ["/ok", "/crash"]
+    assert handled == ["/crash"]
+
+
+def test_an_unhandled_error_is_recorded_on_the_server_span_of_an_unwrapped_app(monkeypatch):
+    provider, exporter = _exporting_provider()
+    client, handled = _app_with_error_handler(monkeypatch, fastapi.FastAPI(), provider)
+
+    assert client.get("/crash").status_code == 500
+
+    crashed = _server_spans_by_route(exporter)["/crash"]
+    assert [event.name for event in crashed.events] == ["exception"]
+    assert handled == ["/crash"]
+
+
 def test_every_traced_response_names_its_own_server_span(monkeypatch):
     provider, exporter = _exporting_provider()
     client = TestClient(_traced_app(monkeypatch, provider), raise_server_exceptions=False)

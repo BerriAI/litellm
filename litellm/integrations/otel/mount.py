@@ -170,6 +170,7 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
             get_global_response_propagator,
             set_global_response_propagator,  # pyright: ignore[reportUnknownVariableType]  # upstream leaves its parameter unannotated
         )
+        from starlette.middleware.errors import ServerErrorMiddleware
 
         from litellm.integrations.otel.trace_response import (
             UpstreamFirstTraceResponsePropagator,
@@ -182,6 +183,13 @@ def instrument_fastapi_app(app: "FastAPI", tracer_provider: "TracerProvider | No
             _passthrough_span_name_hook(span, scope)
 
         excluded_urls: Final = os.environ.get("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS", _DEFAULT_EXCLUDED_URLS)
+        plain_stack: Final = app.build_middleware_stack
+
+        def server_error_stack() -> "ASGIApp":
+            stack: Final = plain_stack()
+            return stack if isinstance(stack, ServerErrorMiddleware) else ServerErrorMiddleware(app=stack)
+
+        app.build_middleware_stack = server_error_stack  # rebind-ok: the instrumentation skips any other outermost type
         FastAPIInstrumentor.instrument_app(
             app,
             tracer_provider=tracer_provider,
