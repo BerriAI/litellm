@@ -1917,7 +1917,7 @@ class OpenAIFilesAPI(BaseLLM):
         openai_client: AsyncOpenAI,
     ) -> HttpxBinaryResponseContent:
         response: Final = await openai_client.files.content(**file_content_request)
-        return HttpxBinaryResponseContent(response=response.response)
+        return HttpxBinaryResponseContent(response=response.response, batch_input_format=BatchInputFormat.OPENAI)
 
     def file_content(
         self,
@@ -1957,7 +1957,7 @@ class OpenAIFilesAPI(BaseLLM):
             )
         response: Final = cast(OpenAI, openai_client).files.content(**file_content_request)
 
-        return HttpxBinaryResponseContent(response=response.response)
+        return HttpxBinaryResponseContent(response=response.response, batch_input_format=BatchInputFormat.OPENAI)
 
     async def afile_content_streaming(
         self,

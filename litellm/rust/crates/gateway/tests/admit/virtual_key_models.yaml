@@ -1,0 +1,85 @@
+# A virtual key with a model list is served natively for a model the proxy lets it call, and a
+# model it may not call goes to Python, which answers it 403 key_model_access_denied.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+      model_info:
+        id: claude-a
+        access_groups: [haiku]
+    - model_name: claude-down
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  router_settings:
+    model_group_alias:
+      sonnet: claude
+  general_settings:
+    master_key: gateway-key
+
+keys:
+  sk-claude: [claude]
+  sk-haiku: [haiku]
+  sk-sonnet: [sonnet]
+  sk-every: ["*"]
+  sk-proxy: [all-proxy-models]
+  sk-any: []
+
+requests:
+  - name: a model on the key's list
+    headers: {authorization: Bearer sk-claude}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a model off the key's list
+    headers: {authorization: Bearer sk-claude}
+    body: {model: claude-down, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: models
+
+  - name: an alias of a model on the key's list
+    headers: {authorization: Bearer sk-claude}
+    body: {model: sonnet, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: the model an alias on the key's list names
+    headers: {authorization: Bearer sk-sonnet}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: models
+
+  - name: a model in an access group on the key's list
+    headers: {authorization: Bearer sk-haiku}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a model outside the access group on the key's list
+    headers: {authorization: Bearer sk-haiku}
+    body: {model: claude-down, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: models
+
+  - name: a key reaching every model
+    headers: {authorization: Bearer sk-every}
+    body: {model: claude-down, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a key reaching every proxy model
+    headers: {authorization: Bearer sk-proxy}
+    body: {model: claude-down, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a key without a list
+    headers: {authorization: Bearer sk-any}
+    body: {model: claude-down, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: the master key
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-down, max_tokens: 16, messages: []}
+    expect: rust

@@ -233,10 +233,10 @@ def test_rest_tool_call_keeps_the_flattened_error_result_for_url_elicitation_req
 REDACTED: Final = "[KEYWORD_REDACTED]"
 
 
-def _addressed_elicitation(nonce: str, shown: str, hinted: str) -> dict[str, object]:
+def _addressed_elicitation(nonce: str, shown: str, hinted: str, verb: str = "Authorize") -> dict[str, object]:
     return {
         "code": -32042,
-        "message": f"Authorize to continue for {shown}.",
+        "message": f"{verb} to continue for {shown}.",
         "data": {
             "elicitations": [
                 {
@@ -277,11 +277,13 @@ def _output_guardrail(gateway: Gateway, keyword: str, action: Literal["MASK", "B
         assert deleted.status_code == 200, deleted.text
 
 
-def _addressed_tools(email: str, hinted: str | None = None) -> tuple[ScriptedTool, ScriptedTool]:
+def _addressed_tools(
+    email: str, hinted: str | None = None, verb: str = "Authorize"
+) -> tuple[ScriptedTool, ScriptedTool]:
     return (
         ScriptedTool(
             "consent",
-            lambda params: JsonRpcFailure(_addressed_elicitation(_nonce(params), email, hinted or email)),
+            lambda params: JsonRpcFailure(_addressed_elicitation(_nonce(params), email, hinted or email, verb)),
         ),
         ScriptedTool("whoami", lambda _: text_result(f"Signed in as {email}.")),
     )
@@ -987,10 +989,11 @@ def test_failure_log_of_an_elicitation_refused_by_an_output_guardrail_never_stor
 ) -> None:
     gateway: Final = hooked[0]
     email: Final = f"john.doe.{uuid.uuid4().hex[:8]}@example.com"
+    verb: Final = "Authorize" + uuid.uuid4().hex[:8]
     with (
-        _output_guardrail(gateway, "Authorize", "MASK"),
+        _output_guardrail(gateway, verb, "MASK"),
         _output_guardrail(gateway, email, "BLOCK"),
-        _granted(gateway, *_addressed_tools(email, "none")) as (upstream, alias, _, key),
+        _granted(gateway, *_addressed_tools(email, "none", verb)) as (upstream, alias, _, key),
     ):
         caller: Final = McpCaller(gateway, key, "mcp", alias)
         refused: Final = f"Error: Content blocked: keyword '{email}' detected"
@@ -1014,6 +1017,6 @@ def test_failure_log_of_an_elicitation_refused_by_an_output_guardrail_never_stor
             return_last_on_timeout=True,
         )
         rows: Final = [row for row in logged.json() if nonce in json.dumps(row)]
-        assert [(row["status"], "Authorize to continue for" in json.dumps(row)) for row in rows] == [
+        assert [(row["status"], f"{verb} to continue for" in json.dumps(row)) for row in rows] == [
             ("failure", False)
         ], rows

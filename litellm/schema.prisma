@@ -11,6 +11,7 @@ generator client {
 
 // Budget / Rate Limits for an org
 model LiteLLM_BudgetTable {
+  rollover_max_budget Float?
   apps LiteLLM_AppTable[] @relation("AppBudget")
   app_groups LiteLLM_AppGroupTable[] @relation("AppGroupBudget")
   app_group_org_budgets LiteLLM_AppGroupCustomerOrgTable[] @relation("AppGroupOrgBudget")
@@ -496,6 +497,8 @@ model LiteLLM_DeletedTeamTable {
 
 // Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
+    rollover_max_budget Float?
+    rollover_credit Float?
     budget_limits Json?
     verified_subjects LiteLLM_VerifiedSubject[]
 		user_id    String @id
@@ -1003,6 +1006,7 @@ model LiteLLM_UserNotifications {
 }
 
 model LiteLLM_TeamMembership {
+  rollover_credit Float?
   // Use this table to track the Internal User's Spend within a Team + Set Budgets, rpm limits for the user within the team
   user_id    String
   team_id    String
@@ -2355,6 +2359,16 @@ model LiteLLM_BackgroundInteractionSettlement {
 model LiteLLM_BackgroundResponseSettlement {
   response_id String   @id
   settled_at  DateTime @default(now())
+}
+
+model LiteLLM_BackgroundResponseCreator {
+  response_id           String    @id
+  upstream_url          String
+  create_context        Json
+  created_at            DateTime  @default(now())
+  poll_lease_expires_at DateTime?
+
+  @@index([created_at], map: "idx_background_response_creator_created_at")
 }
 
 model LiteLLM_Lens {

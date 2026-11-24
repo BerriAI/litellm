@@ -890,7 +890,7 @@ describe("TeamInfoView - member budget reset prompt", () => {
   });
 });
 
-describe("TeamInfoView - model settings", () => {
+describe("TeamInfoView - team settings", () => {
   const props = {
     teamId: "123",
     onUpdate: vi.fn(),
@@ -903,6 +903,39 @@ describe("TeamInfoView - model settings", () => {
 
   beforeEach(() => {
     seedDefaultMocks();
+  });
+
+  it("shows custom team metadata without opening the settings editor", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(
+      createMockTeamData({
+        caller_edit_access: {
+          kind: "team_admin",
+          editable_fields: ["metadata"],
+          proxy_controlled_metadata_keys: ["internal_setting"],
+        },
+        metadata: {
+          region: "us",
+          review_required: true,
+          tags: ["dev"],
+          require_trace_id: true,
+          internal_setting: "enabled",
+        },
+      }),
+    );
+    renderWithProviders(<TeamInfoView {...props} is_proxy_admin={false} userModels={[]} />);
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+
+    const settings = within(screen.getByRole("tabpanel", { name: "Settings" }));
+    expect(settings.getByRole("heading", { name: "Metadata" })).toBeVisible();
+    expect(settings.getByText("region")).toBeVisible();
+    expect(settings.getByText("us")).toBeVisible();
+    expect(settings.getByText("review_required")).toBeVisible();
+    expect(settings.getByText("true")).toBeVisible();
+    expect(settings.getByText("tags")).toBeVisible();
+    expect(settings.getByText('["dev"]')).toBeVisible();
+    expect(settings.queryByText("require_trace_id")).not.toBeInTheDocument();
+    expect(settings.queryByText("internal_setting")).not.toBeInTheDocument();
   });
 
   it("submits the prompt storage restriction in team metadata", async () => {
@@ -953,6 +986,23 @@ describe("TeamInfoView - model settings", () => {
     const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
     expect(payload).toMatchObject({ team_id: "123", max_budget: 100 });
     expect(payload).not.toHaveProperty("models");
+  });
+
+  it("submits a semantic cache threshold in team metadata", async () => {
+    const user = userEvent.setup({ delay: null });
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData({ metadata: { region: "us" } }));
+    renderWithProviders(<TeamInfoView {...props} userModels={[]} />);
+
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+    await user.click(await screen.findByRole("button", { name: /edit settings/i }));
+    fireEvent.change(await screen.findByLabelText("Similarity threshold"), { target: { value: "0" } });
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1].metadata).toMatchObject({
+      region: "us",
+      cache_params: { similarity_threshold: 0 },
+    });
   });
 
   it("discards a cancelled model clear but saves an intentional clear of unrestricted access", async () => {

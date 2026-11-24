@@ -707,7 +707,7 @@ def test_malformed_allowed_tools_tool_choice_is_rejected_unless_drop_params_true
 def test_remote_image_is_sent_as_bare_base64_with_its_detected_mime_type(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64",
-        lambda url: "data:image/webp;base64,ZmFrZQ==",
+        lambda url, max_bytes=None: "data:image/webp;base64,ZmFrZQ==",
     )
 
     prepared = transform_chat_to_interactions_request(

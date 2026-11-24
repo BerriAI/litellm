@@ -21,7 +21,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
     get_thought_signature_from_tool,
 )
-from litellm.llms.vertex_ai.gemini.transformation import GEMINI_FILES_API_URI_PREFIX
+from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIX
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     OPENAI_TO_GEMINI_TTS_VOICES,
     VertexGeminiConfig,

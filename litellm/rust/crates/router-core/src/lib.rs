@@ -271,6 +271,10 @@ pub struct FailureReport {
     pub count_only: bool,
     /// The model group the request was for, whose fallbacks keep a lone deployment cooling.
     pub requested_group: Option<String>,
+    /// The failed call was a batch, file, fine-tuning, vector store, or container call
+    /// ([`RouterRequest::batch_api`]), which the group's deployments serving only batches could
+    /// also have taken.
+    pub batch_api: bool,
     /// Cool down without counting the failure (`set_cooldown_deployments` alone).
     pub uncounted: bool,
     /// Also count the failed request against the deployment's per-minute requests
@@ -616,25 +620,29 @@ impl Router {
         } else {
             snapshot.settings.cooldown_time
         };
-        let shape = GroupShape {
-            single_deployment: snapshot
+        let has_fallback_group = snapshot
+            .settings
+            .dynamic
+            .fallback_targets(&[report
+                .requested_group
+                .as_deref()
+                .unwrap_or(&deployment.model_name)])
+            .is_some();
+        let shape = GroupShape::of_failure(report.batch_api, has_fallback_group, |batch_call| {
+            snapshot
                 .registry
                 .group(&deployment.model_name)
-                .is_some_and(|group| group.len() == 1)
-                && !report
-                    .requested_group
-                    .as_deref()
-                    .is_some_and(|group| routing_group_has_alternatives(&snapshot.registry, group))
-                && !team_model_has_alternatives(&snapshot.registry, &deployment),
-            has_fallback_group: snapshot
-                .settings
-                .dynamic
-                .fallback_targets(&[report
-                    .requested_group
-                    .as_deref()
-                    .unwrap_or(&deployment.model_name)])
-                .is_some(),
-        };
+                .is_some_and(|group| deployment.peers_in(&group, batch_call) == 1)
+                && !report.requested_group.as_deref().is_some_and(|group| {
+                    routing_group_has_alternatives(
+                        &snapshot.registry,
+                        group,
+                        &deployment,
+                        batch_call,
+                    )
+                })
+                && !team_model_has_alternatives(&snapshot.registry, &deployment, batch_call)
+        });
         health
             .cool_down_after(&snapshot.settings, &deployment, shape, failure, cooldown)
             .await

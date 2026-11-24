@@ -222,6 +222,42 @@ async def test_public_sdk_preserves_http_errors_response_and_timeout(
     executor.call.assert_called_once_with("embedding-alias", "travel policy", {})
 
 
+@pytest.mark.parametrize(
+    "status,error_type",
+    [
+        (400, litellm.BadRequestError),
+        (401, litellm.AuthenticationError),
+        (408, litellm.Timeout),
+        (503, litellm.ServiceUnavailableError),
+    ],
+)
+@pytest.mark.parametrize("asynchronous", [False, True])
+@pytest.mark.asyncio
+async def test_a_sidecar_error_keeps_the_sidecar_reply_body_on_the_raised_exception(
+    status: int, error_type: type[Exception], asynchronous: bool
+) -> None:
+    wire_body: Final = {"error": {"message": "Index is not queryable", "code": "index_not_ready"}}
+    transport: Final = httpx.MockTransport(lambda request: httpx.Response(status, json=wire_body))
+    kwargs: Final = {
+        **BASE_PARAMS,
+        "vector_store_id": "policy_index",
+        "query": "travel policy",
+        "custom_llm_provider": "mongodb",
+        "_direct_vector_store_embedding_executor": RecordingEmbeddingExecutor(),
+    }
+
+    async def search() -> VectorStoreSearchResponse:
+        if asynchronous:
+            return await litellm.vector_stores.asearch(**kwargs, client=AsyncHTTPHandler(transport=transport))
+        with httpx.Client(transport=transport) as sync_client:
+            return litellm.vector_stores.search(**kwargs, client=HTTPHandler(client=sync_client))
+
+    with pytest.raises(error_type) as caught:
+        await search()
+
+    assert caught.value.response.json() == wire_body
+
+
 QUERY_IMAGE: Final = {"type": "base64", "media_type": "image/jpeg", "data": "/9j/4AAQSkZJRg=="}
 
 

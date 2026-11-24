@@ -708,8 +708,8 @@ _SERVED_ANTHROPIC_BODY: Final = TypeAdapter(dict[str, object])
 _GOOGLE_USAGE_FIELDS: Final = frozenset(UsageMetadata.__annotations__)
 _REDACTED_RESULT: Final = TypeAdapter(object)
 _DECODED_BODY: Final = TypeAdapter(object)
-_LoggedResponse: Final = TypeVar("_LoggedResponse")
-_LoggedMessages: Final = TypeVar("_LoggedMessages")
+_LoggedResponse = TypeVar("_LoggedResponse")
+_LoggedMessages = TypeVar("_LoggedMessages")
 _GUARDRAIL_INFORMATION_KEY: Final = "standard_logging_guardrail_information"
 
 
@@ -2825,15 +2825,20 @@ class Logging(LiteLLMLoggingBaseClass):
     def _price_without_recording(
         self, result: object, *, cache_hit: bool | None, ignore_stamped_cost: bool
     ) -> UncachedPrice:
+        with self.pricing_left_unrecorded():
+            cost: Final = self.response_cost_calculator(
+                result=result, cache_hit=cache_hit, ignore_stamped_cost=ignore_stamped_cost
+            )
+            return UncachedPrice(cost=cost, cost_breakdown=self.cost_breakdown)
+
+    @contextmanager
+    def pricing_left_unrecorded(self) -> Generator[None]:
         previous_cost_breakdown: Final = self.cost_breakdown
         previous_billed_token_rates: Final = self.billed_token_rates
         debug_key: Final = "response_cost_failure_debug_information"
         previous_failure_debug_info: Final = self.model_call_details.get(debug_key)
         try:
-            cost: Final = self.response_cost_calculator(
-                result=result, cache_hit=cache_hit, ignore_stamped_cost=ignore_stamped_cost
-            )
-            return UncachedPrice(cost=cost, cost_breakdown=self.cost_breakdown)
+            yield
         finally:
             self.cost_breakdown = previous_cost_breakdown
             self.billed_token_rates = previous_billed_token_rates
@@ -3583,6 +3588,14 @@ class Logging(LiteLLMLoggingBaseClass):
         if self._async_success_scheduled:
             return False
         self._async_success_scheduled = True
+        return True
+
+    def claim_sync_success_log(self) -> bool:
+        if self.stream:
+            return True
+        if self._sync_success_scheduled:
+            return False
+        self._sync_success_scheduled = True
         return True
 
     def mark_logging_complete(
@@ -6040,10 +6053,8 @@ class Logging(LiteLLMLoggingBaseClass):
         if self._should_run_sync_callbacks_for_async_calls() is False:
             return
 
-        if not self.stream and self._sync_success_scheduled:
+        if not self.claim_sync_success_log():
             return
-        if not self.stream:
-            self._sync_success_scheduled = True
         executor.submit(
             self.success_handler,
             result,
@@ -6060,6 +6071,8 @@ class Logging(LiteLLMLoggingBaseClass):
         end_time: datetime.datetime,
         cache_hit: bool | None = None,
     ) -> None:
+        if not self.claim_sync_success_log():
+            return
         executor.submit(self.success_handler, result, start_time, end_time, cache_hit)
 
     def _model_call_details_with_request_messages(self) -> dict[str, object]:  # mutable-ok: loggers take a dict

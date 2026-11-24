@@ -9,7 +9,7 @@ Per OpenAPI spec (https://ai.google.dev/static/api/interactions.openapi.json):
 Requests use Api-Revision 2026-05-20 (`steps` schema).
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Protocol, TypeAlias
 
 import httpx
@@ -150,10 +150,10 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """Google AI Studio uses x-goog-api-key header for authentication."""
         headers = headers or {}
         headers["Content-Type"] = "application/json"
@@ -195,8 +195,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         input: InteractionInput | None,
         optional_params: InteractionsAPIOptionalRequestParams,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
+        headers: Mapping[str, str],
+    ) -> dict[str, object]:
         """
         Build request body per OpenAPI spec.
 
@@ -318,7 +318,7 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
     def transform_streaming_response(
         self,
         model: str | None,
-        parsed_chunk: dict,
+        parsed_chunk: Mapping[str, object],
         logging_obj: LiteLLMLoggingObj,
     ) -> InteractionsAPIStreamingResponse:
         """Parse streaming chunk."""
@@ -332,8 +332,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         interaction_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, str],
+    ) -> tuple[str, dict[str, object]]:
         """GET /{api_version}/interactions/{interaction_id}"""
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
@@ -368,8 +368,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         interaction_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, str],
+    ) -> tuple[str, dict[str, object]]:
         """DELETE /{api_version}/interactions/{interaction_id}"""
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")
@@ -395,8 +395,8 @@ class GoogleAIStudioInteractionsConfig(BaseInteractionsAPIConfig):
         interaction_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, str],
+    ) -> tuple[str, dict[str, object]]:
         """POST /{api_version}/interactions/{interaction_id}/cancel"""
         if not GeminiModelInfo.get_api_key(litellm_params.api_key):
             raise ValueError("Google API key is required")

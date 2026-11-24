@@ -13,6 +13,7 @@ from typing import Final, Literal, cast  # noqa: TID251  # preserve arbitrary ke
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.types.utils import (
     BAGGAGE_METADATA_KEYS_VAR,
@@ -282,11 +283,11 @@ def _same_callback_var_value(variable_name: str, first: str, second: str) -> boo
 
 def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str | None:
     """Validate every ``logging`` entry of a team/key metadata payload."""
-    if not metadata:
+    if not metadata or "logging" not in metadata:
         return None
-    entries: Final = object_sequence(metadata.get("logging"))
-    if entries is None:
-        return None
+    entries: Final = normalize_logging_entries(metadata.get("logging"))
+    if isinstance(entries, InvalidLoggingMetadata):
+        return entries.message
     entry_error: Final = next(
         (error for entry in entries if (error := _logging_entry_error(entry)) is not None),
         None,
@@ -466,6 +467,54 @@ def credential_is_defined(credential_name: str) -> bool:
 
 
 _STRING_KEYED: Final = TypeAdapter(Mapping[str, object])
+_LOGGING_JSON: Final = TypeAdapter(object)
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidLoggingMetadata:
+    message: str = "metadata.logging must be a list of objects or a JSON string encoding a list of objects"
+
+
+def normalize_logging_entries(
+    value: object, *, skip_invalid: bool = False
+) -> tuple[Mapping[str, object], ...] | InvalidLoggingMetadata:
+    if is_empty_logging(value):
+        return ()
+    try:
+        decoded: Final = _LOGGING_JSON.validate_json(value) if isinstance(value, str) else value
+    except ValidationError:
+        return InvalidLoggingMetadata()
+    items: Final = object_sequence(decoded) or ()
+    if not isinstance(decoded, list):
+        return InvalidLoggingMetadata()
+    if not all(isinstance(entry, Mapping) for entry in items):
+        if not skip_invalid:
+            return InvalidLoggingMetadata()
+        verbose_proxy_logger.warning("Ignoring invalid metadata.logging items, expected objects")
+    entries: Final = tuple(fields for item in items if (fields := _logging_object(item)) is not None)
+    valid_entries: Final = tuple(entry for entry in entries if not has_invalid_logging_callback_vars(entry))
+    if len(valid_entries) != len(entries):
+        if not skip_invalid:
+            return InvalidLoggingMetadata("metadata.logging callback_vars must be an object")
+        verbose_proxy_logger.warning("Ignoring invalid metadata.logging items, expected callback_vars to be an object")
+    return valid_entries
+
+
+def has_invalid_logging_callback_vars(entry: object) -> bool:
+    match entry:
+        case {"callback_vars": variables}:
+            return not isinstance(variables, Mapping)
+        case _:
+            return False
+
+
+def is_empty_logging(value: object) -> bool:
+    return value is None or value == "" or (isinstance(value, Mapping) and not value)
+
+
+def _logging_object(value: object) -> Mapping[str, object] | None:
+    fields: Final = string_keyed(value)
+    return fields if isinstance(value, Mapping) else None
 
 
 def string_keyed(value: object) -> Mapping[str, object]:
@@ -476,7 +525,8 @@ def string_keyed(value: object) -> Mapping[str, object]:
 
 
 def _logging_entries(metadata: object) -> object:
-    return string_keyed(metadata).get("logging")
+    value: Final = string_keyed(metadata).get("logging")
+    return normalize_logging_entries(value) if "logging" in string_keyed(metadata) else None
 
 
 def _entry_credential_name(entry: object) -> str | None:
@@ -508,10 +558,13 @@ def credential_reference_rejection(
     if requested_metadata is None:
         return None
     requested_logging: Final = _logging_entries(requested_metadata)
+    if isinstance(requested_logging, InvalidLoggingMetadata):
+        return CredentialReferenceRejection(400, requested_logging.message)
     requested_names: Final = logging_credential_names(requested_logging)
-    stored_names: Final = logging_credential_names(stored_logging)
+    normalized_stored: Final = () if isinstance(stored_logging, str) else normalize_logging_entries(stored_logging)
+    stored_names: Final = logging_credential_names(stored_logging) if isinstance(stored_logging, list) else ()
     references_involved: Final = bool(requested_names or stored_names)
-    if references_involved and not is_proxy_admin and requested_logging != stored_logging:
+    if references_involved and not is_proxy_admin and requested_logging != normalized_stored:
         return CredentialReferenceRejection(
             403,
             "Only proxy admins can change the logging entries of a key that uses litellm_credential_name",
