@@ -6491,7 +6491,9 @@ def completion(
         )
 
 
-_COMPLETION_PARAMETERS: Final = frozenset(inspect.signature(completion).parameters)
+_COMPLETION_PARAMETERS: Final = frozenset(
+    inspect.signature(completion).parameters  # pyright: ignore[reportUnknownArgumentType]  # bare list and dict params
+)
 
 
 def _is_not_resent_failure(error: BaseException) -> bool:
