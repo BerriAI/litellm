@@ -11,13 +11,14 @@ request carries one.
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable, Generator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Generator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar
 from itertools import product
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+import anyio.to_thread
 from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
 
 from litellm.integrations.langfuse.trace_id import resolve_trace_id
@@ -130,14 +131,12 @@ async def read_named_trace(scope: Scope, receive: Receive) -> tuple[int | None, 
     if _declared_length(headers) > _MAX_LOOKAHEAD_BYTES:
         return named_trace_id(headers, _NO_BODY), receive
     read: Final[list[Message]] = []  # mutable-ok: the request's own messages, read here and replayed to the app
+    held = 0  # rebind-ok: bytes read so far, counted once per message so a body sent in tiny pieces costs no rescans
     while True:
         message = await receive()
         read.append(message)
-        if (
-            message["type"] != "http.request"
-            or not message.get("more_body", False)
-            or _held(read) > _MAX_LOOKAHEAD_BYTES
-        ):
+        held += len(message.get("body", b""))
+        if message["type"] != "http.request" or not message.get("more_body", False) or held > _MAX_LOOKAHEAD_BYTES:
             break
     replayed: Final = iter(read)
 
@@ -145,14 +144,28 @@ async def read_named_trace(scope: Scope, receive: Receive) -> tuple[int | None, 
         message: Final = next(replayed, None)
         return message if message is not None else await receive()
 
-    if _held(read) > _MAX_LOOKAHEAD_BYTES:
+    if held > _MAX_LOOKAHEAD_BYTES:
         return named_trace_id(headers, _NO_BODY), _as_receive(replay)
-    body: Final = b"".join(message.get("body", b"") for message in read if message["type"] == "http.request")
+    sent: Final = b"".join(message.get("body", b"") for message in read if message["type"] == "http.request")
+    coding: Final = headers.get("content-encoding", "").strip().lower()
+    body: Final = await anyio.to_thread.run_sync(_decoded, coding, sent) if coding else sent
     return named_trace_id(headers, _json_object(body)), _as_receive(replay)
 
 
-def _held(read: Sequence[Message]) -> int:
-    return sum(len(message.get("body", b"")) for message in read)
+def _decoded(coding: str, sent: bytes) -> bytes:
+    """The JSON a compressed body carries, which the proxy only decodes further in. Decoding stops at
+    ``_MAX_LOOKAHEAD_BYTES``, and a body that is larger, damaged or in an unknown coding names no trace."""
+    from litellm.proxy.middleware.request_body_decompression_middleware import AVAILABLE_CODECS, CODING_ALIASES
+
+    codec: Final = AVAILABLE_CODECS.get(CODING_ALIASES.get(coding, coding))
+    if codec is None:
+        return b""
+    decompressor: Final = codec.new_decompressor()
+    try:
+        decoded: Final = decompressor.decompress(sent, max_length=_MAX_LOOKAHEAD_BYTES + 1)
+    except codec.error:
+        return b""
+    return decoded if decompressor.eof and len(decoded) <= _MAX_LOOKAHEAD_BYTES else b""
 
 
 def _declared_length(headers: Mapping[str, str]) -> int:
