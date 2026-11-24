@@ -18,10 +18,13 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.openai.openai import AllMessageValues
 from litellm.utils import is_prompt_caching_valid_prompt
 
-from ..common_utils import VertexAIError, get_vertex_base_url
+from ..common_utils import VertexAIError, get_supports_system_message, get_vertex_base_url
+from ..gemini.transformation import reject_system_message_videos
 from ..vertex_llm_base import VertexBase
 from .transformation import (
+    cached_block_ttl,
     cached_messages_end_on_supported_turn,
+    extract_ttl_from_cached_messages,
     reject_unusable_tool_call_arguments,
     separate_cached_messages,
     transform_openai_messages_to_gemini_context_caching,
@@ -30,6 +33,15 @@ from .transformation import (
 local_cache_obj: Final = Cache(type=LiteLLMCacheType.LOCAL)  # only used for calling 'get_cache_key' function
 
 MAX_PAGINATION_PAGES: Final = 100  # Reasonable upper bound for pagination
+
+
+def _cache_key(
+    cached_messages: Sequence[AllMessageValues], ttl: str | None, tools: object, tool_choice: object, model: str
+) -> str:
+    key: Final = local_cache_obj.get_cache_key(
+        messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
+    )
+    return key if ttl == extract_ttl_from_cached_messages(cached_messages) else f"{key}-{ttl}"
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -66,6 +78,17 @@ class _CreatedCachedContentRoot(RootModel[_CreatedCachedContent]):
 def _record_cache_creation_tokens(logging_obj: Logging, created: _CreatedCachedContent) -> None:
     tokens: Final = (created.get("usageMetadata") or {}).get("totalTokenCount") or 0
     logging_obj.vertex_ai_cache_creation_input_tokens = max(tokens, 0)  # rebind-ok: set provider count
+
+
+def _reject_system_message_videos_gemini_would_drop(
+    messages: Sequence[AllMessageValues],
+    supports_system_message: bool,
+    drop_params: bool,
+    model: str,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+) -> None:
+    if supports_system_message:
+        reject_system_message_videos(messages, drop_params, model, custom_llm_provider)
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -331,7 +354,12 @@ class ContextCachingEndpoints(VertexBase):
         if cached_content is not None:
             return messages, optional_params, cached_content
 
-        cached_messages, non_cached_messages = separate_cached_messages(messages=messages)
+        supports_system_message: Final = get_supports_system_message(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        cached_messages, non_cached_messages = separate_cached_messages(
+            messages=messages, supports_system_message=supports_system_message
+        )
 
         if len(cached_messages) == 0:
             return messages, optional_params, None
@@ -359,6 +387,9 @@ class ContextCachingEndpoints(VertexBase):
             )
             return messages, optional_params, None
         reject_unusable_tool_call_arguments(cached_messages, model, custom_llm_provider, drop_params)
+        _reject_system_message_videos_gemini_would_drop(
+            messages, supports_system_message, drop_params, model, custom_llm_provider
+        )
 
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)
@@ -395,9 +426,8 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key: Final = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
-        )
+        ttl: Final = cached_block_ttl(messages)
+        generated_cache_key: Final = _cache_key(cached_messages, ttl, tools, tool_choice, model)
         google_cache_name: Final = self.check_cache(
             cache_key=generated_cache_key,
             client=client,
@@ -419,6 +449,7 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
             messages=cached_messages,
             cache_key=generated_cache_key,
+            ttl=ttl,
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
@@ -492,7 +523,12 @@ class ContextCachingEndpoints(VertexBase):
         if cached_content is not None:
             return messages, optional_params, cached_content
 
-        cached_messages, non_cached_messages = separate_cached_messages(messages=messages)
+        supports_system_message: Final = get_supports_system_message(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+        cached_messages, non_cached_messages = separate_cached_messages(
+            messages=messages, supports_system_message=supports_system_message
+        )
 
         if len(cached_messages) == 0:
             return messages, optional_params, None
@@ -520,6 +556,9 @@ class ContextCachingEndpoints(VertexBase):
             )
             return messages, optional_params, None
         reject_unusable_tool_call_arguments(cached_messages, model, custom_llm_provider, drop_params)
+        _reject_system_message_videos_gemini_would_drop(
+            messages, supports_system_message, drop_params, model, custom_llm_provider
+        )
 
         tools: Final = optional_params.pop("tools", None)
         tool_choice: Final = optional_params.pop("tool_choice", None)
@@ -551,9 +590,8 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key: Final = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
-        )
+        ttl: Final = cached_block_ttl(messages)
+        generated_cache_key: Final = _cache_key(cached_messages, ttl, tools, tool_choice, model)
         google_cache_name: Final = await self.async_check_cache(
             cache_key=generated_cache_key,
             client=client,
@@ -576,6 +614,7 @@ class ContextCachingEndpoints(VertexBase):
             model=model,
             messages=cached_messages,
             cache_key=generated_cache_key,
+            ttl=ttl,
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,

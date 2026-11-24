@@ -12,13 +12,17 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     GatewayTools,
     allowed_tools_tool_choice_in_auto_mode,
     allowed_tools_tool_choice_in_effect,
+    HostedMcpCall,
     allowed_tools_tool_choice_with_builtin_as_function,
     allowed_tools_tool_choice_with_function,
     allowed_tools_tool_choice_with_gateway_tools_as_functions,
     drops_unsupported_allowed_tools_tool_choice,
+    hosted_tool_choice_type,
     is_allowed_tools_tool_choice,
     chat_allowed_tools_tool_choice,
     parse_allowed_tools_tool_choice,
+    raise_if_hosted_tool_choice_unsupported,
+    raise_if_mcp_tool_choice_forces_a_gateway_server,
     refuse_tool_calls_the_choice_excludes,
     tool_calls_the_choice_excludes,
     unenforced_allowed_tools_tool_choice,
@@ -589,3 +593,136 @@ def test_auto_mode_lifts_only_the_requirement_and_keeps_the_callers_layout_and_t
     tool_choice: object, expected: object
 ):
     assert allowed_tools_tool_choice_in_auto_mode(tool_choice) == expected
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "expected"),
+    [
+        ({"type": "web_search"}, "web_search"),
+        ({"type": "mcp", "server_label": "docs"}, "mcp"),
+        ({"type": "function", "function": {"name": "get_time"}}, None),
+        ({"type": "allowed_tools"}, None),
+        ("required", None),
+        (None, None),
+    ],
+)
+def test_hosted_tool_choice_type(tool_choice: Mapping[str, object] | str | None, expected: str | None):
+    assert hosted_tool_choice_type(tool_choice) == expected
+
+
+_FORWARDED_MCP: Final = HostedMcpCall(handling="forwards", sent_servers=frozenset(), drops_unsupported_params=False)
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure", "litellm_proxy"])
+def test_hosted_tool_choice_passes_where_the_responses_api_runs_the_tool(provider: str):
+    assert (
+        raise_if_hosted_tool_choice_unsupported(
+            {"type": "web_search"}, custom_llm_provider=provider, model="m", mcp=_FORWARDED_MCP
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("provider", ["anthropic", "bedrock", "gemini", "vertex_ai"])
+def test_hosted_tool_choice_is_a_400_where_the_provider_cannot_run_it(provider: str):
+    with pytest.raises(BadRequestError, match=r"tool_choice type 'file_search'.*only supported for") as exc:
+        raise_if_hosted_tool_choice_unsupported(
+            {"type": "file_search"},
+            custom_llm_provider=provider,
+            model="m",
+            mcp=HostedMcpCall(handling="drops", sent_servers=frozenset({"docs"}), drops_unsupported_params=True),
+        )
+    assert exc.value.status_code == 400
+    assert f"custom_llm_provider={provider}" in str(exc.value)
+    assert exc.value.message.endswith(
+        "drop_params does not drop it, since that would let the model answer without the tool the request required."
+    )
+
+
+_FORCED_DOCS: Final = {"type": "mcp", "server_label": "docs"}
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "route", "mcp", "cause"),
+    [
+        (
+            _FORCED_DOCS,
+            "gemini",
+            HostedMcpCall(handling="drops", sent_servers=frozenset({"docs"}), drops_unsupported_params=False),
+            "Set drop_params to true to drop this tool_choice together with the hosted MCP tool `docs`, or remove both.",
+        ),
+        (
+            _FORCED_DOCS,
+            "gemini",
+            HostedMcpCall(handling="drops", sent_servers=frozenset({"wiki"}), drops_unsupported_params=True),
+            "This request sends no hosted MCP tool with server_label `docs`. Send that tool or remove the tool_choice.",
+        ),
+        (
+            {"type": "mcp"},
+            "gemini",
+            HostedMcpCall(handling="drops", sent_servers=frozenset({"docs"}), drops_unsupported_params=True),
+            "This tool_choice names no server_label, so no hosted MCP tool drops with it. Remove the tool_choice.",
+        ),
+        (
+            _FORCED_DOCS,
+            "anthropic",
+            HostedMcpCall(handling="runs", sent_servers=frozenset({"docs"}), drops_unsupported_params=True),
+            "anthropic runs hosted MCP tools itself, but LiteLLM cannot force one there. "
+            "Remove the tool_choice or set it to 'auto'.",
+        ),
+        (
+            _FORCED_DOCS,
+            "openrouter",
+            HostedMcpCall(handling="forwards", sent_servers=frozenset({"docs"}), drops_unsupported_params=True),
+            "LiteLLM cannot force a hosted MCP tool on openrouter. Remove the tool_choice or set it to 'auto'.",
+        ),
+    ],
+    ids=["drop_params_off", "server_not_sent", "no_server_label", "provider_runs_mcp", "route_forwards_mcp"],
+)
+def test_the_mcp_tool_choice_400_names_only_the_cause_that_keeps_the_choice(
+    tool_choice: Mapping[str, object], route: str, mcp: HostedMcpCall, cause: str
+):
+    with pytest.raises(BadRequestError) as exc:
+        raise_if_hosted_tool_choice_unsupported(tool_choice, custom_llm_provider=route, model="m", mcp=mcp)
+    assert exc.value.status_code == 400
+    assert exc.value.message.split(f"got custom_llm_provider={route}. ", 1)[1] == cause
+
+
+def test_an_mcp_tool_choice_passes_where_drop_params_drops_it_with_the_sent_tool_it_names():
+    assert (
+        raise_if_hosted_tool_choice_unsupported(
+            _FORCED_DOCS,
+            custom_llm_provider="gemini",
+            model="m",
+            mcp=HostedMcpCall(handling="drops", sent_servers=frozenset({"docs"}), drops_unsupported_params=True),
+        )
+        is None
+    )
+
+
+def test_an_mcp_tool_choice_naming_a_gateway_server_says_to_force_its_function_instead():
+    gateway_tools: Final = ({"type": "mcp", "server_label": "docs", "server_url": "litellm_proxy/mcp/docs"},)
+
+    with pytest.raises(BadRequestError) as exc:
+        raise_if_mcp_tool_choice_forces_a_gateway_server(_FORCED_DOCS, gateway_tools, model="m")
+
+    assert exc.value.status_code == 400
+    assert exc.value.message.endswith(
+        "tool_choice type 'mcp' cannot force `docs`, which runs on the LiteLLM MCP gateway. The gateway sends its "
+        "tools to the model as functions, so force one by its function name or remove the tool_choice."
+    )
+    assert raise_if_mcp_tool_choice_forces_a_gateway_server(
+        {"type": "mcp", "server_label": "wiki"}, gateway_tools, model="m"
+    ) is None
+
+
+def test_a_function_tool_choice_is_not_a_hosted_tool_anywhere():
+    assert (
+        raise_if_hosted_tool_choice_unsupported(
+            {"type": "function", "function": {"name": "get_time"}},
+            custom_llm_provider="anthropic",
+            model="m",
+            mcp=HostedMcpCall(handling="runs", sent_servers=frozenset(), drops_unsupported_params=False),
+        )
+        is None
+    )
