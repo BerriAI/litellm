@@ -142,7 +142,8 @@ pub trait RouterCache: Send + Sync {
         ttl: Duration,
     ) -> impl Future<Output = Result<Option<f64>, Error>> + Send;
 
-    /// [`Self::add_limit_usage`] for every increment in one round trip, answering their totals.
+    /// Add every increment in one round trip, answering their totals. Redis batches refresh each
+    /// counter's TTL on every write; memory keeps the deadline from its first write.
     fn add_limit_usages(
         &self,
         increments: &[(LimitCounter, i64, Duration)],
