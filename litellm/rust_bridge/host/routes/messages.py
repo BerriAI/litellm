@@ -8,8 +8,10 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
+from litellm.llms.anthropic.common_utils import AnthropicError
+from litellm.llms.anthropic.pass_through.deferred_tools import unknown_deferred_tools_refusal
 from litellm.llms.anthropic.pass_through.utils import is_reasoning_auto_summary_enabled
 from litellm.rust_bridge import failures
 from litellm.rust_bridge.public_call import known_params, optional_str
@@ -96,7 +98,17 @@ def _additional_drop_params(kwargs: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(path for path in configured if isinstance(path, str))
 
 
+def _refuse_unknown_deferred_tools(kwargs: Mapping[str, object]) -> None:
+    """Python's handler refuses an unknown model_info.deferred_tools, or ignores it under drop_params."""
+    refusal: Final = unknown_deferred_tools_refusal(
+        kwargs.get("model_info"), drops_unsupported_params(kwargs.get("drop_params"))
+    )
+    if refusal is not None:
+        raise AnthropicError(status_code=400, message=refusal)
+
+
 def settings(kwargs: Mapping[str, object]) -> dict[str, object]:
+    _refuse_unknown_deferred_tools(kwargs)
     return asdict(
         MessagesSettings(
             drop_params=_drop_params(kwargs),

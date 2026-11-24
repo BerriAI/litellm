@@ -98,6 +98,18 @@ def _tool_reference_names(tool_result: Mapping[str, object]) -> Iterator[str]:
             yield name
 
 
+def _tool_result_texts(tool_result: Mapping[str, object]) -> Iterator[str]:
+    content: Final = tool_result.get("content")
+    if isinstance(content, str):
+        if content:
+            yield content
+        return
+    for block in _content_dicts(content):
+        text = block.get("text")
+        if block.get("type") == "text" and isinstance(text, str) and text:
+            yield text
+
+
 @dataclass(frozen=True, slots=True)
 class ToolSearchReplay:
     call_ids: frozenset[object]
@@ -112,12 +124,23 @@ class ToolSearchReplay:
             "status": "completed",
         }
 
+    def output_items(
+        self, tool_result: Mapping[str, object]
+    ) -> tuple[dict[str, object], ...]:  # mutable-ok: API input items
+        texts: Final = tuple(_tool_result_texts(tool_result))
+        if not texts:
+            return (self.output_item(tool_result),)
+        return (
+            self.output_item(tool_result),
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": text} for text in texts]},
+        )
+
     def output_item(self, tool_result: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: API input item
         return {
             "type": "tool_search_output",
             "call_id": tool_result.get("tool_use_id", ""),
             "execution": "client",
-            "status": "completed",
+            "status": "incomplete" if tool_result.get("is_error") is True else "completed",
             "tools": [self.loadable[name] for name in _tool_reference_names(tool_result) if name in self.loadable],
         }
 
@@ -436,7 +459,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             inner = block.get("content")
                             tool_result_block = cast(Mapping[str, object], block)  # cast-ok: TypedDict upcast
                             if tool_search is not None and tool_use_id in tool_search.call_ids:
-                                input_items.append(tool_search.output_item(tool_result_block))
+                                input_items.extend(tool_search.output_items(tool_result_block))
                                 continue
                             tool_breakpoint, covered_image_parts, later_image_parts = (
                                 self._tool_result_images_by_breakpoint(tool_result_block)

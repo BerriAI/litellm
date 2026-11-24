@@ -5,7 +5,7 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 
 import json
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, Dict, Final, List, Literal
 from unittest.mock import MagicMock
 
@@ -32,6 +32,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     encrypted_reasoning_signature,
 )
+from litellm.llms.anthropic.pass_through.deferred_tools import DeferredToolsMode
 from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
     LiteLLMAnthropicToResponsesAPIAdapter,
 )
@@ -2688,19 +2689,21 @@ _AFTER_LOAD: Final = [
 ]
 
 
-def _translated(messages: list, tools: list, deferred_tools: Literal["passthrough", "native", "drop"]) -> dict:
+def _translated(
+    messages: Sequence[Mapping[str, object]], tools: Sequence[Mapping[str, object]], deferred_tools: DeferredToolsMode
+) -> Mapping[str, object]:
     return _ADAPTER.translate_request(
         _make_request(messages=messages, tools=tools), include_encrypted_reasoning=False, deferred_tools=deferred_tools
     )
 
 
-def _rendered_tools(request: Mapping[str, object]) -> list:
+def _rendered_tools(request: Mapping[str, object]) -> Sequence[Mapping[str, object]]:
     return [tool for tool in request["tools"] if not tool.get("defer_loading")]
 
 
 class TestNativeDeferredTools:
     def test_search_tool_becomes_client_tool_search_and_deferred_tools_stay_deferred(self):
-        request = _translated(_FIRST_TURN, _claude_code_tools(), "native")
+        request: Final = _translated(_FIRST_TURN, _claude_code_tools(), "native")
 
         assert request["tools"] == [
             {
@@ -2727,7 +2730,7 @@ class TestNativeDeferredTools:
         ]
 
     def test_a_search_and_its_result_replay_as_tool_search_items(self):
-        request = _translated(_AFTER_LOAD, _claude_code_tools("mcp__weather__get_forecast"), "native")
+        request: Final = _translated(_AFTER_LOAD, _claude_code_tools("mcp__weather__get_forecast"), "native")
 
         assert request["input"][1:] == [
             {
@@ -2755,23 +2758,55 @@ class TestNativeDeferredTools:
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Tool loaded."}]},
         ]
 
+    @pytest.mark.parametrize(
+        "result_fields, status, texts",
+        [
+            (
+                {
+                    "content": [
+                        {"type": "tool_reference", "tool_name": "mcp__weather__get_forecast"},
+                        {"type": "text", "text": "Loaded 1 tool"},
+                    ]
+                },
+                "completed",
+                ["Loaded 1 tool"],
+            ),
+            ({"content": "No tools matched weather", "is_error": True}, "incomplete", ["No tools matched weather"]),
+        ],
+        ids=["text_next_to_references", "error_text"],
+    )
+    def test_a_search_result_keeps_its_text_and_error_state(
+        self, result_fields: Mapping[str, object], status: str, texts: Sequence[str]
+    ):
+        result: Final = {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_search", **result_fields}]}
+
+        request: Final = _translated(
+            [*_AFTER_LOAD[:2], result], _claude_code_tools("mcp__weather__get_forecast"), "native"
+        )
+
+        assert [(item["type"], item.get("status")) for item in request["input"][2:]] == [
+            ("tool_search_output", status),
+            ("message", None),
+        ]
+        assert request["input"][3]["content"] == [{"type": "input_text", "text": text} for text in texts]
+
     def test_loading_a_tool_keeps_the_earlier_prompt_as_a_prefix(self):
-        before_load = _translated(_AFTER_LOAD[:2], _claude_code_tools(), "native")
-        after_load = _translated(_AFTER_LOAD, _claude_code_tools("mcp__weather__get_forecast"), "native")
+        before_load: Final = _translated(_AFTER_LOAD[:2], _claude_code_tools(), "native")
+        after_load: Final = _translated(_AFTER_LOAD, _claude_code_tools("mcp__weather__get_forecast"), "native")
 
         assert _rendered_tools(after_load) == _rendered_tools(before_load)
         assert after_load["input"][: len(before_load["input"])] == before_load["input"]
 
     def test_without_the_search_tool_deferred_tools_load_up_front(self):
-        tools = [tool for tool in _claude_code_tools("mcp__weather__get_forecast") if tool["name"] != "ToolSearch"]
+        tools: Final = [tool for tool in _claude_code_tools("mcp__weather__get_forecast") if tool["name"] != "ToolSearch"]
 
-        request = _translated(_FIRST_TURN, tools, "native")
+        request: Final = _translated(_FIRST_TURN, tools, "native")
 
         assert [tool["type"] for tool in request["tools"]] == ["function", "function", "function"]
         assert not any("defer_loading" in tool for tool in request["tools"])
 
     def test_tool_search_call_comes_back_as_a_search_tool_use(self):
-        call = ResponseToolSearchCall(
+        call: Final = ResponseToolSearchCall(
             id="tsc_1",
             call_id="call_search",
             execution="client",
@@ -2795,7 +2830,7 @@ class TestNativeDeferredTools:
 
 class TestDropAndPassthroughDeferredTools:
     def test_drop_sends_every_tool_as_a_plain_function_and_the_search_as_a_function_call(self):
-        request = _translated(_AFTER_LOAD, _claude_code_tools("mcp__weather__get_forecast"), "drop")
+        request: Final = _translated(_AFTER_LOAD, _claude_code_tools("mcp__weather__get_forecast"), "drop")
 
         assert {tool["type"] for tool in request["tools"]} == {"function"}
         assert not any("defer_loading" in tool for tool in request["tools"])
@@ -2807,7 +2842,7 @@ class TestDropAndPassthroughDeferredTools:
         ]
 
     def test_passthrough_keeps_defer_loading_on_deferred_functions_only(self):
-        request = _translated(_FIRST_TURN, _claude_code_tools("mcp__weather__get_forecast"), "passthrough")
+        request: Final = _translated(_FIRST_TURN, _claude_code_tools("mcp__weather__get_forecast"), "passthrough")
 
         assert {tool["name"]: tool.get("defer_loading") for tool in request["tools"]} == {
             "Read": None,

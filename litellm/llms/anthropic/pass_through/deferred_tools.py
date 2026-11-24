@@ -6,6 +6,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 DeferredToolsMode: TypeAlias = Literal["passthrough", "native", "emulate", "drop"]
 CLAUDE_CODE_TOOL_SEARCH_NAME: Final = "ToolSearch"
+CLIENT_TOOL_SEARCH_PROVIDERS: Final = frozenset({"azure", "fireworks_ai", "openai"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,6 +40,13 @@ def unknown_deferred_tools_message(setting: UnknownDeferredTools) -> str:
         f"model_info.deferred_tools must be one of passthrough, native, emulate, drop, got {setting.value!r}. "
         "Fix the deployment, or set drop_params to send deferred tools the default drop way"
     )
+
+
+def unknown_deferred_tools_refusal(model_info: object, drop_params: bool) -> str | None:
+    setting: Final = deferred_tools_setting(model_info)
+    if not isinstance(setting, UnknownDeferredTools) or drop_params:
+        return None
+    return unknown_deferred_tools_message(setting)
 
 
 def is_deferred(tool: Mapping[str, object]) -> bool:

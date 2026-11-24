@@ -183,6 +183,11 @@ class DeferredToolEmulation:
         dispatcher: Final = cast(_Item, _dispatcher_tool())  # cast-ok: the dispatcher is a tool like the others
         return (*(tool for tool in tools if not is_deferred(tool)), dispatcher)
 
+    def tool_choice(self, tool_choice: _Item | None) -> _Item | None:
+        if tool_choice is None or tool_choice.get("name") not in self.deferred:
+            return tool_choice
+        return cast(_Item, {**tool_choice, "name": DISPATCHER_NAME})  # cast-ok: only the forced tool's name changed
+
     def messages(self, messages: Iterable[_Item]) -> tuple[_Item, ...]:
         return tuple(self._message(message) for message in messages)
 
@@ -221,11 +226,11 @@ class DeferredToolEmulation:
         if isinstance(result, Mapping):
             response: Final = cast(Mapping[str, object], result)  # cast-ok: a bridged Messages response
             return restored_response(response, self.deferred)
+        if isinstance(result, Iterator):
+            return _restored_sync_frames(cast(Iterator[bytes], result), self.deferred)  # cast-ok: a bridged SSE stream
         if isinstance(result, AsyncIterator):
             stream: Final = cast(AsyncIterator[bytes], result)  # cast-ok: a bridged SSE stream
             return DispatcherRestoringStream(stream, self.deferred)
-        if isinstance(result, Iterator):
-            return _restored_sync_frames(cast(Iterator[bytes], result), self.deferred)  # cast-ok: a bridged SSE stream
         return result
 
     async def _restored_later(self, pending: Awaitable[object]) -> object:

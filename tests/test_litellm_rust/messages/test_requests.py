@@ -136,6 +136,25 @@ async def test_unsupported_params_are_rejected_before_io_without_drop_params(
 
 
 @pytest.mark.asyncio
+async def test_an_unknown_deferred_tools_setting_is_rejected_before_io_without_drop_params(
+    server: RecordingServer,
+) -> None:
+    server.expected_requests = 0
+
+    with pytest.raises(litellm.BadRequestError, match="passthrough, native, emulate, drop"):
+        await call(server, model_info={"deferred_tools": "loaded"})
+
+    assert server.requests == []
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_deferred_tools_setting_is_ignored_under_drop_params(server: RecordingServer) -> None:
+    await call(server, model_info={"deferred_tools": "loaded"}, drop_params=True)
+
+    sent(server)
+
+
+@pytest.mark.asyncio
 async def test_optional_positional_body_parameters_reach_the_wire(server: RecordingServer) -> None:
     metadata: Final = {"user_id": "caller"}
     args: Final = (16, list(MESSAGES), "anthropic/claude-test", metadata, None, False, "Be brief", 0.25)

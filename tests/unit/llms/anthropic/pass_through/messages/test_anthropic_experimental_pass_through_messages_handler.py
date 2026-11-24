@@ -2438,22 +2438,45 @@ async def test_azure_messages_send_no_tool_search_unless_deferred_tools_is_nativ
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "model, model_info",
+    "model, model_info, extra, way_out",
     [
-        ("azure/gpt-6.1-sol", {"deferred_tools": "loaded"}),
-        ("bedrock/chat_completions/us.moonshotai.kimi-k3.1", {"deferred_tools": "native"}),
+        ("azure/gpt-6.1-sol", {"deferred_tools": "loaded"}, {}, "passthrough, native, emulate, drop"),
+        (
+            "bedrock/chat_completions/us.moonshotai.kimi-k3.1",
+            {"deferred_tools": "native"},
+            {},
+            "emulate, passthrough or drop",
+        ),
+        ("xai/grok-4.7", {"deferred_tools": "native"}, {}, "emulate, passthrough or drop"),
+        (
+            "azure/gpt-6.1-sol",
+            {"deferred_tools": "native"},
+            {"tool_choice": {"type": "tool", "name": "ToolSearch"}},
+            "Remove tool_choice, or set drop_params",
+        ),
+        ("anthropic/claude-opus-5-5", {"deferred_tools": "loaded"}, {}, "passthrough, native, emulate, drop"),
     ],
-    ids=["unknown_value", "native_without_a_responses_api"],
+    ids=[
+        "unknown_value",
+        "native_without_a_responses_api",
+        "native_without_client_tool_search",
+        "native_with_a_forced_tool_search",
+        "unknown_value_on_a_messages_api_route",
+    ],
 )
 async def test_unusable_deferred_tools_setting_is_a_400_before_any_upstream_call(
-    model: str, model_info: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+    model: str,
+    model_info: Mapping[str, object],
+    extra: Mapping[str, object],
+    way_out: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
     with respx.mock(assert_all_mocked=True, assert_all_called=False) as respx_mock:
         upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
-        with pytest.raises(litellm.BadRequestError, match="deferred_tools"):
+        with pytest.raises(litellm.BadRequestError, match=way_out):
             await litellm.anthropic.messages.acreate(
                 max_tokens=100,
                 messages=[{"role": "user", "content": "ping"}],
@@ -2464,9 +2487,48 @@ async def test_unusable_deferred_tools_setting_is_a_400_before_any_upstream_call
                 aws_region_name="us-east-1",
                 tools=_CLAUDE_CODE_TOOL_SEARCH_TOOLS,
                 model_info=model_info,
+                **extra,
             )
 
     assert upstream.calls.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_native_deferred_tools_keep_client_tool_search_when_chat_completions_is_forced_globally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "use_chat_completions_url_for_anthropic_messages", True)
+
+    assert await _azure_messages_tool_types({"deferred_tools": "native"}) == {"function", "tool_search"}
+
+
+@pytest.mark.asyncio
+async def test_native_deferred_tools_drop_a_forced_tool_search_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((openai.APIError, litellm.exceptions.APIConnectionError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+                model="azure/gpt-6.1-sol",
+                api_base="https://example-resource.openai.azure.com",
+                api_key="deployment-key",
+                api_version="2026-10-01-preview",
+                tools=_CLAUDE_CODE_TOOL_SEARCH_TOOLS,
+                tool_choice={"type": "tool", "name": "ToolSearch"},
+                model_info={"deferred_tools": "native"},
+                drop_params=True,
+            )
+
+    sent_tool_choices: Final = [json.loads(call.request.content).get("tool_choice") for call in upstream.calls]
+    assert sent_tool_choices
+    assert not any(sent_tool_choices)
 
 
 _FORECAST_TOOL: Final = {
@@ -2559,7 +2621,7 @@ def _dispatcher_chat_stream() -> bytes:
 
 
 async def _fireworks_kimi_messages(
-    model_info: Mapping[str, object], upstream_response: httpx.Response, *, stream: bool
+    model_info: Mapping[str, object], upstream_response: httpx.Response, *, stream: bool, **extra: object
 ) -> tuple[dict[str, object], object]:
     litellm.in_memory_llm_clients_cache.flush_cache()
     with respx.mock(assert_all_called=True) as respx_mock:
@@ -2572,6 +2634,7 @@ async def _fireworks_kimi_messages(
             tools=[*_CLAUDE_CODE_TOOL_SEARCH_TOOLS, _FORECAST_TOOL],
             model_info=model_info,
             stream=stream,
+            **extra,
         )
         body: Final = json.loads(upstream.calls[0].request.content)
     return body, response
@@ -2602,6 +2665,25 @@ async def test_emulated_deferred_tools_keep_one_tool_list_and_hand_claude_code_t
     }
     assert [block for block in response["content"] if block["type"] == "tool_use"] == [
         {"type": "tool_use", "id": "call_lyon", "name": "mcp__weather__get_forecast", "input": {"city": "Lyon"}}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_emulated_deferred_tools_force_a_forced_deferred_tool_through_the_dispatcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    body, response = await _fireworks_kimi_messages(
+        {"deferred_tools": "emulate"},
+        httpx.Response(200, json=_dispatcher_chat_completion()),
+        stream=False,
+        tool_choice={"type": "tool", "name": "mcp__weather__get_forecast"},
+    )
+
+    assert body["tool_choice"] == {"type": "function", "function": {"name": "CallLoadedTool"}}
+    assert [block["name"] for block in response["content"] if block["type"] == "tool_use"] == [
+        "mcp__weather__get_forecast"
     ]
 
 
