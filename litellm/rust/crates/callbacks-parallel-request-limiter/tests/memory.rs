@@ -6,7 +6,7 @@ use std::sync::{
 use litellm_callbacks::Abort;
 use litellm_callbacks_parallel_request_limiter::{
     Code, Descriptor, Engine, LimiterState, ParallelRequestLimiter, PostCallFailureFacts,
-    PreCallFacts, PriorResponse, Settings, SuccessFacts, TargetFacts,
+    PreCallFacts, PriorResponse, Settings, SocketClose, SuccessFacts, TargetFacts,
 };
 use litellm_redis_store::{
     Number,
@@ -308,4 +308,73 @@ async fn the_response_another_limiter_stored_is_kept_like_the_python_stash(
             .collect::<Vec<_>>(),
         keys
     );
+}
+
+fn key_tokens(store: &RateLimits) -> Option<f64> {
+    match count(store, "api_key", "k", Kind::Tokens)? {
+        Local::Number(number) => Some(number.as_f64()),
+        _ => None,
+    }
+}
+
+#[rstest]
+#[case::turns_finished(SocketClose::TurnsFinished, 0.0)]
+#[case::relay_failed(SocketClose::RelayFailed, 0.0)]
+#[case::refused_at_open(SocketClose::RefusedAtOpen, 0.0)]
+#[case::turn_unfinished(SocketClose::TurnUnfinished, 300.0)]
+#[case::settled_by_its_log(SocketClose::SettledByItsLog, 300.0)]
+#[tokio::test]
+async fn a_socket_left_to_its_close_holds_its_tpm_through_its_failure_callbacks_until_the_close_settles_it(
+    #[case] close: SocketClose,
+    #[case] settled: f64,
+) {
+    let (limiter, store, _) = limiter(true);
+    let socket = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1000, "max_parallel_requests": 1}}]),
+    );
+    let state = LimiterState::default();
+    assert_eq!(
+        limiter
+            .pre_call(&state, facts(socket.clone(), Some(300)), None)
+            .await,
+        None
+    );
+    limiter.leave_reservation_to_socket_close(&state);
+    limiter
+        .post_call_failure(&state, PostCallFailureFacts::default())
+        .await;
+    assert!(state.snapshot().parallel_slot.is_none());
+    assert_eq!(key_tokens(&store), Some(300.0));
+    limiter.close_socket(&state, close).await;
+    limiter.close_socket(&state, close).await;
+    assert_eq!(key_tokens(&store), Some(settled));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_socket_refund_after_its_window_rolled_over_leaves_the_next_window_alone() {
+    let (limiter, store, clock) = limiter(true);
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1000}}]),
+    );
+    let socket = LimiterState::default();
+    assert_eq!(
+        limiter
+            .pre_call(&socket, facts(tpm.clone(), Some(300)), None)
+            .await,
+        None
+    );
+    clock
+        .0
+        .store((1_700_000_061.0_f64).to_bits(), Ordering::SeqCst);
+    let next = LimiterState::default();
+    assert_eq!(
+        limiter.pre_call(&next, facts(tpm, Some(100)), None).await,
+        None
+    );
+    let before = key_tokens(&store);
+    limiter
+        .close_socket(&socket, SocketClose::RelayFailed)
+        .await;
+    assert_eq!(key_tokens(&store), before);
 }

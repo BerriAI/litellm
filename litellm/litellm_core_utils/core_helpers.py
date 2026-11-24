@@ -5,7 +5,7 @@ import json
 import logging
 import math
 import re
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from http import HTTPStatus
 from types import MappingProxyType
@@ -278,6 +278,7 @@ def http_error_status(value: object) -> int | None:
 
 
 _Shape = TypeVar("_Shape")
+_MetadataBucket = TypeVar("_MetadataBucket", bound=MutableMapping[str, object])
 
 
 @dataclass(frozen=True, slots=True)
@@ -662,7 +663,9 @@ def remove_items_at_indices(items: _PoppableByIndex | None, indices: Iterable[in
             items.pop(index)
 
 
-def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metadata: Mapping[str, object]) -> dict:
+def add_missing_spend_metadata_to_litellm_metadata(
+    litellm_metadata: _MetadataBucket, metadata: Mapping[str, object]
+) -> _MetadataBucket:
     """
     Helper to get litellm metadata for spend tracking
 
@@ -707,7 +710,7 @@ def max_retries_per_request_hit(kwargs: Mapping[str, object], num_retries_per_re
 
 
 def get_or_create_metadata_bucket(
-    request_data: dict,
+    request_data: MutableMapping[str, object],
 ) -> tuple[Literal["metadata", "litellm_metadata"], dict]:
     """
     Return the proxy-internal metadata bucket for this request, creating it if absent.
@@ -935,9 +938,9 @@ _get_parent_otel_span_from_kwargs = get_parent_otel_span_from_kwargs
 
 
 def process_response_headers(
-    response_headers: httpx.Headers | dict,
+    response_headers: httpx.Headers | Mapping[str, _Value],
     preserve_litellm_internal_headers: bool = False,
-) -> dict:
+) -> dict[str, _Value | str]:
     """
     `preserve_litellm_internal_headers` must only be True when the input is a
     LiteLLM-owned dict (e.g. `_hidden_params["additional_headers"]` that has
@@ -956,9 +959,9 @@ def process_response_headers(
     # must never be treated as LiteLLM-owned, regardless of caller intent.
     _preserve: Final = preserve_litellm_internal_headers and isinstance(response_headers, dict)
 
-    openai_headers: Final = {}
-    processed_headers: Final = {}
-    additional_headers = {}
+    openai_headers: Final[dict[str, _Value | str]] = {}
+    processed_headers: Final[dict[str, _Value | str]] = {}
+    additional_headers: dict[str, _Value | str] = {}
 
     for k, v in response_headers.items():
         if k in OPENAI_RESPONSE_HEADERS:  # return openai-compatible headers
@@ -1077,7 +1080,7 @@ def safe_deep_copy(data):
 
 
 def independent_snapshot(
-    data: dict,  # mutable-ok: caller-defined request-payload shape
+    data: dict[str, _Value],  # mutable-ok: caller-defined request-payload shape
 ) -> dict:  # mutable-ok: caller-defined request-payload shape
     """
     A copy of ``data`` whose top-level keys are deep-copied independently

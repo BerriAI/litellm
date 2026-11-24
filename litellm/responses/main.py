@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 import json
-from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import partial
@@ -3102,6 +3102,7 @@ async def _aresponses_websocket(
     turn_admission: "ResponsesWsTurnAdmission | None" = None,
     turn_usage_recorder: "ResponsesWsTurnUsageRecorder | None" = None,
     responses_ws_frame_guard: "ResponsesWsFrameGuard | None" = None,
+    responses_ws_on_unfinished_turn: Callable[[], None] | None = None,
     **kwargs,
 ) -> Exception | None:
     """
@@ -3197,5 +3198,6 @@ async def _aresponses_websocket(
         turn_admission=turn_admission,
         turn_usage_recorder=turn_usage_recorder,
         frame_guard=responses_ws_frame_guard,
+        on_unfinished_turn=responses_ws_on_unfinished_turn,
         **remaining_kwargs,
     )

@@ -782,7 +782,7 @@ class BaseEmailLogger(CustomLogger):
         custom_subject_key_created = os.getenv("EMAIL_SUBJECT_KEY_CREATED", None)
 
         # Track which custom values were not applied
-        unused_custom_fields = []
+        unused_custom_fields: list[str] = []
 
         # Function to safely get custom value or default
         def get_custom_or_default(

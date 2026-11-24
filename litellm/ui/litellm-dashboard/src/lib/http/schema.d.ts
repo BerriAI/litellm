@@ -33435,6 +33435,37 @@ export interface components {
              */
             mcp_disabled_capabilities?: ("prompts" | "resources")[] | null;
             /**
+             * Mcp Event Max Events Per Minute
+             * @description Events delivered to one caller per minute before events are dropped. Defaults to 600.
+             */
+            mcp_event_max_events_per_minute?: number | null;
+            /**
+             * Mcp Event Max Streams
+             * @description Concurrent events/stream requests one replica serves. Defaults to 512.
+             */
+            mcp_event_max_streams?: number | null;
+            /**
+             * Mcp Event Max Streams Per Caller
+             * @description Concurrent events/stream requests one caller may hold on a replica. Defaults to 50.
+             */
+            mcp_event_max_streams_per_caller?: number | null;
+            /**
+             * Mcp Event Max Subscriptions Per Key
+             * @description Webhook event subscriptions one caller may hold. Defaults to 50.
+             */
+            mcp_event_max_subscriptions_per_key?: number | null;
+            /**
+             * Mcp Events Enabled
+             * @description Serve the MCP Events extension (io.modelcontextprotocol/events) on /mcp for 2026-07-28 clients. Each upstream server also needs events.enabled. Off by default.
+             * @default false
+             */
+            mcp_events_enabled: boolean;
+            /**
+             * Mcp Events Public Base Url
+             * @description Public https base URL of this proxy that upstream MCP servers can reach, used to build the callback URL for webhook event subscriptions. Webhook delivery is unavailable while unset.
+             */
+            mcp_events_public_base_url?: string | null;
+            /**
              * Mcp Internal Ip Ranges
              * @description Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).
              */
@@ -38409,6 +38440,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[];
             /** Has User Credential */
@@ -41685,6 +41717,29 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /** MCPServerEventsConfig */
+        MCPServerEventsConfig: {
+            /**
+             * Allowed Events
+             * @description Event names or globs this server may publish. Omit for every event; set enabled false for none.
+             */
+            allowed_events?: string[] | null;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Legacy Webhook Id Equals Event Id
+             * @default false
+             */
+            legacy_webhook_id_equals_event_id: boolean;
+            /**
+             * Min Poll Interval Ms
+             * @default 1000
+             */
+            min_poll_interval_ms: number;
+        };
         /**
          * MCPServerUserCredentialListItem
          * @description One user's stored credential for an MCP server, as an admin sees it. Never carries the secret.
@@ -42933,6 +42988,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[] | null;
             /** Instructions */
@@ -54112,6 +54168,7 @@ export interface components {
             };
             /** Env Vars */
             env_vars?: components["schemas"]["MCPEnvVar"][] | null;
+            events?: components["schemas"]["MCPServerEventsConfig"] | null;
             /** Extra Headers */
             extra_headers?: string[] | null;
             /** Instructions */

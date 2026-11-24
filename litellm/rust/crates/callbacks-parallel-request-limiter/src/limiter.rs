@@ -483,6 +483,20 @@ fn windows_keyed(windows: &[WindowIdentity], key: &str) -> Vec<WindowIdentity> {
         .collect()
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString, strum::VariantArray)]
+pub enum SocketClose {
+    #[strum(serialize = "refused_at_open")]
+    RefusedAtOpen,
+    #[strum(serialize = "relay_failed")]
+    RelayFailed,
+    #[strum(serialize = "turns_finished")]
+    TurnsFinished,
+    #[strum(serialize = "turn_unfinished")]
+    TurnUnfinished,
+    #[strum(serialize = "settled_by_its_log")]
+    SettledByItsLog,
+}
+
 pub struct ParallelRequestLimiter {
     manifest: Manifest,
     engine: Engine,
@@ -752,6 +766,7 @@ impl ParallelRequestLimiter {
             stash.reserved_tokens = estimated;
             stash.ptu_reserved_tokens = ptu_estimated;
             stash.ptu_windows = windows_keyed(tpm_response.windows(), PTU_TEAM);
+            stash.reserved_windows = tpm_response.windows().to_vec();
             stash.reserved_model = facts.reserved_model.clone();
             stash.reserved_scopes = descriptors
                 .iter()
@@ -1043,14 +1058,10 @@ impl ParallelRequestLimiter {
             request: None,
         };
         self.release_stashed(state, false, ctx).await;
-        let enqueued = state.stash().batch_enqueued.take();
-        if let Some(reservation) = enqueued {
-            self.enqueued.refund(&reservation).await;
+        if state.stash().settles_at_close {
+            return;
         }
-        let refunds = std::mem::take(&mut state.stash().batch_tpd_refunds);
-        if !refunds.is_empty() {
-            self.engine.reservation_aware(&refunds).await;
-        }
+        self.refund_batch_reservations(state).await;
         let settlements = {
             let mut stash = state.stash();
             let (reserved, itpm, otpm) = Self::open_reservations(&stash);
@@ -1065,6 +1076,94 @@ impl ParallelRequestLimiter {
             );
             stash.mark_reservation_released();
             settlements
+        };
+        for settlement in settlements {
+            self.engine.settle(settlement, ctx, false).await;
+        }
+    }
+
+    async fn refund_batch_reservations(&self, state: &LimiterState) {
+        let enqueued = state.stash().batch_enqueued.take();
+        if let Some(reservation) = enqueued {
+            self.enqueued.refund(&reservation).await;
+        }
+        let refunds = std::mem::take(&mut state.stash().batch_tpd_refunds);
+        if !refunds.is_empty() {
+            self.engine.reservation_aware(&refunds).await;
+        }
+    }
+
+    /// Leaves a WebSocket's admission reservation to its close: the failure callbacks of the
+    /// socket's own call then only free its slot.
+    pub fn leave_reservation_to_socket_close(&self, state: &LimiterState) {
+        state.stash().settles_at_close = true;
+    }
+
+    /// Frees a closed WebSocket's slot and settles its admission reservation by how it closed.
+    /// A socket refused at open, or whose relay failed, relayed nothing and gives back everything.
+    /// One whose turns all finished gives back its token windows but keeps the team PTU estimate,
+    /// since its turns never charge the PTU share. A turn cut before its terminal event charged
+    /// nothing, so its socket keeps every reservation until the windows end. A socket that logs
+    /// as one row under its own call id is settled by that row.
+    pub async fn close_socket(&self, state: &LimiterState, close: SocketClose) {
+        if close == SocketClose::TurnUnfinished {
+            state.stash().mark_reservation_released();
+        }
+        self.release_on_disconnect(state).await;
+        match close {
+            SocketClose::RefusedAtOpen | SocketClose::RelayFailed => {
+                self.refund_socket_reservation(state, true).await;
+            }
+            SocketClose::TurnsFinished => self.refund_socket_reservation(state, false).await,
+            SocketClose::TurnUnfinished | SocketClose::SettledByItsLog => {}
+        }
+    }
+
+    async fn refund_socket_reservation(&self, state: &LimiterState, refunds_ptu: bool) {
+        if !state.stash().owned {
+            return;
+        }
+        self.refund_batch_reservations(state).await;
+        let settlements = {
+            let mut stash = state.stash();
+            let (reserved, itpm, otpm) = Self::open_reservations(&stash);
+            if reserved <= 0 && itpm <= 0 && otpm <= 0 {
+                return;
+            }
+            let targets: Vec<(String, String)> = stash
+                .reserved_scopes
+                .iter()
+                .filter(|scope| scope.0 != PTU_TEAM)
+                .cloned()
+                .collect();
+            let combined = if reserved > 0 {
+                self.engine.project_ops(
+                    &targets,
+                    &stash.reserved_scopes,
+                    0,
+                    reserved,
+                    &stash.reserved_windows,
+                )
+            } else {
+                Vec::new()
+            };
+            let ptu = if refunds_ptu && reserved > 0 {
+                self.ptu_failure_ops(&stash, 0, None)
+            } else {
+                Vec::new()
+            };
+            let settlements = vec![
+                Settlement::Project(combined),
+                self.io_failure_settlement(&stash.itpm, 0, itpm),
+                self.io_failure_settlement(&stash.otpm, 0, otpm),
+                Settlement::Project(ptu),
+            ];
+            stash.mark_reservation_released();
+            settlements
+        };
+        let ctx = Ctx {
+            policy: Policy::default(),
+            request: None,
         };
         for settlement in settlements {
             self.engine.settle(settlement, ctx, false).await;
@@ -1212,6 +1311,9 @@ impl ParallelRequestLimiter {
             }
         }
         self.release_stashed(state, true, ctx).await;
+        if state.stash().settles_at_close {
+            return;
+        }
         let settlements = {
             let mut stash = state.stash();
             let open = Self::open_reservations(&stash);

@@ -888,7 +888,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
     @with_service_target(RATE_LIMITS_TARGET)
     async def async_post_call_success_hook(
-        self, data: dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
+        self, data: dict[str, object], user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
     ) -> None:
         """
         Retrieve the key's remaining rate limits.

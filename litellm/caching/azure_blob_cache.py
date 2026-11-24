@@ -10,7 +10,7 @@ Has 4 methods:
 
 import asyncio
 import json
-from collections.abc import Iterable, Sequence
+from collections.abc import Coroutine, Iterable, Sequence
 from contextlib import suppress
 from typing import Final
 
@@ -111,7 +111,7 @@ class AzureBlobCache(BaseCache):
         await self.async_container_client.close()
 
     async def async_set_cache_pipeline(self, cache_list: Iterable[Sequence[object]], **kwargs: object) -> None:
-        tasks: Final = []
+        tasks: Final[list[Coroutine[object, object, None]]] = []
         for val in cache_list:
             tasks.append(self.async_set_cache(val[0], val[1], **kwargs))
         await asyncio.gather(*tasks)

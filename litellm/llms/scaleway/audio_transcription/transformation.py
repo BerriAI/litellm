@@ -45,10 +45,10 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
         for k, v in non_default_params.items():
             if k in supported_params:
@@ -66,7 +66,9 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> str:
         return join_api_base("https://api.scaleway.ai/v1" if api_base is None else api_base, "audio/transcriptions")
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return ScalewayAudioTranscriptionException(
             message=error_message,
             status_code=status_code,
@@ -75,14 +77,14 @@ class ScalewayAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, str],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         if api_key is None:
             api_key = get_secret_str("SCW_SECRET_KEY")
 
