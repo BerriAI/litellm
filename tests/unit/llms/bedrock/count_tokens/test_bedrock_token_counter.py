@@ -20,7 +20,12 @@ from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transform
 )
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat
+from litellm.types.utils import (
+    ChatCompletionMessageToolCall,
+    CountContextManagement,
+    Function,
+    TokenCountMessagesFormat,
+)
 
 RUNTIME_HOST: Final = "bedrock-runtime.us-east-1.amazonaws.com"
 MANTLE_HOST: Final = "bedrock-mantle.us-east-1.api.aws"
@@ -318,6 +323,35 @@ async def test_claude_count_sends_a_history_echoing_a_fallback_block_as_the_hist
     assert echoed.total_tokens == plain.total_tokens
     assert [request.content for request in echoed_bedrock.requests] == [
         request.content for request in plain_bedrock.requests
+    ]
+
+
+@pytest.mark.asyncio
+async def test_runtime_count_sends_a_response_tool_call_object_the_way_it_sends_its_dict() -> None:
+    tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_1", type="function", function=Function(name="get_weather", arguments="{}")
+    )
+    object_bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 12}), mantle=(200, {"input_tokens": 20}))
+    dict_bedrock: Final = _Bedrock(runtime=(200, {"inputTokens": 12}), mantle=(200, {"input_tokens": 20}))
+
+    counts: Final = [
+        await _counter(bedrock).count_tokens(
+            model_to_use="amazon.nova-pro-v1:0",
+            messages=[
+                {"role": "user", "content": "weather?"},
+                {"role": "assistant", "content": None, "tool_calls": [call]},
+            ],
+            contents=None,
+            deployment=DEPLOYMENT,
+            request_model="amazon.nova-pro-v1:0",
+            messages_format="openai",
+        )
+        for bedrock, call in ((object_bedrock, tool_call), (dict_bedrock, tool_call.model_dump()))
+    ]
+
+    assert [(count.error, count.total_tokens) for count in counts if count is not None] == [(False, 12), (False, 12)]
+    assert [request.content for request in object_bedrock.requests] == [
+        request.content for request in dict_bedrock.requests
     ]
 
 

@@ -276,7 +276,7 @@ class BedrockTokenCounter(BaseTokenCounter):
     ) -> TokenCountResponse | None:
         if not messages:
             return None
-        rendered_messages: Final = without_unrendered_blocks(_COUNTED_MESSAGES.validate_python(messages))
+        rendered_messages: Final = without_unrendered_blocks(messages)
 
         use_mantle: Final = model_to_use.startswith("bedrock_mantle/")
         counted_model: Final = model_to_use.removeprefix("bedrock_mantle/")
@@ -331,7 +331,7 @@ class BedrockTokenCounter(BaseTokenCounter):
             else await asyncify(messages_count_options)(
                 _claude_messages_translator(litellm_params),
                 counted_model,
-                rendered_messages,
+                _COUNTED_MESSAGES.validate_python(rendered_messages),
                 count_options,
                 litellm_params,
             )

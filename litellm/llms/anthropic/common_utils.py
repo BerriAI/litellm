@@ -312,15 +312,34 @@ def carries_fallback_block(messages: Sequence[object]) -> bool:
     return any(map(_is_fallback_block, chain.from_iterable(map(_message_blocks, messages))))
 
 
-def _without_unrendered_content(message: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
+def _without_unrendered_content(message: Mapping[str, object]) -> Mapping[str, object]:
+    blocks: Final = as_object_list(message.get("content"))
+    if blocks is None:
+        return message
+    return {**message, "content": [block for block in blocks if not is_unrendered_block(block)]}
+
+
+def without_unrendered_blocks(messages: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
+    return tuple(map(_without_unrendered_content, messages))
+
+
+def _as_sent_text(block: JsonValue) -> tuple[JsonValue, ...]:
+    if not is_unrendered_block(block):
+        return (block,)
+    fields: Final = as_str_mapping(block)
+    text: Final = None if fields is None else fields.get("text")
+    return ({"type": "text", "text": text},) if isinstance(text, str) and text else ()
+
+
+def _with_unrendered_text_content(message: Mapping[str, JsonValue]) -> Mapping[str, JsonValue]:
     content: Final = message.get("content")
     if not isinstance(content, list):
         return message
-    return {**message, "content": [block for block in content if not is_unrendered_block(block)]}
+    return {**message, "content": list(chain.from_iterable(map(_as_sent_text, content)))}
 
 
-def without_unrendered_blocks(messages: Sequence[Mapping[str, JsonValue]]) -> tuple[Mapping[str, JsonValue], ...]:
-    return tuple(map(_without_unrendered_content, messages))
+def with_unrendered_blocks_as_text(messages: Sequence[Mapping[str, JsonValue]]) -> tuple[Mapping[str, JsonValue], ...]:
+    return tuple(map(_with_unrendered_text_content, messages))
 
 
 def requires_native_compaction_beta(
