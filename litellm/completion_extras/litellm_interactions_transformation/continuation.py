@@ -4,7 +4,8 @@ from collections.abc import Callable, Mapping, Sequence
 from itertools import chain
 from typing import Final, TypeAlias
 
-from pydantic import JsonValue
+import httpx
+from pydantic import JsonValue, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_object_list
@@ -149,6 +150,33 @@ def initial_input_tokens_of(hops: Sequence[JsonMapping]) -> int | None:
     first_usage: Final = hops[0].get("usage")
     count: Final = first_usage.get("total_input_tokens") if isinstance(first_usage, dict) else None
     return count if len(hops) > 1 and isinstance(count, int) else None
+
+
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
+class RecitationBlockedHop(ValueError):
+    pass
+
+
+def _is_recitation_body(body: str) -> bool:
+    try:
+        parsed: Final = _JSON_VALUE.validate_json(body)
+    except ValueError:
+        return False
+    error: Final = parsed.get("error") if isinstance(parsed, dict) else None
+    return isinstance(error, dict) and error.get("code") == "recitation"
+
+
+def is_recitation_block(error: Exception) -> bool:
+    if isinstance(error, RecitationBlockedHop):
+        return True
+    if not isinstance(error, httpx.HTTPStatusError):
+        return False
+    try:
+        return _is_recitation_body(error.response.text)
+    except httpx.StreamError:
+        return False
 
 
 def log_failed_hop(error: Exception | str) -> None:

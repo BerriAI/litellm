@@ -42,6 +42,7 @@ from litellm.types.utils import (
 from .continuation import (
     client_continuation_token,
     initial_input_tokens_of,
+    is_recitation_block,
     log_failed_hop,
     merge_hop_usage,
     next_hop_body,
@@ -698,7 +699,11 @@ class InteractionsChatStreamingIterator:
         log_failed_hop(error)
         self._done = True
         self._hop_open = False
-        self._buffer.append(self._final_chunk("length", self._pending_hop_token))
+        self._buffer.append(
+            self._final_chunk("content_filter", None)
+            if is_recitation_block(error)
+            else self._final_chunk("length", self._pending_hop_token)
+        )
 
     def _end_stream(self) -> None:
         if self._hop_open:

@@ -94,8 +94,8 @@ def test_unary_bridge_resends_with_the_continuation_token_until_the_answer_compl
     assert token is None
     assert [(body.get("continuation_token"), body.get("previous_interaction_id")) for body in bodies] == [
         (None, None),
-        ("tok-1", None),
-        ("tok-2", None),
+        ("tok-1", "v1_first"),
+        ("tok-2", "v1_second"),
     ]
     assert bodies[1]["input"] == bodies[0]["input"]
     usage: Final = response.usage  # pyright: ignore[reportAttributeAccessIssue]  # ModelResponse sets usage dynamically
@@ -139,7 +139,7 @@ def test_answer_cut_off_by_the_output_cap_is_not_resent_and_hands_the_token_to_t
     assert len(bodies) == 1
 
 
-def test_caller_continuation_token_is_forwarded_to_interactions() -> None:
+def test_caller_continuation_token_is_forwarded_as_an_unstored_resume_since_chat_cannot_name_the_interaction() -> None:
     bodies, responder = _scripted((httpx.Response(200, json=_interaction("a time.", "completed")),))
     with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
         _ = litellm.completion(
@@ -152,7 +152,8 @@ def test_caller_continuation_token_is_forwarded_to_interactions() -> None:
             client=HTTPHandler(client=raw_client),
         )
 
-    assert bodies[0]["continuation_token"] == "tok-cap"
+    assert (bodies[0]["continuation_token"], bodies[0]["store"]) == ("tok-cap", False)
+    assert "previous_interaction_id" not in bodies[0]
 
 
 def _drain(stream: object) -> tuple[str, list[str], list[str], tuple[int, int] | None]:
@@ -196,7 +197,7 @@ def test_streaming_bridge_continues_into_the_next_hop_as_one_stream() -> None:
     assert finish_reasons == ["stop"]
     assert tokens == []
     assert usage == (20, 10)
-    assert (bodies[1]["continuation_token"], bodies[1].get("previous_interaction_id")) == ("tok-1", None)
+    assert (bodies[1]["continuation_token"], bodies[1].get("previous_interaction_id")) == ("tok-1", "v1_first")
     assert bodies[1]["input"] == bodies[0]["input"]
 
 
@@ -303,8 +304,8 @@ def test_streaming_bridge_raises_when_a_hop_fails_after_it_delivered_text_so_the
 
 @pytest.mark.parametrize(
     ("store", "resends_input", "previous_interaction_id"),
-    ((True, False, "v1_first"), (None, True, None)),
-    ids=("stored", "unstored"),
+    ((True, False, "v1_first"), (None, False, "v1_first"), (False, True, None)),
+    ids=("stored", "store left to Google's default", "unstored"),
 )
 def test_vertex_resume_sends_the_input_again_unless_a_stored_interaction_holds_it(
     store: bool | None,
@@ -915,3 +916,51 @@ def test_plain_answer_keeps_the_empty_grounding_lists_generate_content_returns()
 
     assert isinstance(response, ModelResponse)
     assert (response.vertex_ai_grounding_metadata, response.vertex_ai_url_context_metadata) == ([], [])
+
+
+_RECITATION_BLOCK: Final = {"error": {"message": "Request blocked due to recitation.", "code": "recitation"}}
+
+
+@pytest.mark.parametrize("stream", (False, True), ids=("unary", "stream"))
+def test_continued_answer_blocked_for_recitation_ends_as_content_filter_with_no_token_to_resume(stream: bool) -> None:
+    first: Final = _interaction("Once ", "requires_continuation", "tok-1")
+    _, responder = _scripted(
+        ((_sse(first) if stream else httpx.Response(200, json=first)), httpx.Response(400, json=_RECITATION_BLOCK))
+    )
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        response: Final = litellm.completion(
+            model=MODEL,
+            max_tokens=1000,
+            messages=list(MESSAGES),
+            stream=stream,
+            api_key="k",
+            api_base=API_BASE,
+            client=HTTPHandler(client=raw_client),
+        )
+        if stream:
+            text, finish_reasons, tokens, _ = _drain(response)
+        else:
+            choice, token = _message_of(response)
+            text, finish_reasons, tokens = choice.message.content, [choice.finish_reason], [token] if token else []
+
+    assert text == "Once "
+    assert finish_reasons == ["content_filter"]
+    assert tokens == []
+
+
+def test_stream_flag_nested_in_extra_body_does_not_turn_a_unary_request_into_a_provider_stream() -> None:
+    bodies, responder = _scripted((httpx.Response(200, json=_interaction("Once upon a time.", "completed")),))
+    with httpx.Client(transport=httpx.MockTransport(responder)) as raw_client:
+        response: Final = litellm.completion(
+            model=MODEL,
+            messages=list(MESSAGES),
+            stream=False,
+            extra_body={"stream": True},
+            api_key="k",
+            api_base=API_BASE,
+            client=HTTPHandler(client=raw_client),
+        )
+
+    choice, _ = _message_of(response)
+    assert choice.message.content == "Once upon a time."
+    assert "stream" not in bodies[0]

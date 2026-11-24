@@ -1091,7 +1091,13 @@ def transform_chat_to_interactions_request(
     )
     explicit_store: Final = normalized_params.get("store")
     passthrough_entries: Final = {
-        "store": explicit_store if explicit_store is not None else False,
+        **(
+            {"store": explicit_store}
+            if explicit_store is not None
+            else {"store": False}
+            if normalized_params.get("continuation_token")
+            else {}
+        ),
         **{
             key: normalized_params[key]
             for key in (
@@ -1107,7 +1113,7 @@ def transform_chat_to_interactions_request(
         **({"tools": tools} if tools is not None else {}),
         **({"response_format": response_format} if response_format is not None else {}),
         **({"generation_config": generation_config} if generation_config is not None else {}),
-        **({"stream": True} if stream or normalized_params.get("stream") is True else {}),
+        **({"stream": True} if stream else {}),
         **passthrough_entries,
     }
 

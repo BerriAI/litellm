@@ -31,7 +31,6 @@ def test_gemini_chat_completions_pinned_to_interactions_bills_thought_tokens_on_
         assert json.loads(request.body) == {
             "model": "gemini-3-flash-preview",
             "input": [{"type": "user_input", "content": [{"type": "text", "text": "solve puzzle"}]}],
-            "store": False,
         }
         return Reply(
             body=json.dumps(
@@ -76,7 +75,6 @@ def test_gemini_chat_completions_pinned_to_interactions_bills_thought_tokens_on_
             {
                 "model": model,
                 "messages": [{"role": "user", "content": "solve puzzle"}],
-                "store": False,
             },
             key=key,
         )
@@ -106,7 +104,6 @@ def test_vertex_chat_completions_pinned_to_interactions_authenticates_and_hits_g
         assert json.loads(request.body) == {
             "model": "gemini-3-flash-preview",
             "input": [{"type": "user_input", "content": [{"type": "text", "text": "hello vertex"}]}],
-            "store": False,
         }
         return Reply(
             body=json.dumps(

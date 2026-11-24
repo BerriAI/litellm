@@ -23,7 +23,7 @@ class _MovieReview(BaseModel):
     rating: float
 
 
-def test_basic_multiturn_and_system_instruction_is_not_stored_by_default() -> None:
+def test_basic_multiturn_and_system_instruction_leave_store_to_googles_default() -> None:
     prepared: Final = transform_chat_to_interactions_request(
         messages=[
             {"role": "system", "content": "Be concise."},
@@ -47,7 +47,6 @@ def test_basic_multiturn_and_system_instruction_is_not_stored_by_default() -> No
         {"type": "user_input", "content": [{"type": "text", "text": "2+2?"}]},
     ]
     assert prepared.optional_params == {
-        "store": False,
         "system_instruction": "Be concise.",
         "generation_config": {
             "temperature": 0.4,
@@ -167,7 +166,6 @@ def test_structured_output_pydantic_model_and_thinking_config() -> None:
     )
 
     assert prepared.optional_params == {
-        "store": False,
         "tools": [{"type": "google_search"}],
         "response_format": {
             "type": "text",
@@ -328,7 +326,7 @@ def test_unsupported_params_raise_by_default_and_drop_when_requested(
         optional_params=bad_param,
         litellm_params={"drop_params": True},
     )
-    assert dropped.optional_params == {"store": False}
+    assert dropped.optional_params == {}
 
 
 def _wrap_layer(inner: object, _: int) -> object:
@@ -525,7 +523,6 @@ def test_drop_params_omits_unsupported_sampling_params_and_normalizes_builtin_to
         litellm_params={"drop_params": True},
     )
     assert dropped.optional_params == {
-        "store": False,
         "generation_config": {"seed": 42},
         "tools": [
             {"type": "google_search"},
@@ -546,7 +543,7 @@ def test_drop_params_omits_unsupported_sampling_params_and_normalizes_builtin_to
     assert getattr(vertex_exc.value, "llm_provider", None) == "vertex_ai"
 
 
-def test_chat_turns_are_not_stored_unless_the_caller_asks() -> None:
+def test_store_is_only_sent_when_the_caller_sets_it() -> None:
     encoded_id: Final = encode_tool_call_id_with_signature("call_ls", "sig_vtx_1")
     mixed_messages: Final = [
         {"role": "user", "content": "Inspect repo"},
@@ -617,9 +614,9 @@ def test_chat_turns_are_not_stored_unless_the_caller_asks() -> None:
         custom_llm_provider="vertex_ai",
     )
 
-    assert vertex_turn1.optional_params == {"store": False}
-    assert vertex_tool_only.optional_params == {"store": False}
-    assert vertex_mixed.optional_params == {"store": False}
+    assert vertex_turn1.optional_params == {}
+    assert vertex_tool_only.optional_params == {}
+    assert vertex_mixed.optional_params == {}
     assert [step["type"] for step in vertex_mixed.input_steps if isinstance(step, dict)] == [
         "user_input",
         "thought",
@@ -627,7 +624,7 @@ def test_chat_turns_are_not_stored_unless_the_caller_asks() -> None:
         "function_call",
         "function_result",
     ]
-    assert gemini_mixed.optional_params == {"store": False}
+    assert gemini_mixed.optional_params == {}
     assert vertex_explicit_store_true.optional_params == {"store": True}
 
 
@@ -669,7 +666,7 @@ def test_openai_allowed_tools_tool_choice_translates_mode_and_names_for_interact
         optional_params={"tool_choice": raw_choice},
         litellm_params={},
     )
-    assert prepared.optional_params == {"store": False, "generation_config": {"tool_choice": expected_choice}}
+    assert prepared.optional_params == {"generation_config": {"tool_choice": expected_choice}}
 
 
 @pytest.mark.parametrize(
@@ -713,7 +710,7 @@ def test_malformed_allowed_tools_tool_choice_is_rejected_unless_drop_params_true
         optional_params={"tool_choice": bad_choice},
         litellm_params={"drop_params": True},
     )
-    assert dropped.optional_params == {"store": False}
+    assert dropped.optional_params == {}
 
 
 def test_remote_image_is_sent_as_bare_base64_with_its_detected_mime_type(monkeypatch: pytest.MonkeyPatch) -> None:

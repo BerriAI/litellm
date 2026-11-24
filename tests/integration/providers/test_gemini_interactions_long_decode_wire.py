@@ -35,7 +35,6 @@ _SECOND_HOP: Final = {
 _FIRST_REQUEST: Final = {
     "model": "gemini-4-neon",
     "input": [{"type": "user_input", "content": [{"type": "text", "text": "write it all"}]}],
-    "store": False,
     "generation_config": {"max_output_tokens": 1000},
 }
 
@@ -82,7 +81,11 @@ def test_gemini_4_chat_answer_google_ends_early_is_continued_into_one_answer_bil
         assert response.status_code == 200, response.text
         first_body, second_body = (json.loads(wire.received.get(timeout=5).body) for _ in range(2))
         assert first_body == _FIRST_REQUEST
-        assert second_body == {**first_body, "continuation_token": "token-after-first-hop"}
+        assert second_body == {
+            **first_body,
+            "continuation_token": "token-after-first-hop",
+            "previous_interaction_id": answer_id,
+        }
         payload: Final = _JSON_OBJECT.validate_json(response.content)
         choice: Final = payload["choices"][0]  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
         assert choice["message"]["content"] == "The first half, then the second half."  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
@@ -177,7 +180,11 @@ def test_gemini_4_chat_stream_google_ends_early_is_continued_under_one_id_with_s
         assert usages[-1]["completion_tokens"] == 150  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
         first_body, second_body = (json.loads(wire.received.get(timeout=5).body) for _ in range(2))
         assert first_body == {**_FIRST_REQUEST, "stream": True}
-        assert second_body == {**first_body, "continuation_token": "token-after-first-hop"}
+        assert second_body == {
+            **first_body,
+            "continuation_token": "token-after-first-hop",
+            "previous_interaction_id": answer_id,
+        }
         assert wire.received.empty()
 
 
@@ -234,7 +241,11 @@ def test_gemini_4_chat_answer_continued_across_hops_cites_each_source_at_its_joi
         assert response.status_code == 200, response.text
         first_body, second_body = (json.loads(wire.received.get(timeout=5).body) for _ in range(2))
         assert first_body == _FIRST_REQUEST
-        assert second_body == {**first_body, "continuation_token": "token-after-first-hop"}
+        assert second_body == {
+            **first_body,
+            "continuation_token": "token-after-first-hop",
+            "previous_interaction_id": hops[0]["id"],
+        }
         payload: Final = _JSON_OBJECT.validate_json(response.content)
         message: Final = payload["choices"][0]["message"]  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys
         answer: Final = message["content"]  # pyright: ignore[reportIndexIssue, reportOptionalSubscript, reportCallIssue, reportArgumentType]  # JSON payload indexed by fixed keys

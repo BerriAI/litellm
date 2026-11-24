@@ -42,7 +42,9 @@ from litellm.types.utils import Choices, LlmProviders, Message, ModelResponse, U
 
 from .continuation import (
     JsonMapping,
+    RecitationBlockedHop,
     initial_input_tokens_of,
+    is_recitation_block,
     log_failed_hop,
     merge_hops,
     next_hop_body,
@@ -532,13 +534,21 @@ def _checked_hop_response(response: httpx.Response, custom_llm_provider: str) ->
     if response.status_code >= 400:
         with contextlib.suppress(httpx.HTTPError):
             _ = response.read()
-        raise _build_provider_http_error(
-            custom_llm_provider,
-            response.status_code,
-            _safe_response_text(response, f"HTTP {response.status_code}"),
-            dict(response.headers),
-        )
+        error_text: Final = _safe_response_text(response, f"HTTP {response.status_code}")
+        if _is_recitation_block(error_text):
+            raise RecitationBlockedHop(error_text)
+        raise _build_provider_http_error(custom_llm_provider, response.status_code, error_text, dict(response.headers))
     return response
+
+
+def _blocked_for_recitation(answer_so_far: ModelResponse) -> ModelResponse:
+    choice: Final = answer_so_far.choices[0]
+    choice.finish_reason = "content_filter"
+    kept: Final = _OBJECT_MAP.validate_python(choice.message.provider_specific_fields or {})
+    choice.message.provider_specific_fields = {
+        str(key): kept[key] for key in kept if key != "continuation_token"
+    } or None
+    return answer_so_far
 
 
 async def _checked_async_hop_response(response: httpx.Response, custom_llm_provider: str) -> httpx.Response:
@@ -809,6 +819,7 @@ class InteractionsToCompletionBridgeHandler:
         first_hop: Final = _interaction_of(raw_response)
         _raise_if_interaction_failed(first_hop, model=model, custom_llm_provider=custom_llm_provider, url=wire.url)
         hops: tuple[JsonMapping, ...] = (first_hop,)  # rebind-ok: grows by one hop per loop pass
+        is_blocked: bool = False  # rebind-ok: set when a continuation hop is blocked for recitation
         while (
             hop_body := next_hop_body(
                 wire.body,
@@ -829,6 +840,7 @@ class InteractionsToCompletionBridgeHandler:
                 )
                 hops = (*hops, _completed_hop(hop_response))
             except _HOP_FAILURES as hop_error:
+                is_blocked = is_recitation_block(hop_error)
                 log_failed_hop(hop_error)
                 break
         result: Final = transform_interactions_response_to_chat_response(
@@ -838,7 +850,7 @@ class InteractionsToCompletionBridgeHandler:
         )
         _mark_initial_prompt_tokens(result, hops)
         _attach_response_metadata(result, raw_response, wire.url)
-        return result
+        return _blocked_for_recitation(result) if is_blocked else result
 
     async def acompletion(
         self,
@@ -991,6 +1003,7 @@ class InteractionsToCompletionBridgeHandler:
         first_hop: Final = _interaction_of(raw_response)
         _raise_if_interaction_failed(first_hop, model=model, custom_llm_provider=custom_llm_provider, url=wire.url)
         hops: tuple[JsonMapping, ...] = (first_hop,)  # rebind-ok: grows by one hop per loop pass
+        is_blocked: bool = False  # rebind-ok: set when a continuation hop is blocked for recitation
         while (
             hop_body := next_hop_body(
                 wire.body,
@@ -1012,6 +1025,7 @@ class InteractionsToCompletionBridgeHandler:
                 )
                 hops = (*hops, _completed_hop(hop_response))
             except _HOP_FAILURES as hop_error:
+                is_blocked = is_recitation_block(hop_error)
                 log_failed_hop(hop_error)
                 break
         result: Final = transform_interactions_response_to_chat_response(
@@ -1021,7 +1035,7 @@ class InteractionsToCompletionBridgeHandler:
         )
         _mark_initial_prompt_tokens(result, hops)
         _attach_response_metadata(result, raw_response, wire.url)
-        return result
+        return _blocked_for_recitation(result) if is_blocked else result
 
 
 interactions_api_bridge: Final = InteractionsToCompletionBridgeHandler()

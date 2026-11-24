@@ -94,7 +94,6 @@ def test_gemini_sync_completion_sends_interactions_payload_and_headers() -> None
     assert json.loads(seen[0].content) == {
         "model": "gemini-3-flash-preview",
         "input": [{"type": "user_input", "content": [{"type": "text", "text": "ping"}]}],
-        "store": False,
         "system_instruction": "Reply uppercase.",
         "generation_config": {"temperature": 0.2},
     }
