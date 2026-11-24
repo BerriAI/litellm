@@ -3422,10 +3422,11 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
 
     @staticmethod
     def _logged_action(request_data: dict[str, object]) -> object:
-        metadata = request_data["litellm_metadata"]
+        metadata: Final = request_data["litellm_metadata"]
         assert isinstance(metadata, dict)
-        (entry,) = metadata["standard_logging_guardrail_information"]
-        return entry.get("guardrail_action")
+        entries: Final = metadata["standard_logging_guardrail_information"]
+        assert len(entries) == 1
+        return entries[0].get("guardrail_action")
 
     @staticmethod
     def _request() -> dict[str, object]:
@@ -3521,10 +3522,10 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
 
         assert result == "Blocked by policy"
         assert self._logged_response(data) == "Blocked by policy"
-        assert self._logged_action(data) is None
+        assert self._logged_action(data) == "block"
 
     @pytest.mark.asyncio
-    async def test_pre_call_hook_rejecting_with_the_word_mask_logs_no_masking_action(self):
+    async def test_pre_call_hook_rejecting_with_the_word_mask_logs_a_blocking_action(self):
         class RejectingGuardrail(CustomGuardrail):
             @log_guardrail_information
             async def async_pre_call_hook(
@@ -3536,9 +3537,29 @@ class TestPreCallHookResponseIsNotLoggedVerbatim:
             ) -> str:
                 return "mask"
 
-        data = self._request()
+        data: Final = self._request()
         await RejectingGuardrail(guardrail_name="g").async_pre_call_hook(
             user_api_key_dict=UserAPIKeyAuth(), cache=None, data=data, call_type="acompletion"
+        )
+
+        assert self._logged_response(data) == "mask"
+        assert self._logged_action(data) == "block"
+
+    @pytest.mark.asyncio
+    async def test_a_string_returned_outside_pre_call_logs_no_action(self):
+        class ModeratingGuardrail(CustomGuardrail):
+            @log_guardrail_information
+            async def async_moderation_hook(
+                self,
+                data: dict[str, object],
+                user_api_key_dict: UserAPIKeyAuth,
+                call_type: str,
+            ) -> str:
+                return "mask"
+
+        data: Final = self._request()
+        await ModeratingGuardrail(guardrail_name="g").async_moderation_hook(
+            data=data, user_api_key_dict=UserAPIKeyAuth(), call_type="acompletion"
         )
 
         assert self._logged_response(data) == "mask"

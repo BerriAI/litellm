@@ -39,6 +39,7 @@ from litellm.types.guardrails import (
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import (
+    GUARDRAIL_ACTION_BLOCK,
     GUARDRAIL_ACTION_MASK,
     CallTypes,
     GenericGuardrailAPIInputs,
@@ -1750,13 +1751,20 @@ class CustomGuardrail(CustomLogger):
             start_time=start_time,
             end_time=end_time,
             event_type=event_type,
-            tracing_detail=(
-                {"guardrail_action": GUARDRAIL_ACTION_MASK}
-                if guardrail_response == "mask" and not isinstance(response, str)
-                else None
-            ),
+            tracing_detail=self._acted_tracing_detail(response, guardrail_response, event_type),
         )
         return response
+
+    @staticmethod
+    def _acted_tracing_detail(
+        response: object, guardrail_response: object, event_type: GuardrailEventHooks | None
+    ) -> GuardrailTracingDetail | None:
+        """The ``guardrail_action`` of a run that acted while its status reads as success: a pre_call
+        hook that returned its rejection message, which the proxy turns into a 400, or a hook that
+        changed the content."""
+        if isinstance(response, str):
+            return {"guardrail_action": GUARDRAIL_ACTION_BLOCK} if event_type == GuardrailEventHooks.pre_call else None
+        return {"guardrail_action": GUARDRAIL_ACTION_MASK} if guardrail_response == "mask" else None
 
     def _summarize_guardrail_response(
         self,

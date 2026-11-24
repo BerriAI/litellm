@@ -3886,9 +3886,11 @@ class StandardLoggingEvalInformation(TypedDict, total=False):
     threshold: float | None
 
 
-# The `guardrail_action` a run logs when it changed the content and let the request through. Spend-log
-# redaction keeps `guardrail_action`, so a masked run stays recognizable when prompts are not stored.
+# The `guardrail_action` a run logs when it acted while its status reads as success: it changed the
+# content and let the request through, or its pre_call hook returned a rejection message. Spend-log
+# redaction keeps `guardrail_action`, so such a run stays recognizable when prompts are not stored.
 GUARDRAIL_ACTION_MASK: Final = "mask"
+GUARDRAIL_ACTION_BLOCK: Final = "block"
 
 
 class GuardrailTracingDetail(TypedDict, total=False):
