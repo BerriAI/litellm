@@ -12,7 +12,6 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
 )
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
-    as_str_mapping,
     has_attributes,
     iter_items,
     length_of,
@@ -1240,20 +1239,19 @@ def _has_only_text_parts(content: object) -> bool:
 
 
 def _set_mcp_tool_output(span: "Span", coerced_response_obj: object) -> None:
-    response: Final = as_str_mapping(coerced_response_obj)
-    if response is None:
+    if not isinstance(coerced_response_obj, Mapping):
         return
 
-    content: Final[object] = response.get("content")
+    content: Final[object] = coerced_response_obj.get("content")
     text: Final[str | None] = _coerce_text(content)
     if text and _has_only_text_parts(content):
         safe_set_attribute(span, SpanAttributes.OUTPUT_VALUE, text)
         safe_set_attribute(span, SpanAttributes.OUTPUT_MIME_TYPE, OpenInferenceMimeTypeValues.TEXT.value)
         return
 
-    structured: Final[object] = response.get(
+    structured: Final[object] = coerced_response_obj.get(
         "structured_content",
-        response.get("structuredContent"),  # pyright: ignore[reportUnknownMemberType]  # tolerant dual-spelling lookup on untyped payloads
+        coerced_response_obj.get("structuredContent"),  # pyright: ignore[reportUnknownMemberType]  # tolerant dual-spelling lookup on untyped payloads
     )
     payload: Final[object] = content if content else structured if structured is not None else content
     if payload is None:
