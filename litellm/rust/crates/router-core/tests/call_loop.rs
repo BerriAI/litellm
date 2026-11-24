@@ -9,10 +9,10 @@ use std::{
 
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, CallbackFiltered, Deployment, Error, FailureKind,
-    FailureReport, Health, HealthState, HostStep, InMemoryRouterCache, Op, Outcomes, PreRoute,
-    PreRouted, Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost,
-    RouterRequest, RouterResponse, RoutingContext, SeededRandomness, SelectStage, Served,
-    SuccessReport, UsageCounts, UsageWindow,
+    FailureReport, Health, HealthState, HostStep, InMemoryRouterCache, LimitCounter, Op, Outcomes,
+    PreRoute, PreRouted, Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent,
+    RouterHost, RouterRequest, RouterResponse, RoutingContext, SeededRandomness, SelectStage,
+    Served, SuccessReport, UsageCounts, UsageWindow,
     call::{StreamOrigin, Unanswered},
     fallback::Fallbacks,
     health::CooldownValue,
@@ -199,6 +199,30 @@ impl RouterCache for RecordingCache {
     async fn count_failure(&self, id: &str) -> Result<(), litellm_cache::Error> {
         self.inner.count_failure(id).await
     }
+
+    async fn limit_usage(
+        &self,
+        counter: &LimitCounter,
+        limit: f64,
+    ) -> Result<Option<f64>, litellm_cache::Error> {
+        self.inner.limit_usage(counter, limit).await
+    }
+
+    async fn add_limit_usage(
+        &self,
+        counter: &LimitCounter,
+        amount: i64,
+        ttl: Duration,
+    ) -> Result<Option<f64>, litellm_cache::Error> {
+        self.inner.add_limit_usage(counter, amount, ttl).await
+    }
+
+    async fn add_limit_usages(
+        &self,
+        increments: &[(LimitCounter, i64, Duration)],
+    ) -> Result<Option<Vec<f64>>, litellm_cache::Error> {
+        self.inner.add_limit_usages(increments).await
+    }
 }
 
 /// The host error behind a scripted failure: the deployment it was raised on.
@@ -340,7 +364,7 @@ impl Hosted {
         self.router.healthy(&*self.host, op, request).await
     }
 
-    fn health(&self) -> Health<&RecordingCache> {
+    fn health(&self) -> Health<'_, RecordingCache> {
         self.router.health(self.host.cache())
     }
 
@@ -3880,6 +3904,53 @@ async fn a_chat_call_keeps_an_unhealthy_azure_chat_deployment_as_it_would_alone(
         .await;
     assert!(
         matches!(&picked, Ok(deployment) if deployment.id == "c1"),
+        "{picked:?}"
+    );
+}
+
+#[rstest]
+#[case::never_probed(None)]
+#[case::last_failure_gone_stale(Some((false, 3600.0)))]
+#[case::last_probe_healthy(Some((true, 0.0)))]
+#[tokio::test]
+async fn health_check_routing_falls_back_to_the_unhealthy_deployments_beside_a_paused_one(
+    #[case] paused_probe: Option<(bool, f64)>,
+) {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a1"}},
+            {"model_name": "primary", "litellm_params": {"model": "openai/p"}, "model_info": {"id": "p2", "blocked": true}},
+        ],
+        "enable_health_check_routing": true,
+    }))
+    .unwrap();
+    let host = Arc::new(ScriptedHost::default());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    let active = HealthState {
+        is_healthy: false,
+        timestamp: now,
+    };
+    host.cache.inner.set_health_states(
+        std::iter::once(("a1".to_owned(), active))
+            .chain(paused_probe.map(|(is_healthy, age)| {
+                (
+                    "p2".to_owned(),
+                    HealthState {
+                        is_healthy,
+                        timestamp: now - age,
+                    },
+                )
+            }))
+            .collect(),
+    );
+    let picked = router(config, json!({}), host)
+        .select(&Op::from("acompletion"), &request())
+        .await;
+    assert!(
+        matches!(&picked, Ok(deployment) if deployment.id == "a1"),
         "{picked:?}"
     );
 }

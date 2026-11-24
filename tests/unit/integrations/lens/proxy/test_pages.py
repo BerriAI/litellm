@@ -7,8 +7,10 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from litellm.integrations.lens.proxy.buffering import BufferBudget
+from litellm.integrations.lens.proxy.model_gateway import GatewaySetupRequest
 from litellm.integrations.lens.proxy.pages import (
     allow_page,
+    connect_model_gateway,
     dashboard_session,
     lens_ui_asset,
     page_auth,
@@ -16,6 +18,7 @@ from litellm.integrations.lens.proxy.pages import (
     ui_mount,
 )
 from litellm.integrations.lens.remote import LensConnection
+from litellm.proxy import proxy_server
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 SECRET: Final = "gateway-delegated-identity-fixture-32"
@@ -205,6 +208,45 @@ async def _signed_out(request: Request) -> UserAPIKeyAuth | None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    "configured_url",
+    (
+        None,
+        "not-a-url",
+        "https://[broken",
+        "https://user@gateway.test",
+        "http://bad host",
+        "https://gateway.test:99999",
+    ),
+)
+async def test_connect_requires_a_configured_gateway_url(
+    monkeypatch: pytest.MonkeyPatch, configured_url: str | None
+) -> None:
+    if configured_url is None:
+        monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    else:
+        monkeypatch.setenv("PROXY_BASE_URL", configured_url)
+    monkeypatch.setenv("LITELLM_LENS_URL", "http://lens.test")
+    monkeypatch.setenv("LITELLM_LENS_SERVICE_TOKEN", SECRET)
+    monkeypatch.setenv("LENS_GATEWAY_SECRET", SECRET)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+    async def admin_key(**_headers: object) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    async def log_teams(_auth: UserAPIKeyAuth) -> tuple[str, ...]:
+        return ()
+
+    monkeypatch.setattr("litellm.integrations.lens.proxy.pages.user_api_key_auth", admin_key)
+    request: Final = _request("POST", {"host": "request-host.test", "authorization": "Bearer fixture"})
+    with pytest.raises(HTTPException) as error:
+        await connect_model_gateway(request, GatewaySetupRequest(), log_teams)
+
+    assert error.value.status_code == 503
+    assert "PROXY_BASE_URL" in error.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("method", "headers"),
     (
         ("GET", {}),
@@ -252,6 +294,73 @@ async def test_a_key_is_used_instead_of_the_dashboard_login_when_one_is_sent() -
         key=keyed,
     )
     assert auth.user_id == "owner-of-Bearer sk-cli"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "headers",
+    (
+        {"authorization": "Bearer sk-gateway-master"},
+        {"x-litellm-api-key": "sk-gateway-master"},
+        {"x-gateway-key": "Bearer sk-gateway-master"},
+        {"api-key": "sk-gateway-master"},
+        {"x-api-key": "sk-gateway-master"},
+        {"x-goog-api-key": "sk-gateway-master"},
+        {"ocp-apim-subscription-key": "sk-gateway-master"},
+    ),
+    ids=("authorization", "litellm", "configured_name", "azure", "anthropic", "google", "azure_apim"),
+)
+async def test_a_key_in_any_header_the_gateway_reads_keys_from_signs_the_caller_in(
+    monkeypatch: pytest.MonkeyPatch, headers: Mapping[str, str]
+) -> None:
+    monkeypatch.setattr(proxy_server, "master_key", "sk-gateway-master")
+    monkeypatch.setattr(proxy_server, "general_settings", {"litellm_key_header_name": "X-Gateway-Key"})
+
+    auth: Final = await page_auth(_request("GET", headers), session=_signed_out)
+
+    assert auth.user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "empty_header",
+    (
+        "authorization",
+        "x-litellm-api-key",
+        "x-gateway-key",
+        "api-key",
+        "x-api-key",
+        "x-goog-api-key",
+        "ocp-apim-subscription-key",
+    ),
+)
+async def test_an_empty_key_header_does_not_replace_the_dashboard_login(
+    monkeypatch: pytest.MonkeyPatch, empty_header: str
+) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {"litellm_key_header_name": "X-Gateway-Key"})
+
+    auth: Final = await page_auth(
+        _request("GET", {empty_header: "", "sec-fetch-site": "same-origin"}), session=_signed_in
+    )
+
+    assert auth.user_id == "alice"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "empty_header", ("api-key", "x-goog-api-key", "ocp-apim-subscription-key", "x-litellm-api-key")
+)
+async def test_an_empty_key_header_does_not_hide_a_key_sent_in_another_header(
+    monkeypatch: pytest.MonkeyPatch, empty_header: str
+) -> None:
+    monkeypatch.setattr(proxy_server, "master_key", "sk-gateway-master")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+
+    auth: Final = await page_auth(
+        _request("GET", {empty_header: "", "x-api-key": "sk-gateway-master"}), session=_signed_out
+    )
+
+    assert auth.user_role == LitellmUserRoles.PROXY_ADMIN
 
 
 def _cookie(user_id: str | None, session_key: str | None):

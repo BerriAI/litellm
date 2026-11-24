@@ -171,7 +171,7 @@ class AmazonNovaEmbeddingConfig:
             "encoding_format",
         ]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
+    def map_openai_params(self, non_default_params: Mapping[str, object], optional_params: dict[str, object]) -> dict:
         """Map OpenAI-style parameters to Nova parameters."""
         for k, v in non_default_params.items():
             if k == "dimensions":
@@ -181,7 +181,7 @@ class AmazonNovaEmbeddingConfig:
                 optional_params["encoding_format"] = v
         return optional_params
 
-    def _parse_data_url(self, data_url: str) -> tuple:
+    def _parse_data_url(self, data_url: str) -> tuple[str, str]:
         """
         Parse a data URL to extract the media type and base64 data.
 
@@ -217,11 +217,11 @@ class AmazonNovaEmbeddingConfig:
     def _transform_request(
         self,
         input: str,
-        inference_params: dict,
+        inference_params: dict[str, object],
         async_invoke_route: bool = False,
         model_id: str | None = None,
         output_s3_uri: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform OpenAI-style input to Nova format.
 
@@ -242,7 +242,7 @@ class AmazonNovaEmbeddingConfig:
         task_type: Final = "SEGMENTED_EMBEDDING" if async_invoke_route else "SINGLE_EMBEDDING"
 
         # Build the base request structure
-        request: Final[dict] = {
+        request: Final[dict[str, object]] = {
             "schemaVersion": "nova-multimodal-embed-v1",
             "taskType": task_type,
         }
@@ -347,10 +347,10 @@ class AmazonNovaEmbeddingConfig:
 
     def _wrap_async_invoke_request(
         self,
-        model_input: dict,
+        model_input: dict[str, object],
         model_id: str,
         output_s3_uri: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Wrap the transformed request in the AWS Bedrock async invoke format.
 
@@ -480,7 +480,7 @@ class AmazonNovaEmbeddingConfig:
     ) -> EmbeddingResponse:
         return self._transform_response(response_list, model, batch_data, metered_input_tokens)
 
-    def _transform_async_invoke_response(self, response: dict, model: str) -> EmbeddingResponse:
+    def _transform_async_invoke_response(self, response: Mapping[str, object], model: str) -> EmbeddingResponse:
         """
         Transform async invoke response (invocation ARN) to OpenAI format.
 

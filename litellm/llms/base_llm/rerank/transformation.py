@@ -24,7 +24,7 @@ class BaseRerankConfig(ABC):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
     ) -> dict:
         pass
@@ -34,8 +34,8 @@ class BaseRerankConfig(ABC):
         self,
         model: str,
         optional_rerank_params: dict,
-        headers: dict,
-        litellm_params: dict | None = None,
+        headers: dict[str, object],
+        litellm_params: dict[str, object] | None = None,
     ) -> dict:
         return {}
 
@@ -48,8 +48,8 @@ class BaseRerankConfig(ABC):
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        optional_params: dict[str, object] = {},
+        litellm_params: dict[str, object] = {},
     ) -> RerankResponse:
         return model_response
 
@@ -58,7 +58,7 @@ class BaseRerankConfig(ABC):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
     ) -> str:
         """
         OPTIONAL
@@ -70,13 +70,13 @@ class BaseRerankConfig(ABC):
         return api_base or ""
 
     @abstractmethod
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         pass
 
     @abstractmethod
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         model: str,
         drop_params: bool,
         query: str,

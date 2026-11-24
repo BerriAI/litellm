@@ -42,7 +42,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import LLMResponseTypes
 
 if TYPE_CHECKING:
-    from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+    from litellm.types.proxy.guardrails.guardrail_hooks.pillar import PillarGuardrailConfigModel
 
 MAX_PILLAR_HEADER_VALUE_BYTES: Final = 8 * 1024
 
@@ -850,7 +850,7 @@ class PillarGuardrail(CustomGuardrail):
     # =========================================================================
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["PillarGuardrailConfigModel"] | None:
         """
         Get the configuration model for this guardrail.
 

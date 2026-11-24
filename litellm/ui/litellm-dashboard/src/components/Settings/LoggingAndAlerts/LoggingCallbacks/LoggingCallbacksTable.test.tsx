@@ -60,6 +60,14 @@ describe("LoggingCallbacksTable", () => {
     expect(screen.getByText("custom_callback_x")).toBeInTheDocument();
   });
 
+  it("should call onAdd when the Add Callback button is clicked", async () => {
+    const user = userEvent.setup();
+    const onAdd = vi.fn();
+    render(<LoggingCallbacksTable callbacks={[]} availableCallbacks={{}} onAdd={onAdd} />);
+    await user.click(screen.getByRole("button", { name: "Add Callback" }));
+    expect(onAdd).toHaveBeenCalledTimes(1);
+  });
+
   it("should test, edit, and delete a callback through the actions menu", async () => {
     const user = userEvent.setup();
     const onTest = vi.fn();

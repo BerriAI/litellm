@@ -112,6 +112,8 @@ from litellm.types.router import reject_server_owned_wif_fields
 from litellm.types.utils import AdminApiKeySecretReference, admin_api_key_secret_reference
 
 if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
     from litellm.proxy.utils import PrismaClient
 
 #### Health ENDPOINTS ####
@@ -746,7 +748,9 @@ async def health_services_endpoint(
         raise proxy_exception_for(e, default_status_code=status.HTTP_500_INTERNAL_SERVER_ERROR) from e
 
 
-def convert_health_check_to_dict(check) -> dict:
+def convert_health_check_to_dict(
+    check: "prisma_models.LiteLLM_HealthCheckTable | LatestHealthCheckRow",
+) -> dict[str, object]:
     """Convert health check database record to dictionary format"""
     return {
         "health_check_id": check.health_check_id,
@@ -880,9 +884,9 @@ def _model_infos_for_endpoint(
 
 
 def _aggregate_health_check_results(
-    model_param_to_info: dict,
-    healthy_endpoints: list,
-    unhealthy_endpoints: list,
+    model_param_to_info: Mapping[str, object],
+    healthy_endpoints: Sequence[Mapping[str, object]],
+    unhealthy_endpoints: Sequence[Mapping[str, object]],
 ) -> dict:
     """
     Aggregate health check results per unique model.
@@ -975,8 +979,8 @@ def _should_persist_health_check_result(
 
 async def _save_health_check_results_if_changed(
     prisma_client: "PrismaClient",
-    model_results: dict,
-    latest_checks_map: dict,
+    model_results: Mapping[object, _AggregatedHealthResult],
+    latest_checks_map: Mapping[_LatestCheckKey, LatestHealthCheckRow],
     start_time: float,
     checked_by: str | None = None,
 ) -> bool:
@@ -1028,8 +1032,8 @@ async def _save_health_check_results_if_changed(
 async def save_background_health_checks_to_db(
     prisma_client: "PrismaClient | None",
     model_list: list,
-    healthy_endpoints: list,
-    unhealthy_endpoints: list,
+    healthy_endpoints: Sequence[Mapping[str, object]],
+    unhealthy_endpoints: Sequence[Mapping[str, object]],
     start_time: float,
     checked_by: str | None = None,
 ) -> bool:
@@ -1062,7 +1066,7 @@ async def save_background_health_checks_to_db(
 
         # Step 3: Get latest health checks for all models in one query to compare status
         latest_checks: Final = await query_latest_health_checks(prisma_client)
-        latest_checks_map: Final = {}
+        latest_checks_map: Final[dict[_LatestCheckKey, LatestHealthCheckRow]] = {}
         for check in latest_checks:
             key = _latest_check_key(check.model_id, check.model_name)
             if key not in latest_checks_map:
@@ -1576,7 +1580,7 @@ def _without_model_ids(results: Mapping[str, object], model_ids: frozenset[str])
 
 
 async def _perform_health_check_and_save(
-    model_list,
+    model_list: list[object],
     target_model: str | None,
     recorded_model_name: str | None,
     cli_model: str | None,
@@ -1721,7 +1725,7 @@ async def health_endpoint(
         )
         return _strip_admin_only_fields_from_health_result(dict(result))
 
-    def _post_process(result: dict) -> Mapping[str, object]:
+    def _post_process(result: Mapping[str, object]) -> Mapping[str, object]:
         # When a caller asked about a specific model/model_id and zero
         # endpoints came back healthy, surface that as a 503 so monitoring
         # systems can rely on the HTTP status instead of having to parse the
@@ -2781,8 +2785,8 @@ async def test_model_connection(
 
         # Look up model configuration from router if model name is provided
         # This gets the litellm_params from proxy config (with resolved env vars)
-        config_litellm_params: dict = {}
-        loaded_model_info: dict | None = None
+        config_litellm_params: dict[str, object] = {}
+        loaded_model_info: dict[str, object] | None = None
         deployment_by_id: Deployment | None = None
         if llm_router is not None:
             # Prefer disambiguation by deployment id (`model_info.id`) when

@@ -374,7 +374,7 @@ export default function UserInfoView({
 
   if (isLoading) {
     return (
-      <div className="p-4">
+      <div>
         <Button variant="ghost" onClick={onClose} className="mb-4">
           <ArrowLeft />
           {t("users.userInfo.backToUsers")}
@@ -386,7 +386,7 @@ export default function UserInfoView({
 
   if (!userData) {
     return (
-      <div className="p-4">
+      <div>
         <Button variant="ghost" onClick={onClose} className="mb-4">
           <ArrowLeft />
           {t("users.userInfo.backToUsers")}
@@ -433,7 +433,7 @@ export default function UserInfoView({
 
   const roleId = userData.user_role;
   return (
-    <div className="p-4">
+    <div>
       <div className="flex justify-between items-center mb-6">
         <div>
           <Button variant="ghost" onClick={onClose} className="mb-4">

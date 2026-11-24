@@ -50,7 +50,7 @@ class AmazonNovaCanvasConfig:
         }
 
     @classmethod
-    def get_supported_openai_params(cls, model: str | None = None) -> list:
+    def get_supported_openai_params(cls, model: str | None = None) -> list[str]:
         """ """
         return ["n", "size", "quality"]
 
@@ -166,7 +166,7 @@ class AmazonNovaCanvasConfig:
         raise NotImplementedError(f"Task type {task_type} is not supported")
 
     @classmethod
-    def map_openai_params(cls, non_default_params: dict, optional_params: dict) -> dict:
+    def map_openai_params(cls, non_default_params: dict, optional_params: dict[str, object]) -> dict[str, object]:
         """
         Map the OpenAI params to the Bedrock params
         """
@@ -208,7 +208,7 @@ class AmazonNovaCanvasConfig:
         model: str,
         image_response: ImageResponse,
         size: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> float:
         get_model_info: Final = get_cached_model_info()
         model_info: Final = get_model_info(
