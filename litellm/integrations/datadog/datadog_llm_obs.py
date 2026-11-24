@@ -16,7 +16,6 @@ from typing import Final, Literal
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, ValidationError
-from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -94,13 +93,6 @@ _ROUTER_SPAN_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
 )
 _ROUTER_DIMENSIONS: Final[tuple[str, ...]] = ("router_tier", "router_cause", "router_escalated", "routed_model")
 _COST_DIMENSIONS: Final[tuple[str, ...]] = ("team", "user", "key_alias", "model_group", *_ROUTER_DIMENSIONS)
-
-
-class _DatadogLLMObsLoggingKwargs(TypedDict, total=False, extra_items=object):
-    """The logging kwargs this logger reads its standard logging payload and span metadata from."""
-
-    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
-    litellm_params: ReadOnly[Mapping[str, object]]
 
 
 def _logging_metadata_of(standard_logging_payload: StandardLoggingPayload) -> StandardLoggingMetadata | None:
@@ -553,9 +545,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 ).model_dump(exclude_unset=True)
         return dict_datadog_llm_obs_params
 
-    async def async_log_success_event(
-        self, kwargs: _DatadogLLMObsLoggingKwargs, response_obj: object, start_time: datetime, end_time: datetime
-    ):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
         try:
             verbose_logger.debug("DataDogLLMObs: Logging success event for model %s", kwargs.get("model", "unknown"))
             payload: Final = self.create_llm_obs_payload(kwargs, start_time, end_time)
@@ -567,9 +557,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception("DataDogLLMObs: Error logging success event - %s", e)
 
-    async def async_log_failure_event(
-        self, kwargs: _DatadogLLMObsLoggingKwargs, response_obj: object, start_time: datetime, end_time: datetime
-    ):
+    async def async_log_failure_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
         try:
             verbose_logger.debug("DataDogLLMObs: Logging failure event for model %s", kwargs.get("model", "unknown"))
             payload: Final = self.create_llm_obs_payload(kwargs, start_time, end_time)
@@ -639,9 +627,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception("DataDogLLMObs: Error sending batch - %s", e)
 
-    def create_llm_obs_payload(
-        self, kwargs: _DatadogLLMObsLoggingKwargs, start_time: datetime, end_time: datetime
-    ) -> LLMObsPayload:
+    def create_llm_obs_payload(self, kwargs: dict, start_time: datetime, end_time: datetime) -> LLMObsPayload:
         standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
         if standard_logging_payload is None:
             raise Exception("DataDogLLMObs: standard_logging_object is not set")
