@@ -71,15 +71,11 @@ def _server_tool_blocks(message: object) -> tuple[Mapping[str, object], ...]:
 
 def _compaction_blocks(provider_specific_fields: object) -> tuple[Mapping[str, object], ...]:
     fields: Final = _as_string_mapping(provider_specific_fields)
-    raw_blocks: Final = fields.get("compaction_blocks") if fields is not None else None
-    return (
-        tuple(
-            block
-            for raw_block in raw_blocks
-            if (block := _as_string_mapping(raw_block)) is not None and block.get("type") == "compaction"
-        )
-        if isinstance(raw_blocks, (list, tuple))
-        else ()
+    raw_blocks: Final = _object_sequence(fields.get("compaction_blocks") if fields is not None else None)
+    return tuple(
+        block
+        for raw_block in raw_blocks or ()
+        if (block := _as_string_mapping(raw_block)) is not None and block.get("type") == "compaction"
     )
 
 
