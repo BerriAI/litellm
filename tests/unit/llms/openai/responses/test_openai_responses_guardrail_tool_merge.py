@@ -4,6 +4,8 @@ Responses API request tools they were flattened from
 """
 
 import copy
+from collections.abc import Callable, Mapping
+from typing import Final
 
 import pytest
 
@@ -260,18 +262,49 @@ def test_edited_mcp_tool_is_rewritten():
     assert list(merged) == edited
 
 
-@pytest.mark.parametrize("kept", [0, 1], ids=["first_server_kept", "second_server_kept"])
-def test_editing_one_mcp_server_and_dropping_another_with_the_same_label_sends_the_edit(kept):
-    original = [
-        {"type": "mcp", "server_label": "litellm", "server_url": "litellm_proxy/mcp/jira", "require_approval": "never"},
-        {"type": "mcp", "server_label": "litellm", "server_url": "litellm_proxy/mcp/github", "require_approval": "never"},
-    ]
-    groups = _groups(original)
-    edited = {**_flat(groups)[kept], "require_approval": "always"}
+def _always_approved(tool: Mapping[str, object]) -> dict[str, object]:
+    return {**tool, "require_approval": "always"}
 
-    merged = merge_guardrailed_tools(original, groups, [edited])
 
-    assert merged == (edited,)
+def _with_memory_limit(tool: Mapping[str, object]) -> dict[str, object]:
+    container: Final = tool["container"]
+    assert isinstance(container, Mapping)
+    return {**tool, "container": {**container, "memory_limit": "4g"}}
+
+
+@pytest.mark.parametrize("kept", [0, 2], ids=["first_kept", "last_kept"])
+@pytest.mark.parametrize(
+    ("first", "last", "edit"),
+    [
+        pytest.param(
+            {"type": "mcp", "server_label": "docs", "server_url": "https://a.example/mcp", "require_approval": "never"},
+            {"type": "mcp", "server_label": "docs", "server_url": "https://b.example/mcp", "require_approval": "never"},
+            _always_approved,
+            id="mcp_servers_sharing_a_label",
+        ),
+        pytest.param(
+            {"type": "code_interpreter", "container": {"type": "auto"}},
+            {"type": "code_interpreter", "container": {"type": "auto", "file_ids": ["file_1"]}},
+            _with_memory_limit,
+            id="code_interpreters",
+        ),
+    ],
+)
+def test_editing_one_of_two_same_named_tools_and_dropping_the_other_sends_the_edit_in_its_own_slot(
+    first: Mapping[str, object],
+    last: Mapping[str, object],
+    edit: Callable[[Mapping[str, object]], dict[str, object]],
+    kept: int,
+) -> None:
+    between: Final = _function("lookup")
+    original: Final = [first, between, last]
+    groups: Final = _groups(original)
+    flat: Final = _flat(groups)
+    edited: Final = edit(flat[kept])
+
+    merged: Final = merge_guardrailed_tools(original, groups, [flat[1], edited])
+
+    assert merged == ((edited, between) if kept == 0 else (between, edited))
 
 
 def test_injected_tool_lands_after_the_request_tools_when_request_had_none():

@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.tool_fields import (
     SentToolNames,
+    chat_member_name,
     declared_function_names,
     truncate_tool_name,
     with_renamed_tool_calls,
@@ -463,14 +464,23 @@ def _declared_tool_names(
     return frozenset() if model_parameters is None else declared_function_names(model_parameters.get("tools"))
 
 
+def _sent_name(name: str, namespace: object) -> str | None:
+    if not namespace:
+        return truncate_tool_name(name)
+    return chat_member_name(name, name) if namespace == name else None
+
+
 def _input_item_named_as_declared(item: object, declared_names: frozenset[str]) -> object:
     fields: Final = as_str_mapping(item)
-    if fields is None or fields.get("type") != "function_call" or fields.get("namespace"):
+    if fields is None or fields.get("type") != "function_call":
         return item
     name: Final = fields.get("name")
-    if not isinstance(name, str) or name in declared_names or truncate_tool_name(name) not in declared_names:
+    if not isinstance(name, str) or name in declared_names:
         return item
-    return {**fields, "name": truncate_tool_name(name)}
+    sent_name: Final = _sent_name(name, fields.get("namespace"))
+    if sent_name is None or sent_name not in declared_names:
+        return item
+    return {**{key: value for key, value in fields.items() if key != "namespace"}, "name": sent_name}
 
 
 def _input_named_as_declared(stored_input: object, declared_names: frozenset[str]) -> object:
