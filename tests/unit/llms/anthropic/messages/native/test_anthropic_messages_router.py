@@ -1086,6 +1086,35 @@ async def test_native_anthropic_drop_params_strips_a_blank_text_beside_a_dropped
     assert sent["messages"] == _CLEAN_PROMPT
 
 
+_SYSTEM_TEXT: Final = {"type": "text", "text": "Answer in one word"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", _NON_STRING_TEXTS)
+@pytest.mark.parametrize(("deployment_params", "request_params", "drop_globally"), _DROP_PARAMS_SOURCES)
+async def test_native_anthropic_drop_params_drops_a_non_string_system_text_and_a_system_prompt_it_empties(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    text: object,
+    deployment_params: Mapping[str, object],
+    request_params: Mapping[str, object],
+    drop_globally: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_globally)
+    non_string: Final = {"type": "text", "text": text}
+
+    dropped: Final = await _native_body_sent(
+        respx_mock, _CLEAN_PROMPT, deployment_params, system=[non_string, _SYSTEM_TEXT], **request_params
+    )
+    emptied: Final = await _native_body_sent(
+        respx_mock, _CLEAN_PROMPT, deployment_params, system=[non_string], **request_params
+    )
+
+    assert dropped["system"] == [_SYSTEM_TEXT]
+    assert dropped["messages"] == emptied["messages"] == _CLEAN_PROMPT
+    assert "system" not in emptied
+
+
 @pytest.mark.asyncio
 async def test_native_anthropic_still_strips_empty_user_text_and_non_string_assistant_text_without_drop_params(
     respx_mock: respx.MockRouter,
@@ -1140,6 +1169,12 @@ _REJECTED_REQUESTS: Final = (
     ),
     pytest.param(
         _BLANK_BEFORE_NULL_PROMPT, {}, _non_string_text_error("messages.0.content.1.text"), id="blank-before-null"
+    ),
+    pytest.param(
+        _CLEAN_PROMPT,
+        {"system": [{"type": "text", "text": "Answer in one word"}, {"type": "text", "text": None}]},
+        _non_string_text_error("system.1.text"),
+        id="null-system-text",
     ),
 )
 _EVERY_MESSAGES_PATH: Final = (

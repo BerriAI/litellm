@@ -34,13 +34,13 @@ use crate::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
         ANTHROPIC_BASE_URL_ENV, OauthHandling, OauthToken,
         anthropic_request_errors_on_thinking_binding_mismatch, complete_anthropic_url,
-        drop_advisor_blocks, drop_non_string_user_texts, drop_raw_advisor_blocks,
-        drop_raw_non_string_user_texts, existing_betas, get_api_key, get_auth_header,
-        has_advisor_tool, has_anthropic_credential, is_anthropic_invalid_thinking_block_error,
-        is_anthropic_thinking_binding_mismatch_error, is_claude_strict_tools_rejection,
-        is_tool_search_used, map_messages, map_messages_rejecting_emptied, merge_beta_headers,
-        minted_oauth_environment, optionally_handle_anthropic_oauth,
-        requires_native_compaction_beta, strip_advisor_blocks,
+        drop_advisor_blocks, drop_non_string_system_texts, drop_non_string_user_texts,
+        drop_raw_advisor_blocks, drop_raw_non_string_user_texts, existing_betas, get_api_key,
+        get_auth_header, has_advisor_tool, has_anthropic_credential,
+        is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
+        is_claude_strict_tools_rejection, is_tool_search_used, map_messages,
+        map_messages_rejecting_emptied, merge_beta_headers, minted_oauth_environment,
+        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
         strip_encrypted_reasoning_blocks_restoring_redacted_data, strip_raw_advisor_blocks,
         strip_raw_encrypted_reasoning_blocks, strip_raw_unsigned_thinking_blocks,
         strip_thinking_blocks_from_anthropic_messages_request, strip_unsigned_thinking_blocks,
@@ -391,6 +391,17 @@ pub(crate) fn transform_messages_request(
         .context_management
         .clone()
         .map(map_openai_context_management_to_anthropic);
+    let request = if context.drops_unsupported_params {
+        MessagesRequest {
+            params: MessagesOptionalParams {
+                system: request.params.system.and_then(drop_non_string_system_texts),
+                ..request.params
+            },
+            ..request
+        }
+    } else {
+        request
+    };
     let messages = if context.drops_unsupported_params {
         map_messages_rejecting_emptied(
             request.messages,

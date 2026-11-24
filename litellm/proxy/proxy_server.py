@@ -453,7 +453,9 @@ from litellm.llms.anthropic.messages.convertible_blocks import (
     deployment_drops_params,
     emptied_messages_error,
     malformed_text_count_error,
+    non_string_system_text_error,
     non_string_user_text_error,
+    without_non_string_system_texts,
 )
 from litellm.llms.anthropic.messages.native.utils import native_messages_to_send
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
@@ -15477,6 +15479,19 @@ def _counted_request_messages(
     return kept or list(messages)
 
 
+def _counted_request_system(
+    system: JsonValue,
+    messages_format: TokenCountMessagesFormat,
+    deployment: Mapping[str, object] | None,
+) -> JsonValue:
+    error: Final = None if messages_format != "anthropic" else non_string_system_text_error(system)
+    if error is None or not isinstance(system, list):
+        return system
+    if not deployment_drops_params(deployment):
+        raise ProxyException(message=error, type="invalid_request_error", param="system", code=400)
+    return without_non_string_system_texts(system)
+
+
 async def _try_provider_token_count(
     provider_counter: "BaseTokenCounter",
     custom_llm_provider: str | None,
@@ -16580,6 +16595,7 @@ async def _count_request_tokens(
         prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     )
     request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
+    request_system: Final = _counted_request_system(system, messages_format, count_deployment)
     local_count_error: Final = malformed_text_count_error(request_messages, messages_format, count_deployment)
     malformed_messages: Final = (
         None
@@ -16601,7 +16617,7 @@ async def _count_request_tokens(
         else await _gateway_request_view(
             route,
             request_messages,
-            system,
+            request_system,
             _COUNT_TOOLS.validate_python(tools),
             messages_format,
             context_edits,
@@ -16614,7 +16630,7 @@ async def _count_request_tokens(
     inference_messages: Final = (
         request_messages if edited_request is None else [dict(message) for message in edited_request.messages]
     )
-    inference_system: Final = system if edited_request is None else edited_request.system
+    inference_system: Final = request_system if edited_request is None else edited_request.system
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     routed_deployment: Final = _ROUTED_DEPLOYMENT.validate_python(deployment)
     routed_request: Final = (
@@ -16720,7 +16736,7 @@ async def _count_request_tokens(
         if route not in NATIVE_MESSAGES_TARGETS or context_edits is None or request_messages is None
         else await _bridged_request_view(
             request_messages,
-            system,
+            request_system,
             _COUNT_TOOLS.validate_python(tools),
             messages_format,
             replace(context_edits, drop_invalid_edits=False),
@@ -16734,7 +16750,7 @@ async def _count_request_tokens(
     local_messages: Final = (
         request_messages if counted_view is None else [dict(message) for message in counted_view.messages]
     )
-    post_edit_system: Final = system if counted_view is None else counted_view.system
+    post_edit_system: Final = request_system if counted_view is None else counted_view.system
     local_system: Final = (
         system_without_claude_code_billing_header(post_edit_system)
         if messages_format == "anthropic" and route in (Target.CHAT_COMPLETIONS, Target.RESPONSES)

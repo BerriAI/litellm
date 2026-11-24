@@ -451,6 +451,48 @@ pub fn non_string_user_text_path(messages: &[Recognized<Message>]) -> Option<Str
         })
 }
 
+/// Python's `non_string_system_text_error`: the first system text block that is not a string, as
+/// the field path its 400 names.
+pub fn non_string_system_text_path(system: Option<&Recognized<SystemPrompt>>) -> Option<String> {
+    let block_index = match system? {
+        Recognized::Known(SystemPrompt::Blocks(blocks)) => {
+            blocks.iter().position(is_non_string_text_block)
+        }
+        Recognized::Unrecognized(Value::Array(blocks)) => {
+            blocks.iter().position(is_non_string_raw_text)
+        }
+        Recognized::Known(SystemPrompt::Text(_)) | Recognized::Unrecognized(_) => None,
+    }?;
+    Some(format!("system.{block_index}.text"))
+}
+
+/// Python's `drop_non_string_system_texts` under `drop_params`: a system text block whose `text`
+/// is not a string goes, and a system prompt left with no blocks is dropped.
+pub fn drop_non_string_system_texts(
+    system: Recognized<SystemPrompt>,
+) -> Option<Recognized<SystemPrompt>> {
+    if non_string_system_text_path(Some(&system)).is_none() {
+        return Some(system);
+    }
+    match system {
+        Recognized::Known(SystemPrompt::Blocks(blocks)) => {
+            let kept: Vec<ContentBlock> = blocks
+                .into_iter()
+                .filter(|block| !is_non_string_text_block(block))
+                .collect();
+            (!kept.is_empty()).then_some(Recognized::Known(SystemPrompt::Blocks(kept)))
+        }
+        Recognized::Unrecognized(Value::Array(blocks)) => {
+            let kept: Vec<Value> = blocks
+                .into_iter()
+                .filter(|block| !is_non_string_raw_text(block))
+                .collect();
+            (!kept.is_empty()).then_some(Recognized::Unrecognized(Value::Array(kept)))
+        }
+        system => Some(system),
+    }
+}
+
 fn without_non_string_tool_result_texts(block: ContentBlock) -> ContentBlock {
     if !block.is_type(ContentBlockType::ToolResult) {
         return block;
@@ -1440,6 +1482,29 @@ mod tests {
     use strum::VariantArray;
 
     use super::*;
+
+    #[rstest]
+    #[case::one_left(
+        json!([{"type": "text", "text": null}, {"type": "text", "text": "be terse"}]),
+        Some(json!([{"type": "text", "text": "be terse"}]))
+    )]
+    #[case::none_left(json!([{"type": "text", "text": 5}]), None)]
+    #[case::only_strings(
+        json!([{"type": "text", "text": "be terse"}]),
+        Some(json!([{"type": "text", "text": "be terse"}]))
+    )]
+    #[case::empty_list(json!([]), Some(json!([])))]
+    #[case::text(json!("be terse"), Some(json!("be terse")))]
+    fn drop_params_drops_a_non_string_system_text_and_a_system_prompt_it_empties(
+        #[case] system: Value,
+        #[case] expected: Option<Value>,
+    ) {
+        let system: Recognized<SystemPrompt> = serde_json::from_value(system).unwrap();
+        assert_eq!(
+            drop_non_string_system_texts(system).map(|kept| serde_json::to_value(kept).unwrap()),
+            expected
+        );
+    }
 
     fn apply(sanitizer: fn(Vec<Message>) -> Vec<Message>, messages: Value) -> Value {
         let parsed: Vec<Message> = serde_json::from_value(messages).unwrap();

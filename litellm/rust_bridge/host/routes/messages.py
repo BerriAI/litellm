@@ -69,6 +69,7 @@ from litellm.llms.anthropic.common_utils import (
     anthropic_pass_through_api_base,
     strip_provider_specific_fields_from_anthropic_messages,
 )
+from litellm.llms.anthropic.messages.convertible_blocks import reject_non_string_system_text
 from litellm.llms.anthropic.messages.native import handler
 from litellm.llms.anthropic.messages.native import utils as native_utils
 from litellm.llms.anthropic.messages.native.handler import (
@@ -1536,6 +1537,12 @@ def sync_answer(request: Mapping[str, object]) -> _Answered | None:
         request.get("drop_params"),
         model=str(request["model"]),
         custom_llm_provider=optional_str(request.get("custom_llm_provider")),
+    )
+    reject_non_string_system_text(
+        request.get("system"),
+        request.get("drop_params"),
+        str(request["model"]),
+        optional_str(request.get("custom_llm_provider")),
     )
     logger: Final = request.get("litellm_logging_obj")
     mock: Final = _mock(request, logger, asynchronous=False)

@@ -11,8 +11,9 @@ use crate::{
     Error, ErrorDetail,
     anthropic::common_utils::{
         flatten_unencrypted_raw_web_search_results, flatten_unencrypted_web_search_results,
-        map_messages, non_string_user_text_path, sanitize_raw_tool_use_ids, sanitize_tool_use_ids,
-        strip_empty_content_blocks, strip_empty_raw_content_blocks, strip_provider_specific_fields,
+        map_messages, non_string_system_text_path, non_string_user_text_path,
+        sanitize_raw_tool_use_ids, sanitize_tool_use_ids, strip_empty_content_blocks,
+        strip_empty_raw_content_blocks, strip_provider_specific_fields,
         strip_raw_provider_specific_fields,
     },
     base_llm::messages::context::MessagesShapeOptions,
@@ -24,6 +25,7 @@ pub fn shape_anthropic_messages_request(
 ) -> Result<MessagesRequest, Error> {
     if !options.drops_unsupported_params
         && let Some(path) = non_string_user_text_path(&request.messages)
+            .or_else(|| non_string_system_text_path(request.params.system.as_ref()))
     {
         return Err(Error::InvalidRequest(ErrorDetail::NonStringText { path }));
     }
@@ -447,6 +449,34 @@ mod tests {
         assert_eq!(
             detail.to_string(),
             "messages.1.content.1.text: Input should be a valid string"
+        );
+        assert!(shape(true).is_ok());
+    }
+
+    #[rstest]
+    fn a_non_string_system_text_is_a_request_error_naming_its_index_without_drop_params(
+        #[values(false, true)] presanitized: bool,
+        #[values(json!(null), json!(5))] text: Value,
+    ) {
+        let shape = |drops_unsupported_params| {
+            shape_anthropic_messages_request(
+                request(json!({"model": "m", "system": [
+                    {"type": "text", "text": "be terse"},
+                    {"type": "text", "text": text}
+                ], "messages": [{"role": "user", "content": "hi"}]})),
+                MessagesShapeOptions {
+                    reasoning_auto_summary: false,
+                    presanitized,
+                    drops_unsupported_params,
+                },
+            )
+        };
+        let Err(Error::InvalidRequest(detail)) = shape(false) else {
+            panic!("a non-string system text must be a request error without drop_params");
+        };
+        assert_eq!(
+            detail.to_string(),
+            "system.1.text: Input should be a valid string"
         );
         assert!(shape(true).is_ok());
     }
