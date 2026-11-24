@@ -652,7 +652,7 @@ def transform_openai_input_gemini_content(
     return VertexAIBatchEmbeddingsRequestBody(
         requests=cast(  # cast-ok: extra_body carries raw Gemini fields the TypedDict does not list
             list[EmbedContentRequest],
-            [{**extra_body, **request} for request in over_extra_body_items(extra_requests, requests)],
+            over_extra_body_items([extra_body] * len(requests), over_extra_body_items(extra_requests, requests)),
         )
     )
 

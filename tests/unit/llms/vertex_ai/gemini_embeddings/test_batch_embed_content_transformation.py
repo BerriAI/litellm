@@ -932,6 +932,30 @@ def test_gemini_embedding_merges_extra_body_requests_into_the_request_for_the_sa
 
 
 @pytest.mark.respx(assert_all_called=True)
+def test_gemini_embedding_keeps_a_shared_extra_body_config_beside_the_config_of_one_request(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:batchEmbedContents"
+    ).mock(return_value=httpx.Response(200, json={"embeddings": [{"values": [0.1]}, {"values": [0.2]}]}))
+
+    litellm.embedding(
+        model="gemini/gemini-embedding-2",
+        input=["hello", "world"],
+        api_key="gemini-test-key",
+        extra_body={
+            "embedContentConfig": {"autoTruncate": False, "documentOcr": False},
+            "requests": [{"embedContentConfig": {"documentOcr": True}}],
+        },
+    )
+
+    assert [request["embedContentConfig"] for request in json.loads(route.calls.last.request.content)["requests"]] == [
+        {"autoTruncate": False, "documentOcr": True},
+        {"autoTruncate": False, "documentOcr": False},
+    ]
+
+
+@pytest.mark.respx(assert_all_called=True)
 def test_gemini_embedding_still_sends_an_extra_body_requests_field_that_is_not_a_list(
     respx_mock: respx.MockRouter,
 ) -> None:
