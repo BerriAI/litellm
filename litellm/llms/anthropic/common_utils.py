@@ -81,8 +81,9 @@ DROP_DISABLED_THINKING_WARNING: Final = (
     "thinking blocks, and those thinking tokens are billed as output tokens."
 )
 DROP_SERVER_SIDE_FALLBACK_BETA_WARNING: Final = (
-    "Dropping the %s beta for model=%s (drop_params=True): the model does not support server-side fallback "
-    "and the provider answers the beta with 400 invalid beta flag."
+    "Dropping the %s beta for model=%s (drop_params=True): neither its model_info nor the model cost map lists "
+    "server-side fallback support for it. Set model_info.supports_server_side_fallback: true on a deployment whose "
+    "model supports it."
 )
 
 # Anthropic error `type` (both the JSON error body and SSE `event: error`
