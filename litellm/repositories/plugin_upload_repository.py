@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 _MANIFEST: Final = TypeAdapter(dict[str, object])
 _SOURCE: Final = TypeAdapter(dict[str, str])
 PAGE_SIZE: Final = 100
+DOWNLOAD_EXPORT_BATCH_SIZE: Final = 1000
 _INCREMENT_ANONYMOUS_DOWNLOADS: Final = """
 UPDATE "LiteLLM_ClaudeCodePluginTable"
 SET "anonymous_download_count" = "anonymous_download_count" + 1
@@ -250,29 +251,44 @@ class PluginUploadRepository:
         return PluginDownloadsResponse(
             total_downloads=total + plugin.anonymous_download_count,
             anonymous_downloads=plugin.anonymous_download_count,
-            downloads=tuple(
-                PluginDownloadEvent(
-                    id=str(row.id),
-                    downloaded_at=row.downloaded_at,
-                    version=row.version,
-                    digest=row.digest,
-                    authenticated=row.authenticated,
-                    user_id=row.user_id,
-                    user_email=row.user_email,
-                    key_alias=row.key_alias,
-                    team_id=row.team_id,
-                    team_alias=row.team_alias,
-                )
-                for row in rows[:limit]
-            ),
+            downloads=tuple(_download_event(row) for row in rows[:limit]),
             next_cursor=str(rows[limit - 1].id) if len(rows) > limit else None,
         )
+
+    async def export_downloads(self, plugin_id: str) -> AsyncIterator[PluginDownloadEvent]:
+        cursor: int | None = None  # rebind-ok: bounded keyset traversal advances after each export batch
+        while True:
+            rows: Sequence[prisma_models.LiteLLM_ClaudeCodePluginDownload] = await self._downloads.find_many(
+                where={"plugin_id": plugin_id, **({"id": {"lt": cursor}} if cursor is not None else {})},
+                order={"id": "desc"},
+                take=DOWNLOAD_EXPORT_BATCH_SIZE,
+            )
+            for row in rows:
+                yield _download_event(row)
+            if len(rows) < DOWNLOAD_EXPORT_BATCH_SIZE:
+                return
+            cursor = rows[-1].id
 
     async def download_counts(self, plugin_ids: tuple[str, ...]) -> Mapping[str, int]:
         if not plugin_ids:
             return MappingProxyType({})
         rows: Final = _DOWNLOAD_COUNTS.validate_python(await self._db.query_raw(_DOWNLOAD_COUNTS_QUERY, plugin_ids))
         return MappingProxyType({row.id: row.download_count for row in rows})
+
+
+def _download_event(row: "prisma_models.LiteLLM_ClaudeCodePluginDownload") -> PluginDownloadEvent:
+    return PluginDownloadEvent(
+        id=str(row.id),
+        downloaded_at=row.downloaded_at,
+        version=row.version,
+        digest=row.digest,
+        authenticated=row.authenticated,
+        user_id=row.user_id,
+        user_email=row.user_email,
+        key_alias=row.key_alias,
+        team_id=row.team_id,
+        team_alias=row.team_alias,
+    )
 
 
 def _archive_metadata(plugin: "prisma_models.LiteLLM_ClaudeCodePluginTable") -> PluginArchiveMetadata:

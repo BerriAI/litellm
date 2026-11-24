@@ -92,6 +92,7 @@ export function MultiSelect({
       : safeOptions;
 
   const canClear = (selected: MultiSelectOption[]) => selected.length > 0 && !disabled && !loading;
+  const inputPlaceholder = selectedOptions.length ? undefined : placeholder;
 
   const handleValueChange = (selected: MultiSelectOption[]) => {
     const next = allowCustomValues
@@ -114,29 +115,32 @@ export function MultiSelect({
       filter={matchesQuery}
       disabled={disabled || loading}
     >
-      <ComboboxChips render={<div ref={anchor} />} className={`min-h-8 py-1 text-sm ${className ?? ""}`}>
+      <ComboboxChips
+        render={<div ref={anchor} />}
+        className={`relative min-h-8 min-w-0 py-1 text-sm has-data-[slot=combobox-clear]:pr-8 ${className ?? ""}`}
+      >
         <ComboboxValue>
           {(selected: MultiSelectOption[]) => (
             <>
               {selected.map((option) => (
-                <ComboboxChip key={option.value} aria-label={option.label}>
+                <ComboboxChip key={option.value} aria-label={option.label} className="min-w-0 max-w-full">
                   {option.icon && (
                     <span aria-hidden="true" className="shrink-0">
                       {option.icon}
                     </span>
                   )}
-                  {option.label}
+                  <span className="truncate">{option.label}</span>
                 </ComboboxChip>
               ))}
               <ComboboxChipsInput
                 id={id}
                 aria-describedby={describedBy}
-                placeholder={loading ? t("shared.multiSelect.loading") : placeholder}
-                className="min-w-24"
+                placeholder={loading ? t("shared.multiSelect.loading") : inputPlaceholder}
+                className="min-w-8"
                 aria-label={placeholder || undefined}
               />
               {canClear(selected) && (
-                <ComboboxClear className="ml-auto self-center" aria-label={t("shared.multiSelect.clearAll")} />
+                <ComboboxClear className="absolute top-1 right-1" aria-label={t("shared.multiSelect.clearAll")} />
               )}
             </>
           )}

@@ -59,6 +59,13 @@ class _SuccessKwargs(TypedDict, total=False):
 _SUCCESS_KWARGS_ADAPTER: Final = TypeAdapter(_SuccessKwargs)
 
 
+class _SuccessEventKwargs(TypedDict, total=False):
+    """The logging call details a success callback reads."""
+
+    call_type: ReadOnly[object]
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
+
+
 _active_prefetched_usage: Final[ContextVar["PrefetchedUsage | None"]] = ContextVar("prefetched_usage", default=None)
 
 
@@ -143,7 +150,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
     logged_failure: int = 0
     default_cache_time_seconds: int = 1 * 60 * 60  # 1 hour
 
-    def __init__(self, usage: RouterUsage, routing_args: dict = {}):
+    def __init__(self, usage: RouterUsage, routing_args: Mapping[str, object] = {}):
         self.routing_args = RoutingArgs.model_validate(routing_args)
         BaseRoutingStrategy.__init__(
             self,
@@ -304,7 +311,9 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             return deployment  # don't fail calls if eg. redis fails to connect
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self, kwargs: _SuccessEventKwargs, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:
@@ -345,7 +354,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             )
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
         try:

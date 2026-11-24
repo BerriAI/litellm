@@ -17,6 +17,7 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     CUSTOMER_ORG_ALIAS_HEADER,
     CUSTOMER_TEAM_ID_HEADER,
     AmbiguousOrganizationAlias,
+    CustomerIdentityHeaderNames,
     check_customer_hierarchy_budget,
     check_customer_hierarchy_key_scope,
     check_customer_hierarchy_model_access,
@@ -24,7 +25,6 @@ from litellm.proxy.auth.customer_hierarchy_auth import (
     customer_hierarchy_from_member_row,
     customer_identity_from_headers,
     customer_identity_from_request,
-    customer_member_id_from_headers,
     forget_customer_organization_aliases,
     get_customer_hierarchy,
     get_customer_organization_hierarchy,
@@ -371,7 +371,9 @@ def test_model_access_requires_every_level_with_an_allowlist_to_permit_the_model
 def test_member_header_is_read_case_insensitively_and_blank_values_are_ignored(
     headers: Mapping[str, object] | None, expected: str | None
 ) -> None:
-    assert customer_member_id_from_headers(headers) == expected
+    assert customer_identity_from_headers(headers) == (
+        CustomerRequestIdentity(customer_member_id=expected) if expected is not None else None
+    )
 
 
 class _MemberTable:
@@ -673,6 +675,54 @@ def test_a_jwt_proxy_without_customer_claim_mappings_keeps_reading_customer_head
     settings: LiteLLM_JWTAuth,
 ) -> None:
     assert customer_identity_from_request(_CUSTOMER_HEADERS, {"sub": "user"}, settings) == _HEADER_IDENTITY
+
+
+@pytest.mark.parametrize(
+    ("jwt_settings", "claims", "expected"),
+    [
+        (
+            LiteLLM_JWTAuth(team_id_jwt_field="client_id"),
+            {"client_id": "app"},
+            CustomerRequestIdentity(customer_org_alias="tenant", customer_member_id="external-user"),
+        ),
+        (
+            LiteLLM_JWTAuth(team_id_jwt_field="client_id", customer_org_alias_jwt_field="org"),
+            {"client_id": "app", "org": "signed-tenant"},
+            CustomerRequestIdentity(customer_org_alias="signed-tenant"),
+        ),
+        (
+            LiteLLM_JWTAuth(team_id_jwt_field="client_id", customer_org_alias_jwt_field="org"),
+            {"client_id": "app"},
+            None,
+        ),
+    ],
+)
+def test_jwt_app_with_custom_customer_headers_respects_claim_precedence(
+    jwt_settings: LiteLLM_JWTAuth, claims: Mapping[str, object], expected: CustomerRequestIdentity | None
+) -> None:
+    identity: Final = customer_identity_from_request(
+        {
+            "x-tenant-id": " tenant ",
+            "X-User-ID": "external-user",
+            CUSTOMER_ORG_ALIAS_HEADER: "other-org",
+            CUSTOMER_MEMBER_ID_HEADER: "other-member",
+        },
+        claims,
+        jwt_settings,
+        names=CustomerIdentityHeaderNames.from_settings(
+            {"customer_org_alias_header": "X-Tenant-ID", "customer_member_id_header": "X-User-ID"}
+        ),
+    )
+    assert identity == expected
+
+
+def test_configured_customer_header_does_not_fall_back_to_the_standard_header() -> None:
+    assert customer_identity_from_request(
+        {CUSTOMER_ORG_ALIAS_HEADER: "org", CUSTOMER_MEMBER_ID_HEADER: "member"},
+        None,
+        LiteLLM_JWTAuth(),
+        names=CustomerIdentityHeaderNames.from_settings({"customer_member_id_header": "X-User-ID"}),
+    ) == CustomerRequestIdentity(customer_org_alias="org")
 
 
 def test_an_issuer_specific_customer_mapping_alone_stops_header_fallback() -> None:

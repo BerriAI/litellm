@@ -799,3 +799,34 @@ def test_a_deployment_pinned_to_ga_bridges_only_a_beta_client(
     )
 
     assert protocol == AzureRealtimeProtocol(name=pinned_protocol, bridges_beta_client_to_ga=bridges_beta_client_to_ga)
+
+
+def test_construct_url_forwards_the_call_id_of_a_webrtc_call():
+    """A sideband joins an existing WebRTC call by `call_id`, so the id has to reach Azure."""
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    url = AzureOpenAIRealtime().construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-realtime",
+        api_version=None,
+        realtime_protocol="GA",
+        query_params={"call_id": "rtc_abc"},
+    )
+
+    assert url == "wss://my-endpoint.openai.azure.com/openai/v1/realtime?call_id=rtc_abc"
+
+
+def test_construct_url_joins_a_translation_call_without_naming_a_model():
+    """Azure opens a new translation session, and leaves the call unjoined, when the join also names a model."""
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    url = AzureOpenAIRealtime()._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-realtime-translate",
+        api_version=None,
+        realtime_protocol="GA",
+        query_params={"call_id": "rtc_abc"},
+        realtime_mode="translation",
+    )
+
+    assert url == "wss://my-endpoint.openai.azure.com/openai/v1/realtime/translations?call_id=rtc_abc"

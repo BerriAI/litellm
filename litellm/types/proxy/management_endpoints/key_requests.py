@@ -4,7 +4,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Any, Final, Literal  # noqa: TID251  # allowed_routes and metadata stay Any for existing callers
 
-from pydantic import Field, PositiveInt, field_validator, model_validator
+from pydantic import Field, PositiveInt, StrictBool, field_validator, model_validator
 from typing_extensions import TypeIs  # noqa: TID251  # narrows the raw payload a before-validator receives
 
 from litellm.types.proxy.management_endpoints.request_base import GenerateRequestBase
@@ -35,7 +35,7 @@ class KeyRequestBase(GenerateRequestBase):
     enable_prompt_caching: bool | None = None
     throttle_on_budget_exceeded: bool | None = None
     enforced_params: list[str] | None = None
-    allowed_routes: list[Any] | None = []
+    allowed_routes: list[object] | None = []
     allowed_passthrough_routes: list[object] | None = None
     denied_passthrough_routes: list[str] | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
@@ -110,6 +110,14 @@ class UpdateKeyRequest(KeyRequestBase):
     spend: float | None = None
     soft_budget: float | None = None
     metadata: dict[Any, Any] | None = None
+    lens_enabled: StrictBool | None = Field(
+        default=None,
+        description=(
+            "Enable or disable Lens tracing for this key. Omit to retain its policy or send null to inherit "
+            "the team policy. This updates only metadata.lens_enabled and preserves other stored metadata. "
+            "When metadata is also supplied, this field takes precedence over metadata.lens_enabled."
+        ),
+    )
     temp_budget_increase: float | None = None
     temp_budget_expiry: datetime | None = None
     auto_rotate: bool | None = None

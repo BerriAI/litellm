@@ -12,7 +12,7 @@ import os
 import re
 import time
 import traceback
-from collections.abc import Mapping
+from collections.abc import Coroutine, Mapping
 from typing import Final, Literal, get_args
 
 import httpx
@@ -89,7 +89,7 @@ def substitute_env_variables(value: str) -> str:
     """
     pattern: Final = r"\{\{environment_variables\.([A-Z_]+)\}\}"
 
-    def replace_env_var(match):
+    def replace_env_var(match: re.Match[str]) -> str:
         env_var_name: Final = match.group(1)
         return os.getenv(env_var_name, "")
 
@@ -324,7 +324,7 @@ class GenericAPILogger(CustomBatchLogger):
 
         raise RuntimeError("Generic API Logger retry loop exited unexpectedly")
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj, start_time: object, end_time: object):
         """
         Async Log success events to Generic API Endpoint
 
@@ -364,7 +364,7 @@ class GenericAPILogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception("Generic API Logger Error - %s\n%s", e, traceback.format_exc())
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs, response_obj, start_time: object, end_time: object):
         """
         Async Log failure events to Generic API Endpoint
 
@@ -424,7 +424,7 @@ class GenericAPILogger(CustomBatchLogger):
 
             if self.log_format == "single":
                 # Send each log as individual HTTP request in parallel
-                tasks: Final = []
+                tasks: Final[list[Coroutine[object, object, httpx.Response]]] = []
                 for log_entry in batch:
                     task = self._post_with_retries(data=safe_dumps(log_entry))
                     tasks.append(task)
@@ -468,7 +468,9 @@ class GenericAPILogger(CustomBatchLogger):
             del self.log_queue[: len(batch)]
             self.last_flush_time = time.time()
 
-    def _get_v1_logging_payload(self, kwargs, response_obj, start_time, end_time) -> dict:
+    def _get_v1_logging_payload(
+        self, kwargs, response_obj, start_time: object, end_time: object
+    ) -> Mapping[str, object]:
         """
         Maintained for backwards compatibility with old logging payload
 
@@ -489,7 +491,7 @@ class GenericAPILogger(CustomBatchLogger):
         id: Final = response_obj.get("id", str(uuid.uuid4()))
 
         # Build the initial payload
-        payload: Final = {
+        payload: Final[dict[str, object]] = {
             "id": id,
             "call_type": call_type,
             "cache_hit": cache_hit,

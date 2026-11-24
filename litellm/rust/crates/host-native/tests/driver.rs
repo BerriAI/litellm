@@ -166,6 +166,7 @@ fn dispatching_call() -> TestMachine {
                         optional_params: json!({}),
                         secret_fields: Vec::new(),
                         api_key: None,
+                        host_transport: false,
                     },
                 )
                 .await?;

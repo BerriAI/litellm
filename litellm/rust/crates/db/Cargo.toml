@@ -15,7 +15,7 @@ serde.workspace = true
 sqlx.workspace = true
 strum.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["time"] }
+tokio = { workspace = true, features = ["macros", "net", "sync", "time"] }
 
 [dev-dependencies]
 rstest.workspace = true

@@ -2,6 +2,8 @@
 MiniMax Anthropic transformation config - extends AnthropicConfig for MiniMax's Anthropic-compatible API
 """
 
+from collections.abc import Sequence
+
 import litellm
 from litellm.litellm_core_utils.url_utils import ensure_api_route
 from litellm.llms.anthropic.messages.native.transformation import (
@@ -50,11 +52,11 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
 
     def validate_anthropic_messages_environment(
         self,
-        headers: dict,  # mutable-ok: mirrors the legacy base override signature
+        headers: dict[str, object],  # mutable-ok: mirrors the legacy base override signature
         model: str,
-        messages: list[object],  # mutable-ok: mirrors the legacy base override signature
-        optional_params: dict,  # mutable-ok: mirrors the legacy base override signature
-        litellm_params: dict,  # mutable-ok: mirrors the legacy base override signature
+        messages: Sequence[object],
+        optional_params: dict[str, object],  # mutable-ok: mirrors the legacy base override signature
+        litellm_params: dict[str, object],  # mutable-ok: mirrors the legacy base override signature
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> tuple[dict, str | None]:  # mutable-ok: mirrors the legacy base override signature
@@ -73,8 +75,8 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: object,
+        litellm_params: object,
         stream: bool | None = None,
     ) -> str:
         """

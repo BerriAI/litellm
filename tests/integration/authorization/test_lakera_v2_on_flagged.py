@@ -298,8 +298,10 @@ def test_lakera_v2_outage_mid_burst_never_forwards_raw_pii(gateway: Gateway) -> 
 
         def burst(phase: str) -> tuple[tuple[str, int], ...]:
             futures: Final = tuple(
-                pool.submit(_send, gateway, endpoint, model, guardrails[on_flagged], f"{_PII_PROMPT} ({phase})", stream)
-                for on_flagged, endpoint, stream in calls
+                pool.submit(
+                    _send, gateway, endpoint, model, guardrails[on_flagged], f"{_PII_PROMPT} ({phase} {call})", stream
+                )
+                for call, (on_flagged, endpoint, stream) in enumerate(calls)
             )
             return tuple(
                 (on_flagged, future.result(timeout=60).status_code)

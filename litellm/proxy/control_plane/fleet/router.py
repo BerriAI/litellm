@@ -19,7 +19,7 @@ from litellm.proxy.control_plane.fleet.service import fetch_models, fetch_teams,
 from litellm.types.proxy.control_plane.dataplanes import UnreachableDataplane
 from litellm.types.proxy.control_plane.fleet import FleetModel, FleetModelsResponse, FleetTeam, FleetTeamsResponse
 
-T: Final = TypeVar("T")
+T = TypeVar("T")
 
 router: Final = APIRouter(prefix="/fleet", tags=["fleet"])
 

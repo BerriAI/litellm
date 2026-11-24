@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.111.0"
+version = "1.112.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.16"
@@ -95,8 +95,8 @@ proxy = [
     "mcp>=2.3.0,<3",
     "httpx2>=2.10.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.117",
-    "litellm-enterprise==0.1.86",
+    "litellm-proxy-extras==0.4.120",
+    "litellm-enterprise==0.1.88",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -255,6 +255,7 @@ dev = [
     "vcrpy==8.2.1",
     "pytest-recording==0.13.4",
     "nvidia-riva-client==2.16.0",
+    "time-machine==2.19.0",
 ]
 e2e-dev = [
     "playwright==1.61.0",
@@ -298,6 +299,7 @@ ci = [
     # The Riva tests serve NVIDIA's own message definitions, which checks
     # LiteLLM's hand-written copy of them on every run.
     "nvidia-riva-client==2.16.0",
+    "time-machine==2.19.0",
     "Pillow==12.3.0; python_version == '3.10'",
     "Pillow==13.0.0; python_version >= '3.11'",
     # Azure batch E2E tests still import psycopg2 directly.
@@ -453,7 +455,7 @@ litellm-enterprise = { workspace = true }
 members = ["litellm/enterprise", "litellm/proxy-extras", "litellm/packaging/litellm-proxy"]
 
 [tool.commitizen]
-version = "1.111.0"
+version = "1.112.0"
 version_files = [
     "pyproject.toml:^version",
     "litellm/packaging/litellm-proxy/pyproject.toml:^version",
@@ -585,6 +587,17 @@ banned-module-level-imports = ["prisma"]
 "litellm.rust_bridge._native.RustKeyRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
 "litellm.rust_bridge._native.RustJwtKeyMappingRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
 "litellm.rust_bridge._native.RustModelAccessGroupRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustBudgetRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustEndUserRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustUserRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustOrganizationRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustTeamMembershipRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustTeamRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustProjectRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustTagRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustAccessGroupRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustObjectPermissionRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
+"litellm.rust_bridge._native.RustSpendLogRepository".msg = "Use a Python repository in litellm/repositories/; only it may reach a Rust repository."
 
 [tool.ruff.lint.per-file-ignores]
 "litellm/main.py" = ["F401"]

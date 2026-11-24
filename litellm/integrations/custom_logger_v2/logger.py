@@ -8,7 +8,7 @@ from litellm.integrations.custom_logger_v2.enums import Activation, Field, Hook
 from litellm.integrations.custom_logger_v2.hooks import InvalidDeclarationError, Subscription
 from litellm.integrations.custom_logger_v2.selection import Selection
 
-HandlerT: Final = TypeVar("HandlerT", bound=Callable[..., object])
+HandlerT = TypeVar("HandlerT", bound=Callable[..., object])
 
 _SUBSCRIPTION_ATTR: Final = "__custom_logger_v2_subscription__"
 

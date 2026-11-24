@@ -27,6 +27,16 @@ A boundary knows which surface a value came from. `general_settings.coordination
 
 Each typed field keeps where its value came from (the key, `REDIS_<KWARG>` or the fallback name), so an error or warning downstream still names it
 
+## Flags
+
+A flag a user writes in config.yaml or in an environment variable is read by one rule, whichever Python helper the proxy uses for that key. The proxy has a helper per key and they disagree on the same word, so copying each one makes the same text mean different things in different keys
+
+- The rule is `lax_bool`: `true`, `1`, `yes`, `on`, `t` and `y` are on and their opposites are off, in any case once stripped. A word that is no flag leaves the flag unset, never on
+- Use `lenient::LaxBool` on an `Option<bool>` field for config.yaml, and `flags::lax_bool` on a variable's text
+- The flag leaves the boundary as a `bool`. Do not hand a consumer `Spelled<bool>` text to read again
+- Where this differs from what the proxy does for a key, list it as a deliberate difference next to the code, as `crates/config/src/layer.rs` does
+- A per-helper reader such as `redis_str_to_bool` is only for a crate that stands in for a Python library and has to keep that library's rule
+
 ## What stays downstream
 
 A crate that stands in for a Python library keeps that library's semantics, because they are its compatibility contract and not value coercion. `redis-resolve` stands in for redis-py, so it keeps
@@ -46,7 +56,7 @@ The rule is about where config and kwargs get coerced, not about who may depend 
 
 ## Existing code
 
-Some code still coerces Python-shaped values past the boundary, for example the `REDIS_*` merge in `redis-resolve/src/layers.rs` and the flag and number readers in `redis-resolve/src/options.rs`. Do not add more. When you change one, move the coercion to its boundary instead of extending it in place
+Some code still coerces Python-shaped values past the boundary, for example the `REDIS_*` merge in `redis-resolve/src/layers.rs` and the flag and number readers in `redis-resolve/src/options.rs`. Some flags are still read by a per-helper rule or carried downstream as `Spelled<bool>`. Do not add more. When you change one, move the coercion to its boundary instead of extending it in place
 
 ## Tests
 

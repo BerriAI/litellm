@@ -3,13 +3,18 @@ from __future__ import annotations
 import base64
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final
+from urllib.parse import quote, urlsplit
 
 import httpx
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, string_value
+from integration._support.process import owned_proxy
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
+from integration._support.wire import Reply, Request, wire_server
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
 from pydantic import JsonValue
 
@@ -269,3 +274,77 @@ def test_regenerated_key_without_user_or_team_keeps_its_managed_files(gateway: G
             retrieved.text,
             stranger.text,
         )
+
+
+def _gemini_file_provider(file_id: str) -> Callable[[Request], Reply]:
+    metadata: Final = {
+        "name": f"files/{file_id}",
+        "uri": f"https://generativelanguage.googleapis.com/v1beta/files/{file_id}",
+        "displayName": "input.jsonl",
+        "sizeBytes": "6",
+        "createTime": "2026-01-01T00:00:00Z",
+        "state": "ACTIVE",
+    }
+
+    def respond(request: Request) -> Reply:
+        path: Final = urlsplit(request.target).path
+        if request.method == "POST" and path == "/upload/v1beta/files":
+            return Reply(headers={"X-Goog-Upload-URL": f"http://{request.headers['host']}/upload-file"})
+        if request.method == "POST" and path == "/upload-file":
+            return Reply(body=json.dumps({"file": metadata}).encode())
+        if request.method == "GET" and path == f"/download/v1beta/files/{file_id}:download":
+            return Reply(body=b"notes\n", content_type="text/plain")
+        return Reply(status=404)
+
+    return respond
+
+
+def test_gemini_file_content_resolves_url_spellings_to_the_registered_owner(gateway: Gateway, tmp_path: Path) -> None:
+    config: Final = tmp_path / "gemini-files.yaml"
+    config.write_text(
+        json.dumps(
+            {
+                "model_list": [],
+                "general_settings": {
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                    "database_url": "os.environ/DATABASE_URL",
+                    "store_model_in_db": True,
+                },
+                "router_settings": {"num_retries": 0},
+                "litellm_settings": {
+                    "provider_url_destination_allowed_hosts": ["example.invalid", "generativelanguage.googleapis.com"],
+                    "user_url_allowed_hosts": ["127.0.0.1"],
+                },
+            }
+        )
+    )
+    provider_id: Final = "upload-" + uuid.uuid4().hex
+    with (
+        wire_server(_gemini_file_provider(provider_id)) as wire,
+        owned_proxy(gateway, tmp_path, {}, config=config) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="gemini/gemini-flash-latest", api_base=wire.url)
+        owner_team: Final = scenario.team(models=[model])
+        other_team: Final = scenario.team(models=[model])
+        routes: Final = ["/v1/files", "/v1/files/*", "/gemini/v1/files/*"]
+        owner: Final = scenario.key(
+            user_id=scenario.user(user_role="internal_user"), team_id=owner_team, allowed_routes=routes
+        )
+        other: Final = scenario.key(
+            user_id=scenario.user(user_role="internal_user"), team_id=other_team, allowed_routes=routes
+        )
+        managed_id: Final = _upload(scenario, owner, model, "user_data")
+        assert managed_id != provider_id
+        for prefix in ("/gemini/v1/files", "/v1/files"):
+            for spelling in (
+                provider_id,
+                f"files/{provider_id}",
+                f"https://generativelanguage.googleapis.com/v1beta/files/{provider_id}",
+                f"https://example.invalid/{provider_id}",
+            ):
+                path: Final = f"{prefix}/{quote(spelling, safe='')}/content"
+                denied: Final = candidate.request("GET", path, key=other, params={"model": model})
+                assert denied.status_code == 403, denied.text
+                allowed: Final = candidate.request("GET", path, key=owner, params={"model": model})
+                assert (allowed.status_code, allowed.content) == (200, b"notes\n"), allowed.text

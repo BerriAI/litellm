@@ -17,7 +17,7 @@ export const MAX_CLIENT_MODEL_EXPORT_BYTES = 20 * 1024 * 1024;
 
 const loadModels = async (request: DailyActivityRequest, agent: AgentRow): Promise<ClientAgentModelsResult> => {
   try {
-    const blob = await dailyActivityExportCall("tag", request, "daily_with_models", "json");
+    const blob = await dailyActivityExportCall("tag", request, "daily_with_models", { format: "json" });
     if (blob.size > MAX_CLIENT_MODEL_EXPORT_BYTES) {
       return { results: [], error: i18n.t("usage.clientModels.errors.tooLarge") };
     }
