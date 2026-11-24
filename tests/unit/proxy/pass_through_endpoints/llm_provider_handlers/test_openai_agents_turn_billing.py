@@ -48,6 +48,7 @@ ROOT_ITEMS_URL: Final = f"{SESSIONS_URL}/{SESSION_ID}/turns/turn_1/items?limit=1
 CALL_TIME: Final = datetime(2026, 10, 29, 9, 12, 41)
 CALL_STARTED_AT: Final = math.floor(CALL_TIME.timestamp())
 AGENT_MODEL: Final = "gpt-5.4-mini"
+LOGGED_END_USER: Final = "agents-end-user"
 TURN_USAGE: Final = {
     "input_tokens": 7200,
     "input_tokens_details": {"cached_tokens": 6912},
@@ -277,7 +278,7 @@ def _logging_obj(
     )
     logging_obj.update_environment_variables(
         model="unknown",
-        user="unknown",
+        user=LOGGED_END_USER,
         optional_params={},
         litellm_params=litellm_params,
         call_type="pass_through_endpoint",
@@ -1727,6 +1728,72 @@ async def test_a_turn_row_the_legacy_limiter_sees_a_minute_later_leaves_the_key_
     await call("7a9c1e3a-5c7e-4a9c-8e1a-3c5e7a9c1e02")
     with pytest.raises(ProxyRateLimitError):
         await call("7a9c1e3a-5c7e-4a9c-8e1a-3c5e7a9c1e03")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("key", "metadata"),
+    [
+        pytest.param(
+            UserAPIKeyAuth(
+                api_key=hash_token("sk-agents-legacy-user-tpm"), user_id="agents-user", user_tpm_limit=7241
+            ),
+            {"user_api_key_user_id": "agents-user"},
+            id="user",
+        ),
+        pytest.param(
+            UserAPIKeyAuth(
+                api_key=hash_token("sk-agents-legacy-team-tpm"), team_id="agents-team", team_tpm_limit=7241
+            ),
+            {"user_api_key_team_id": "agents-team"},
+            id="team",
+        ),
+        pytest.param(
+            UserAPIKeyAuth(
+                api_key=hash_token("sk-agents-legacy-end-user-tpm"),
+                end_user_id=LOGGED_END_USER,
+                end_user_tpm_limit=7241,
+            ),
+            {},
+            id="end_user",
+        ),
+    ],
+)
+async def test_a_turn_row_logged_in_a_new_minute_counts_once_toward_user_team_and_end_user_tpm(
+    key: UserAPIKeyAuth, metadata: dict[str, str], local_model_cost_map: None
+):
+    limiter_clock: Final = _LimiterClock()
+    limiter: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=limiter_clock
+    )
+    api: Final = _AgentsApi(
+        turn_pages=((_turn("turn_1", CALL_STARTED_AT + 1, "completed", TURN_USAGE),),), session=_session()
+    )
+    rows: Final = _SpendRows()
+
+    async def call(litellm_call_id: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=key,
+            cache=DualCache(),
+            data={"litellm_call_id": litellm_call_id},
+            call_type="pass_through_endpoint",
+        )
+
+    await call("9c1e3a5c-7e9a-4c1e-8a3c-5e7a9c1e3a01")
+    limiter_clock.now = CALL_TIME + timedelta(minutes=1)
+    await _relay_call(
+        _biller(api, _Clock()),
+        rows,
+        EVENTS_URL,
+        {"events": [INPUT_MESSAGE]},
+        None,
+        "9c1e3a5c-7e9a-4c1e-8a3c-5e7a9c1e3a01",
+        metadata={"user_api_key": key.api_key, "user_api_key_model_max_budget": key.model_max_budget, **metadata},
+        callbacks=(limiter,),
+    )
+    assert (await rows.only_row())["total_tokens"] == 7240
+
+    await call("9c1e3a5c-7e9a-4c1e-8a3c-5e7a9c1e3a02")
 
 
 async def _failing_release(logging_obj: LiteLLMLoggingObj) -> None:

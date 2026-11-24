@@ -648,7 +648,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
                     "current_requests": released,
-                    "current_tpm": total_tokens,
+                    "current_tpm": 0,
                     "current_rpm": released,
                 }
 
@@ -672,7 +672,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
                     "current_requests": released,
-                    "current_tpm": total_tokens,
+                    "current_tpm": 0,
                     "current_rpm": released,
                 }
 
@@ -696,7 +696,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
                     litellm_parent_otel_span=litellm_parent_otel_span,
                 ) or {
                     "current_requests": released,
-                    "current_tpm": total_tokens,
+                    "current_tpm": 0,
                     "current_rpm": released,
                 }
 
