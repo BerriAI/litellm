@@ -12,6 +12,7 @@ from litellm.llms.bedrock.common_utils import(
     get_bedrock_base_model,
     get_bedrock_cross_region_inference_regions,
     is_bedrock_native_output_rejection,
+    normalize_json_schema_custom_types_to_object,
     strip_bedrock_routing_prefix,
     strip_bedrock_throughput_suffix,
     without_bedrock_native_output_opt_in,
@@ -2126,3 +2127,27 @@ def test_without_bedrock_native_output_opt_in_turns_the_opt_in_off_and_keeps_the
     assert turned_off["api_base"] == "https://bedrock.example"
     assert deployment_model_info(turned_off)["id"] == "deployment-1"
     assert litellm_params["model_info"] == {"id": "deployment-1"}
+
+
+def test_normalize_json_schema_custom_types_to_object_reaches_subschemas_under_defs():
+    def tool_schema(custom_type: str) -> dict[str, object]:
+        return {
+            "type": custom_type,
+            "properties": {"args": {"type": "array", "items": {"type": custom_type}}},
+            "additionalProperties": {"type": custom_type},
+            "anyOf": [{"type": custom_type}, {"type": "string"}],
+        }
+
+    schema: Final = {
+        "type": "custom",
+        "properties": {"tool": {"$ref": "#/$defs/Tool"}},
+        "$defs": {"Tool": tool_schema("custom")},
+    }
+
+    normalize_json_schema_custom_types_to_object(schema)
+
+    assert schema == {
+        "type": "object",
+        "properties": {"tool": {"$ref": "#/$defs/Tool"}},
+        "$defs": {"Tool": tool_schema("object")},
+    }
