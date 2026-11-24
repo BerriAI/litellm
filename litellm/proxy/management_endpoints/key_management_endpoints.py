@@ -1121,10 +1121,10 @@ def _configured_default_allowed_routes() -> tuple[str, ...] | None:
 
 def _default_allowed_routes_for(request: GenerateKeyRequest, key_routes: object) -> tuple[str, ...] | None:
     configured_routes: Final = _configured_default_allowed_routes()
-    if configured_routes is None or _creates_team_service_account(request):
+    if configured_routes is None:
         return None
     if "key_type" not in request.model_fields_set or request.key_type is None:
-        return None if key_routes else configured_routes
+        return None if key_routes or _creates_team_service_account(request) else configured_routes
     match request.key_type:
         case LiteLLMKeyType.LLM_API:
             llm_api_routes: Final = _KEY_TYPE_PRESET_ROUTES[LiteLLMKeyType.LLM_API]

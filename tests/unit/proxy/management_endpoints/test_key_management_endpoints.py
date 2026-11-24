@@ -20821,22 +20821,36 @@ def test_effective_key_for_generate_shows_default_allowed_routes_to_the_policy(
 
 
 @pytest.mark.asyncio
-async def test_default_key_generate_params_allowed_routes_skips_team_service_account_keys(
+@pytest.mark.parametrize(
+    ("key_type", "expected_routes"),
+    [
+        (None, []),
+        (LiteLLMKeyType.LLM_API, ["llm_api_routes", "/key/spend/report", "/key/info"]),
+        (LiteLLMKeyType.DEFAULT, []),
+        (LiteLLMKeyType.MANAGEMENT, ["management_routes"]),
+        (LiteLLMKeyType.READ_ONLY, ["info_routes"]),
+    ],
+    ids=["unset", "llm_api", "full_access", "management", "read_only"],
+)
+async def test_default_key_generate_params_allowed_routes_for_team_service_account_keys(
     monkeypatch: pytest.MonkeyPatch,
+    key_type: LiteLLMKeyType | None,
+    expected_routes: list[str],
 ) -> None:
     monkeypatch.setattr(
         litellm,
         "default_key_generate_params",
-        {"allowed_routes": ["llm_api_routes", "/key/spend/report"]},
+        {"allowed_routes": ["llm_api_routes", "/key/spend/report", "/key/info"]},
     )
     mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
 
-    key_row: Final = await _generate_key_and_get_persisted_row(
-        GenerateKeyRequest(team_id="team-a", metadata={"service_account_id": "sa-1"}),
-        mock_insert_data,
-    )
+    request: Final = GenerateKeyRequest(team_id="team-a", metadata={"service_account_id": "sa-1"})
+    key_request: Final = request if key_type is None else request.model_copy(update={"key_type": key_type})
+    effective_key: Final = _effective_key_for_generate(data=key_request, now=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    key_row: Final = await _generate_key_and_get_persisted_row(key_request, mock_insert_data)
 
-    assert not key_row.get("allowed_routes")
+    assert (effective_key.allowed_routes or []) == expected_routes
+    assert (key_row.get("allowed_routes") or []) == expected_routes
 
 
 @pytest.mark.asyncio
