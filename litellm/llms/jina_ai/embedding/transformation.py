@@ -73,11 +73,11 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
 
     def map_openai_params(
         self,
-        non_default_params: Mapping[str, object],
-        optional_params: dict[str, object],
+        non_default_params: dict,
+        optional_params: dict,
         model: str,
         drop_params: bool,
-    ) -> dict[str, object]:
+    ) -> dict:
         if "dimensions" in non_default_params:
             optional_params["dimensions"] = non_default_params["dimensions"]
         return optional_params
@@ -164,14 +164,14 @@ class JinaAIEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: Mapping[str, str],
+        headers: dict,
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict:
         default_headers: Final = {
             "Content-Type": "application/json",
         }
