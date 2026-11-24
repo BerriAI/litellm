@@ -461,7 +461,7 @@ async def test_generic_api_callback_luca_sends_successful_calls_with_its_token(m
 
     generic_logger = GenericAPILogger(callback_name="luca", flush_interval=3600)
     generic_logger.async_httpx_client.post = mock_post
-    litellm.callbacks = [generic_logger]
+    monkeypatch.setattr(litellm, "callbacks", [generic_logger])
 
     assert generic_logger.endpoint == luca_url
     assert generic_logger.headers["Authorization"] == "Bearer test-ingest-token"
