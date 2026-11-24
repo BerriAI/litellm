@@ -1,8 +1,10 @@
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import FileTypes
 
 PARAMS_VLLM_OMNI_DOES_NOT_ACCEPT: Final = frozenset({"mask", "quality", "input_fidelity"})
 
@@ -14,6 +16,13 @@ class HostedVLLMImageEditConfig(OpenAIImageEditConfig):
             for param in super().get_supported_openai_params(model)
             if param not in PARAMS_VLLM_OMNI_DOES_NOT_ACCEPT
         ]
+
+    def uses_json_body(
+        self,
+        image: FileTypes | Sequence[FileTypes | None] | None,
+        image_edit_optional_request_params: Mapping[str, object],
+    ) -> bool:
+        return False
 
     def validate_environment(
         self,
