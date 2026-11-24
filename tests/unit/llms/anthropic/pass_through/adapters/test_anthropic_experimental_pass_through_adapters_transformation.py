@@ -6401,3 +6401,47 @@ def test_unsigned_thinking_is_still_replayed_to_an_open_model_through_the_chat_a
     turns: Final = _sent_assistant_turns("deepseek/deepseek-v4-pro", {"custom_llm_provider": "deepseek"})
 
     assert [turn.get("reasoning_content") for turn in turns] == ["open model plan", "call ls"]
+
+
+def _deferred_tool_request() -> AnthropicMessagesRequest:
+    return AnthropicMessagesRequest(
+        model="claude-sonnet-5-5",
+        max_tokens=100,
+        messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+        tools=[
+            {"name": "Read", "description": "Read a file", "input_schema": {"type": "object", "properties": {}}},
+            {
+                "name": "mcp__weather__get_forecast",
+                "description": "Get a forecast",
+                "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+                "defer_loading": True,
+            },
+        ],
+    )
+
+
+@pytest.mark.parametrize("deployment_model_info", [None, {"deferred_tools": "drop"}, {"deferred_tools": "native"}])
+def test_chat_route_sends_deferred_tools_as_plain_functions_unless_passthrough(
+    deployment_model_info: Mapping[str, object] | None,
+):
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _deferred_tool_request(), deployment_model_info=deployment_model_info
+    )
+
+    tools = openai_request["tools"]
+    assert [tool["function"]["name"] for tool in tools] == ["Read", "mcp__weather__get_forecast"]
+    assert not any("defer_loading" in tool for tool in tools)
+    assert not any("defer_loading" in tool["function"]["parameters"] for tool in tools)
+
+
+def test_chat_route_passthrough_keeps_defer_loading_on_the_deferred_tool():
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _deferred_tool_request(), deployment_model_info={"deferred_tools": "passthrough"}
+    )
+
+    tools = openai_request["tools"]
+    assert {tool["function"]["name"]: tool.get("defer_loading") for tool in tools} == {
+        "Read": None,
+        "mcp__weather__get_forecast": True,
+    }
+    assert not any("defer_loading" in tool["function"]["parameters"] for tool in tools)

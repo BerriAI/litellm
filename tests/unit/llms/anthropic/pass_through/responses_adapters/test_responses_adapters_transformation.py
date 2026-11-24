@@ -5,7 +5,8 @@ Tests for LiteLLMAnthropicToResponsesAPIAdapter
 
 import json
 import os
-from typing import Any, Dict, Final, List
+from collections.abc import Mapping
+from typing import Any, Dict, Final, List, Literal
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,6 +16,7 @@ from openai.types.responses import (
     ResponseOutputMessage,
     ResponseOutputText,
     ResponseReasoningItem,
+    ResponseToolSearchCall,
 )
 from openai.types.responses.response_reasoning_item import Summary
 from pydantic import TypeAdapter
@@ -2633,3 +2635,184 @@ class TestTranslateChatBridgedResponse:
             {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Oslo"}}
         ]
         assert result["stop_reason"] == "tool_use"
+
+
+_TOOL_SEARCH_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"query": {"type": "string"}, "max_results": {"type": "number"}},
+    "required": ["query"],
+}
+_FORECAST_SCHEMA: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+
+
+def _claude_code_tools(*loaded: str) -> list[dict[str, object]]:
+    return [
+        {"name": "Read", "description": "Read a file", "input_schema": {"type": "object", "properties": {}}},
+        {"name": "ToolSearch", "description": "Load deferred tools", "input_schema": _TOOL_SEARCH_SCHEMA},
+        {
+            "name": "DeferredToolPlaceholder",
+            "description": "Never call this tool",
+            "input_schema": {"type": "object", "properties": {}},
+            "defer_loading": True,
+        },
+        *(
+            {"name": name, "description": f"{name} tool", "input_schema": _FORECAST_SCHEMA, "defer_loading": True}
+            for name in loaded
+        ),
+    ]
+
+
+_FIRST_TURN: Final = [{"role": "user", "content": "What is the forecast for Paris?"}]
+_AFTER_LOAD: Final = [
+    *_FIRST_TURN,
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "tool_use", "id": "toolu_search", "name": "ToolSearch", "input": {"query": "weather forecast"}}
+        ],
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_search",
+                "content": [
+                    {"type": "tool_reference", "tool_name": "mcp__weather__get_forecast"},
+                    {"type": "tool_reference", "tool_name": "mcp__weather__unknown"},
+                ],
+            },
+            {"type": "text", "text": "Tool loaded."},
+        ],
+    },
+]
+
+
+def _translated(messages: list, tools: list, deferred_tools: Literal["passthrough", "native", "drop"]) -> dict:
+    return _ADAPTER.translate_request(
+        _make_request(messages=messages, tools=tools), include_encrypted_reasoning=False, deferred_tools=deferred_tools
+    )
+
+
+def _rendered_tools(request: Mapping[str, object]) -> list:
+    return [tool for tool in request["tools"] if not tool.get("defer_loading")]
+
+
+class TestNativeDeferredTools:
+    def test_search_tool_becomes_client_tool_search_and_deferred_tools_stay_deferred(self):
+        request = _translated(_FIRST_TURN, _claude_code_tools(), "native")
+
+        assert request["tools"] == [
+            {
+                "type": "function",
+                "name": "Read",
+                "strict": False,
+                "description": "Read a file",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {
+                "type": "tool_search",
+                "execution": "client",
+                "description": "Load deferred tools",
+                "parameters": _TOOL_SEARCH_SCHEMA,
+            },
+            {
+                "type": "function",
+                "name": "DeferredToolPlaceholder",
+                "strict": False,
+                "description": "Never call this tool",
+                "parameters": {"type": "object", "properties": {}},
+                "defer_loading": True,
+            },
+        ]
+
+    def test_a_search_and_its_result_replay_as_tool_search_items(self):
+        request = _translated(_AFTER_LOAD, _claude_code_tools("mcp__weather__get_forecast"), "native")
+
+        assert request["input"][1:] == [
+            {
+                "type": "tool_search_call",
+                "call_id": "toolu_search",
+                "execution": "client",
+                "arguments": {"query": "weather forecast"},
+                "status": "completed",
+            },
+            {
+                "type": "tool_search_output",
+                "call_id": "toolu_search",
+                "execution": "client",
+                "status": "completed",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "mcp__weather__get_forecast",
+                        "strict": False,
+                        "description": "mcp__weather__get_forecast tool",
+                        "parameters": _FORECAST_SCHEMA,
+                    }
+                ],
+            },
+            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Tool loaded."}]},
+        ]
+
+    def test_loading_a_tool_keeps_the_earlier_prompt_as_a_prefix(self):
+        before_load = _translated(_AFTER_LOAD[:2], _claude_code_tools(), "native")
+        after_load = _translated(_AFTER_LOAD, _claude_code_tools("mcp__weather__get_forecast"), "native")
+
+        assert _rendered_tools(after_load) == _rendered_tools(before_load)
+        assert after_load["input"][: len(before_load["input"])] == before_load["input"]
+
+    def test_without_the_search_tool_deferred_tools_load_up_front(self):
+        tools = [tool for tool in _claude_code_tools("mcp__weather__get_forecast") if tool["name"] != "ToolSearch"]
+
+        request = _translated(_FIRST_TURN, tools, "native")
+
+        assert [tool["type"] for tool in request["tools"]] == ["function", "function", "function"]
+        assert not any("defer_loading" in tool for tool in request["tools"])
+
+    def test_tool_search_call_comes_back_as_a_search_tool_use(self):
+        call = ResponseToolSearchCall(
+            id="tsc_1",
+            call_id="call_search",
+            execution="client",
+            arguments={"query": "weather", "max_results": 1},
+            status="completed",
+            type="tool_search_call",
+        )
+
+        result: Any = _ADAPTER.translate_response(_make_mock_response(output=[call]), tool_search_name="ToolSearch")
+
+        assert result["content"] == [
+            {
+                "type": "tool_use",
+                "id": "call_search",
+                "name": "ToolSearch",
+                "input": {"query": "weather", "max_results": 1},
+            }
+        ]
+        assert result["stop_reason"] == "tool_use"
+
+
+class TestDropAndPassthroughDeferredTools:
+    def test_drop_sends_every_tool_as_a_plain_function_and_the_search_as_a_function_call(self):
+        request = _translated(_AFTER_LOAD, _claude_code_tools("mcp__weather__get_forecast"), "drop")
+
+        assert {tool["type"] for tool in request["tools"]} == {"function"}
+        assert not any("defer_loading" in tool for tool in request["tools"])
+        assert [item.get("type") for item in request["input"]] == [
+            "message",
+            "function_call",
+            "function_call_output",
+            "message",
+        ]
+
+    def test_passthrough_keeps_defer_loading_on_deferred_functions_only(self):
+        request = _translated(_FIRST_TURN, _claude_code_tools("mcp__weather__get_forecast"), "passthrough")
+
+        assert {tool["name"]: tool.get("defer_loading") for tool in request["tools"]} == {
+            "Read": None,
+            "ToolSearch": None,
+            "DeferredToolPlaceholder": True,
+            "mcp__weather__get_forecast": True,
+        }
+        assert {tool["type"] for tool in request["tools"]} == {"function"}

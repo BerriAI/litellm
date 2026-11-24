@@ -12,6 +12,7 @@ import litellm
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
+from litellm.llms.anthropic.pass_through.deferred_tools import deferred_tools_mode, is_deferred
 from litellm.llms.anthropic.pass_through.utils import (
     REASONING_EFFORT_OFF,
     RESPONSES_API_PROVIDERS,
@@ -299,13 +300,20 @@ def _streamed_thinking_blocks(delta: object) -> tuple[Mapping[str, object], ...]
     return tuple(block for item in attribute_items(delta, "thinking_blocks") if (block := as_str_mapping(item)))
 
 
-def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:
+def _chat_tool_param(
+    function_chunk: ChatCompletionToolParamFunctionChunk, tool: object, keeps_deferral: bool = False
+) -> ChatCompletionToolParam:
     eager_input_streaming: Final = eager_input_streaming_flag(tool)
-    if eager_input_streaming is None:
-        return ChatCompletionToolParam(type="function", function=function_chunk)
-    return ChatCompletionToolParam(
-        type="function", function=function_chunk, eager_input_streaming=eager_input_streaming
+    tool_param: Final = (
+        ChatCompletionToolParam(type="function", function=function_chunk)
+        if eager_input_streaming is None
+        else ChatCompletionToolParam(
+            type="function", function=function_chunk, eager_input_streaming=eager_input_streaming
+        )
     )
+    if keeps_deferral and is_deferred(as_str_mapping(tool) or {}):
+        return {**tool_param, "defer_loading": True}
+    return tool_param
 
 
 class AnthropicAdapter:
@@ -903,7 +911,7 @@ class LiteLLMAnthropicMessagesAdapter:
             raise ValueError(f"Incompatible tool choice param submitted - {tool_choice}")
 
     def translate_anthropic_tools_to_openai(
-        self, tools: list[AllAnthropicToolsValues], model: str | None = None
+        self, tools: list[AllAnthropicToolsValues], model: str | None = None, keeps_deferral: bool = False
     ) -> tuple[list[ChatCompletionToolParam], dict[str, str]]:
         """
         Translate Anthropic tools to OpenAI format.
@@ -927,6 +935,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "strict",
             "type",
             "eager_input_streaming",
+            "defer_loading",
         ]
 
         for idx, tool in enumerate(json_copy_or_original(tool) for tool in tools):
@@ -965,7 +974,7 @@ class LiteLLMAnthropicMessagesAdapter:
             for k, v in tool.items():
                 if k not in mapped_tool_params:  # pass additional computer kwargs
                     function_chunk.setdefault("parameters", {}).update({k: v})
-            tool_param = _chat_tool_param(function_chunk, tool)
+            tool_param = _chat_tool_param(function_chunk, tool, keeps_deferral)
             self._add_cache_control_if_applicable(tool, tool_param, model)
             new_tools.append(tool_param)
 
@@ -1191,6 +1200,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         anthropic_message_request: AnthropicMessagesRequest,
         new_kwargs: ChatCompletionRequest,
+        keeps_deferral: bool = False,
     ) -> dict[str, str]:
         """Translate tools and extract web_search_options when needed."""
         if "tools" not in anthropic_message_request:
@@ -1218,6 +1228,7 @@ class LiteLLMAnthropicMessagesAdapter:
         translated_tools, tool_name_mapping = self.translate_anthropic_tools_to_openai(
             tools=regular_tools,
             model=new_kwargs.get("model"),
+            keeps_deferral=keeps_deferral,
         )
         new_kwargs["tools"] = translated_tools
         return tool_name_mapping
@@ -1422,6 +1433,7 @@ class LiteLLMAnthropicMessagesAdapter:
         tool_name_mapping = self._translate_tools_to_openai(
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
+            keeps_deferral=deferred_tools_mode(deployment_model_info) == "passthrough",
         )
         ## CONVERT THINKING
         self._translate_thinking_to_openai(

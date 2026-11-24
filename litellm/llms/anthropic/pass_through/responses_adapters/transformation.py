@@ -6,7 +6,8 @@ path used for OpenAI and Azure models.
 """
 
 import json
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from itertools import groupby
 from types import MappingProxyType
 from typing import Any, Final, cast
@@ -25,6 +26,11 @@ from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
 from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
+from litellm.llms.anthropic.pass_through.deferred_tools import (
+    DeferredToolsMode,
+    client_tool_search_name,
+    is_deferred,
+)
 from litellm.llms.anthropic.pass_through.messages.utils import (
     refusal_stop_details,
     responses_output_refusal_text,
@@ -66,6 +72,54 @@ def _output_item_mapping(item: object) -> Mapping[str, object]:
     if isinstance(item, BaseModel):
         return item.model_dump()
     return as_str_mapping(item) or MappingProxyType({})
+
+
+def _content_dicts(content: object) -> Iterator[Mapping[str, object]]:
+    if not isinstance(content, list):
+        return
+    for block in cast(list[object], content):  # cast-ok: untrusted client payload
+        if isinstance(block, dict):
+            yield cast(Mapping[str, object], block)  # cast-ok: untrusted client payload
+
+
+def _assistant_tool_uses(messages: Iterable[AllAnthropicPassThroughMessageValues]) -> Iterator[Mapping[str, object]]:
+    for message in messages:
+        if message["role"] != "assistant":
+            continue
+        for block in _content_dicts(message.get("content")):
+            if block.get("type") == "tool_use":
+                yield block
+
+
+def _tool_reference_names(tool_result: Mapping[str, object]) -> Iterator[str]:
+    for block in _content_dicts(tool_result.get("content")):
+        name = block.get("tool_name")
+        if block.get("type") == "tool_reference" and isinstance(name, str):
+            yield name
+
+
+@dataclass(frozen=True, slots=True)
+class ToolSearchReplay:
+    call_ids: frozenset[object]
+    loadable: Mapping[str, Mapping[str, object]]
+
+    def call_item(self, tool_use: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: API input item
+        return {
+            "type": "tool_search_call",
+            "call_id": tool_use.get("id", ""),
+            "execution": "client",
+            "arguments": as_str_mapping(tool_use.get("input")) or {},
+            "status": "completed",
+        }
+
+    def output_item(self, tool_result: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: API input item
+        return {
+            "type": "tool_search_output",
+            "call_id": tool_result.get("tool_use_id", ""),
+            "execution": "client",
+            "status": "completed",
+            "tools": [self.loadable[name] for name in _tool_reference_names(tool_result) if name in self.loadable],
+        }
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -284,13 +338,15 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @classmethod
     def _assistant_group_to_input_items(
-        cls, group: tuple[Mapping[str, object], ...]
+        cls, group: tuple[Mapping[str, object], ...], tool_search: ToolSearchReplay | None = None
     ) -> tuple[dict[str, object], ...]:  # mutable-ok: API message payload
         first: Final = group[0]
         btype: Final = first.get("type")
         if btype in ("thinking", "redacted_thinking"):
             replayed: Final = responses_reasoning_items_from_thinking_blocks(group)
             return tuple(dict(item) for item in replayed)
+        if btype == "tool_use" and tool_search is not None and first.get("id") in tool_search.call_ids:
+            return (tool_search.call_item(first),)
         if btype == "tool_use":
             return (
                 {
@@ -305,6 +361,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_messages_to_responses_input(
         self,
         messages: list[AllAnthropicPassThroughMessageValues],
+        tool_search: ToolSearchReplay | None = None,
     ) -> list[dict[str, object]]:
         """
         Convert Anthropic messages list to Responses API `input` items.
@@ -377,10 +434,12 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                         elif btype == "tool_result":
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
+                            tool_result_block = cast(Mapping[str, object], block)  # cast-ok: TypedDict upcast
+                            if tool_search is not None and tool_use_id in tool_search.call_ids:
+                                input_items.append(tool_search.output_item(tool_result_block))
+                                continue
                             tool_breakpoint, covered_image_parts, later_image_parts = (
-                                self._tool_result_images_by_breakpoint(
-                                    cast(Mapping[str, object], block)  # cast-ok: TypedDict upcast
-                                )
+                                self._tool_result_images_by_breakpoint(tool_result_block)
                             )
                             document_candidates = (
                                 tuple(
@@ -455,7 +514,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     input_items.extend(
                         item
                         for _, group in groupby(enumerate(blocks), key=self._assistant_block_group_key)
-                        for item in self._assistant_group_to_input_items(tuple(block for _, block in group))
+                        for item in self._assistant_group_to_input_items(
+                            tuple(block for _, block in group), tool_search
+                        )
                     )
                     asst_parts: list[dict[str, object]] = [  # mutable-ok: API message payload
                         {"type": "output_text", "text": block.get("text", "")}
@@ -473,33 +534,71 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
         return input_items
 
+    @staticmethod
+    def _translate_tool_to_responses_api(tool_dict: Mapping[str, object]) -> dict[str, object]:
+        tool_type: Final = tool_dict.get("type", "")
+        tool_name: Final = tool_dict.get("name", "")
+        # web_search tool
+        if (isinstance(tool_type, str) and tool_type.startswith("web_search")) or tool_name == "web_search":
+            return {"type": "web_search_preview"}
+        # Responses turns strict mode on when `strict` is omitted, silently rewriting
+        # `required` to every property. Anthropic tools are non-strict unless asked.
+        func_tool: Final[dict[str, object]] = {
+            "type": "function",
+            "name": tool_name,
+            "strict": bool(tool_dict.get("strict")),
+        }
+        if "description" in tool_dict:
+            func_tool["description"] = tool_dict["description"]
+        if "input_schema" in tool_dict:
+            func_tool["parameters"] = json_copy_or_original(tool_dict["input_schema"])
+        return func_tool
+
+    @classmethod
+    def _translate_tool_with_deferral(
+        cls, tool_dict: Mapping[str, object], keeps_deferral: bool, tool_search_name: str | None
+    ) -> dict[str, object]:  # mutable-ok: API tool payload
+        if tool_search_name is not None and tool_dict.get("name") == tool_search_name:
+            return {
+                "type": "tool_search",
+                "execution": "client",
+                **({"description": tool_dict["description"]} if "description" in tool_dict else {}),
+                **(
+                    {"parameters": json_copy_or_original(tool_dict["input_schema"])}
+                    if "input_schema" in tool_dict
+                    else {}
+                ),
+            }
+        translated: Final = cls._translate_tool_to_responses_api(tool_dict)
+        if keeps_deferral and is_deferred(tool_dict) and translated.get("type") == "function":
+            return {**translated, "defer_loading": True}
+        return translated
+
     def translate_tools_to_responses_api(
         self,
         tools: list[AllAnthropicToolsValues],
+        deferred_tools: DeferredToolsMode = "drop",
     ) -> list[dict[str, object]]:
         """Convert Anthropic tool definitions to Responses API function tools."""
-        result: Final[list[dict[str, object]]] = []
-        for tool in tools:
-            tool_dict = cast(dict[str, Any], tool)
-            tool_type = tool_dict.get("type", "")
-            tool_name = tool_dict.get("name", "")
-            # web_search tool
-            if (isinstance(tool_type, str) and tool_type.startswith("web_search")) or tool_name == "web_search":
-                result.append({"type": "web_search_preview"})
-                continue
-            # Responses turns strict mode on when `strict` is omitted, silently rewriting
-            # `required` to every property. Anthropic tools are non-strict unless asked.
-            func_tool: dict[str, object] = {
-                "type": "function",
-                "name": tool_name,
-                "strict": bool(tool_dict.get("strict")),
-            }
-            if "description" in tool_dict:
-                func_tool["description"] = tool_dict["description"]
-            if "input_schema" in tool_dict:
-                func_tool["parameters"] = json_copy_or_original(tool_dict["input_schema"])
-            result.append(func_tool)
-        return result
+        tool_search_name: Final = client_tool_search_name(tools) if deferred_tools == "native" else None
+        keeps_deferral: Final = deferred_tools == "passthrough" or tool_search_name is not None
+        return [self._translate_tool_with_deferral(tool, keeps_deferral, tool_search_name) for tool in tools]
+
+    @classmethod
+    def tool_search_replay(
+        cls,
+        messages: Sequence[AllAnthropicPassThroughMessageValues],
+        tools: Sequence[Mapping[str, object]],
+        tool_search_name: str,
+    ) -> ToolSearchReplay:
+        searches: Final = (block for block in _assistant_tool_uses(messages) if block.get("name") == tool_search_name)
+        loadable: Final = (tool for tool in tools if tool.get("name") != tool_search_name)
+        return ToolSearchReplay(
+            call_ids=frozenset(block.get("id") for block in searches),
+            loadable=MappingProxyType(
+                {str(tool.get("name")): cls._translate_tool_to_responses_api(tool) for tool in loadable}
+            ),
+        )
 
     @staticmethod
     def translate_tool_choice_to_responses_api(
@@ -618,6 +717,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         include_encrypted_reasoning: bool = True,
         *,
         preserve_system_instructions: bool = True,
+        deferred_tools: DeferredToolsMode = "drop",
     ) -> dict[str, Any]:
         """
         Translate a full Anthropic /v1/messages request dict to
@@ -634,7 +734,19 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
             anthropic_request["messages"],
         )
 
-        input_items: Final = self.translate_messages_to_responses_input(messages_list)
+        tools: Final = anthropic_request.get("tools")
+        request_tools: Final = cast(list[AllAnthropicToolsValues], tools or [])
+        tool_search_name: Final = client_tool_search_name(request_tools) if deferred_tools == "native" else None
+        input_items: Final = self.translate_messages_to_responses_input(
+            messages_list,
+            None
+            if tool_search_name is None
+            else self.tool_search_replay(
+                messages_list,
+                cast(Sequence[Mapping[str, object]], request_tools),  # cast-ok: TypedDict upcast
+                tool_search_name,
+            ),
+        )
         system: Final = system_without_claude_code_billing_header(anthropic_request.get("system"))
         developer_parts: Final = (
             self._translate_midturn_system_content_to_responses(system)
@@ -684,12 +796,8 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if "top_p" in anthropic_request:
             responses_kwargs["top_p"] = anthropic_request["top_p"]
 
-        # tools
-        tools: Final = anthropic_request.get("tools")
-        if tools:
-            responses_kwargs["tools"] = self.translate_tools_to_responses_api(
-                cast(list[AllAnthropicToolsValues], tools)
-            )
+        if request_tools:
+            responses_kwargs["tools"] = self.translate_tools_to_responses_api(request_tools, deferred_tools)
 
         # tool_choice
         tool_choice: Final = anthropic_request.get("tool_choice")
@@ -749,6 +857,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     def translate_response(
         self,
         response: ResponsesAPIResponse,
+        tool_search_name: str | None = None,
     ) -> AnthropicMessagesResponse:
         """
         Translate an OpenAI ResponsesAPIResponse to AnthropicMessagesResponse.
@@ -795,6 +904,18 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             "id": item.get("call_id") or item.get("id") or "",
                             "name": item.get("name") or "",
                             "input": input_data,
+                        }
+                    ).model_dump(exclude_none=True)
+                )
+                stop_reason = "tool_use"
+            elif item_type == "tool_search_call" and tool_search_name is not None:
+                content.append(
+                    AnthropicResponseContentBlockToolUse.model_validate(
+                        {
+                            "type": "tool_use",
+                            "id": item.get("call_id") or item.get("id") or "",
+                            "name": tool_search_name,
+                            "input": as_str_mapping(item.get("arguments")) or {},
                         }
                     ).model_dump(exclude_none=True)
                 )
