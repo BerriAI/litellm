@@ -2,16 +2,19 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
+from io import BytesIO
 from threading import Lock
 from time import monotonic
 from typing import Annotated, Final, Protocol, TypeVar
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, FiniteFloat, ValidationError
+from typing_extensions import assert_never
 
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import AuthenticationError
 from litellm.llms.base_llm.auth.token_exchange import MAX_RESPONSE_BYTES, InsecureTokenUrl, validate_token_endpoint_url
+from litellm.llms.base_llm.auth.types import MalformedTokenResponse, TokenEndpointError, TokenTransportError
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
 
@@ -68,25 +71,62 @@ def _secure_url(value: str | None) -> bool:
         return False
 
 
-def _fetch_token(token_url: str, client_id: str, client_secret: str, scope: str | None) -> _TokenResponse:
-    response: Final = httpx.post(
-        token_url,
-        data={
-            "grant_type": "client_credentials",
-            "client_id": client_id,
-            "client_secret": client_secret,
-            **({"scope": scope} if scope else {}),
-        },
-        timeout=_TIMEOUT_SECONDS,
-        follow_redirects=False,
-    )
-    response.raise_for_status()
-    if len(response.content) > MAX_RESPONSE_BYTES:
-        raise ValueError("OAuth token response exceeded the size limit")
-    token: Final = _TokenResponse.model_validate_json(response.content)
+_TokenResult = _TokenResponse | MalformedTokenResponse | TokenEndpointError | TokenTransportError
+
+
+def _parse_token_response(response: httpx.Response) -> _TokenResponse | MalformedTokenResponse:
+    if response.headers.get("content-encoding", "identity").lower() != "identity":
+        return MalformedTokenResponse(detail="Expected an uncompressed OAuth token response")
+    try:
+        with BytesIO() as body:
+            for chunk in response.iter_bytes(chunk_size=65536):
+                if body.tell() + len(chunk) > MAX_RESPONSE_BYTES:
+                    return MalformedTokenResponse(detail="OAuth token response exceeded the size limit")
+                body.write(chunk)
+            token: Final = _TokenResponse.model_validate_json(body.getvalue())
+    except ValidationError:
+        return MalformedTokenResponse(detail="OAuth token response is not valid JSON or has invalid fields")
     if token.token_type.lower() != "bearer" or _BEARER_TOKEN.fullmatch(token.access_token) is None:
-        raise ValueError("Expected a Bearer access token")
+        return MalformedTokenResponse(detail="Expected a Bearer access token")
     return token
+
+
+def _fetch_token(token_url: str, client_id: str, client_secret: str, scope: str | None) -> _TokenResult:
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    try:
+        with (
+            HTTPHandler(timeout=_TIMEOUT_SECONDS, follow_redirects=False).client as client,
+            client.stream(
+                "POST",
+                token_url,
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    **({"scope": scope} if scope else {}),
+                },
+                headers={"Accept-Encoding": "identity"},
+            ) as response,
+        ):
+            if not response.is_success:
+                return TokenEndpointError(status_code=response.status_code, redacted_body="")
+            return _parse_token_response(response)
+    except (httpx.RequestError, httpx.InvalidURL, OSError, ValueError):
+        return TokenTransportError(detail="OAuth token request failed")
+
+
+def _require_token(result: _TokenResult, provider: str, model: str) -> _TokenResponse:
+    match result:
+        case _TokenResponse():
+            return result
+        case TokenEndpointError(status_code=status):
+            message = f"OAuth client credentials token request returned HTTP {status}."
+        case MalformedTokenResponse() | TokenTransportError():
+            message = "OAuth client credentials exchange failed to return a valid Bearer access token."
+        case _:
+            assert_never(result)
+    raise AuthenticationError(message=message, llm_provider=provider, model=model)
 
 
 def provider_oauth_token(
@@ -125,20 +165,7 @@ def provider_oauth_token(
         if isinstance(cached, str):
             return cached
         started: Final = monotonic()
-        try:
-            token: Final = _fetch_token(token_url, client_id, client_secret, scope)
-        except httpx.HTTPStatusError as exc:
-            raise AuthenticationError(
-                message=f"OAuth client credentials token request returned HTTP {exc.response.status_code}.",
-                llm_provider=provider,
-                model=model,
-            ) from None
-        except (httpx.RequestError, httpx.InvalidURL, ValidationError, ValueError):
-            raise AuthenticationError(
-                message="OAuth client credentials exchange failed to return a valid Bearer access token.",
-                llm_provider=provider,
-                model=model,
-            ) from None
+        token: Final = _require_token(_fetch_token(token_url, client_id, client_secret, scope), provider, model)
         if token.expires_in is not None:
             remaining: Final = token.expires_in - (monotonic() - started)
             ttl: Final = remaining - min(30.0, token.expires_in * 0.1)

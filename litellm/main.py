@@ -2971,6 +2971,29 @@ def _missing_provider_key_error(ctx: CompletionDispatchContext) -> Authenticatio
     )
 
 
+def _openai_sdk_client_with_provider_bearer(
+    client: openai.OpenAI | openai.AsyncOpenAI,
+    api_base: str | None,
+    token: str,
+    model: str,
+) -> openai.OpenAI | openai.AsyncOpenAI:
+    if getattr(client, "workload_identity", None) is not None:
+        raise AuthenticationError(
+            message="OAuth client credentials cannot be combined with OpenAI SDK workload identity.",
+            llm_provider="openai",
+            model=model,
+        )
+    return client.with_options(
+        api_key=token,
+        base_url=api_base,
+        set_default_headers={
+            name: value
+            for name, value in oauth_credential_free_headers(client.default_headers).items()
+            if isinstance(value, str)
+        },
+    )
+
+
 def _complete_custom_openai(
     ctx: CompletionDispatchContext,
 ) -> _CompletionDispatchResult:
@@ -2982,7 +3005,12 @@ def _complete_custom_openai(
         if ctx.custom_llm_provider in ("openai", "custom_openai")
         else None
     )
-    client: Final = _dispatch_client_http(ctx) if oauth_token is None else None
+    supplied_client: Final = _dispatch_client_http(ctx)
+    client: Final = (
+        _openai_sdk_client_with_provider_bearer(supplied_client, api_base, oauth_token, ctx.model)
+        if oauth_token is not None and isinstance(supplied_client, (openai.OpenAI, openai.AsyncOpenAI))
+        else supplied_client
+    )
     custom_llm_provider: Final = ctx.custom_llm_provider
     custom_prompt_dict: Final = ctx.custom_prompt_dict
     configured_extra_headers: Final = with_canonical_authorization(custom_llm_provider, ctx.extra_headers)
@@ -3112,7 +3140,7 @@ def _complete_custom_openai(
                 stream=stream,
                 api_key=api_key,
                 headers=outbound_headers,
-                client=client,
+                client=supplied_client,
                 provider_config=provider_config,
             )
         else:

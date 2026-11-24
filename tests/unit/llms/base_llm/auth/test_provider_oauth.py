@@ -1,12 +1,20 @@
+from collections.abc import Iterator
 from typing import Final
 from urllib.parse import parse_qs
 
 import httpx
+import openai
 import pytest
 import respx
 
+import litellm
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import AuthenticationError
+from litellm.llms.anthropic.messages.native.handler import anthropic_messages
+from litellm.llms.base_llm.auth import provider_oauth
 from litellm.llms.base_llm.auth.provider_oauth import provider_oauth_token
+from litellm.llms.base_llm.auth.token_exchange import MAX_RESPONSE_BYTES
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 _TOKEN_URL: Final = "https://idp.example.com/oauth2/token"
 _PROVIDER_URL: Final = "https://provider.example.com/v1"
@@ -76,3 +84,150 @@ def test_oauth_does_not_forward_client_credentials_or_expose_endpoint_response(r
     assert token_route.called
     assert not redirect.called
     assert "test-secret" not in str(error.value)
+
+
+def test_oauth_stops_reading_an_oversized_token_response() -> None:
+    class OversizedResponse(httpx.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            for _ in range(MAX_RESPONSE_BYTES // 65536 + 1):
+                yield b" " * 65536
+            pytest.fail("Read past the first chunk above the response limit")
+
+    token_url = "https://idp.example.com/oversized"
+    with respx.mock as upstream:
+        upstream.post(token_url).mock(return_value=httpx.Response(200, stream=OversizedResponse()))
+        with pytest.raises(AuthenticationError, match="valid Bearer access token"):
+            provider_oauth_token(
+                {**_PARAMS, "oauth_token_url": token_url}, api_base=_PROVIDER_URL, provider="openai", model="test"
+            )
+
+
+@pytest.mark.parametrize("provider", ("openai", "custom_openai"))
+def test_openai_compatible_completion_sends_refreshed_bearer(provider: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    now = 0.0
+
+    def clock() -> float:
+        return now
+
+    monkeypatch.setattr(provider_oauth, "monotonic", clock)
+    monkeypatch.setattr(provider_oauth, "_TOKENS", InMemoryCache(clock=clock))
+    with respx.mock as upstream:
+        token_route = upstream.post(_TOKEN_URL).mock(
+            side_effect=(
+                httpx.Response(200, json={"access_token": "first-token", "expires_in": 30}),
+                httpx.Response(200, json={"access_token": "fresh-token", "expires_in": 30}),
+            ),
+        )
+        inference = upstream.post(f"{_PROVIDER_URL}/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-auth-test",
+                    "object": "chat.completion",
+                    "created": 123,
+                    "model": "gpt-6-luna",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}
+                    ],
+                },
+            )
+        )
+        for now in (0.0, 5.0, 31.0):
+            litellm.completion(
+                model=f"{provider}/gpt-6-luna",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_base=_PROVIDER_URL,
+                api_key="static-key",
+                extra_headers={"Authorization": "Bearer caller-key", "X-API-Key": "caller-key"},
+                **_PARAMS,
+            )
+
+    assert token_route.call_count == 2
+    assert [call.request.headers.get("authorization") for call in inference.calls] == [
+        "Bearer first-token",
+        "Bearer first-token",
+        "Bearer fresh-token",
+    ]
+    assert [call.request.headers.get("x-api-key") for call in inference.calls] == [None, None, None]
+
+
+def test_oauth_completion_preserves_the_supplied_openai_transport() -> None:
+    token_url = "https://idp.example.com/sdk-token"
+
+    def infer(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == f"{_PROVIDER_URL}/chat/completions"
+        assert request.headers["authorization"] == "Bearer sdk-token"
+        assert request.headers["x-connection-marker"] == "custom-client"
+        assert "x-api-key" not in request.headers
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-auth-test",
+                "object": "chat.completion",
+                "created": 123,
+                "model": "gpt-6-luna",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "OK"}, "finish_reason": "stop"}],
+            },
+        )
+
+    with (
+        respx.mock as upstream,
+        openai.OpenAI(
+            api_key="sdk-key",
+            base_url="https://previous.example.com/v1",
+            http_client=httpx.Client(transport=httpx.MockTransport(infer)),
+            default_headers={"X-API-Key": "sdk-key", "X-Connection-Marker": "custom-client"},
+        ) as client,
+    ):
+        token_route = upstream.post(token_url).mock(
+            return_value=httpx.Response(200, json={"access_token": "sdk-token"})
+        )
+        response = litellm.completion(
+            model="openai/gpt-6-luna",
+            messages=[{"role": "user", "content": "Hello"}],
+            client=client,
+            api_base=_PROVIDER_URL,
+            **{**_PARAMS, "oauth_token_url": token_url},
+        )
+
+    assert token_route.called
+    assert response.choices[0].message.content == "OK"
+    assert client.api_key == "sdk-key"
+
+
+@pytest.mark.asyncio
+async def test_native_messages_sends_bearer_without_static_api_key() -> None:
+    token_url = "https://idp.example.com/messages-token"
+    api_base = "https://provider.example.com"
+    client = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport())
+    async with client.client:
+        with respx.mock as upstream:
+            upstream.post(token_url).mock(return_value=httpx.Response(200, json={"access_token": "messages-token"}))
+            inference = upstream.post(f"{api_base}/v1/messages").mock(
+                return_value=httpx.Response(
+                    200,
+                    json={
+                        "id": "msg-auth-test",
+                        "type": "message",
+                        "model": "claude-sonnet-5",
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "OK"}],
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 3, "output_tokens": 1},
+                    },
+                )
+            )
+            await anthropic_messages(
+                model="claude-sonnet-5",
+                custom_llm_provider="anthropic",
+                messages=[{"role": "user", "content": "Hello"}],
+                max_tokens=16,
+                api_base=api_base,
+                api_key="static-key",
+                client=client,
+                extra_headers={"Authorization": "Bearer caller-key", "X-API-Key": "caller-key"},
+                **{**_PARAMS, "oauth_token_url": token_url},
+            )
+
+    assert inference.calls[0].request.headers["authorization"] == "Bearer messages-token"
+    assert "x-api-key" not in inference.calls[0].request.headers
