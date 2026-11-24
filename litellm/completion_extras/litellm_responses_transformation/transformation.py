@@ -2,9 +2,10 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
+import hashlib
 import json
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
-from itertools import accumulate, chain
+from itertools import accumulate, chain, count
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, TypeVar, Union, cast
 
@@ -46,6 +47,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     responses_allowed_tools_tool_choice,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     as_str_mapping,
     attribute_or_none,
     drops_unsupported_params,
@@ -929,6 +931,69 @@ def _incomplete_reason_from_response_payload(response_payload: object) -> str | 
 
 class _ChatToolCallDict(ChatCompletionToolCallChunk, total=False):
     provider_specific_fields: Mapping[str, object]
+
+
+_CALL_ID_LIMITED_ITEM_TYPES: Final = frozenset(
+    ("function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output")
+)
+_MAX_CALL_ID_LENGTH: Final = 64
+
+
+def _call_id(item: object) -> str | None:
+    match item:
+        case {"call_id": str() as call_id}:
+            return call_id
+        case _:
+            return None
+
+
+def _overlong_tool_call_id(item: object) -> str | None:
+    match item:
+        case {"type": str() as item_type, "call_id": str() as call_id} if (
+            item_type in _CALL_ID_LIMITED_ITEM_TYPES and len(call_id) > _MAX_CALL_ID_LENGTH
+        ):
+            return call_id
+        case _:
+            return None
+
+
+def _call_id_candidates(call_id: str) -> Iterator[str]:
+    return (
+        hashlib.sha256((f"{attempt}:{call_id}" if attempt else call_id).encode("utf-8", "surrogatepass")).hexdigest()
+        for attempt in count()
+    )
+
+
+def _call_id_replacements(items: Sequence[object], overlong: Sequence[str]) -> Mapping[str, str]:
+    taken: Final = {
+        call_id for call_id in map(_call_id, items) if call_id is not None and len(call_id) <= _MAX_CALL_ID_LENGTH
+    }
+
+    def claim(call_id: str) -> str:
+        replacement: Final = next(candidate for candidate in _call_id_candidates(call_id) if candidate not in taken)
+        taken.add(replacement)
+        return replacement
+
+    return MappingProxyType({call_id: claim(call_id) for call_id in overlong})
+
+
+def _with_replaced_call_id(item: object, replacements: Mapping[str, str]) -> object:
+    call_id: Final = _overlong_tool_call_id(item)
+    if call_id is None:
+        return item
+    fields: Final = cast(Mapping[str, object], item)  # cast-ok: matched a JSON input item above
+    return {**fields, "call_id": replacements[call_id]}
+
+
+def bounded_call_id_fields(request: Mapping[str, object]) -> Mapping[str, object]:
+    items: Final = as_object_list(request.get("input"))
+    if items is None:
+        return MappingProxyType({})
+    overlong: Final = tuple(sorted({call_id for call_id in map(_overlong_tool_call_id, items) if call_id is not None}))
+    if not overlong:
+        return MappingProxyType({})
+    replacements: Final = _call_id_replacements(items, overlong)
+    return MappingProxyType({"input": [_with_replaced_call_id(item, replacements) for item in items]})
 
 
 def tool_call_dict_from_output_item(

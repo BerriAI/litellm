@@ -186,7 +186,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside Cato Pre-Call Hook")
@@ -203,7 +203,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
 
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
@@ -626,7 +626,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
 
     async def _inspect_output_text(
         self,
-        data: dict,
+        data: dict[str, object],
         text: str,
         user_api_key_dict: UserAPIKeyAuth,
         user_email: str | None,
@@ -647,7 +647,7 @@ class CatoNetworksGuardrail(CustomGuardrail):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ) -> LLMResponseTypes:

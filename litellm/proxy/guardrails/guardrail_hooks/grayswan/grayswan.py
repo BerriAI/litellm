@@ -543,7 +543,7 @@ class GraySwanGuardrail(CustomGuardrail):
     def _process_response_internal(
         self,
         response_json: _GraySwanMonitorResponse,
-        request_data: dict,
+        request_data: dict[str, object],
         inputs: GenericGuardrailAPIInputs,
         is_output: bool,
     ) -> GenericGuardrailAPIInputs:
@@ -669,7 +669,7 @@ class GraySwanGuardrail(CustomGuardrail):
 
     def _post_call_context(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         logging_obj: Optional["LiteLLMLoggingObj"],
         scan_only_tool_results: bool,
     ) -> tuple[tuple[Mapping[str, object], ...], tuple[object, ...] | None]:
@@ -724,7 +724,7 @@ class GraySwanGuardrail(CustomGuardrail):
         self,
         messages: tuple[Mapping[str, object], ...],
         dynamic_body: Mapping[str, object],
-        request_data: dict,
+        request_data: dict[str, object],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
         *,
         tools: tuple[object, ...] | None = None,
@@ -856,7 +856,7 @@ class GraySwanGuardrail(CustomGuardrail):
     def _log_guardrail_failure(
         self,
         exc: Exception,
-        request_data: dict,
+        request_data: dict[str, object],
         start_time: float,
         end_time: float,
         status_code: int | None = None,

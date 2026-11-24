@@ -128,7 +128,7 @@ if os.environ.get("LITELLM_PROFILE", "false").lower() == "true":
 
         # Get the top 50 memory usage lines
         top_50: Final = top_stats[:50]
-        result: Final = []
+        result: Final[list[str]] = []
         for stat in top_50:
             result.append(f"{stat.traceback.format(limit=10)}: {stat.size / 1024} KiB")
 

@@ -5811,6 +5811,51 @@ def test_rerank_metadata_ignores_unrelated_and_invalid_responses(response: dict[
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (0, 0, 0)
 
 
+@pytest.mark.parametrize(
+    ("meta", "provider_usage"),
+    [
+        ({"billed_units": {"total_tokens": 99}, "tokens": {}}, {"total_tokens": 99}),
+        ({"billed_units": {"search_units": 1}, "tokens": {}}, {"search_units": 1, "cost": 0.002}),
+        ({"tokens": {"input_tokens": 7, "output_tokens": 3}}, {"prompt_tokens": 500, "total_tokens": 500}),
+        (None, {"search_units": 1, "cost": 0.002}),
+    ],
+)
+def test_rerank_provider_usage_does_not_change_logged_tokens(
+    logging_obj: Logging, meta: dict[str, object] | None, provider_usage: dict[str, object]
+) -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    now: Final = datetime_unit_test(2026, 1, 1, 12, 0, 0)
+    kwargs: Final = {"model": "rerank-model", "call_type": "arerank", "litellm_params": {"metadata": {}}}
+
+    def logged(response: RerankResponse) -> tuple[object, ...]:
+        standard: Final = get_standard_logging_object_payload(
+            kwargs=kwargs,
+            init_response_obj=response,
+            start_time=now,
+            end_time=now,
+            logging_obj=logging_obj,
+            status="success",
+        )
+        assert standard is not None
+        spend: Final = get_logging_payload(
+            kwargs={**kwargs, "standard_logging_object": standard}, response_obj=response, start_time=now, end_time=now
+        )
+        return (
+            StandardLoggingPayloadSetup.get_usage_as_dict(response.model_dump()),
+            standard["metadata"]["usage_object"],
+            (standard["prompt_tokens"], standard["completion_tokens"], standard["total_tokens"]),
+            (spend["prompt_tokens"], spend["completion_tokens"], spend["total_tokens"]),
+        )
+
+    results: Final = [{"index": 0, "relevance_score": 0.9}]
+    with_provider_usage: Final = RerankResponse(id="rerank", results=results, meta=meta, usage=provider_usage)
+    without_provider_usage: Final = RerankResponse(id="rerank", results=results, meta=meta)
+
+    assert with_provider_usage.model_dump(by_alias=True)["usage"] == provider_usage
+    assert logged(with_provider_usage) == logged(without_provider_usage)
+
+
 def test_append_system_prompt_messages():
     """
     Test append_system_prompt_messages prepends system message from kwargs to messages list.
