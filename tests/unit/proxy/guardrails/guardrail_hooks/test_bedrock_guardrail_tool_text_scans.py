@@ -37,6 +37,7 @@ MASKED_SECRET: Final = f"transfer to account {MASKED_CARD}"
 NUMERIC_CARD: Final = "4111111111111111"
 ARGUMENTS: Final = f'{{"note": "{SECRET}"}}'
 MASKED_ARGUMENTS: Final = json.dumps({"note": MASKED_SECRET})
+MASKED_TOOL_CALL_TEXT: Final = f"send_payment\nnote\n{MASKED_SECRET}"
 PASS: Final = {"action": "NONE", "outputs": [], "assessments": []}
 BLOCK: Final = {
     "action": "GUARDRAIL_INTERVENED",
@@ -407,7 +408,12 @@ async def test_masked_generated_tool_call_blocks_and_is_logged_as_intervened() -
         )
 
     assert blocked.value.status_code == 400
-    assert "transfer to account" not in json.dumps(blocked.value.detail)
+    assert blocked.value.detail == {
+        "error": "Violated guardrail policy",
+        "bedrock_guardrail_response": MASKED_TOOL_CALL_TEXT,
+        "guardrailIdentifier": "test-guardrail",
+        "guardrailVersion": "DRAFT",
+    }
     assert _logged_statuses(request_data) == ["guardrail_intervened"]
 
 
@@ -415,12 +421,7 @@ async def test_masked_generated_tool_call_blocks_and_is_logged_as_intervened() -
 @pytest.mark.parametrize(
     ("bedrock_params", "expected_message"),
     [
-        pytest.param(
-            {"masked": CARD},
-            "Bedrock guardrail would mask text in a tool call that cannot be forwarded masked, so the response was "
-            "blocked",
-            id="masked",
-        ),
+        pytest.param({"masked": CARD}, MASKED_TOOL_CALL_TEXT, id="masked"),
         pytest.param({"blocked": CARD}, "Blocked", id="blocked"),
     ],
 )
@@ -443,14 +444,19 @@ async def test_blocked_generated_tool_call_response_never_carries_the_tool_call(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("input_type", "tool_call"),
+    ("input_type", "tool_call", "masked_text"),
     [
-        pytest.param("request", _function_tool_call(json.dumps({CARD: "note"})), id="request"),
-        pytest.param("response", _function_tool_call(ARGUMENTS), id="response"),
+        pytest.param(
+            "request",
+            _function_tool_call(json.dumps({CARD: "note"})),
+            f"send_payment\n{MASKED_CARD}\nnote",
+            id="request",
+        ),
+        pytest.param("response", _function_tool_call(ARGUMENTS), MASKED_TOOL_CALL_TEXT, id="response"),
     ],
 )
-async def test_text_and_tool_call_scans_each_log_an_entry_and_the_text_block_wins(
-    input_type: Literal["request", "response"], tool_call: dict[str, object]
+async def test_a_blocked_tool_call_answers_its_own_error_without_a_text_scan(
+    input_type: Literal["request", "response"], tool_call: dict[str, object], masked_text: str
 ) -> None:
     bedrock: Final = _Bedrock(blocked="forbidden", masked=CARD)
     request_data: Final[dict[str, object]] = {"metadata": {}}
@@ -462,23 +468,9 @@ async def test_text_and_tool_call_scans_each_log_an_entry_and_the_text_block_win
             input_type=input_type,
         )
 
-    assert blocked.value.detail["bedrock_guardrail_response"] == "Blocked"
-    assert len(bedrock.requests) == 2
-    assert _logged_statuses(request_data) == ["guardrail_intervened", "guardrail_intervened"]
-
-
-@pytest.mark.asyncio
-async def test_text_scan_is_logged_when_the_tool_call_scan_blocks() -> None:
-    request_data: Final[dict[str, object]] = {"metadata": {}}
-
-    with pytest.raises(HTTPException):
-        await _guardrail(scan_tool_calls=True, bedrock=_Bedrock(blocked=CARD)).apply_guardrail(
-            inputs={"texts": ["pay the invoice"], "tool_calls": [_function_tool_call(ARGUMENTS)]},
-            request_data=request_data,
-            input_type="request",
-        )
-
-    assert _logged_statuses(request_data) == ["guardrail_intervened", "success"]
+    assert blocked.value.detail["bedrock_guardrail_response"] == masked_text
+    assert len(bedrock.requests) == 1
+    assert _logged_statuses(request_data) == ["guardrail_intervened"]
 
 
 @pytest.mark.asyncio
@@ -856,7 +848,22 @@ async def test_tool_call_arguments_nested_too_deep_to_scan_are_blocked_and_logge
         )
 
     assert blocked.value.status_code == 400
+    assert "maximum nesting depth" in blocked.value.detail["error"]
     assert _logged_statuses(request_data) == ["guardrail_intervened"]
+
+
+@pytest.mark.asyncio
+async def test_tool_call_arguments_nested_too_deep_answer_400_even_when_blocks_answer_200() -> None:
+    guardrail: Final = _guardrail(scan_tool_calls=True, bedrock=_Bedrock(), disable_exception_on_block=True)
+
+    with pytest.raises(HTTPException) as blocked:
+        await guardrail.apply_guardrail(
+            inputs={"texts": [], "tool_calls": [_function_tool_call("[" * 200 + f'"{SECRET}"' + "]" * 200)]},
+            request_data={},
+            input_type="request",
+        )
+
+    assert blocked.value.status_code == 400
 
 
 @pytest.mark.asyncio

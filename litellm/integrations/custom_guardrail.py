@@ -1,4 +1,3 @@
-import asyncio
 import contextlib
 import contextvars
 import copy
@@ -10,7 +9,7 @@ from collections.abc import Awaitable, Iterable, Mapping, Sequence
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, TypeAlias, TypeVar, cast, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, TypeAlias, cast, get_args
 
 import httpx
 from pydantic import BaseModel, TypeAdapter
@@ -92,29 +91,15 @@ _guardrail_self_recorded: Final[contextvars.ContextVar[bool]] = contextvars.Cont
     "litellm_guardrail_self_recorded", default=False
 )
 
-_ScanResult = TypeVar("_ScanResult")
 ScannedTextScope: TypeAlias = Literal["texts", "tool_calls"]
-_FirstScanResult = TypeVar("_FirstScanResult")
-_SecondScanResult = TypeVar("_SecondScanResult")
 
 
-async def _scan_outcome(scan: Awaitable[_ScanResult]) -> tuple[_ScanResult | Exception, bool]:
+async def _scan_failure(scan: Awaitable[object]) -> Exception | None:
     try:
-        result: Final = await scan
-    except Exception as error:  # noqa: BLE001  # returned so the sibling scan still finishes and logs its entry
-        return error, _guardrail_self_recorded.get()
-    return result, _guardrail_self_recorded.get()
-
-
-async def gather_self_recording_scans(
-    first: Awaitable[_FirstScanResult], second: Awaitable[_SecondScanResult]
-) -> tuple[_FirstScanResult | Exception, _SecondScanResult | Exception]:
-    (first_outcome, first_recorded), (second_outcome, second_recorded) = await asyncio.gather(
-        _scan_outcome(first), _scan_outcome(second)
-    )
-    if first_recorded or second_recorded:
-        _guardrail_self_recorded.set(True)
-    return first_outcome, second_outcome
+        await scan
+    except Exception as error:  # noqa: BLE001  # returned so the next scan still runs and logs its entry
+        return error
+    return None
 
 
 def is_guardrail_intervention(e: Exception) -> bool:
@@ -1382,12 +1367,12 @@ class CustomGuardrail(CustomLogger):
         translation: "BaseTranslation",
         scratch_request: dict[str, object],  # mutable-ok: the translation masks the scratch copy in place
     ) -> None:
-        text_outcome, descriptions_outcome = await gather_self_recording_scans(
-            translation.process_input_messages(data=scratch_request, guardrail_to_apply=self),
-            self._scan_logged_tool_descriptions(scratch_request),
+        text_failure: Final = await _scan_failure(
+            translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
         )
+        descriptions_failure: Final = await _scan_failure(self._scan_logged_tool_descriptions(scratch_request))
         failures: Final = sorted(
-            (outcome for outcome in (text_outcome, descriptions_outcome) if isinstance(outcome, Exception)),
+            (failure for failure in (text_failure, descriptions_failure) if failure is not None),
             key=lambda failure: isinstance(failure, UnappliableRequestRewrite),
         )
         if failures:

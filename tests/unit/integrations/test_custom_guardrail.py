@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import copy
 import datetime as dt
 import json
@@ -2709,6 +2710,11 @@ class TestUndecoratedApplyGuardrailIsLogged:
         assert [e["guardrail_mode"] for e in entries] == ["pre_call", "post_call"]
 
 
+_SCANNED_IN_CONTEXT: Final[contextvars.ContextVar[tuple[tuple[str, ...], ...]]] = contextvars.ContextVar(
+    "scanned_in_context", default=()
+)
+
+
 class _ApplyOnlyObserver(CustomGuardrail):
     """Overrides only apply_guardrail, like panw_prisma_airs; inherits async_logging_hook."""
 
@@ -3077,6 +3083,28 @@ class TestLoggingOnlyApplyGuardrail:
         assert ("response", ["general kenobi"]) not in guardrail.calls
         entries: Final = out_kwargs["standard_logging_object"]["guardrail_information"]
         assert "guardrail_intervened" in [entry["guardrail_status"] for entry in entries]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("scan_descriptions", [False, True])
+    async def test_the_message_scan_runs_in_the_callers_context(self, scan_descriptions: bool):
+        class _RecordsInContext(_ApplyOnlyObserver):
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                texts = tuple(inputs.get("texts") or [])
+                _SCANNED_IN_CONTEXT.set((*_SCANNED_IN_CONTEXT.get(), texts))
+                return GenericGuardrailAPIInputs(texts=list(texts))
+
+        guardrail: Final = _RecordsInContext()
+        guardrail.logging_only_scope = "input"
+        guardrail.scan_tool_descriptions_as_text = scan_descriptions
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+        tools: Final = [{"type": "function", "function": {"name": "lookup", "description": "look up a record"}}]
+
+        await guardrail.async_logging_hook(
+            {**kwargs, "optional_params": {"tools": tools}}, response, CallTypes.acompletion.value
+        )
+
+        assert _SCANNED_IN_CONTEXT.get() == (("hello there",),)
 
     @pytest.mark.asyncio
     async def test_call_type_without_translation_is_skipped(self):
