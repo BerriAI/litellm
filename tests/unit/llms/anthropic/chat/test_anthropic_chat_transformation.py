@@ -11931,26 +11931,35 @@ def test_chat_transform_request_keeps_the_generic_400_when_thinking_blocks_are_n
 
 
 _REMOTE_IMAGE: Final = {"type": "image_url", "image_url": {"url": "http://images.test/large.png"}}
+_REMOTE_FILE_DATA: Final = {"type": "file", "file": {"file_data": "http://files.test/report.pdf", "format": "application/pdf"}}
 _FETCHED_IMAGE: Final = "data:image/png;base64,ZmV0Y2hlZA=="
+_REMOTE_MEDIA_PARAMS: Final = (
+    pytest.param(_REMOTE_IMAGE, id="image_url"),
+    pytest.param(_REMOTE_FILE_DATA, id="file_data_url"),
+)
 
 
-def _turns_with_remote_image(thinking_blocks: object) -> list[dict[str, object]]:
+def _turns_with_remote_media(media: Mapping[str, object], thinking_blocks: object) -> list[dict[str, object]]:
     return [
-        {"role": "user", "content": [{"type": "text", "text": "Hi"}, _REMOTE_IMAGE]},
+        {"role": "user", "content": [{"type": "text", "text": "Hi"}, media]},
         {"role": "assistant", "content": "Hello", "thinking_blocks": thinking_blocks},
         {"role": "user", "content": "Go on"},
     ]
 
 
-def test_chat_transform_request_fetches_no_image_for_a_request_it_rejects(local_model_cost_map):
+@pytest.mark.parametrize("media", _REMOTE_MEDIA_PARAMS)
+def test_chat_transform_request_fetches_no_media_for_a_request_it_rejects(
+    local_model_cost_map, media: Mapping[str, object]
+):
     with patch(
         "litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64", return_value=_FETCHED_IMAGE
     ) as fetch, pytest.raises(AnthropicError, match=r"messages\[1\]\.thinking_blocks"):
-        _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, _turns_with_remote_image("abc"))
+        _chat_request(AnthropicConfig(), UNFLAGGED_CLAUDE, _turns_with_remote_media(media, "abc"))
 
     fetch.assert_not_called()
 
 
+@pytest.mark.parametrize("media", _REMOTE_MEDIA_PARAMS)
 @pytest.mark.parametrize(
     ("thinking_blocks", "drop_params"),
     [
@@ -11959,15 +11968,15 @@ def test_chat_transform_request_fetches_no_image_for_a_request_it_rejects(local_
         pytest.param([_REPLAYED_THINKING], False, id="well_formed"),
     ],
 )
-def test_chat_transform_request_fetches_a_remote_image_once_and_sends_it(
-    local_model_cost_map, thinking_blocks: object, drop_params: bool
+def test_chat_transform_request_fetches_remote_media_once_and_sends_it(
+    local_model_cost_map, media: Mapping[str, object], thinking_blocks: object, drop_params: bool
 ):
     with patch(
         "litellm.litellm_core_utils.prompt_templates.factory.convert_url_to_base64", return_value=_FETCHED_IMAGE
     ) as fetch:
         converted: Final = AnthropicConfig().transform_request(
             model=UNFLAGGED_CLAUDE,
-            messages=_turns_with_remote_image(thinking_blocks),
+            messages=_turns_with_remote_media(media, thinking_blocks),
             optional_params={},
             litellm_params={"drop_params": drop_params},
             headers={},
@@ -11977,9 +11986,12 @@ def test_chat_transform_request_fetches_a_remote_image_once_and_sends_it(
     assert converted["messages"][0]["content"][1]["source"]["data"] == "ZmV0Y2hlZA=="
 
 
-def test_chat_transform_request_fetches_once_when_another_field_is_the_real_cause(local_model_cost_map):
+@pytest.mark.parametrize("media", _REMOTE_MEDIA_PARAMS)
+def test_chat_transform_request_fetches_once_when_another_field_is_the_real_cause(
+    local_model_cost_map, media: Mapping[str, object]
+):
     messages: Final = [
-        *_turns_with_remote_image("abc")[:1],
+        *_turns_with_remote_media(media, "abc")[:1],
         {"role": "assistant", "content": "Hello", "thinking_blocks": "abc", "tool_calls": 5},
         {"role": "user", "content": "Go on"},
     ]
