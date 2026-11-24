@@ -525,6 +525,16 @@ def test_an_env_reference_in_any_logging_entry_is_rejected(field: str) -> None:
     assert logging_metadata_config_error(metadata) == error
 
 
+def test_an_env_reference_inside_json_string_logging_is_rejected() -> None:
+    metadata: Final = {"logging": json.dumps([_arize_entry(arize_api_key="os.environ/ARIZE_TENANT_1")])}
+    error: Final = logging_metadata_env_reference_error(metadata)
+    assert error is not None and "Callback param 'arize_api_key'" in error
+    assert logging_metadata_config_error(metadata) == error
+    with pytest.raises(HTTPException) as raised:
+        raise_on_logging_metadata_env_reference(metadata)
+    assert raised.value.status_code == 400
+
+
 def test_an_env_reference_is_rejected_whatever_the_callback_name() -> None:
     metadata: Final = {"logging": [{"callback_vars": {"langfuse_secret_key": "os.environ/LANGFUSE_SECRET"}}]}
     assert logging_metadata_env_reference_error(metadata) is not None

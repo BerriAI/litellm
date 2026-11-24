@@ -315,7 +315,11 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
 def logging_metadata_env_reference_error(metadata: Mapping[str, object] | None) -> str | None:
     if not metadata:
         return None
-    entries: Final = (*(object_sequence(metadata.get("logging")) or ()), metadata.get("callback_settings"))
+    logging_entries: Final = normalize_logging_entries(metadata.get("logging"), skip_invalid=True)
+    entries: Final = (
+        *(() if isinstance(logging_entries, InvalidLoggingMetadata) else logging_entries),
+        metadata.get("callback_settings"),
+    )
     return next(
         (error for entry in entries if (error := _entry_env_reference_error(entry)) is not None),
         None,
