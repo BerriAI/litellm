@@ -11,7 +11,7 @@ from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from functools import cached_property
-from itertools import accumulate, chain, islice
+from itertools import accumulate, chain, filterfalse, islice
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
 
@@ -58,6 +58,7 @@ from litellm.litellm_core_utils.prompt_templates.chat_template_tools import (
     chat_template_tool_choice_tokens,
     chat_template_tool_section,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import is_unrendered_block
 from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
 
 if TYPE_CHECKING:
@@ -67,7 +68,6 @@ from litellm.litellm_core_utils.url_utils import safe_get
 from litellm.llms.custom_httpx.http_handler import get_httpx_client, header_value
 from litellm.rust_bridge.tokenizer import get_encoding
 from litellm.types.llms.anthropic import (
-    ANTHROPIC_UNRENDERED_BLOCK_TYPES,
     AnthropicContentParamSource,
     AnthropicContentParamSourceFileId,
     AnthropicContentParamSourceUrl,
@@ -1984,7 +1984,7 @@ _ContentListBlock: TypeAlias = (
 
 
 def _rendered_blocks(content_list: str | Iterable[_ContentListBlock]) -> Iterable[str | _ContentListBlock]:
-    return (c for c in content_list if isinstance(c, str) or c["type"] not in ANTHROPIC_UNRENDERED_BLOCK_TYPES)
+    return filterfalse(is_unrendered_block, content_list)
 
 
 def _count_content_list(

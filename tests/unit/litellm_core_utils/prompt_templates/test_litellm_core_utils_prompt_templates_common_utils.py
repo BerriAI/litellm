@@ -956,6 +956,19 @@ def test_get_str_from_messages_leaves_out_the_text_of_an_echoed_fallback_block()
     assert get_str_from_messages(echoed) == get_str_from_messages(history)
 
 
+@pytest.mark.parametrize("block_type", (["text"], {"name": "text"}))
+def test_get_str_from_messages_keeps_the_text_of_a_block_whose_type_is_not_a_string(block_type: object) -> None:
+    assert get_str_from_messages([{"role": "user", "content": [{"type": block_type, "text": "Hello"}]}]) == "Hello"
+
+
+@pytest.mark.parametrize("part", ("Hello", {"type": "text", "text": 5}))
+def test_get_str_from_messages_raises_on_a_content_part_it_cannot_read_instead_of_dropping_its_text(
+    part: object,
+) -> None:
+    with pytest.raises((AttributeError, TypeError)):
+        get_str_from_messages([{"role": "user", "content": [{"type": "fallback"}, part]}])
+
+
 def test_strip_litellm_response_only_fields_drops_nested_tool_call_provider_fields() -> None:
     message: Final = {
         "role": "assistant",

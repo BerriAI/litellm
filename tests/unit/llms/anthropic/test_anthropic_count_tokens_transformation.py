@@ -39,8 +39,8 @@ from litellm.llms.anthropic.common_utils import count_tokens_feature_betas
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 
 COMPACTION_BETA = ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value
-FALLBACK_BETA = ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value
-FALLBACK_HISTORY = [
+FALLBACK_BETA: Final = ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value
+FALLBACK_HISTORY: Final = [
     {"role": "user", "content": "hi"},
     {
         "role": "assistant",
@@ -1327,11 +1327,11 @@ def test_headers_add_the_compaction_beta_only_for_a_compacted_history():
 
 
 def test_headers_add_the_fallback_beta_only_for_a_history_that_echoes_the_block():
-    config = AnthropicCountTokensConfig()
-    auth_header = {"x-api-key": "sk-ant-api03-test-key"}
+    config: Final = AnthropicCountTokensConfig()
+    auth_header: Final = {"x-api-key": "sk-ant-api03-test-key"}
 
-    with_block = config.get_count_tokens_headers(auth_header, FALLBACK_HISTORY)["anthropic-beta"].split(",")
-    plain = config.get_count_tokens_headers(auth_header, [{"role": "user", "content": "hi"}])["anthropic-beta"]
+    with_block: Final = config.get_count_tokens_headers(auth_header, FALLBACK_HISTORY)["anthropic-beta"].split(",")
+    plain: Final = config.get_count_tokens_headers(auth_header, [{"role": "user", "content": "hi"}])["anthropic-beta"]
 
     assert FALLBACK_BETA in with_block
     assert ANTHROPIC_TOKEN_COUNTING_BETA_VERSION in with_block
