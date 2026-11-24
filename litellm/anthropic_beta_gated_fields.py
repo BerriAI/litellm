@@ -31,6 +31,7 @@ ANTHROPIC_MID_CONVERSATION_SYSTEM_CLEAR_AT_BETA_HEADER: Final = "mid-conversatio
 ANTHROPIC_INLINE_TOOLS_BETA_HEADER: Final = "inline-tools-2026-09-15"
 ANTHROPIC_SERVER_SIDE_FALLBACK_2026_06_01_BETA_HEADER: Final = "server-side-fallback-2026-06-01"
 ANTHROPIC_SERVER_SIDE_FALLBACK_2026_07_01_BETA_HEADER: Final = "server-side-fallback-2026-07-01"
+ANTHROPIC_LINKED_BILLING_BETA_HEADER: Final = "user-profiles-billing-2026-10-01"
 
 THINKING_BLOCK_BINDING: Final = "thinking.block_binding"
 THINKING_DISPLAY_UPDATES: Final = "thinking.display=updates"
@@ -39,6 +40,7 @@ SYSTEM_OUTPUT_CONFIG: Final = "messages[].system.output_config"
 SYSTEM_TOOL_CHANGES: Final = "messages[].system.content[].tool_addition|tool_removal"
 SYSTEM_MESSAGE_EMPTIED: Final = "messages[].system (emptied by the strip)"
 FALLBACKS: Final = "fallbacks"
+BILLING_POLICY: Final = "billing_policy"
 
 _TOOL_CHANGE_BLOCK_TYPES: Final = frozenset({"tool_addition", "tool_removal"})
 
@@ -53,6 +55,7 @@ BETA_GATED_FIELDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
         ANTHROPIC_INLINE_TOOLS_BETA_HEADER: (SYSTEM_TOOL_CHANGES,),
         ANTHROPIC_SERVER_SIDE_FALLBACK_2026_06_01_BETA_HEADER: (FALLBACKS,),
         ANTHROPIC_SERVER_SIDE_FALLBACK_2026_07_01_BETA_HEADER: (FALLBACKS,),
+        ANTHROPIC_LINKED_BILLING_BETA_HEADER: (BILLING_POLICY,),
     }
 )
 
@@ -263,6 +266,7 @@ class StrippedNativeRequest:
     messages: Sequence[object]
     messages_stripped: bool
     stripped: tuple[str, ...]
+    dropped_params: frozenset[str] = frozenset()
 
 
 def unstripped_native_request(optional_params: object, messages: object) -> StrippedNativeRequest:
@@ -282,7 +286,8 @@ def strip_beta_gated_native_request(
     headers: object, optional_params: object, messages: object, *, body_betas: object = (), drop_params: object
 ) -> StrippedNativeRequest:
     """The ``/v1/messages`` seam, fed the final (already filtered) headers, the final body ``anthropic_beta``
-    list on legs that carry betas in the body, plus the body parts it may rewrite."""
+    list on legs that carry betas in the body, plus the body parts it may rewrite. ``dropped_params`` names the
+    top-level params the caller must leave out of the request."""
     if not drops_unsupported_params(drop_params):
         return unstripped_native_request(optional_params, messages)
     active_betas: Final = active_beta_values(headers, body_betas)
@@ -294,12 +299,16 @@ def strip_beta_gated_native_request(
         if message_sequence is not None
         else StrippedMessages(messages=(), stripped=())
     )
+    dropped_params: Final = frozenset(
+        {BILLING_POLICY} if BILLING_POLICY in params and field_is_gated(BILLING_POLICY, active_betas) else ()
+    )
     return StrippedNativeRequest(
         thinking=thinking.thinking,
         thinking_stripped=bool(thinking.stripped),
         messages=system_messages.messages,
         messages_stripped=bool(system_messages.stripped),
-        stripped=(*thinking.stripped, *system_messages.stripped),
+        stripped=(*thinking.stripped, *system_messages.stripped, *sorted(dropped_params)),
+        dropped_params=dropped_params,
     )
 
 

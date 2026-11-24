@@ -444,6 +444,20 @@ class TestAnthropicBetaHeadersFiltering:
         assert set(headers["anthropic-beta"].split(",")) == {beta, "context-1m-2025-08-07"}
         assert body["anthropic_beta"] == ["context-1m-2025-08-07"]
 
+    def test_vertex_ai_drops_the_linked_billing_beta_from_the_header_and_the_body(self) -> None:
+        """Vertex answers 400 "Unexpected value(s) `user-profiles-billing-2026-10-01` for the `anthropic-beta`
+        header" (live on claude-haiku-4-5, 2026-11-24), so the beta is dropped in both placements."""
+        headers, body = update_request_with_filtered_beta(
+            headers={"anthropic-beta": "user-profiles-billing-2026-10-01,context-1m-2025-08-07"},
+            request_data={"anthropic_beta": ["user-profiles-billing-2026-10-01", "context-1m-2025-08-07"]},
+            provider="vertex_ai",
+        )
+
+        assert (headers["anthropic-beta"], body["anthropic_beta"]) == (
+            "context-1m-2025-08-07",
+            ["context-1m-2025-08-07"],
+        )
+
     def test_header_only_betas_stay_out_of_the_provider_columns_older_proxies_read(self) -> None:
         """Proxies released before header-only columns existed fetch this map from main, read only the
         provider column, and copy its betas into the body field too, where Vertex answers 400. So a

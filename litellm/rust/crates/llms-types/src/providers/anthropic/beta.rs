@@ -347,8 +347,7 @@ impl AnthropicBeta {
             | Self::TokenCounting20241101
             | Self::UserProfiles20260324
             | Self::UserProfiles20260818
-            | Self::UserProfiles20260904
-            | Self::UserProfilesBilling20261001 => &[
+            | Self::UserProfiles20260904 => &[
                 BetaProvider::BedrockConverse,
                 BetaProvider::Bedrock,
                 BetaProvider::BedrockMantle,
@@ -377,6 +376,7 @@ impl AnthropicBeta {
             | Self::Output300k20260324
             | Self::ServerSideFallback20260701
             | Self::Skills20251002
+            | Self::UserProfilesBilling20261001
             | Self::WebFetch20250910
             | Self::Webhooks20261007 => &[
                 BetaProvider::BedrockConverse,

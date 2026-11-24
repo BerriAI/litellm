@@ -29,6 +29,7 @@ const DISPLAY_UPDATES: &str = "updates";
 /// in the order it sorts those names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum GatedField {
+    BillingPolicy,
     Emptied,
     ClearAt,
     ToolChanges,
@@ -40,6 +41,7 @@ enum GatedField {
 impl GatedField {
     fn name(self) -> &'static str {
         match self {
+            Self::BillingPolicy => "billing_policy",
             Self::Emptied => "messages[].system (emptied by the strip)",
             Self::ClearAt => "messages[].system.clear_at",
             Self::ToolChanges => "messages[].system.content[].tool_addition|tool_removal",
@@ -51,6 +53,7 @@ impl GatedField {
 
     fn betas(self) -> &'static [AnthropicBeta] {
         match self {
+            Self::BillingPolicy => &[AnthropicBeta::UserProfilesBilling20261001],
             Self::Emptied => &[],
             Self::ClearAt => &[AnthropicBeta::MidConversationSystemClearAt20260821],
             Self::ToolChanges => &[
@@ -107,8 +110,9 @@ pub fn strip_beta_gated_system_messages(
 }
 
 /// Python's `strip_beta_gated_native_request` and `log_beta_gated_strips`, run once the final
-/// `anthropic-beta` values are known: under drop_params the `thinking` fields and the system
-/// message fields no beta in `active` unlocks are dropped, and one warning names them all.
+/// `anthropic-beta` values are known: under drop_params the `thinking` fields, the system
+/// message fields and the `billing_policy` no beta in `active` unlocks are dropped, and one
+/// warning names them all.
 pub fn strip_beta_gated_request(
     request: MessagesRequest,
     active: &BetaSet,
@@ -120,8 +124,14 @@ pub fn strip_beta_gated_request(
     }
     let (thinking, thinking_gated) = stripped_thinking(request.params.thinking, active);
     let (messages, messages_gated) = stripped_system_messages(request.messages, active);
+    let billing_policy_gated =
+        request.params.billing_policy.is_some() && GatedField::BillingPolicy.gated(active);
     log_beta_gated_strips(
-        &thinking_gated.union(&messages_gated).copied().collect(),
+        &thinking_gated
+            .union(&messages_gated)
+            .copied()
+            .chain(billing_policy_gated.then_some(GatedField::BillingPolicy))
+            .collect(),
         &request.model,
         provider,
     );
@@ -129,6 +139,10 @@ pub fn strip_beta_gated_request(
         messages,
         params: MessagesOptionalParams {
             thinking,
+            billing_policy: request
+                .params
+                .billing_policy
+                .filter(|_| !billing_policy_gated),
             ..request.params
         },
         ..request
@@ -629,6 +643,42 @@ mod tests {
             strip_beta_gated_request(sent.clone(), &BetaSet::default(), false, "test"),
             sent
         );
+    }
+
+    fn billing_policy_request() -> MessagesRequest {
+        serde_json::from_value(json!({
+            "model": "test-model",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "hi"}],
+            "billing_policy": {"type": "billing_policy"},
+        }))
+        .unwrap()
+    }
+
+    #[rstest]
+    #[case::without_its_beta_under_drop_params("", true, None)]
+    #[case::with_its_beta_under_drop_params(
+        "user-profiles-billing-2026-10-01",
+        true,
+        Some(json!({"type": "billing_policy"}))
+    )]
+    #[case::without_its_beta_and_without_drop_params(
+        "",
+        false,
+        Some(json!({"type": "billing_policy"}))
+    )]
+    fn a_billing_policy_is_dropped_only_when_gated_under_drop_params(
+        #[case] active: &str,
+        #[case] drops_unsupported_params: bool,
+        #[case] expected: Option<Value>,
+    ) {
+        let stripped = strip_beta_gated_request(
+            billing_policy_request(),
+            &betas(active),
+            drops_unsupported_params,
+            "test",
+        );
+        assert_eq!(stripped.params.billing_policy, expected);
     }
 
     #[rstest]

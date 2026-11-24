@@ -372,7 +372,7 @@
     "user-profiles-2026-03-24": "user-profiles-2026-03-24",
     "user-profiles-2026-08-18": "user-profiles-2026-08-18",
     "user-profiles-2026-09-04": "user-profiles-2026-09-04",
-    "user-profiles-billing-2026-10-01": "user-profiles-billing-2026-10-01"
+    "user-profiles-billing-2026-10-01": null
   },
   "databricks": {
     "advisor-tool-2026-03-01": null,
