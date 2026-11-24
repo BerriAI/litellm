@@ -273,6 +273,62 @@ async fn a_team_model_limit_counts_cached_tokens_only_when_the_team_asks(
 
 #[rstest]
 #[tokio::test]
+async fn a_fallback_sharing_the_reserved_team_model_scope_settles_cached_tokens_once() {
+    let (limiter, store, _) = limiter(true);
+    let tpm = descriptors(json!([
+        {"key": "model_per_team", "value": "t:gpt", "rate_limit": {"tokens_per_unit": 5000}},
+    ]));
+    let state = LimiterState::default();
+    let reserved = PreCallFacts {
+        reserved_model: Some(RateLimitedModel {
+            requested: "alias".into(),
+            group: "gpt".into(),
+        }),
+        ..facts(tpm, Some(1000))
+    };
+    assert_eq!(limiter.pre_call(&state, reserved, None).await, None);
+    state.stash().fallback_models.insert("target".into());
+    limiter
+        .settle_success(
+            &state,
+            SuccessFacts {
+                call_id: Some("call".into()),
+                total_tokens: 120,
+                cached_tokens_left_out: 800,
+                team_label: "t".into(),
+                targets: TargetFacts {
+                    user_api_key_team_id: Some("t".into()),
+                    ..TargetFacts::default()
+                },
+                served_model: Some(RateLimitedModel {
+                    requested: "target".into(),
+                    group: "gpt".into(),
+                }),
+                models: [(
+                    "target".to_owned(),
+                    ModelFacts {
+                        candidates: vec![Candidate {
+                            group: "gpt".into(),
+                            key_owns: false,
+                            counts_cached_tokens: true,
+                        }],
+                        ptu: None,
+                    },
+                )]
+                .into(),
+                ..SuccessFacts::default()
+            },
+            None,
+        )
+        .await;
+    assert_eq!(
+        count(&store, "model_per_team", "t:gpt", Kind::Tokens),
+        Some(Local::Number(Number::Int(920)))
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn a_tpm_refusal_releases_the_slot_and_names_tokens() {
     let (limiter, _, _) = limiter(true);
     let both = descriptors(

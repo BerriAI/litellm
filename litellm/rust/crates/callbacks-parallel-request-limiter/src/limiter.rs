@@ -1659,7 +1659,9 @@ impl ParallelRequestLimiter {
                 .reserved_scopes
                 .iter()
                 .filter(|scope| {
-                    PER_MODEL_KEYS.contains(&scope.0.as_str()) && !charged.contains(scope)
+                    PER_MODEL_KEYS.contains(&scope.0.as_str())
+                        && !charged.contains(scope)
+                        && !charged_with_cached.contains(scope)
                 })
                 .cloned()
                 .collect()

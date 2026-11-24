@@ -1320,6 +1320,11 @@ class ParallelRequestLimiterHook(CustomLogger):
                         "user_api_key_model_max_budget": _METADATA.validate_python(
                             user_api_key_dict.model_max_budget or {}  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.model_max_budget is a bare dict
                         ),
+                        "user_api_key_team_metadata": {
+                            "model_tpm_limit_counts_cached_tokens": team_models_counting_cached_tokens(
+                                user_api_key_dict.team_metadata
+                            )
+                        },
                     }
                 },
                 "standard_logging_object": {

@@ -3175,6 +3175,36 @@ async def test_a_realtime_response_is_refused_once_its_session_turns_used_the_pr
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("counts_cached_tokens", "turn_tokens"), [(False, 950), (True, 1050)], ids=["off", "on"])
+async def test_a_realtime_turn_counts_cached_tokens_against_the_team_model_limit_only_when_the_team_opts_in(
+    counts_cached_tokens: bool, turn_tokens: int
+) -> None:
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-realtime-team-cached"),
+        team_id="team-rt-cached",
+        team_metadata={
+            "model_tpm_limit": {_REALTIME_MODEL: 10**9},
+            "model_tpm_limit_counts_cached_tokens": {_REALTIME_MODEL: counts_cached_tokens},
+        },
+    )
+    team_window: Final = f"team-rt-cached:{_REALTIME_MODEL}"
+    await _open_realtime_session(handler, local_cache, auth)
+    tokens_at_open: Final = _tokens_counted(handler, "model_per_team", team_window)
+
+    await handler.charge_realtime_turn_usage(
+        auth,
+        _REALTIME_MODEL,
+        Usage(
+            prompt_tokens=600, completion_tokens=450, total_tokens=1050, prompt_tokens_details={"cached_tokens": 100}
+        ),
+    )
+
+    assert _tokens_counted(handler, "model_per_team", team_window) - tokens_at_open == turn_tokens
+
+
+@pytest.mark.asyncio
 async def test_realtime_turns_charge_the_key_model_and_tag_windows_and_keep_the_session_slot_v3(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
