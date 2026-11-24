@@ -3208,7 +3208,7 @@ async def get_user_object(
                     user_email=user_email,
                     email_verified=email_verified,
                     links_any_user=_email_fallback_links_any_user(),
-                    use_writer=bool(check_db_only),
+                    use_writer=True,
                 ),
                 name="user",
             )

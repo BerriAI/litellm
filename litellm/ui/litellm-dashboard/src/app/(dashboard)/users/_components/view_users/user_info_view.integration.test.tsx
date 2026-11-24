@@ -126,6 +126,72 @@ describe("UserInfoView add-to-team form", () => {
     mockListMCPTools.mockResolvedValue({ tools: [] });
   });
 
+  it("restores the effective budget when a temporary increase expires on the open details page", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2030-01-01T12:00:00Z"));
+      const userWithTemporaryBudget = {
+        ...MOCK_USER_DATA_NO_TEAMS,
+        max_budget: 100,
+        rollover_credit: 5,
+        temp_budget_increase: 25,
+        temp_budget_expiry: "2030-01-01T12:01:00Z",
+        effective_max_budget: 130,
+      };
+      mockUserGetInfoV2.mockResolvedValue(userWithTemporaryBudget);
+
+      await act(async () => {
+        render(<UserInfoView {...defaultProps} initialTab={1} />);
+      });
+      expect(screen.getByText(/\+\$25.*Active/)).toBeInTheDocument();
+      expect(screen.getByText("2030-01-01 12:01:00")).toBeInTheDocument();
+      expect(screen.getByText("$130.0000")).toBeInTheDocument();
+
+      await act(() => vi.advanceTimersByTimeAsync(60_000));
+
+      expect(screen.getByText(/\+\$25.*Expired/)).toBeInTheDocument();
+      expect(screen.getByText("$105.0000")).toBeInTheDocument();
+      expect(screen.queryByText("$130.0000")).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the new base budget immediately after saving a base-budget edit", async () => {
+    mockUserGetInfoV2.mockResolvedValue(MOCK_USER_DATA_NO_TEAMS);
+    render(<UserInfoView {...defaultProps} initialTab={1} startInEditMode />);
+
+    const budget = await screen.findByRole("spinbutton", { name: /max budget/i });
+    fireEvent.change(budget, { target: { value: "42.57" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(await screen.findByText("$42.5700")).toBeInTheDocument();
+  });
+
+  it("keeps the edit draft when an existing temporary budget expires", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2030-01-01T12:00:00Z"));
+      mockUserGetInfoV2.mockResolvedValue({
+        ...MOCK_USER_DATA_NO_TEAMS,
+        temp_budget_increase: 25,
+        temp_budget_expiry: "2030-01-01T12:01:00Z",
+        effective_max_budget: 125,
+      });
+      await act(async () => {
+        render(<UserInfoView {...defaultProps} initialTab={1} startInEditMode />);
+      });
+
+      const budget = screen.getByRole("spinbutton", { name: /max budget/i });
+      fireEvent.change(budget, { target: { value: "42" } });
+      act(() => vi.advanceTimersByTime(60_000));
+
+      expect(budget).toHaveValue(42);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["grant", "revoke", "keep"])("saves direct user skills on %s without dropping MCP grants", async (action) => {
     mockUserGetInfoV2.mockResolvedValue({
       ...MOCK_USER_DATA,

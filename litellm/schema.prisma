@@ -499,6 +499,8 @@ model LiteLLM_DeletedTeamTable {
 model LiteLLM_UserTable {
     rollover_max_budget Float?
     rollover_credit Float?
+    temp_budget_increase Float?
+    temp_budget_expiry DateTime?
     budget_limits Json?
     verified_subjects LiteLLM_VerifiedSubject[]
 		user_id    String @id

@@ -1,7 +1,7 @@
 import { useUrlTab } from "@/hooks/useUrlTab";
 import ResourceActivity from "@/components/UsagePage/ResourceActivity";
 import { MemberRoleSelect } from "./MemberRoleSelect";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -50,6 +50,7 @@ import ScopedSavingsTab from "@/components/shared/ScopedSavingsTab";
 import { AutoRouterUsageView } from "@/app/(dashboard)/cost-optimization/_components/AutoRouterBenchmarksTab";
 import { useActivityDateRange } from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
 import { UserSpendCard } from "./UserSpendCard";
+import { UserTemporaryBudget, useUserTemporaryBudget } from "./UserTemporaryBudget";
 
 interface UserInfoViewProps {
   userId: string;
@@ -75,8 +76,17 @@ interface TeamOption {
   team_alias: string;
 }
 
+const budgetFields = ["rollover_max_budget", "temp_budget_expiry"] as const;
+
+const editUserData = (user: UserInfoV2Response | null) =>
+  user === null ? undefined : { user_id: user.user_id, user_info: user };
 const shouldRefreshBudget = (user: UserInfoV2Response, changes: Record<string, unknown>) =>
-  user.rollover_max_budget != null || changes.rollover_max_budget !== undefined;
+  budgetFields.some((field) => user[field] != null || changes[field] !== undefined);
+
+const editedBaseBudget = (value: number | string | null | undefined, previous: number | null) => {
+  if (typeof value === "string") return Number(value);
+  return value === undefined ? previous : value;
+};
 
 export default function UserInfoView({
   userId,
@@ -94,6 +104,8 @@ export default function UserInfoView({
   const canViewUserUsage = canViewAutoRouterUsage || (Boolean(userId.trim()) && userId === signedInUserId);
   const activityDateRange = useActivityDateRange();
   const [userData, setUserData] = useState<UserInfoV2Response | null>(null);
+  const temporaryBudget = useUserTemporaryBudget(userData);
+  const userDataForEdit = useMemo(() => editUserData(userData), [userData]);
   const [teamDetails, setTeamDetails] = useState<TeamDisplayInfo[]>([]);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeletingUser, setIsDeletingUser] = useState(false);
@@ -345,14 +357,14 @@ export default function UserInfoView({
       // Update local state with new values
       if (shouldRefreshBudget(userData, formValues)) {
         setUserData(await userGetInfoV2(accessToken, userData.user_id));
-      } else
-        setUserData({
+      } else {
+        const editedUser = {
           ...userData,
           user_email: formValues.user_email ?? userData.user_email,
           user_alias: formValues.user_alias ?? userData.user_alias,
           user_role: formValues.user_role ?? userData.user_role,
           models: formValues.models ?? userData.models,
-          max_budget: formValues.max_budget === undefined ? userData.max_budget : formValues.max_budget,
+          max_budget: editedBaseBudget(formValues.max_budget, userData.max_budget),
           tpm_limit: formValues.tpm_limit === undefined ? userData.tpm_limit : formValues.tpm_limit,
           rpm_limit: formValues.rpm_limit === undefined ? userData.rpm_limit : formValues.rpm_limit,
           budget_duration:
@@ -362,7 +374,9 @@ export default function UserInfoView({
           object_permission: objectPermission
             ? { ...userData.object_permission, ...objectPermission }
             : userData.object_permission,
-        });
+        };
+        setUserData(editedUser);
+      }
 
       toast.success(t("users.userInfo.toasts.updated"));
       setIsEditing(false);
@@ -409,27 +423,6 @@ export default function UserInfoView({
   const unknownTimestamp = t("users.userInfo.details.unknown");
   const unlimited = t("users.userInfo.unlimited");
   const teamPickerPlaceholder = t("users.userInfo.addTeamDialog.teamPlaceholder");
-
-  // Build a legacy-compatible shape for UserEditView
-  const userDataForEdit = {
-    user_id: userData.user_id,
-    user_info: {
-      user_email: userData.user_email,
-      user_alias: userData.user_alias,
-      user_role: userData.user_role,
-      models: userData.models,
-      max_budget: userData.max_budget,
-      rollover_max_budget: userData.rollover_max_budget,
-      tpm_limit: userData.tpm_limit,
-      rpm_limit: userData.rpm_limit,
-      budget_duration: userData.budget_duration,
-      metadata: userData.metadata,
-      // Without these the per-model budget editor mounts empty and a save
-      // replaces the user's existing budgets with whatever was typed.
-      model_max_budget: userData.model_max_budget,
-      model_max_budget_usage: userData.model_max_budget_usage,
-    },
-  };
 
   const roleId = userData.user_role;
   return (
@@ -535,7 +528,7 @@ export default function UserInfoView({
         {/* Overview Panel */}
         <TabsContent value="overview" keepMounted>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            <UserSpendCard user={userData} />
+            <UserSpendCard user={{ ...userData, effective_max_budget: temporaryBudget.effectiveBudget }} />
 
             <Card className="block p-6">
               <div className="flex justify-between items-center mb-2">
@@ -709,6 +702,8 @@ export default function UserInfoView({
                       : unlimited}
                   </p>
                 </div>
+
+                <UserTemporaryBudget user={userData} budget={temporaryBudget} />
 
                 <div>
                   <p className="font-medium">{t("users.userInfo.details.budgetReset")}</p>

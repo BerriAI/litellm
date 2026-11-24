@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "UPDATE \"LiteLLM_UserTable\" AS u\nSET user_role = $2,\n    updated_at = NOW() AT TIME ZONE 'UTC'\nWHERE u.user_id = $1\nRETURNING u.user_id,\n       u.user_alias,\n       u.team_id,\n       u.sso_user_id,\n       u.organization_id,\n       u.object_permission_id,\n       u.password_reset_required,\n       u.last_breach_check_at,\n       COALESCE(u.teams, '{}') AS \"teams!\",\n       u.user_role,\n       u.max_budget,\n       u.rollover_max_budget,\n       u.rollover_credit,\n       u.budget_limits AS \"budget_limits: RawJson\",\n       u.spend,\n       u.user_email,\n       COALESCE(u.models, '{}') AS \"models!\",\n       u.metadata AS \"metadata: RawJson\",\n       u.max_parallel_requests,\n       u.tpm_limit,\n       u.rpm_limit,\n       u.budget_duration,\n       u.budget_reset_at,\n       COALESCE(u.allowed_cache_controls, '{}') AS \"allowed_cache_controls!\",\n       COALESCE(u.policies, '{}') AS \"policies!\",\n       u.model_spend AS \"model_spend: RawJson\",\n       u.model_max_budget AS \"model_max_budget: RawJson\",\n       u.created_at,\n       u.updated_at,\n       COALESCE(\n           (SELECT jsonb_agg(to_jsonb(m) ORDER BY m.organization_id)\n            FROM \"LiteLLM_OrganizationMembership\" AS m\n            WHERE m.user_id = u.user_id),\n           '[]'\n       ) AS \"organization_memberships!: Json<Vec<OrganizationMembership>>\"\n",
+  "query": "INSERT INTO \"LiteLLM_UserTable\" AS u (\n    user_id,\n    user_email,\n    sso_user_id,\n    user_role,\n    max_budget,\n    budget_duration,\n    budget_reset_at,\n    models,\n    budget_limits,\n    tpm_limit,\n    rpm_limit,\n    max_parallel_requests,\n    user_alias,\n    team_id,\n    organization_id,\n    object_permission_id,\n    password_reset_required,\n    metadata,\n    allowed_cache_controls,\n    policies,\n    model_max_budget,\n    created_at,\n    updated_at\n)\nVALUES (\n    $1,\n    CASE\n        WHEN $3::bool OR NOT EXISTS (\n            SELECT 1\n            FROM \"LiteLLM_UserTable\"\n            WHERE lower(user_email) = lower($2)\n              AND user_id <> $1\n        ) THEN $2\n    END,\n    $4,\n    $5,\n    $6,\n    $7,\n    $8,\n    $9,\n    $10,\n    $11,\n    $12,\n    $13,\n    $14,\n    $15,\n    $16,\n    $17,\n    $18,\n    COALESCE($19::jsonb, '{}'),\n    COALESCE($20::text[], '{}'),\n    COALESCE($21::text[], '{}'),\n    COALESCE($22::jsonb, '{}'),\n    NOW() AT TIME ZONE 'UTC',\n    NOW() AT TIME ZONE 'UTC'\n)\nON CONFLICT DO NOTHING\nRETURNING u.user_id,\n       u.user_alias,\n       u.team_id,\n       u.sso_user_id,\n       u.organization_id,\n       u.object_permission_id,\n       u.password_reset_required,\n       u.last_breach_check_at,\n       COALESCE(u.teams, '{}') AS \"teams!\",\n       u.user_role,\n       u.max_budget,\n       u.rollover_max_budget,\n       u.rollover_credit,\n       u.temp_budget_increase,\n       u.temp_budget_expiry,\n       u.budget_limits AS \"budget_limits: RawJson\",\n       u.spend,\n       u.user_email,\n       COALESCE(u.models, '{}') AS \"models!\",\n       u.metadata AS \"metadata: RawJson\",\n       u.max_parallel_requests,\n       u.tpm_limit,\n       u.rpm_limit,\n       u.budget_duration,\n       u.budget_reset_at,\n       COALESCE(u.allowed_cache_controls, '{}') AS \"allowed_cache_controls!\",\n       COALESCE(u.policies, '{}') AS \"policies!\",\n       u.model_spend AS \"model_spend: RawJson\",\n       u.model_max_budget AS \"model_max_budget: RawJson\",\n       u.created_at,\n       u.updated_at,\n       COALESCE(\n           (SELECT jsonb_agg(to_jsonb(m) ORDER BY m.organization_id)\n            FROM \"LiteLLM_OrganizationMembership\" AS m\n            WHERE m.user_id = u.user_id),\n           '[]'\n       ) AS \"organization_memberships!: Json<Vec<OrganizationMembership>>\"\n",
   "describe": {
     "columns": [
       {
@@ -143,6 +143,28 @@
       },
       {
         "ordinal": 13,
+        "name": "temp_budget_increase",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_UserTable\"",
+            "name": "temp_budget_increase"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "temp_budget_expiry",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_UserTable\"",
+            "name": "temp_budget_expiry"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
         "name": "budget_limits: RawJson",
         "type_info": "Jsonb",
         "origin": {
@@ -153,7 +175,7 @@
         }
       },
       {
-        "ordinal": 14,
+        "ordinal": 16,
         "name": "spend",
         "type_info": "Float8",
         "origin": {
@@ -164,7 +186,7 @@
         }
       },
       {
-        "ordinal": 15,
+        "ordinal": 17,
         "name": "user_email",
         "type_info": "Text",
         "origin": {
@@ -175,13 +197,13 @@
         }
       },
       {
-        "ordinal": 16,
+        "ordinal": 18,
         "name": "models!",
         "type_info": "TextArray",
         "origin": "Expression"
       },
       {
-        "ordinal": 17,
+        "ordinal": 19,
         "name": "metadata: RawJson",
         "type_info": "Jsonb",
         "origin": {
@@ -192,7 +214,7 @@
         }
       },
       {
-        "ordinal": 18,
+        "ordinal": 20,
         "name": "max_parallel_requests",
         "type_info": "Int4",
         "origin": {
@@ -203,7 +225,7 @@
         }
       },
       {
-        "ordinal": 19,
+        "ordinal": 21,
         "name": "tpm_limit",
         "type_info": "Int8",
         "origin": {
@@ -214,7 +236,7 @@
         }
       },
       {
-        "ordinal": 20,
+        "ordinal": 22,
         "name": "rpm_limit",
         "type_info": "Int8",
         "origin": {
@@ -225,7 +247,7 @@
         }
       },
       {
-        "ordinal": 21,
+        "ordinal": 23,
         "name": "budget_duration",
         "type_info": "Text",
         "origin": {
@@ -236,7 +258,7 @@
         }
       },
       {
-        "ordinal": 22,
+        "ordinal": 24,
         "name": "budget_reset_at",
         "type_info": "Timestamp",
         "origin": {
@@ -247,19 +269,19 @@
         }
       },
       {
-        "ordinal": 23,
+        "ordinal": 25,
         "name": "allowed_cache_controls!",
         "type_info": "TextArray",
         "origin": "Expression"
       },
       {
-        "ordinal": 24,
+        "ordinal": 26,
         "name": "policies!",
         "type_info": "TextArray",
         "origin": "Expression"
       },
       {
-        "ordinal": 25,
+        "ordinal": 27,
         "name": "model_spend: RawJson",
         "type_info": "Jsonb",
         "origin": {
@@ -270,7 +292,7 @@
         }
       },
       {
-        "ordinal": 26,
+        "ordinal": 28,
         "name": "model_max_budget: RawJson",
         "type_info": "Jsonb",
         "origin": {
@@ -281,7 +303,7 @@
         }
       },
       {
-        "ordinal": 27,
+        "ordinal": 29,
         "name": "created_at",
         "type_info": "Timestamp",
         "origin": {
@@ -292,7 +314,7 @@
         }
       },
       {
-        "ordinal": 28,
+        "ordinal": 30,
         "name": "updated_at",
         "type_info": "Timestamp",
         "origin": {
@@ -303,7 +325,7 @@
         }
       },
       {
-        "ordinal": 29,
+        "ordinal": 31,
         "name": "organization_memberships!: Json<Vec<OrganizationMembership>>",
         "type_info": "Jsonb",
         "origin": "Expression"
@@ -312,7 +334,27 @@
     "parameters": {
       "Left": [
         "Text",
-        "Text"
+        "Text",
+        "Bool",
+        "Text",
+        "Text",
+        "Float8",
+        "Text",
+        "Timestamp",
+        "TextArray",
+        "Jsonb",
+        "Int8",
+        "Int8",
+        "Int4",
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Bool",
+        "Jsonb",
+        "TextArray",
+        "TextArray",
+        "Jsonb"
       ]
     },
     "nullable": [
@@ -325,6 +367,8 @@
       true,
       true,
       null,
+      true,
+      true,
       true,
       true,
       true,
@@ -348,5 +392,5 @@
       null
     ]
   },
-  "hash": "c178a25888d6e7fb3a89c48afeb5b659ca8b0e91d2a1a355c61bd83a4915f714"
+  "hash": "8dec7d6e04b8ac1bf0062eea7fe0d5537dc3c7222553cdd783c73590ef9fddc4"
 }

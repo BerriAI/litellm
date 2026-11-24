@@ -15,6 +15,7 @@ import SkillSelector from "@/components/skills/SkillSelector";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
+import { UtcDateTimeInput } from "@/components/shared/form/UtcDateTimeInput";
 import { SemanticCacheJsonControls } from "@/components/shared/SemanticCacheControls";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -23,6 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { utcIsoToPickerValue } from "@/utils/ptuDatetime";
 import { CircleHelp } from "lucide-react";
 
 const isBlank = (value: string | number | null | undefined): boolean =>
@@ -76,17 +78,58 @@ const userEditShape = (t: TFunction) => ({
   skills: z.array(z.string()).optional(),
 });
 
-const userEditSchema = (unlimitedBudget: boolean, t: TFunction) =>
-  z.object({
+const userEditSchema = (unlimitedBudget: boolean, t: TFunction) => {
+  const shape = {
     ...userEditShape(t),
     max_budget: z
       .union([z.string(), z.number()])
       .nullish()
       .refine((value) => unlimitedBudget || !isBlank(value), t("users.editView.errors.budgetRequired")),
+    temp_budget_increase: z.union([z.string(), z.number()]).nullish(),
+    temp_budget_expiry: z.string().nullish(),
+  };
+  return z.object(shape).superRefine((values, ctx) => {
+    const hasIncrease = !isBlank(values.temp_budget_increase);
+    if (hasIncrease !== Boolean(values.temp_budget_expiry)) {
+      ctx.addIssue({
+        code: "custom",
+        path: [hasIncrease ? "temp_budget_expiry" : "temp_budget_increase"],
+        message: t("teams.memberFormValues.tempBudgetPairRequired"),
+      });
+    }
   });
+};
 
 type UserEditFormInput = z.input<ReturnType<typeof userEditSchema>>;
 type UserEditFormValues = z.output<ReturnType<typeof userEditSchema>>;
+
+type BudgetEditFields = Pick<
+  UserEditFormValues,
+  "max_budget" | "user_role" | "budget_duration" | "temp_budget_increase" | "temp_budget_expiry"
+>;
+
+function budgetUpdate(
+  { max_budget, user_role, budget_duration, temp_budget_increase, temp_budget_expiry }: BudgetEditFields,
+  unlimitedBudget: boolean,
+  canEditTemporaryBudget: boolean,
+  isDirty: (field: keyof BudgetEditFields) => boolean,
+) {
+  const permanentFields = {
+    max_budget: unlimitedBudget || isBlank(max_budget) ? null : max_budget,
+    user_role,
+    budget_duration,
+  };
+  if (!canEditTemporaryBudget || !(isDirty("temp_budget_increase") || isDirty("temp_budget_expiry"))) {
+    return permanentFields;
+  }
+  return {
+    ...(isDirty("max_budget") && { max_budget: permanentFields.max_budget }),
+    ...(isDirty("user_role") && { user_role }),
+    ...(isDirty("budget_duration") && { budget_duration }),
+    temp_budget_increase: isBlank(temp_budget_increase) ? null : Number(temp_budget_increase),
+    temp_budget_expiry: temp_budget_expiry || null,
+  };
+}
 
 const buildPermissionFieldValues = (objectPermission: ObjectPermission | null | undefined) => ({
   mcp_servers_and_groups: {
@@ -96,6 +139,11 @@ const buildPermissionFieldValues = (objectPermission: ObjectPermission | null | 
   },
   mcp_tool_permissions: objectPermission?.mcp_tool_permissions ?? {},
   skills: objectPermission?.skills ?? [],
+});
+
+const temporaryBudgetFormValues = (userInfo: UserEditFormInput | undefined) => ({
+  temp_budget_increase: userInfo?.temp_budget_increase ?? null,
+  temp_budget_expiry: utcIsoToPickerValue(userInfo?.temp_budget_expiry)?.toISOString() ?? null,
 });
 
 // antd only reported the fields that were actually mounted, so the identity and
@@ -125,7 +173,9 @@ const toFormValues = (
     budget_duration: userData.user_info?.budget_duration,
     rollover_max_budget: userData.user_info?.rollover_max_budget,
     metadata: userData.user_info?.metadata ? JSON.stringify(userData.user_info.metadata, null, 2) : undefined,
-    ...(canEditPermissions ? buildPermissionFieldValues(objectPermission) : {}),
+    ...(canEditPermissions
+      ? { ...buildPermissionFieldValues(objectPermission), ...temporaryBudgetFormValues(userData.user_info) }
+      : {}),
   };
 };
 
@@ -145,6 +195,9 @@ const parseMetadata = (metadata: string | null | undefined): ParsedMetadata => {
 
 const changedLimit = (value: number | null, stored: number | null | undefined): number | null | undefined =>
   value === (stored ?? null) ? undefined : value;
+
+const canEditUserPermissions = (userRole: string | null, isBulkEdit: boolean): boolean =>
+  !isBulkEdit && isProxyAdminRole(userRole || "");
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
@@ -171,7 +224,8 @@ export function UserEditView({
   premiumUser = false,
 }: UserEditViewProps) {
   const { t } = useTranslation();
-  const canEditPermissions = !isBulkEdit && isProxyAdminRole(userRole || "");
+  const canEditPermissions = canEditUserPermissions(userRole, isBulkEdit);
+  const canEditTemporaryBudget = canEditPermissions && premiumUser;
   const [unlimitedBudget, setUnlimitedBudget] = useState(false);
   const [modelMaxBudget, setModelMaxBudget] = useSeededState<ModelMaxBudget>(
     userData.user_id,
@@ -191,7 +245,7 @@ export function UserEditView({
   const handleUnlimitedBudgetChange = (checked: boolean) => {
     setUnlimitedBudget(checked);
     if (checked) {
-      form.setValue("max_budget", "");
+      form.setValue("max_budget", "", { shouldDirty: true });
     }
   };
 
@@ -201,11 +255,28 @@ export function UserEditView({
       return;
     }
 
-    const { tpm_limit: tpmLimitInput, rpm_limit: rpmLimitInput, rollover_max_budget, ...formValues } = values;
+    const {
+      tpm_limit: tpmLimitInput,
+      rpm_limit: rpmLimitInput,
+      max_budget,
+      user_role,
+      budget_duration,
+      rollover_max_budget,
+      temp_budget_increase,
+      temp_budget_expiry,
+      ...formValues
+    } = values;
     const rolloverCap = isBlank(rollover_max_budget) ? null : Number(rollover_max_budget);
     const modelBudgets = modelMaxBudgetUpdate(modelMaxBudget, userData.user_info?.model_max_budget);
     const tpmLimit = changedLimit(tpmLimitInput, userData.user_info?.tpm_limit);
     const rpmLimit = changedLimit(rpmLimitInput, userData.user_info?.rpm_limit);
+    const budgetValues = { max_budget, user_role, budget_duration, temp_budget_increase, temp_budget_expiry };
+    const budgetFields = budgetUpdate(
+      budgetValues,
+      unlimitedBudget,
+      canEditTemporaryBudget,
+      (field) => form.getFieldState(field).isDirty,
+    );
     const payload = {
       ...formValues,
       ...("metadata" in values ? { metadata: metadata.value } : {}),
@@ -213,8 +284,7 @@ export function UserEditView({
       ...(tpmLimit !== undefined && { tpm_limit: tpmLimit }),
       ...(rpmLimit !== undefined && { rpm_limit: rpmLimit }),
       ...(form.getFieldState("rollover_max_budget").isDirty && { rollover_max_budget: rolloverCap }),
-      max_budget:
-        unlimitedBudget || values.max_budget === "" || values.max_budget === undefined ? null : values.max_budget,
+      ...budgetFields,
     };
     onSubmit(payload);
   };
@@ -359,6 +429,36 @@ export function UserEditView({
                   />
                 )}
               </FormField>
+
+              {canEditTemporaryBudget && (
+                <>
+                  <FormField
+                    control={form.control}
+                    name="temp_budget_increase"
+                    label={t("users.temporaryBudget.increase")}
+                  >
+                    {({ value, onChange, ...field }) => (
+                      <Input
+                        {...field}
+                        type="number"
+                        min={0}
+                        step="any"
+                        value={value ?? ""}
+                        onChange={(event) => onChange(event.target.value)}
+                      />
+                    )}
+                  </FormField>
+                  <FormField control={form.control} name="temp_budget_expiry" label={t("users.temporaryBudget.expiry")}>
+                    {({ value, onChange, ...field }) => (
+                      <UtcDateTimeInput
+                        {...field}
+                        value={utcIsoToPickerValue(value)}
+                        onChange={(expiry) => onChange(expiry?.toISOString() ?? null)}
+                      />
+                    )}
+                  </FormField>
+                </>
+              )}
 
               <FormField
                 control={form.control}

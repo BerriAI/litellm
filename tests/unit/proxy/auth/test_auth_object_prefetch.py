@@ -1,6 +1,7 @@
 """Counts the Redis round trips and DB queries auth object reads cost per cache regime, and checks that the
 per-object getters still enforce on their own when the prefetch cannot help."""
 
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -76,6 +77,7 @@ ALL_ROWS = {
 def _prisma(rows: dict[str, object] | None = ALL_ROWS) -> MagicMock:
     prisma = MagicMock(name="prisma_client")
     prisma.db.query_first = AsyncMock(return_value=rows)
+    prisma.writer_db = prisma.db
     return prisma
 
 
@@ -172,6 +174,17 @@ async def test_cold_regime_is_one_mget_one_query_and_the_getters_never_touch_io_
     assert membership.litellm_budget_table.max_budget == 20.0
     assert isinstance(org, LiteLLM_OrganizationTable) and org.litellm_budget_table is not None
     assert org.litellm_budget_table.max_budget == 1000.0
+
+
+@pytest.mark.asyncio
+async def test_cold_user_auth_prefetch_uses_the_writer_budget() -> None:
+    stale_row: Final = {**USER_ROW, "temp_budget_increase": 50, "temp_budget_expiry": "2030-01-01T12:00:00Z"}
+    prisma: Final = _prisma({**ALL_ROWS, "user_row": stale_row})
+    prisma.writer_db = _prisma().db
+    cache: Final = _cache(FakeAuthCache())
+    await prefetch_auth_objects(refs=_refs(), user_api_key_cache=cache, prisma_client=prisma)
+    cached: Final = await cache.async_get_cache(key=AuthObject.user(USER_ID), model_type=LiteLLM_UserTable)
+    assert cached is not None and cached.temp_budget_increase is None
 
 
 @pytest.mark.asyncio

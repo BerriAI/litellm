@@ -4,7 +4,7 @@ import json
 import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, cast
@@ -2519,6 +2519,23 @@ def test_update_internal_user_params_clears_model_budget(cleared_budget: dict[st
     assert update == {"user_id": "user-spruce", "model_max_budget": {}}
 
 
+def test_user_temporary_budget_applies_until_expiry_alongside_rollover() -> None:
+    expiry: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    user: Final = LiteLLM_UserTable(
+        user_id="user-spruce",
+        max_budget=10,
+        budget_duration="30d",
+        rollover_max_budget=15,
+        rollover_credit=3,
+        temp_budget_increase=7,
+        temp_budget_expiry=expiry.replace(tzinfo=None),
+    )
+
+    assert user.effective_max_budget(expiry - timedelta(microseconds=1)) == 20
+    assert user.effective_max_budget(expiry) == 13
+    assert user.max_budget == 10
+
+
 def test_update_internal_user_params_preserves_model_budget_presence_and_neighbors() -> None:
     omitted: Final = UpdateUserRequest(user_id="user-spruce", user_alias="Spruce")
     assert _update_internal_user_params(data_json=omitted.model_dump(), data=omitted) == {
@@ -3699,7 +3716,7 @@ async def test_user_info_v2_proxy_admin_can_query_any_user(mocker: MockerFixture
 
     class _PrismaClient:
         def __init__(self, db: _Database) -> None:
-            self.db = db
+            self.writer_db = db
 
     async def mock_find_unique(*_args: object, **kwargs: object) -> LiteLLM_UserTable | None:
         where: Final = kwargs.get("where")
@@ -3771,7 +3788,7 @@ async def test_user_info_v2_redacts_scim_enterprise_metadata(mocker):
             return mock_user_row
         return None
 
-    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
+    mock_prisma_client.writer_db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -3855,7 +3872,7 @@ async def test_user_info_v2_internal_user_can_query_self(mocker):
             return mock_user_row
         return None
 
-    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
+    mock_prisma_client.writer_db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -3897,7 +3914,6 @@ async def test_user_info_v2_internal_user_cannot_query_other(mocker):
         return None
 
     mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
-
     mock_prisma_client.db.litellm_organizationmembership.find_many = mocker.AsyncMock(return_value=[])
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -3951,7 +3967,7 @@ async def test_user_info_v2_no_user_id_defaults_to_self(mocker):
             return mock_user_row
         return None
 
-    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
+    mock_prisma_client.writer_db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -3985,7 +4001,7 @@ async def test_user_info_v2_nonexistent_user_returns_404(mocker):
     async def mock_find_unique(*args, **kwargs):
         return None
 
-    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
+    mock_prisma_client.writer_db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -4024,7 +4040,7 @@ async def test_user_info_v2_logs_traceback_only_for_server_errors(
     from litellm.proxy.management_endpoints.internal_user_endpoints import user_info_v2
 
     prisma: Final = mocker.MagicMock()
-    prisma.db.litellm_usertable.find_unique = find_unique
+    prisma.writer_db.litellm_usertable.find_unique = find_unique
     mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma)
 
     with caplog.at_level(logging.ERROR), pytest.raises(ProxyException) as exc_info:
@@ -4073,7 +4089,7 @@ async def test_user_info_v2_response_shape(mocker):
     async def mock_find_unique(*args, **kwargs):
         return mock_user_row
 
-    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
+    mock_prisma_client.writer_db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -4178,6 +4194,7 @@ async def test_user_info_v2_team_admin_can_query_team_member(mocker):
         return None
 
     mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
+    mock_prisma_client.writer_db = mock_prisma_client.db
 
     # Mock team with caller as admin
     mock_team = mocker.MagicMock()
@@ -4241,6 +4258,7 @@ async def test_user_info_v2_team_admin_cannot_query_non_team_member(mocker):
         return None
 
     mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
+    mock_prisma_client.writer_db = mock_prisma_client.db
 
     # Mock team where caller is admin
     mock_team = mocker.MagicMock()
@@ -4307,6 +4325,7 @@ def _org_admin_prisma(mocker: MockerFixture) -> MagicMock:
 
     prisma: Final = mocker.MagicMock()
     prisma.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=find_unique)
+    prisma.writer_db = prisma.db
     prisma.db.litellm_organizationmembership.find_many = mocker.AsyncMock(side_effect=find_many)
     return prisma
 
@@ -4388,7 +4407,7 @@ async def test_user_info_v2_url_encoding_plus_character(mocker):
             return mock_user_row
         return None
 
-    mock_prisma_client.db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
+    mock_prisma_client.writer_db.litellm_usertable.find_unique = mocker.AsyncMock(side_effect=mock_find_unique)
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
@@ -6131,7 +6150,7 @@ async def test_user_info_v2_reports_current_spend_per_budget_window(mocker):
     user_row = mocker.MagicMock()
     user_row.model_dump.return_value = {"user_id": "window-user", "budget_limits": budget_limits}
     prisma = mocker.MagicMock()
-    prisma.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=user_row)
+    prisma.writer_db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=user_row)
     mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma)
     spend_by_counter = {"spend:user_window:window-user:1h": 0.73, "spend:user_window:window-user:30d": 41.25}
     get_current_spend = mocker.patch(
@@ -6245,7 +6264,7 @@ async def test_user_info_v2_without_budget_windows_reads_no_window_spend(mocker)
     user_row = mocker.MagicMock()
     user_row.model_dump.return_value = {"user_id": "plain-user", "budget_limits": None}
     prisma = mocker.MagicMock()
-    prisma.db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=user_row)
+    prisma.writer_db.litellm_usertable.find_unique = mocker.AsyncMock(return_value=user_row)
     mocker.patch("litellm.proxy.proxy_server.prisma_client", prisma)
     get_current_spend = mocker.patch("litellm.proxy.proxy_server.get_current_spend", mocker.AsyncMock())
 

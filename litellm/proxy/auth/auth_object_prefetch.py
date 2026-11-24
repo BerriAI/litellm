@@ -265,7 +265,10 @@ async def _fetch_rows(
     refs: AuthObjectRefs, kinds: frozenset[_RowKind], prisma_client: PrismaClient
 ) -> Mapping[str, object]:
     async with db_span("prefetch_auth_objects", AUTH_OBJECTS_TARGET):
-        row: Final[object] = await prisma_client.db.query_first(  # pyright: ignore[reportAny]  # prisma types query_first as Any
+        # A user budget edit evicts auth caches. Refill from the writer so a lagging reader
+        # cannot put the previous budget back in the cache.
+        db: Final = prisma_client.writer_db if "user_row" in kinds else prisma_client.db
+        row: Final[object] = await db.query_first(  # pyright: ignore[reportAny]  # prisma types query_first as Any
             _SQL,
             refs.user_id if "user_row" in kinds else None,
             refs.team_id if kinds & _TEAM_BOUND_ROWS else None,

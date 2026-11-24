@@ -83,6 +83,47 @@ describe("UserEditView", () => {
     });
   });
 
+  it.each([
+    ["leave the pair untouched", null, null, undefined],
+    [
+      "update the expiry",
+      null,
+      "2030-01-01T13:00",
+      { temp_budget_increase: 25, temp_budget_expiry: "2030-01-01T13:00:00.000Z" },
+    ],
+    ["clear the pair", "", "", { temp_budget_increase: null, temp_budget_expiry: null }],
+  ] as const)("handles a temporary budget edit to %s", async (_case, increase, expiry, expected) => {
+    const userData = {
+      ...MOCK_USER_DATA,
+      user_info: {
+        ...MOCK_USER_DATA.user_info,
+        temp_budget_increase: 25,
+        temp_budget_expiry: "2030-01-01T12:00:00Z",
+      },
+    };
+    renderWithProviders(<UserEditView {...defaultProps} userData={userData} premiumUser />);
+
+    if (increase !== null) {
+      fireEvent.change(screen.getByLabelText("Temporary Budget Increase (USD)"), { target: { value: increase } });
+    }
+    if (expiry !== null) {
+      fireEvent.change(screen.getByLabelText("Temporary Budget Expiry (UTC)"), { target: { value: expiry } });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => expect(defaultProps.onSubmit).toHaveBeenCalledOnce());
+    const [payload] = defaultProps.onSubmit.mock.calls[0];
+    if (expected === undefined) {
+      expect(payload).not.toHaveProperty("temp_budget_increase");
+      expect(payload).not.toHaveProperty("temp_budget_expiry");
+    } else {
+      expect(payload).toMatchObject(expected);
+      expect(payload).not.toHaveProperty("max_budget");
+      expect(payload).not.toHaveProperty("user_role");
+      expect(payload).not.toHaveProperty("budget_duration");
+    }
+  });
+
   it("uses translated role names instead of backend labels in the role dropdown", async () => {
     const user = userEvent.setup();
     renderWithProviders(

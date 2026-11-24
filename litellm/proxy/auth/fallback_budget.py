@@ -146,7 +146,7 @@ async def is_token_within_budget_for_model(
 
     # Mirrors `_PROXY_MaxBudgetLimiter`: a team key does not carry the key owner's personal budget
     # unless the proxy opts in, so the personal cap must not gate the fallback either.
-    user_budget: Final = valid_token.user_max_budget
+    user_budget: Final = valid_token.effective_user_max_budget()
     if (
         user_budget is not None
         and valid_token.user_id is not None

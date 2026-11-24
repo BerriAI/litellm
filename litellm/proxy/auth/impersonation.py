@@ -151,7 +151,7 @@ def _email_matches(claimed: str | None, actual: str | None) -> bool:
 
 def _as_subject(actor: UserAPIKeyAuth, subject: LiteLLM_UserTable, grants: _SubjectGrants) -> UserAPIKeyAuth:
     """Only the key identity survives, while subject grants and budgets come from the user row."""
-    return UserAPIKeyAuth(
+    auth: Final = UserAPIKeyAuth(
         api_key=None,
         token=actor.token,
         key_alias=actor.key_alias,
@@ -162,8 +162,10 @@ def _as_subject(actor: UserAPIKeyAuth, subject: LiteLLM_UserTable, grants: _Subj
         models=list(grants.models),
         user_tpm_limit=subject.tpm_limit,
         user_rpm_limit=subject.rpm_limit,
-        user_max_budget=subject.effective_max_budget(),
+        user_max_budget=subject.max_budget_with_rollover(),
         user_spend=subject.spend,
         user_model_max_budget=grants.model_max_budget,
         parent_otel_span=actor.parent_otel_span,
     ).model_copy(update={"impersonated_by": actor_label(actor)})
+    auth.carry_temporary_user_budget(subject)
+    return auth

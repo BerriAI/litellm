@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import Annotated, Final, Literal
 
 from pydantic import AfterValidator, Field, field_validator, model_validator
@@ -86,6 +87,26 @@ class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):
     # else they will get overwritten
     user_id: str | None = None
     user_email: str | None = None
+    temp_budget_increase: float | None = Field(
+        default=None, ge=0, allow_inf_nan=False, description="Extra USD added to the user budget until expiry."
+    )
+    temp_budget_expiry: datetime | None = Field(default=None, description="Expiry for the temporary user budget.")
+
+    @field_validator("temp_budget_expiry")
+    @classmethod
+    def normalize_temp_budget_expiry(cls, expiry: datetime | None) -> datetime | None:
+        if expiry is None:
+            return None
+        return expiry.replace(tzinfo=timezone.utc) if expiry.tzinfo is None else expiry.astimezone(timezone.utc)
+
+    @model_validator(mode="after")
+    def validate_temp_budget(self) -> "UpdateUserRequest":
+        fields: Final = self.model_fields_set
+        if ("temp_budget_increase" in fields) != ("temp_budget_expiry" in fields) or (
+            (self.temp_budget_increase is None) != (self.temp_budget_expiry is None)
+        ):
+            raise ValueError("temp_budget_increase and temp_budget_expiry must be set together")
+        return self
 
     @model_validator(mode="before")
     @classmethod

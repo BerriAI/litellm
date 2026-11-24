@@ -2912,7 +2912,12 @@ async def generate_service_account_key_fn(
 
 
 def prepare_metadata_fields(
-    data: BaseModel, non_default_values: dict, existing_metadata: dict, *, logging_references_approved: bool = False
+    data: BaseModel,
+    non_default_values: dict,
+    existing_metadata: dict,
+    *,
+    logging_references_approved: bool = False,
+    exclude_fields: frozenset[str] = frozenset(),
 ) -> dict:
     """
     Check LiteLLM_ManagementEndpoint_MetadataFields (proxy/_types.py) for fields that are allowed to be updated
@@ -2939,7 +2944,7 @@ def prepare_metadata_fields(
             )
         casted_metadata[reserved_field] = existing_value
 
-    data_json: Final = _as_object_dict(data.model_dump(exclude_unset=True, exclude_none=True))
+    data_json: Final = _as_object_dict(data.model_dump(exclude=exclude_fields, exclude_unset=True, exclude_none=True))
 
     try:
         for k, v in data_json.items():

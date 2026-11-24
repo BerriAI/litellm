@@ -1170,6 +1170,8 @@ export interface UserInfoV2Response {
   max_budget: number | null;
   rollover_max_budget?: number | null;
   rollover_credit?: number | null;
+  temp_budget_increase?: number | null;
+  temp_budget_expiry?: string | null;
   effective_max_budget?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;

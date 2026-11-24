@@ -1829,8 +1829,6 @@ async def test_auth_prefetches_referenced_objects_before_central_model_authoriza
 async def test_return_user_api_key_auth_obj_user_spend_and_budget(
     cap: float | None, credit: float | None, expected_budget: float
 ) -> None:
-    from datetime import datetime
-
     from litellm.proxy._types import LiteLLM_UserTable, UserAPIKeyAuth
     from litellm.proxy.auth.user_api_key_auth import return_user_api_key_auth_obj
 
@@ -1844,6 +1842,8 @@ async def test_return_user_api_key_auth_obj_user_spend_and_budget(
         budget_duration="monthly",
         rollover_max_budget=cap,
         rollover_credit=credit,
+        temp_budget_increase=20.0,
+        temp_budget_expiry=datetime(9999, 1, 1, tzinfo=timezone.utc),
         user_role="internal_user",
     )
 
@@ -1875,6 +1875,7 @@ async def test_return_user_api_key_auth_obj_user_spend_and_budget(
     assert isinstance(result, UserAPIKeyAuth)
     assert result.user_spend == 250.0
     assert result.user_max_budget == expected_budget
+    assert result.effective_user_max_budget() == expected_budget + 20.0
     assert result.user_tpm_limit == 1000
     assert result.user_rpm_limit == 100
     assert result.user_email == "test@example.com"
@@ -3738,6 +3739,23 @@ async def test_centralized_common_checks_enforce_personal_budget_on_proxy_admin_
     assert (exc_info.value.max_budget, exc_info.value.current_cost) == (10.0, 25.0)
     user_alerts = [c.kwargs["user_info"] for c in budget_alerts.call_args_list if c.kwargs["type"] == "user_budget"]
     assert [a.user_email for a in user_alerts] == ["admin@example.com"]
+
+
+@pytest.mark.asyncio
+async def test_centralized_common_checks_apply_temporary_personal_budget_to_named_admin() -> None:
+    db_user: Final = LiteLLM_UserTable(
+        user_id="admin-with-temporary-budget",
+        spend=25.0,
+        max_budget=10.0,
+        budget_duration="monthly",
+        rollover_max_budget=15.0,
+        rollover_credit=3.0,
+        temp_budget_increase=30.0,
+        temp_budget_expiry=datetime(9999, 1, 1, tzinfo=timezone.utc),
+    )
+    token: Final = UserAPIKeyAuth(api_key="sk-test", user_id=db_user.user_id, user_role=LitellmUserRoles.PROXY_ADMIN)
+    await _run_checks_for_cached_user(db_user, token)
+    assert token.effective_user_max_budget() == 43.0
 
 
 @pytest.mark.asyncio

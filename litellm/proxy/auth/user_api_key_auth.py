@@ -2815,12 +2815,20 @@ async def run_centralized_common_checks(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             spend=user_object.spend if user_object is not None else 0.0,
             max_budget=budget_row.max_budget if budget_row is not None else None,
+            budget_duration=budget_row.budget_duration if budget_row is not None else None,
+            rollover_max_budget=budget_row.rollover_max_budget if budget_row is not None else None,
+            rollover_credit=budget_row.rollover_credit if budget_row is not None else None,
+            temp_budget_increase=budget_row.temp_budget_increase if budget_row is not None else None,
+            temp_budget_expiry=budget_row.temp_budget_expiry if budget_row is not None else None,
             budget_limits=budget_row.budget_limits if budget_row is not None else None,
             user_email=budget_row.user_email if budget_row is not None else None,
             object_permission_id=(
                 user_object.object_permission_id if isinstance(user_object, LiteLLM_UserTable) else None
             ),
         )
+
+    if user_object is not None:
+        user_api_key_auth_obj.carry_temporary_user_budget(user_object)
 
     if project_object is not None:
         user_api_key_auth_obj.project_metadata = project_object.metadata
@@ -3641,7 +3649,7 @@ async def return_user_api_key_auth_obj(
             user_rpm_limit=user_obj.rpm_limit,
             user_email=user_obj.user_email,
             user_spend=getattr(user_obj, "spend", None),
-            user_max_budget=user_obj.effective_max_budget(),
+            user_max_budget=user_obj.max_budget_with_rollover(),
             user_model_max_budget=getattr(user_obj, "model_max_budget", None),
             user_semantic_cache_params=semantic_cache_params(attribute_or_none(user_obj, "metadata")),
         )
@@ -3649,9 +3657,10 @@ async def return_user_api_key_auth_obj(
         user_api_key_kwargs.update(
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
-        return UserAPIKeyAuth.model_validate(user_api_key_kwargs)
-    else:
-        return UserAPIKeyAuth.model_validate(user_api_key_kwargs)
+    auth: Final = UserAPIKeyAuth.model_validate(user_api_key_kwargs)
+    if user_obj is not None:
+        auth.carry_temporary_user_budget(user_obj)
+    return auth
 
 
 def get_api_key_from_custom_header(request: Request, custom_litellm_key_header_name: str) -> str:

@@ -104,7 +104,13 @@ from litellm.proxy.management_helpers.utils import (
     budget_windows_json,
     management_endpoint_wrapper,
 )
-from litellm.proxy.utils import handle_exception_on_proxy, hash_password, query_raw_rows, run_off_loop_if_fips
+from litellm.proxy.utils import (
+    handle_exception_on_proxy,
+    hash_password,
+    query_raw_rows,
+    require_enterprise_license,
+    run_off_loop_if_fips,
+)
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import (
     user_counter,
@@ -1051,11 +1057,17 @@ def _build_user_info_response(
     info_fields: Final = as_str_mapping(_user_info)
     if isinstance(info_fields, dict):
         info_fields.pop("password", None)
-        if info_fields.get("rollover_max_budget") is not None:
-            rollover_user: Final = LiteLLM_UserTable.model_validate(info_fields)
-            info_fields["rollover_credit"] = rollover_user.active_rollover_credit()
-            info_fields["effective_max_budget"] = rollover_user.effective_max_budget()
-        else:
+        has_rollover: Final = info_fields.get("rollover_max_budget") is not None
+        has_temporary_budget: Final = info_fields.get("temp_budget_expiry") is not None
+        if has_rollover or has_temporary_budget:
+            budget_user: Final = LiteLLM_UserTable.model_validate(info_fields)
+            if has_rollover:
+                info_fields["rollover_credit"] = budget_user.active_rollover_credit()
+            info_fields["effective_max_budget"] = budget_user.effective_max_budget()
+        if not has_temporary_budget:
+            info_fields.pop("temp_budget_increase", None)
+            info_fields.pop("temp_budget_expiry", None)
+        if not has_rollover:
             info_fields.pop("rollover_max_budget", None)
             info_fields.pop("rollover_credit", None)
         info_fields["metadata"] = _redact_scim_enterprise_metadata(info_fields.get("metadata"))
@@ -1204,7 +1216,7 @@ async def _check_user_info_v2_access(
     # Helper: fetch the target user row (reused across branches). object_permission is included so
     # callers can read the user's MCP/vector-store entitlements without a second round trip.
     async def _fetch_target_user():
-        return await _user_table(prisma_client).find_unique(
+        return await UserRepository(prisma_client, use_writer=True).table.find_unique(
             where={"user_id": target_user_id}, include={"object_permission": True}
         )
 
@@ -1341,10 +1353,12 @@ async def user_info_v2(
         user_data: Final = require_get(user_dump)
         row_user_id: Final = user_data.get("user_id", user_id)
         row_user_key: Final = None if row_user_id is None else f"{row_user_id}"
-        rollover_user: Final = (
-            LiteLLM_UserTable.model_validate(user_dump) if user_data.get("rollover_max_budget") is not None else None
+        budget_user: Final = (
+            LiteLLM_UserTable.model_validate(user_dump)
+            if user_data.get("rollover_max_budget") is not None or user_data.get("temp_budget_expiry") is not None
+            else None
         )
-        rollover_credit: Final = rollover_user.active_rollover_credit() if rollover_user is not None else None
+        rollover_credit: Final = budget_user.active_rollover_credit() if budget_user is not None else None
 
         return UserInfoV2Response.model_validate(
             {
@@ -1354,10 +1368,13 @@ async def user_info_v2(
                 "user_role": user_data.get("user_role"),
                 "spend": user_data.get("spend", 0.0),
                 "max_budget": user_data.get("max_budget"),
-                "rollover_max_budget": rollover_user.rollover_max_budget if rollover_user is not None else None,
+                "rollover_max_budget": budget_user.rollover_max_budget if budget_user is not None else None,
                 "rollover_credit": rollover_credit,
-                "effective_max_budget": rollover_user.effective_max_budget()
-                if rollover_user is not None and rollover_credit is not None
+                "temp_budget_increase": user_data.get("temp_budget_increase"),
+                "temp_budget_expiry": user_data.get("temp_budget_expiry"),
+                "effective_max_budget": budget_user.effective_max_budget()
+                if budget_user is not None
+                and (rollover_credit is not None or budget_user.temp_budget_expiry is not None)
                 else None,
                 "tpm_limit": user_data.get("tpm_limit"),
                 "rpm_limit": user_data.get("rpm_limit"),
@@ -1531,7 +1548,16 @@ def _update_internal_user_params(data_json: dict, data: UpdateUserRequest | Upda
     fields_set: Final = data.fields_set() if hasattr(data, "fields_set") else set()
 
     for k, v in data_json.items():
-        if k in ("max_budget", "budget_duration", "tpm_limit", "rpm_limit", "budget_limits", "rollover_max_budget"):
+        if k in (
+            "max_budget",
+            "budget_duration",
+            "tpm_limit",
+            "rpm_limit",
+            "budget_limits",
+            "rollover_max_budget",
+            "temp_budget_increase",
+            "temp_budget_expiry",
+        ):
             if k in fields_set:
                 non_default_values[k] = v
         elif k == "model_max_budget":
@@ -1815,6 +1841,8 @@ async def _update_single_user_helper(
         _protected_fields: Final = (
             "max_budget",
             "rollover_max_budget",
+            "temp_budget_increase",
+            "temp_budget_expiry",
             "budget_limits",
             "model_max_budget",
             "soft_budget",
@@ -1836,6 +1864,9 @@ async def _update_single_user_helper(
                     },
                 )
 
+    if user_request.temp_budget_increase is not None:
+        require_enterprise_license("Temporary user budget increase")
+
     existing_metadata: Final = (
         cast(dict, getattr(existing_user_row, "metadata", {}) or {}) if existing_user_row is not None else {}
     )
@@ -1851,6 +1882,7 @@ async def _update_single_user_helper(
         data=user_request,
         non_default_values=non_default_values,
         existing_metadata=existing_metadata or {},
+        exclude_fields=frozenset(("temp_budget_increase", "temp_budget_expiry")),
     )
 
     # Reject NaN/±inf spend before it can reach the DB / spend counter.
@@ -2024,6 +2056,8 @@ async def user_update(
         - user_role: Optional[str] - Specify a user role - "proxy_admin", "proxy_admin_viewer", "internal_user", "internal_user_viewer", "team", "customer". Info about each role here: `https://github.com/BerriAI/litellm/litellm/proxy/_types.py#L20`
         - max_budget: Optional[float] - Specify max budget for a given user.
         - rollover_max_budget: Optional[float] - Cap in USD for the base budget plus carried allowance. Requires a reset period and must exceed the base budget. Set to null to disable rollover.
+        - temp_budget_increase: Optional[float] - Extra USD added to the user budget until expiry (Enterprise only).
+        - temp_budget_expiry: Optional[datetime] - UTC expiry for the increase. Set both fields to null to clear it.
         - budget_duration: Optional[str] - Budget is reset at the end of specified duration. If not set, budget is never reset. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d"), months ("1mo").
         - models: Optional[list] - Model_name's a user is allowed to call. (if empty, key is allowed to call all models)
         - tpm_limit: Optional[int] - Specify tpm limit for a given user (Tokens per minute)

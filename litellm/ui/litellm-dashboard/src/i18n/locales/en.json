@@ -21205,6 +21205,13 @@
         "submitting": "Adding..."
       }
     },
+    "temporaryBudget": {
+      "increase": "Temporary Budget Increase (USD)",
+      "expiry": "Temporary Budget Expiry (UTC)",
+      "active": "Active",
+      "expired": "Expired",
+      "effective": "Effective Budget"
+    },
     "editView": {
       "errors": {
         "rateLimit": "Enter a non-negative whole number, or leave empty for unlimited",

@@ -1,11 +1,14 @@
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timedelta, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+import time_machine
 
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
+from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.auth.fallback_budget import (
     RouterFallbackBudgetCheck,
@@ -114,6 +117,19 @@ async def test_paid_target_refused_when_over_key_budget():
 async def test_paid_target_refused_when_over_user_budget():
     token = _token(user_spend=1900.0, user_max_budget=50.0)
     assert await is_token_within_budget_for_model(model="paid-model", valid_token=token, llm_router=_router()) is False
+
+
+@pytest.mark.asyncio
+async def test_paid_target_loses_temporary_user_budget_at_expiry() -> None:
+    expiry: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    user: Final = LiteLLM_UserTable(user_id="u1", max_budget=10, temp_budget_increase=20, temp_budget_expiry=expiry)
+    token: Final = UserAPIKeyAuth(user_id="u1", user_spend=15, user_max_budget=30)
+    token.carry_temporary_user_budget(user)
+    router: Final = _router()
+    with time_machine.travel(expiry - timedelta(seconds=1), tick=False):
+        assert await is_token_within_budget_for_model(model="paid-model", valid_token=token, llm_router=router)
+    with time_machine.travel(expiry, tick=False):
+        assert not await is_token_within_budget_for_model(model="paid-model", valid_token=token, llm_router=router)
 
 
 @pytest.mark.asyncio
