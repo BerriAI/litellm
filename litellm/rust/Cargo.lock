@@ -5021,6 +5021,7 @@ dependencies = [
 name = "litellm-router-types"
 version = "0.1.0"
 dependencies = [
+ "jiff",
  "litellm-auth-types",
  "litellm-secret-value",
  "rstest",

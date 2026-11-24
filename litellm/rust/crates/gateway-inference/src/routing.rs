@@ -305,7 +305,12 @@ async fn answered<H: Host, O>(
             error: litellm_router_core::Error::NoHealthyDeployments { model, .. },
             ..
         } => no_deployments(gateway, model).await.into(),
-        CallError { error, .. } => Error::Routing(error).into(),
+        CallError { error, .. } => Ended {
+            routing: error
+                .refused()
+                .map(|refused| Routing::failed_on(&refused.deployment_id)),
+            error: Box::new(Error::Routing(error)),
+        },
     })
 }
 
