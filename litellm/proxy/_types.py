@@ -4139,7 +4139,7 @@ class ProxyException(Exception):
         code: int | str | None = None,  # maps to status code
         headers: dict[str, str] | None = None,
         openai_code: str | None = None,  # maps to 'code'  in openai
-        provider_specific_fields: dict | None = None,
+        provider_specific_fields: dict[str, object] | None = None,
     ):
         self.message = str(message)
         super().__init__(self.message)

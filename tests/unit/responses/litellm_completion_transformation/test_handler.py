@@ -23,6 +23,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -34,8 +35,138 @@ from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, ChatCompletionDeltaToolCall, ModelResponseStream
+
+
+_UPSTREAM_PARAM_CASES: Final = [
+    pytest.param("max_tokens", "max_output_tokens", id="renamed_by_the_bridge"),
+    pytest.param("max_completion_tokens", "max_output_tokens", id="renamed_twice"),
+    pytest.param("reasoning_effort", "reasoning.effort", id="moved_under_reasoning"),
+    pytest.param("response_format.json_schema.schema", "text.format", id="moved_under_text"),
+    pytest.param("verbosity", "text.verbosity", id="verbosity_moved_under_text"),
+    pytest.param("tools[0].function.name", "tools", id="reshaped_tool"),
+    pytest.param("messages[0].content[1].image_url", "input", id="message_path_under_input"),
+    pytest.param("stream_options", None, id="sent_only_by_the_bridge"),
+    pytest.param("frequency_penalty", None, id="not_a_responses_field"),
+    pytest.param("user", "user", id="shared_field"),
+    pytest.param(["body", "max_tokens"], None, id="non_string_param"),
+]
+
+
+def _request_sending_every_renamed_field() -> ResponsesAPIOptionalRequestParams:
+    return {
+        "max_output_tokens": 16,
+        "reasoning": {"effort": "low"},
+        "text": {"format": {"type": "text"}, "verbosity": "low"},
+        "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {}}}],
+        "user": "user-1",
+    }
+
+
+def _upstream_rejects(respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, param: object) -> respx.Route:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            400,
+            json={"error": {"message": "rejected", "type": "invalid_request_error", "param": param, "code": None}},
+        )
+    )
+
+
+@pytest.mark.parametrize("upstream_param, relayed_param", _UPSTREAM_PARAM_CASES)
+def test_sync_bridged_turn_names_an_upstream_param_as_the_responses_field_the_caller_sent(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, upstream_param: object, relayed_param: str | None
+):
+    upstream: Final = _upstream_rejects(respx_mock, monkeypatch, upstream_param)
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="gpt-5.6",
+            input="hi",
+            responses_api_request=_request_sending_every_renamed_field(),
+            custom_llm_provider="openai",
+            api_key="sk-bridge-test",
+        )
+
+    assert upstream.call_count == 1
+    assert raised.value.param == relayed_param
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("upstream_param, relayed_param", _UPSTREAM_PARAM_CASES)
+async def test_async_bridged_turn_names_an_upstream_param_as_the_responses_field_the_caller_sent(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, upstream_param: object, relayed_param: str | None
+):
+    upstream: Final = _upstream_rejects(respx_mock, monkeypatch, upstream_param)
+    bridged_turn: Final = LiteLLMCompletionTransformationHandler().response_api_handler(
+        model="gpt-5.6",
+        input="hi",
+        responses_api_request=_request_sending_every_renamed_field(),
+        custom_llm_provider="openai",
+        _is_async=True,
+        api_key="sk-bridge-test",
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        await bridged_turn
+
+    assert upstream.call_count == 1
+    assert raised.value.param == relayed_param
+
+
+@pytest.mark.parametrize(
+    "upstream_param",
+    ["max_tokens", "max_completion_tokens", "reasoning_effort", "response_format", "tools[0].function.name"],
+)
+def test_bridged_turn_names_no_responses_field_the_caller_did_not_send(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, upstream_param: str
+):
+    upstream: Final = _upstream_rejects(respx_mock, monkeypatch, upstream_param)
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="gpt-5.6",
+            input="hi",
+            responses_api_request={"user": "user-1"},
+            custom_llm_provider="openai",
+            api_key="sk-bridge-test",
+            max_tokens=100000,
+        )
+
+    assert upstream.call_count == 1
+    assert raised.value.param is None
+
+
+@pytest.mark.parametrize(
+    "responses_api_request, upstream_param, relayed_param",
+    [
+        pytest.param({"instructions": "Answer in one word"}, "messages.[0].content", "instructions", id="instructions"),
+        pytest.param({"instructions": "Answer in one word"}, "messages.[1].role", "input", id="input_after_instructions"),
+        pytest.param({"previous_response_id": "resp_stored"}, "messages.[1].role", None, id="stored_turns_first"),
+    ],
+)
+def test_bridged_turn_names_a_message_path_by_the_request_field_the_message_came_from(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    responses_api_request: dict[str, str],  # mutable-ok: response_api_handler takes the request as a dict
+    upstream_param: str,
+    relayed_param: str | None,
+):
+    upstream: Final = _upstream_rejects(respx_mock, monkeypatch, upstream_param)
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="gpt-5.6",
+            input="hi",
+            responses_api_request=responses_api_request,
+            custom_llm_provider="openai",
+            api_key="sk-bridge-test",
+        )
+
+    assert upstream.call_count == 1
+    assert raised.value.param == relayed_param
 
 
 class _StopForwarding(Exception):

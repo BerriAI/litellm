@@ -10953,7 +10953,9 @@ async def async_data_generator(
                 if isinstance(client_error, HTTPException)
                 else route_failure_proxy_exception(
                     client_error,
-                    str(attribute_of(client_error, "message", client_error)),
+                    redact_internal_details_from_client_message(
+                        str(attribute_of(client_error, "message", client_error))
+                    ),
                     status.HTTP_500_INTERNAL_SERVER_ERROR,
                 ).to_dict()
             },
