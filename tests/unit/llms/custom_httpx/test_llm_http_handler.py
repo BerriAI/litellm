@@ -8199,6 +8199,10 @@ def _upstream_answer(stream: bool) -> httpx.Response:
     return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body.encode())
 
 
+def _upstream_answer_in_the_requested_mode(request: httpx.Request) -> httpx.Response:
+    return _upstream_answer(json.loads(request.content).get("stream") is True)
+
+
 def _answer_text(response: object) -> str:
     assert isinstance(response, ModelResponse), response
     content: Final = response.choices[0].message.content
@@ -8477,7 +8481,7 @@ async def test_an_async_streamed_bridged_provider_route_changes_only_overlong_ca
     respx_mock: respx.MockRouter,
     no_ambient_openai_base: pytest.MonkeyPatch,
 ) -> None:
-    upstream: Final = respx_mock.route(host=host).mock(return_value=_upstream_answer(True))
+    upstream: Final = respx_mock.route(host=host).mock(side_effect=_upstream_answer_in_the_requested_mode)
 
     answers: Final = [await _streamed_route_answer(model, api_base, messages) for messages in _route_conversations()]
 
