@@ -101,6 +101,7 @@ def _rate_limit_check() -> ModelRateLimitingCheck:
         ({"messages": []}, False),
         ({"first_message": "{}"}, False),
         ({"websocket": "x", "first_message": "{}"}, False),
+        ({"websocket": _CLIENT_SOCKET}, False),
         ({"websocket": _CLIENT_SOCKET, "first_message": "{}"}, True),
         ({"websocket": _CLIENT_SOCKET, "first_message": "{}", "previous_response_id": "resp_1"}, False),
     ],

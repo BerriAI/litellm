@@ -2404,6 +2404,19 @@ async def _relay_turns_to(
     return websocket
 
 
+def _refund_noting_errors_heard(
+    websocket: _ClientSocket, failure: Exception | None = None
+) -> tuple[AsyncMock, asyncio.Future[int]]:
+    errors_heard: Final[asyncio.Future[int]] = asyncio.get_running_loop().create_future()
+
+    def note_errors_heard() -> None:
+        errors_heard.set_result(len(_errors(websocket)))
+        if failure is not None:
+            raise failure
+
+    return AsyncMock(side_effect=note_errors_heard), errors_heard
+
+
 def _errors(websocket: _ClientSocket) -> list[tuple[object, object]]:
     return [(frame.get("status"), frame["error"]) for frame in websocket.sent if frame.get("type") == "error"]
 
@@ -3116,12 +3129,12 @@ class TestWebSocketTurnAdmission:
         self, refund_failure: Exception | None
     ) -> None:
         first, second, third = _turn_frames()
-        refund: Final = AsyncMock(side_effect=refund_failure)
+        websocket: Final = _ClientSocket(second, third)
+        refund, errors_heard_before_refund = _refund_noting_errors_heard(websocket, refund_failure)
         quota_callback: Final = MagicMock()
         quota_callback.enforce_project_io_token_quota_for_frame = AsyncMock(return_value=refund)
         backend_ws: Final = MagicMock()
         backend_ws.send = AsyncMock()
-        websocket: Final = _ClientSocket(second, third)
         handler: Final = _make_streaming(
             websocket=websocket,
             backend_ws=backend_ws,
@@ -3134,8 +3147,21 @@ class TestWebSocketTurnAdmission:
         await handler.client_to_backend()
 
         assert refund.await_count == 1
+        assert errors_heard_before_refund.result() == 1
         assert [json.loads(call.args[0])["input"] for call in backend_ws.send.await_args_list] == ["one", "three"]
         assert [status for status, _ in _errors(websocket)] == [429]
+
+    @pytest.mark.asyncio
+    async def test_a_quota_callback_returning_a_non_callable_yields_no_refund(self) -> None:
+        from litellm.responses.streaming_iterator import _enforce_frame_project_quota
+
+        quota_callback: Final = MagicMock()
+        quota_callback.enforce_project_io_token_quota_for_frame = AsyncMock(return_value=True)
+
+        refunds: Final = await _enforce_frame_project_quota([quota_callback], None, "gpt-4o", _turn_frames()[0])
+
+        assert quota_callback.enforce_project_io_token_quota_for_frame.await_count == 1
+        assert refunds == ()
 
     @pytest.mark.asyncio
     async def test_managed_relay_refunds_the_project_charge_of_a_refused_turn(
@@ -3154,10 +3180,10 @@ class TestWebSocketTurnAdmission:
 
         monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
         first, second, third = _turn_frames()
-        refund: Final = AsyncMock()
+        websocket: Final = _ClientSocket(second, third)
+        refund, errors_heard_before_refund = _refund_noting_errors_heard(websocket)
         quota_callback: Final = MagicMock()
         quota_callback.enforce_project_io_token_quota_for_frame = AsyncMock(return_value=refund)
-        websocket: Final = _ClientSocket(second, third)
         handler: Final = ManagedResponsesWebSocketHandler(
             websocket=websocket,
             model="test-model",
@@ -3178,6 +3204,7 @@ class TestWebSocketTurnAdmission:
         await handler.run()
 
         assert refund.await_count == 1
+        assert errors_heard_before_refund.result() == 1
         assert [status for status, _ in _errors(websocket)] == [429]
 
     @pytest.mark.asyncio

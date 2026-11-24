@@ -149,8 +149,10 @@ class ModelRateLimitingCheck(CustomLogger):
         self._io_token_conflict_warned_ids: set[str] = set()
 
     def filters_deployments_for(self, request_kwargs: Mapping[str, object]) -> bool:
-        return isinstance(request_kwargs.get("websocket"), ResponsesClientWebSocket) and not request_kwargs.get(
-            "previous_response_id"
+        return (
+            isinstance(request_kwargs.get("websocket"), ResponsesClientWebSocket)
+            and isinstance(request_kwargs.get("first_message"), str)
+            and not request_kwargs.get("previous_response_id")
         )
 
     async def async_filter_deployments(

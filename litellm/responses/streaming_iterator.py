@@ -2279,7 +2279,7 @@ async def _enforce_frame_project_quota(
             for callback in quota_callbacks
         ]
     )
-    return tuple(refund for refund in refunds if refund is not None)
+    return tuple(refund for refund in refunds if callable(refund))
 
 
 async def _refund_frame_quota(refunds: Sequence[ResponsesWsQuotaRefund]) -> None:
@@ -2487,13 +2487,19 @@ def _frame_rejection_event(rejection: Exception) -> str:
 
 
 async def _reject_guarded_turn(
-    websocket: ResponsesClientWebSocket, guarded: GuardedResponsesWsFrame, rejection: Exception
+    websocket: ResponsesClientWebSocket,
+    guarded: GuardedResponsesWsFrame,
+    rejection: Exception,
+    quota_refunds: Sequence[ResponsesWsQuotaRefund],
 ) -> None:
-    """Bills the refused turn as its own failed request, then answers it on the open socket."""
-    if guarded.bill_refusal is not None:
-        await guarded.bill_refusal(rejection)
-    with contextlib.suppress(Exception):
-        await websocket.send_text(_turn_rejection_frame(rejection))
+    """Bills the refused turn as its own failed request, answers it on the open socket, then returns its charge."""
+    try:
+        if guarded.bill_refusal is not None:
+            await guarded.bill_refusal(rejection)
+        with contextlib.suppress(Exception):
+            await websocket.send_text(_turn_rejection_frame(rejection))
+    finally:
+        await _refund_frame_quota(quota_refunds)
 
 
 _RESPONSES_WS_TERMINAL_EVENT_TYPES: Final = _HISTORY_TERMINAL_EVENT_TYPES | _RESPONSES_WS_FAILURE_EVENT_TYPES
@@ -3202,10 +3208,9 @@ class ResponsesWebSocketStreaming:
             case _AdmittedTurn():
                 return verdict
             case _RefusedTurn(rejection=rejection):
-                await _refund_frame_quota(quota_refunds)
                 if self._failure is None:
                     self._failure = rejection
-                await _reject_guarded_turn(self.websocket, guarded, rejection)
+                await _reject_guarded_turn(self.websocket, guarded, rejection, quota_refunds)
                 return None
 
     async def _send_turn_refusal(self, refusal: RateLimitError) -> None:
@@ -3786,10 +3791,9 @@ class ManagedResponsesWebSocketHandler:
             return
         verdict: Final = await _admit_frame_turn(turn_admission, raw_message)
         if isinstance(verdict, _RefusedTurn):
-            await _refund_frame_quota(quota_refunds)
             if self._failure is None:
                 self._failure = verdict.rejection
-            await _reject_guarded_turn(self.websocket, guarded, verdict.rejection)
+            await _reject_guarded_turn(self.websocket, guarded, verdict.rejection, quota_refunds)
             return
         if guarded.pii_tokens:
             self._pii_tokens = {**self._pii_tokens, **guarded.pii_tokens}

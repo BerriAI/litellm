@@ -2112,6 +2112,31 @@ async def test_refunding_a_frame_charge_returns_exactly_that_charge(limit: str) 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("limit", ["model_itpm_limit", "model_otpm_limit"])
+async def test_refunding_more_than_was_counted_leaves_no_credit_against_the_limit(limit: str) -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token(f"sk-ws-frame-overrefund-{limit}"),
+        project_id=f"proj-ws-overrefund-{limit}",
+        project_metadata={limit: {"gpt-4o": 50}},
+    )
+
+    async def charge():
+        return await handler.enforce_project_io_token_quota_for_frame(auth, "gpt-4o", 30, 30)
+
+    refund: Final = await charge()
+    assert refund is not None
+    await refund()
+    await refund()
+
+    await charge()
+    with pytest.raises(HTTPException) as over_limit:
+        await charge()
+
+    assert over_limit.value.status_code == 429
+
+
+@pytest.mark.asyncio
 async def test_enforce_project_io_token_quota_for_frame_noop_without_project_limits():
     """A key with no project ITPM/OTPM configured must never be blocked by
     the per-frame check (no descriptors to reserve against)."""
