@@ -211,6 +211,17 @@ def verifies_claude_thinking_signatures(custom_llm_provider: str | None, model: 
     return upstream is None or not replays_unsigned_thinking(upstream)
 
 
+_ANY_MODEL_ANTHROPIC_PROTOCOL_ROUTES: Final = frozenset({"anthropic", "opencode_go"})
+
+
+def chat_target_keeps_unsigned_thinking(
+    custom_llm_provider: str, model: str, base_model: str | None, api_base: str | None
+) -> bool:
+    return custom_llm_provider in _ANY_MODEL_ANTHROPIC_PROTOCOL_ROUTES and not any(
+        verifies_claude_thinking_signatures(custom_llm_provider, name, api_base) for name in (model, base_model) if name
+    )
+
+
 def _hoistable_defer_loading(tool_dict: Mapping[object, object], custom: object) -> bool | None:
     if not isinstance(custom, dict) or "defer_loading" in tool_dict:
         return None
