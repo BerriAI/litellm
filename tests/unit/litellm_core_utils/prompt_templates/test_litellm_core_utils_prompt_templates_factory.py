@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import time
+import traceback
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from typing import Final, List, TypeAlias
@@ -16,7 +17,7 @@ import respx
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BEDROCK_DOCUMENT_PLACEHOLDER_TEXT,
-    _EMPTY_TEXT_PLACEHOLDER,
+    EMPTY_TEXT_PLACEHOLDER,
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
@@ -34,6 +35,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     get_thought_signature_from_tool,
     get_tool_calls_from_response,
     make_valid_bedrock_tool_name,
+    map_system_message_pt,
     ollama_pt,
     parse_mime_type,
     sanitize_messages_for_tool_calling,
@@ -68,6 +70,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.vertex_ai.gemini.transformation import gemini_convert_messages_with_history
 from litellm.types.llms.bedrock import BedrockConverseReasoningContentBlock
+from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 
 
@@ -1120,7 +1123,7 @@ def test_anthropic_messages_pt_preserves_trailing_user_message_with_empty_conten
     )
 
     assert [message["role"] for message in result] == ["user", "assistant", "user"]
-    assert result[-1]["content"] == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER}]
+    assert result[-1]["content"] == [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER}]
 
 
 @EMPTY_USER_MESSAGES
@@ -1224,7 +1227,7 @@ def test_anthropic_messages_pt_keeps_every_breakpoint_of_a_long_run_of_empty_use
 
     assert (
         result[-1]["content"]
-        == [{"type": "text", "text": _EMPTY_TEXT_PLACEHOLDER, "cache_control": {"type": "ephemeral"}}] * 10_000
+        == [{"type": "text", "text": EMPTY_TEXT_PLACEHOLDER, "cache_control": {"type": "ephemeral"}}] * 10_000
     )
 
 
@@ -1568,6 +1571,110 @@ def test_vertex_ai_transform_empty_function_call_arguments():
     }
 
 
+@pytest.mark.parametrize(
+    "arguments, expected_args",
+    [
+        (None, {}),
+        ('{"location": "Boston"', {"location": "Boston"}),
+        (b'{"location": "Boston"}', {"location": "Boston"}),
+    ],
+    ids=["null_arguments", "truncated_arguments", "bytes_arguments"],
+)
+def test_convert_to_gemini_tool_call_invoke_tolerates_null_truncated_and_bytes_arguments(
+    arguments: str | bytes | None, expected_args: dict[str, str]
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    message: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": arguments},
+            }
+        ],
+    }
+    parts: Final = convert_to_gemini_tool_call_invoke(message)
+    assert len(parts) == 1
+    assert parts[0]["function_call"]["name"] == "get_weather"
+    assert parts[0]["function_call"]["args"] == expected_args
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [{"location": "Boston"}, ["Boston"], 5, False],
+    ids=["object", "list", "number", "false"],
+)
+def test_convert_to_gemini_tool_call_invoke_rejects_arguments_that_are_not_a_json_string(
+    arguments: dict[str, str] | list[str] | int | bool,
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    message: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": arguments},
+            }
+        ],
+    }
+    with pytest.raises(litellm.BadRequestError, match="must be a JSON string"):
+        convert_to_gemini_tool_call_invoke(message)
+
+
+@pytest.mark.parametrize("arguments", ['["Boston"]', '"Boston"', "5"], ids=["list", "string", "number"])
+def test_convert_to_gemini_tool_call_invoke_rejects_json_text_that_is_not_an_object(arguments: str) -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    message: Final = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": arguments},
+            }
+        ],
+    }
+    with pytest.raises(litellm.BadRequestError, match="must be a JSON object"):
+        convert_to_gemini_tool_call_invoke(message)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [{"location": "Boston"}, ["Boston"], '["Boston"]', "not json"],
+    ids=["object", "list", "json_list_text", "not_json"],
+)
+@pytest.mark.parametrize("shape", ["tool_calls", "function_call"])
+def test_convert_to_gemini_tool_call_invoke_drops_unusable_arguments_under_drop_params(
+    arguments: object, shape: str
+) -> None:
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_invoke,
+    )
+
+    function: Final = {"name": "get_weather", "arguments": arguments}
+    message: Final = (
+        {"role": "assistant", "content": None, "tool_calls": [{"id": "call_1", "type": "function", "function": function}]}
+        if shape == "tool_calls"
+        else {"role": "assistant", "content": None, "function_call": function}
+    )
+    parts: Final = convert_to_gemini_tool_call_invoke(message, drop_params=True)
+    assert parts == [{"function_call": {"name": "get_weather", "args": {}}}]
+
+
 @pytest.mark.asyncio
 async def test_bedrock_process_image_async_factory():
     """
@@ -1715,6 +1822,279 @@ def test_convert_gemini_tool_call_result_with_image_url():
     )
     inline_parts = _get_gemini_function_response_inline_data_parts(result2)
     assert len(inline_parts) == 1
+
+
+_FIND_CLIP_CALL: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "find_clip", "arguments": "{}"}}],
+}
+
+
+def _find_clip_result(video_url: Mapping[str, object]) -> Mapping[str, object]:
+    return {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": [{"type": "text", "text": '{"ok":true}'}, {"type": "video_url", "video_url": video_url}],
+    }
+
+
+_TOOL_OUTPUT_ONLY: Final = {"function_response": {"name": "find_clip", "response": {"ok": True}}}
+_CLIP_SETTINGS: Final = ({"video_metadata": {"fps": 2}}, {"detail": "high"})
+
+
+def test_gemini_tool_result_video_url_reaches_gemini_as_inline_video() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _find_clip_result({"url": "data:video/mp4;base64,AAAAGGZ0eXA="}), _FIND_CLIP_CALL
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
+
+
+_LINKS_GEMINI_CANNOT_INLINE: Final = (
+    pytest.param("https://www.youtube.com/watch?v=aqz-KE-bpKQ", id="youtube"),
+    pytest.param("gs://cloud-samples-data/video/animals.mp4", id="gcs-uri"),
+)
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize("video_url", _LINKS_GEMINI_CANNOT_INLINE)
+def test_gemini_tool_result_video_link_it_cannot_inline_is_a_bad_request(
+    custom_llm_provider: str, video_url: str
+) -> None:
+    with respx.mock, pytest.raises(litellm.BadRequestError, match="require inline media data"):
+        convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": video_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
+        )
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize("video_url", _LINKS_GEMINI_CANNOT_INLINE)
+def test_drop_params_drops_a_video_link_gemini_cannot_inline_from_a_tool_result(
+    custom_llm_provider: str, video_url: str
+) -> None:
+    with respx.mock:
+        delivered: Final = convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": video_url}),
+            _FIND_CLIP_CALL,
+            drop_params=True,
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert delivered == _TOOL_OUTPUT_ONLY
+
+
+_MISSING_VIDEO_URL: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4"
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+@pytest.mark.parametrize(
+    "video_url",
+    [
+        pytest.param(_MISSING_VIDEO_URL, id="link-answering-404"),
+        pytest.param("data:video/mp4;base64", id="data-url-without-data"),
+    ],
+)
+def test_gemini_tool_result_video_that_fails_to_download_is_a_bad_request_unless_drop_params(
+    custom_llm_provider: str, video_url: str
+) -> None:
+    with respx.mock(assert_all_called=False) as router:
+        router.get(_MISSING_VIDEO_URL).respond(404)
+        with pytest.raises(litellm.BadRequestError, match="Could not download the video in a tool result") as excinfo:
+            convert_to_gemini_tool_call_result(
+                _find_clip_result({"url": video_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
+            )
+        dropped: Final = convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": video_url}),
+            _FIND_CLIP_CALL,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=True,
+        )
+
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert dropped == _TOOL_OUTPUT_ONLY
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_failed_tool_result_video_download_keeps_its_signed_link_out_of_the_error(custom_llm_provider: str) -> None:
+    signature: Final = uuid.uuid4().hex
+    signed_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4?X-Goog-Signature={signature}"
+
+    with respx.mock as router:
+        router.get(signed_url).respond(404)
+        with pytest.raises(litellm.BadRequestError) as excinfo:
+            convert_to_gemini_tool_call_result(
+                _find_clip_result({"url": signed_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
+            )
+
+    assert signature not in str(excinfo.value)
+    assert signature not in "".join(traceback.format_exception(excinfo.value))
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_dropped_tool_result_video_keeps_its_signed_link_out_of_the_logs(
+    custom_llm_provider: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    signature: Final = uuid.uuid4().hex
+    signed_url: Final = f"https://8.8.8.8/{uuid.uuid4()}.mp4?X-Goog-Signature={signature}"
+
+    with respx.mock as router, caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        router.get(signed_url).respond(404)
+        dropped: Final = convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": signed_url}),
+            _FIND_CLIP_CALL,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=True,
+        )
+
+    assert dropped == _TOOL_OUTPUT_ONLY
+    assert caplog.records
+    assert signature not in caplog.text
+
+
+_MP4_BYTES: Final = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"
+_HEIC_BYTES: Final = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic"
+_XAVC_BYTES: Final = b"\x00\x00\x00\x18ftypXAVC\x00\x00\x00\x00XAVCmp42"
+_QUICKTIME_BYTES: Final = b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  "
+
+
+@pytest.mark.parametrize(
+    ("part_type", "suffix", "body", "mime_type"),
+    [
+        pytest.param("video_url", ".mp4", _MP4_BYTES, "video/mp4", id="mp4-link"),
+        pytest.param("video_url", "", _MP4_BYTES, "video/mp4", id="mp4-bytes"),
+        pytest.param("video_url", "", _XAVC_BYTES, "video/mp4", id="xavc-bytes"),
+        pytest.param("video_url", "", _QUICKTIME_BYTES, "video/mov", id="quicktime-bytes"),
+        pytest.param("image_url", "", _HEIC_BYTES, "image/heic", id="heic-bytes"),
+    ],
+)
+def test_gemini_tool_result_media_served_as_octet_stream_keeps_its_real_type(
+    part_type: str, suffix: str, body: bytes, mime_type: str
+) -> None:
+    media_url: Final = f"https://8.8.8.8/{uuid.uuid4()}{suffix}"
+    message: Final = {
+        "role": "tool",
+        "tool_call_id": "call_1",
+        "content": [{"type": "text", "text": '{"ok":true}'}, {"type": part_type, part_type: {"url": media_url}}],
+    }
+
+    with respx.mock as router:
+        router.get(media_url).respond(200, content=body, headers={"content-type": "application/octet-stream"})
+        delivered: Final = convert_to_gemini_tool_call_result(message, _FIND_CLIP_CALL)
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": base64.b64encode(body).decode(), "mime_type": mime_type}}],
+            }
+        }
+    ]
+
+
+def test_gemini_tool_result_video_without_a_url_is_a_bad_request_instead_of_a_silent_drop() -> None:
+    with pytest.raises(litellm.BadRequestError, match="'video_url' but it has no 'url'"):
+        convert_to_gemini_tool_call_result(_find_clip_result({}), _FIND_CLIP_CALL)
+
+
+def test_drop_params_drops_a_tool_result_video_without_a_url() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(_find_clip_result({}), _FIND_CLIP_CALL, drop_params=True)
+
+    assert delivered == _TOOL_OUTPUT_ONLY
+
+
+@pytest.mark.parametrize("settings", _CLIP_SETTINGS)
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_gemini_tool_result_video_settings_are_a_bad_request_instead_of_a_silent_drop(
+    settings: Mapping[str, object], custom_llm_provider: str
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match="cannot carry detail or video_metadata") as excinfo:
+        convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": "data:video/mp4;base64,AAAAGGZ0eXA=", **settings}),
+            _FIND_CLIP_CALL,
+            model="gemini-3.8-flash",
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    assert (excinfo.value.llm_provider, excinfo.value.model) == (custom_llm_provider, "gemini-3.8-flash")
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [pytest.param({"detail": "auto"}, id="detail-auto"), pytest.param({"video_metadata": {"label": "x"}}, id="no-op-metadata")],
+)
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_tool_result_video_settings_that_change_nothing_are_sent_without_error(
+    settings: Mapping[str, object], custom_llm_provider: str
+) -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _find_clip_result({"url": "data:video/mp4;base64,AAAAGGZ0eXA=", **settings}),
+        _FIND_CLIP_CALL,
+        model="gemini-3.8-flash",
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
+
+
+@pytest.mark.parametrize("settings", _CLIP_SETTINGS)
+def test_drop_params_sends_a_tool_result_video_without_its_settings(settings: Mapping[str, object]) -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _find_clip_result({"url": "data:video/mp4;base64,AAAAGGZ0eXA=", **settings}), _FIND_CLIP_CALL, drop_params=True
+    )
+
+    assert delivered == [
+        {
+            "function_response": {
+                "name": "find_clip",
+                "response": {"ok": True},
+                "parts": [{"inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"}}],
+            }
+        }
+    ]
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_gemini_tool_result_video_url_linking_a_web_page_is_a_bad_request_instead_of_sending_html(
+    monkeypatch: pytest.MonkeyPatch, custom_llm_provider: str
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    page_url: Final = f"https://videos.example/watch/{uuid.uuid4()}"
+
+    with respx.mock:
+        respx.get(page_url).mock(
+            return_value=httpx.Response(200, text="<html>clip</html>", headers={"content-type": "text/html"})
+        )
+        with pytest.raises(litellm.BadRequestError, match="but it holds text/html") as excinfo:
+            convert_to_gemini_tool_call_result(
+                _find_clip_result({"url": page_url}), _FIND_CLIP_CALL, custom_llm_provider=custom_llm_provider
+            )
+        dropped: Final = convert_to_gemini_tool_call_result(
+            _find_clip_result({"url": page_url}),
+            _FIND_CLIP_CALL,
+            custom_llm_provider=custom_llm_provider,
+            drop_params=True,
+        )
+
+    assert excinfo.value.llm_provider == custom_llm_provider
+    assert dropped == _TOOL_OUTPUT_ONLY
 
 
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():
@@ -2140,6 +2520,482 @@ def test_bedrock_tools_pt_sends_malformed_parameters_as_an_object_schema(paramet
     assert "$defs" not in input_schema
 
 
+_ADDRESS_SCHEMA: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+
+
+@pytest.mark.parametrize(
+    ("legacy_defs", "ref"),
+    [
+        ({"definitions": {"Address": _ADDRESS_SCHEMA}}, "#/definitions/Address"),
+        ({"components": {"schemas": {"Address": _ADDRESS_SCHEMA}}}, "#/components/schemas/Address"),
+    ],
+    ids=["definitions", "components_schemas"],
+)
+def test_bedrock_tools_pt_inlines_legacy_definitions_for_claude(legacy_defs: dict[str, object], ref: str) -> None:
+    parameters: Final = {"type": "object", "properties": {"home": {"$ref": ref}}, "required": ["home"], **legacy_defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_address", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"home": _ADDRESS_SCHEMA}, "required": ["home"]}
+
+
+@pytest.mark.parametrize(
+    "legacy_defs",
+    [{"definitions": 5}, {"components": "openapi", "definitions": {"Address": _ADDRESS_SCHEMA}}],
+    ids=["definitions_not_a_map", "components_not_a_map"],
+)
+def test_bedrock_tools_pt_drops_a_malformed_legacy_defs_block_for_claude(legacy_defs: dict[str, object]) -> None:
+    parameters: Final = {"type": "object", "properties": {"name": {"type": "string"}}, **legacy_defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_name", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"name": {"type": "string"}}, "required": []}
+
+
+def test_bedrock_tools_pt_sends_strict_claude_tools_with_their_defs() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {"home": {"$ref": "#/$defs/Address"}},
+        "required": ["home"],
+        "additionalProperties": False,
+        "$defs": {"Address": {**_ADDRESS_SCHEMA, "additionalProperties": False}},
+    }
+    tools: Final = [
+        {"type": "function", "function": {"name": "save_address", "strict": True, "parameters": parameters}}
+    ]
+
+    tool_spec: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-haiku-4-5-20251001-v1:0")[0]["toolSpec"]
+
+    assert tool_spec["strict"] is True
+    assert tool_spec["inputSchema"]["json"] == parameters
+
+
+def test_bedrock_tools_pt_resolves_a_root_ref_for_claude_and_keeps_its_defs() -> None:
+    node: Final = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "children": {"type": "array", "items": {"$ref": "#/$defs/Node"}}},
+        "required": ["name", "children"],
+    }
+    tools: Final = [
+        {
+            "type": "function",
+            "function": {"name": "save_tree", "parameters": {"$defs": {"Node": node}, "$ref": "#/$defs/Node"}},
+        }
+    ]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {**node, "$defs": {"Node": node}}
+
+
+def test_bedrock_tools_pt_follows_a_chain_of_root_refs_for_claude() -> None:
+    defs: Final = {"Alias": {"$ref": "#/$defs/Address"}, "Address": _ADDRESS_SCHEMA}
+    tools: Final = [
+        {"type": "function", "function": {"name": "save_address", "parameters": {"$ref": "#/$defs/Alias", "$defs": defs}}}
+    ]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == _ADDRESS_SCHEMA
+
+
+@pytest.mark.parametrize("hops", [32, 40])
+def test_bedrock_tools_pt_keeps_the_arguments_of_a_root_ref_chain_past_the_hop_limit_for_claude(hops: int) -> None:
+    aliases: Final = {f"Alias{i}": {"$ref": f"#/$defs/Alias{i + 1}"} for i in range(hops)}
+    defs: Final = {**aliases, f"Alias{hops}": _ADDRESS_SCHEMA}
+    tools: Final = [
+        {"type": "function", "function": {"name": "save_address", "parameters": {"$ref": "#/$defs/Alias0", "$defs": defs}}}
+    ]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["properties"] == _ADDRESS_SCHEMA["properties"]
+    assert sent["required"] == _ADDRESS_SCHEMA["required"]
+
+
+_ORDER_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"street": {"type": "string"}, "city": {"type": "string"}},
+    "required": ["street", "city"],
+}
+
+
+@pytest.mark.parametrize(
+    ("siblings", "expected"),
+    [
+        (
+            {"type": "object", "properties": {}, "additionalProperties": False},
+            {**_ORDER_SCHEMA, "additionalProperties": False},
+        ),
+        (
+            {
+                "properties": {"city": {"type": "string", "enum": ["Paris"]}, "note": {"type": "string"}},
+                "required": ["note"],
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "street": {"type": "string"},
+                    "city": {"type": "string", "enum": ["Paris"]},
+                    "note": {"type": "string"},
+                },
+                "required": ["street", "city", "note"],
+            },
+        ),
+    ],
+    ids=["mcp_normalized_empty_properties", "root_properties_win"],
+)
+def test_bedrock_tools_pt_merges_root_ref_siblings_into_its_target_for_claude(
+    siblings: dict[str, object], expected: dict[str, object]
+) -> None:
+    parameters: Final = {"$ref": "#/$defs/Order", "$defs": {"Order": _ORDER_SCHEMA}, **siblings}
+    tools: Final = [{"type": "function", "function": {"name": "ship_order", "strict": True, "parameters": parameters}}]
+
+    tool_spec: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-haiku-4-5-20251001-v1:0")[0]["toolSpec"]
+
+    assert tool_spec["inputSchema"]["json"] == expected
+
+
+def test_bedrock_tools_pt_sends_claude_only_the_defs_its_refs_reach() -> None:
+    defs: Final = {
+        "Home": {"type": "object", "properties": {"address": {"$ref": "#/$defs/Address"}}},
+        "Address": _ADDRESS_SCHEMA,
+        "Place": _ORDER_SCHEMA,
+        "Unused": {"type": "string"},
+    }
+    properties: Final = {
+        "home": {"$ref": "#/$defs/Home"},
+        "city": {"$ref": "#/$defs/Place/properties/city"},
+        "same_home": {"$ref": "#/properties/home"},
+        "parent": {"$ref": "#"},
+    }
+    parameters: Final = {"type": "object", "properties": properties, "$defs": defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_home", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["$defs"] == {"Home": defs["Home"], "Address": _ADDRESS_SCHEMA, "Place": _ORDER_SCHEMA}
+
+
+def test_bedrock_tools_pt_keeps_a_claude_def_whose_name_its_ref_escapes() -> None:
+    defs: Final = {"a/b c~1": _ADDRESS_SCHEMA, "Unused": {"type": "string"}}
+    parameters: Final = {"type": "object", "properties": {"home": {"$ref": "#/$defs/a~1b%20c~01"}}, "$defs": defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_home", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["$defs"] == {"a/b c~1": _ADDRESS_SCHEMA}
+
+
+@pytest.mark.parametrize(
+    "home",
+    [{"$ref": "#home"}, {"$dynamicRef": "#home"}, {"$ref": "#/$defs"}],
+    ids=["anchor_ref", "dynamic_ref", "whole_defs_ref"],
+)
+def test_bedrock_tools_pt_keeps_every_claude_def_when_a_ref_may_reach_one_by_other_means(
+    home: dict[str, object],
+) -> None:
+    defs: Final = {"Home": {"$anchor": "home", **_ADDRESS_SCHEMA}, "Spare": {"type": "string"}}
+    parameters: Final = {"type": "object", "properties": {"home": home}, "$defs": defs}
+    tools: Final = [{"type": "function", "function": {"name": "save_home", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["$defs"] == defs
+
+
+def _with_root_defs_inlined(schema: object, defs: Mapping[str, object]) -> object:
+    if isinstance(schema, list):
+        return [_with_root_defs_inlined(item, defs) for item in schema]
+    if not isinstance(schema, dict):
+        return schema
+    ref: Final = schema.get("$ref")
+    if isinstance(ref, str) and ref.startswith("#/$defs/"):
+        return _with_root_defs_inlined(defs[ref.removeprefix("#/$defs/")], defs)
+    return {key: _with_root_defs_inlined(value, defs) for key, value in schema.items()}
+
+
+_SHIP_TO: Final = {"type": "object", "properties": {"to": {"$ref": "#/$defs/Address"}}, "required": ["to"]}
+_ZIP_ONLY: Final = {"type": "object", "properties": {"zip": {"type": "string"}}, "required": ["zip"]}
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"$ref": "#/definitions/Ship", "definitions": {"Ship": _SHIP_TO}, "$defs": {"Address": _ADDRESS_SCHEMA}},
+        {"$ref": "#/$defs/Ship", "$defs": {"Ship": {**_SHIP_TO, "$defs": {"Address": _ADDRESS_SCHEMA}}}},
+        {
+            "type": "object",
+            "properties": {"to": {"$ref": "#/%24defs/Address"}},
+            "required": ["to"],
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
+            "properties": {"to": {"$ref": "#/definitions/Address"}},
+            "required": ["to"],
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
+            "properties": {"ship": {"$ref": "#/definitions/Ship"}},
+            "required": ["ship"],
+            "definitions": {"Ship": _SHIP_TO},
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
+            "properties": {"ship": {**_SHIP_TO, "$defs": {"Address": _ADDRESS_SCHEMA}}},
+            "required": ["ship"],
+            "$defs": {"Unused": {"type": "string"}},
+        },
+        {
+            "type": "object",
+            "properties": {
+                "ship": {
+                    "type": "object",
+                    "properties": {"gift": {"type": "boolean"}},
+                    "dependencies": {"gift": {"properties": {"to": {"$ref": "#/$defs/Address"}}}},
+                }
+            },
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
+            "properties": {"ship": {**_SHIP_TO, "$defs": {"Address": _ZIP_ONLY}}},
+            "required": ["ship"],
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+        {
+            "type": "object",
+            "properties": {"ship": {"$ref": "#/$defs/Ship"}},
+            "required": ["ship"],
+            "$defs": {"Ship": {**_SHIP_TO, "$defs": {"Address": _ZIP_ONLY}}, "Address": _ADDRESS_SCHEMA},
+        },
+        {"$ref": "/$defs/Ship", "$defs": {"Ship": _SHIP_TO, "Address": _ADDRESS_SCHEMA}},
+        {
+            "type": "object",
+            "properties": {"to": {"$ref": "/$defs/Address"}},
+            "required": ["to"],
+            "$defs": {"Address": _ADDRESS_SCHEMA},
+        },
+    ],
+    ids=[
+        "root_ref_into_definitions_beside_defs",
+        "root_ref_target_with_its_own_defs",
+        "percent_encoded_defs_pointer",
+        "definitions_pointer_into_root_defs",
+        "property_ref_into_definitions_that_refs_defs",
+        "property_with_its_own_defs",
+        "ref_under_dependencies",
+        "property_defs_shadowing_a_root_name",
+        "defs_entry_shadowing_a_root_name",
+        "root_ref_without_a_leading_hash",
+        "property_ref_without_a_leading_hash",
+    ],
+)
+def test_bedrock_tools_pt_sends_claude_a_schema_that_means_what_full_inlining_does(
+    parameters: dict[str, object],
+) -> None:
+    tools: Final = [{"type": "function", "function": {"name": "ship", "parameters": parameters}}]
+
+    claude: Final = _bedrock_tools_pt(deepcopy(tools), model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]
+    inlined: Final = _bedrock_tools_pt(deepcopy(tools), model="us.amazon.nova-2-lite-v1:0")[0]["toolSpec"]
+
+    claude_schema: Final = claude["inputSchema"]["json"]
+    claude_body: Final = {key: value for key, value in claude_schema.items() if key != "$defs"}
+    assert _with_root_defs_inlined(claude_body, claude_schema.get("$defs", {})) == inlined["inputSchema"]["json"]
+
+
+def test_bedrock_tools_pt_spends_no_inlining_budget_on_unused_claude_defs() -> None:
+    big: Final = {"type": "string", "description": "x" * 1_000_000}
+    unused: Final = {f"Unused{i}": {"$ref": "#/definitions/Big"} for i in range(11)}
+    parameters: Final = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "required": ["a"],
+        "$defs": unused,
+        "definitions": {"Big": big},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+
+
+def test_bedrock_tools_pt_spends_no_inlining_budget_on_claude_defs_only_unused_definitions_reach() -> None:
+    big: Final = {"type": "string", "description": "x" * 1_000_000}
+    heavy: Final = {"type": "object", "properties": {f"p{i}": {"$ref": "#/definitions/Big"} for i in range(11)}}
+    parameters: Final = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "required": ["a"],
+        "$defs": {"Heavy": heavy},
+        "definitions": {"Big": big, "Unused": {"$ref": "#/$defs/Heavy"}},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+
+
+@pytest.mark.parametrize("model", ["us.anthropic.claude-sonnet-5-5", "us.amazon.nova-2-lite-v1:0"])
+def test_bedrock_tools_pt_spends_no_inlining_budget_on_unused_legacy_definitions(model: str) -> None:
+    big: Final = {"type": "string", "description": "x" * 1_000_000}
+    unused: Final = {f"Unused{i}": {"$ref": "#/definitions/Big"} for i in range(11)}
+    parameters: Final = {
+        "type": "object",
+        "properties": {"a": {"type": "string"}},
+        "required": ["a"],
+        "definitions": {"Big": big, **unused},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model=model)[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"a": {"type": "string"}}, "required": ["a"]}
+
+
+def test_bedrock_tools_pt_resolves_a_root_ref_targets_refs_to_its_own_defs_for_claude() -> None:
+    zip_only: Final = {"type": "object", "properties": {"zip": {"type": "string"}}, "required": ["zip"]}
+    request: Final = {
+        "type": "object",
+        "properties": {"to": {"$ref": "#/$defs/Address"}},
+        "required": ["to"],
+        "$defs": {"Address": zip_only},
+    }
+    parameters: Final = {"$ref": "#/$defs/Request", "$defs": {"Request": request, "Address": _ADDRESS_SCHEMA}}
+    tools: Final = [{"type": "function", "function": {"name": "send", "parameters": parameters}}]
+
+    sent_to_claude: Final = _bedrock_tools_pt(deepcopy(tools), model="us.anthropic.claude-sonnet-5-5")
+    sent_to_nova: Final = _bedrock_tools_pt(deepcopy(tools), model="us.amazon.nova-2-lite-v1:0")
+
+    assert sent_to_claude[0]["toolSpec"]["inputSchema"]["json"]["properties"] == {"to": zip_only}
+    assert sent_to_claude == sent_to_nova
+
+
+def test_bedrock_tools_pt_keeps_defs_a_root_ref_target_repeats_unchanged_for_claude() -> None:
+    request: Final = {
+        "type": "object",
+        "properties": {"to": {"$ref": "#/$defs/Address"}},
+        "required": ["to"],
+        "$defs": {"Address": _ADDRESS_SCHEMA},
+    }
+    parameters: Final = {"$ref": "#/$defs/Request", "$defs": {"Request": request, "Address": _ADDRESS_SCHEMA}}
+    tools: Final = [{"type": "function", "function": {"name": "send", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {
+        "type": "object",
+        "properties": {"to": {"$ref": "#/$defs/Address"}},
+        "required": ["to"],
+        "$defs": {"Address": _ADDRESS_SCHEMA},
+    }
+
+
+def test_bedrock_tools_pt_sends_claude_tools_whose_properties_have_non_string_keys() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {1: {"type": "string"}, "home": {"$ref": "#/$defs/Address"}},
+        "$defs": {"Address": _ADDRESS_SCHEMA},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["properties"] == {1: {"type": "string"}, "home": {"$ref": "#/$defs/Address"}}
+    assert sent["$defs"] == {"Address": _ADDRESS_SCHEMA}
+
+
+def test_bedrock_tools_pt_inlines_boolean_definitions_as_the_schemas_they_mean() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {"anything": {"$ref": "#/$defs/Anything"}, "nothing": {"$ref": "#/$defs/Nothing"}},
+        "$defs": {"Anything": True, "Nothing": False},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "t", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.amazon.nova-2-lite-v1:0")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["properties"] == {"anything": {}, "nothing": {"not": {}}}
+
+
+def test_bedrock_tools_pt_keeps_defs_for_claude_behind_any_region_prefix() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {"to": {"$ref": "#/$defs/Address"}},
+        "required": ["to"],
+        "$defs": {"Address": _ADDRESS_SCHEMA},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "ship", "parameters": deepcopy(parameters)}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="ca.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == parameters
+
+
+def test_bedrock_tools_pt_sends_no_defs_to_models_that_need_inlining() -> None:
+    parameters: Final = {"$ref": "#/$defs/Ship", "$defs": {"Ship": {**_SHIP_TO, "$defs": {"Address": _ADDRESS_SCHEMA}}}}
+    tools: Final = [{"type": "function", "function": {"name": "ship", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.amazon.nova-2-lite-v1:0")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"to": _ADDRESS_SCHEMA}, "required": ["to"]}
+
+
+def test_bedrock_tools_pt_inlines_legacy_refs_under_a_root_defs_ref_for_claude() -> None:
+    defs: Final = {
+        "Home": {"type": "object", "properties": {"address": {"$ref": "#/definitions/Address"}}, "required": ["address"]}
+    }
+    parameters: Final = {"$ref": "#/$defs/Home", "$defs": defs, "definitions": {"Address": _ADDRESS_SCHEMA}}
+    tools: Final = [{"type": "function", "function": {"name": "save_home", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {"type": "object", "properties": {"address": _ADDRESS_SCHEMA}, "required": ["address"]}
+
+
+def test_bedrock_tools_pt_inlines_only_legacy_refs_for_claude() -> None:
+    parameters: Final = {
+        "type": "object",
+        "properties": {"home": {"$ref": "#/definitions/Address"}, "work": {"$ref": "#/$defs/Address"}},
+        "required": ["home", "work"],
+        "definitions": {"Address": _ADDRESS_SCHEMA},
+        "$defs": {"Address": {"type": "string"}},
+    }
+    tools: Final = [{"type": "function", "function": {"name": "save_addresses", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent == {
+        "type": "object",
+        "properties": {"home": _ADDRESS_SCHEMA, "work": {"$ref": "#/$defs/Address"}},
+        "required": ["home", "work"],
+        "$defs": {"Address": {"type": "string"}},
+    }
+
+
+def test_bedrock_tools_pt_keeps_claude_defs_refs_beside_an_empty_definitions_block() -> None:
+    depth: Final = 17
+    branches: Final = {
+        f"L{i}": {"type": "object", "properties": {"left": {"$ref": f"#/$defs/L{i + 1}"}, "right": {"$ref": f"#/$defs/L{i + 1}"}}}
+        for i in range(depth)
+    }
+    defs: Final = {**branches, f"L{depth}": {"type": "string"}}
+    parameters: Final = {"type": "object", "properties": {"root": {"$ref": "#/$defs/L0"}}, "$defs": defs, "definitions": {}}
+    tools: Final = [{"type": "function", "function": {"name": "tree", "parameters": parameters}}]
+
+    sent: Final = _bedrock_tools_pt(tools, model="us.anthropic.claude-sonnet-5-5")[0]["toolSpec"]["inputSchema"]["json"]
+
+    assert sent["properties"] == {"root": {"$ref": "#/$defs/L0"}}
+    assert sent["$defs"] == defs
+
+
 def test_bedrock_tools_pt_strict_parameter():
     """Regression for strict tools on the Bedrock Converse path.
 
@@ -2237,6 +3093,16 @@ def test_bedrock_image_processor_content_type_fallback_binary_detection():
 
     assert content_type == "image/jpeg"
     assert base64_bytes == base64.b64encode(jpeg_content).decode("utf-8")
+
+
+def test_bedrock_sends_an_mp4_link_served_as_octet_stream_as_a_video_block() -> None:
+    video_url: Final = f"https://8.8.8.8/{uuid.uuid4()}"
+
+    with respx.mock as router:
+        router.get(video_url).respond(200, content=_MP4_BYTES, headers={"content-type": "application/octet-stream"})
+        block: Final = BedrockImageProcessor.process_image_sync(video_url)
+
+    assert block == {"video": {"source": {"bytes": base64.b64encode(_MP4_BYTES).decode()}, "format": "mp4"}}
 
 
 def test_bedrock_image_processor_content_type_fallback_application_octet_stream():
@@ -2481,10 +3347,10 @@ def test_bedrock_create_bedrock_block_deterministic_document_hash():
 
     # Create two blocks with same content
     block1 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
     block2 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
 
     # Both should have the same document name
@@ -2509,10 +3375,10 @@ def test_bedrock_create_bedrock_block_different_content_different_hash():
 
     # Create blocks
     block1 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content1, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content1}, mime_type="application/pdf", image_format="pdf"
     )
     block2 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content2, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content2}, mime_type="application/pdf", image_format="pdf"
     )
 
     # Should have different document names
@@ -2535,15 +3401,15 @@ def test_bedrock_create_bedrock_block_normalized_base64():
 
     # Create blocks
     block1 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
     block2 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_with_newlines,
+        source={"bytes": base64_with_newlines},
         mime_type="application/pdf",
         image_format="pdf",
     )
     block3 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_with_spaces,
+        source={"bytes": base64_with_spaces},
         mime_type="application/pdf",
         image_format="pdf",
     )
@@ -2570,10 +3436,10 @@ def test_bedrock_create_bedrock_block_large_file_sampling():
 
     # Create blocks
     block1 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content1, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content1}, mime_type="application/pdf", image_format="pdf"
     )
     block2 = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content2, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content2}, mime_type="application/pdf", image_format="pdf"
     )
 
     # Should have different names because total length is different
@@ -2592,7 +3458,7 @@ def test_bedrock_create_bedrock_block_very_large_file():
 
     # Create block
     block = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
 
     # Should have a valid document name
@@ -2614,7 +3480,7 @@ def test_bedrock_create_bedrock_block_image_type():
 
     # Create block
     block = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="image/png", image_format="png"
+        source={"bytes": base64_content}, mime_type="image/png", image_format="png"
     )
 
     # Should be an image block, not a document block
@@ -2635,7 +3501,7 @@ def test_bedrock_create_bedrock_block_video_type():
 
     # Create block
     block = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="video/mp4", image_format="mp4"
+        source={"bytes": base64_content}, mime_type="video/mp4", image_format="mp4"
     )
 
     # Should be a video block, not a document block
@@ -2656,7 +3522,7 @@ def test_bedrock_create_bedrock_block_document_name_format():
     base64_content = base64.b64encode(pdf_content).decode("utf-8")
 
     block = BedrockImageProcessor._create_bedrock_block(
-        image_bytes=base64_content, mime_type="application/pdf", image_format="pdf"
+        source={"bytes": base64_content}, mime_type="application/pdf", image_format="pdf"
     )
 
     document_name = block["document"]["name"]
@@ -2685,13 +3551,402 @@ def test_bedrock_create_bedrock_block_different_document_formats():
     for content, mime_type, format_type in test_cases:
         base64_content = base64.b64encode(content + b"\x00" * 100).decode("utf-8")
         block = BedrockImageProcessor._create_bedrock_block(
-            image_bytes=base64_content, mime_type=mime_type, image_format=format_type
+            source={"bytes": base64_content}, mime_type=mime_type, image_format=format_type
         )
 
         assert block.get("document") is not None
         assert f"DocumentPDFmessages_" in block["document"]["name"]
         assert block["document"]["name"].endswith(f"_{format_type}")
         assert block["document"]["format"] == format_type
+
+
+_S3_MEDIA_MODEL: Final = "us.amazon.nova-2-lite-v1:0"
+_S3_BUCKET_OWNER: Final = "111122223333"
+
+
+async def _converse_user_content(part: Mapping[str, object], run_async: bool) -> Sequence[BedrockContentBlock]:
+    messages: Final = [{"role": "user", "content": [{"type": "text", "text": "Describe this."}, part]}]
+    with respx.mock:
+        converted: Final = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+            )
+            if run_async
+            else _bedrock_converse_messages_pt(messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock")
+        )
+    return converted[0]["content"][1:]
+
+
+def _s3_source(uri: str, bucket_owner: str | None = None) -> Mapping[str, object]:
+    return {"s3Location": {"uri": uri} if bucket_owner is None else {"uri": uri, "bucketOwner": bucket_owner}}
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("part", "expected"),
+    [
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/cat.png"}},
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png")}},
+            id="image-format-from-extension",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": "s3://media-bucket/dir/CAT.JPG"},
+            {"image": {"format": "jpeg", "source": _s3_source("s3://media-bucket/dir/CAT.JPG")}},
+            id="string-url-uppercase-extension",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/cat.jpg"}},
+            {"image": {"format": "jpeg", "source": _s3_source("s3://media-bucket/dir/cat.jpg")}},
+            id="jpg-is-jpeg",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/CAT.PNG"}},
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/CAT.PNG")}},
+            id="uppercase-image-extension",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/clips/DEMO.MOV"}},
+            {"video": {"format": "mov", "source": _s3_source("s3://media-bucket/clips/DEMO.MOV")}},
+            id="uppercase-video-extension",
+        ),
+        pytest.param(
+            {
+                "type": "image_url",
+                "image_url": {"url": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER},
+            },
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png", _S3_BUCKET_OWNER)}},
+            id="bucket-owner",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/dir/cat.png", "format": "image/webp"}},
+            {"image": {"format": "webp", "source": _s3_source("s3://media-bucket/dir/cat.png")}},
+            id="explicit-format-wins",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/base64/cat.png"}},
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/base64/cat.png")}},
+            id="base64-in-key",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/clips/demo.mp4"}},
+            {"video": {"format": "mp4", "source": _s3_source("s3://media-bucket/clips/demo.mp4")}},
+            id="video",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": "s3://media-bucket/clips/demo.mov"}},
+            {"video": {"format": "mov", "source": _s3_source("s3://media-bucket/clips/demo.mov")}},
+            id="video-extension-is-the-bedrock-format",
+        ),
+        pytest.param(
+            {"type": "file", "file": {"file_id": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER}},
+            {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png", _S3_BUCKET_OWNER)}},
+            id="file-id",
+        ),
+    ],
+)
+async def test_bedrock_converse_s3_media_is_sent_as_an_s3_location_without_a_download(
+    part: Mapping[str, object], expected: Mapping[str, object], run_async: bool
+):
+    assert await _converse_user_content(part, run_async) == [expected]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("declared", "block", "converse_format"),
+    [
+        pytest.param("image/jpg", "image", "jpeg", id="image-jpg"),
+        pytest.param("IMAGE/PNG", "image", "png", id="upper-case"),
+        pytest.param("image/png; charset=binary", "image", "png", id="image-with-parameter"),
+        pytest.param("video/quicktime", "video", "mov", id="quicktime"),
+        pytest.param("video/x-matroska", "video", "mkv", id="matroska"),
+        pytest.param("video/x-flv", "video", "flv", id="flv"),
+        pytest.param("video/x-ms-wmv", "video", "wmv", id="wmv"),
+        pytest.param("video/3gpp", "video", "three_gp", id="3gpp"),
+    ],
+)
+async def test_bedrock_converse_s3_media_format_accepts_a_registered_mime_type(
+    declared: str, block: str, converse_format: str, run_async: bool
+):
+    uri: Final = "s3://media-bucket/uploads/7f3a9c"
+
+    content: Final = await _converse_user_content(
+        {"type": "image_url", "image_url": {"url": uri, "format": declared}}, run_async
+    )
+
+    assert content == [{block: {"format": converse_format, "source": _s3_source(uri)}}]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_s3_3gp_key_uses_the_converse_format_name(run_async: bool):
+    uri: Final = "s3://media-bucket/clips/demo.3gp"
+
+    content: Final = await _converse_user_content({"type": "image_url", "image_url": {"url": uri}}, run_async)
+
+    assert content == [{"video": {"format": "three_gp", "source": _s3_source(uri)}}]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_s3_text_with_a_charset_is_a_txt_document(run_async: bool):
+    uri: Final = "s3://media-bucket/docs/7f3a9c"
+
+    content: Final = await _converse_user_content(
+        {"type": "file", "file": {"file_id": uri, "format": "text/plain; charset=utf-8"}}, run_async
+    )
+
+    assert content[0]["document"]["format"] == "txt"
+    assert content[0]["document"]["source"] == _s3_source(uri)
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_s3_pdf_is_a_document_named_after_its_uri(run_async: bool):
+    report: Final = "s3://media-bucket/docs/report.pdf"
+    invoice: Final = "s3://media-bucket/docs/invoice.pdf"
+
+    report_content: Final = await _converse_user_content({"type": "file", "file": {"file_id": report}}, run_async)
+    report_again: Final = await _converse_user_content({"type": "file", "file": {"file_id": report}}, run_async)
+    invoice_content: Final = await _converse_user_content({"type": "file", "file": {"file_id": invoice}}, run_async)
+
+    report_name: Final = report_content[0]["document"]["name"]
+    assert report_content == [{"document": {"format": "pdf", "name": report_name, "source": _s3_source(report)}}]
+    assert re.fullmatch(r"DocumentPDFmessages_[0-9a-f]{16}_pdf", report_name)
+    assert report_again == report_content
+    assert invoice_content[0]["document"]["name"] != report_name
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("uri", ["s3://media-bucket/docs/notes.md", "s3://media-bucket/docs/NOTES.markdown"])
+async def test_bedrock_converse_s3_markdown_without_a_format_is_an_md_document(uri: str, run_async: bool):
+    content: Final = await _converse_user_content({"type": "file", "file": {"file_id": uri}}, run_async)
+
+    assert [{**block, "document": {**block["document"], "name": "-"}} for block in content] == [
+        {"document": {"format": "md", "name": "-", "source": _s3_source(uri)}}
+    ]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("uri", ["s3://media-bucket/uploads/7f3a9c", "s3://media-bucket/uploads/blob.unknownext"])
+async def test_bedrock_converse_s3_media_without_a_known_extension_or_format_is_a_bad_request(
+    uri: str, run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_user_content({"type": "image_url", "image_url": {"url": uri}}, run_async)
+
+    assert uri in excinfo.value.message
+    assert "`format`" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("image_url", "named_format"),
+    [
+        pytest.param({"url": "s3://media-bucket/scans/page.tiff"}, "page.tiff", id="tiff-key"),
+        pytest.param(
+            {"url": "s3://media-bucket/scans/page.png", "format": "image/tiff"}, "image/tiff", id="tiff-format"
+        ),
+        pytest.param({"url": "s3://media-bucket/voice/note.mp3"}, "audio/mpeg", id="mp3-key"),
+        pytest.param(
+            {"url": "s3://media-bucket/voice/note.bin", "format": "audio/mp4"}, "audio/mp4", id="audio-format"
+        ),
+    ],
+)
+async def test_bedrock_converse_s3_media_in_a_format_bedrock_does_not_take_is_a_bad_request(
+    image_url: Mapping[str, str], named_format: str, run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_user_content({"type": "image_url", "image_url": image_url}, run_async)
+
+    assert image_url["url"] in excinfo.value.message
+    assert named_format in excinfo.value.message
+
+
+_PNG_BASE64: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+
+
+def _owned_image_url_part(url: str, bucket_owner: object) -> Mapping[str, object]:
+    return {"type": "image_url", "image_url": {"url": url, "bucket_owner": bucket_owner}}
+
+
+def _owned_file_part(url: str, bucket_owner: object) -> Mapping[str, object]:
+    return {"type": "file", "file": {"file_id": url, "bucket_owner": bucket_owner}}
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("bucket_owner", [111122223333, ["111122223333"], ""], ids=["int", "list", "empty-string"])
+@pytest.mark.parametrize("part_for", [_owned_image_url_part, _owned_file_part], ids=["image-url", "file"])
+async def test_bedrock_converse_s3_media_with_a_bucket_owner_that_is_not_an_account_id_is_a_bad_request(
+    part_for: Callable[[str, object], Mapping[str, object]], bucket_owner: object, run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_user_content(part_for("s3://media-bucket/dir/cat.png", bucket_owner), run_async)
+
+    assert "`bucket_owner`" in excinfo.value.message
+    assert "s3://media-bucket/dir/cat.png" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("part_for", [_owned_image_url_part, _owned_file_part], ids=["image-url", "file"])
+async def test_bedrock_converse_ignores_a_bucket_owner_on_media_that_is_not_on_s3(
+    part_for: Callable[[str, object], Mapping[str, object]], run_async: bool
+):
+    content: Final = await _converse_user_content(
+        part_for(f"data:image/png;base64,{_PNG_BASE64}", 111122223333), run_async
+    )
+
+    assert content == [{"image": {"format": "png", "source": {"bytes": _PNG_BASE64}}}]
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        pytest.param(
+            {
+                "type": "image_url",
+                "image_url": {"url": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER},
+            },
+            id="image-url",
+        ),
+        pytest.param(
+            {"type": "file", "file": {"file_id": "s3://media-bucket/dir/cat.png", "bucket_owner": _S3_BUCKET_OWNER}},
+            id="file",
+        ),
+    ],
+)
+def test_bedrock_converse_tool_result_s3_media_keeps_its_bucket_owner(part: Mapping[str, object]):
+    messages: Final = [
+        {"role": "user", "content": "Describe the screenshot."},
+        {"tool_call_id": "tooluse_s3_1", "role": "tool", "name": "fetch_screenshot", "content": [part]},
+    ]
+
+    with respx.mock:
+        converted: Final = _bedrock_converse_messages_pt(
+            messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+        )
+
+    assert converted[-1]["content"][-1]["toolResult"]["content"] == [
+        {"image": {"format": "png", "source": _s3_source("s3://media-bucket/dir/cat.png", _S3_BUCKET_OWNER)}}
+    ]
+
+
+_OCTET_STREAM_MP4_URL: Final = "https://8.8.8.8/clip"
+_NON_S3_TOOL_RESULT_VIDEOS: Final = (
+    pytest.param({"type": "file", "file": {"file_data": "data:video/mp4;base64,AAAAGGZ0eXBtcDQy"}}, id="inline-file"),
+    pytest.param({"type": "image_url", "image_url": {"url": _OCTET_STREAM_MP4_URL}}, id="octet-stream-mp4-link"),
+)
+
+
+async def _converse_tool_result_content(
+    part: Mapping[str, object], run_async: bool, drop_params: bool
+) -> Sequence[Mapping[str, object]]:
+    messages: Final = [
+        {"role": "user", "content": "Describe the clip."},
+        {
+            "tool_call_id": "tooluse_video_1",
+            "role": "tool",
+            "name": "fetch_clip",
+            "content": [{"type": "text", "text": "clip:"}, part],
+        },
+    ]
+    with respx.mock(assert_all_called=False) as router:
+        router.get(_OCTET_STREAM_MP4_URL).respond(
+            200, content=_MP4_BYTES, headers={"content-type": "application/octet-stream"}
+        )
+        converted: Final = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock", drop_params=drop_params
+            )
+            if run_async
+            else _bedrock_converse_messages_pt(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock", drop_params=drop_params
+            )
+        )
+    return converted[-1]["content"][-1]["toolResult"]["content"]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_tool_result_s3_video_is_forwarded(run_async: bool):
+    content: Final = await _converse_tool_result_content(
+        {"type": "file", "file": {"file_id": "s3://media-bucket/clips/demo.mp4"}}, run_async, drop_params=False
+    )
+
+    assert content == [
+        {"text": "clip:"},
+        {"video": {"format": "mp4", "source": _s3_source("s3://media-bucket/clips/demo.mp4")}},
+    ]
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("part", _NON_S3_TOOL_RESULT_VIDEOS)
+async def test_bedrock_converse_tool_result_video_not_on_s3_is_a_bad_request(
+    part: Mapping[str, object], run_async: bool
+):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await _converse_tool_result_content(part, run_async, drop_params=False)
+
+    assert "drop_params=True" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("part", _NON_S3_TOOL_RESULT_VIDEOS)
+async def test_drop_params_drops_a_bedrock_tool_result_video_not_on_s3(part: Mapping[str, object], run_async: bool):
+    content: Final = await _converse_tool_result_content(part, run_async, drop_params=True)
+
+    assert content == [{"text": "clip:"}]
+
+
+@pytest.mark.parametrize("bucket_owner", [111122223333, ""], ids=["int", "empty-string"])
+@pytest.mark.parametrize("part_for", [_owned_image_url_part, _owned_file_part], ids=["image-url", "file"])
+def test_bedrock_converse_tool_result_s3_media_with_a_bucket_owner_that_is_not_an_account_id_is_a_bad_request(
+    part_for: Callable[[str, object], Mapping[str, object]], bucket_owner: object
+):
+    messages: Final = [
+        {"role": "user", "content": "Describe the screenshot."},
+        {
+            "tool_call_id": "tooluse_s3_1",
+            "role": "tool",
+            "name": "fetch_screenshot",
+            "content": [part_for("s3://media-bucket/dir/cat.png", bucket_owner)],
+        },
+    ]
+
+    with respx.mock, pytest.raises(litellm.BadRequestError) as excinfo:
+        _bedrock_converse_messages_pt(messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock")
+
+    assert "`bucket_owner`" in excinfo.value.message
+
+
+@pytest.mark.parametrize("run_async", [False, True], ids=["sync", "async"])
+async def test_bedrock_converse_assistant_s3_image_is_sent_as_an_s3_location(run_async: bool):
+    messages: Final = [
+        {"role": "user", "content": "Draw a cat."},
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "s3://media-bucket/dir/cat.png",
+                        "format": "image/webp",
+                        "bucket_owner": _S3_BUCKET_OWNER,
+                    },
+                }
+            ],
+        },
+        {"role": "user", "content": "Make it bigger."},
+    ]
+
+    with respx.mock:
+        converted: Final = (
+            await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock"
+            )
+            if run_async
+            else _bedrock_converse_messages_pt(messages=messages, model=_S3_MEDIA_MODEL, llm_provider="bedrock")
+        )
+
+    assert converted[1]["content"] == [
+        {"image": {"format": "webp", "source": _s3_source("s3://media-bucket/dir/cat.png", _S3_BUCKET_OWNER)}}
+    ]
 
 
 def test_bedrock_nova_web_search_options_mapping():
@@ -6558,6 +7813,101 @@ def test_ensure_alternating_roles(messages, expected_messages, user_continue_mes
     print(messages)
 
     assert messages == expected_messages
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param([{"role": "assistant", "content": "Hello!"}], id="before_a_first_assistant_message"),
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "assistant", "content": "Still there?"},
+            ],
+            id="between_adjacent_assistant_messages",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "tool", "tool_call_id": "call_1", "content": "42"},
+                {"role": "assistant", "content": "Still there?"},
+            ],
+            id="between_assistant_messages_split_by_a_tool_result",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}],
+            id="after_a_last_assistant_message",
+        ),
+        pytest.param(
+            [{"role": "user", "content": "Hi"}, {"role": "user", "content": "Anyone there?"}],
+            id="between_adjacent_user_messages",
+        ),
+    ],
+)
+def test_folding_a_system_prompt_into_an_inserted_continue_message_never_changes_a_later_request(
+    messages: list[dict[str, str]],
+) -> None:
+    def completion_messages() -> list[dict[str, str]]:
+        return get_completion_messages(
+            messages=messages,
+            assistant_continue_message=None,
+            user_continue_message=None,
+            ensure_alternating_roles=True,
+        )
+
+    first: Final = completion_messages()
+    untouched: Final = json.loads(json.dumps(first))
+    for inserted in (message for message in first if message not in messages):
+        map_system_message_pt([{"role": "system", "content": "First tenant secret"}, inserted])
+
+    assert completion_messages() == untouched
+
+
+_STRICT_TEMPLATE_API_BASE: Final = "https://strict-template.example.com/v1"
+_STRICT_TEMPLATE_REPLY: Final = {
+    "id": "chatcmpl-strict",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "strict-template-model",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    "user_continue_message", [None, {"role": "user", "content": "Keep going"}], ids=["default", "configured"]
+)
+def test_a_system_prompt_folded_into_the_continue_message_never_reaches_a_later_request(
+    respx_mock: respx.MockRouter, user_continue_message: dict[str, str] | None
+) -> None:
+    route: Final = respx_mock.post(f"{_STRICT_TEMPLATE_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(200, json=_STRICT_TEMPLATE_REPLY)
+    )
+
+    def send(messages: list[dict[str, str]]) -> None:
+        litellm.completion(
+            model="openai/strict-template-model",
+            api_base=_STRICT_TEMPLATE_API_BASE,
+            api_key="test-key",
+            messages=messages,
+            ensure_alternating_roles=True,
+            supports_system_message=False,
+            user_continue_message=user_continue_message,
+        )
+
+    send(
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello!"},
+            {"role": "system", "content": "First tenant secret"},
+            {"role": "assistant", "content": "Anything else?"},
+        ]
+    )
+    send([{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}])
+
+    assert "First tenant secret" not in json.dumps(json.loads(route.calls.last.request.read())["messages"])
 
 
 def test_ensure_alternating_roles_with_tool_calls():

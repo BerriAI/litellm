@@ -6,6 +6,7 @@ from typing import Final, Protocol, TypedDict, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.hidden_params import (
     HIDDEN_PARAMS_ATTR as _HIDDEN_PARAMS_ATTR,
 )
@@ -249,7 +250,11 @@ def _ensure_additional_headers_dict(
 
 def get_fallback_error_info(error: Exception) -> FallbackErrorInfo:
     message: Final = cast(object, getattr(error, "message", str(error)))
-    error_type: Final = cast(object, getattr(error, "type", error.__class__.__name__))
+    error_type: Final = (
+        error.__class__.__name__
+        if isinstance(error, UnsupportedParamsError)
+        else cast(object, getattr(error, "type", error.__class__.__name__))
+    )
     param: Final = cast(object, getattr(error, "param", None))
     code: Final = cast(object, getattr(error, "status_code", getattr(error, "code", None)))
     return FallbackErrorInfo(

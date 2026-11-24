@@ -11,6 +11,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
 
 from ...custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from .reasoning import normalize_stream_event
 
 
 # -------------------------------
@@ -151,7 +152,7 @@ class SAPStreamIterator:
                 continue
 
             try:
-                chunk = _StreamParser.to_openai_chunk(obj)
+                chunk = _StreamParser.to_openai_chunk(dict(normalize_stream_event(obj)))
             except ValueError as e:
                 self._safe_close()
                 raise e
@@ -222,7 +223,7 @@ class AsyncSAPStreamIterator:
                 continue
 
             try:
-                chunk = _StreamParser.to_openai_chunk(obj)
+                chunk = _StreamParser.to_openai_chunk(dict(normalize_stream_event(obj)))
             except ValueError as e:
                 await self._aclose()
                 raise GenAIHubOrchestrationError(502, str(e))

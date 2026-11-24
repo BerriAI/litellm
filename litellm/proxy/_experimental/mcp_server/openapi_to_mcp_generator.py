@@ -650,7 +650,7 @@ def register_tools_from_openapi(spec: _OpenAPISpec, base_url: str) -> None:
                 # by sanitized characters (e.g. "foo/list" and "foo.list")
                 # would both become "foo_list". Append _2, _3, … to keep
                 # every tool reachable, mirroring the Anthropic-side logic
-                # in _build_anthropic_tool_name_maps.
+                # in build_anthropic_tool_name_maps.
                 unique = tool_name
                 n = 1
                 while unique in used_names:

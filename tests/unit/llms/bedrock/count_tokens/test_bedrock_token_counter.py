@@ -150,6 +150,58 @@ async def test_other_bedrock_runtime_failures_are_not_retried_on_mantle(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_to_use", "runtime"),
+    (
+        ("us.anthropic.claude-sonnet-4-6", (200, {"inputTokens": 36})),
+        ("us.anthropic.claude-opus-5-5", (400, UNSUPPORTED)),
+    ),
+)
+async def test_claude_count_sends_a_history_echoing_a_fallback_block_as_the_history_without_it(
+    model_to_use: str, runtime: tuple[int, Mapping[str, object]]
+) -> None:
+    fallback_block: Final = {
+        "type": "fallback",
+        "from": {"model": "claude-opus-5-5"},
+        "to": {"model": "claude-haiku-5-5"},
+        "trigger": {"type": "refusal", "category": "cyber"},
+    }
+    reply: Final = ({"type": "text", "text": "Hello"}, {"type": "text", "text": "there"})
+    echoed_bedrock: Final = _Bedrock(runtime=runtime, mantle=(200, {"input_tokens": 20}))
+    plain_bedrock: Final = _Bedrock(runtime=runtime, mantle=(200, {"input_tokens": 20}))
+
+    echoed: Final = await _counter(echoed_bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=[
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": [reply[0], fallback_block, reply[1]]},
+            {"role": "user", "content": "thanks"},
+        ],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model=model_to_use,
+    )
+    plain: Final = await _counter(plain_bedrock).count_tokens(
+        model_to_use=model_to_use,
+        messages=[
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": list(reply)},
+            {"role": "user", "content": "thanks"},
+        ],
+        contents=None,
+        deployment=DEPLOYMENT,
+        request_model=model_to_use,
+    )
+
+    assert echoed is not None and plain is not None
+    assert (echoed.error, plain.error) == (False, False)
+    assert echoed.total_tokens == plain.total_tokens
+    assert [request.content for request in echoed_bedrock.requests] == [
+        request.content for request in plain_bedrock.requests
+    ]
+
+
+@pytest.mark.asyncio
 async def test_mantle_failure_is_reported_with_its_status() -> None:
     bedrock: Final = _Bedrock(
         runtime=(404, UNSUPPORTED),

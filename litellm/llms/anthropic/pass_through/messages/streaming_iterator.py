@@ -4,7 +4,7 @@ import re
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
 from contextvars import ContextVar
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -21,6 +21,7 @@ from litellm.llms.anthropic.common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP
 from litellm.llms.anthropic.pass_through.messages.utils import INCOMPLETE_STREAM_ERROR_MESSAGE
 from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
 from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
@@ -243,16 +244,11 @@ def _anthropic_content_block_start_and_deltas(
             )
         case "thinking":
             signature: Final = block.get("signature")
-            signature_deltas: Final = (
-                ({"signature": signature, "type": "signature_delta"},)
-                if isinstance(signature, str) and signature
-                else ()
-            )
             return (
                 {"thinking": "", "signature": "", "type": "thinking"},
                 (
                     {"thinking": block.get("thinking") or "", "type": "thinking_delta"},
-                    *signature_deltas,
+                    {"signature": signature if isinstance(signature, str) else "", "type": "signature_delta"},
                 ),
             )
         case "redacted_thinking":
@@ -341,16 +337,6 @@ def _anthropic_content_block_events(index: int, block: Mapping[str, object]) -> 
 
 class AnthropicMessagesStreamHiddenParams(TypedDict):
     additional_headers: dict[str, str]
-
-
-@runtime_checkable
-class SupportsAclose(Protocol):
-    async def aclose(self) -> None: ...
-
-
-async def aclose_if_supported(stream: object) -> None:
-    if isinstance(stream, SupportsAclose):
-        await stream.aclose()
 
 
 _CLOSING_SUPERSEDED_ATTEMPT: Final[ContextVar[bool]] = ContextVar("closing_superseded_attempt", default=False)

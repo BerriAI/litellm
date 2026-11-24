@@ -11,7 +11,7 @@ Translations handled by LiteLLM:
 - Logprobs => drop param (if user opts in to dropping param)
 """
 
-from collections.abc import Coroutine
+from collections.abc import Collection, Coroutine, Sequence
 from typing import Final, Literal, cast, overload
 
 import litellm
@@ -19,12 +19,17 @@ from litellm import verbose_logger
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.utils import (
+    is_explicitly_disabled_factory,
     supports_function_calling,
     supports_parallel_function_calling,
     supports_response_schema,
     supports_system_messages,
 )
 
+from .gpt_5_transformation import (
+    get_effort_level,  # pyright: ignore[reportUnknownVariableType]  # its signature takes the bare reasoning_effort dict
+    unsupported_reasoning_effort_message,
+)
 from .gpt_transformation import OpenAIGPTConfig
 
 
@@ -94,7 +99,29 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         optional_params: dict,
         model: str,
         drop_params: bool,
+        *,
+        declared_reasoning_efforts: Collection[str] | None = None,
+        allowed_openai_params: Collection[str] = (),
     ):
+        requested_effort: Final = get_effort_level(
+            non_default_params.get("reasoning_effort") or optional_params.get("reasoning_effort")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+        )
+        refused_effort: Final = (
+            requested_effort
+            if requested_effort is not None
+            and requested_effort not in (declared_reasoning_efforts or ())
+            and "reasoning_effort" not in allowed_openai_params
+            and is_explicitly_disabled_factory(
+                model=model, custom_llm_provider=None, key=f"supports_{requested_effort}_reasoning_effort"
+            )
+            else None
+        )
+        if refused_effort is not None and not (litellm.drop_params or drop_params):
+            raise litellm.utils.UnsupportedParamsError(
+                message=unsupported_reasoning_effort_message("reasoning_effort", refused_effort, model),
+                status_code=400,
+                body={"param": "reasoning_effort", "code": "unsupported_value"},
+            )
         if "max_tokens" in non_default_params:
             optional_params["max_completion_tokens"] = non_default_params.pop("max_tokens")
         if "temperature" in non_default_params:
@@ -112,7 +139,21 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
                             status_code=400,
                         )
 
-        return super()._map_openai_params(non_default_params, optional_params, model, drop_params)
+        mapped_params: Final[dict[str, object]] = super()._map_openai_params(  # mutable-ok: OpenAIConfig returns a dict
+            non_default_params, optional_params, model, drop_params
+        )
+        if refused_effort is None:
+            return mapped_params
+        return {param: value for param, value in mapped_params.items() if param != "reasoning_effort"}
+
+    def _with_provider_roles(self, messages: Sequence[AllMessageValues], model: str) -> Sequence[AllMessageValues]:
+        keeps_system_messages: Final = supports_system_messages(model, "openai")
+        return tuple(
+            message
+            if keeps_system_messages or message["role"] != "system"
+            else ChatCompletionUserMessage(content=message["content"], role="user")
+            for message in messages
+        )
 
     def is_model_o_series_model(self, model: str) -> bool:
         model = model.split("/")[-1]  # could be "openai/o3" or "o3"
@@ -144,13 +185,8 @@ class OpenAIOSeriesConfig(OpenAIGPTConfig):
         - modalities: image => drop param (if user opts in to dropping param)
         - role: system ==> translate to role 'user'
         """
-        _supports_system_messages: Final = supports_system_messages(model, "openai")
-        for i, message in enumerate(messages):
-            if message["role"] == "system" and not _supports_system_messages:
-                new_message = ChatCompletionUserMessage(content=message["content"], role="user")
-                messages[i] = new_message  # Replace the old message with the new one
-
+        transformed_messages: Final = list(self._with_provider_roles(messages, model))
         if is_async:
-            return super()._transform_messages(messages, model, is_async=cast(Literal[True], True))
+            return super()._transform_messages(transformed_messages, model, is_async=cast(Literal[True], True))
         else:
-            return super()._transform_messages(messages, model, is_async=cast(Literal[False], False))
+            return super()._transform_messages(transformed_messages, model, is_async=cast(Literal[False], False))

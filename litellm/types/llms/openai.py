@@ -93,6 +93,7 @@ from litellm.types.responses.main import (
     OutputFunctionToolCall,
     OutputImageGenerationCall,
     OutputToolSearchCall,
+    OutputToolSearchOutput,
 )
 
 from .base import CachedTokensDetails
@@ -793,6 +794,12 @@ class ChatCompletionTextObject(
     cache_control: ChatCompletionCachedContent
 
 
+class ChatCompletionGuardedTextObject(TypedDict):
+    type: ReadOnly[Literal["guarded_text"]]
+    text: ReadOnly[str]
+    cache_control: NotRequired[ReadOnly[ChatCompletionCachedContent]]
+
+
 class ChatCompletionImageUrlObject(TypedDict, total=False):
     url: Required[str]
     detail: str
@@ -1239,6 +1246,7 @@ OpenAIImageGenerationOptionalParams = Literal[
     "image_url",
     "image_prompt_strength",
     "aspect_ratio",
+    "area",
     "width",
     "height",
     "guidance",
@@ -1324,6 +1332,11 @@ class ResponsesAPIStreamOptions(TypedDict, total=False):
     include_obfuscation: bool
 
 
+class ResponsesAPIBackgroundOptions(TypedDict, total=False):
+    completion_window: ReadOnly[Literal["soonest", "2h", "8h"]]
+    continuation_id: ReadOnly[str]
+
+
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the responses API."""
 
@@ -1336,6 +1349,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     reasoning: Reasoning | None
     store: bool | None
     background: bool | None
+    background_options: ReadOnly[ResponsesAPIBackgroundOptions | None]
     stream: bool | None
     temperature: float | None
     text: Optional["ResponseText"]
@@ -1482,6 +1496,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
             | OutputToolSearchCall
+            | OutputToolSearchOutput
         ]
     )
     parallel_tool_calls: bool | None = None

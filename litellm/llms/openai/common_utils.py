@@ -31,8 +31,9 @@ if TYPE_CHECKING:
 
 import litellm
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.token_counter import token_counter
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.base_llm.chat.transformation import BaseLLMException, RelayOnlyBodyLLMException
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AsyncHTTPHandler,
@@ -104,9 +105,16 @@ def is_openai_backed_api_base(api_base: str) -> bool:
     return hostname is not None and (hostname == _OPENAI_API_HOST or hostname.endswith(f".{_OPENAI_API_HOST}"))
 
 
+_OPENAI_AGENTS_API_RESOURCES: Final = frozenset({"agents", "vaults"})
+
+
 def _openai_api_resource_segments(path: str) -> tuple[str, ...]:
     segments: Final = tuple(segment for segment in path.split("/") if segment)
     return segments[1:] if segments[:1] == ("v1",) else segments
+
+
+def openai_api_resource(path: str) -> str | None:
+    return next(iter(_openai_api_resource_segments(path)), None)
 
 
 def is_openai_batch_create(method: str, path: str) -> bool:
@@ -114,6 +122,10 @@ def is_openai_batch_create(method: str, path: str) -> bool:
         return False
     sent_path: Final = posixpath.normpath(f"/{httpx.URL(path).path}")
     return _openai_api_resource_segments(sent_path) == ("batches",)
+
+
+def is_openai_agents_api_path(path: str) -> bool:
+    return openai_api_resource(path) in _OPENAI_AGENTS_API_RESOURCES
 
 
 class OpenAIError(BaseLLMException):
@@ -124,7 +136,7 @@ class OpenAIError(BaseLLMException):
         request: httpx.Request | None = None,
         response: httpx.Response | None = None,
         headers: dict | httpx.Headers | None = None,
-        body: dict | None = None,
+        body: object = None,
     ):
         self.status_code = status_code
         self.message = message
@@ -143,8 +155,16 @@ class OpenAIError(BaseLLMException):
             headers=self.headers,
             request=self.request,
             response=self.response,
-            body=body,
+            body=None if (body_object := as_str_mapping(body)) is None else dict(body_object),
         )
+
+
+class RelayOnlyBodyOpenAIError(OpenAIError, RelayOnlyBodyLLMException):
+    pass
+
+
+def upstream_error_body(error: Exception) -> Mapping[str, object] | None:
+    return as_str_mapping(error.body) if isinstance(error, openai.APIError) else None
 
 
 ####### Error Handling Utils for OpenAI API #######################

@@ -2,9 +2,11 @@ import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
+from types import MappingProxyType
 from typing import Final, Literal, cast
 
 import pytest
+import respx
 from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.response_function_web_search import (
@@ -23,6 +25,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     anthropic_messages_pt,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
     ChatCompletionSession,
@@ -30,7 +33,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 )
 from litellm.types.llms.base import HiddenParams
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
-from litellm.types.responses.main import OutputToolSearchCall, build_web_search_call
+from litellm.types.responses.main import OutputToolSearchCall, OutputToolSearchOutput, build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     Choices,
@@ -41,9 +44,72 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
+from tests.unit.proxy.conftest import httpx_transport
 
 
 class TestLiteLLMCompletionResponsesConfig:
+    @pytest.mark.parametrize("part_type", ["input_image", "input_file"])
+    @pytest.mark.parametrize(
+        ("key", "media_format", "expected_format"),
+        [("key", "image/png", "png"), ("key.jpeg", "image/png", "png"), ("key.png", None, "png")],
+    )
+    def test_explicit_responses_media_format_reaches_the_converse_s3_image(
+        self, part_type: str, key: str, media_format: str | None, expected_format: str
+    ) -> None:
+        uri: Final = f"s3://bucket/{key}"
+        messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": part_type,
+                            "image_url" if part_type == "input_image" else "file_id": uri,
+                            **({"format": media_format} if media_format is not None else {}),
+                        }
+                    ],
+                }
+            ],
+            responses_api_request={},
+        )
+        request: Final = litellm.AmazonConverseConfig()._transform_request(
+            model="us.amazon.nova-2-lite-v1:0",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+
+        assert request["messages"] == [
+            {
+                "role": "user",
+                "content": [{"image": {"format": expected_format, "source": {"s3Location": {"uri": uri}}}}],
+            }
+        ]
+
+    @pytest.mark.parametrize("part_type", ["input_image", "input_file"])
+    def test_extensionless_responses_s3_media_without_format_is_a_bad_request(self, part_type: str) -> None:
+        messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": part_type, "image_url" if part_type == "input_image" else "file_id": "s3://bucket/key"}
+                    ],
+                }
+            ],
+            responses_api_request={},
+        )
+
+        with pytest.raises(litellm.BadRequestError, match="Cannot tell the media type"):
+            litellm.AmazonConverseConfig()._transform_request(
+                model="us.amazon.nova-2-lite-v1:0",
+                messages=messages,
+                optional_params={},
+                litellm_params={},
+                headers={},
+            )
+
     def test_transform_input_file_item_to_file_item_with_file_id(self):
         """Test transformation of input_file item with file_id to Chat Completion file format"""
         # Setup
@@ -262,6 +328,81 @@ class TestLiteLLMCompletionResponsesConfig:
         assert result["image_url"]["detail"] == "auto"
         assert "extra_field" not in result
         assert "another_field" not in result
+
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            pytest.param(
+                {"type": "input_image", "image_url": "s3://media-bucket/dir/cat.png", "bucket_owner": "111122223333"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "s3://media-bucket/dir/cat.png",
+                        "detail": "auto",
+                        "bucket_owner": "111122223333",
+                    },
+                },
+                id="input-image",
+            ),
+            pytest.param(
+                {"type": "input_file", "file_id": "s3://media-bucket/docs/report.pdf", "bucket_owner": "111122223333"},
+                {
+                    "type": "file",
+                    "file": {"file_id": "s3://media-bucket/docs/report.pdf", "bucket_owner": "111122223333"},
+                },
+                id="input-file",
+            ),
+            pytest.param(
+                {"type": "input_image", "image_url": "s3://media-bucket/dir/cat.png", "bucket_owner": 111122223333},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "s3://media-bucket/dir/cat.png", "detail": "auto", "bucket_owner": 111122223333},
+                },
+                id="input-image-owner-left-for-bedrock-to-check",
+            ),
+            pytest.param(
+                {"type": "input_image", "image_url": "s3://media-bucket/dir/cat.png", "bucket_owner": ""},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "s3://media-bucket/dir/cat.png", "detail": "auto", "bucket_owner": ""},
+                },
+                id="input-image-empty-owner-left-for-bedrock-to-check",
+            ),
+        ],
+    )
+    def test_transform_input_media_item_keeps_bucket_owner(self, item: Mapping[str, object], expected: object):
+        assert LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content([item]) == [
+            expected
+        ]
+
+    @pytest.mark.parametrize(
+        ("item", "expected"),
+        [
+            pytest.param(
+                {"type": "input_image", "image_url": "data:image/png;base64,AA", "bucket_owner": "111122223333"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA", "detail": "auto"}},
+                id="data-url-image",
+            ),
+            pytest.param(
+                {"type": "input_image", "image_url": "https://example.test/cat.png", "bucket_owner": 111122223333},
+                {"type": "image_url", "image_url": {"url": "https://example.test/cat.png", "detail": "auto"}},
+                id="https-image-with-an-int-owner",
+            ),
+            pytest.param(
+                {
+                    "type": "input_file",
+                    "file_data": "data:application/pdf;base64,AA",
+                    "bucket_owner": ["111122223333"],
+                },
+                {"type": "file", "file": {"file_data": "data:application/pdf;base64,AA"}},
+                id="data-url-file-with-a-list-owner",
+            ),
+        ],
+    )
+    def test_transform_input_media_item_drops_bucket_owner_off_s3(self, item: Mapping[str, object], expected: object):
+        assert LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content([item]) == [
+            expected
+        ]
 
     def test_transform_chat_completion_response_with_reasoning_content(self):
         """Test that reasoning content is preserved in the full transformation pipeline"""
@@ -1655,6 +1796,77 @@ def _chat_response_with_tool_search_call(
     )
 
 
+_STOCK_PRICE_TOOL: Final = {"type": "function", "name": "get_stock_price", "defer_loading": True}
+_FX_RATE_TOOL: Final = {"type": "function", "name": "get_fx_rate", "defer_loading": True}
+_CONVERT_TOOL: Final = {"type": "custom", "name": "convert_currency", "defer_loading": True}
+_FINANCE_NAMESPACE: Final = {
+    "type": "namespace",
+    "name": "finance",
+    "description": "Market data",
+    "tools": [_STOCK_PRICE_TOOL, _FX_RATE_TOOL, _CONVERT_TOOL, {"type": "web_search"}],
+}
+_UNNAMED_TOOL: Final = {"type": "function", "name": None}
+
+
+def _chat_response_with_tool_search_result(result_content: Mapping[str, object]) -> ModelResponse:
+    response: Final = _chat_response_with_tool_search_call('{"pattern": "weather"}')
+    message: Final = response.choices[0].message
+    return response.model_copy(
+        update={
+            "choices": [
+                response.choices[0].model_copy(
+                    update={
+                        "message": Message(
+                            content=None,
+                            tool_calls=message.tool_calls,
+                            provider_specific_fields={
+                                "tool_results": [
+                                    {
+                                        "type": "tool_search_tool_result",
+                                        "tool_use_id": "srvtoolu_01Search",
+                                        "content": result_content,
+                                    }
+                                ]
+                            },
+                        )
+                    }
+                )
+            ]
+        }
+    )
+
+
+def _stateless_tool_search_input(
+    call_id: str | None, output_status: Literal["completed", "incomplete"]
+) -> Sequence[Mapping[str, object]]:
+    return [
+        {"type": "message", "role": "user", "content": "What is the weather in Paris right now?"},
+        {
+            "type": "tool_search_call",
+            "id": "tsc_01",
+            "call_id": call_id,
+            "arguments": {"pattern": "weather"},
+            "execution": "server",
+            "status": "completed",
+        },
+        {
+            "type": "tool_search_output",
+            "id": "tso_01",
+            "call_id": call_id,
+            "execution": "server",
+            "status": output_status,
+            "tools": [_deferred_tools_with_server_tool_search()[1]],
+        },
+        {
+            "type": "function_call",
+            "call_id": "toolu_01Weather",
+            "name": "get_weather",
+            "arguments": '{"city": "Paris"}',
+        },
+        {"type": "function_call_output", "call_id": "toolu_01Weather", "output": "18C and sunny"},
+    ]
+
+
 class TestToolTransformation:
     """Test cases for tool transformation from Responses API to Chat Completion format"""
 
@@ -2205,6 +2417,201 @@ class TestToolTransformation:
         assert [message["role"] for message in messages] == ["user", "assistant", "tool"]
         assert [call["id"] for call in messages[1]["tool_calls"]] == ["toolu_01Weather"]
         assert "tool_search" not in json.dumps(messages)
+
+    @pytest.mark.parametrize(
+        ("result_content", "status", "loaded_tools"),
+        [
+            pytest.param(
+                {
+                    "type": "tool_search_tool_search_result",
+                    "tool_references": [
+                        {"type": "tool_reference", "tool_name": name}
+                        for name in ("get_weather", "finance__get_stock_price", "convert_currency", "not_a_tool")
+                    ],
+                },
+                "completed",
+                [
+                    _deferred_tools_with_server_tool_search()[1],
+                    {**_FINANCE_NAMESPACE, "tools": [_STOCK_PRICE_TOOL, _CONVERT_TOOL]},
+                ],
+                id="found_tools",
+            ),
+            pytest.param(
+                {"type": "tool_search_tool_result_error", "error_code": "unavailable"},
+                "incomplete",
+                [],
+                id="search_failed",
+            ),
+        ],
+    )
+    def test_anthropic_tool_search_result_becomes_a_tool_search_output_of_the_tools_as_sent(
+        self,
+        result_content: Mapping[str, object],
+        status: str,
+        loaded_tools: list[Mapping[str, object]],
+    ) -> None:
+        items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            chat_completion_response=_chat_response_with_tool_search_result(result_content),
+            responses_api_request={
+                "tools": [*_deferred_tools_with_server_tool_search()[:2], _FINANCE_NAMESPACE, _UNNAMED_TOOL],
+            },
+        )
+
+        assert [item.type for item in items] == ["tool_search_call", "tool_search_output", "function_call"]
+        search_output: Final = items[1]
+        assert isinstance(search_output, OutputToolSearchOutput)
+        assert (search_output.call_id, search_output.execution, search_output.status) == (
+            "srvtoolu_01Search",
+            "server",
+            status,
+        )
+        assert [dict(tool) for tool in search_output.tools] == loaded_tools
+
+    @pytest.mark.parametrize(
+        ("model", "custom_llm_provider", "call_id", "output_status", "replayed_call_ids"),
+        [
+            pytest.param(
+                "anthropic/claude-sonnet-5-5",
+                "anthropic",
+                "srvtoolu_01Search",
+                "completed",
+                ["srvtoolu_01Search", "toolu_01Weather"],
+                id="claude_search_on_anthropic",
+            ),
+            pytest.param(
+                "anthropic/claude-sonnet-5-5",
+                "anthropic",
+                "srvtoolu_01Search",
+                "incomplete",
+                ["toolu_01Weather"],
+                id="failed_claude_search_on_anthropic",
+            ),
+            pytest.param(
+                "anthropic/claude-sonnet-5-5", "anthropic", None, "completed", ["toolu_01Weather"], id="openai_search"
+            ),
+            pytest.param(
+                "mistral/mistral-small-latest",
+                "mistral",
+                "srvtoolu_01Search",
+                "completed",
+                ["toolu_01Weather"],
+                id="claude_search_off_anthropic",
+            ),
+            pytest.param(
+                "anthropic/claude-3-7-sonnet-20250219",
+                "anthropic",
+                "srvtoolu_01Search",
+                "completed",
+                ["toolu_01Weather"],
+                id="claude_search_sent_to_a_claude_without_tool_search",
+            ),
+        ],
+    )
+    def test_stateless_tool_search_items_are_replayed_only_for_a_completed_claude_search_on_anthropic(
+        self,
+        model: str,
+        custom_llm_provider: str,
+        call_id: str | None,
+        output_status: Literal["completed", "incomplete"],
+        replayed_call_ids: Sequence[str],
+    ) -> None:
+        request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input=cast(  # cast-ok: tool search items are not in the SDK's input TypedDicts
+                ResponseInputParam, list(_stateless_tool_search_input(call_id, output_status))
+            ),
+            responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        assert [message["role"] for message in request["messages"]] == ["user", "assistant", "tool"]
+        assert [call["id"] for call in request["messages"][1]["tool_calls"]] == replayed_call_ids
+
+    @pytest.mark.parametrize(
+        ("model", "custom_llm_provider", "replayed_call_ids"),
+        [
+            pytest.param(
+                "anthropic/claude-3-7-sonnet-20250219",
+                "anthropic",
+                ["srvtoolu_01Search", "toolu_01Weather"],
+                id="on_anthropic",
+            ),
+            pytest.param("mistral/mistral-small-latest", "mistral", ["toolu_01Weather"], id="off_anthropic"),
+        ],
+    )
+    def test_stateless_tool_search_items_follow_anthropics_own_search_tool_on_a_claude_the_cost_map_does_not_flag(
+        self, model: str, custom_llm_provider: str, replayed_call_ids: Sequence[str]
+    ) -> None:
+        request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input=cast(  # cast-ok: tool search items are not in the SDK's input TypedDicts
+                ResponseInputParam, list(_stateless_tool_search_input("srvtoolu_01Search", "completed"))
+            ),
+            responses_api_request={
+                "tools": [
+                    {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+                    *_deferred_tools_with_server_tool_search()[1:],
+                ]
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        assert [call["id"] for call in request["messages"][1]["tool_calls"]] == replayed_call_ids
+
+    @pytest.mark.parametrize(
+        "tools",
+        [
+            pytest.param(_deferred_tools_with_server_tool_search()[1:], id="only_the_tools_it_found"),
+            pytest.param(
+                [{"type": "tool_search", "execution": "client"}, *_deferred_tools_with_server_tool_search()[1:]],
+                id="a_search_the_client_runs",
+            ),
+            pytest.param([], id="no_tools"),
+        ],
+    )
+    def test_stateless_claude_search_is_dropped_when_the_follow_up_sends_no_search_tool_the_route_runs(
+        self, tools: list[dict[str, object]]
+    ) -> None:
+        request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic/claude-sonnet-5-5",
+            input=cast(  # cast-ok: tool search items are not in the SDK's input TypedDicts
+                ResponseInputParam, list(_stateless_tool_search_input("srvtoolu_01Search", "completed"))
+            ),
+            responses_api_request={"tools": tools},
+            custom_llm_provider="anthropic",
+        )
+
+        assert [call["id"] for call in request["messages"][1]["tool_calls"]] == ["toolu_01Weather"]
+
+    @pytest.mark.parametrize(
+        ("arguments", "search_tool_name"),
+        [
+            pytest.param({"pattern": "weather"}, "tool_search_tool_regex", id="regex_object"),
+            pytest.param({"query": "weather"}, "tool_search_tool_bm25", id="bm25_object"),
+            pytest.param('{"query": "weather"}', "tool_search_tool_bm25", id="bm25_json"),
+            pytest.param("weather", "tool_search_tool_regex", id="not_json"),
+        ],
+    )
+    def test_stateless_claude_search_is_replayed_under_the_search_tool_its_arguments_belong_to(
+        self, arguments: object, search_tool_name: str
+    ) -> None:
+        items: Final = (
+            {**item, "arguments": arguments} if item["type"] == "tool_search_call" else item
+            for item in _stateless_tool_search_input("srvtoolu_01Search", "completed")
+        )
+        request: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic/claude-sonnet-5-5",
+            input=cast(  # cast-ok: tool search items are not in the SDK's input TypedDicts
+                ResponseInputParam, list(items)
+            ),
+            responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
+            custom_llm_provider="anthropic",
+        )
+
+        assert [(call["id"], call["function"]["name"]) for call in request["messages"][1]["tool_calls"]] == [
+            ("srvtoolu_01Search", search_tool_name),
+            ("toolu_01Weather", "get_weather"),
+        ]
 
     def test_transform_local_shell_tools_dropped(self) -> None:
         (
@@ -6534,7 +6941,9 @@ async def test_bridge_partial_response_on_disconnect_bills_the_relayed_chat_chun
     assert incomplete_event.type == "response.incomplete"
     assert incomplete_event.response.status == "incomplete"
     assert incomplete_event.response.usage is not None
-    assert incomplete_event.response.usage.output_tokens == litellm.token_counter(model="gpt-4o-mini", text=relayed_text)
+    assert incomplete_event.response.usage.output_tokens == litellm.token_counter(
+        model="gpt-4o-mini", text=relayed_text
+    )
     assert incomplete_event.response.usage.input_tokens > 0
 
 
@@ -6559,3 +6968,286 @@ def test_a_hosted_mcp_tool_sent_to_responses_on_bedrock_converse_answers_400(mon
     assert raised.value.status_code == 400
     assert "`deepwiki`" in str(raised.value)
     assert "litellm_proxy/mcp/" in str(raised.value)
+
+
+_HELLO: Final = {"role": "assistant", "content": "Hello!"}
+_EMPTY_USER_TURN: Final = {"role": "user", "content": ""}
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "last_item", "extra_kwargs", "expected_tail"),
+    [
+        pytest.param("gemini/gemini-3.8-flash", None, {"role": "user"}, {}, [_HELLO, _EMPTY_USER_TURN], id="gemini"),
+        pytest.param(
+            "gemini-3.8-flash",
+            "vertex_ai",
+            {"role": "user", "content": None},
+            {},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_gemini",
+        ),
+        pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"base_model": "vertex_ai/gemini-3.8-flash"},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_endpoint_with_a_gemini_base_model",
+        ),
+        pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"model_info": {"base_model": "vertex_ai/gemini-3.8-flash"}},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_endpoint_with_a_gemini_base_model_in_model_info",
+        ),
+        pytest.param(
+            "1234567890123",
+            "vertex_ai",
+            {"role": "user"},
+            {"base_model": "vertex_ai/claude-sonnet-4-5", "model_info": {"base_model": "vertex_ai/gemini-3.8-flash"}},
+            [_HELLO],
+            id="vertex_ai_endpoint_base_model_param_wins_over_model_info",
+        ),
+        pytest.param(
+            "1234567890",
+            "vertex_ai",
+            {"role": "user"},
+            {"api_base": "http://10.96.32.8"},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="vertex_ai_private_service_connect_endpoint",
+        ),
+        pytest.param(
+            "claude-sonnet-4-5", "vertex_ai", {"role": "user"}, {}, [_HELLO], id="vertex_ai_claude_accepts_it_as_before"
+        ),
+        pytest.param(
+            "command-a-03-2025", "cohere", {"role": "user"}, {}, [_HELLO], id="cohere_accepts_a_model_turn_end"
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "user"},
+            {"ensure_alternating_roles": True},
+            [_HELLO, _EMPTY_USER_TURN],
+            id="gemini_with_ensure_alternating_roles",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "user", "content": "Go on"},
+            {},
+            [_HELLO, {"role": "user", "content": "Go on"}],
+            id="gemini_with_user_text",
+        ),
+        pytest.param(
+            "gemini/gemini-3.8-flash",
+            None,
+            {"role": "assistant", "content": "Sure,"},
+            {},
+            [_HELLO, {"role": "assistant", "content": "Sure,"}],
+            id="gemini_with_assistant_prefill",
+        ),
+        pytest.param("an-unmapped-model", None, {"role": "user"}, {}, [_HELLO], id="unresolvable_provider"),
+    ],
+)
+def test_a_dropped_trailing_user_item_becomes_an_empty_user_turn_only_for_a_gemini_target(
+    model: str,
+    custom_llm_provider: str | None,
+    last_item: dict[str, object],
+    extra_kwargs: dict[str, object],
+    expected_tail: list[dict[str, object]],
+) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model=model,
+        input=[{"role": "user", "content": "Hi"}, _HELLO, last_item],
+        responses_api_request={},
+        custom_llm_provider=custom_llm_provider,
+        **extra_kwargs,
+    )
+
+    assert [
+        {key: message_field(message, key) for key in ("role", "content")} for message in result["messages"][1:]
+    ] == expected_tail
+
+
+@pytest.mark.parametrize(
+    ("input_items", "expected_roles"),
+    [
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "42"},
+                {"role": "user"},
+            ],
+            ["user", "assistant", "tool"],
+            id="after_a_tool_result",
+        ),
+        pytest.param([{"role": "user", "content": "Hi"}, {"role": "user"}], ["user"], id="after_a_user_message"),
+    ],
+)
+def test_a_dropped_empty_user_item_gets_no_empty_user_turn_for_gemini_when_a_user_side_turn_ends_the_request(
+    input_items: list[dict[str, object]], expected_roles: list[str]
+) -> None:
+    result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/gemini-3.8-flash",
+        input=input_items,
+        responses_api_request={},
+        custom_llm_provider=None,
+    )
+
+    assert [message_field(message, "role") for message in result["messages"]] == expected_roles
+
+
+@pytest.mark.parametrize("empty_item", [{"role": "user", "content": None}, {"role": "user"}], ids=["null", "missing"])
+def test_an_empty_user_item_after_a_previous_response_reaches_gemini_as_an_empty_user_turn(
+    empty_item: dict[str, object],
+) -> None:
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        return ChatCompletionSession(
+            messages=[{"role": "user", "content": "Hi"}, Message(role="assistant", content="Hello!")],
+            litellm_session_id=None,
+        )
+
+    bridged: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+        model="gemini/gemini-3.8-flash",
+        input=[empty_item],
+        responses_api_request={"previous_response_id": "resp_earlier"},
+        custom_llm_provider=None,
+    )
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_earlier",
+            litellm_completion_request=bridged,
+            instructions=None,
+            session_lookup=session_lookup,
+        )
+    )
+
+    assert [(message_field(message, "role"), message_field(message, "content")) for message in request["messages"]] == [
+        ("user", "Hi"),
+        ("assistant", "Hello!"),
+        ("user", ""),
+    ]
+
+
+_DEEPWIKI_MCP_TOOL: Final = MappingProxyType(
+    {
+        "type": "mcp",
+        "server_label": "deepwiki",
+        "server_url": "https://mcp.deepwiki.com/mcp",
+        "require_approval": "never",
+    }
+)
+
+
+def _function_tool(name: str) -> dict[str, object]:
+    return {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+@pytest.mark.parametrize("function_names", [("get_weather",), ("get_weather", "deepwiki")])
+def test_a_responses_mcp_tool_choice_under_drop_params_is_dropped_and_forces_no_function(
+    monkeypatch: pytest.MonkeyPatch, function_names: tuple[str, ...]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*").respond(
+        json={
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "Sunny."}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 2, "totalTokenCount": 11},
+        }
+    )
+
+    litellm.responses(
+        model="gemini/gemini-3.8-flash",
+        input="Weather in Paris?",
+        tools=[dict(_DEEPWIKI_MCP_TOOL), *map(_function_tool, function_names)],
+        tool_choice={"type": "mcp", "server_label": "deepwiki"},
+        drop_params=True,
+        api_key="gemini-test-key",
+    )
+
+    sent: Final = json.loads(gemini.calls.last.request.content)
+    assert "toolConfig" not in sent
+    assert [declaration["name"] for declaration in sent["tools"][0]["function_declarations"]] == list(function_names)
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+def test_a_responses_mcp_tool_choice_naming_a_server_the_request_did_not_send_stays_a_400_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*")
+
+    with pytest.raises(litellm.BadRequestError, match=r"tool_choice type 'mcp'") as exc:
+        litellm.responses(
+            model="gemini/gemini-3.8-flash",
+            input="Weather in Paris?",
+            tools=[dict(_DEEPWIKI_MCP_TOOL), _function_tool("get_weather")],
+            tool_choice={"type": "mcp", "server_label": "unsent"},
+            drop_params=True,
+            api_key="gemini-test-key",
+        )
+
+    assert "This request sends no hosted MCP tool with server_label `unsent`." in exc.value.message
+    assert not gemini.called
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+def test_a_responses_function_tool_choice_under_drop_params_still_forces_the_function(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    gemini: Final = respx.post(url__regex=r"https://generativelanguage\.googleapis\.com/.*:generateContent.*").respond(
+        json={
+            "candidates": [{"content": {"role": "model", "parts": [{"text": "Sunny."}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 2, "totalTokenCount": 11},
+        }
+    )
+
+    litellm.responses(
+        model="gemini/gemini-3.8-flash",
+        input="Weather in Paris?",
+        tools=[dict(_DEEPWIKI_MCP_TOOL), _function_tool("get_weather")],
+        tool_choice={"type": "function", "name": "get_weather"},
+        drop_params=True,
+        api_key="gemini-test-key",
+    )
+
+    sent: Final = json.loads(gemini.calls.last.request.content)
+    assert sent["toolConfig"]["functionCallingConfig"]["allowed_function_names"] == ["get_weather"]
+
+
+@pytest.mark.usefixtures(httpx_transport.__name__)
+@respx.mock
+def test_a_responses_mcp_tool_choice_without_drop_params_is_a_400_on_a_route_that_runs_the_mcp_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    anthropic: Final = respx.post("https://api.anthropic.com/v1/messages").respond(
+        json={
+            "id": "msg_weather",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "Sunny."}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 9, "output_tokens": 2},
+        }
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        litellm.responses(
+            model="anthropic/claude-haiku-5-5",
+            input="What does the deepwiki MCP server say about litellm?",
+            tools=[dict(_DEEPWIKI_MCP_TOOL)],
+            tool_choice={"type": "mcp", "server_label": "deepwiki"},
+            api_key="anthropic-test-key",
+        )
+
+    assert raised.value.status_code == 400
+    assert not anthropic.called
