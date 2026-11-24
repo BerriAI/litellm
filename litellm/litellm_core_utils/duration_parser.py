@@ -21,6 +21,31 @@ _BUDGET_DURATION_WORD_ALIASES: Final[dict[str, str]] = {
     "monthly": "30d",
 }
 
+_SPELLED_DURATION_UNIT_MAP: Final[dict[str, str]] = {
+    "s": "s",
+    "sec": "s",
+    "second": "s",
+    "seconds": "s",
+    "m": "m",
+    "min": "m",
+    "minute": "m",
+    "minutes": "m",
+    "h": "h",
+    "hr": "h",
+    "hour": "h",
+    "hours": "h",
+    "d": "d",
+    "day": "d",
+    "days": "d",
+    "w": "w",
+    "wk": "w",
+    "week": "w",
+    "weeks": "w",
+    "mo": "mo",
+    "month": "mo",
+    "months": "mo",
+}
+
 
 def normalize_duration(duration: str) -> str:
     return _BUDGET_DURATION_WORD_ALIASES.get(duration.strip().lower(), duration)
@@ -28,14 +53,20 @@ def normalize_duration(duration: str) -> str:
 
 def _extract_from_regex(duration: str) -> tuple[int, str]:
     match: Final = re.match(r"^(\d+)(mo|[smhdw]?)$", duration)
+    if match:
+        value, unit = match.groups()
+        return int(value), unit
 
-    if not match:
-        raise ValueError("Invalid duration format")
+    # Support explicit spelled unit words (e.g. '7days', '12months', '24hours')
+    # normalized to canonical units, while rejecting non-duration words (e.g. '5dogs', '10cats').
+    spelled_match: Final = re.match(r"^(\d+)([a-z]+)$", duration)
+    if spelled_match:
+        val_str, unit_str = spelled_match.groups()
+        canonical_unit = _SPELLED_DURATION_UNIT_MAP.get(unit_str)
+        if canonical_unit is not None:
+            return int(val_str), canonical_unit
 
-    value, unit = match.groups()
-    value = int(value)
-
-    return value, unit
+    raise ValueError(f"Invalid duration format: {duration}")
 
 
 def get_last_day_of_month(year: int, month: int) -> int:
@@ -298,9 +329,10 @@ def _parse_duration(duration: str) -> tuple[int | None, str | None]:
     value: Final = int(match.group(1))
     spelled_unit: Final = match.group(2)
     try:
-        extracted_unit: Final = _extract_from_regex(duration)[1]
+        extracted_value, extracted_unit = _extract_from_regex(duration)
     except ValueError:
-        extracted_unit = None
+        return None, None
+
     unit: Final = extracted_unit or spelled_unit
     if unit == "mo" and spelled_unit != "mo" and value not in (1, 12):
         return value, spelled_unit

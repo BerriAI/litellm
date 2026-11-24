@@ -10940,6 +10940,23 @@ def test_extract_from_regex_invalid(invalid_duration):
         _extract_from_regex(duration=invalid_duration)
 
 
+@pytest.mark.parametrize(
+    "duration,expected_val,expected_unit",
+    [
+        ("7days", 7, "d"),
+        ("12months", 12, "mo"),
+        ("24hours", 24, "h"),
+        ("60minutes", 60, "m"),
+        ("30seconds", 30, "s"),
+        ("2weeks", 2, "w"),
+    ],
+)
+def test_extract_from_regex_spelled(duration, expected_val, expected_unit):
+    val, unit = _extract_from_regex(duration=duration)
+    assert val == expected_val
+    assert unit == expected_unit
+
+
 def test_duration_in_seconds_basic():
     assert duration_in_seconds(duration="3s") == 3
     assert duration_in_seconds(duration="3m") == 180
