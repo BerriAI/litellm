@@ -14159,12 +14159,6 @@ def test_claude_call_bills_the_deployment_input_rate_and_catalog_output_rate() -
                 "input_cost_per_token": 0.01,
                 "output_cost_per_token": 0.02,
             },
-            deployment: {
-                "litellm_provider": "deepseek",
-                "mode": "chat",
-                "base_model": model,
-                "input_cost_per_token": 0.003,
-            },
         }
     )
     logging_obj: Final = Logging(
@@ -14176,14 +14170,37 @@ def test_claude_call_bills_the_deployment_input_rate_and_catalog_output_rate() -
         litellm_call_id="deployment-pricing",
         function_id="deployment-pricing",
     )
-    cost: Final = completion_cost(
-        completion_response=ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=2)),
-        model=model,
-        custom_llm_provider="anthropic",
-        router_model_id=deployment,
-        litellm_logging_obj=logging_obj,
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "priced-claude",
+                "litellm_params": {"model": model, "api_key": "test-key"},
+                "model_info": {
+                    "id": deployment,
+                    "litellm_provider": "deepseek",
+                    "base_model": model,
+                    "input_cost_per_token": 0.003,
+                },
+            }
+        ]
     )
+    try:
+        cost: Final = completion_cost(
+            completion_response=ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=2)),
+            model=model,
+            custom_llm_provider="anthropic",
+            router_model_id=deployment,
+            litellm_logging_obj=logging_obj,
+        )
+        catalog_cost: Final = completion_cost(
+            completion_response=ModelResponse(model=model, usage=Usage(prompt_tokens=10, completion_tokens=2)),
+            model=model,
+            custom_llm_provider="anthropic",
+        )
+    finally:
+        router.retire()
 
+    assert catalog_cost == pytest.approx(10 * 0.01 + 2 * 0.02)
     assert cost == pytest.approx(10 * 0.003 + 2 * 0.02)
     assert logging_obj.cost_breakdown is not None
     assert logging_obj.cost_breakdown["input_cost"] == pytest.approx(10 * 0.003)

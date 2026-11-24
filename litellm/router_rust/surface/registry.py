@@ -532,6 +532,17 @@ def _catalog_backend_keys(
     )
 
 
+def _shared_backend_registration(
+    key: str, model_info: Mapping[str, object], catalog: Mapping[str, Mapping[str, object]]
+) -> Mapping[str, object]:
+    shared: Final = keep_registered_mode(key, model_info)
+    if "litellm_provider" not in shared:
+        return shared
+    catalog_entry: Final = catalog.get(key) or catalog.get(model_cost_registration_key(key)) or {}
+    provider: Final = catalog_entry.get("litellm_provider")
+    return {**shared, "litellm_provider": provider} if isinstance(provider, str) else shared
+
+
 def register_deployment_in_model_cost(
     host: "PythonHost",
     *,
@@ -564,13 +575,14 @@ def register_deployment_in_model_cost(
             add_to_provider_model_sets=False,
         )
     backend_keys: Final = _backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider)
+    catalog: Final = catalog_with_runtime_registrations()
     shared_model_info: Final = _shared_backend_model_info_for_keys(
-        catalog=catalog_with_runtime_registrations(),
+        catalog=catalog,
         backend_keys=_catalog_backend_keys(model, custom_llm_provider, backend_keys),
         shared_model_info=shared_backend_model_info(registered),
     )
     register_model(
-        model_cost={key: keep_registered_mode(key, shared_model_info) for key in backend_keys},
+        model_cost={key: _shared_backend_registration(key, shared_model_info, catalog) for key in backend_keys},
         persist_across_reloads=False,
     )
 
