@@ -138,15 +138,15 @@ class BedrockClaudePlatformMixin(BaseAWSLLM):
 
     def sign_request(
         self,
-        headers: dict,
-        optional_params: dict,
-        request_data: dict,
+        headers: dict[str, object],
+        optional_params: dict[str, object],
+        request_data: dict[str, object],
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
         stream: bool | None = None,
         fake_stream: bool | None = None,
-    ) -> tuple[dict, bytes | None]:
+    ) -> tuple[dict[str, object], bytes | None]:
         if api_key or get_secret_str("ANTHROPIC_AWS_API_KEY"):
             return headers, None
 
