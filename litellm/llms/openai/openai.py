@@ -2,7 +2,7 @@ import inspect
 import json
 import time
 import types
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Coroutine, Iterable, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
 import httpx
@@ -288,6 +288,8 @@ class OpenAIConfig(BaseConfig):
         drop_params: bool,
         *,
         reasoning_drop_logger: WarningLogger = verbose_logger,
+        declared_reasoning_efforts: Collection[str] | None = None,
+        allowed_openai_params: Collection[str] = (),
     ) -> dict:
         """ """
         if openaiOSeriesConfig.is_model_o_series_model(model=model):
@@ -296,6 +298,9 @@ class OpenAIConfig(BaseConfig):
                 optional_params=optional_params,
                 model=model,
                 drop_params=drop_params,
+                declared_reasoning_efforts=declared_reasoning_efforts,
+                allowed_openai_params=allowed_openai_params,
+                reasoning_drop_logger=reasoning_drop_logger,
             )
         elif self._routes_to_gpt_5_config(model):
             return openAIGPT5Config.map_openai_params(
