@@ -796,7 +796,10 @@ def should_route_to_interactions_api(
         return True
     return (
         _is_gemini_4_or_newer(model)
-        and requested_safety_settings(str_keyed_mapping(optional_params), llm_map) is None
+        and interactions_safety_settings(
+            requested_safety_settings(str_keyed_mapping(optional_params), llm_map), custom_llm_provider
+        )
+        is not None
         and not asks_for_penalty
         and service_tier is None
         and not _names_a_file_search_store(tools)

@@ -6897,9 +6897,7 @@ def _bridged_turns(
         ("azure_ai/claude-opus-5-5", "azure_ai"),
     ),
 )
-@pytest.mark.parametrize(
-    "empty_user_item", (_NULL_USER_ITEM, {"role": "user"}), ids=("null_content", "no_content_key")
-)
+@pytest.mark.parametrize("empty_user_item", (_NULL_USER_ITEM, {"role": "user"}), ids=("null_content", "no_content_key"))
 def test_a_final_user_input_item_without_content_stays_an_empty_user_turn(
     model: str, provider: str, empty_user_item: dict[str, object]
 ) -> None:
@@ -6918,7 +6916,9 @@ def test_a_final_user_input_item_without_content_stays_an_empty_user_turn(
 
 _ARN_DEPLOYMENT: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc"
 _ROUTED_BASE_MODEL_CASES: Final = (
-    pytest.param({"model_info": {"base_model": "anthropic.claude-opus-5-5"}}, [("user", "")], id="model_info_base_model"),
+    pytest.param(
+        {"model_info": {"base_model": "anthropic.claude-opus-5-5"}}, [("user", "")], id="model_info_base_model"
+    ),
     pytest.param({"model_info": {}}, [], id="no_base_model"),
     pytest.param(
         {"base_model": "", "model_info": {"base_model": "anthropic.claude-opus-5-5"}},
@@ -7068,9 +7068,7 @@ def test_a_final_user_input_item_without_content_keeps_its_cache_mark_on_the_emp
 
 @pytest.mark.parametrize("instructions", (None, "Be brief."), ids=("no_instructions", "instructions"))
 @pytest.mark.parametrize("object_input", (False, True), ids=("list", "object"))
-@pytest.mark.parametrize(
-    "empty_user_item", (_NULL_USER_ITEM, {"role": "user"}), ids=("null_content", "no_content_key")
-)
+@pytest.mark.parametrize("empty_user_item", (_NULL_USER_ITEM, {"role": "user"}), ids=("null_content", "no_content_key"))
 def test_a_lone_user_item_without_content_on_a_follow_up_ends_the_stored_history_on_an_empty_user_turn(
     instructions: str | None, empty_user_item: dict[str, object], object_input: bool
 ) -> None:
@@ -7101,7 +7099,9 @@ def test_a_lone_user_item_without_content_on_a_follow_up_ends_the_stored_history
         )
     )
 
-    assert [(message["role"], message.get("content")) for message in request["messages"] if message["role"] != "system"] == [
+    assert [
+        (message["role"], message.get("content")) for message in request["messages"] if message["role"] != "system"
+    ] == [
         ("user", "What is 2+2?"),
         ("assistant", "Four."),
         ("user", ""),
@@ -7109,7 +7109,9 @@ def test_a_lone_user_item_without_content_on_a_follow_up_ends_the_stored_history
 
 
 @pytest.mark.parametrize("object_input", (False, True), ids=("list", "object"))
-def test_a_lone_user_item_without_content_on_a_follow_up_with_no_stored_turns_is_still_refused(object_input: bool) -> None:
+def test_a_lone_user_item_without_content_on_a_follow_up_with_no_stored_turns_is_still_refused(
+    object_input: bool,
+) -> None:
     async def no_stored_turns(previous_response_id: str) -> ChatCompletionSession:
         return ChatCompletionSession(messages=[], litellm_session_id=None)
 
@@ -7655,9 +7657,7 @@ def _follow_up_ending_on_a_marked_empty_item(
         current_items[0] if current_items else None,
         model="us.anthropic.claude-opus-5-5",
         tools=(_MARKED_LOOKUP_TOOL,) * marked_tools,
-        request_input=cast(
-            ResponseInputParam, [*current_items, {**_NULL_USER_ITEM, "cache_control": _EPHEMERAL}]
-        ),
+        request_input=cast(ResponseInputParam, [*current_items, {**_NULL_USER_ITEM, "cache_control": _EPHEMERAL}]),
         drop_params=True,
         cache_control=_EPHEMERAL,
     )

@@ -144,7 +144,9 @@ def test_bridged_turn_names_no_responses_field_the_caller_did_not_send(
     "responses_api_request, upstream_param, relayed_param",
     [
         pytest.param({"instructions": "Answer in one word"}, "messages.[0].content", "instructions", id="instructions"),
-        pytest.param({"instructions": "Answer in one word"}, "messages.[1].role", "input", id="input_after_instructions"),
+        pytest.param(
+            {"instructions": "Answer in one word"}, "messages.[1].role", "input", id="input_after_instructions"
+        ),
         pytest.param({"previous_response_id": "resp_stored"}, "messages.[1].role", None, id="stored_turns_first"),
     ],
 )
@@ -609,7 +611,9 @@ async def test_bridged_turn_logs_the_full_name_of_a_namespace_member_sent_under_
 
     with (
         patch("litellm.completion", fake_completion),  # test-quality-ok: no DI seam; the file stubs this same boundary
-        patch("litellm.acompletion", fake_acompletion),  # test-quality-ok: no DI seam; the file stubs this same boundary
+        patch(
+            "litellm.acompletion", fake_acompletion
+        ),  # test-quality-ok: no DI seam; the file stubs this same boundary
         pytest.raises(_StopForwarding),
     ):
         await forward()
@@ -705,7 +709,9 @@ def test_per_chunk_hooks_of_a_sync_bridged_stream_see_the_full_name_of_a_namespa
         tools=[namespace],
         stream=True,
         api_key="sk-ant-fake",
-        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_anthropic_streams_a_call_to_the_first_tool))),
+        client=HTTPHandler(
+            client=httpx.Client(transport=httpx.MockTransport(_anthropic_streams_a_call_to_the_first_tool))
+        ),
     )
     events: Final = tuple(stream)
 
@@ -854,9 +860,7 @@ async def test_a_compaction_trigger_after_a_stored_turn_asks_for_the_summary_aft
         )
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
-    assert [
-        (message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]
-    ] == [
+    assert [(message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]] == [
         ("user", json.dumps([{"type": "text", "text": "My favorite number is 7."}])),
         ("assistant", json.dumps([{"type": "text", "text": "Noted."}])),
         ("user", json.dumps([{"type": "text", "text": SUMMARY_PROMPT}])),

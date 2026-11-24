@@ -84,7 +84,6 @@ async def test_responses_api_rate_limit_marks_deployment_for_cooldown():
     )
 
 
-
 @pytest.mark.asyncio
 async def test_openrouter_responses_connection_failure_cools_down_the_deployment(
     monkeypatch: pytest.MonkeyPatch,
