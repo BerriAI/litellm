@@ -76,6 +76,7 @@ from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
+    GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
     INTERNAL_CALLBACK_NAMES,
     LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
@@ -858,6 +859,9 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     set_files_config,
 )
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_agents_turn_billing import (
+    openai_agents_turn_biller,
+)
 from litellm.proxy.pass_through_endpoints.openai_passthrough_endpoints import (
     router as openai_passthrough_router,
 )
@@ -1243,6 +1247,19 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
         )
     except Exception as e:  # noqa: BLE001  # shutdown must continue even if the drain fails
         verbose_proxy_logger.exception("Error flushing spend logs queue on shutdown: %s", e)
+
+
+async def _flush_spend_around_agents_rows_drain_on_shutdown(
+    flush_spend: Callable[[], Awaitable[None]] = flush_spend_counters_on_shutdown,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+    drain_deferred_rows: Callable[[float], Awaitable[None]] = openai_agents_turn_biller.drain,
+) -> None:
+    await flush_spend()
+    remaining: Final = GracefulShutdownManager.remaining(clock=clock)
+    await drain_deferred_rows(max(0.0, remaining - GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS))
+    await drain_deferred_rows(GracefulShutdownManager.remaining(5.0, clock=clock))
+    await flush_spend()
 
 
 async def _drain_audit_tasks_on_shutdown() -> None:
@@ -1778,6 +1795,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         try:
             async with AsyncExitStack() as admin_mcp_stack:
                 try:
+                    admin_mcp_stack.enter_context(GracefulShutdownManager.capture_sigterm())
                     await admin_mcp_stack.enter_async_context(admin_mcp_lifespan(app))
                     yield state
                 finally:
@@ -1840,7 +1858,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
                 except Exception as e:
                     verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
-            await flush_spend_counters_on_shutdown()
+            await _flush_spend_around_agents_rows_drain_on_shutdown()
 
             await _flush_spend_logs_queue_on_shutdown()
 
