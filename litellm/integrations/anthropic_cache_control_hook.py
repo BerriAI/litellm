@@ -145,6 +145,12 @@ def _validated_object_list(value: object) -> list[object] | None:
         return None
 
 
+def _message_dict(message: AllMessageValues | BaseModel) -> AllMessageValues:
+    if isinstance(message, BaseModel):
+        return cast(AllMessageValues, message.model_dump())  # cast-ok: SDK messages dump to chat message fields
+    return message
+
+
 _MessageT = TypeVar("_MessageT")
 _CacheControlRewrite: TypeAlias = Callable[[object], ChatCompletionCachedContent | None]
 _MARK_CARRYING_MESSAGE_FIELDS: Final = ("content", "tool_calls")
@@ -856,6 +862,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not injection_points:
             return model, messages, non_default_params
 
+        message_dicts: Final = [_message_dict(message) for message in messages]
         message_points: Final = tuple(
             cast(CacheControlMessageInjectionPoint, point)
             for point in injection_points
@@ -879,9 +886,9 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             )
         )
         processed_messages = copy.deepcopy(
-            [without_prompt_cache_breakpoints(message) for message in messages]
+            [without_prompt_cache_breakpoints(message) for message in message_dicts]
             if not openai_dialect and message_points and _translates_prompt_cache_breakpoint(model, custom_llm_provider)
-            else messages
+            else message_dicts
         )
         # A provisional message list defers every role-targeted point to the pass holding
         # the final one: a role with no message here may have one there, and settling all
