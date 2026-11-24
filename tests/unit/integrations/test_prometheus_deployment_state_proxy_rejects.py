@@ -148,6 +148,8 @@ def test_image_prompt_answered_without_an_image_leaves_deployment_healthy(refusa
 
     logger.set_llm_deployment_failure_metrics(_attributed_failure_kwargs(refusal, rejected_before_routing=False))
 
-    assert logger.litellm_deployment_state._metrics == {}
+    assert {
+        sample.labels["model_id"]: sample.value for sample in logger.litellm_deployment_state.collect()[0].samples
+    } == {"dep-1": 0.0}
     assert logger.litellm_deployment_failure_responses._metrics == {}
     assert _model_id_values(logger.litellm_deployment_total_requests) == {"dep-1"}
