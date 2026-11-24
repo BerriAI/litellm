@@ -1227,7 +1227,7 @@ class AmazonConverseConfig(BaseConfig):
         )
 
     @staticmethod
-    def _add_additional_properties_to_schema(schema: dict) -> dict:
+    def _add_additional_properties_to_schema(schema: dict[str, object]) -> dict[str, object]:
         """
         Recursively ensure all object types in a JSON schema have
         ``"additionalProperties": false``.
@@ -1353,11 +1353,11 @@ class AmazonConverseConfig(BaseConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
         model_info: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         request_params: Final = tool_params_without_hosted_mcp(
             non_default_params,
             model=model,
@@ -1712,7 +1712,9 @@ class AmazonConverseConfig(BaseConfig):
             deployment_model_info(litellm_params),
         )
 
-    def update_optional_params_with_thinking_tokens(self, non_default_params: dict, optional_params: dict):
+    def update_optional_params_with_thinking_tokens(
+        self, non_default_params: dict[str, object], optional_params: dict[str, object]
+    ):
         """
         Handles scenario where max tokens is not specified. For anthropic models (anthropic api/bedrock/vertex ai), this requires having the max tokens being set and being greater than the thinking token budget.
 
@@ -2304,7 +2306,7 @@ class AmazonConverseConfig(BaseConfig):
 
     def _process_tools_and_beta(
         self,
-        original_tools: list,
+        original_tools: list[OpenAIChatCompletionToolParam],
         model: str,
         headers: dict[str, object] | None,
         additional_request_params: dict[str, object],
@@ -2778,9 +2780,9 @@ class AmazonConverseConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         return cast(
             dict,
@@ -3362,8 +3364,8 @@ class AmazonConverseConfig(BaseConfig):
         logging_obj: Logging | None,
         optional_params: dict,
         api_key: str | None,
-        data: dict | str,
-        messages: list,
+        data: Mapping[str, object] | str,
+        messages: Sequence[object],
         encoding: object,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -3533,7 +3535,9 @@ class AmazonConverseConfig(BaseConfig):
 
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return BedrockError(
             message=error_message,
             status_code=status_code,

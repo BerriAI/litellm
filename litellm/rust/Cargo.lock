@@ -4164,6 +4164,7 @@ dependencies = [
  "litellm-tracing",
  "litellm-yaml",
  "parking_lot",
+ "rand 0.8.7",
  "rstest",
  "rustls 0.23.42",
  "serde",
@@ -4977,6 +4978,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "jiff",
+ "litellm-core-utils",
  "litellm-db",
  "litellm-error",
  "litellm-python-compat",
