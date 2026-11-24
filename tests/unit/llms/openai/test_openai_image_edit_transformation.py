@@ -358,7 +358,7 @@ def test_transform_image_edit_request_with_markup(
         model="gpt-image-2.5-flare",
         prompt="Apply the marked changes",
         image=[image],
-        image_edit_optional_request_params={"markup": [markup]},
+        image_edit_optional_request_params={"markup": markup},
         litellm_params=GenericLiteLLMParams(),
         headers={},
     )

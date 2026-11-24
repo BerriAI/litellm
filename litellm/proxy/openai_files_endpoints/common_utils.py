@@ -38,12 +38,14 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 from litellm.llms.gemini.files.utils import gemini_file_id
+from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_V1_URI_PREFIX
 from litellm.proxy._types import ProxyException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
     ManagedObjectRepository,
 )
+from litellm.router_api import RoutingContext
 from litellm.types.llms.openai import OpenAIFilesPurpose
 from litellm.types.utils import SpecialEnums
 
@@ -490,6 +492,7 @@ def _iter_stored_forms(bare_ids: Sequence[str]) -> Iterator[str]:
         yield bare_id
         yield f"files/{bare_id}"
         yield f"{_GEMINI_FILES_URL}{bare_id}"
+        yield f"{GEMINI_FILES_API_V1_URI_PREFIX}{bare_id}"
 
 
 def provider_file_id_spellings(file_id: str) -> tuple[str, ...]:
@@ -813,16 +816,30 @@ def batch_row_model_for_deployment(deployment_model: str, custom_llm_provider: s
     return get_llm_provider(model=deployment_model, custom_llm_provider=custom_llm_provider)[0]
 
 
-def deployment_drop_params(
+def _deployment_drop_params(llm_router: "Router", model_id: str) -> bool | str | None:
+    deployment: Final = llm_router.registry().credentials(model_id, form="deployment")
+    return deployment.litellm_params.drop_params if deployment is not None else None
+
+
+def _as_drop_params(drop_params: object) -> Mapping[str, bool | str]:
+    return MappingProxyType({"drop_params": drop_params} if isinstance(drop_params, (bool, str)) else {})
+
+
+def router_default_drop_params(
+    llm_router: Optional["Router"], request: Mapping[str, object]
+) -> Mapping[str, bool | str]:
+    if llm_router is None or request.get("drop_params") is not None:
+        return MappingProxyType({})
+    return _as_drop_params(RoutingContext(llm_router).default_litellm_params().get("drop_params"))
+
+
+def configured_drop_params(
     llm_router: Optional["Router"], model_id: str, request: Mapping[str, object]
 ) -> Mapping[str, bool | str]:
-    deployment: Final = (
-        llm_router.registry().credentials(model_id, form="deployment")
-        if llm_router is not None and "drop_params" not in request
-        else None
-    )
-    drop_params: Final = deployment.litellm_params.drop_params if deployment is not None else None
-    return MappingProxyType({}) if drop_params is None else MappingProxyType({"drop_params": drop_params})
+    router_default: Final = router_default_drop_params(llm_router, request)
+    if llm_router is None or request.get("drop_params") is not None or router_default:
+        return router_default
+    return _as_drop_params(_deployment_drop_params(llm_router, model_id))
 
 
 def _key_model_allowlist(llm_router: "Router", user_api_key_dict: "UserAPIKeyAuth") -> tuple[str, ...]:

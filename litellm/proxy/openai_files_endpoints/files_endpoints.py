@@ -94,13 +94,14 @@ from litellm.proxy.openai_files_endpoints.common_utils import (  # noqa: F401  #
     apply_team_provider_credentials,
     authorize_model_for_key,
     batch_row_model_for_deployment,
-    deployment_drop_params,
+    configured_drop_params,
     encode_file_id_with_model,
     extract_file_creation_params,
     get_authorized_credentials_for_model,
     handle_model_based_routing,
     is_base64_encoded_unified_file_id,
     prepare_data_with_credentials,
+    router_default_drop_params,
     validate_file_list_limit,
     validate_managed_files_requirement,
     validate_managed_id_requirement,
@@ -195,7 +196,7 @@ async def _litellm_executed_batch_input_model(
     )
 
 
-_MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final = TypeAdapter(int | None)
+_MAX_BATCH_FILE_SIZE_MB_ADAPTER: Final[TypeAdapter[int | None]] = TypeAdapter(int | None)
 _LISTED_FILES_ADAPTER: Final = TypeAdapter(list[OpenAIFileObject])
 _REQUEST_BODY_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _JSON_VALUE_ADAPTER: Final = TypeAdapter(object)
@@ -503,7 +504,7 @@ async def route_create_file(
         # Merge credentials into the request
         prepare_data_with_credentials(
             data=_create_file_request,
-            credentials={**credentials, **deployment_drop_params(llm_router, model, _create_file_request)},
+            credentials={**credentials, **configured_drop_params(llm_router, model, _create_file_request)},
             keep_request_buckets=True,
         )
 
@@ -596,7 +597,10 @@ async def route_create_file(
             _create_file_request.update(llm_provider_config)
         _create_file_request.pop("custom_llm_provider", None)
         # for now use custom_llm_provider=="openai" -> this will change as LiteLLM adds more providers for acreate_batch
-        response = await litellm.acreate_file(**_create_file_request, custom_llm_provider=custom_llm_provider)
+        provider_upload_request: Final = cast(  # cast-ok: files_settings and router defaults add undeclared keys
+            CreateFileRequest, {**_create_file_request, **router_default_drop_params(llm_router, _create_file_request)}
+        )
+        response = await litellm.acreate_file(**provider_upload_request, custom_llm_provider=custom_llm_provider)
 
     return response
 

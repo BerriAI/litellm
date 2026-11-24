@@ -172,11 +172,11 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: BaseSearchConfig hands providers the mutable request header dict
+        headers: dict[str, str],  # mutable-ok: BaseSearchConfig hands providers the mutable request header dict
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.validate_environment forwards provider-specific extras
-    ) -> dict:  # mutable-ok: the handler passes these headers straight to httpx, which wants a dict
+    ) -> dict[str, object]:  # mutable-ok: the handler passes these headers straight to httpx, which wants a dict
         """
         Set MCP transport headers. Per the MCP Streamable HTTP transport spec,
         the client MUST accept both application/json and text/event-stream, and
@@ -196,7 +196,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,  # mutable-ok: BaseSearchConfig passes optional params as a dict
+        optional_params: dict[str, object],  # mutable-ok: BaseSearchConfig passes optional params as a dict
         data: dict | list[dict] | None = None,  # mutable-ok: BaseSearchConfig request bodies are JSON dicts
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.get_complete_url forwards provider-specific extras
     ) -> str:
@@ -214,7 +214,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         query: str | list[str],  # mutable-ok: BaseSearchConfig accepts a list of queries
         optional_params: dict,  # mutable-ok: BaseSearchConfig passes optional params as a dict
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.transform_search_request forwards provider-specific extras
-    ) -> dict:  # mutable-ok: the JSON-RPC body is serialized as a JSON object
+    ) -> dict[str, object]:  # mutable-ok: the JSON-RPC body is serialized as a JSON object
         """
         Transform Search request to an MCP tools/call request.
 
@@ -455,7 +455,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         self,
         error_message: str,
         status_code: int,
-        headers: dict,  # mutable-ok: BaseSearchConfig.get_error_class takes the response headers as a dict
+        headers: dict[str, object],  # mutable-ok: BaseSearchConfig.get_error_class takes the response headers as a dict
     ) -> Exception:
         return BedrockError(
             status_code=status_code,

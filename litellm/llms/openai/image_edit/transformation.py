@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 from io import BufferedReader
-from typing import TYPE_CHECKING, Any, Final, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 from httpx._types import RequestFiles
@@ -13,10 +14,7 @@ from litellm.litellm_core_utils.core_helpers import keyword_arguments
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.images.main import (
-    ImageEditOptionalRequestParams,
-    ImageEditRequestParams,
-)
+from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.llms.openai import FileTypes
 from litellm.types.router import GenericLiteLLMParams
 from litellm.utils import ImageResponse
@@ -39,8 +37,8 @@ class _ImageResponseFields(TypedDict, total=False, extra_items=object):
     pass
 
 
-def _upload_file_name(image: object) -> object:
-    return image.name if isinstance(image, BufferedReader) else "image.png"
+def _upload_file_name(upload: object, default_name: str) -> object:
+    return upload.name if isinstance(upload, BufferedReader) else default_name
 
 
 class OpenAIImageEditConfig(BaseImageEditConfig):
@@ -77,7 +75,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """No mapping applied since inputs are in OpenAI spec already"""
         return dict(image_edit_optional_params)
 
@@ -86,10 +84,11 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         files_list: list[tuple[str, object]],
         image: object,
         field_name: str,
+        default_name: str = "image.png",
     ) -> None:
         """Add an image to the files list with appropriate content type"""
         image_content_type: Final = ImageEditRequestUtils.get_image_content_type(image)
-        files_list.append((field_name, (_upload_file_name(image), image, image_content_type)))
+        files_list.append((field_name, (_upload_file_name(image, default_name), image, image_content_type)))
 
     def transform_image_edit_request(
         self,
@@ -99,7 +98,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+    ) -> tuple[dict[str, object], RequestFiles]:
         """
         Transform image edit request to OpenAI API format.
 
@@ -107,24 +106,21 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         to support multiple images (e.g., for gpt-image-1).
         """
         # Build request params, only including non-None values
-        request_params: Final = {
-            **({"model": model} if model else {}),
-            **image_edit_optional_request_params,
-        }
-        if image is not None:
-            request_params["image"] = image
-        if prompt is not None:
-            request_params["prompt"] = prompt
-
-        request: Final = ImageEditRequestParams(**request_params)
-        request_dict: Final = cast(dict, request)
+        request_dict: Final = MappingProxyType[str, object](
+            {
+                **({"model": model} if model else {}),
+                **image_edit_optional_request_params,
+                **({"image": image} if image is not None else {}),
+                **({"prompt": prompt} if prompt is not None else {}),
+            }
+        )
 
         #########################################################
         # Separate images, masks, and markup as `files` and send other parameters as `data`
         #########################################################
         _image_list: Final = request_dict.get("image")
         _mask = request_dict.get("mask")
-        _markup = request_dict.get("markup")
+        markup: Final = request_dict.get("markup")
         data_without_files: Final = {k: v for k, v in request_dict.items() if k not in ["image", "mask", "markup"]}
         files_list: Final[list[tuple[str, Any]]] = []
 
@@ -152,21 +148,13 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
                 else:
                     files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
 
-        # Handle markup parameter if provided
-        if _markup is not None:
-            if isinstance(_markup, list):
-                _markup = _markup[0] if _markup else None
-
-            if _markup is not None:
-                markup_content_type: Final[str] = ImageEditRequestUtils.get_image_content_type(_markup)
-                if isinstance(_markup, BufferedReader):
-                    files_list.append(("markup", (_markup.name, _markup, markup_content_type)))
-                else:
-                    markup_name: Final = getattr(_markup, "name", None)
-                    filename: Final = (
-                        markup_name if isinstance(markup_name, str) and markup_name else "markup.png"
-                    )
-                    files_list.append(("markup", (filename, _markup, markup_content_type)))
+        if markup is not None:
+            self._add_image_to_files(
+                files_list=files_list,
+                image=markup,
+                field_name="markup",
+                default_name="markup.png",
+            )
 
         return data_without_files, files_list
 

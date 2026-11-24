@@ -110,7 +110,7 @@ class ClusterConnectionGate:
 
 
 class RedisClusterCache(RedisCache):
-    def __init__(self, *args, max_connections: object = None, connection_gate: object = None, **kwargs):
+    def __init__(self, *args, max_connections: object = None, connection_gate: object = None, **kwargs) -> None:
         pool_kwargs: Final = {} if max_connections is None else {"max_connections": max_connections}
         super().__init__(*args, **pool_kwargs, **kwargs)
         self._connection_gate: Final = (
@@ -139,7 +139,7 @@ class RedisClusterCache(RedisCache):
         async_redis_cluster_client: Final = self.init_async_client()
         return await async_redis_cluster_client.mget_nonatomic(keys=keys)
 
-    async def test_connection(self) -> dict:
+    async def test_connection(self) -> dict[str, str]:
         """
         Test the Redis Cluster connection.
 

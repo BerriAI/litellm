@@ -7,11 +7,12 @@ while leaving the policies and the discovering caller's fields alone. Same shape
 """
 
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
+from litellm.constants import POSTGRES_MAX_BIND_PARAMETERS
 from litellm.proxy._types import ToolDiscoveryQueueItem
 
 SqlValue: TypeAlias = str | int | None
@@ -29,6 +30,12 @@ _TOOL_ROW_COLUMNS: Final[tuple[str, ...]] = (
     "user_agent",
 )
 _CASTS: Final[Mapping[str, str]] = MappingProxyType({"call_count": "integer"})
+_ROWS_PER_UPSERT: Final = POSTGRES_MAX_BIND_PARAMETERS // len(_TOOL_ROW_COLUMNS)
+
+
+def tool_upsert_chunks(items: Sequence[ToolDiscoveryQueueItem]) -> Iterator[Sequence[ToolDiscoveryQueueItem]]:
+    for start in range(0, len(items), _ROWS_PER_UPSERT):
+        yield items[start : start + _ROWS_PER_UPSERT]
 
 
 def _row_params(item: ToolDiscoveryQueueItem) -> tuple[SqlValue, ...]:

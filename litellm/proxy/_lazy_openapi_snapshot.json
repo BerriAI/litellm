@@ -24721,6 +24721,36 @@
               ],
               "title": "Image[]"
             },
+            "markup": {
+              "anyOf": [
+                {
+                  "items": {
+                    "contentMediaType": "application/octet-stream",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Markup"
+            },
+            "markup[]": {
+              "anyOf": [
+                {
+                  "items": {
+                    "contentMediaType": "application/octet-stream",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Markup[]"
+            },
             "mask": {
               "anyOf": [
                 {
@@ -38836,6 +38866,45 @@
           "title": "MCPEnvVarScope",
           "type": "string"
         },
+        "MCPServerEventsConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_events": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Event names or globs this server may publish. Omit for every event; set enabled false for none.",
+              "title": "Allowed Events"
+            },
+            "enabled": {
+              "default": false,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "legacy_webhook_id_equals_event_id": {
+              "default": false,
+              "title": "Legacy Webhook Id Equals Event Id",
+              "type": "boolean"
+            },
+            "min_poll_interval_ms": {
+              "default": 1000,
+              "minimum": 0.0,
+              "title": "Min Poll Interval Ms",
+              "type": "integer"
+            }
+          },
+          "title": "MCPServerEventsConfig",
+          "type": "object"
+        },
         "NewMCPServerRequest": {
           "properties": {
             "alias": {
@@ -39025,6 +39094,16 @@
                 }
               ],
               "title": "Env Vars"
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "extra_headers": {
               "anyOf": [
@@ -40862,6 +40941,16 @@
               ],
               "title": "Env Vars"
             },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "extra_headers": {
               "items": {
                 "type": "string"
@@ -41672,6 +41761,45 @@
           "title": "MCPEnvVarScope",
           "type": "string"
         },
+        "MCPServerEventsConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_events": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Event names or globs this server may publish. Omit for every event; set enabled false for none.",
+              "title": "Allowed Events"
+            },
+            "enabled": {
+              "default": false,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "legacy_webhook_id_equals_event_id": {
+              "default": false,
+              "title": "Legacy Webhook Id Equals Event Id",
+              "type": "boolean"
+            },
+            "min_poll_interval_ms": {
+              "default": 1000,
+              "minimum": 0.0,
+              "title": "Min Poll Interval Ms",
+              "type": "integer"
+            }
+          },
+          "title": "MCPServerEventsConfig",
+          "type": "object"
+        },
         "NewMCPServerRequest": {
           "properties": {
             "alias": {
@@ -41861,6 +41989,16 @@
                 }
               ],
               "title": "Env Vars"
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "extra_headers": {
               "anyOf": [
@@ -44061,6 +44199,16 @@
               ],
               "title": "Env Vars"
             },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "extra_headers": {
               "items": {
                 "type": "string"
@@ -45385,6 +45533,45 @@
           "title": "MCPOAuthUserCredentialStatus",
           "type": "object"
         },
+        "MCPServerEventsConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_events": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Event names or globs this server may publish. Omit for every event; set enabled false for none.",
+              "title": "Allowed Events"
+            },
+            "enabled": {
+              "default": false,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "legacy_webhook_id_equals_event_id": {
+              "default": false,
+              "title": "Legacy Webhook Id Equals Event Id",
+              "type": "boolean"
+            },
+            "min_poll_interval_ms": {
+              "default": 1000,
+              "minimum": 0.0,
+              "title": "Min Poll Interval Ms",
+              "type": "integer"
+            }
+          },
+          "title": "MCPServerEventsConfig",
+          "type": "object"
+        },
         "MCPServerUserCredentialListItem": {
           "description": "One user's stored credential for an MCP server, as an admin sees it. Never carries the secret.",
           "properties": {
@@ -45904,6 +46091,16 @@
                 }
               ],
               "title": "Env Vars"
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "extra_headers": {
               "anyOf": [
@@ -46460,6 +46657,16 @@
               ],
               "title": "Env Vars"
             },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "extra_headers": {
               "anyOf": [
                 {
@@ -46554,6 +46761,12 @@
             "per_server_oauth_discovery": {
               "default": false,
               "title": "Per Server Oauth Discovery",
+              "type": "boolean"
+            },
+            "preserve_explicit_oauth_settings": {
+              "default": false,
+              "description": "Keep explicitly supplied OAuth settings on upstream or auth changes, even when their values match the saved settings.",
+              "title": "Preserve Explicit Oauth Settings",
               "type": "boolean"
             },
             "registration_url": {
@@ -49179,6 +49392,45 @@
           "title": "MCPEnvVarScope",
           "type": "string"
         },
+        "MCPServerEventsConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "allowed_events": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "minItems": 1,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Event names or globs this server may publish. Omit for every event; set enabled false for none.",
+              "title": "Allowed Events"
+            },
+            "enabled": {
+              "default": false,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "legacy_webhook_id_equals_event_id": {
+              "default": false,
+              "title": "Legacy Webhook Id Equals Event Id",
+              "type": "boolean"
+            },
+            "min_poll_interval_ms": {
+              "default": 1000,
+              "minimum": 0.0,
+              "title": "Min Poll Interval Ms",
+              "type": "integer"
+            }
+          },
+          "title": "MCPServerEventsConfig",
+          "type": "object"
+        },
         "NewMCPServerRequest": {
           "properties": {
             "alias": {
@@ -49368,6 +49620,16 @@
                 }
               ],
               "title": "Env Vars"
+            },
+            "events": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/MCPServerEventsConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "extra_headers": {
               "anyOf": [

@@ -8,7 +8,7 @@ Handles the custom request/response format:
 The actual message transformation reuses OpenAIGPTConfig since Gemma uses OpenAI-compatible format.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Final, cast
 
 import httpx
@@ -84,7 +84,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     def _handle_fake_stream_response(
         self,
         model_response: ModelResponse,
-        stream: bool,
+        stream: object,
         model: str,
         logging_obj: "LiteLLMLoggingObj",
     ) -> "ModelResponse | CustomStreamWrapper":
@@ -114,10 +114,10 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Transform request to Vertex Gemma format.
 
@@ -252,20 +252,20 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         api_key: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         logging_obj: "LiteLLMLoggingObj",
-        optional_params: dict,
+        optional_params: dict[str, object],
         acompletion: bool,
-        litellm_params: dict,
-        logger_fn: Callable | None = None,
+        litellm_params: dict[str, object],
+        logger_fn: Callable[..., object] | None = None,
         client: HTTPHandler | AsyncHTTPHandler | httpx.Client | httpx.AsyncClient | None = None,
         timeout: float | httpx.Timeout | None = None,
-        encoding=None,
+        encoding: "Tokenizer | None" = None,
         custom_llm_provider: str = "vertex_ai",
     ):
         """
@@ -308,14 +308,14 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     def _sync_completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         api_key: str,
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         logging_obj: "LiteLLMLoggingObj",
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         client: HTTPHandler | httpx.Client | None = None,
         timeout: float | httpx.Timeout | None = None,
         encoding: "Tokenizer | None" = None,
@@ -403,14 +403,14 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     async def _async_completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         api_key: str,
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         logging_obj: "LiteLLMLoggingObj",
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         client: AsyncHTTPHandler | httpx.AsyncClient | None = None,
         timeout: float | httpx.Timeout | None = None,
         encoding: "Tokenizer | None" = None,

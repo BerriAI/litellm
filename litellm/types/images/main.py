@@ -1,6 +1,7 @@
-from typing import Literal
+from dataclasses import dataclass
+from typing import Final, Literal
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.utils import FileTypes
 
@@ -14,7 +15,7 @@ class ImageEditOptionalRequestParams(TypedDict, total=False):
 
     background: Literal["transparent", "opaque", "auto"] | None
     input_fidelity: Literal["high", "low"] | None
-    markup: FileTypes | None
+    markup: ReadOnly[FileTypes | None]
     mask: str | None
     n: int | None
     quality: Literal["high", "medium", "low", "standard", "auto"] | None
@@ -34,3 +35,12 @@ class ImageEditRequestParams(ImageEditOptionalRequestParams, total=False):
     image: FileTypes
     prompt: str
     model: str | None
+
+
+IMAGE_CONFIG_FIELDS: Final = ("imageConfig", "image_config")
+
+
+@dataclass(frozen=True, slots=True)
+class UnsupportedImageParam:
+    param: str
+    reason: str

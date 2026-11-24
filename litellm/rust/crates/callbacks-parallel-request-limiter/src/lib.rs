@@ -44,7 +44,8 @@ pub use limiter::{
     BatchResponseFacts, CallIdFacts, Candidate, CapSettings, FailureFacts, LogPrepareInputs,
     ModelFacts, NAME, ParallelRequestLimiter, Phase, Plan, PolicyFacts, PostCallFailureFacts,
     PostCallFailureInputs, PostCallSuccessFacts, PostCallSuccessInputs, PreCallFacts,
-    PreCallInputs, PriorResponse, PtuFacts, SuccessFacts, TargetFacts, manifest, prior_response,
+    PreCallInputs, PriorResponse, PtuFacts, SocketClose, SuccessFacts, TargetFacts, manifest,
+    prior_response,
 };
 pub use logged::{
     LoggedCall, LoggedObject, RESPONSES_WEBSOCKET_CALL_TYPE, Resolved, SettledModel, UsageObject,

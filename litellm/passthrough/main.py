@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import weakref
-from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Generator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Generator, Iterator, Mapping
 from functools import partial
 from types import TracebackType
 from typing import Final, cast
@@ -314,13 +314,13 @@ async def allm_passthrough_route(
     request_query_params: dict | None = None,
     request_headers: dict | None = None,
     content: RequestContent | None = None,
-    data: dict | None = None,
+    data: Mapping[str, object] | None = None,
     files: RequestFiles | None = None,
     json: object | None = None,
     params: QueryParamTypes | None = None,
     cookies: CookieTypes | None = None,
     client: HTTPHandler | AsyncHTTPHandler | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> httpx.Response | AsyncGenerator[bytes, bytes]:
     """
     Async: Reranks a list of documents based on their relevance to the query
@@ -439,7 +439,7 @@ def llm_passthrough_route(
     request_query_params: dict | None = None,
     request_headers: dict | None = None,
     content: RequestContent | None = None,
-    data: dict | None = None,
+    data: Mapping[str, object] | None = None,
     files: RequestFiles | None = None,
     json: object | None = None,
     params: QueryParamTypes | None = None,
@@ -553,7 +553,9 @@ def llm_passthrough_route(
         forward_headers=False,
     )
 
-    _request_data: dict | None = data if isinstance(data, dict) else (json if isinstance(json, dict) else None)
+    _request_data: dict[str, object] | None = (
+        data if isinstance(data, dict) else (json if isinstance(json, dict) else None)
+    )
     headers, signed_json_body = provider_config.sign_request(
         headers=headers,
         litellm_params={**litellm_params_dict, "guardrailConfig": guardrailConfig},

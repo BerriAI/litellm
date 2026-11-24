@@ -133,7 +133,10 @@ use arc_swap::ArcSwap;
 use parking_lot::Mutex;
 
 pub use crate::{
-    cache::{HealthState, InMemoryRouterCache, Outcomes, RouterCache, UsageCounts, UsageWindow},
+    cache::{
+        HealthState, InMemoryRouterCache, LimitCounter, LimitKind, Outcomes, RouterCache,
+        UsageCounts, UsageWindow,
+    },
     call::RouterResponse,
     config::{Op, RouterConfig, RouterDynamicConfig},
     error::{AttemptError, ConfigError, Error, FailureKind, RaisedAt},
