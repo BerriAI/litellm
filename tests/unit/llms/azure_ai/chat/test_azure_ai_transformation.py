@@ -2655,3 +2655,29 @@ def test_translate_developer_role_hoists_a_later_developer_message_for_a_model_t
 
     assert [message["role"] for message in messages] == ["system", "user", "assistant", "user"]
     assert messages[0]["content"] == "You are terse.\n\nAnswer with exactly one word."
+
+
+_GET_TIME_TOOL: Final = {"type": "function", "function": {"name": "get_time", "parameters": {"type": "object"}}}
+
+
+@pytest.mark.parametrize(
+    ("tool_params", "expected_tool_choice"),
+    [
+        ({"tool_choice": "none"}, None),
+        ({"tools": [], "tool_choice": "auto"}, None),
+        ({"tools": [_GET_TIME_TOOL], "tool_choice": "none"}, "none"),
+        ({"functions": [_GET_TIME_TOOL["function"]], "tool_choice": "auto"}, "auto"),
+    ],
+)
+def test_azure_ai_sends_tool_choice_only_with_tools(
+    _local_model_cost_map, tool_params: Mapping[str, object], expected_tool_choice: str | None
+):
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="grok-4.7",
+        messages=[{"role": "user", "content": "What time is it?"}],
+        optional_params=dict(tool_params),
+        litellm_params={},
+        headers={},
+    )
+
+    assert request.get("tool_choice") == expected_tool_choice
