@@ -10,6 +10,7 @@ from urllib.parse import parse_qs
 
 import pytest
 
+import litellm
 from litellm.llms.base_llm.realtime.transformation import RealtimeBackend
 from litellm.llms.elevenlabs.common_utils import ElevenLabsException
 from litellm.llms.elevenlabs.realtime.backend import ElevenLabsRealtimeBackend
@@ -276,6 +277,7 @@ def test_live_partials_with_trailing_word_revisions_continue_emitting_stable_wor
         ("conversation.item.input_audio_transcription.delta", "item_0", " LLM now"),
         ("conversation.item.input_audio_transcription.delta", "item_0", " streams audio to"),
         ("conversation.item.input_audio_transcription.delta", "item_0", " ElevenLabs"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", " Scribe."),
         ("input_audio_buffer.speech_stopped", "item_0", None),
         ("conversation.item.input_audio_transcription.completed", "item_0", committed),
     ]
@@ -299,21 +301,20 @@ def test_cumulative_partials_start_the_turn_once_and_emit_only_new_text():
     ]
 
 
-def test_revised_partial_emits_nothing_and_the_commit_carries_the_final_text():
-    transformer: Final = ElevenLabsEventTransformer(new_item_id=_item_ids())
-    first: Final = _events(transformer, _frame("partial_transcript", text="Hello world today"))
-    revised: Final = _events(transformer, _frame("partial_transcript", text="Hallo world tomorrow soon"))
-    resumed: Final = _events(
-        transformer,
+def test_a_revised_emitted_word_keeps_streaming_from_the_same_word_position_and_the_commit_flushes_the_tail():
+    events: Final = _events(
+        ElevenLabsEventTransformer(new_item_id=_item_ids()),
+        _frame("partial_transcript", text="Hello world today"),
+        _frame("partial_transcript", text="Hallo world tomorrow soon"),
         _frame("partial_transcript", text="Hello world tomorrow soon"),
         _frame("committed_transcript", text="Hello world tomorrow soon."),
     )
 
-    assert revised == []
-    assert _summary([*first, *resumed]) == [
+    assert _summary(events) == [
         ("input_audio_buffer.speech_started", "item_0", None),
         ("conversation.item.input_audio_transcription.delta", "item_0", "Hello world"),
         ("conversation.item.input_audio_transcription.delta", "item_0", " tomorrow"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", " soon."),
         ("input_audio_buffer.speech_stopped", "item_0", None),
         ("conversation.item.input_audio_transcription.completed", "item_0", "Hello world tomorrow soon."),
     ]
@@ -355,6 +356,7 @@ def test_commit_without_partials_still_reports_a_whole_turn():
 
     assert _summary(events) == [
         ("input_audio_buffer.speech_started", "item_0", None),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "Hi"),
         ("input_audio_buffer.speech_stopped", "item_0", None),
         ("conversation.item.input_audio_transcription.completed", "item_0", "Hi"),
     ]
@@ -422,6 +424,7 @@ def test_unspaced_chinese_partials_stream_the_prefix_kept_across_two_partials():
         ("conversation.item.input_audio_transcription.delta", "item_0", "今天"),
         ("conversation.item.input_audio_transcription.delta", "item_0", "天气"),
         ("conversation.item.input_audio_transcription.delta", "item_0", "很好"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "。"),
         ("input_audio_buffer.speech_stopped", "item_0", None),
         ("conversation.item.input_audio_transcription.completed", "item_0", "今天天气很好。"),
     ]
@@ -440,6 +443,7 @@ def test_unspaced_japanese_partials_stream_the_prefix_kept_across_two_partials()
         ("conversation.item.input_audio_transcription.delta", "item_0", "こんにちは"),
         ("conversation.item.input_audio_transcription.delta", "item_0", "世界"),
         ("conversation.item.input_audio_transcription.delta", "item_0", "です"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "。"),
         ("input_audio_buffer.speech_stopped", "item_0", None),
         ("conversation.item.input_audio_transcription.completed", "item_0", "こんにちは世界です。"),
     ]
@@ -466,6 +470,7 @@ def test_a_revision_inside_unspaced_text_emits_nothing_until_the_emitted_prefix_
         ("input_audio_buffer.speech_started", "item_0", None),
         ("conversation.item.input_audio_transcription.delta", "item_0", "今天"),
         ("conversation.item.input_audio_transcription.delta", "item_0", "天气很好"),
+        ("conversation.item.input_audio_transcription.delta", "item_0", "啊。"),
         ("input_audio_buffer.speech_stopped", "item_0", None),
         ("conversation.item.input_audio_transcription.completed", "item_0", "今天天气很好啊。"),
     ]
@@ -481,14 +486,25 @@ def _streamed_deltas(partials: tuple[str, ...], committed: str) -> tuple[str, ..
     deltas: Final = tuple(
         str(event["delta"]) for event in events if event["type"] == "conversation.item.input_audio_transcription.delta"
     )
-    assert committed.startswith("".join(deltas)), deltas
+    assert "".join(deltas) == committed, deltas
     return deltas
 
 
 def test_a_turn_that_moves_from_unspaced_to_spaced_text_only_extends_the_emitted_text():
     partials: Final = ("我喜欢", "我喜欢用", "我喜欢用 LiteLLM 网关", "我喜欢用 LiteLLM 网关 很好")
 
-    assert _streamed_deltas(partials, "我喜欢用 LiteLLM 网关 很好。") == ("我喜欢", "用 LiteLLM", " 网关")
+    assert _streamed_deltas(partials, "我喜欢用 LiteLLM 网关 很好。") == ("我喜欢", "用", " LiteLLM 网关", " 很好。")
+
+
+def test_japanese_with_spaced_latin_words_streams_by_character_instead_of_waiting_for_a_space():
+    partials: Final = ("今日は", "今日は LiteLLM", "今日は LiteLLM を使って", "今日は LiteLLM を使ってテストします")
+
+    assert _streamed_deltas(partials, "今日は LiteLLM を使ってテストします。") == (
+        "今日は",
+        " LiteLLM",
+        " を使って",
+        "テストします。",
+    )
 
 
 def test_live_chinese_partials_with_provisional_trailing_punctuation_stream_only_kept_text():
@@ -503,15 +519,19 @@ def test_live_chinese_partials_with_provisional_trailing_punctuation_stream_only
     )
     committed: Final = "今天天气很好，我们一起去公园散步吧，下午我们再回来喝茶。"
 
-    assert _streamed_deltas(partials, committed) == ("今天天气", "很好", "，我们一起去公园", "散步吧")
+    assert _streamed_deltas(partials, committed) == ("今天天气", "很好", "，我们一起去公园", "散步吧", "，下午我们再回来喝茶。")
 
 
 @pytest.mark.parametrize(
     ("partials", "committed", "expected"),
     [
-        pytest.param(("今天天汽", "今天天汽", "今天天气很好"), "今天天气很好。", ("今天天",), id="repeated-unspaced"),
-        pytest.param(("Lite", "Lite", "Light LLM now"), "Light LLM now.", ("Light LLM",), id="repeated-ascii-word"),
-        pytest.param(("Hel", "Hello", "Hello world"), "Hello world.", ("Hello",), id="growing-ascii-word"),
+        pytest.param(
+            ("今天天汽", "今天天汽", "今天天气很好"), "今天天气很好。", ("今天天", "气很好。"), id="repeated-unspaced"
+        ),
+        pytest.param(
+            ("Lite", "Lite", "Light LLM now"), "Light LLM now.", ("Light LLM", " now."), id="repeated-ascii-word"
+        ),
+        pytest.param(("Hel", "Hello", "Hello world"), "Hello world.", ("Hello", " world."), id="growing-ascii-word"),
     ],
 )
 def test_a_repeated_or_growing_partial_never_emits_its_unconfirmed_last_character(
@@ -597,19 +617,27 @@ def test_append_becomes_input_audio_chunks_that_reassemble_the_audio():
     assert b"".join(base64.b64decode(chunk["audio_base_64"]) for chunk in chunks) == audio
 
 
-@pytest.mark.parametrize("event_type", ["input_audio_buffer.commit", "input_audio_buffer.end"])
-def test_commit_and_end_send_an_empty_committing_chunk(event_type: str):
-    config: Final = _configured(_session_update(rate=24_000))
-    sent: Final = config.transform_realtime_request(json.dumps({"type": event_type}), SCRIBE_REALTIME_MODEL)
-
-    assert [json.loads(message) for message in sent] == [
-        {"message_type": "input_audio_chunk", "audio_base_64": "", "commit": True, "sample_rate": 24_000}
-    ]
+def test_response_create_has_no_elevenlabs_equivalent_and_is_dropped():
+    assert _configured().transform_realtime_request(json.dumps({"type": "response.create"}), SCRIBE_REALTIME_MODEL) == ()
 
 
-@pytest.mark.parametrize("event_type", ["input_audio_buffer.clear", "response.create"])
-def test_events_without_an_elevenlabs_equivalent_are_dropped(event_type: str):
-    assert _configured().transform_realtime_request(json.dumps({"type": event_type}), SCRIBE_REALTIME_MODEL) == ()
+def test_clear_without_uncommitted_audio_sends_nothing_and_keeps_the_next_turn():
+    config: Final = _configured()
+    cleared: Final = config.transform_realtime_request(
+        json.dumps({"type": "input_audio_buffer.clear"}), SCRIBE_REALTIME_MODEL
+    )
+    events: Final = _response(config, _frame("committed_transcript", text="Hello."))
+
+    assert cleared == ()
+    assert events[-1]["transcript"] == "Hello."
+
+
+@pytest.mark.parametrize(("options", "addon_count"), [(ElevenLabsRealtimeOptions(keyterms=("LiteLLM",)), 1), (NO_OPTIONS, 0)])
+def test_keyterms_add_a_priced_addon_model_to_the_session(options: ElevenLabsRealtimeOptions, addon_count: int):
+    addons: Final = ElevenLabsRealtimeConfig(options=options).transcription_addon_pricing_models()
+
+    assert len(addons) == addon_count
+    assert all((litellm.get_model_info(addon)["input_cost_per_second"] or 0) > 0 for addon in addons)
 
 
 async def _billing_session(rate: int, upstream: RealtimeBackend) -> tuple[ElevenLabsRealtimeConfig, RealtimeBackend]:
@@ -627,6 +655,57 @@ async def _billing_session(rate: int, upstream: RealtimeBackend) -> tuple[Eleven
     for message in config.transform_realtime_request(_session_update(rate=rate), SCRIBE_REALTIME_MODEL):
         await backend.send(message)
     return config, backend
+
+
+async def _send_audio(config: ElevenLabsRealtimeConfig, backend: RealtimeBackend, audio: bytes) -> None:
+    for message in config.transform_realtime_request(_append(audio), SCRIBE_REALTIME_MODEL):
+        await backend.send(message)
+
+
+async def _audio_session() -> tuple[ElevenLabsRealtimeConfig, RealtimeBackend]:
+    upstream: Final = MagicMock(spec=RealtimeBackend)
+    upstream.send = AsyncMock()
+    return await _billing_session(24_000, upstream)
+
+
+@pytest.mark.parametrize("event_type", ["input_audio_buffer.commit", "input_audio_buffer.end"])
+async def test_commit_and_end_commit_the_audio_sent_since_the_last_commit_once(event_type: str):
+    config, backend = await _audio_session()
+    commit: Final = json.dumps({"type": event_type})
+    before_audio: Final = config.transform_realtime_request(commit, SCRIBE_REALTIME_MODEL)
+    await _send_audio(config, backend, b"\x00\x00" * 2_400)
+    after_audio: Final = config.transform_realtime_request(commit, SCRIBE_REALTIME_MODEL)
+    repeated: Final = config.transform_realtime_request(commit, SCRIBE_REALTIME_MODEL)
+
+    assert before_audio == ()
+    assert [json.loads(message) for message in after_audio] == [
+        {"message_type": "input_audio_chunk", "audio_base_64": "", "commit": True, "sample_rate": 24_000}
+    ]
+    assert repeated == ()
+
+
+async def test_clear_discards_the_uncommitted_turn_and_bills_its_audio_with_the_next_one():
+    config, backend = await _audio_session()
+    await _send_audio(config, backend, b"\x00\x00" * 24_000)
+    abandoned: Final = _response(config, _frame("partial_transcript", text="never mind this"))
+    cleared: Final = config.transform_realtime_request(
+        json.dumps({"type": "input_audio_buffer.clear"}), SCRIBE_REALTIME_MODEL
+    )
+    discarded: Final = [
+        *_response(config, _frame("partial_transcript", text="never mind this part")),
+        *_response(config, _frame("committed_transcript", text="Never mind this part.")),
+    ]
+    await _send_audio(config, backend, b"\x00\x00" * 12_000)
+    kept: Final = [
+        *_response(config, _frame("partial_transcript", text="Hello there")),
+        *_response(config, _frame("committed_transcript", text="Hello there.")),
+    ]
+
+    assert [json.loads(message)["commit"] for message in cleared] == [True]
+    assert discarded == []
+    assert kept[0]["item_id"] != abandoned[0]["item_id"]
+    assert [event.get("delta") for event in kept if "delta" in event] == ["Hello", " there."]
+    assert (kept[-1]["transcript"], kept[-1]["usage"]) == ("Hello there.", {"type": "duration", "seconds": 1.5})
 
 
 @pytest.mark.parametrize("rate", [16_000, 48_000])
@@ -693,7 +772,8 @@ def test_an_error_before_session_started_refuses_the_session_with_the_mapped_sta
         _REFUSAL_STATUS_CODES.get(error_type, 500),
         f"ElevenLabs realtime transcription failed: {error_type}",
     )
-    assert events == [{"type": "error", "error": {"type": "server_error", "message": refusal.message}}]
+    expected_type: Final = "invalid_request_error" if refusal.status_code < 500 else "server_error"
+    assert events == [{"type": "error", "error": {"type": expected_type, "message": refusal.message}}]
 
 
 def test_an_error_after_session_started_is_an_error_event_and_not_a_refusal():
@@ -704,7 +784,10 @@ def test_an_error_after_session_started_is_an_error_event_and_not_a_refusal():
     assert events == [
         {
             "type": "error",
-            "error": {"type": "server_error", "message": "ElevenLabs realtime transcription failed: auth_error"},
+            "error": {
+                "type": "invalid_request_error",
+                "message": "ElevenLabs realtime transcription failed: auth_error",
+            },
         }
     ]
     assert config.session_refusal() is None

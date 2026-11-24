@@ -22,6 +22,7 @@ from litellm.constants import (
     OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS,
     OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES,
     REALTIME_METERED_USAGE_KEY,
+    REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY,
 )
 from litellm.litellm_core_utils.audio_utils.utils import normalized_audio_duration_seconds
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
@@ -3439,6 +3440,20 @@ def _first_live_model_rate(
     )
 
 
+_ADDON_PRICING_MODELS: Final = TypeAdapter(tuple[str, ...])
+
+
+def _transcription_addon_pricing_models(litellm_logging_obj: LitellmLoggingObject | None) -> tuple[str, ...]:
+    if litellm_logging_obj is None:
+        return ()
+    try:
+        return _ADDON_PRICING_MODELS.validate_python(
+            litellm_logging_obj.model_call_details.get(REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY, ())
+        )
+    except ValidationError:
+        return ()
+
+
 def _xai_metered_usage(litellm_logging_obj: LitellmLoggingObject | None) -> RealtimeMeteredUsage | None:
     if litellm_logging_obj is None:
         return None
@@ -3581,6 +3596,7 @@ def handle_realtime_stream_cost_calculation(
             custom_llm_provider=custom_llm_provider,
             litellm_model_name=litellm_model_name,
             custom_pricing_model=custom_pricing_model,
+            addon_pricing_models=_transcription_addon_pricing_models(litellm_logging_obj),
         )
         if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results)
         else 0.0
@@ -3672,6 +3688,7 @@ def handle_realtime_transcription_cost_calculation(
     custom_llm_provider: str,
     litellm_model_name: str,
     custom_pricing_model: str | None = None,
+    addon_pricing_models: Sequence[str] = (),
 ) -> float:
     """
     Cost for realtime transcription sessions (e.g. gpt-realtime-whisper).
@@ -3694,10 +3711,14 @@ def handle_realtime_transcription_cost_calculation(
         _get_model_info_or_none(custom_pricing_model, custom_llm_provider) if custom_pricing_model is not None else None
     )
 
+    addon_infos: Final = tuple(_cost_map_model_info(addon, custom_llm_provider) for addon in addon_pricing_models)
+
     total_cost = 0.0
     for event in completed_events:
         usage = event.get("usage") or {}
-        total_cost += _transcription_usage_cost(usage, model_info, override_info)
+        total_cost += _transcription_usage_cost(usage, model_info, override_info) + sum(
+            (_transcription_usage_cost(usage, addon_info) for addon_info in addon_infos), 0.0
+        )
     return total_cost
 
 
