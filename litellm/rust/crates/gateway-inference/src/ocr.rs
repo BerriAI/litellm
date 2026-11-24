@@ -20,6 +20,7 @@ use crate::{
     request::{InferenceBody, Upload},
     routing::{self, Host, RouteAttempt},
     serve::{self, Call, Endpoint},
+    stream_event::Counts,
 };
 
 pub(crate) async fn create<H: Host>(call: Call<H>, body: Result<InferenceBody, Error>) -> Response {
@@ -121,5 +122,10 @@ impl RouteAttempt for OcrAttempt<'_> {
             Some(native) => Value::Object(native),
             None => response.into_json(),
         })
+    }
+
+    /// Nothing: Python's router reads no `usage` off an OCR response.
+    fn counts(_outcome: &Value) -> Option<Counts> {
+        None
     }
 }

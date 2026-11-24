@@ -76,10 +76,8 @@ pub trait RouteAttempt: Send + Sync {
 
     /// What a complete outcome counted, which the router counts against the deployment. A
     /// stream's counts are read from its events.
-    fn counts(outcome: &Self::Outcome) -> Option<Counts> {
-        let _ = outcome;
-        None
-    }
+    /// Required, so a new route says what it counts rather than counting nothing by default.
+    fn counts(outcome: &Self::Outcome) -> Option<Counts>;
 
     /// The stream of an outcome and the reader of its format: its outcome is reported to the
     /// router as it is read, and another attempt may answer in its place while it has sent no
@@ -577,6 +575,11 @@ mod tests {
                 event.map(|event| bytes::Bytes::from_static(event.as_bytes()))
             });
             Ok(litellm_framer::sse::blocks(sent).boxed())
+        }
+
+        /// Only ever a stream, whose counts are read from its events.
+        fn counts(_outcome: &RouteChunks) -> Option<Counts> {
+            None
         }
 
         fn held(outcome: &mut RouteChunks) -> Option<(&mut RouteChunks, Read)> {
