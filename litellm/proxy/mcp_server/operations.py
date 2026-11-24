@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from functools import partial, reduce
 from types import EllipsisType
-from typing import Final, NoReturn, TypeAlias, overload
+from typing import Final, NoReturn, Protocol, TypeAlias, overload
 
 import anyio
 from fastapi import HTTPException
@@ -56,6 +56,7 @@ from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
     MCP_TOOL_LISTING_TIMEOUT,
 )
+from litellm.integrations.lens.policy import LENS_LOGGING_POLICY_PARAM, LensLoggingPolicy, lens_logging_enabled
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import (
     UserAPIKeyAuth,
@@ -1575,7 +1576,7 @@ async def _get_prompts_from_mcp_servers(
     )
 
     # Get prompts from each allowed server
-    all_prompts: Final = []
+    all_prompts: Final[list[Prompt]] = []
     for server in allowed_mcp_servers:
         if server is None:
             continue
@@ -2638,6 +2639,15 @@ async def _execute_mcp_tool(
     )
 
 
+class _CarriesData(Protocol):
+    @property
+    def data(self) -> object: ...
+
+
+def _error_data(error: _CarriesData) -> object:
+    return error.data
+
+
 def _json_object(value: object) -> Mapping[str, JsonValue] | None:
     return TypeAdapter(dict[str, JsonValue]).validate_python(value) if isinstance(value, dict) else None
 
@@ -2669,7 +2679,8 @@ async def _relay_guarded_url_elicitation(
     elicitation_error: Final = await _result_or_url_elicitation(execution)
     if not isinstance(elicitation_error, MCPError):
         return elicitation_error
-    data: Final = _json_object(elicitation_error.error.data)
+    raw_data: Final = _error_data(elicitation_error.error)
+    data: Final = _json_object(raw_data)
     listed: Final = data.get("elicitations") if data is not None else None
     elicitations: Final = TypeAdapter(list[JsonValue]).validate_python(listed) if isinstance(listed, list) else []
     entries: Final = tuple(_json_object(elicitation) for elicitation in elicitations)
@@ -2710,7 +2721,7 @@ async def _relay_guarded_url_elicitation(
             ],
         }
         if data is not None and replaced
-        else elicitation_error.error.data,
+        else raw_data,
     )
 
 
@@ -3007,7 +3018,10 @@ async def log_mcp_sdk_rejection(
         metadata=metadata,
     )
     logging_obj.update_environment_variables(  # pyright: ignore[reportUnknownMemberType]  # untyped legacy signature
-        litellm_params={"metadata": metadata},
+        litellm_params={
+            "metadata": metadata,
+            LENS_LOGGING_POLICY_PARAM: LensLoggingPolicy(enabled=lens_logging_enabled(user_api_key_auth)),
+        },
         optional_params={},
         user=user_api_key_auth.user_id,
     )

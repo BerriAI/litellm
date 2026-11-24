@@ -302,14 +302,14 @@ def create_config_class(provider: SimpleProviderConfig):
             api_base: str | None,
             api_key: str | None,
             model: str,
-            optional_params: dict,
-            litellm_params: dict,
+            optional_params: Mapping[str, object],
+            litellm_params: Mapping[str, object],
             stream: bool | None = None,
         ) -> str:
             """Build complete URL for the API endpoint"""
             return ensure_api_route(api_base or provider.default_base_url(model), "chat/completions")
 
-        def get_supported_openai_params(self, model: str) -> list:
+        def get_supported_openai_params(self, model: str) -> list[str]:
             """Get supported OpenAI params, excluding tool-related params for models
             that don't support function calling."""
             from litellm.utils import supports_function_calling, supports_reasoning
@@ -361,7 +361,7 @@ def create_config_class(provider: SimpleProviderConfig):
 
         def map_openai_params(
             self,
-            non_default_params: dict,
+            non_default_params: Mapping[str, object],
             optional_params: dict,
             model: str,
             drop_params: bool,
@@ -472,7 +472,7 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
 
         def validate_environment(
             self,
-            headers: dict,
+            headers: dict[str, object],
             model: str,
             litellm_params: GenericLiteLLMParams | None,
         ) -> dict:
@@ -485,7 +485,7 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
         def get_complete_url(
             self,
             api_base: str | None,
-            litellm_params: dict,
+            litellm_params: Mapping[str, object],
         ) -> str:
             resolved_base: Final = (
                 api_base
@@ -546,10 +546,10 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
             self,
             model: str,
             input: str | ResponseInputParam,
-            response_api_optional_request_params: dict,
+            response_api_optional_request_params: dict[str, object],
             litellm_params: GenericLiteLLMParams,
-            headers: dict,
-        ) -> dict:
+            headers: dict[str, object],
+        ) -> dict[str, object]:
             if provider.special_handling.get("force_store_false"):
                 response_api_optional_request_params["store"] = False
             return super().transform_responses_api_request(

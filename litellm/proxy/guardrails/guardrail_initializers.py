@@ -204,7 +204,7 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
     )
 
 
-def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail):
+def initialize_hide_secrets(litellm_params: LitellmParams, guardrail: Guardrail) -> CustomGuardrail:
     try:
         from litellm_enterprise.enterprise_callbacks.secret_detection import (
             _ENTERPRISE_SecretDetection,
@@ -271,7 +271,7 @@ def initialize_lasso(
     return _lasso_callback
 
 
-def initialize_panw_prisma_airs(litellm_params, guardrail):
+def initialize_panw_prisma_airs(litellm_params, guardrail: Guardrail):
     from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import (
         PanwPrismaAirsHandler,
     )

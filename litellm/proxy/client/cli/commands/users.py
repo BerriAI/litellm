@@ -65,11 +65,13 @@ def get_user(ctx: click.Context, user_id: str):
 @click.option("--team", multiple=True, help="Team IDs (can specify multiple)")
 @click.option("--max-budget", type=float, default=None, help="Max budget for user")
 @click.pass_context
-def create_user(ctx: click.Context, email, role, alias, team, max_budget):
+def create_user(
+    ctx: click.Context, email: str, role: str, alias: str | None, team: tuple[str, ...], max_budget: float | None
+):
     """Create a new user"""
     context: Final = cli_context_values(ctx)
     client: Final = UsersManagementClient(base_url=context["base_url"], api_key=context["api_key"])
-    user_data: Final = {
+    user_data: Final[dict[str, object]] = {
         "user_email": email,
         "user_role": role,
     }
@@ -86,7 +88,7 @@ def create_user(ctx: click.Context, email, role, alias, team, max_budget):
 @users.command("delete")
 @click.argument("user_ids", nargs=-1)
 @click.pass_context
-def delete_user(ctx: click.Context, user_ids):
+def delete_user(ctx: click.Context, user_ids: tuple[str, ...]):
     """Delete one or more users by user_id"""
     context: Final = cli_context_values(ctx)
     client: Final = UsersManagementClient(base_url=context["base_url"], api_key=context["api_key"])

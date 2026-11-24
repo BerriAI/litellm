@@ -5,6 +5,7 @@ When model is litellm_agent/gpt-3.5-turbo, this hook replaces it with gpt-3.5-tu
 before the completion call, similar to langfuse/model resolution.
 """
 
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 from litellm.integrations.custom_logger import CustomLogger
@@ -26,16 +27,16 @@ class LiteLLMAgentModelResolver(CustomLogger):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Strip litellm_agent/ prefix from model name.
 
@@ -51,18 +52,18 @@ class LiteLLMAgentModelResolver(CustomLogger):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: object,
         prompt_spec: PromptSpec | None = None,
-        tools: list[dict] | None = None,
+        tools: Sequence[Mapping[str, object]] | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """Async delegate to get_chat_completion_prompt."""
         return self.get_chat_completion_prompt(
             model=model,
