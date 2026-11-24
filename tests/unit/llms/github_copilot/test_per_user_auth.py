@@ -1033,22 +1033,20 @@ async def test_chat_bridged_to_responses_uses_per_user_credential(per_user_crede
         )
 
     with github_http(respond) as requests:
-        params = {
+        params: Final = {
             "model": "github_copilot/gpt-5.3-codex",
             "messages": [{"role": "user", "content": "hi"}],
             "litellm_credential_name": "copilot-cred",
             "secret_fields": _secret_fields("user-a", "gho_a"),
             "stream": stream,
         }
-        if is_async:
-            response = await litellm.acompletion(**params)
-        else:
-            response = litellm.completion(**params)
-        if stream:
-            chunks = [chunk async for chunk in response] if is_async else list(response)
-            text = "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
-        else:
-            text = response.choices[0].message.content
+        response: Final = await litellm.acompletion(**params) if is_async else litellm.completion(**params)
+        chunks: Final = (tuple([chunk async for chunk in response]) if is_async else tuple(response)) if stream else ()
+        text: Final = (
+            "".join(chunk.choices[0].delta.content or "" for chunk in chunks if chunk.choices)
+            if stream
+            else response.choices[0].message.content
+        )
 
     assert text == "hi"
     _assert_user_lookup_then_model_call(requests, "gho_a")
