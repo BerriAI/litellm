@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     convert_generic_chunk_to_model_response_stream,
 )
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator as AnthropicModelResponseIterator
+from litellm.llms.azure_ai.chat.transformation import AzureAIChatCompletionResponseIterator
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, MaskedHTTPStatusError
 from litellm.llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
@@ -785,7 +786,7 @@ async def test_streaming_handler_with_usage(
 
 
 def _usage_test_logging(
-    caller_stream_options: dict[str, bool] | None, stream_usage_injected: bool = False
+    caller_stream_options: dict[str, bool] | None, stream_usage_injected: bool = False, stream_usage_stripped: bool = False
 ) -> Logging:
     logging_obj: Final = Logging(
         model="hosted_vllm/m",
@@ -795,7 +796,10 @@ def _usage_test_logging(
         start_time=1_790_000_000.0,
         litellm_call_id="12345",
         function_id="1245",
-        kwargs={"_litellm_stream_usage_injected": True} if stream_usage_injected else {},
+        kwargs={
+            **({"_litellm_stream_usage_injected": True} if stream_usage_injected else {}),
+            **({"_litellm_strip_stream_usage": True} if stream_usage_stripped else {}),
+        },
     )
     logging_obj.update_environment_variables(
         litellm_params={}, optional_params={}, model="hosted_vllm/m", stream_options=caller_stream_options
@@ -8413,14 +8417,21 @@ def _azure_stream_chunks() -> tuple[ChatCompletionChunk, ...]:
 
 
 @pytest.mark.parametrize(
-    ("caller_stream_options", "stream_usage_injected", "wrapper_stream_options", "prompt_filter_frame"),
+    (
+        "caller_stream_options",
+        "stream_usage_injected",
+        "stream_usage_stripped",
+        "wrapper_stream_options",
+        "prompt_filter_frame",
+    ),
     [
-        (None, False, None, 0),
-        ({"include_usage": True}, False, {"include_usage": True}, 0),
-        (None, False, {"include_usage": True}, 1),
-        ({"include_usage": True}, True, {"include_usage": True}, 1),
+        (None, False, False, None, 0),
+        ({"include_usage": True}, False, False, {"include_usage": True}, 0),
+        (None, False, False, {"include_usage": True}, 0),
+        ({"include_usage": True}, True, False, {"include_usage": True}, 0),
+        ({"include_usage": True}, True, True, {"include_usage": True}, 1),
     ],
-    ids=["no-usage", "caller-asked", "provider-handler-injected", "proxy-injected"],
+    ids=["no-usage", "caller-asked", "provider-handler-injected", "proxy-always-includes-usage", "proxy-strips-usage"],
 )
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
@@ -8428,6 +8439,7 @@ async def test_azure_stream_passes_on_prompt_filter_results_and_finish_content_f
     sync_mode: bool,
     caller_stream_options: dict[str, bool] | None,
     stream_usage_injected: bool,
+    stream_usage_stripped: bool,
     wrapper_stream_options: dict[str, bool] | None,
     prompt_filter_frame: int,
 ) -> None:
@@ -8435,7 +8447,7 @@ async def test_azure_stream_passes_on_prompt_filter_results_and_finish_content_f
         completion_stream=iter(_azure_stream_chunks()),
         model="gpt-4o",
         custom_llm_provider="azure",
-        logging_obj=_usage_test_logging(caller_stream_options, stream_usage_injected),
+        logging_obj=_usage_test_logging(caller_stream_options, stream_usage_injected, stream_usage_stripped),
         stream_options=wrapper_stream_options,
     )
 
@@ -8448,6 +8460,33 @@ async def test_azure_stream_passes_on_prompt_filter_results_and_finish_content_f
     assert frames[prompt_filter_frame]["prompt_filter_results"] == _AZURE_PROMPT_FILTER_RESULTS
     assert first_choice_frame["obfuscation"] == "own"
     assert finish_frame["choices"][0]["content_filter_results"] == _AZURE_FINISH_FILTER_RESULTS
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_azure_ai_stream_keeps_finish_content_filter_results(sync_mode: bool, logging_obj: Logging) -> None:
+    parser: Final = AzureAIChatCompletionResponseIterator(streaming_response=iter(()), sync_stream=sync_mode)
+    chunks: Final = tuple(
+        parser.chunk_parser(
+            {"id": "c1", "created": 1, "model": "gpt-4o", "object": "chat.completion.chunk", "choices": [choice]}
+        )
+        for choice in (
+            {"index": 0, "delta": {"role": "assistant", "content": "Red"}, "content_filter_results": {}},
+            {"index": 0, "delta": {}, "finish_reason": "stop", "content_filter_results": _AZURE_FINISH_FILTER_RESULTS},
+        )
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks), model="gpt-4o", custom_llm_provider="azure_ai", logging_obj=logging_obj
+    )
+
+    emitted: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
+    finish_choices: Final = [
+        choice for frame in map(_wire_dump, emitted) for choice in frame["choices"] if choice.get("finish_reason")
+    ]
+
+    assert [(choice["finish_reason"], choice["content_filter_results"]) for choice in finish_choices] == [
+        ("stop", _AZURE_FINISH_FILTER_RESULTS)
+    ]
 
 
 def _openai_sdk_stream_choices(

@@ -181,14 +181,16 @@ def _prepend_upstream_choice_extras(
     choice.__pydantic_fields_set__.update(upstream_extras)
 
 
-_CHOICE_EXTRAS_NOT_CARRIED_TO_FINISH: Final = frozenset({"message", *STREAM_CHUNK_CHOICE_FIELDS})
+_CHOICE_EXTRAS_NOT_CARRIED_TO_FINISH: Final = frozenset(
+    {"message", *STREAM_CHUNK_CHOICE_FIELDS, *ChunkChoice.model_fields}
+)
 
 
 def _keep_single_upstream_choice_extras(
     model_response: ModelResponseStream, response_obj: Mapping[str, object]
 ) -> None:
     original_chunk: Final = response_obj.get("original_chunk")
-    if not isinstance(original_chunk, ChatCompletionChunk) or len(original_chunk.choices) != 1:
+    if not isinstance(original_chunk, (ChatCompletionChunk, ModelResponseStream)) or len(original_chunk.choices) != 1:
         return
     upstream_choice: Final = original_chunk.choices[0]
     if tuple(choice.index for choice in model_response.choices) != (upstream_choice.index,):
@@ -644,6 +646,7 @@ class CustomStreamWrapper:
             self.check_send_stream_usage(getattr(logging_obj, "stream_options", None))
             and getattr(logging_obj, "stream_usage_injected", False) is not True
         )
+        self.proxy_drops_choiceless_chunks: Final = getattr(logging_obj, "stream_usage_stripped", False) is True
         self.tool_call = False
         # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self.chunks: list[ModelResponseStream] = []
@@ -2092,7 +2095,7 @@ class CustomStreamWrapper:
                         self._hold_attributes_before_first_choice(original_chunk)
                     if self.send_stream_usage is True:
                         model_response.choices = []
-                        if self.caller_requested_stream_usage:
+                        if not self.proxy_drops_choiceless_chunks:
                             self._release_attributes_before_first_choice(model_response)
                         return model_response
                     self._record_usage_only_chunk(model_response=model_response)
