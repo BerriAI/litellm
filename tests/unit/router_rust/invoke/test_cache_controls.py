@@ -185,3 +185,16 @@ def test_a_key_control_the_attempt_changed_is_no_longer_the_keys() -> None:
 
     assert merged["cache"] == {"ttl": 60}
     assert ignored == ("no-store",)
+
+
+def test_a_number_standing_in_for_the_keys_boolean_is_not_the_keys_control() -> None:
+    key = {"metadata": {"user_api_key_metadata": {"cache": {"no-store": True}}}}
+
+    _, merged, ignored = with_model_cache_controls(
+        {"cache": {"no-store": True}, "allowed_cache_controls": []},
+        {**key, "cache": {"no-store": 1}},
+        authenticated=key,
+    )
+
+    assert merged["cache"]["no-store"] is True
+    assert ignored == ("no-store",)

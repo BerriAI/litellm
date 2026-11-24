@@ -43,7 +43,7 @@ def model_cache_controls(
         for control in request_controls
         if _CONTROL_NAMES.get(control, control) in _LOCKABLE_CONTROLS
         and _CONTROL_NAMES.get(control, control) not in allowed
-        and not (key_controls and control in key_controls and key_controls[control] == request_controls[control])
+        and not _is_key_value(key_controls or {}, control, request_controls[control])
     )
     kept: Final = {control: value for control, value in request_controls.items() if control not in ignored}
     return ModelCacheControls({**deployment_controls, **_canonical(kept)}, ignored)
@@ -128,6 +128,11 @@ def with_model_cache_controls(
         return params, request, ()
     controls: Final = {"cache": cache.controls} if cache.controls else {}
     return {**without(params, "cache"), **controls}, {**without(request, "cache"), **controls}, cache.ignored
+
+
+def _is_key_value(key_controls: Mapping[str, object], control: str, value: object) -> bool:
+    """``1`` is not the key's ``True``: the cache reads these controls by identity."""
+    return control in key_controls and type(key_controls[control]) is type(value) and key_controls[control] == value
 
 
 def _key_cache_controls(request: Mapping[str, object]) -> Mapping[str, object]:
