@@ -30,9 +30,11 @@ from litellm.constants import (
     HUGGINGFACE_TOKENIZER_LOAD_RETRY_SECONDS,
     PDF_MAX_XOBJECT_DRAWS_PER_PAGE,
     TOKEN_COUNTER_MAX_CONCURRENT_COUNTS,
+    TRUNCATED_BASE64_MARKER,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
+    PdfDocumentPricing,
     TokenCountMemo,
     UnsupportedContentTypeError,
     _count_content_list,
@@ -3375,6 +3377,100 @@ def test_messages_reach_token_count_prices_pdf_pages_like_token_counter():
 def _png_data_url(width: int, height: int) -> str:
     ihdr = b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big")
     return "data:image/png;base64," + base64.b64encode(ihdr + b"\x08\x06\x00\x00\x00").decode()
+
+
+def _pypdf_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if record.name.startswith("pypdf")]
+
+
+@pytest.mark.parametrize("size", ["1.00MB", "12.5KB"])
+def test_a_redacted_pdf_placeholder_is_priced_like_an_image_without_being_parsed(
+    size: str, caplog: pytest.LogCaptureFixture
+):
+    placeholder: Final = f"data:application/pdf;base64,[base64_data truncated: {size}]"
+    caplog.set_level("WARNING", logger="pypdf")
+
+    assert len(base64.b64decode(placeholder.removeprefix("data:application/pdf;base64,"))) == 18
+
+    as_file: Final = _count_user_content([{"type": "file", "file": {"file_data": placeholder}}], model="")
+    as_document: Final = _count_user_content(
+        [{"type": "document", "source": {"type": "url", "url": placeholder}}], model=""
+    )
+
+    assert as_file == as_document == _count_user_content([{"type": "image_url", "image_url": {"url": placeholder}}], "")
+    assert _pypdf_warnings(caplog) == []
+
+
+def test_messages_the_logging_redaction_rewrote_reach_the_counter_without_a_pdf_parse(
+    caplog: pytest.LogCaptureFixture,
+):
+    from litellm.litellm_core_utils.logging_utils import truncate_base64_in_messages
+
+    messages: Final = [{"role": "user", "content": [_as_pdf_file(_pdf_base64(("",)))]}]
+    redacted: Final = truncate_base64_in_messages(messages)
+    caplog.set_level("WARNING", logger="pypdf")
+
+    assert redacted[0]["content"][0]["file"]["file_data"].startswith(
+        "data:application/pdf;base64," + TRUNCATED_BASE64_MARKER
+    )
+
+    total: Final = token_counter_new(model="", messages=redacted)
+
+    assert messages_reach_token_count(model="", messages=redacted, threshold=total) is True
+    assert messages_reach_token_count(model="", messages=redacted, threshold=total + 1) is False
+    assert total < token_counter_new(model="", messages=messages)
+    assert _pypdf_warnings(caplog) == []
+
+
+def test_a_line_wrapped_base64_pdf_keeps_its_page_price():
+    encoded: Final = _pdf_base64((_REVENUE_LINE, ""))
+    wrapped: Final = "\n".join(encoded[start : start + 76] for start in range(0, len(encoded), 76))
+
+    assert _pdf_cost("", wrapped, _as_pdf_file) == _pdf_cost("", encoded, _as_pdf_file)
+    assert _pdf_cost("", wrapped, _as_pdf_file) == _text_cost("", _REVENUE_LINE) + 2 * 1534
+
+
+@pytest.mark.parametrize(
+    "wrap", [_as_pdf_file, _as_pdf_document, _as_pdf_tool_result], ids=["file", "document", "tool_result"]
+)
+def test_single_image_pdf_pricing_prices_a_pdf_the_same_whatever_its_pages(wrap: Callable[[str], Mapping[str, object]]):
+    encoded: Final = _pdf_base64((_REVENUE_LINE,) * 3)
+
+    def count(pdf_base64: str, pdf_pricing: PdfDocumentPricing | None) -> int:
+        return token_counter_new(
+            model="", messages=[{"role": "user", "content": [wrap(pdf_base64)]}], pdf_pricing=pdf_pricing
+        )
+
+    assert count(encoded, "single_image") == count(_pdf_base64(()), "single_image")
+    assert count(encoded, "single_image") < count(encoded, None)
+
+
+def test_single_image_pdf_pricing_prices_a_pdf_document_like_the_same_bytes_sent_as_an_image():
+    source: Final = _pdf_source(_pdf_base64((_REVENUE_LINE,) * 3))
+
+    as_document: Final = [{"role": "user", "content": [{"type": "document", "source": source}]}]
+    as_image: Final = [{"role": "user", "content": [{"type": "image", "source": source}]}]
+
+    assert token_counter_new(model="", messages=as_document, pdf_pricing="single_image") == token_counter_new(
+        model="", messages=as_image
+    )
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        [{"type": "text", "text": _REVENUE_LINE}],
+        [{"type": "image_url", "image_url": {"url": _png_data_url(1024, 1024)}}],
+        [_as_pdf_file(base64.b64encode(b"not a pdf at all").decode())],
+    ],
+    ids=["text", "image", "unreadable_pdf"],
+)
+def test_single_image_pdf_pricing_leaves_every_prompt_without_a_readable_pdf_alone(content: list[object]):
+    messages: Final = [{"role": "user", "content": content}]
+
+    assert token_counter_new(model="", messages=messages, pdf_pricing="single_image") == token_counter_new(
+        model="", messages=messages
+    )
 
 
 @pytest.mark.parametrize(

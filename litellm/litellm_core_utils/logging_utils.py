@@ -13,6 +13,7 @@ from litellm.constants import (
     BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS,
     BASE64_TRUNCATION_OFFLOAD_THRESHOLD_STRINGS,
     MAX_BASE64_LENGTH_FOR_LOGGING,
+    TRUNCATED_BASE64_MARKER,
 )
 from litellm.litellm_core_utils.core_helpers import as_object_list, get_litellm_metadata_from_kwargs
 from litellm.types.utils import (
@@ -62,7 +63,7 @@ def _base64_data_uri_replacer(match: re.Match[str]) -> str:
     if len(payload) <= MAX_BASE64_LENGTH_FOR_LOGGING:
         return match.group(0)
     size_str: Final = format_base64_size(len(payload))
-    return f"data:{mime_type};base64,[base64_data truncated: {size_str}]"
+    return f"data:{mime_type};base64,{TRUNCATED_BASE64_MARKER}{size_str}]"
 
 
 def _may_contain_base64_data_uri(value: str) -> bool:

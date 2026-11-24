@@ -4341,6 +4341,252 @@ def test_pre_call_checks_count_a_group_mixing_in_another_vendor_by_its_own_name(
         )
 
 
+def _blank_pdf_base64(pages: int) -> str:
+    from pypdf import PdfWriter
+
+    writer: Final = PdfWriter()
+    for _ in range(pages):
+        writer.add_blank_page(612, 792)
+    buffer: Final = io.BytesIO()
+    writer.write(buffer)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+_PDF_BASE64: Final = _blank_pdf_base64(3)
+_PDF_URL: Final = f"data:application/pdf;base64,{_PDF_BASE64}"
+_PDF_FILE_PROMPT: Final = [
+    {
+        "role": "user",
+        "content": [{"type": "text", "text": "summarize"}, {"type": "file", "file": {"file_data": _PDF_URL}}],
+    }
+]
+_PDF_DOCUMENT_PROMPT: Final = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "summarize"},
+            {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": _PDF_BASE64}},
+        ],
+    }
+]
+_PDF_RESPONSES_INPUT: Final = [
+    {
+        "type": "message",
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "summarize"},
+            {"type": "input_file", "filename": "report.pdf", "file_data": _PDF_URL},
+        ],
+    }
+]
+_GEMINI_MODELS: Final = ("gemini/gemini-3.5-flash-lite", "vertex_ai/gemini-3.8-flash")
+_CLAUDE_MODELS: Final = (
+    "anthropic/claude-sonnet-5-5",
+    "bedrock/anthropic.claude-sonnet-5-5",
+    "vertex_ai/claude-sonnet-5-5",
+)
+
+
+def _page_priced_pdf_tokens() -> int:
+    return litellm.token_counter(model="", messages=_PDF_FILE_PROMPT)
+
+
+def _single_image_pdf_tokens() -> int:
+    from litellm.litellm_core_utils.token_counter import token_counter
+
+    return token_counter(model="", messages=_PDF_FILE_PROMPT, pdf_pricing="single_image")
+
+
+def _between_pdf_prices() -> int:
+    return (_page_priced_pdf_tokens() + _single_image_pdf_tokens()) // 2
+
+
+def _window_router(limit: int, *served: str) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "docs",
+                "litellm_params": {"model": model, "api_key": "sk-test", "mock_response": model},
+                "model_info": {"max_input_tokens": limit},
+            }
+            for model in served
+        ],
+        enable_pre_call_checks=True,
+    )
+
+
+def _kept_models(router: litellm.Router, **request: object) -> list[str]:
+    kept: Final = router._pre_call_checks(
+        model="docs", healthy_deployments=router.get_model_list(model_name="docs"), **request
+    )
+    return [deployment["litellm_params"]["model"] for deployment in kept]
+
+
+@pytest.mark.parametrize("gemini", _GEMINI_MODELS)
+async def test_gemini_takes_a_pdf_its_window_fits_on_the_sync_and_async_router(gemini: str):
+    router: Final = _window_router(_between_pdf_prices(), gemini)
+
+    sync_response: Final = router.completion(model="docs", messages=_PDF_FILE_PROMPT)
+    async_response: Final = await router.acompletion(model="docs", messages=_PDF_FILE_PROMPT)
+
+    assert (sync_response.choices[0].message.content, async_response.choices[0].message.content) == (gemini, gemini)
+
+
+@pytest.mark.parametrize("claude", _CLAUDE_MODELS)
+async def test_a_group_of_gemini_and_claude_sends_a_pdf_only_claude_overflows_to_gemini(claude: str):
+    gemini: Final = _GEMINI_MODELS[0]
+    router: Final = _window_router(_between_pdf_prices(), gemini, claude)
+
+    sync_answers: Final = {router.completion(model="docs", messages=_PDF_FILE_PROMPT).choices[0].message.content}
+    async_answers: Final = {
+        (await router.acompletion(model="docs", messages=_PDF_FILE_PROMPT)).choices[0].message.content
+    }
+
+    assert _kept_models(router, messages=_PDF_FILE_PROMPT) == [gemini]
+    assert sync_answers == async_answers == {gemini}
+
+
+async def test_a_pdf_no_deployment_fits_names_each_deployments_own_count():
+    gemini: Final = _GEMINI_MODELS[0]
+    router: Final = _window_router(_single_image_pdf_tokens() - 1, gemini, _CLAUDE_MODELS[0])
+    expected: Final = (
+        f"Max Input Tokens={_single_image_pdf_tokens() - 1}, Got={_single_image_pdf_tokens()}",
+        f"Max Input Tokens={_single_image_pdf_tokens() - 1}, Got={_page_priced_pdf_tokens()}",
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError) as sync_error:
+        _kept_models(router, messages=_PDF_FILE_PROMPT)
+    with pytest.raises(litellm.ContextWindowExceededError) as async_error:
+        await router.acompletion(model="docs", messages=_PDF_FILE_PROMPT)
+
+    assert all(part in str(sync_error.value) for part in expected)
+    assert all(part in str(async_error.value) for part in expected)
+
+
+@pytest.mark.parametrize(
+    "served", [*_CLAUDE_MODELS, "mistral/mistral-large-latest", "openrouter/google/gemini-3.5-flash-lite"]
+)
+async def test_a_pdf_keeps_its_page_price_on_every_deployment_without_a_known_lower_pdf_price(served: str):
+    router: Final = _window_router(_between_pdf_prices(), served)
+
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={_page_priced_pdf_tokens()}"):
+        _kept_models(router, messages=_PDF_FILE_PROMPT)
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={_page_priced_pdf_tokens()}"):
+        await router.acompletion(model="docs", messages=_PDF_FILE_PROMPT)
+
+
+@pytest.mark.parametrize("openai", ["openai/gpt-6.1-sol", "azure/gpt-6.1-sol"])
+async def test_an_openai_deployment_grouped_with_claude_takes_a_pdf_its_own_pdf_price_fits(openai: str):
+    router: Final = _window_router(_between_pdf_prices(), openai, _CLAUDE_MODELS[0])
+
+    sync_answer: Final = router.completion(model="docs", messages=_PDF_FILE_PROMPT).choices[0].message.content
+    async_answer: Final = (await router.acompletion(model="docs", messages=_PDF_FILE_PROMPT)).choices[0].message.content
+
+    assert _kept_models(router, messages=_PDF_FILE_PROMPT) == [openai]
+    assert (sync_answer, async_answer) == (openai, openai)
+
+
+def test_an_alias_of_gemini_openai_and_claude_keeps_every_deployment_whose_own_pdf_count_fits():
+    router: Final = _window_router(_between_pdf_prices(), _GEMINI_MODELS[0], "openai/gpt-6.1-sol", _CLAUDE_MODELS[0])
+
+    assert _kept_models(router, messages=_PDF_FILE_PROMPT) == [_GEMINI_MODELS[0], "openai/gpt-6.1-sol"]
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+async def test_a_custom_token_counter_stays_authoritative_for_a_pdf_request(
+    monkeypatch: pytest.MonkeyPatch, wrapped: bool
+):
+    custom_count: Final = 10 * _page_priced_pdf_tokens()
+    router: Final = _window_router(_between_pdf_prices(), _GEMINI_MODELS[0], "openai/gpt-6.1-sol")
+
+    def custom_token_counter(**_: object) -> int:
+        return custom_count
+
+    configured_counter: Final = (
+        functools.wraps(litellm.token_counter)(custom_token_counter) if wrapped else custom_token_counter
+    )
+    monkeypatch.setattr(litellm, "token_counter", configured_counter)
+
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={custom_count}"):
+        _kept_models(router, messages=_PDF_FILE_PROMPT)
+    with pytest.raises(litellm.ContextWindowExceededError, match=f"Got={custom_count}"):
+        await router.acompletion(model="docs", messages=_PDF_FILE_PROMPT)
+
+
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [{"messages": _PDF_DOCUMENT_PROMPT}, {"input": _PDF_RESPONSES_INPUT}],
+    ids=["anthropic_document", "responses_input_file"],
+)
+@pytest.mark.parametrize("fitting", [_GEMINI_MODELS[0], "openai/gpt-6.1-sol"])
+def test_a_pdf_in_every_request_shape_reaches_the_deployment_its_own_pdf_price_fits(
+    request_kwargs: dict[str, object], fitting: str
+):
+    shared: Final = _window_router(1, _CLAUDE_MODELS[0])._count_pre_call_check_tokens(
+        messages=request_kwargs.get("messages"), input=request_kwargs.get("input")
+    )
+    router: Final = _window_router(shared - 1, fitting, _CLAUDE_MODELS[0])
+
+    assert _kept_models(router, **request_kwargs) == [fitting]
+
+
+def _image_prompt() -> list[dict[str, object]]:
+    from PIL import Image
+
+    image: Final = io.BytesIO()
+    Image.new("RGB", (1024, 1024)).save(image, format="PNG")
+    url: Final = "data:image/png;base64," + base64.b64encode(image.getvalue()).decode()
+    return [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": url}}]}]
+
+
+def _file_prompt(file_data: str) -> list[dict[str, object]]:
+    return [{"role": "user", "content": [{"type": "file", "file": {"file_data": file_data}}]}]
+
+
+def _wrapped_base64(encoded: str) -> str:
+    return "\n".join(encoded[start : start + 76] for start in range(0, len(encoded), 76))
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        [{"role": "user", "content": "read the attached report and summarize the findings. " * 40}],
+        _image_prompt(),
+        _file_prompt("data:application/pdf;base64," + base64.b64encode(b"not a pdf at all").decode()),
+    ],
+    ids=["text", "image", "unreadable_pdf"],
+)
+async def test_a_prompt_without_a_readable_pdf_keeps_the_shared_count_on_every_deployment(prompt: list[object]):
+    router: Final = _window_router(
+        litellm.token_counter(model="", messages=prompt) - 1, _GEMINI_MODELS[0], "openai/gpt-6.1-sol", _CLAUDE_MODELS[0]
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        _kept_models(router, messages=prompt)
+    with pytest.raises(litellm.ContextWindowExceededError):
+        await router.acompletion(model="docs", messages=prompt)
+
+
+def test_a_pdf_with_line_wrapped_base64_keeps_its_page_price_and_fits_gemini():
+    prompt: Final = _file_prompt(f"data:application/pdf;base64,{_wrapped_base64(_PDF_BASE64)}")
+    limit: Final = litellm.token_counter(model="", messages=prompt) - 1
+
+    assert litellm.token_counter(model="", messages=prompt) == litellm.token_counter(
+        model="", messages=_file_prompt(_PDF_URL)
+    )
+    assert _kept_models(_window_router(limit, _GEMINI_MODELS[0]), messages=prompt) == [_GEMINI_MODELS[0]]
+    with pytest.raises(litellm.ContextWindowExceededError):
+        _kept_models(_window_router(limit, _CLAUDE_MODELS[0]), messages=prompt)
+
+
+def test_an_explicit_input_token_count_still_decides_a_gemini_pdf_request():
+    router: Final = _window_router(_between_pdf_prices(), _GEMINI_MODELS[0])
+
+    with pytest.raises(litellm.ContextWindowExceededError):
+        _kept_models(router, messages=_PDF_FILE_PROMPT, input_token_count=_page_priced_pdf_tokens())
+    assert _kept_models(router, messages=_PDF_FILE_PROMPT, skip_inline_token_count=True) == [_GEMINI_MODELS[0]]
+
+
 _EMBEDDING_CONTEXT_WINDOW: Final = 8_192
 _EMBEDDING_IMAGE_INPUT: Final = f"data:image/png;base64,{base64.b64encode(bytes(range(256)) * 1024).decode()}"
 
