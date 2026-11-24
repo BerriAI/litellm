@@ -1,6 +1,6 @@
 //! Rust repositories for the objects the proxy reads from Postgres: the auth objects it reads when its auth cache
-//! misses, the spend log sums it reseeds cold budget window counters from, and the config, model and credential
-//! rows the gateway loads its DB config from. The spend log repository also writes the spend logs and their ledger
+//! misses, the spend log sums it reseeds cold budget window counters from, and the config, model, credential and
+//! UI settings rows the gateway loads its DB config from. The spend log repository also writes the spend logs and their ledger
 //! deliveries.
 //!
 //! Each repository is a folder that owns its queries, the shaping of their rows into what their callers consume,
@@ -36,6 +36,7 @@ mod team;
 mod team_membership;
 #[cfg(test)]
 mod test_support;
+mod ui_settings;
 mod user;
 mod utc_timestamp;
 
@@ -64,4 +65,5 @@ pub use team::{Team, TeamRepository};
 pub use team_membership::{
     AddedMember, MemberAdd, MemberBudget, NewMemberBudget, TeamMembership, TeamMembershipRepository,
 };
+pub use ui_settings::UiSettingsRepository;
 pub use user::{NewUserDefaults, SignIn, User, UserRepository};
