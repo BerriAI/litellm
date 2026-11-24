@@ -178,11 +178,11 @@ class NomaV2Guardrail(CustomGuardrail):
     def _build_scan_payload(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
+        request_data: Mapping[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"],
         application_id: str | None,
-    ) -> dict:
+    ) -> dict[str, object]:
         payload_request_data: Final = self._sanitize_payload_for_transport(
             {key: value for key, value in request_data.items() if key not in _KEYS_DUPLICATING_SCAN_INPUTS}
         )
@@ -211,7 +211,7 @@ class NomaV2Guardrail(CustomGuardrail):
         return payload
 
     @staticmethod
-    def _sanitize_payload_for_transport(payload: dict) -> dict:
+    def _sanitize_payload_for_transport(payload: Mapping[str, object]) -> dict[str, object]:
         def _default(obj: object) -> object:
             model_dump: Final[Callable[[], Mapping[str, object]] | None] = getattr(obj, "model_dump", None)
             if model_dump is not None:
@@ -243,7 +243,7 @@ class NomaV2Guardrail(CustomGuardrail):
 
     async def _call_noma_scan(
         self,
-        payload: dict,
+        payload: Mapping[str, object],
     ) -> object:
         headers: Final[dict[str, str]] = {"Content-Type": "application/json"}
         authorization_header: Final = self._get_authorization_header()
@@ -273,7 +273,7 @@ class NomaV2Guardrail(CustomGuardrail):
 
     def _add_guardrail_observability(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         start_time: datetime,
         guardrail_status: GuardrailStatus,
         guardrail_json_response: object,

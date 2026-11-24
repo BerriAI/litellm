@@ -1299,7 +1299,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     async def process_input_messages(
         self,
-        data: dict,
+        data: dict[str, object],
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> dict[str, object]:
@@ -1308,7 +1308,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Handles both string input and list of message objects.
         """
-        raw_input: Final[str | ResponseInputParam | None] = data.get("input")
+        raw_input: Final[object] = data.get("input")
         if not isinstance(raw_input, (str, list)):
             return data
         input_data: Final = cast("str | ResponseInputParam", raw_input)  # cast-ok: fields read via stream_item_field

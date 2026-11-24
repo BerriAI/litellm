@@ -138,8 +138,6 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 from litellm import (
-    EmbeddingResponse,
-    ImageResponse,
     ModelResponse,
     ModelResponseStream,
     Router,
@@ -209,8 +207,13 @@ from litellm.litellm_core_utils.litellm_logging import (
     Logging,
     deployment_pricing_model_info,
 )
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.litellm_core_utils.redact_messages import drop_token_ids
+from litellm.litellm_core_utils.redact_messages import (
+    TokenDataCheckedFields,
+    drop_token_ids,
+    without_hidden_token_data,
+)
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -305,6 +308,7 @@ from litellm.proxy.hooks.parallel_request_limiter import (  # noqa: F401, RUF100
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (  # noqa: F401, RUF100  # legacy module exports
     ParallelRequestLimiterHook,
     PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportUnusedImport]  # backwards-compatible package export
+    ResponsesWebSocketClose,
     _PROXY_MaxParallelRequestsHandler_v3,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
@@ -974,7 +978,7 @@ def _partition_post_call_callbacks() -> tuple[tuple[CustomGuardrail, ...], tuple
     return (guardrails, others)
 
 
-def _merge_pipeline_metadata_bucket(data: dict, bucket_key: str, modified_bucket_value: object) -> None:
+def _merge_pipeline_metadata_bucket(data: dict[str, object], bucket_key: str, modified_bucket_value: object) -> None:
     if not isinstance(modified_bucket_value, dict):
         return
     modified_bucket: Final = cast("dict[str, object]", modified_bucket_value)  # cast-ok: metadata buckets are str-keyed
@@ -986,7 +990,7 @@ def _merge_pipeline_metadata_bucket(data: dict, bucket_key: str, modified_bucket
         data[bucket_key] = surviving_writes
 
 
-def _merge_pipeline_metadata_writes(data: dict, modified_data: Mapping[str, object]) -> None:
+def _merge_pipeline_metadata_writes(data: dict[str, object], modified_data: Mapping[str, object]) -> None:
     """
     Copy metadata-bucket writes from a pipeline's working copy back onto the request.
 
@@ -1733,7 +1737,7 @@ def _failure_usage_to_lift(
     return _billed_across_attempts(failed_attempts, current_usage, current_cost)
 
 
-_EMPTY_LIFT: Final = MappingProxyType({})
+_EMPTY_LIFT: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _reached_deployment(litellm_logging_obj: Logging) -> bool:
@@ -2636,7 +2640,7 @@ class ProxyLogging:
                 return user_api_key_auth_obj.__dict__
         return {}
 
-    def _convert_mcp_to_llm_format(self, request_obj, kwargs: Mapping[str, object]) -> dict:
+    def _convert_mcp_to_llm_format(self, request_obj: MCPPreCallRequestObject, kwargs: Mapping[str, object]) -> dict:
         """
         Convert MCP tool call to LLM message format for existing guardrail validation.
         """
@@ -2721,7 +2725,9 @@ class ProxyLogging:
     ) -> dict[str, object]:
         return self._convert_mcp_to_llm_format(request_obj, kwargs)
 
-    def _convert_llm_result_to_mcp_response(self, llm_result, request_obj) -> MCPPreCallResponseObject | None:
+    def _convert_llm_result_to_mcp_response(
+        self, llm_result: object, request_obj: MCPPreCallRequestObject
+    ) -> MCPPreCallResponseObject | None:
         """
         Convert LLM guardrail result back to MCP response format.
         """
@@ -2783,7 +2789,9 @@ class ProxyLogging:
 
         return None
 
-    def _extract_modified_arguments_from_content(self, masked_content: str, request_obj) -> object:
+    def _extract_modified_arguments_from_content(
+        self, masked_content: str, request_obj: MCPPreCallRequestObject
+    ) -> object:
         """
         Extract modified/masked arguments from the guardrail response content.
         """
@@ -2820,7 +2828,7 @@ class ProxyLogging:
             verbose_proxy_logger.error("Error extracting modified arguments: %s", e)
             return None
 
-    def _parse_arguments_manually(self, args_text: str, original_args: dict) -> dict | None:
+    def _parse_arguments_manually(self, args_text: str, original_args: dict[str, object]) -> dict[str, object] | None:
         """
         Try to manually parse arguments when JSON parsing fails.
         This is a fallback for cases where the guardrail modifies the format.
@@ -2849,7 +2857,9 @@ class ProxyLogging:
             verbose_proxy_logger.error("Error in manual argument parsing: %s", e)
             return None
 
-    def _convert_llm_result_to_mcp_during_response(self, llm_result, request_obj) -> MCPDuringCallResponseObject | None:
+    def _convert_llm_result_to_mcp_during_response(
+        self, llm_result: object, request_obj
+    ) -> MCPDuringCallResponseObject | None:
         """
         Convert LLM guardrail result back to MCP during call response format.
         """
@@ -2963,7 +2973,7 @@ class ProxyLogging:
 
     _convert_mcp_hook_response_to_kwargs = convert_mcp_hook_response_to_kwargs
 
-    async def process_pre_call_hook_response(self, response, data, call_type):
+    async def process_pre_call_hook_response(self, response: object, data, call_type: str):
         if isinstance(response, Exception):
             raise response
         if isinstance(response, dict):
@@ -3004,7 +3014,7 @@ class ProxyLogging:
         self,
         callback: "CustomGuardrail",
         hook_type: str,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
         response: LLMResponseTypes | None = None,
@@ -3059,7 +3069,7 @@ class ProxyLogging:
         self,
         guardrail_name: str,
         hook_type: str,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
         response: LLMResponseTypes | None = None,
@@ -3106,7 +3116,7 @@ class ProxyLogging:
     async def _process_guardrail_callback(
         self,
         callback: CustomGuardrail,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
         event_type: GuardrailEventHooks,
@@ -3201,7 +3211,7 @@ class ProxyLogging:
     async def _run_sequential_guardrail_callback(
         self,
         callback: CustomGuardrail,
-        data: dict,  # mutable-ok: matches _process_guardrail_callback's own request-payload typing
+        data: dict[str, object],  # mutable-ok: matches _process_guardrail_callback's own request-payload typing
         raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
@@ -3424,7 +3434,7 @@ class ProxyLogging:
         if not pipelines:
             return data, None
 
-        current_response = response  # rebind-ok: chains each pipeline's replacement response into the next
+        current_response: LLMResponseTypes | None = response  # rebind-ok: chains each pipeline's replacement response
         steps_that_ran: frozenset[str] = frozenset()  # rebind-ok: a later pipeline keeps a step an earlier one ran
         request: Final = cast(dict[str, object], data)  # cast-ok: request payload, updated in place by every pipeline
         log_waits: Final = event_hook == "post_call" and _whole_response_log_waits_for_its_pipelines(request, call_type)
@@ -4386,7 +4396,9 @@ class ProxyLogging:
                 raise Exception("Missing SENTRY_DSN from environment")
             sentry.capture_message(formatted_message)
 
-    async def failure_handler(self, original_exception: Exception, duration: float, call_type: str, traceback_str=""):
+    async def failure_handler(
+        self, original_exception: Exception, duration: float, call_type: str, traceback_str: object = ""
+    ):
         """
         Log failed db read/writes
 
@@ -4825,7 +4837,16 @@ class ProxyLogging:
         3. /image/generation
         4. /files
         """
+        return await without_hidden_token_data(
+            response, self._post_call_success_response(data, response, user_api_key_dict)
+        )
 
+    async def _post_call_success_response(
+        self,
+        data: dict[str, object],  # mutable-ok: guardrail_to_apply is written into the live request
+        response: LLMResponseTypes,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> LLMResponseTypes:
         from litellm.proxy.proxy_server import llm_router
 
         run: Final[HookRun[LLMResponseTypes]] = HookRun(response=response)
@@ -4850,7 +4871,7 @@ class ProxyLogging:
             await self._post_call_without_v2(run, guardrails, guardrail_callbacks, other_callbacks)
             return run.response
         fields: Final = with_sources(
-            hook_fields(data, run, Field.response),
+            TokenDataCheckedFields(hook_fields(data, run, Field.response)),
             DERIVED_POST_CALL_SUCCESS_FIELDS,
             HookArgs(auth=user_api_key_dict, request=data),  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy request dict
         )
@@ -4928,7 +4949,9 @@ class ProxyLogging:
             return
         if callback.post_call_already_checked(guardrails.request_view, run.response) is True:
             return
-        run.adopt(await self._post_call_guardrail(guardrails, callback, run.response))
+        run.adopt(
+            await without_hidden_token_data(run.response, self._post_call_guardrail(guardrails, callback, run.response))
+        )
 
     async def _post_call_parallel_guardrail(
         self,
@@ -4946,7 +4969,9 @@ class ProxyLogging:
                 return
             if callback.post_call_already_checked(request_view, run.response) is True:
                 return
-            _ = await self._post_call_guardrail(guardrails, callback, run.response)
+            _ = await without_hidden_token_data(
+                run.response, self._post_call_guardrail(guardrails, callback, run.response)
+            )
         except BaseException as e:
             if not _exception_changes_request_flow(e):
                 raise
@@ -4990,8 +5015,11 @@ class ProxyLogging:
         if not isinstance(callback, CustomLogger):
             return
         run.adopt(
-            await callback.async_post_call_success_hook(
-                user_api_key_dict=user_api_key_dict, data=data, response=run.response
+            await without_hidden_token_data(
+                run.response,
+                callback.async_post_call_success_hook(
+                    user_api_key_dict=user_api_key_dict, data=data, response=run.response
+                ),
             )
         )
 
@@ -5195,17 +5223,17 @@ class ProxyLogging:
             "model_id": hidden_params.get("model_id"),
         }
 
-    def is_a2a_streaming_response(self, response: dict) -> bool:
+    def is_a2a_streaming_response(self, response: Mapping[str, object]) -> bool:
         expected_keys: Final = ["jsonrpc", "id", "result"]
         return all(key in response for key in expected_keys)
 
     async def async_post_call_streaming_hook(
         self,
         data: dict,
-        response: ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream,
+        response: object,
         user_api_key_dict: UserAPIKeyAuth,
         str_so_far: str | None = None,
-    ):
+    ) -> object:
         """
         Allow user to modify outgoing streaming data -> per chunk
 
@@ -5227,7 +5255,7 @@ class ProxyLogging:
         response_str: str | None = None
         if isinstance(response, (ModelResponse, ModelResponseStream)):
             response_str = litellm.get_response_string(response_obj=response)
-        elif isinstance(response, dict) and self.is_a2a_streaming_response(response):
+        elif is_str_keyed_dict(response) and self.is_a2a_streaming_response(response):
             from litellm.llms.a2a.common_utils import extract_text_from_a2a_response
 
             response_str = extract_text_from_a2a_response(response)
@@ -5276,9 +5304,6 @@ class ProxyLogging:
                             complete_response = str_so_far + response_str
                         else:
                             complete_response = response_str
-                        callback_response: (
-                            ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
-                        )
                         callback_response = await _callback.async_post_call_streaming_hook(
                             user_api_key_dict=user_api_key_dict,
                             response=complete_response,
@@ -5727,7 +5752,7 @@ class ProxyLogging:
         return _deferred_cb(*_args)
 
     @staticmethod
-    def fire_deferred_stream_logging(request_data: dict) -> None:
+    def fire_deferred_stream_logging(request_data: Mapping[str, object]) -> None:
         """
         Fire the deferred streaming logging callback after the full streaming
         pipeline (including guardrail end-of-stream blocks) has completed.
@@ -5797,13 +5822,25 @@ class ProxyLogging:
     arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
     _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
 
-    async def arelease_responses_websocket_slot(self, user_api_key_dict: UserAPIKeyAuth) -> None:
-        """Release the slot a Responses WebSocket took at admission. Only call this once that admission succeeded:
+    async def arelease_responses_websocket_slot(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        close: ResponsesWebSocketClose = "settled_by_its_log",
+        turns_logged: Callable[[], Awaitable[bool]] | None = None,
+    ) -> None:
+        """Release what a Responses WebSocket took at admission. Only call this once that admission succeeded:
         the legacy limiter keeps no record of its acquisitions and decrements unconditionally."""
         limiter: Final = self.get_proxy_hook("parallel_request_limiter")
-        if not isinstance(limiter, (ParallelRequestLimiterHook, _PROXY_MaxParallelRequestsHandler)):
-            return
-        await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+        if isinstance(limiter, ParallelRequestLimiterHook):
+            await limiter.async_release_responses_websocket_admission(user_api_key_dict, close, turns_logged)
+        elif isinstance(limiter, _PROXY_MaxParallelRequestsHandler):
+            await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+
+    def leave_responses_websocket_reservation_to_close(self) -> None:
+        """Leave an admitted WebSocket's token reservation to ``arelease_responses_websocket_slot`` at its close."""
+        limiter: Final = self.get_proxy_hook("parallel_request_limiter")
+        if isinstance(limiter, ParallelRequestLimiterHook):
+            limiter.leave_reservation_to_socket_close()
 
     async def arelease_refused_responses_websocket_slot(self, user_api_key_dict: UserAPIKeyAuth) -> None:
         """Release the slot of a Responses WebSocket refused while opening, only when its admission got that far."""
@@ -5811,7 +5848,7 @@ class ProxyLogging:
         if isinstance(limiter, _PROXY_MaxParallelRequestsHandler):
             await limiter.async_release_admitted_max_parallel_requests(user_api_key_dict)
         elif isinstance(limiter, ParallelRequestLimiterHook):
-            await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+            await limiter.async_release_responses_websocket_admission(user_api_key_dict, "refused_at_open")
 
     async def enforce_mcp_server_rate_limits(
         self,
@@ -5823,7 +5860,7 @@ class ProxyLogging:
             return
         await _enforce_mcp_server_rate_limits(limiter, user_api_key_dict, server)
 
-    def _init_response_taking_too_long_task(self, data: dict | None = None):
+    def _init_response_taking_too_long_task(self, data: dict[str, object] | None = None):
         """
         Initialize the response taking too long task if user is using slack alerting
 
@@ -5839,7 +5876,7 @@ class ProxyLogging:
 ### DB CONNECTOR ###
 # Define the retry decorator with backoff strategy
 # Function to be called whenever a retry is about to happen
-def on_backoff(details):
+def on_backoff(details: Mapping[str, object]):
     # The 'tries' key in the details dictionary contains the number of completed tries
     print_verbose(f"Backing off... this was attempt #{details['tries']}")
 
@@ -6112,6 +6149,10 @@ def _raise_user_unique_conflict(error: "UniqueViolationError", user_id: object, 
     ) from error
 
 
+class KeyWriter(Protocol):
+    async def __call__(self, data: Mapping[str, object]) -> "prisma_models.LiteLLM_VerificationToken": ...
+
+
 class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
@@ -6244,7 +6285,7 @@ class PrismaClient:
         self._closing: bool = False
         self._engine_exit_wait_seconds: Final = engine_exit_wait_seconds
         self._engine_tasks: frozenset[asyncio.Task[object]] = frozenset()
-        self._db_health_watchdog_task: asyncio.Task | None = None
+        self._db_health_watchdog_task: asyncio.Task[None] | None = None
         self._view_setup_task: asyncio.Task[_ViewSetupOutcome] | None = None
         self._db_last_reconnect_attempt_ts: float = 0.0
         self._db_reconnect_cooldown_seconds: int = max(1, get_env_int("PRISMA_RECONNECT_COOLDOWN_SECONDS", 15))
@@ -6838,6 +6879,7 @@ class PrismaClient:
         table_name: Literal["user", "key", "config", "spend", "team", "user_notification"],
         *,
         allow_existing_user: bool = True,
+        key_writer: KeyWriter | None = None,
     ):
         """
         Add a key to the database. If it already exists, do nothing.
@@ -6860,15 +6902,19 @@ class PrismaClient:
                 if db_data.get("budget_limits") is None:
                     db_data.pop("budget_limits", None)
                 print_verbose("PrismaClient: Before upsert into litellm_verificationtoken")
-                new_verification_token: Final = await VerificationTokenRepository(self).table.upsert(
-                    where={
-                        "token": hashed_token,
-                    },
-                    data={
-                        "create": {**db_data},
-                        "update": {},  # don't do anything if it already exists
-                    },
-                    include={"litellm_budget_table": True},
+                new_verification_token: Final = (
+                    await key_writer(db_data)
+                    if key_writer is not None
+                    else await VerificationTokenRepository(self).table.upsert(
+                        where={
+                            "token": hashed_token,
+                        },
+                        data={
+                            "create": {**db_data},
+                            "update": {},  # don't do anything if it already exists
+                        },
+                        include={"litellm_budget_table": True},
+                    )
                 )
                 verbose_proxy_logger.info("Data Inserted into Keys Table")
                 return new_verification_token
@@ -7441,7 +7487,7 @@ class PrismaClient:
             return True
 
     @staticmethod
-    def _reap_all_zombies() -> set:
+    def _reap_all_zombies() -> set[int]:
         """Reap ALL zombie child processes via waitpid(-1, WNOHANG).
 
         Returns a set of reaped PIDs.  As PID 1 in Docker (or any
@@ -7452,7 +7498,7 @@ class PrismaClient:
         """
         if sys.platform == "win32":
             return set()
-        reaped: Final[set] = set()
+        reaped: Final[set[int]] = set()
         while True:
             try:
                 pid, _ = os.waitpid(-1, os.WNOHANG)
@@ -8543,7 +8589,7 @@ class PrismaClient:
             verbose_proxy_logger.warning("Invalid response_time_ms value: %s", response_time_ms)
             return None
 
-    def _clean_details(self, details: dict | None) -> object:
+    def _clean_details(self, details: Mapping[str, object] | None) -> object:
         """Clean and validate details JSON"""
         if not isinstance(details, dict):
             return None
@@ -8561,7 +8607,7 @@ class PrismaClient:
         unhealthy_count: int = 0,
         error_message: str | None = None,
         response_time_ms: float | None = None,
-        details: dict | None = None,
+        details: Mapping[str, object] | None = None,
         checked_by: str | None = None,
         model_id: str | None = None,
     ):
@@ -8646,7 +8692,7 @@ async def cache_user_row(user_id: str, cache: DualCache, db: PrismaClient) -> No
     cache_key: Final = f"{user_id}_user_api_key_user_id"
     response: Final = cache.get_cache(key=cache_key)
     if response is None:  # Cache miss
-        user_row: Final = await db.get_data(user_id=user_id)
+        user_row: Final[object] = await db.get_data(user_id=user_id)
         if user_row is not None:
             print_verbose(f"User Row: {user_row}, type = {type(user_row)}")
             if has_attributes(user_row, _JsonDumpableRow, "model_dump_json") and callable(user_row.model_dump_json):
@@ -8842,7 +8888,7 @@ async def run_off_loop_if_fips(kdf: Callable[..., _T], *args: str) -> _T:
     return await asyncio.get_running_loop().run_in_executor(_FIPS_KDF_POOL, kdf, *args)
 
 
-async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
+async def migrate_passwords_to_scrypt_async(prisma_client: "PrismaClient") -> str:
     """
     Migrate plaintext passwords in the DB to scrypt. SHA256 passwords
     are left alone (they migrate on next login via the SHA256 fallback).

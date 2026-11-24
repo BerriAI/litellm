@@ -641,7 +641,7 @@ class PassThroughEndpointLogging:
         self,
         httpx_response: httpx.Response,
         response_body: Mapping[str, object] | list[dict[str, object]] | None,
-        request_body: dict,
+        request_body: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         result: str,

@@ -64,6 +64,7 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     decoded_json_object,
     is_codex_user_agent,
+    is_github_copilot_chat_user_agent,
     iter_items,
     keyword_arguments,
     normalize_drop_params,
@@ -1346,14 +1347,18 @@ def apply_missing_session_id_policy(
 def should_auto_drop_params_for_agentic_cli(
     user_agent: str, caller_set_drop_params: bool, proxy_config: ProxyConfig
 ) -> bool:
-    """drop_params defaults to on for agentic CLIs so their client-specific
-    params (e.g. Claude Code's thinking, Codex's service_tier) don't fail
-    requests routed to providers that reject them. A drop_params from the
-    caller wins over this default, and the operator's ``litellm_settings``
-    turns it off only with a value that reads as false."""
+    """drop_params defaults to on for agentic coding clients so their client-specific
+    params (e.g. Claude Code's thinking, Codex's service_tier, Copilot Chat's cot_id
+    on old assistant turns) don't fail requests routed to providers that reject them.
+    A drop_params from the caller wins over this default, and the operator's
+    ``litellm_settings`` turns it off only with a value that reads as false."""
     from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 
-    if not (is_claude_code_user_agent(user_agent) or is_codex_user_agent(user_agent)):
+    if not (
+        is_claude_code_user_agent(user_agent)
+        or is_codex_user_agent(user_agent)
+        or is_github_copilot_chat_user_agent(user_agent)
+    ):
         return False
     if caller_set_drop_params:
         return False
