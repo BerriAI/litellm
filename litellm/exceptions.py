@@ -412,6 +412,10 @@ class UnresolvablePreviousResponseError(MalformedRequestFieldError):
     pass
 
 
+class UnknownPreviousResponseError(UnresolvablePreviousResponseError):
+    pass
+
+
 class UnsupportedEndpointError(BadRequestError):
     pass
 

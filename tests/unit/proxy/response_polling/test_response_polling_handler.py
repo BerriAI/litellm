@@ -2153,7 +2153,7 @@ class TestBackgroundStreamingTerminalEvents:
             previous_response_not_found,
         )
 
-        refusal: Final = previous_response_not_found("resp_unknown", "claude-sonnet-4-6", "anthropic")
+        refusal: Final = previous_response_not_found(("resp_unknown",), "claude-sonnet-4-6", "anthropic")
         handler: Final = AsyncMock(spec=ResponsePollingHandler)
         kwargs: Final = _make_background_streaming_kwargs("poll_refused", handler)
 

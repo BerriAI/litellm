@@ -634,6 +634,52 @@ async def test_a_refused_follow_up_is_neither_retried_nor_sent_to_a_fallback(fal
     assert not getattr(refused.value, "num_retries", None)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_id_fields",
+    [
+        pytest.param({}, id="previous_response_id_only"),
+        pytest.param({ADDRESSED_RESPONSE_ID_FIELD: "resp_the_client_held"}, id="with_the_id_the_client_sent"),
+    ],
+)
+async def test_a_follow_up_to_a_native_turn_the_bridged_group_cannot_rebuild_goes_to_its_fallback(
+    client_id_fields: Mapping[str, str],
+):
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bridged",
+                "litellm_params": {
+                    "model": "azure_ai/claude-sonnet-4-6",
+                    "api_base": "https://fake-foundry-resource.services.ai.azure.com",
+                    "api_key": "fake-api-key",
+                },
+                "model_info": {"id": "d1"},
+            },
+            {
+                "model_name": "native",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake-api-key",
+                    "mock_response": "answered by the native fallback",
+                },
+                "model_info": {"id": "n1"},
+            },
+        ],
+        fallbacks=[{"bridged": ["native"]}],
+    )
+    native_turn_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai", model_id="native-elsewhere", response_id="resp_turn_one"
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        response: Final = await router.aresponses(
+            model="bridged", input="Double it", previous_response_id=native_turn_id, **client_id_fields
+        )
+
+    assert response._hidden_params["model_id"] == "n1"
+
+
 class _CountedLookups:
     def __init__(self) -> None:
         self.lookups = 0

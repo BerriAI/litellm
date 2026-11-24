@@ -298,13 +298,13 @@ fn retried_failure(error: &Error) -> Option<Cow<'_, AttemptError>> {
     }
 }
 
-/// The host refused an attempt, the dynamic queue did, or a follow-up's earlier turns could not be
-/// found, somewhere in the walk: the request ends with that error, whichever level or fallback hop
+/// The host refused an attempt, the dynamic queue did, or a follow-up names a response no provider
+/// holds, somewhere in the walk: the request ends with that error, whichever level or fallback hop
 /// raised it.
 fn ends_call(error: &Error) -> bool {
     matches!(error, Error::Refused(_))
         || retried_failure(error)
-            .is_some_and(|failure| failure.queue_rejected() || failure.is_unresolvable_follow_up())
+            .is_some_and(|failure| failure.queue_rejected() || failure.is_unknown_follow_up())
 }
 
 impl<H: RouterHost> Call<'_, H> {
@@ -756,7 +756,7 @@ impl<H: RouterHost> Call<'_, H> {
         retried_failure(error).is_none_or(|failure| {
             failure.kind == FailureKind::GuardrailIntervention
                 || failure.queue_rejected()
-                || failure.is_unresolvable_follow_up()
+                || failure.is_unknown_follow_up()
                 || (!snapshot.settings.fallback_on_unsupported_params
                     && is_bad_request_without_fallback(&failure))
         })

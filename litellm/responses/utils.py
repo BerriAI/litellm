@@ -1413,6 +1413,23 @@ class ResponsesAPIRequestUtils:
         )
 
 
+_CHAT_COMPLETION_ID_PREFIX: Final = "chatcmpl-"
+
+
+def answered_by_the_chat_bridge(response_id: object) -> bool:
+    return isinstance(
+        response_id, str
+    ) and ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(response_id).startswith(
+        _CHAT_COMPLETION_ID_PREFIX
+    )
+
+
+def held_by_a_provider(response_id: str) -> bool:
+    return ResponsesAPIRequestUtils.get_model_id_from_response_id(
+        response_id
+    ) is not None and not answered_by_the_chat_bridge(response_id)
+
+
 class ResponseAPILoggingUtils:
     @staticmethod
     def is_response_api_usage(usage: Mapping[str, object] | ResponseAPIUsage) -> bool:

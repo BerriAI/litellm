@@ -10,6 +10,7 @@ import pytest
 import litellm
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, UnresolvablePreviousResponseError
 from litellm.responses.litellm_completion_transformation.transformation import previous_response_not_found
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_api import ChangeSet
 from litellm.router_core import RouterCore
 from litellm.types.utils import Usage
@@ -294,12 +295,17 @@ async def test_a_failed_fallback_group_follows_its_own_chain(make_core: MakeCore
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "previous_response_id",
+    ["resp_unknown", ResponsesAPIRequestUtils._build_responses_api_response_id("openai", "b-1", "chatcmpl-abc")],
+    ids=["unknown-id", "id-the-chat-bridge-answered"],
+)
 async def test_a_fallback_that_cannot_find_the_previous_response_ends_the_walk_with_its_own_400(
-    make_core: MakeCore, host: ScriptedHost
+    make_core: MakeCore, host: ScriptedHost, previous_response_id: str
 ) -> None:
     show_router_debug(host)
     core: Final = build(make_core, fallbacks=[{"a": ["b", "c"]}])
-    refusal: Final = previous_response_not_found("resp_unknown", "b", "openai")
+    refusal: Final = previous_response_not_found((previous_response_id,), "b", "openai")
     host.answer("openai/a", server_error())
     host.answer("openai/b", refusal)
 
@@ -308,6 +314,39 @@ async def test_a_fallback_that_cannot_find_the_previous_response_ends_the_walk_w
 
     assert raised.value.message == refusal.message
     assert host.deployments_called("acompletion") == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_a_fallback_that_cannot_rebuild_a_response_a_provider_holds_hands_it_to_the_next_fallback(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = build(make_core, fallbacks=[{"a": ["b", "c"]}])
+    held_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id("openai", "a-1", "resp_abc")
+    host.answer("openai/a", server_error())
+    host.answer("openai/b", previous_response_not_found((held_id,), "b", "openai"))
+
+    response: Final = await complete(core)
+
+    assert host.deployments_called("acompletion") == ["a", "b", "c"]
+    assert headers(response)["x-litellm-model-group"] == "c"
+
+
+@pytest.mark.asyncio
+async def test_a_walk_that_fails_after_a_fallback_could_not_rebuild_the_response_answers_with_that_400(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = build(make_core, fallbacks=[{"a": ["b", "c"]}])
+    held_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id("openai", "a-1", "resp_abc")
+    refusal: Final = previous_response_not_found((held_id,), "b", "openai")
+    host.answer("openai/a", server_error())
+    host.answer("openai/b", refusal)
+    host.answer("openai/c", server_error())
+
+    with pytest.raises(UnresolvablePreviousResponseError) as raised:
+        await complete(core)
+
+    assert raised.value.message == refusal.message
+    assert host.deployments_called("acompletion") == ["a", "b", "c"]
 
 
 @pytest.mark.asyncio

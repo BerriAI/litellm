@@ -37,6 +37,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     holds_an_earlier_reply,
     previous_response_ids_metadata,
     previous_response_not_found,
+    previous_response_refusal,
     with_compaction_items_as_params,
 )
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -70,14 +71,14 @@ def _proxy_database_connected() -> bool:
 
 
 def _stored_turns_need_aresponses(
-    client_response_id: str, model: str, provider: str | None
+    client_response_ids: tuple[str, ...], model: str, provider: str | None
 ) -> UnresolvablePreviousResponseError:
     message: Final = (
-        f"Previous response with id '{client_response_id}' can only be continued with `litellm.aresponses()` in "
+        f"Previous response with id '{client_response_ids[-1]}' can only be continued with `litellm.aresponses()` in "
         "this process. Its conversation is rebuilt from the LiteLLM proxy's database, which only the proxy's event "
         "loop can query."
     )
-    return UnresolvablePreviousResponseError(
+    return previous_response_refusal(client_response_ids)(
         message=message,
         model=model,
         llm_provider=provider,
@@ -86,12 +87,12 @@ def _stored_turns_need_aresponses(
 
 
 def _sync_follow_up_refusal(
-    client_response_id: str, model: str, provider: str | None
+    client_response_ids: tuple[str, ...], model: str, provider: str | None
 ) -> UnresolvablePreviousResponseError:
     return (
-        _stored_turns_need_aresponses(client_response_id, model, provider)
+        _stored_turns_need_aresponses(client_response_ids, model, provider)
         if _proxy_database_connected()
-        else previous_response_not_found(client_response_id, model, provider)
+        else previous_response_not_found(client_response_ids, model, provider)
     )
 
 
@@ -260,9 +261,7 @@ class LiteLLMCompletionTransformationHandler:
             and not holds_an_earlier_reply(bridged_input)
         ):
             raise _sync_follow_up_refusal(
-                previous_response_client_ids[-1] if previous_response_client_ids else previous_response_id,
-                model,
-                custom_llm_provider,
+                previous_response_client_ids or (previous_response_id,), model, custom_llm_provider
             )
         _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), echoed_request)
         with error_param_named_as_a_responses_field(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), bridged_request):

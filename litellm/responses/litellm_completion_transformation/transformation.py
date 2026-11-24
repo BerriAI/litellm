@@ -41,7 +41,7 @@ from litellm.constants import (
     REDACTED_BY_LITELLM,
     REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
 )
-from litellm.exceptions import BadRequestError, UnresolvablePreviousResponseError
+from litellm.exceptions import BadRequestError, UnknownPreviousResponseError, UnresolvablePreviousResponseError
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     block_with_cache_control,
@@ -106,7 +106,7 @@ from litellm.responses.litellm_completion_transformation.session_handler import 
     ResponsesSessionHandler,
     StoredTurns,
 )
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.utils import ResponsesAPIRequestUtils, held_by_a_provider
 from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex, claude_hosted_web_tool_call
 from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.llms.bedrock import S3MediaFileObjectFile, S3MediaImageUrlObject
@@ -650,13 +650,21 @@ _SDK_REPLAY_REQUIREMENTS: Final = (
 )
 
 
+def previous_response_refusal(client_response_ids: tuple[str, ...]) -> type[UnresolvablePreviousResponseError]:
+    return (
+        UnresolvablePreviousResponseError
+        if held_by_a_provider(client_response_ids[0])
+        else UnknownPreviousResponseError
+    )
+
+
 def previous_response_not_found(
-    client_response_id: str, model: str, provider: str | None
+    client_response_ids: tuple[str, ...], model: str, provider: str | None
 ) -> UnresolvablePreviousResponseError:
-    message: Final = f"Previous response with id '{client_response_id}' not found. " + (
+    message: Final = f"Previous response with id '{client_response_ids[-1]}' not found. " + (
         _PROXY_REPLAY_REQUIREMENTS if "litellm.proxy.proxy_server" in sys.modules else _SDK_REPLAY_REQUIREMENTS
     )
-    return UnresolvablePreviousResponseError(
+    return previous_response_refusal(client_response_ids)(
         message=message,
         model=model,
         llm_provider=provider,
@@ -1836,11 +1844,7 @@ class LiteLLMCompletionResponsesConfig:
         session_history: Final = chat_completion_session.get("messages") or []
         input_stands_alone: Final = input_replaces_history or holds_an_earlier_reply(request_input)
         if previous_response_id and not session_history and not input_stands_alone:
-            raise previous_response_not_found(
-                previous_response_client_ids[-1] if previous_response_client_ids else previous_response_id,
-                model,
-                provider,
-            )
+            raise previous_response_not_found(previous_response_client_ids or (previous_response_id,), model, provider)
         stored_messages: Final = LiteLLMCompletionResponsesConfig._with_compaction_blocks_the_route_takes(
             _instruction_messages(session_history) if input_replaces_history else session_history,
             route,
