@@ -2632,35 +2632,43 @@ def test_native_messages_tool_config_point_marks_last_tool_and_drops_the_key(mon
     assert tools == tools_before
 
 
-def test_native_messages_tool_config_point_marks_the_last_tool_that_is_not_deferred(monkeypatch):
-    from litellm.llms.anthropic.messages.native import handler
-
-    captured = {}
-
-    def fake_native(**kwargs):
-        captured["params"] = kwargs["anthropic_messages_optional_request_params"]
-        return "native-passthrough"
-
-    monkeypatch.setattr(handler.base_llm_http_handler, "anthropic_messages_handler", fake_native)
-    loaded = {"name": "Read", "description": "Reads a file", "input_schema": {"type": "object"}}
-    deferred = {
+@pytest.mark.asyncio
+async def test_native_messages_tool_config_point_marks_the_last_tool_that_is_not_deferred() -> None:
+    loaded: Final = {"name": "Read", "description": "Reads a file", "input_schema": {"type": "object"}}
+    deferred: Final = {
         "name": "mcp__weather__get_alerts",
         "description": "Gets weather alerts",
         "input_schema": {"type": "object"},
         "defer_loading": True,
     }
+    with recording_service() as upstream:
+        upstream.enqueue(
+            ResponseSpec(
+                body={
+                    "id": "msg_tool_config",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-opus-5-5",
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 1},
+                }
+            )
+        )
+        await litellm.anthropic.messages.acreate(
+            model="anthropic/claude-opus-5-5",
+            max_tokens=100,
+            messages=[{"role": "user", "content": "Hello"}],
+            tools=[loaded, deferred],
+            cache_control_injection_points=[{"location": "tool_config"}],
+            api_key="sk-test",
+            api_base=upstream.base_url,
+        )
 
-    handler.anthropic_messages_handler(
-        max_tokens=100,
-        messages=[{"role": "user", "content": "Hello"}],
-        model="anthropic/claude-opus-4-6",
-        api_key="sk-test",
-        tools=[loaded, deferred],
-        litellm_metadata={},
-        cache_control_injection_points=[{"location": "tool_config"}],
-    )
-
-    assert captured["params"]["tools"] == [{**loaded, "cache_control": {"type": "ephemeral"}}, deferred]
+    sent: Final = upstream.requests[-1].body
+    assert isinstance(sent, dict)
+    assert sent["tools"] == [{**loaded, "cache_control": {"type": "ephemeral"}}, deferred]
 
 
 # Anthropic's 400 for a request past Claude's strict tool limits, seen live on claude-sonnet-4-6 on 2026-10-29

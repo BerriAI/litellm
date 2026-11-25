@@ -361,9 +361,10 @@ def deferred_tool_emulation(
     )
     forced: Final = _forced_tool_name(tool_choice)
     loaded: Final = frozenset(name for name in _loaded_tool_names(messages) if name in deferred)
+    strict: Final = frozenset(str(tool.get("name")) for tool in tool_mappings if tool.get("strict") is True)
     return DeferredToolEmulation(
         deferred=deferred,
         dispatcher=_unused_dispatcher_name(tool_names),
         forced=forced if isinstance(forced, str) and forced in deferred else None,
-        restorable=loaded | (tool_names - deferred.keys()),
+        restorable=loaded | (tool_names - deferred.keys() - strict),
     )
