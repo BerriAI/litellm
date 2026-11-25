@@ -44,6 +44,18 @@ pub struct Customer {
     pub hierarchy: Option<Value>,
 }
 
+/// The app a customer hierarchy resolved the key to, which the proxy stamps as
+/// `user_api_key_app_id`, `user_api_key_app_group_id` and `user_api_key_app_alias` only when the
+/// hierarchy names both an app id and an alias
+/// (`LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct App {
+    pub id: String,
+    /// Logged only when the app belongs to a group.
+    pub group_id: Option<String>,
+    pub alias: String,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Caller {
     pub key: Key,
@@ -52,6 +64,7 @@ pub struct Caller {
     pub organization: Named,
     pub project: Named,
     pub customer: Customer,
+    pub app: Option<App>,
     pub end_user_id: Option<String>,
     pub request_route: Option<String>,
 }
