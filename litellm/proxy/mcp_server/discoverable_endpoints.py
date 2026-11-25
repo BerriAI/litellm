@@ -1752,7 +1752,7 @@ async def _load_store_dcr_credentials(
     return credentials
 
 
-async def hydrate_config_dcr_clients(servers: Sequence[MCPServer]) -> None:
+async def hydrate_config_dcr_clients(servers: Sequence[MCPServer]) -> bool:
     from litellm.proxy.mcp_server.db import (  # noqa: PLC0415  # avoids circular import
         get_mcp_server_oauth_client_credentials_by_id,
     )
@@ -1760,7 +1760,7 @@ async def hydrate_config_dcr_clients(servers: Sequence[MCPServer]) -> None:
 
     candidates: Final = tuple(server for server in servers if not server.client_id)
     if not candidates:
-        return
+        return True
     try:
         prisma_client: Final = get_prisma_client_or_throw(
             "Database not connected. Cannot read MCP OAuth client registration."
@@ -1770,8 +1770,9 @@ async def hydrate_config_dcr_clients(servers: Sequence[MCPServer]) -> None:
         )
     except Exception as exc:  # noqa: BLE001  # configuration hydration is best effort
         verbose_logger.debug("Failed to read stored MCP OAuth clients: %s", exc)
-        return
+        return False
 
+    had_error = False  # rebind-ok: accumulate best-effort credential hydration failures
     for server in candidates:
         if server.client_id:
             continue
@@ -1786,9 +1787,11 @@ async def hydrate_config_dcr_clients(servers: Sequence[MCPServer]) -> None:
                     "hydrated persisted DCR client onto config MCP server server_id=%s", server.server_id
                 )
         except Exception as exc:  # noqa: BLE001  # one bad client must not block other servers
+            had_error = True  # rebind-ok: record a failure without skipping remaining servers
             verbose_logger.debug(
                 "load_servers_from_config: failed to hydrate DCR client for server_id=%s: %s", server.server_id, exc
             )
+    return not had_error
 
 
 async def _resolve_persisted_dcr_client(

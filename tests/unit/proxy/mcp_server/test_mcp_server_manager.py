@@ -20497,6 +20497,85 @@ async def test_catalog_unchanged_revision_skips_table_reload(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_scheduled_catalog_skips_unchanged_revision_but_forced_reload_reads(monkeypatch):
+    read_rows = AsyncMock(side_effect=([_catalog_row()], [_catalog_row("updated")]))
+    read_revision = AsyncMock(return_value=_revision_row(0))
+    _catalog_database(monkeypatch, read_rows, read_revision)
+    manager = MCPServerManager()
+
+    await manager.reload_servers_from_database(skip_unchanged=True)
+    await manager.reload_servers_from_database(skip_unchanged=True)
+    read_rows.assert_awaited_once()
+
+    await manager.reload_servers_from_database()
+    assert (await manager.catalog.list())["catalog-server"].name == "updated"
+    assert read_rows.await_count == 2
+    assert read_revision.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_scheduled_catalog_retries_incomplete_hydration_at_the_same_revision(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows, AsyncMock(return_value=_revision_row(7)))
+    manager = MCPServerManager()
+    hydrate = AsyncMock(side_effect=(False, True))
+    monkeypatch.setattr(manager, "hydrate_config_servers_dcr_clients", hydrate)
+
+    await manager.reload_servers_from_database()
+    await manager.reload_servers_from_database(skip_unchanged=True)
+    await manager.reload_servers_from_database(skip_unchanged=True)
+    assert read_rows.await_count == 2
+    assert hydrate.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision", [_revision_row(8), None])
+async def test_scheduled_catalog_fetches_when_revision_changes_or_is_missing(monkeypatch, revision):
+    read_rows = AsyncMock(side_effect=([_catalog_row()], [_catalog_row("updated")]))
+    _catalog_database(monkeypatch, read_rows, AsyncMock(side_effect=(_revision_row(7), revision)))
+    manager = MCPServerManager()
+
+    await manager.reload_servers_from_database()
+    await manager.reload_servers_from_database(skip_unchanged=True)
+
+    assert manager.registry["catalog-server"].name == "updated"
+    assert read_rows.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_scheduled_catalog_retries_a_server_that_failed_registration(monkeypatch):
+    read_rows = AsyncMock(return_value=[_catalog_row()])
+    _catalog_database(monkeypatch, read_rows, AsyncMock(return_value=_revision_row(7)))
+    manager = MCPServerManager()
+    register_tools = AsyncMock(side_effect=(RuntimeError("temporary failure"), None))
+    monkeypatch.setattr(manager, "maybe_register_openapi_tools", register_tools)
+
+    await manager.reload_servers_from_database()
+    assert not manager.registry
+    await manager.reload_servers_from_database(skip_unchanged=True)
+    await manager.reload_servers_from_database(skip_unchanged=True)
+
+    assert manager.registry["catalog-server"].name == "initial"
+    assert read_rows.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_scheduled_catalog_keeps_refreshing_database_openapi_tools(monkeypatch):
+    row = _catalog_row().model_copy(update={"spec_path": "https://upstream.example/openapi.json"})
+    read_rows = AsyncMock(return_value=[row])
+    _catalog_database(monkeypatch, read_rows, AsyncMock(return_value=_revision_row(7)))
+    manager = MCPServerManager()
+    register_tools = AsyncMock()
+    monkeypatch.setattr(manager, "maybe_register_openapi_tools", register_tools)
+
+    await manager.reload_servers_from_database()
+    await manager.reload_servers_from_database(skip_unchanged=True)
+
+    assert read_rows.await_count == 2
+    assert register_tools.await_count == 2
+
+
+@pytest.mark.asyncio
 async def test_catalog_changed_revision_reloads_table(monkeypatch):
     read_rows = AsyncMock(side_effect=([_catalog_row()], [_catalog_row("updated")]))
     read_revision = AsyncMock(side_effect=[_revision_row(7), _revision_row(8)])

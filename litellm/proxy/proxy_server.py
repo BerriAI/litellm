@@ -8806,6 +8806,7 @@ class ProxyConfig:
         proxy_logging_obj: ProxyLogging,
         *,
         ui_settings_already_synced: bool = False,
+        skip_unchanged_mcp_catalog: bool = False,
     ) -> ReconcileOutcome:
         """
         - Check db for new models
@@ -8832,12 +8833,18 @@ class ProxyConfig:
             await sync_ui_settings_to_general_settings(prisma_client)
 
         async with DB_RECONCILE_LOCK:
-            return await self.add_deployment_locked(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+            return await self.add_deployment_locked(
+                prisma_client=prisma_client,
+                proxy_logging_obj=proxy_logging_obj,
+                skip_unchanged_mcp_catalog=skip_unchanged_mcp_catalog,
+            )
 
     async def add_deployment_locked(
         self,
         prisma_client: PrismaClient,
         proxy_logging_obj: ProxyLogging,
+        *,
+        skip_unchanged_mcp_catalog: bool = False,
     ) -> ReconcileOutcome:
         """add_deployment's body, minus the locking. DB_RECONCILE_LOCK MUST already
         be held. Split out for clear_cache, which already holds the lock and would
@@ -8881,6 +8888,7 @@ class ProxyConfig:
             await self._init_non_llm_objects_in_db(
                 prisma_client=prisma_client,
                 refresh_pass_through_endpoints=_general_settings_row_is_readable(db_general_settings),
+                skip_unchanged_mcp_catalog=skip_unchanged_mcp_catalog,
             )
 
         except Exception as e:
@@ -8962,7 +8970,11 @@ class ProxyConfig:
         channel.stop()
 
     async def _init_non_llm_objects_in_db(
-        self, prisma_client: PrismaClient, *, refresh_pass_through_endpoints: bool = True
+        self,
+        prisma_client: PrismaClient,
+        *,
+        refresh_pass_through_endpoints: bool = True,
+        skip_unchanged_mcp_catalog: bool = False,
     ):
         """
         Use this to read non-llm objects from the db and initialize them
@@ -8982,7 +8994,7 @@ class ProxyConfig:
             await self._init_vector_store_indexes_in_db(prisma_client=prisma_client)
 
         if self._should_load_db_object(object_type="mcp"):
-            await self._init_mcp_servers_in_db()
+            await self._init_mcp_servers_in_db(skip_unchanged=skip_unchanged_mcp_catalog)
 
         if self._should_load_db_object(object_type="agents"):
             await self._init_agents_in_db(prisma_client=prisma_client)
@@ -9655,7 +9667,7 @@ class ProxyConfig:
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_vector_stores_in_db - %s", e
             )
 
-    async def _init_mcp_servers_in_db(self):
+    async def _init_mcp_servers_in_db(self, *, skip_unchanged: bool = False) -> None:
         from litellm.proxy.mcp_server.utils import is_mcp_available
 
         if not is_mcp_available():
@@ -9689,7 +9701,7 @@ class ProxyConfig:
             )
 
         try:
-            await global_mcp_server_manager.reload_servers_from_database()
+            await global_mcp_server_manager.reload_servers_from_database(skip_unchanged=skip_unchanged)
         except Exception as e:
             verbose_proxy_logger.exception("litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - %s", e)
 
@@ -11743,6 +11755,7 @@ class ProxyStartupEvent:
                 seconds=config_reload_interval_seconds,
                 # REMOVED jitter parameter - major cause of memory leak
                 args=[prisma_client, proxy_logging_obj],
+                kwargs={"skip_unchanged_mcp_catalog": True},
                 id="add_deployment_job",
                 replace_existing=True,
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,

@@ -120,6 +120,7 @@ class CatalogSnapshots:
         self._completed_ticket = 0
         self._shared_snapshot: CatalogSnapshot | None = None
         self._applied_revision: int | None = None
+        self._refresh_complete = False
         self._warned_shadowed_config_server_ids: frozenset[str] = frozenset()
         self._warned_capturing_config_server_ids: frozenset[str] = frozenset()
         self._operation: ContextVar[tuple[CatalogSnapshot, asyncio.Event] | None] = ContextVar(
@@ -270,19 +271,35 @@ class CatalogSnapshots:
         _check_oauth_revision(selected, resolved)
         return resolved
 
-    async def reload(self) -> None:
+    async def reload(self, *, skip_unchanged: bool = False) -> None:
         from litellm.proxy.mcp_server.db import get_mcp_catalog_revision
         from litellm.proxy.proxy_server import prisma_client
 
         revision: Final = await get_mcp_catalog_revision(prisma_client) if prisma_client is not None else None
         async with self._refresh_lock:
+            if skip_unchanged and self._can_skip_scheduled_reload(revision):
+                self.manager.clear_initialize_instructions()
+                return
             await self._publish_refresh(revision)
+
+    def _can_skip_scheduled_reload(self, revision: int | None) -> bool:
+        from litellm.proxy.mcp_server.mcp_server_manager import oauth_endpoints_unresolved
+
+        snapshot: Final = self._shared_snapshot
+        if revision is None or revision != self._applied_revision or snapshot is None or not self._refresh_complete:
+            return False
+        return (
+            snapshot.servers == (self.manager.config_mcp_servers | self.manager.registry)
+            and not any(server.spec_path for server in self.manager.registry.values())
+            and not any(oauth_endpoints_unresolved(server) for server in snapshot.servers.values())
+        )
 
     async def _publish_refresh(self, revision: int | None, *, reuse_unchanged: bool = False) -> None:
         covered: Final = self._arrival_ticket
         token: Final = self._operation.set(None)
+        self._refresh_complete = False
         try:
-            await self._reload_and_publish(reuse_unchanged=reuse_unchanged)
+            complete: Final = await self._reload_and_publish(reuse_unchanged=reuse_unchanged)
         except Exception:
             self._shared_snapshot = None
             self._completed_ticket = covered
@@ -290,11 +307,12 @@ class CatalogSnapshots:
         else:
             self._shared_snapshot = _snapshot(self.manager, self._database_identity)
             self._applied_revision = revision
+            self._refresh_complete = complete
             self._completed_ticket = covered
         finally:
             self._operation.reset(token)
 
-    async def _reload_and_publish(self, *, reuse_unchanged: bool) -> None:
+    async def _reload_and_publish(self, *, reuse_unchanged: bool) -> bool:
         from litellm.proxy.mcp_server.tool_registry import global_mcp_tool_registry
         from litellm.proxy.mcp_server.utils import normalize_server_name
 
@@ -311,7 +329,7 @@ class CatalogSnapshots:
         staged_config: Final = MappingProxyType(
             {key: value.model_copy(deep=True) for key, value in previous_config.items()}
         )
-        await self.manager.hydrate_config_servers_dcr_clients(tuple(staged_config.values()))
+        hydrated: Final = await self.manager.hydrate_config_servers_dcr_clients(tuple(staged_config.values()))
         initial_routing: Final = MappingProxyType(dict(self.manager.published_tool_routes))
         staged_routing: Final = dict(initial_routing)
         closed: Final = asyncio.Event()
@@ -319,7 +337,7 @@ class CatalogSnapshots:
         initial_tools: Final = MappingProxyType(dict(global_mcp_tool_registry.published_tools))
         try:
             with global_mcp_tool_registry.catalog_scope(initial_tools) as staged_tools:
-                await self._reload(reuse_unchanged=reuse_unchanged)
+                registered_all: Final = await self._reload(reuse_unchanged=reuse_unchanged)
                 refreshed_openapi: Final = (
                     server
                     for server in self.manager.registry.values()
@@ -393,6 +411,7 @@ class CatalogSnapshots:
                     | concurrent_tools
                 )
                 self.manager.published_tool_routes = live_routes | retained_staged_routes | concurrent_routes
+                return hydrated and registered_all
         finally:
             closed.set()
             self._staged_routing.reset(routing_token)
@@ -464,7 +483,7 @@ class CatalogSnapshots:
 
         return new_registry
 
-    async def _reload(self, *, reuse_unchanged: bool) -> None:
+    async def _reload(self, *, reuse_unchanged: bool) -> bool:
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             get_prisma_client_or_throw,
         )
@@ -567,6 +586,7 @@ class CatalogSnapshots:
                 ", ".join(sorted(capturing_config_server_ids)),
             )
         self._warned_capturing_config_server_ids = capturing_config_server_ids
+        return len(registered_registry) == len(raw_rows)
 
 
 def catalog_operation(
