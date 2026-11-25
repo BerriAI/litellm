@@ -487,9 +487,8 @@ class AmazonConverseConfig(BaseConfig):
                 label = f"tool result for {tool_call_id or name or 'unknown'}"
                 result_text: Final = f"[{label}: {_result_text(message)}]"
                 content: Final = [{"type": "guarded_text", "text": result_text}] if guards_tool_results else result_text
-                cache_mark: Final[Mapping[str, object]] = {} if guards_tool_results else _cache_mark_of(message)
                 return cast(  # cast-ok: the user message keeps the tool result's cache mark, read off a loose dict
-                    AllMessageValues, {"role": "user", "content": content, **cache_mark}
+                    AllMessageValues, {"role": "user", "content": content, **_cache_mark_of(message)}
                 )
             return message
 

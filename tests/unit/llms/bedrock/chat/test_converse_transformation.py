@@ -8902,10 +8902,11 @@ def test_transform_request_neutralized_tool_output_guarded_mid_history(monkeypat
 
 
 @pytest.mark.parametrize(
-    "tool_message",
+    ("tool_message", "cache_point"),
     [
         pytest.param(
             {"role": "tool", "tool_call_id": "c1", "content": "lookup result", "cache_control": {"type": "ephemeral"}},
+            {"type": "default"},
             id="string-content",
         ),
         pytest.param(
@@ -8914,14 +8915,29 @@ def test_transform_request_neutralized_tool_output_guarded_mid_history(monkeypat
                 "tool_call_id": "c1",
                 "content": [{"type": "text", "text": "lookup result", "cache_control": {"type": "ephemeral"}}],
             },
+            {"type": "default"},
             id="list-content",
+        ),
+        pytest.param(
+            {
+                "role": "tool",
+                "tool_call_id": "c1",
+                "content": [
+                    {"type": "text", "text": "lookup result", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+                ],
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"type": "default", "ttl": "1h"},
+            id="part-mark-over-message-mark",
         ),
     ],
 )
-def test_transform_request_neutralized_tool_result_keeps_its_cache_point(monkeypatch, tool_message):
+def test_transform_request_neutralized_tool_result_keeps_its_cache_point(
+    monkeypatch, tool_message: Mapping[str, object], cache_point: Mapping[str, str]
+):
     monkeypatch.setattr(litellm, "modify_params", False)
 
-    result = AmazonConverseConfig()._transform_request(
+    result: Final = AmazonConverseConfig()._transform_request(
         model="us.anthropic.claude-sonnet-5-5",
         messages=[
             {"role": "user", "content": "look it up"},
@@ -8938,10 +8954,11 @@ def test_transform_request_neutralized_tool_result_keeps_its_cache_point(monkeyp
     )
 
     _assert_no_structured_tool_blocks(result)
-    last_blocks = result["messages"][-1]["content"]
+    sent_blocks: Final = tuple(chain.from_iterable(message["content"] for message in result["messages"]))
+    assert [block for block in sent_blocks if "cachePoint" in block] == [{"cachePoint": cache_point}]
+    last_blocks: Final = result["messages"][-1]["content"]
     assert "lookup result" in json.dumps(last_blocks)
-    assert last_blocks[-1] == {"cachePoint": {"type": "default"}}
-    assert sum("cachePoint" in block for message in result["messages"] for block in message["content"]) == 1
+    assert last_blocks[-1] == {"cachePoint": cache_point}
 
 
 @pytest.mark.asyncio

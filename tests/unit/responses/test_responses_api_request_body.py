@@ -999,7 +999,7 @@ _OPENROUTER_CHAT_COMPLETION: Final = {
     "id": "chatcmpl-forced-bridge",
     "object": "chat.completion",
     "created": 0,
-    "model": "anthropic/claude-sonnet-4.5",
+    "model": "anthropic/claude-sonnet-5.5",
     "choices": [{"index": 0, "message": {"role": "assistant", "content": "Done."}, "finish_reason": "stop"}],
     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
 }
@@ -1016,7 +1016,7 @@ async def test_a_point_counted_from_the_end_survives_a_forced_chat_completions_b
     )
 
     await litellm.aresponses(
-        model="openrouter/anthropic/claude-sonnet-4.5",
+        model="openrouter/anthropic/claude-sonnet-5.5",
         api_key="fake-api-key",
         use_chat_completions_api=True,
         instructions="You are a documentation assistant.",
