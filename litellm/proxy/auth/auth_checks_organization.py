@@ -188,7 +188,7 @@ async def add_team_org_context_to_request_body(
     request_body: dict,
     fetch_team_org_id: Callable[[str], Awaitable[str | None]],
     route_template: str | None = None,
-) -> dict:
+) -> dict[str, object]:
     """
     Return a copy of request_body with organization_id resolved from the target
     team when the route identifies the team by team_id and the caller did not

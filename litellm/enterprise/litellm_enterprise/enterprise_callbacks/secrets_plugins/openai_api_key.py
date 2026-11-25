@@ -16,7 +16,7 @@ class OpenAIApiKeyDetector(RegexBasedDetector):
         return "Strict OpenAI API Key"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             re.compile(
                 r"((?:(?<![a-zA-Z0-9])|(?<=%[0-9A-Fa-f]{2}))"

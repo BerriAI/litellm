@@ -2077,7 +2077,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return custom_logger
         return None
 
-    def _get_raw_request_body(self, data: dict[str, object] | str | None) -> dict:
+    def _get_raw_request_body(self, data: dict[str, object] | str | None) -> dict[str, object]:
         if data is None:
             return {"error": "Received empty dictionary for raw request body"}
         if isinstance(data, str):

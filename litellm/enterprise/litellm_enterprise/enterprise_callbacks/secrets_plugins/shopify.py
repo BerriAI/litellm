@@ -18,7 +18,7 @@ class ShopifyDetector(RegexBasedDetector):
         return "Shopify Secret"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Shopify access token
             re.compile(r"""shpat_[a-fA-F0-9]{32}"""),
