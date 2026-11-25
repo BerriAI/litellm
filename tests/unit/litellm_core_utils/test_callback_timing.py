@@ -2,8 +2,13 @@ import asyncio
 from typing import Final, Literal
 
 import pytest
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from prometheus_client import CollectorRegistry, Histogram
 
+from litellm._internal_context import request_parent_otel_span
 from litellm.litellm_core_utils import callback_timing
 
 
@@ -61,3 +66,33 @@ async def test_callback_timing_observes_once_when_hook_exits(
             await asyncio.gather(task, return_exceptions=True)
 
     assert registry.get_sample_value("litellm_callback_execution_seconds_count", labels) == 1
+
+
+def test_callback_stage_span_anchors_to_request_and_does_not_export_exception_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    tracer: Final = provider.get_tracer(__name__)
+    monkeypatch.setattr(trace, "get_tracer", provider.get_tracer)
+    error: Final = RuntimeError("private payload fragment")
+
+    try:
+        with callback_timing.callback_stage_span("orphan"):
+            pass
+        with tracer.start_span("request") as parent, request_parent_otel_span(parent):
+            with callback_timing.callback_stage_span("redact"):
+                with pytest.raises(RuntimeError) as caught, callback_timing.callback_stage_span("nested"):
+                    raise error
+        assert caught.value is error
+
+        spans: Final = {span.name: span for span in exporter.get_finished_spans()}
+        assert set(spans) == {"request", "litellm.callback.stage.redact", "litellm.callback.stage.nested"}
+        redact: Final = spans["litellm.callback.stage.redact"]
+        nested: Final = spans["litellm.callback.stage.nested"]
+        assert redact.parent == parent.get_span_context()
+        assert nested.parent == redact.context
+        assert not nested.events and not nested.attributes and not nested.status.description
+    finally:
+        provider.shutdown()

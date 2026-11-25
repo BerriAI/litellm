@@ -6,6 +6,7 @@ from threading import Lock
 from time import monotonic
 from typing import TYPE_CHECKING, Final, Literal
 
+from litellm._internal_context import current_request_parent_otel_span
 from litellm._logging import verbose_logger
 
 if TYPE_CHECKING:
@@ -84,3 +85,29 @@ def observe_logging_worker_dispatch_wait(seconds: float) -> None:
             histogram.observe(seconds)
         except Exception:  # noqa: BLE001  # reporting must not interrupt logging delivery
             verbose_logger.debug("Logging worker dispatch timing could not be recorded", exc_info=True)
+
+
+@contextmanager
+def callback_stage_span(name: str) -> Iterator[None]:
+    """Trace a code-defined stage under a sampled parent. Keep request values out of the name."""
+    try:
+        from opentelemetry import trace
+    except ImportError:
+        yield
+        return
+
+    active_span: Final = trace.get_current_span()
+    parent: Final = active_span if active_span.get_span_context().is_valid else current_request_parent_otel_span()
+    parent_context: Final = parent.get_span_context() if parent is not None else None
+    if parent_context is None or not parent_context.is_valid or not parent_context.trace_flags.sampled:
+        yield
+        return
+
+    tracer: Final = trace.get_tracer("litellm.callbacks")
+    with tracer.start_as_current_span(
+        f"litellm.callback.stage.{name}",
+        context=trace.set_span_in_context(parent),
+        record_exception=False,
+        set_status_on_exception=False,
+    ):
+        yield
