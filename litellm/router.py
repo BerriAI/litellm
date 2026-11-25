@@ -304,6 +304,7 @@ from litellm.router_utils.ptu_shares import (
 )
 from litellm.router_utils.reasoning_effort_capability import (
     deployment_is_catalog_mapped,
+    gpt_5_row_refuses_reasoning_effort,
     intersect_supported_reasoning_efforts,
     resolve_supported_reasoning_efforts,
 )
@@ -2892,7 +2893,7 @@ class Router:
         """
         if kwargs.get("reasoning_effort") is None or not self._is_classifier_internal_call(kwargs):
             return
-        if self._deployment_accepts_param(deployment, model, "reasoning_effort"):
+        if self._deployment_accepts_param(deployment, model, "reasoning_effort", kwargs.get("reasoning_effort")):
             return
         verbose_router_logger.warning(
             "litellm.router.py: dropping classifier reasoning_effort for model=%s because the selected deployment does not support it",
@@ -12981,7 +12982,7 @@ class Router:
         return frozenset(allowed_openai_param_names(params.get("allowed_openai_params")))
 
     @staticmethod
-    def _deployment_accepts_param(deployment: DeploymentTypedDict, group: str, param: str) -> bool:
+    def _deployment_accepts_param(deployment: DeploymentTypedDict, group: str, param: str, value: object) -> bool:
         deployment_params: Final = deployment.get("litellm_params")
         if not deployment_params:
             return True
@@ -12991,7 +12992,7 @@ class Router:
             str(deployment_params.get("model") or ""), deployment_params.get("custom_llm_provider")
         ):
             return True
-        return Router._deployment_supports_param(deployment, group, param)
+        return Router._deployment_supports_param(deployment, group, param, value)
 
     @staticmethod
     def _capability_model_and_provider(deployment_params: LiteLLMParamsTypedDict, group: str) -> tuple[str, str]:
@@ -13009,17 +13010,23 @@ class Router:
         return model, custom_llm_provider
 
     @staticmethod
-    def _deployment_supports_param(deployment: DeploymentTypedDict, group: str, param: str) -> bool:
+    def _deployment_supports_param(deployment: DeploymentTypedDict, group: str, param: str, value: object) -> bool:
         deployment_params: Final = deployment.get("litellm_params")
         if not deployment_params:
             return True
-        deployment_model_info: Final = deployment.get("model_info")
-        base_model: Final = (
-            deployment_model_info.get("base_model") if deployment_model_info else None
-        ) or deployment_params.get("base_model")
+        deployment_model_info: Final = _configured_model_info(deployment)
+        base_model: Final = deployment_params.get("base_model") or deployment_model_info.get("base_model")
         try:
             model, custom_llm_provider = Router._capability_model_and_provider(deployment_params, group)
             supported: Final = litellm.get_supported_openai_params(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                base_model=base_model if isinstance(base_model, str) else None,
+            )
+            if supported is not None and param not in supported:
+                return False
+            return param != "reasoning_effort" or not gpt_5_row_refuses_reasoning_effort(
+                value,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 base_model=base_model if isinstance(base_model, str) else None,
@@ -13029,7 +13036,6 @@ class Router:
                 "litellm.router.py::_deployment_supports_param: keeping %s for model=%s. Got - %s", param, group, e
             )
             return True
-        return supported is None or param in supported
 
     def _tier_params_the_target_accepts(
         self, model: str, tier_params: Mapping[str, object], request_kwargs: Mapping[str, object]
@@ -13077,7 +13083,10 @@ class Router:
         unsupported: Final = frozenset(
             param
             for param in candidates
-            if not any(self._deployment_accepts_param(deployment, model, param) for deployment in deployments)
+            if not any(
+                self._deployment_accepts_param(deployment, model, param, tier_params.get(param))
+                for deployment in deployments
+            )
         )
         if not unsupported:
             return tier_params
@@ -13582,7 +13591,7 @@ class Router:
 
     @staticmethod
     def _deployment_lacks_params(deployment: DeploymentTypedDict, group: str, params: frozenset[str]) -> bool:
-        return any(not Router._deployment_supports_param(deployment, group, param) for param in params)
+        return any(not Router._deployment_supports_param(deployment, group, param, None) for param in params)
 
     @staticmethod
     def _deployment_rejects_params(

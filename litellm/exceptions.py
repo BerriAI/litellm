@@ -1105,6 +1105,7 @@ class UnsupportedParamsError(BadRequestError):
         litellm_debug_info: str | None = None,
         max_retries: int | None = None,
         num_retries: int | None = None,
+        body: Mapping[str, object] | None = None,
     ):
         super().__init__(
             message=message,
@@ -1114,6 +1115,7 @@ class UnsupportedParamsError(BadRequestError):
             litellm_debug_info=litellm_debug_info,
             max_retries=max_retries,
             num_retries=num_retries,
+            body=body,
         )
         self.message = f"litellm.UnsupportedParamsError: {message}"
         self.args = (self.message,)

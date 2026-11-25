@@ -20,8 +20,12 @@ granularity of ``InFlightRequestsMiddleware``.
 
 import asyncio
 import os
+import signal
+import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Generator
+from contextlib import contextmanager
+from types import FrameType
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
@@ -44,6 +48,7 @@ class GracefulShutdownManager:
     _is_shutting_down: bool = False
     _shutdown_started_at: float | None = None
     _drain_performed: bool = False
+    _sigterm_handler: Callable[[int, FrameType | None], None] | None = None
 
     @classmethod
     def is_shutting_down(cls) -> bool:
@@ -71,7 +76,7 @@ class GracefulShutdownManager:
             return DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT
 
     @classmethod
-    def start_shutdown(cls) -> None:
+    def start_shutdown(cls, clock: Callable[[], float] = time.monotonic) -> None:
         """
         Mark the worker as draining. Idempotent — repeated calls (e.g. SIGTERM
         followed by a preStop hit on /health/drain) do not reset the clock.
@@ -79,11 +84,41 @@ class GracefulShutdownManager:
         if cls._is_shutting_down:
             return
         cls._is_shutting_down = True
-        cls._shutdown_started_at = time.monotonic()
+        cls._shutdown_started_at = clock()
         verbose_proxy_logger.info(
             "graceful_shutdown_started in_flight_requests=%s",
             get_in_flight_requests(),
         )
+
+    @classmethod
+    def remaining(cls, cap: float | None = None, *, clock: Callable[[], float] = time.monotonic) -> float:
+        elapsed: Final = 0.0 if cls._shutdown_started_at is None else clock() - cls._shutdown_started_at
+        remaining: Final = max(0.0, cls.get_timeout() - elapsed)
+        return remaining if cap is None else min(max(0.0, cap), remaining)
+
+    @classmethod
+    @contextmanager
+    def capture_sigterm(cls, clock: Callable[[], float] = time.monotonic) -> Generator[None, None, None]:
+        if threading.current_thread() is not threading.main_thread():
+            yield
+            return
+        previous: Final = signal.getsignal(signal.SIGTERM)
+        if not callable(previous) or previous is cls._sigterm_handler:
+            yield
+            return
+
+        def handle_sigterm(signum: int, frame: FrameType | None) -> None:
+            cls.start_shutdown(clock)
+            previous(signum, frame)
+
+        cls._sigterm_handler = handle_sigterm
+        signal.signal(signal.SIGTERM, handle_sigterm)
+        try:
+            yield
+        finally:
+            if signal.getsignal(signal.SIGTERM) is handle_sigterm:
+                signal.signal(signal.SIGTERM, previous)
+            cls._sigterm_handler = None
 
     @classmethod
     async def wait_for_drain(

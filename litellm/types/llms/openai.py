@@ -2383,6 +2383,11 @@ class OpenAIRealtimeInputAudioBufferSpeechEvent(TypedDict):
     item_id: ReadOnly[str]
 
 
+class OpenAIRealtimeInputAudioBufferCleared(TypedDict):
+    type: ReadOnly[Literal["input_audio_buffer.cleared"]]
+    event_id: ReadOnly[str]
+
+
 class OpenAIRealtimeErrorDetail(TypedDict):
     type: ReadOnly[str]
     message: ReadOnly[str]
@@ -2507,6 +2512,7 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeFunctionCallArgumentsDone
     | OpenAIRealtimeDoneEvent
     | OpenAIRealtimeInputAudioBufferSpeechEvent
+    | OpenAIRealtimeInputAudioBufferCleared
     | OpenAIRealtimeInputAudioTranscriptionDelta
     | OpenAIRealtimeInputAudioTranscriptionCompleted
     | OpenAIRealtimeTranscriptionSessionCreated

@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, get_type_hints
+from typing import Annotated, Final, get_type_hints
 
 import orjson
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
@@ -59,7 +59,8 @@ IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "i
 
 IMAGE_ARRAY_FIELD: Final = "image[]"
 MASK_ARRAY_FIELD: Final = "mask[]"
-BRACKETED_FILE_FIELDS: Final = frozenset({IMAGE_ARRAY_FIELD, MASK_ARRAY_FIELD})
+MARKUP_ARRAY_FIELD: Final = "markup[]"
+BRACKETED_FILE_FIELDS: Final = frozenset({IMAGE_ARRAY_FIELD, MASK_ARRAY_FIELD, MARKUP_ARRAY_FIELD})
 
 
 async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
@@ -271,10 +272,12 @@ async def image_edit_api(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    image: list[UploadFile] | None = File(None),
-    image_array: list[UploadFile] | None = File(None, alias=IMAGE_ARRAY_FIELD),
-    mask: list[UploadFile] | None = File(None),
-    mask_array: list[UploadFile] | None = File(None, alias=MASK_ARRAY_FIELD),
+    image: Annotated[Sequence[UploadFile] | None, File()] = None,
+    image_array: Annotated[Sequence[UploadFile] | None, File(alias=IMAGE_ARRAY_FIELD)] = None,
+    mask: Annotated[Sequence[UploadFile] | None, File()] = None,
+    mask_array: Annotated[Sequence[UploadFile] | None, File(alias=MASK_ARRAY_FIELD)] = None,
+    markup: Annotated[Sequence[UploadFile] | None, File()] = None,
+    markup_array: Annotated[Sequence[UploadFile] | None, File(alias=MARKUP_ARRAY_FIELD)] = None,
     model: str | None = None,
 ):
     """
@@ -294,10 +297,8 @@ async def image_edit_api(
         raise HTTPException(status_code=422, detail="Cannot specify both 'image' and 'image[]'")
     if mask is not None and mask_array is not None:
         raise HTTPException(status_code=422, detail="Cannot specify both 'mask' and 'mask[]'")
-    if image is None and image_array is not None:
-        image = image_array
-    if mask is None and mask_array is not None:
-        mask = mask_array
+    if markup is not None and markup_array is not None:
+        raise HTTPException(status_code=422, detail="Cannot specify both 'markup' and 'markup[]'")
 
     # if image is None:
     #     raise HTTPException(status_code=422, detail="Field required: image")
@@ -331,14 +332,17 @@ async def image_edit_api(
         for key, value in chain(IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS.items(), form_fields.items())
         if key not in BRACKETED_FILE_FIELDS
     }
-    image_files: Final = await batch_to_bytesio(image)
-    mask_files: Final = await batch_to_bytesio(mask)
+    image_files: Final = await batch_to_bytesio(image if image is not None else image_array)
+    mask_files: Final = await batch_to_bytesio(mask if mask is not None else mask_array)
+    markup_files: Final = await batch_to_bytesio(markup if markup is not None else markup_array)
     if image_files:
         data["image"] = image_files
     if mask_files:
         data["mask"] = mask_files
+    if markup_files:
+        data["markup"] = markup_files[0]
 
-    for _field in ("image", "mask"):
+    for _field in ("image", "mask", "markup"):
         if _field in data and isinstance(data[_field], str):
             raise HTTPException(
                 status_code=422,
