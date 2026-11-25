@@ -2755,6 +2755,39 @@ async def test_native_deferred_tools_keep_openai_stop_sequences_requests_on_resp
     assert {tool["type"] for tool in chain.from_iterable(body["tools"] for body in bodies)} == {"function", "tool_search"}
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tools",
+    [None, [tool for tool in _CLAUDE_CODE_TOOL_SEARCH_TOOLS if tool["name"] != "ToolSearch"]],
+    ids=["no_tools", "deferred_tools_without_tool_search"],
+)
+async def test_native_deferred_tools_send_azure_stop_sequences_requests_without_tool_search_to_chat_completions(
+    tools: list[dict[str, object]] | None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"), respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((openai.APIError, litellm.exceptions.APIConnectionError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+                model="azure/gpt-4.1",
+                api_base="https://example-resource.openai.azure.com",
+                api_key="deployment-key",
+                api_version="2026-10-01-preview",
+                tools=tools,
+                model_info={"deferred_tools": "native"},
+                stop_sequences=["END"],
+            )
+
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert all(call.request.url.path.endswith("/chat/completions") for call in upstream.calls)
+    assert [body["stop"] for body in bodies] == [["END"]] * len(bodies)
+    assert not _deferred_tools_fallback_warnings(caplog)
+
+
 _FORECAST_TOOL: Final = {
     "name": "mcp__weather__get_forecast",
     "description": "Get the forecast for a city",

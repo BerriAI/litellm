@@ -683,7 +683,9 @@ def anthropic_messages_handler(
             native_deferred_tools=native_deferred_tools and not stop_sequences,
         )
         _refuse_deferred_tools(
-            None if routes_to_responses_api else native_stop_sequences_refusal(deferred_tools, stop_sequences),
+            None
+            if routes_to_responses_api
+            else native_stop_sequences_refusal(deferred_tools, stop_sequences, request_tools),
             drops_deferred_tools_setting,
         )
         request_messages: Final = cast("list[dict[str, object]]", messages)  # cast-ok: the handler takes untyped dicts
