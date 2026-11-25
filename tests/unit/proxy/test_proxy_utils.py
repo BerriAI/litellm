@@ -3799,8 +3799,9 @@ async def test_refused_native_messages_stream_bills_every_frame_the_provider_sen
 
 
 @pytest.mark.asyncio
-async def test_refused_native_messages_stream_still_bills_its_failure_when_the_client_disconnects_during_the_stop(
-    monkeypatch,
+@pytest.mark.parametrize("served_as", ["native_pump", "rust_bridge_byte_stream"])
+async def test_refused_messages_stream_still_bills_its_failure_when_the_client_disconnects_during_the_stop(
+    monkeypatch, served_as
 ):
     from litellm.caching.caching import DualCache
     from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
@@ -3846,13 +3847,17 @@ async def test_refused_native_messages_stream_still_bills_its_failure_when_the_c
         finally:
             client[0].cancel()
 
-    guarded: Final = ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
-        response=AnthropicMessagesStreamingResponse(
+    served: Final = {
+        "native_pump": lambda: AnthropicMessagesStreamingResponse(
             completion_stream=BaseAnthropicMessagesStreamingIterator(
                 litellm_logging_obj=logging_obj, request_body={"model": "claude-sonnet-4-5"}
             ).async_sse_wrapper(provider()),
             hidden_params={},
         ),
+        "rust_bridge_byte_stream": provider,
+    }[served_as]()
+    guarded: Final = ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+        response=served,
         user_api_key_dict=UserAPIKeyAuth(api_key="sk-1", request_route="/v1/messages"),
         request_data={"model": "litellm-qa-msgstream", "litellm_logging_obj": logging_obj},
     )

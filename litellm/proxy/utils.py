@@ -5060,11 +5060,6 @@ class ProxyLogging:
         provider stream is stopped, a native one billed for every chunk it sent and any other for the bytes the hooks
         read. Returns False when the error is not one, when the stream's success log already ran, or when the stream
         parked an assembled chat response instead, so the caller handles it as a chat stream."""
-        from litellm.litellm_core_utils.asyncify import asyncify
-        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
-            AnthropicPassthroughLoggingHandler,
-        )
-
         logging_obj: Final = request_data.get("litellm_logging_obj")
         if not isinstance(logging_obj, Logging) or not isinstance(error, _STREAM_REFUSAL_ERRORS):
             return False
@@ -5083,18 +5078,31 @@ class ProxyLogging:
         logging_obj._deferred_stream_complete_args = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
         stop_provider_stream: Final = logging_obj.on_stream_refused
         logging_obj.on_stream_refused = None
-        if stop_provider_stream is not None:
-            stopping: Final = asyncio.ensure_future(stop_provider_stream())
-            try:
-                await asyncio.shield(stopping)
-            except asyncio.CancelledError:
-                from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+        settling: Final = asyncio.ensure_future(
+            stop_provider_stream()
+            if stop_provider_stream is not None
+            else ProxyLogging._bill_read_messages_stream(request_data, logging_obj, read_tap)
+        )
+        try:
+            await asyncio.shield(settling)
+        except asyncio.CancelledError:
+            from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
-                GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                    async_coroutine=ProxyLogging._fail_refused_stream_after_disconnect(stopping, fail_request)
-                )
-                raise
-            return True
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=ProxyLogging._fail_refused_stream_after_disconnect(settling, fail_request)
+            )
+            raise
+        return True
+
+    @staticmethod
+    async def _bill_read_messages_stream(
+        request_data: Mapping[str, object], logging_obj: Logging, read_tap: "_ReadBytesTap[object]"
+    ) -> None:
+        from litellm.litellm_core_utils.asyncify import asyncify
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+            AnthropicPassthroughLoggingHandler,
+        )
+
         try:
             await read_tap.aclose()
         except Exception as exc:  # noqa: BLE001  # closing is best-effort, so the refusal still reaches the client
@@ -5108,7 +5116,6 @@ class ProxyLogging:
         await asyncify(AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure)(
             litellm_logging_obj=logging_obj, request_body=pricing_request, all_chunks=(read_text,) if read_text else ()
         )
-        return True
 
     @staticmethod
     async def _fail_refused_stream_after_disconnect(
