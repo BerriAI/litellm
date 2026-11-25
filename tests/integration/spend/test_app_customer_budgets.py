@@ -5,11 +5,13 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime
 from math import isclose
+from pathlib import Path
 from typing import Final
 
 import httpx
 import psycopg
 import pytest
+import yaml
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.types.proxy.management_endpoints.app_groups import AppGroup
@@ -27,7 +29,7 @@ from tests.integration._support.client import (
     eventually,
     string_value,
 )
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.process import CONFIGURATION, owned_proxy
 from tests.integration._support.wire import Reply, Request, wire_server
 
 _APPS: Final = "/management/v1/apps"
@@ -48,7 +50,15 @@ def app_gateway(
     resource_type: Final = TypeAdapter(AppResourceType).validate_python(
         request.param  # pyright: ignore[reportAny]  # pytest parameters are untyped and validated at this boundary
     )
-    with owned_proxy(session_gateway, directory, {}, workers=2) as candidate:
+    config: Final = directory / "config.yaml"
+    base: Final = CONFIGURATION.validate_python(
+        yaml.safe_load((Path(__file__).parents[1] / "proxy_config.yaml").read_text())
+    )
+    general: Final = CONFIGURATION.validate_python(base["general_settings"])
+    _ = config.write_text(
+        yaml.safe_dump({**base, "general_settings": {**general, "customer_budget_response_headers": True}})
+    )
+    with owned_proxy(session_gateway, directory, {}, config=config, workers=2) as candidate:
         unset: Final = candidate.request("GET", f"{_APPS}/definition")
         assert AppDefinition.model_validate_json(unset.content).resource_type is None
         configured: Final = candidate.request("PUT", f"{_APPS}/definition", {"resource_type": resource_type.value})

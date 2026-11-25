@@ -50,7 +50,7 @@ else:
     Span = Any
 
 
-def _as_proxy_exception(e: Exception) -> ProxyException:
+def _as_proxy_exception(e: Exception, general_settings: Mapping[str, object] = EMPTY_MAPPING) -> ProxyException:
     """Convert an authentication failure into the ProxyException the client receives."""
     if isinstance(e, litellm.BudgetExceededError):
         return ProxyException(
@@ -58,7 +58,7 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
             type=ProxyErrorTypes.budget_exceeded,
             param=None,
             code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
-            headers=dict(customer_budget_headers(getattr(e, "customer_hierarchy", None))),
+            headers=dict(customer_budget_headers(getattr(e, "customer_hierarchy", None), general_settings)),
         )
     if isinstance(e, ModelAccessDeniedHTTPException):
         return ModelAccessDeniedProxyException(
@@ -214,6 +214,7 @@ class UserAPIKeyAuthExceptionHandler:
             - Original Exception in all other cases
         """
         from litellm.proxy.proxy_server import (
+            current_general_settings,
             general_settings,
             proxy_logging_obj,
         )
@@ -324,7 +325,9 @@ class UserAPIKeyAuthExceptionHandler:
             if transformed_exception is not None:
                 e = transformed_exception
 
-            final_exception: Final = mark_invalid_virtual_key_error(_as_proxy_exception(e), is_invalid_virtual_key)
+            final_exception: Final = mark_invalid_virtual_key_error(
+                _as_proxy_exception(e, current_general_settings()), is_invalid_virtual_key
+            )
             # If a quiet-logged malformed-key transform yields non-401, escalate to ERROR
             if is_quiet_log and str(final_exception.code) != str(status.HTTP_401_UNAUTHORIZED):
                 verbose_proxy_logger.error(

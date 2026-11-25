@@ -51,11 +51,15 @@ def _scope_headers(scope: CustomerScopeAuth) -> Mapping[str, str]:
     )
 
 
-def customer_budget_headers(hierarchy: object) -> Mapping[str, str]:
-    """Spend, max budget, remaining budget and reset time of the request's customer organization and member, as auth
-    read them before the request ran. A budget window carries its duration as a suffix (``-spend-1d``), so a level
-    with a daily and a monthly cap reports each one under its own name; a budget with no window has no suffix."""
-    if not isinstance(hierarchy, CustomerHierarchyAuth):
+def customer_budget_headers(hierarchy: object, general_settings: Mapping[str, object]) -> Mapping[str, str]:
+    """Spend, max budget, remaining budget and reset time the calling app holds for the request's customer organization
+    and member, as auth read them before the request ran. A budget window carries its duration as a suffix
+    (``-spend-1d``), so a level with a daily and a monthly cap reports each one under its own name; a budget with no
+    window has no suffix. Off unless ``general_settings.customer_budget_response_headers`` is true, because a key that
+    is not pinned to one customer organization reads the budget of whichever organization it names."""
+    if general_settings.get("customer_budget_response_headers") is not True or not isinstance(
+        hierarchy, CustomerHierarchyAuth
+    ):
         return {}
     return dict(
         chain.from_iterable(_scope_headers(scope).items() for scope in hierarchy.scopes if scope.key in _HEADER_SCOPES)
