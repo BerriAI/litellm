@@ -16,7 +16,7 @@ from litellm._logging import (
     redact_internal_details_from_client_fields,
     redact_internal_details_from_client_message,
 )
-from litellm.constants import PROVIDER_ERROR_BODY_ATTRIBUTE, STRINGIFIED_NONE
+from litellm.constants import PROVIDER_ERROR_BODY_ATTRIBUTE, STRINGIFIED_NONE, UNSAFE_PROXY_RESPONSE_HEADERS
 from litellm.litellm_core_utils.core_helpers import error_status_code, http_error_status
 from litellm.llms.openai.common_utils import create_may_already_exist
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, proxy_exception_status_code
@@ -275,8 +275,16 @@ def _proxy_exception(exc: Exception, message: str, answered_status: int, error_t
         type=error_type,
         param=openai_error_param(exc),
         code=answered_status,
-        headers=dict(exc.headers) if isinstance(exc, HTTPException) and exc.headers else None,
+        headers=_relayable_headers(exc),
     )
+
+
+def _relayable_headers(exc: Exception) -> dict[str, str] | None:  # mutable-ok: ProxyException.headers
+    if not isinstance(exc, HTTPException) or not exc.headers:
+        return None
+    return {
+        name: str(value) for name, value in exc.headers.items() if name.lower() not in UNSAFE_PROXY_RESPONSE_HEADERS
+    }
 
 
 def _catch_all_error_type(exc: Exception, status_code: int) -> str:

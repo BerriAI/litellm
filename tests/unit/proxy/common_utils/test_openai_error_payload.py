@@ -295,15 +295,16 @@ def test_an_http_exceptions_detail_survives_the_wrapping() -> None:
     "wrap",
     [status_typed_proxy_exception, functools.partial(proxy_exception_for, default_status_code=500)],
 )
-def test_an_http_exceptions_headers_survive_the_wrapping_without_touching_the_raised_ones(
+def test_an_http_exceptions_safe_headers_survive_the_wrapping_without_touching_the_raised_ones(
     wrap: Callable[[HTTPException], ProxyException],
 ) -> None:
-    raised: Final = HTTPException(status_code=429, detail="busy, retry later", headers={"Retry-After": "3"})
+    raised_headers: Final = {"Retry-After": "3", "Content-Length": "1", "Access-Control-Allow-Origin": "*"}
+    raised: Final = HTTPException(status_code=429, detail="busy, retry later", headers=dict(raised_headers))
 
     answered: Final = with_litellm_call_id(wrap(raised), "call-1")
 
     assert answered.headers == {"Retry-After": "3", "x-litellm-call-id": "call-1"}, answered.headers
-    assert raised.headers == {"Retry-After": "3"}, raised.headers
+    assert raised.headers == raised_headers, raised.headers
 
 
 def test_a_carried_type_survives_the_wrapping() -> None:
