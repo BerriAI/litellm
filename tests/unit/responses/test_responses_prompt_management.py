@@ -21,7 +21,9 @@ from datetime import datetime
 from typing import Final, List, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from fastapi import HTTPException
 
 import litellm
@@ -29,6 +31,8 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 from litellm.types.llms.openai import (
     AllMessageValues,
     ResponseInputParam,
@@ -740,3 +744,48 @@ def test_sync_cache_control_injection_logs_role_less_input_items() -> None:
     assert native_request.call_count == 1
     assert logging_obj.model_call_details["messages"] == _TOOL_TURN_INPUT_WITH_INJECTED_MARKER
     assert logging_obj.messages == _TOOL_TURN_INPUT_WITH_INJECTED_MARKER
+
+
+@pytest.mark.asyncio
+async def test_async_vector_store_context_logs_role_less_input_items(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            vector_stores=[LiteLLM_ManagedVectorStore(vector_store_id="vs_weather", custom_llm_provider="openai")]
+        ),
+    )
+    search_route: Final = respx_mock.post("https://api.openai.com/v1/vector_stores/vs_weather/search").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "vector_store.search_results.page",
+                "search_query": "What is the weather in Bogota?",
+                "data": [{"file_id": "file_1", "filename": "bogota.txt", "score": 0.9, "attributes": {},
+                          "content": [{"type": "text", "text": "Bogota averages 14C"}]}],
+                "has_more": False,
+                "next_page": None,
+            },
+        )
+    )
+    logging_obj: Final = _real_logging_obj()
+
+    with _patch_native_responses_request() as native_request:
+        await litellm.aresponses(
+            input=copy.deepcopy(_TOOL_TURN_INPUT),
+            model="gpt-4o",
+            api_key="sk-test",
+            vector_store_ids=["vs_weather"],
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert search_route.call_count == 1
+    assert native_request.call_count == 1
+    assert logging_obj.model_call_details["messages"] == [
+        _TOOL_TURN_INPUT[0],
+        {"role": "user", "content": "Context:\n\nBogota averages 14C\n\n"},
+        *_TOOL_TURN_INPUT[1:],
+    ]
