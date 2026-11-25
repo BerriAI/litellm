@@ -6298,6 +6298,22 @@ def _serve_proxy_with_vector_store_tables(
     return TestClient(proxy_server.app)
 
 
+def _serve_proxy_whose_index_reads_fail_after_the_first(monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    from litellm.proxy.common_utils import registry_read_through
+
+    client: Final = _serve_proxy_with_vector_store_tables(
+        monkeypatch, AsyncMock(side_effect=[[], RuntimeError("db down")]), AsyncMock(return_value=[])
+    )
+    monkeypatch.setattr(
+        registry_read_through,
+        "vector_store_index_table_reload",
+        registry_read_through.ThrottledTableReload(
+            reload=registry_read_through._reload_vector_store_indexes, min_interval_seconds=0.0
+        ),
+    )
+    return client
+
+
 @pytest.mark.usefixtures("fresh_vector_store_read_throughs")
 class TestManagedIndexCreatedOnAnotherReplica:
     """A store from POST /vector_store/new and an index from POST /v1/indexes are only in
@@ -6408,6 +6424,44 @@ class TestManagedIndexCreatedOnAnotherReplica:
 
         assert (response.status_code, response.json()) == (200, {"value": [{"id": "doc-relay"}]})
         assert relayed.calls.last.request.url.path.endswith("/indexes/kb-unmanaged/docs/search")
+
+    def test_azure_ai_search_on_a_relay_proxy_relays_an_unregistered_index_when_a_read_fails_soon_after_one_succeeded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client: Final = _serve_proxy_whose_index_reads_fail_after_the_first(monkeypatch)
+        monkeypatch.setenv("AZURE_API_BASE", "https://relay.search.windows.net")
+        monkeypatch.setenv("AZURE_API_KEY", "relay-key")
+
+        with respx.mock(assert_all_called=True) as upstream:
+            relayed: Final = upstream.post(url__startswith="https://relay.search.windows.net/").mock(
+                return_value=httpx.Response(200, json={"value": [{"id": "doc-relay"}]})
+            )
+            first: Final = client.post(
+                "/azure_ai/indexes/kb-unmanaged/docs/search?api-version=2024-07-01", json={"search": "refund policy"}
+            )
+            during_failed_read: Final = client.post(
+                "/azure_ai/indexes/kb-unmanaged/docs/search?api-version=2024-07-01", json={"search": "refund policy"}
+            )
+
+        assert (first.status_code, during_failed_read.status_code) == (200, 200)
+        assert during_failed_read.json() == {"value": [{"id": "doc-relay"}]}
+        assert relayed.call_count == 2
+
+    def test_azure_ai_search_without_azure_api_base_answers_503_when_a_read_fails_soon_after_one_succeeded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client: Final = _serve_proxy_whose_index_reads_fail_after_the_first(monkeypatch)
+
+        with respx.mock(assert_all_mocked=True) as upstream:
+            first: Final = client.post(
+                "/azure_ai/indexes/kb-new/docs/search?api-version=2024-07-01", json={"search": "refund policy"}
+            )
+            during_failed_read: Final = client.post(
+                "/azure_ai/indexes/kb-new/docs/search?api-version=2024-07-01", json={"search": "refund policy"}
+            )
+
+        assert (first.status_code, during_failed_read.status_code) == (404, 503)
+        assert upstream.calls.call_count == 0
 
     def test_milvus_search_reaches_the_store_on_the_first_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from tests.unit.proxy.conftest import FakeVectorStoreIndexRow, FakeVectorStoreRow

@@ -52,6 +52,7 @@ READ_THROUGH_MISS_TTL_SECONDS: Final = 2.0
 READ_THROUGH_RESYNC_WINDOW_SECONDS: Final = 5.0
 READ_THROUGH_MAX_RESYNCS_PER_WINDOW: Final = 20
 READ_THROUGH_MAX_WAIT_SECONDS: Final = 1.0
+READ_THROUGH_MAX_STALE_SECONDS: Final = 10.0
 
 VectorStoreIndexLookup: TypeAlias = Literal["managed", "unmanaged", "unknown"]
 
@@ -127,6 +128,7 @@ class ThrottledTableReload:
     __slots__ = (
         "_clock",
         "_finished_at",
+        "_last_success_started_at",
         "_max_wait_seconds",
         "_min_interval_seconds",
         "_reload",
@@ -149,23 +151,28 @@ class ThrottledTableReload:
         self._task: asyncio.Task[bool] | None = None
         self._started_at = float("-inf")
         self._finished_at = float("-inf")
+        self._last_success_started_at = float("-inf")
         self._succeeded = False
 
-    async def reload_if_stale(self) -> bool:
+    async def reload_if_stale(self, max_stale_seconds: float = 0.0) -> bool:
         if self._task is None and self._clock() - self._finished_at >= self._min_interval_seconds:
             self._started_at = self._clock()
-            self._task = asyncio.create_task(self._run())
+            self._task = asyncio.create_task(self._run(self._started_at))
         task: Final = self._task
         if task is None:
-            return self._succeeded
+            return self._succeeded or self._succeeded_within(max_stale_seconds)
         wait_seconds: Final = max(self._started_at + self._max_wait_seconds - self._clock(), 0.0)
         done, _ = await asyncio.wait((task,), timeout=wait_seconds)
-        return task in done and not task.cancelled() and task.result()
+        return (task in done and not task.cancelled() and task.result()) or self._succeeded_within(max_stale_seconds)
 
-    async def _run(self) -> bool:
+    def _succeeded_within(self, seconds: float) -> bool:
+        return self._clock() - self._last_success_started_at < seconds
+
+    async def _run(self, started_at: float) -> bool:
         try:
             await self._reload()
             self._succeeded = True
+            self._last_success_started_at = started_at
         except Exception as e:  # noqa: BLE001  # a failed reload must answer "unknown" to callers, not a 500
             verbose_proxy_logger.warning("registry table reload failed: %s", e)
             self._succeeded = False
@@ -470,12 +477,12 @@ vector_store_registry_read_through: Final = RegistryReadThrough(
 )
 
 
-async def lookup_vector_store_index(index_name: str) -> VectorStoreIndexLookup:
+async def lookup_vector_store_index(index_name: str, max_stale_seconds: float = 0.0) -> VectorStoreIndexLookup:
     if _vector_store_index_is_loaded(index_name):
         return "managed"
     if not _db_backed_registries_enabled("vector_store_indexes"):
         return "unmanaged"
-    reloaded: Final = await vector_store_index_table_reload.reload_if_stale()
+    reloaded: Final = await vector_store_index_table_reload.reload_if_stale(max_stale_seconds=max_stale_seconds)
     if _vector_store_index_is_loaded(index_name):
         return "managed"
     return "unmanaged" if reloaded else "unknown"
