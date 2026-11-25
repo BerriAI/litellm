@@ -324,6 +324,28 @@ def test_editing_one_of_two_same_named_functions_and_dropping_the_other_sends_th
     assert merged == ((sent, between) if kept == 0 else (between, sent))
 
 
+@pytest.mark.parametrize("returned_reversed", [False, True], ids=["request_order", "reversed"])
+def test_dropping_one_of_three_same_named_functions_sends_the_two_edits_in_their_returned_order(
+    returned_reversed: bool,
+) -> None:
+    original: Final = [
+        _function("search", "Search the web"),
+        _function("search", "Search the docs"),
+        _function("search", "Search the news"),
+    ]
+    groups: Final = _groups(original)
+    required_query: Final = {"type": "object", "required": ["query"]}
+    edited: Final = [
+        {**chat_tool, "function": {**chat_tool["function"], "parameters": required_query}}
+        for chat_tool in _flat(groups)[1:]
+    ]
+    returned: Final = edited[::-1] if returned_reversed else edited
+
+    merged: Final = merge_guardrailed_tools(original, groups, returned)
+
+    assert [tool["description"] for tool in merged] == [tool["function"]["description"] for tool in returned]
+
+
 @pytest.mark.parametrize("edit_first", [True, False], ids=["returned_before_lookup", "returned_after_lookup"])
 def test_an_edit_equally_close_to_two_same_named_tools_keeps_its_returned_place_around_the_other_tools(
     edit_first: bool,
