@@ -36,6 +36,7 @@ from litellm.proxy.config_resolvers.sso import (
     SSO_SECRET_FIELDS,
     resolve_sso_config,
 )
+from litellm.proxy.management_endpoints.key_management_endpoints import validate_model_max_budget
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_PERMISSIONS,
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
@@ -1176,6 +1177,11 @@ async def update_internal_user_settings(
     """
     if settings.teams is not None:
         await _validate_default_teams_exist(settings.teams)
+
+    try:
+        validate_model_max_budget(settings.model_max_budget)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": str(e)})
 
     if settings.teams is not None and all(isinstance(team, NewUserRequestTeam) for team in settings.teams):
         await update_default_team_member_budget(

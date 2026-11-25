@@ -4925,6 +4925,7 @@ def _new_user_params_after_saving_defaults(monkeypatch, request_fields: dict[str
     from litellm.proxy.management_endpoints.internal_user_endpoints import _update_internal_new_user_params
 
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     monkeypatch.setattr(litellm, "default_internal_user_params", {})
     saved = client.patch(
         "/update/internal_user_settings",
@@ -4940,6 +4941,7 @@ def test_default_model_max_budget_is_saved_and_returned(mock_proxy_config, mock_
     import litellm
 
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     monkeypatch.setattr(litellm, "default_internal_user_params", {})
     budgets: Final = {"gpt-4o": {"max_budget": 10.0, "budget_duration": "30d"}}
 
@@ -4965,6 +4967,24 @@ def test_default_model_max_budget_rejects_a_malformed_budget(mock_proxy_config, 
     )
 
     assert resp.status_code == 422
+    assert litellm.default_internal_user_params == {"max_budget": 5.0}
+    assert mock_proxy_config["save_call_count"]() == 0
+
+
+def test_default_model_max_budget_needs_an_enterprise_license(mock_proxy_config, mock_auth, monkeypatch):
+    import litellm
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr(litellm, "default_internal_user_params", {"max_budget": 5.0})
+
+    resp = client.patch(
+        "/update/internal_user_settings",
+        json={"model_max_budget": {"gpt-4o": {"max_budget": 10.0}}},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "enterprise license" in resp.json()["detail"]["error"]
     assert litellm.default_internal_user_params == {"max_budget": 5.0}
     assert mock_proxy_config["save_call_count"]() == 0
 
