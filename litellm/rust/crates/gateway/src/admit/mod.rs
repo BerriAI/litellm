@@ -94,10 +94,12 @@ pub struct Admit {
 }
 
 /// What admit decided for a request it admits, which the call's callbacks read: the budget hold
-/// priced from the body the client sent, as Python prices it when it authenticates.
+/// priced from the body the client sent, as Python prices it when it authenticates, and whether
+/// the model is free, so that no budget is checked.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Admitted {
     pub(crate) hold: Option<Hold>,
+    pub(crate) free: bool,
 }
 
 fn refused(request: Parts, body: Body, reason: Reason) -> (Box<Request>, Reason) {
@@ -195,25 +197,18 @@ impl Admit {
         (!allowed).then(|| Reason::new(Refused::Credential, "models"))
     }
 
-    /// A caller with a budget holds what the call may cost before it runs, and only a
-    /// `/v1/messages` call the gateway prices as Python does is held natively, so any other goes
-    /// to Python. Without the hold, under `disable_budget_reservation`, Python checks the budgets
-    /// as the call is authenticated, which the gateway does not yet, so that caller goes to Python
-    /// too.
+    /// A caller with a budget is checked against it, and holds what the call may cost before it
+    /// runs, unless the model is free. Only a `/v1/messages` call to a model the gateway prices as
+    /// Python does is budgeted natively, so any other goes to Python. Under
+    /// `disable_budget_reservation` nothing is held, and the budgets are only checked.
     fn budget_hold(
         &self,
         caller: &Authenticated<NativeRows>,
         path: &str,
         fields: &Fields,
-    ) -> Result<Option<Hold>, Reason> {
+    ) -> Result<Admitted, Reason> {
         if budgets::counters(caller, budgets::Settings::default()).is_empty() {
-            return Ok(None);
-        }
-        if self.config.general_settings.disable_budget_reservation {
-            return Err(Reason::new(
-                Refused::Settings,
-                "general_settings.disable_budget_reservation",
-            ));
+            return Ok(Admitted::default());
         }
         let unheld = || Reason::new(Refused::Body, "budget_hold");
         if path != checks::MESSAGES {
@@ -223,10 +218,13 @@ impl Admit {
             .get("model")
             .and_then(Value::as_str)
             .ok_or_else(unheld)?;
-        self.host
-            .prices()
-            .hold(model, fields)
-            .map_err(|Unheld| unheld())
+        let prices = self.host.prices();
+        let free = prices.free(model).map_err(|Unheld| unheld())?;
+        if free || self.config.general_settings.disable_budget_reservation {
+            return Ok(Admitted { hold: None, free });
+        }
+        let hold = prices.hold(model, fields).map_err(|Unheld| unheld())?;
+        Ok(Admitted { hold, free })
     }
 
     /// The body is read only for a request that passes every other check, and parsed once: an
@@ -286,15 +284,17 @@ impl Admit {
         if let Some(reason) = over_its_caller {
             return Err(refused(parts, body, reason));
         }
-        let held = authenticated.as_ref().map_or(Ok(None), |caller| {
-            self.budget_hold(caller, parts.uri.path(), &fields)
-        });
-        let hold = match held {
-            Ok(hold) => hold,
+        let held = authenticated
+            .as_ref()
+            .map_or(Ok(Admitted::default()), |caller| {
+                self.budget_hold(caller, parts.uri.path(), &fields)
+            });
+        let admitted = match held {
+            Ok(admitted) => admitted,
             Err(reason) => return Err(refused(parts, body, reason)),
         };
         parts.extensions.insert(JsonObject(fields));
-        parts.extensions.insert(Admitted { hold });
+        parts.extensions.insert(admitted);
         if let Ok(caller) = authenticated {
             parts.extensions.insert(Preauthenticated(Ok(caller)));
         }
@@ -487,6 +487,10 @@ mod tests {
     }
 
     fn budgeted() -> Authenticated<NativeRows> {
+        budgeted_at(10.0)
+    }
+
+    fn budgeted_at(max_budget: f64) -> Authenticated<NativeRows> {
         use litellm_gateway_auth_core::{
             Belongs, Caller, Credential,
             record::{Budget, EndUserRecord},
@@ -495,7 +499,7 @@ mod tests {
         Authenticated::from(Caller {
             credential: Credential::Key {
                 key: host::Key::stored("hash", None).with_budget(Budget {
-                    max: Some(10.0),
+                    max: Some(max_budget),
                     spend: 0.0,
                 }),
             },
@@ -504,7 +508,7 @@ mod tests {
         })
     }
 
-    const HELD_MODEL: &str = "model_list:\n  - model_name: held-model\n    litellm_params:\n      model: anthropic/held-model\n      api_key: provider-key\n";
+    const HELD_MODEL: &str = "model_list:\n  - model_name: held-model\n    litellm_params:\n      model: anthropic/held-model\n      api_key: provider-key\n  - model_name: free-model\n    litellm_params:\n      model: anthropic/free-model\n      api_key: provider-key\n";
 
     async fn holding_one_model() -> Admit {
         let prices = Arc::new(host::HoldPrices::of(HELD_MODEL).await);
@@ -534,50 +538,57 @@ mod tests {
         fields
     }
 
+    /// Whether admit held the call and found its model free, or what it sent to Python over.
+    fn decided(admitted: Result<Admitted, Reason>) -> Result<(bool, bool), String> {
+        admitted
+            .map(|admitted| (admitted.hold.is_some(), admitted.free))
+            .map_err(|reason| {
+                assert_eq!(reason.why, Refused::Body);
+                reason.over.to_string()
+            })
+    }
+
     #[rstest]
-    #[case::a_call_it_holds(budgeted(), "/v1/messages", "held-model", Ok(true))]
+    #[case::a_call_it_holds(budgeted(), "/v1/messages", "held-model", Ok((true, false)))]
+    #[case::a_free_model(budgeted(), "/v1/messages", "free-model", Ok((false, true)))]
     #[case::a_model_it_does_not_hold(budgeted(), "/v1/messages", "claude", Err("budget_hold"))]
+    #[case::a_budget_of_zero(budgeted_at(0.0), "/v1/messages", "claude", Err("budget_hold"))]
     #[case::another_route(budgeted(), "/v1/ocr", "held-model", Err("budget_hold"))]
     #[case::a_caller_with_no_budget(
         crate::test_support::master(),
         "/v1/messages",
         "claude",
-        Ok(false)
+        Ok((false, false))
     )]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_budgeted_call_is_priced_here_or_goes_to_python(
         #[case] caller: Authenticated<NativeRows>,
         #[case] path: &str,
         #[case] model: &str,
-        #[case] expected: Result<bool, &str>,
+        #[case] expected: Result<(bool, bool), &str>,
     ) {
         let admit = holding_one_model().await;
 
-        let hold = admit.budget_hold(&caller, path, &sent(model));
+        let admitted = admit.budget_hold(&caller, path, &sent(model));
 
-        assert_eq!(
-            hold.map(|hold| hold.is_some())
-                .map_err(|reason| (reason.why, reason.over.to_string())),
-            expected.map_err(|over| (Refused::Body, over.to_owned()))
-        );
+        assert_eq!(decided(admitted), expected.map_err(str::to_owned));
     }
 
     #[rstest]
-    #[case::a_budgeted_caller(budgeted(), Err((Refused::Settings, "general_settings.disable_budget_reservation")))]
-    #[case::a_caller_with_no_budget(crate::test_support::master(), Ok(false))]
+    #[case::a_model_it_prices(budgeted(), "held-model", Ok((false, false)))]
+    #[case::a_free_model(budgeted(), "free-model", Ok((false, true)))]
+    #[case::a_model_it_does_not_price(budgeted(), "claude", Err("budget_hold"))]
+    #[case::a_caller_with_no_budget(crate::test_support::master(), "claude", Ok((false, false)))]
     #[tokio::test(flavor = "multi_thread")]
-    async fn without_the_hold_a_budgeted_call_goes_to_python(
+    async fn without_the_hold_a_budgeted_call_is_admitted_to_be_checked_only(
         #[case] caller: Authenticated<NativeRows>,
-        #[case] expected: Result<bool, (Refused, &str)>,
+        #[case] model: &str,
+        #[case] expected: Result<(bool, bool), &str>,
     ) {
         let admit = holding_nothing().await;
 
-        let hold = admit.budget_hold(&caller, "/v1/messages", &sent("held-model"));
+        let admitted = admit.budget_hold(&caller, "/v1/messages", &sent(model));
 
-        assert_eq!(
-            hold.map(|hold| hold.is_some())
-                .map_err(|reason| (reason.why, reason.over.to_string())),
-            expected.map_err(|(why, over)| (why, over.to_owned()))
-        );
+        assert_eq!(decided(admitted), expected.map_err(str::to_owned));
     }
 }

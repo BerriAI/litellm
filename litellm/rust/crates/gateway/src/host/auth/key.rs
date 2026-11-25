@@ -108,6 +108,8 @@ pub struct Key {
     priority: Option<Arc<str>>,
     /// The key's `key_alias`, which its calls are logged under.
     alias: Option<Arc<str>>,
+    /// The key's `key_name`, its masked text, which names it when it is over budget.
+    name: Option<Arc<str>>,
     /// The key's own budget, which its budget counter is planned from.
     own_budget: Budget,
     /// The first budget column the row holds, which `key_budgets` declines.
@@ -139,6 +141,10 @@ impl Key {
         self.alias.as_deref()
     }
 
+    pub(crate) fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
     pub(crate) fn budget(&self) -> Budget {
         self.own_budget
     }
@@ -156,6 +162,7 @@ impl Key {
             limits: KeyLimits::default(),
             priority: None,
             alias: alias.map(Arc::from),
+            name: None,
             own_budget: Budget::default(),
             budget: None,
             aliased: false,
@@ -164,6 +171,13 @@ impl Key {
 
     pub(crate) fn with_budget(self, own_budget: Budget) -> Self {
         Self { own_budget, ..self }
+    }
+
+    pub(crate) fn with_name(self, name: &str) -> Self {
+        Self {
+            name: Some(Arc::from(name)),
+            ..self
+        }
     }
 }
 
@@ -432,6 +446,7 @@ pub(super) fn read(key: &CachedKey) -> Result<Keyed<Key>, &'static str> {
             },
             priority: metadata.priority.map(Arc::from),
             alias: key.key_alias.as_deref().map(Arc::from),
+            name: key.key_name.as_deref().map(Arc::from),
             own_budget: Budget {
                 max: key.max_budget,
                 spend: key.spend,

@@ -14,7 +14,7 @@ use std::{
 };
 
 use litellm_callbacks::ErasedCallback;
-use litellm_callbacks_budgets::Budgets;
+use litellm_callbacks_budgets::{Budgets, SpendReader};
 use litellm_callbacks_spend_logger::{SpendLogCallback, SpendLogParts};
 use litellm_config::Environment;
 use litellm_redaction::TokenRedactor;
@@ -27,7 +27,8 @@ use rand::Rng;
 use tokio::sync::Notify;
 
 use super::{
-    Registered, budget_reservation::Reserver, parallel_request_limiter::REDIS_DEFAULT_TTL,
+    Registered, budget_check::BudgetCheck, budget_reservation::Reserver,
+    parallel_request_limiter::REDIS_DEFAULT_TTL,
 };
 use crate::{
     RedisClients,
@@ -121,9 +122,18 @@ impl SpendLog {
     }
 
     /// The budget reservation over the counters this callback charges, so what it holds is what
-    /// the callback settles, with a cold counter started from its row's spend.
-    pub(crate) fn reserver(&self) -> Arc<Reserver> {
-        Reserver::new(self.budgets.clone(), self.rows.clone())
+    /// the callback settles, with a cold counter started from its row's spend. `disabled` is
+    /// `general_settings.disable_budget_reservation`.
+    pub(crate) fn reserver(&self, disabled: bool) -> Arc<Reserver> {
+        Reserver::new(self.budgets.clone(), self.rows.clone(), disabled)
+    }
+
+    /// The read-time budget checks over the counters this callback charges.
+    pub(crate) fn budget_check(&self) -> Arc<BudgetCheck> {
+        BudgetCheck::new(SpendReader::new(
+            self.budgets.store().clone(),
+            self.rows.clone(),
+        ))
     }
 
     /// The spend counters the callback charges and a reservation holds against, which a spend

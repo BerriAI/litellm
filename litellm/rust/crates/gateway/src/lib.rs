@@ -95,7 +95,8 @@ const LICENSE: &str = "LITELLM_LICENSE";
 /// capacity are counted in `redis`'s coordination client when there is one, and in this process's
 /// memory otherwise. `variables` holds the config's `environment_variables` in front of the
 /// process's, as the limiter reads its window from them on every call. With a `spend_log`, the
-/// proxy's spend log callback runs last and writes each served call's row to the database.
+/// caller's budgets are checked and then held first, as Python does both while it authenticates,
+/// and the proxy's spend log callback runs last and writes each served call's row to the database.
 pub async fn build_inference(
     config: &Config,
     variables: &Environment,
@@ -138,11 +139,18 @@ pub(crate) async fn inference_over(
         }));
         ModelCapacity::new(read, counters, active, router.clone())
     });
-    let reserver = spend_log.map(|spend_log| spend_log.reserver());
+    let budgets = spend_log.map(|spend_log| {
+        [
+            spend_log.budget_check().registered(),
+            spend_log
+                .reserver(config.general_settings.disable_budget_reservation)
+                .registered(),
+        ]
+    });
     let callbacks = Callbacks::new(
-        reserver
-            .iter()
-            .map(|reserver| reserver.registered())
+        budgets
+            .into_iter()
+            .flatten()
             .chain(model_capacity.iter().map(|capacity| capacity.registered()))
             .chain([key_limiter.registered()])
             .chain(spend_log.map(SpendLog::registered))
