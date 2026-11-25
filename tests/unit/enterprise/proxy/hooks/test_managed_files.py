@@ -6736,6 +6736,28 @@ async def test_responses_input_checks_managed_file_access(nested: bool) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("nested", [False, True], ids=["direct", "message-content"])
+async def test_responses_input_file_data_uri_checks_ownership_alongside_file_id(nested: bool) -> None:
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+    owner: Final = UserAPIKeyAuth(user_id="owner", team_id="team-owner")
+    other: Final = UserAPIKeyAuth(user_id="other", team_id="team-other")
+    file: Final = {
+        "type": "input_file",
+        "file_id": "file-unregistered",
+        "file_data": "https://generativelanguage.googleapis.com/v1beta/files/batch-out1",
+    }
+    item: Final = {"role": "assistant", "content": [file]} if nested else file
+    request: Final = {"model": "gemini/gemini-4-argon", "input": [item]}
+
+    result: Final = await managed_files.async_pre_call_hook(owner, DualCache(), request, "aresponses")
+
+    assert isinstance(result, dict) and result["input"] == request["input"]
+    with pytest.raises(HTTPException) as denied:
+        await managed_files.async_pre_call_hook(other, DualCache(), request, "aresponses")
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("version", ["v1", "v1beta"])
 @pytest.mark.parametrize(("media_type", "field"), [("input_image", "image_url"), ("input_file", "file_url")])
 @pytest.mark.parametrize("nested", [False, True], ids=["direct", "message-content"])
