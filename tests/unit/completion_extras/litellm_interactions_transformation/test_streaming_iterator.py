@@ -440,3 +440,33 @@ def test_stream_blocked_for_recitation_ends_with_a_content_filter_finish_after_t
     chunks: Final = tuple(InteractionsChatStreamingIterator(model="gemini-3-flash-preview", sync_lines=iter(sse_lines)))
     assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "In my younger"
     assert [chunk.choices[0].finish_reason for chunk in chunks][-1] == "content_filter"
+
+
+def test_legacy_functions_stream_emits_function_call_deltas_and_finish_reason() -> None:
+    lines: Final = (
+        'data: {"event_type": "interaction.created", "interaction": {"id": "v1_legacy_stream", "status": "in_progress"}}',
+        'data: {"event_type": "step.start", "index": 0, "step": {"id": "call_1", "type": "function_call", "name": "get_weather"}}',
+        'data: {"event_type": "step.delta", "index": 0, "delta": {"type": "arguments_delta", "arguments": "{\\"city\\":\\"SF\\"}"}}',
+        'data: {"event_type": "interaction.completed", "interaction": {"id": "v1_legacy_stream", "status": "requires_action"}}',
+        "data: [DONE]",
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=InteractionsChatStreamingIterator(
+            model="gemini-3-flash-preview",
+            sync_lines=iter(lines),
+            is_function_call=True,
+        ),
+        model="gemini-3-flash-preview",
+        custom_llm_provider="gemini",
+        logging_obj=_logging_stub("gemini-3-flash-preview"),
+    )
+    chunks: Final = list(wrapper)
+    assert all(not chunk.choices[0].delta.tool_calls for chunk in chunks)
+    rebuilt: Final = stream_chunk_builder(chunks)  # pyright: ignore[reportUnknownVariableType,reportUnknownArgumentType]  # stream_chunk_builder parameter lacks element type
+    assert rebuilt is not None
+    choice: Final = rebuilt.choices[0]
+    assert isinstance(choice, Choices)
+    assert choice.finish_reason == "function_call"
+    assert choice.message.function_call is not None
+    assert choice.message.function_call.name == "get_weather"
+    assert choice.message.function_call.arguments == '{"city":"SF"}'

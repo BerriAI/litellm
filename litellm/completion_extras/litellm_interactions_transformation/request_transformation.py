@@ -536,7 +536,7 @@ def _tool_id_name_pairs(raw_tool_calls: JsonValue) -> tuple[tuple[str, str], ...
     return tuple(pair for pair in pairs if pair is not None)
 
 
-def _index_tool_call_names(messages: JsonSequence) -> Mapping[str, str]:
+def _index_tool_call_names(messages: Sequence[JsonMapping]) -> Mapping[str, str]:
     groups: Final = tuple(
         _tool_id_name_pairs(msg.get("tool_calls"))
         for msg in messages
@@ -717,14 +717,46 @@ def _blank_last_user_turn(messages: Sequence[JsonMapping], steps: Sequence[JsonV
     return ({"type": "user_input", "content": [{"type": "text", "text": " "}]},)
 
 
+def _legacy_call_id(messages: Sequence[JsonMapping], position: int, name: JsonValue) -> str:
+    calls_so_far: Final = sum(
+        1
+        for msg in messages[: position + 1]
+        if msg.get("role") == "assistant"
+        and isinstance(call := msg.get("function_call"), dict)
+        and call.get("name") == name
+    )
+    return f"call_{name}_{calls_so_far}"
+
+
+def _legacy_function_turn_as_tool_turn(messages: Sequence[JsonMapping], position: int) -> JsonMapping:
+    msg: Final = messages[position]
+    call: Final = msg.get("function_call")
+    if msg.get("role") == "assistant" and isinstance(call, dict) and not msg.get("tool_calls"):
+        return {
+            **{key: value for key, value in msg.items() if key != "function_call"},
+            "tool_calls": [
+                {"id": _legacy_call_id(messages, position, call.get("name")), "type": "function", "function": call}
+            ],
+        }
+    if msg.get("role") == "function" and not msg.get("tool_call_id"):
+        return {**msg, "tool_call_id": _legacy_call_id(messages, position, msg.get("name"))}
+    return msg
+
+
+def _with_legacy_function_turns_as_tool_turns(messages: Sequence[JsonMapping]) -> tuple[JsonMapping, ...]:
+    return tuple(_legacy_function_turn_as_tool_turn(messages, position) for position in range(len(messages)))
+
+
 def _convert_messages(
     messages: JsonSequence,
     model: str,
     custom_llm_provider: str,
     media_fetcher: MediaFetcher,
 ) -> tuple[JsonSequence, str | None]:
-    tool_names_by_id: Final = _index_tool_call_names(messages)
-    dict_messages: Final = tuple(msg for msg in messages if isinstance(msg, dict))
+    dict_messages: Final = _with_legacy_function_turns_as_tool_turns(
+        tuple(msg for msg in messages if isinstance(msg, dict))
+    )
+    tool_names_by_id: Final = _index_tool_call_names(dict_messages)
     raw_system: Final = tuple(
         _extract_text_parts(msg.get("content")) for msg in dict_messages if msg.get("role") in ("system", "developer")
     )
@@ -893,6 +925,8 @@ def _base_response_format(raw_rf: JsonValue) -> JsonValue:
     if not isinstance(raw_rf, dict):
         return None
     match raw_rf:
+        case {"response_schema": dict() as schema}:
+            return {"type": "text", "mime_type": "application/json", "schema": schema}
         case {"type": "json_object"}:
             return {"type": "text", "mime_type": "application/json"}
         case {"type": "json_schema", "json_schema": {"schema": dict() as schema}}:

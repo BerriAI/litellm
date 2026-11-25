@@ -350,11 +350,18 @@ def transform_interactions_usage(raw_usage: object) -> Usage:
     return Usage(prompt_tokens=p_tok, completion_tokens=c_tok, total_tokens=t_tok)
 
 
+def legacy_function_call(
+    name: str | None, arguments: str | None
+) -> dict[str, str | None]:  # mutable-ok: Message and Delta take the call as a dict
+    return {"name": name, "arguments": arguments or ""}
+
+
 def transform_interactions_response_to_chat_response(
     *,
     raw_response: object,
     model: str,
     model_response: ModelResponse,
+    is_function_call: bool = False,
 ) -> ModelResponse:
     payload: Final = _to_json_mapping(raw_response)
     raw_steps: Final = payload.get("steps")
@@ -371,7 +378,12 @@ def transform_interactions_response_to_chat_response(
     msg: Final = Message(
         role="assistant",
         content=extracted.text if (extracted.text or not extracted.tool_calls) else None,
-        tool_calls=list(extracted.tool_calls) if extracted.tool_calls else None,
+        tool_calls=list(extracted.tool_calls) if extracted.tool_calls and not is_function_call else None,
+        function_call=legacy_function_call(
+            extracted.tool_calls[-1].function.name, extracted.tool_calls[-1].function.arguments
+        )
+        if extracted.tool_calls and is_function_call
+        else None,
         reasoning_content=extracted.reasoning_text or None,
         thinking_blocks=list(extracted.thinking_blocks) if extracted.thinking_blocks else None,
         annotations=list(extracted.annotations) if extracted.annotations else None,
@@ -389,9 +401,12 @@ def transform_interactions_response_to_chat_response(
     )
 
     raw_status: Final = payload.get("status")
-    finish_reason: Final = map_interactions_status_to_finish_reason(
+    status_finish_reason: Final = map_interactions_status_to_finish_reason(
         raw_status if isinstance(raw_status, str) else None,
         has_tool_calls=bool(extracted.tool_calls),
+    )
+    finish_reason: Final = (
+        "function_call" if is_function_call and status_finish_reason == "tool_calls" else status_finish_reason
     )
 
     continuation_token: Final = client_continuation_token(payload)

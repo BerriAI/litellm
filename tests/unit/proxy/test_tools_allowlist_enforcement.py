@@ -45,6 +45,11 @@ class TestExtractRequestToolNames:
             "run_sql",
         ]
 
+    def test_openai_chat_mcp_server_tool_is_checked_by_its_server_name(self):
+        tool = {"type": "mcp_server", "name": "internal_db", "url": "https://mcp.example.com"}
+        data = {"tools": [{"type": "function", "function": {"name": "lookup"}}, tool]}
+        assert extract_request_tool_names("/v1/chat/completions", data) == ["lookup", "internal_db"]
+
     @pytest.mark.parametrize("declarations_key", ["functionDeclarations", "function_declarations"])
     def test_openai_chat_gemini_native_function_declarations(self, declarations_key):
         data = {
@@ -72,9 +77,7 @@ class TestExtractRequestToolNames:
                 {"type": "function", "name": "get_current_weather", "description": "x"},
             ]
         }
-        assert extract_request_tool_names("/v1/responses", data) == [
-            "get_current_weather"
-        ]
+        assert extract_request_tool_names("/v1/responses", data) == ["get_current_weather"]
 
     def test_openai_responses_mcp_tools(self):
         data = {
@@ -143,9 +146,7 @@ class TestExtractRequestToolNames:
                 },
             ]
         }
-        assert extract_request_tool_names("/generate_content", data) == [
-            "schedule_meeting"
-        ]
+        assert extract_request_tool_names("/generate_content", data) == ["schedule_meeting"]
 
     def test_mcp_call_tool_name(self):
         data = {"name": "my_tool", "arguments": {}}

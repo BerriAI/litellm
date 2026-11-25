@@ -33,7 +33,9 @@ from litellm.types.llms.openai import (
     ImageURLListItem,
 )
 from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
     Delta,
+    FunctionCall,
     ModelResponseStream,
     StreamingChoices,
     Usage,
@@ -54,6 +56,7 @@ from .response_transformation import (
     FinishReason,
     annotations_for_block,
     attach_vertex_metadata,
+    legacy_function_call,
     map_interactions_status_to_finish_reason,
     parse_output_content_blocks,
     shifted,
@@ -247,6 +250,9 @@ def _merged_step(known: JsonMapping, update: JsonMapping) -> JsonMapping:
     return {**known, **{key: _merged_value(known.get(key), value) for key, value in update.items()}}
 
 
+_FUNCTION_FIELDS: Final = TypeAdapter(Mapping[str, str | None])
+
+
 class InteractionsChatStreamingIterator:
     def __init__(
         self,
@@ -259,7 +265,9 @@ class InteractionsChatStreamingIterator:
         request_body: Mapping[str, object] | None = None,
         open_sync_hop: SyncHopOpener | None = None,
         open_async_hop: AsyncHopOpener | None = None,
+        is_function_call: bool = False,
     ) -> None:
+        self._is_function_call: Final = is_function_call
         self._model: Final = model
         self._custom_llm_provider: Final = custom_llm_provider
         self._sync_lines: LineStreamSync | None = sync_lines
@@ -308,6 +316,11 @@ class InteractionsChatStreamingIterator:
         finish_reason: FinishReason | None = None,
         usage: Usage | None = None,
     ) -> ModelResponseStream:
+        last_call: Final = delta.tool_calls[-1] if self._is_function_call and delta.tool_calls else None
+        if isinstance(last_call, ChatCompletionDeltaToolCall):
+            function: Final = _FUNCTION_FIELDS.validate_python(last_call.function.model_dump())
+            delta.function_call = FunctionCall(**legacy_function_call(function.get("name"), function.get("arguments")))
+            delta.tool_calls = None
         return ModelResponseStream(
             id=self._stream_id,
             model=self._model,
@@ -315,7 +328,9 @@ class InteractionsChatStreamingIterator:
                 StreamingChoices(
                     index=0,
                     delta=delta,
-                    finish_reason=finish_reason,
+                    finish_reason="function_call"
+                    if self._is_function_call and finish_reason == "tool_calls"
+                    else finish_reason,
                 )
             ],
             usage=usage,

@@ -953,3 +953,14 @@ def test_message_with_the_native_model_role_is_not_forwarded_as_a_model_turn() -
         litellm_params={},
     )
     assert sent.input_steps == [{"type": "user_input", "content": [{"type": "text", "text": "transcribe it"}]}]
+
+
+def test_response_format_json_object_keeps_its_nested_response_schema() -> None:
+    schema: Final = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    body: Final = transform_chat_to_interactions_request(
+        model="gemini-3-flash-preview",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"response_format": {"type": "json_object", "response_schema": schema}},
+        litellm_params={},
+    )
+    assert body.optional_params["response_format"] == {"type": "text", "mime_type": "application/json", "schema": schema}

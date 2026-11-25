@@ -532,3 +532,149 @@ async def test_answer_blocked_for_safety_comes_back_as_a_content_filter_finish_s
         assert isinstance(answer, ModelResponse)
         assert answer.choices[0].finish_reason == "content_filter"
         assert answer.choices[0].message.content is None
+
+
+def _function_call_transport(seen: list[httpx.Request]) -> httpx.MockTransport:  # mutable-ok: transport request spy
+    def respond(req: httpx.Request) -> httpx.Response:
+        seen.append(req)
+        return httpx.Response(
+            200,
+            json={
+                "id": "v1_legacy_fn",
+                "status": "requires_action",
+                "steps": [
+                    {"type": "function_call", "id": "call_1", "name": "get_weather", "arguments": {"city": "SF"}}
+                ],
+                "usage": {"total_input_tokens": 5, "total_output_tokens": 2, "total_tokens": 7},
+            },
+        )
+
+    return httpx.MockTransport(respond)
+
+
+def test_legacy_functions_request_gets_a_function_call_answer_and_replays_function_call_history() -> None:
+    seen: Final[list[httpx.Request]] = []  # mutable-ok: transport request spy
+    sync_client: Final = HTTPHandler()
+    sync_client.client = httpx.Client(transport=_function_call_transport(seen))
+
+    result: Final = InteractionsToCompletionBridgeHandler().completion(
+        model="gemini-3-flash-preview",
+        messages=[
+            {"role": "user", "content": "weather in NYC then SF?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "function_call": {"name": "get_weather", "arguments": '{"city": "NYC"}'},
+            },
+            {"role": "function", "name": "get_weather", "content": "rainy"},
+        ],
+        model_response=ModelResponse(id="fallback"),
+        logging_obj=_logging_stub("gemini-3-flash-preview"),
+        optional_params={
+            "functions": [{"name": "get_weather", "parameters": {"type": "object", "properties": {}}}],
+        },
+        litellm_params={},
+        api_key="test-gemini-key",
+        api_base="https://generativelanguage.googleapis.com",
+        client=sync_client,
+        custom_llm_provider="gemini",
+        stream=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    choice: Final = result.choices[0]
+    assert isinstance(choice, Choices)
+    assert choice.finish_reason == "function_call"
+    assert choice.message.tool_calls is None
+    assert choice.message.function_call is not None
+    assert choice.message.function_call.name == "get_weather"
+    assert json.loads(choice.message.function_call.arguments) == {"city": "SF"}
+    sent_steps: Final = _OBJ_MAP.validate_python(json.loads(seen[0].content))["input"]
+    assert isinstance(sent_steps, list)
+    assert [step for step in sent_steps if step["type"] in ("function_call", "function_result")] == [  # pyright: ignore[reportUnknownVariableType]  # parsed JSON steps
+        {"type": "function_call", "id": "call_get_weather_1", "name": "get_weather", "arguments": {"city": "NYC"}},
+        {
+            "type": "function_result",
+            "call_id": "call_get_weather_1",
+            "name": "get_weather",
+            "result": [{"type": "text", "text": "rainy"}],
+        },
+    ]
+
+
+def test_tools_request_still_gets_tool_calls() -> None:
+    sync_client: Final = HTTPHandler()
+    sync_client.client = httpx.Client(transport=_function_call_transport([]))
+
+    result: Final = InteractionsToCompletionBridgeHandler().completion(
+        model="gemini-3-flash-preview",
+        messages=[{"role": "user", "content": "weather in SF?"}],
+        model_response=ModelResponse(id="fallback"),
+        logging_obj=_logging_stub("gemini-3-flash-preview"),
+        optional_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+                }
+            ],
+        },
+        litellm_params={},
+        api_key="test-gemini-key",
+        api_base="https://generativelanguage.googleapis.com",
+        client=sync_client,
+        custom_llm_provider="gemini",
+        stream=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    choice: Final = result.choices[0]
+    assert isinstance(choice, Choices)
+    assert choice.finish_reason == "tool_calls"
+    assert choice.message.function_call is None
+    assert [call.function.name for call in choice.message.tool_calls or []] == ["get_weather"]
+
+
+def test_continued_answer_is_logged_as_the_joined_response_not_the_first_hop() -> None:
+    hops: Final = iter(
+        (
+            {
+                "id": "v1_hop_1",
+                "status": "requires_continuation",
+                "continuation_token": "tok_1",
+                "steps": [{"type": "model_output", "content": [{"type": "text", "text": "first "}]}],
+                "usage": {"total_input_tokens": 5, "total_output_tokens": 2, "total_tokens": 7},
+            },
+            {
+                "id": "v1_hop_2",
+                "status": "completed",
+                "steps": [{"type": "model_output", "content": [{"type": "text", "text": "second"}]}],
+                "usage": {"total_input_tokens": 7, "total_output_tokens": 3, "total_tokens": 10},
+            },
+        )
+    )
+    sync_client: Final = HTTPHandler()
+    sync_client.client = httpx.Client(transport=httpx.MockTransport(lambda _req: httpx.Response(200, json=next(hops))))
+    log_obj: Final = _logging_stub("gemini-3-flash-preview")
+
+    result: Final = InteractionsToCompletionBridgeHandler().completion(
+        model="gemini-3-flash-preview",
+        messages=[{"role": "user", "content": "ping"}],
+        model_response=ModelResponse(id="fallback"),
+        logging_obj=log_obj,
+        optional_params={"max_tokens": 1000},
+        litellm_params={},
+        api_key="test-gemini-key",
+        api_base="https://generativelanguage.googleapis.com",
+        client=sync_client,
+        custom_llm_provider="gemini",
+        stream=False,
+    )
+
+    assert isinstance(result, ModelResponse)
+    choice: Final = result.choices[0]
+    assert isinstance(choice, Choices)
+    assert choice.message.content == "first second"
+    logged: Final = _logged_original_response(log_obj)
+    assert "first " in logged
+    assert "second" in logged

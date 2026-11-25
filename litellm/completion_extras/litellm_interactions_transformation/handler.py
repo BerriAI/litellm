@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import re
 from collections.abc import Callable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass, replace
@@ -24,6 +25,7 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
 )
 from litellm.litellm_core_utils.hidden_params import get_or_create_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.common_utils import is_function_call
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -200,6 +202,21 @@ def _extract_stream_options(
         validated: Final = _OBJECT_MAP.validate_python(raw)
         return {str(k): v for k, v in validated.items()}
     return None
+
+
+def _log_unary_response(
+    call_logger: _CallLogger,
+    messages: Sequence[object],
+    api_key: str | None,
+    wire: _PreparedWireCall,
+    original_response: str,
+) -> None:
+    call_logger.post_call(
+        input=list(messages),
+        api_key=api_key or "",
+        original_response=original_response,
+        additional_args={"complete_input_dict": wire.body},
+    )
 
 
 def _attach_response_metadata(
@@ -812,6 +829,7 @@ class InteractionsToCompletionBridgeHandler:
                 sync_lines=raw_response.iter_lines(),
                 http_response=raw_response,
                 request_body=wire.body,
+                is_function_call=is_function_call(opt_map),
                 open_sync_hop=lambda hop_body: _checked_hop_response(
                     _send_sync_request(
                         client,
@@ -838,14 +856,12 @@ class InteractionsToCompletionBridgeHandler:
             _attach_response_metadata(wrapper, raw_response, wire.url)
             return wrapper
 
-        call_logger.post_call(
-            input=list(messages),
-            api_key=api_key or "",
-            original_response=raw_response.text,
-            additional_args={"complete_input_dict": wire.body},
-        )
         first_hop: Final = _interaction_of(raw_response)
-        _raise_if_interaction_failed(first_hop, model=model, custom_llm_provider=custom_llm_provider, url=wire.url)
+        try:
+            _raise_if_interaction_failed(first_hop, model=model, custom_llm_provider=custom_llm_provider, url=wire.url)
+        except Exception:
+            _log_unary_response(call_logger, messages, api_key, wire, raw_response.text)
+            raise
         hops: tuple[JsonMapping, ...] = (first_hop,)  # rebind-ok: grows by one hop per loop pass
         is_blocked: bool = False  # rebind-ok: set when a continuation hop is blocked for recitation
         while (
@@ -871,10 +887,15 @@ class InteractionsToCompletionBridgeHandler:
                 is_blocked = is_recitation_block(hop_error)
                 log_failed_hop(hop_error)
                 break
+        merged: Final = merge_hops(hops)
+        _log_unary_response(
+            call_logger, messages, api_key, wire, raw_response.text if len(hops) == 1 else json.dumps(merged)
+        )
         result: Final = transform_interactions_response_to_chat_response(
-            raw_response=merge_hops(hops),
+            raw_response=merged,
             model=model,
             model_response=model_response,
+            is_function_call=is_function_call(opt_map),
         )
         _mark_initial_prompt_tokens(result, hops)
         _attach_response_metadata(result, raw_response, wire.url)
@@ -1004,6 +1025,7 @@ class InteractionsToCompletionBridgeHandler:
                 async_lines=raw_response.aiter_lines(),
                 http_response=raw_response,
                 request_body=wire.body,
+                is_function_call=is_function_call(opt_map),
                 open_async_hop=open_async_hop,
             )
             wrapper: Final = CustomStreamWrapper(
@@ -1022,14 +1044,12 @@ class InteractionsToCompletionBridgeHandler:
             _attach_response_metadata(wrapper, raw_response, wire.url)
             return wrapper
 
-        call_logger.post_call(
-            input=list(messages),
-            api_key=api_key or "",
-            original_response=raw_response.text,
-            additional_args={"complete_input_dict": wire.body},
-        )
         first_hop: Final = _interaction_of(raw_response)
-        _raise_if_interaction_failed(first_hop, model=model, custom_llm_provider=custom_llm_provider, url=wire.url)
+        try:
+            _raise_if_interaction_failed(first_hop, model=model, custom_llm_provider=custom_llm_provider, url=wire.url)
+        except Exception:
+            _log_unary_response(call_logger, messages, api_key, wire, raw_response.text)
+            raise
         hops: tuple[JsonMapping, ...] = (first_hop,)  # rebind-ok: grows by one hop per loop pass
         is_blocked: bool = False  # rebind-ok: set when a continuation hop is blocked for recitation
         while (
@@ -1056,10 +1076,15 @@ class InteractionsToCompletionBridgeHandler:
                 is_blocked = is_recitation_block(hop_error)
                 log_failed_hop(hop_error)
                 break
+        merged: Final = merge_hops(hops)
+        _log_unary_response(
+            call_logger, messages, api_key, wire, raw_response.text if len(hops) == 1 else json.dumps(merged)
+        )
         result: Final = transform_interactions_response_to_chat_response(
-            raw_response=merge_hops(hops),
+            raw_response=merged,
             model=model,
             model_response=model_response,
+            is_function_call=is_function_call(opt_map),
         )
         _mark_initial_prompt_tokens(result, hops)
         _attach_response_metadata(result, raw_response, wire.url)
