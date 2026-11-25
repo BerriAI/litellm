@@ -23,11 +23,16 @@ impl Overflow {
     }
 }
 
-/// Whether the prompt overflows `deployment`. A deployment without a window, an uncounted
-/// prompt, or one that may not be counted (a compaction is pending) always fits.
+/// Whether the prompt overflows `deployment`, counted for it when the host counted it apart. A
+/// deployment without a window, an uncounted prompt, or one that may not be counted (a compaction
+/// is pending) always fits.
 pub(super) fn overflow(deployment: &Deployment, facts: &PreCallFacts) -> Option<Overflow> {
-    let limit = facts.of(deployment).max_input_tokens?;
-    let tokens = facts.input_tokens.filter(|_| facts.countable)?;
+    let own = facts.of(deployment);
+    let limit = own.max_input_tokens?;
+    let tokens = own
+        .input_tokens
+        .or(facts.input_tokens)
+        .filter(|_| facts.countable)?;
     (tokens > limit).then(|| Overflow {
         model: named_model(deployment),
         limit,

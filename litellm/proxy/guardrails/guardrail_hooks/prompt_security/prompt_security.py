@@ -604,7 +604,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             detail=f"{resource_name} blocked by Prompt Security. Violations: {', '.join(violations)}",
         )
 
-    async def _process_image_url_item(self, item: dict, user_api_key_alias: str | None) -> dict:
+    async def _process_image_url_item(self, item: dict, user_api_key_alias: str | None) -> dict[str, object]:
         """Process and sanitize image_url items."""
         image_url_data: Final = item.get("image_url", {})
         url: Final = image_url_data.get("url", "") if isinstance(image_url_data, dict) else image_url_data
@@ -643,7 +643,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             verbose_proxy_logger.error("Error sanitizing image file: %s", e)
             raise HTTPException(status_code=500, detail=f"File sanitization failed: {e}")
 
-    async def _process_document_item(self, item: dict, user_api_key_alias: str | None) -> dict:
+    async def _process_document_item(self, item: dict, user_api_key_alias: str | None) -> dict[str, object]:
         """Process and sanitize document/file items."""
         doc_data: Final = item.get("document") or item.get("file") or item
         url_key: Final = "file_data" if isinstance(doc_data, dict) and not doc_data.get("url") else "url"

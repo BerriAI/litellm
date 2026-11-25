@@ -177,6 +177,21 @@ fn text(value: Option<&Value>) -> Option<String> {
 /// `_get_total_tokens_from_usage`: the tokens a usage charges under the rate limit type, cache
 /// reads left out of input and total. Only litellm's `Usage` and plain dicts report them.
 pub fn charged_tokens(usage: Option<&UsageObject>, kind: TokenRateLimitType) -> i64 {
+    let (charged, cached) = counted_and_cached(usage, kind);
+    if cached > 0 {
+        charged.saturating_sub(cached).max(0)
+    } else {
+        charged
+    }
+}
+
+/// The cache-read prompt tokens `charged_tokens` leaves out of a usage's input or total.
+pub fn cached_tokens_left_out(usage: Option<&UsageObject>, kind: TokenRateLimitType) -> i64 {
+    let (charged, cached) = counted_and_cached(usage, kind);
+    cached.clamp(0, charged.max(0))
+}
+
+fn counted_and_cached(usage: Option<&UsageObject>, kind: TokenRateLimitType) -> (i64, i64) {
     let (members, cached) = match usage {
         Some(UsageObject::Chat { members }) => (members, count(members.get("cached_tokens"))),
         Some(UsageObject::Mapping { members, .. }) => {
@@ -186,17 +201,12 @@ pub fn charged_tokens(usage: Option<&UsageObject>, kind: TokenRateLimitType) -> 
             };
             (members, cached)
         }
-        _ => return 0,
+        _ => return (0, 0),
     };
-    let (charged, cached) = match kind {
+    match kind {
         TokenRateLimitType::Output => (count(members.get("completion_tokens")), 0),
         TokenRateLimitType::Input => (count(members.get("prompt_tokens")), cached),
         TokenRateLimitType::Total => (count(members.get("total_tokens")), cached),
-    };
-    if cached > 0 {
-        charged.saturating_sub(cached).max(0)
-    } else {
-        charged
     }
 }
 
@@ -435,30 +445,36 @@ impl LoggedCall {
 
     /// `recovered_partial_usage_tokens`: the usage a failed stream recovered before it broke,
     /// charged under the rate limit type, and its reconciled split.
-    pub fn recovered(&self, kind: TokenRateLimitType) -> (i64, Option<Usage>) {
+    pub fn recovered(&self, kind: TokenRateLimitType) -> (i64, i64, Option<Usage>) {
         match self.combined_usage() {
             Some(usage @ UsageObject::Chat { members })
                 if count(members.get("completion_tokens")) > 0 =>
             {
-                (charged_tokens(Some(usage), kind), reconciled(Some(usage)))
+                (
+                    charged_tokens(Some(usage), kind),
+                    cached_tokens_left_out(Some(usage), kind),
+                    reconciled(Some(usage)),
+                )
             }
-            _ => (0, None),
+            _ => (0, 0, None),
         }
     }
 
     pub fn failure_facts(&self, kind: TokenRateLimitType) -> FailureFacts {
-        let (tpm_actual, partial_usage) = self.recovered(kind);
+        let (tpm_actual, cached_tokens_left_out, partial_usage) = self.recovered(kind);
         FailureFacts {
             call_id: self.call_id.clone(),
             tpm_actual,
+            cached_tokens_left_out,
             partial_usage,
         }
     }
 
     pub fn post_call_failure_facts(&self, kind: TokenRateLimitType) -> PostCallFailureFacts {
-        let (tpm_actual, partial_usage) = self.recovered(kind);
+        let (tpm_actual, cached_tokens_left_out, partial_usage) = self.recovered(kind);
         PostCallFailureFacts {
             tpm_actual,
+            cached_tokens_left_out,
             partial_usage,
         }
     }
@@ -520,6 +536,7 @@ impl LoggedCall {
             call_id: self.call_id.clone(),
             exempt: self.exempt(),
             total_tokens,
+            cached_tokens_left_out: cached_tokens_left_out(usage, kind),
             settles_at_reservation: embedding_reported_no_tokens
                 && kind != TokenRateLimitType::Output,
             embedding_reported_no_tokens,
@@ -574,6 +591,29 @@ mod tests {
             "prompt_tokens": 50, "completion_tokens": 50, "total_tokens": 100, "cached_tokens": 30,
         }));
         assert_eq!(charged_tokens(Some(&usage), kind), expected);
+    }
+
+    #[rstest]
+    #[case::output_reads_no_cache(TokenRateLimitType::Output, 0)]
+    #[case::input(TokenRateLimitType::Input, 30)]
+    #[case::total(TokenRateLimitType::Total, 30)]
+    fn the_cached_tokens_left_out_are_what_charging_subtracts(
+        #[case] kind: TokenRateLimitType,
+        #[case] expected: i64,
+    ) {
+        let usage = chat(json!({
+            "prompt_tokens": 50, "completion_tokens": 50, "total_tokens": 100, "cached_tokens": 30,
+        }));
+        assert_eq!(cached_tokens_left_out(Some(&usage), kind), expected);
+    }
+
+    #[rstest]
+    fn cache_reads_above_the_prompt_leave_out_only_the_prompt() {
+        let usage = chat(json!({"prompt_tokens": 10, "cached_tokens": 30}));
+        assert_eq!(
+            cached_tokens_left_out(Some(&usage), TokenRateLimitType::Input),
+            10
+        );
     }
 
     #[test]
@@ -681,11 +721,15 @@ mod tests {
             },
             ..LoggedCall::default()
         };
-        assert_eq!(partial(0).recovered(TokenRateLimitType::Total), (0, None));
+        assert_eq!(
+            partial(0).recovered(TokenRateLimitType::Total),
+            (0, 0, None)
+        );
         assert_eq!(
             partial(5).recovered(TokenRateLimitType::Total),
             (
                 15,
+                0,
                 Some(Usage {
                     prompt_tokens: 10,
                     completion_tokens: 5,

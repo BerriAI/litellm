@@ -195,7 +195,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
             "messages": list(messages_with_guard_content_as_text(request.get("messages", ()))),
         }
 
-    def _filter_allowed_fields(self, bedrock_invoke_nova_request: BedrockInvokeNovaRequest) -> dict:
+    def _filter_allowed_fields(self, bedrock_invoke_nova_request: BedrockInvokeNovaRequest) -> dict[str, object]:
         """
         Filter out fields that are not allowed in the `BedrockInvokeNovaRequest` dataclass.
         """

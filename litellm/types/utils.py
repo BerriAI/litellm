@@ -466,6 +466,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_image_token: float | None
     output_cost_per_image_token_batches: ReadOnly[float | None]
     output_cost_per_image_token_priority: ReadOnly[float | None]
+    output_cost_per_image_token_flex: ReadOnly[float | None]
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
     output_cost_per_reasoning_token: float | None
@@ -4365,6 +4366,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_image_token: float | None = None
     output_cost_per_image_token_batches: float | None = None
     output_cost_per_image_token_priority: float | None = None
+    output_cost_per_image_token_flex: float | None = None
     output_cost_per_video_token: float | None = None
     output_cost_per_reasoning_token: float | None = None
     output_cost_per_reasoning_token_flex: float | None = None
@@ -4953,6 +4955,7 @@ class LlmProviders(str, Enum):
     REKA = "reka"
     STREAMLAKE = "streamlake"
     WALLY = "wally"
+    HUAWEI_MAAS = "huawei_maas"
     SARVAM = "sarvam"
     WIRO = "wiro"
     LITELLM_AGENT = "litellm_agent"
