@@ -1,12 +1,12 @@
 "use client";
 
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { EmbeddedLens } from "@/components/lens/EmbeddedLens";
-import { useAuth } from "@/contexts/AuthContext";
-import { checkTokenValidity, decodeToken } from "@/utils/jwtUtils";
+import { decodeToken } from "@/utils/jwtUtils";
 
 export default function LensPage() {
-  const { token, authLoading } = useAuth();
-  if (authLoading || !checkTokenValidity(token)) return null;
+  const { token, isLoading, isAuthorized } = useAuthorized();
+  if (isLoading || !isAuthorized) return null;
   const session: Record<string, unknown> | null = decodeToken(token);
   const accessToken = session?.key;
   if (typeof accessToken !== "string" || !accessToken.trim()) return null;
