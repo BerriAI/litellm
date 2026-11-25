@@ -22,6 +22,7 @@ from typing_extensions import ReadOnly, Required
 import litellm
 from litellm._uuid import uuid
 from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES, RESPONSE_FORMAT_TOOL_NAME
+from litellm.exceptions import UnsupportedParamsError
 from litellm.files.types import FileContentStreamingResult
 from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.cloud_storage_security import (
@@ -50,7 +51,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.anthropic.chat.transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
+from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body, row_or_deployment_drop_params
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     BaseFileUploadStream,
@@ -70,7 +71,9 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    VERTEX_SHARED_REQUEST_TIERS,
     VertexGeminiConfig,
+    requests_audio_mime_type,
 )
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     transform_openai_input_gemini_embed_content,
@@ -1028,7 +1031,14 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
         raise TypeError("`body` on batch requests must be a JSON object, but was missing or not an object")
     openai_request_body: Final = openai_entry["body"]
     chat_request_body: Final = (
-        responses_batch_body_to_chat_body(openai_request_body, custom_llm_provider="vertex_ai")
+        {
+            **responses_batch_body_to_chat_body(
+                openai_request_body,
+                custom_llm_provider="vertex_ai",
+                drop_params=row_or_deployment_drop_params(openai_request_body, deployment_params.get("drop_params")),
+            ),
+            **{key: value for key, value in openai_request_body.items() if key == "drop_params" and value is not None},
+        }
         if _is_responses_batch_entry(openai_entry)
         else openai_request_body
     )
@@ -1045,12 +1055,13 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
                 deployment_params=deployment_params,
             ),
         )
+    drop_params: Final = drops_unsupported_params(entry_body.get("drop_params", deployment_params.get("drop_params")))
     vertex_request_body: Final = transform_request_body(
         messages=chat_messages,
         model=chat_request_body.get("model", ""),
         optional_params=map_openai_to_vertex_params(chat_request_body),
         custom_llm_provider="vertex_ai",
-        litellm_params={},
+        litellm_params={"drop_params": drop_params},
         cached_content=None,
     )
 
@@ -1060,16 +1071,7 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
             vertex_request_body["labels"] = {}
         _set_litellm_batch_custom_id_labels(vertex_request_body["labels"], custom_id)
 
-    return (
-        {
-            "request": _with_json_schema_config_in_its_own_column(
-                vertex_request_body,
-                drop_params=drops_unsupported_params(
-                    entry_body.get("drop_params", deployment_params.get("drop_params"))
-                ),
-            )
-        },
-    )
+    return ({"request": _with_json_schema_config_in_its_own_column(vertex_request_body, drop_params=drop_params)},)
 
 
 def _decode_batch_input_line(lineno: int, raw: str | bytes | bytearray) -> str:
@@ -1479,6 +1481,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     def _map_openai_to_vertex_params(
         self,
         openai_request_body: dict[str, Any],
+        deployment_drop_params: object = None,
     ) -> dict[str, object]:
         """
         wrapper to call VertexGeminiConfig.map_openai_params
@@ -1489,12 +1492,27 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
         config: Final = VertexGeminiConfig()
         _model: Final = openai_request_body.get("model", "")
+        drop_params: Final = drops_unsupported_params(openai_request_body.get("drop_params", deployment_drop_params))
         vertex_params: Final = config.map_openai_params(
             model=_model,
             non_default_params=openai_request_body,
             optional_params={},
-            drop_params=False,
+            drop_params=drop_params,
+            allow_unsupported_n=True,
         )
+        if (
+            "service_tier" in vertex_params
+            and vertex_params["service_tier"] in VERTEX_SHARED_REQUEST_TIERS
+            and not drop_params
+        ):
+            raise UnsupportedParamsError(
+                message=(
+                    "Vertex AI batch requests do not support `service_tier`, since batch jobs run on the batch tier. "
+                    "To drop this param, set `litellm.drop_params = True` or pass in `(.., drop_params=True)` "
+                    "in the request - https://docs.litellm.ai/docs/completion/drop_params"
+                ),
+                status_code=400,
+            )
         return vertex_params
 
     def transform_create_file_request(
@@ -1528,11 +1546,12 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             create_file_data=create_file_data,
             content_type=content_type,
         ):
+            deployment_drop_params: Final[object] = litellm_params.get("drop_params")
             return {
                 "streaming_media_upload": StreamingMediaUploadConfig(
                     body_stream=_OpenAIToVertexBatchUploadStream(
                         file_data,
-                        self._map_openai_to_vertex_params,
+                        partial(self._map_openai_to_vertex_params, deployment_drop_params=deployment_drop_params),
                         batch_model=_deployment_batch_model(litellm_params),
                         deployment_params=_claude_batch_deployment_params(litellm_params),
                     ),
@@ -1931,6 +1950,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
         # Transform successful response using existing transformation
         vertex_response: Final = vertex_output.get("response", {})
+        vertex_request: Final = vertex_output.get("request")
 
         # Extract model from response
         model = vertex_response.get("modelVersion", "gemini-1.5-flash-001")
@@ -1947,6 +1967,8 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 model=model,
                 logging_obj=logging_obj,
                 raw_response=mock_httpx_response,
+                keeps_requested_audio_format=isinstance(vertex_request, Mapping)
+                and requests_audio_mime_type(vertex_request),
             )
 
             # Convert ModelResponse to dict

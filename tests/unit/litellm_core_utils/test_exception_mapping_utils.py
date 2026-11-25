@@ -1,6 +1,8 @@
+import functools
 import json
 import traceback
 from collections.abc import Awaitable, Callable
+from types import MappingProxyType
 from typing import Any, Final, Literal, Optional, Union
 from unittest.mock import MagicMock, patch
 
@@ -19,10 +21,19 @@ from litellm.litellm_core_utils.exception_mapping_utils import (
     _get_response_headers,
     exception_type,
     extract_and_raise_litellm_exception,
+    get_error_message,
 )
+from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.llms.anthropic.common_utils import AnthropicError
+from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.groq.chat.transformation import GroqChatCompletionStreamingHandler
 from litellm.llms.openai.common_utils import OpenAIError
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.proxy.common_utils.openai_error_payload import openai_error_param, relayed_provider_specific_fields
+from litellm.proxy.common_utils.responses_stream_errors import ResponsesStreamErrorState
 from litellm.types.utils import LlmProviders
 
 
@@ -1436,6 +1447,230 @@ def test_openrouter_upstream_500_still_maps_to_api_error():
     assert excinfo.value.status_code == 500
 
 
+_OPAQUE_CREDENTIAL: Final = "opaque-upstream-credential"
+_SHAPED_KEY: Final = "sk-9876543210abcdef9876543210"
+
+
+def _openai_sdk_bad_request(body: dict[str, object]) -> openai.BadRequestError:  # mutable-ok: the SDK takes a dict
+    request: Final = httpx.Request("POST", "https://backend.example.test/v1/chat/completions")
+    response: Final = httpx.Response(400, json={"error": body}, request=request)
+    return openai.BadRequestError(message=json.dumps({"error": body}), response=response, body=body)
+
+
+def test_get_error_message_redacts_a_credential_beside_a_structured_message():
+    structured: Final = {"detail": [{"loc": ["body", "max_tokens"], "msg": "must be >= 0"}]}
+
+    message: Final = get_error_message(
+        _openai_sdk_bad_request({"message": structured, "api_key": [_OPAQUE_CREDENTIAL]})
+    )
+
+    assert message is not None
+    assert _OPAQUE_CREDENTIAL not in message
+    assert json.loads(message)["message"] == structured
+
+
+@pytest.mark.parametrize(
+    ("body", "kept"),
+    [
+        ({"message": f"upstream rejected key {_SHAPED_KEY}", "code": 400}, "upstream rejected key"),
+        ({"message": "Provider returned error", "metadata": {"raw": f"bad key {_SHAPED_KEY}"}}, "bad key"),
+        (
+            {"message": "Provider returned error", "metadata": {"raw": {"api_key": _OPAQUE_CREDENTIAL, "why": "denied"}}},
+            "denied",
+        ),
+    ],
+    ids=["message", "raw_text", "raw_object"],
+)
+def test_openrouter_error_message_redacts_a_credential_from_the_provider_body(
+    body: dict[str, object],  # mutable-ok: the SDK takes a dict
+    kept: str,
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="openrouter/qwen",
+            original_exception=_openai_sdk_bad_request(body),
+            custom_llm_provider="openrouter",
+        )
+
+    assert kept in caught.value.message
+    assert [leak for leak in (_SHAPED_KEY, _OPAQUE_CREDENTIAL) if leak in caught.value.message] == []
+
+
+@pytest.mark.parametrize("redaction_enabled", [True, False], ids=["redaction_on", "redaction_off"])
+def test_openrouter_error_message_survives_a_raw_body_nested_past_the_recursion_limit(
+    redaction_enabled: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", redaction_enabled)
+    raw: Final = functools.reduce(
+        lambda inner, _: {"inner": inner},
+        range(50_000),
+        "deep-leaf",
+    )
+    request: Final = httpx.Request("POST", "https://backend.example.test/v1/chat/completions")
+    response: Final = httpx.Response(400, json={"error": {"message": "rejected"}}, request=request)
+    original: Final = openai.BadRequestError(
+        message="rejected",
+        response=response,
+        body={"message": "rejected", "metadata": {"raw": raw}},
+    )
+
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(model="openrouter/qwen", original_exception=original, custom_llm_provider="openrouter")
+
+    assert "rejected" in caught.value.message
+    assert "deep-leaf" not in caught.value.message
+
+
+@pytest.mark.parametrize("status_code", [401, 403, 404, 408, 409, 422, 429, 500, 502, 503, 504])
+@pytest.mark.parametrize("provider", ["openai", "azure", "openrouter", "hosted_vllm"])
+def test_mapped_error_relays_the_provider_code_and_param_on_every_status(status_code: int, provider: str) -> None:
+    request: Final = httpx.Request("POST", "https://backend.example.test/v1/chat/completions")
+    response: Final = httpx.Response(status_code, json={"error": {"message": "rejected"}}, request=request)
+    original: Final = openai.APIStatusError(
+        message="rejected",
+        response=response,
+        body={"message": "rejected", "code": "provider_code", "param": "temperature"},
+    )
+
+    with pytest.raises(openai.APIError) as caught:
+        exception_type(model="qwen", original_exception=original, custom_llm_provider=provider)
+
+    assert (relayed_provider_specific_fields(caught.value) or {}).get("code") == "provider_code"
+    assert openai_error_param(caught.value) == "temperature"
+
+
+@pytest.mark.parametrize("provider", ["openai", "azure", "openrouter", "hosted_vllm"])
+def test_mid_stream_error_relays_the_provider_code_and_param(provider: str) -> None:
+    request: Final = httpx.Request("POST", "https://backend.example.test/v1/chat/completions")
+    original: Final = openai.APIError(
+        message="upstream broke",
+        request=request,
+        body={"message": "upstream broke", "code": "upstream_boom", "param": "temperature"},
+    )
+
+    with pytest.raises(openai.APIError) as caught:
+        exception_type(model="qwen", original_exception=original, custom_llm_provider=provider)
+
+    assert (relayed_provider_specific_fields(caught.value) or {}).get("code") == "upstream_boom"
+    assert openai_error_param(caught.value) == "temperature"
+
+
+def _logged_error_code(mapped: Exception) -> str:
+    return StandardLoggingPayloadSetup.get_error_information(original_exception=mapped)["error_code"]
+
+
+_PROVIDER_ERROR: Final = MappingProxyType(
+    {"message": "rejected", "type": "invalid_request_error", "param": "temperature", "code": "provider_code"}
+)
+
+
+@pytest.mark.parametrize("status_code", [400, 401, 403, 404, 409, 413, 422, 500, 502])
+def test_openrouter_failure_logs_its_status_and_relays_the_provider_code(status_code: int) -> None:
+    request: Final = httpx.Request("POST", "https://backend.example.test/v1/chat/completions")
+    response: Final = httpx.Response(status_code, json={"error": dict(_PROVIDER_ERROR)}, request=request)
+    original: Final = openai.APIStatusError(message="rejected", response=response, body=dict(_PROVIDER_ERROR))
+
+    with pytest.raises(openai.APIError) as caught:
+        exception_type(model="qwen", original_exception=original, custom_llm_provider="openrouter")
+
+    assert _logged_error_code(caught.value) == str(status_code)
+    assert (relayed_provider_specific_fields(caught.value) or {}).get("code") == "provider_code"
+    assert openai_error_param(caught.value) == "temperature"
+
+
+def test_azure_responses_failure_logs_its_status_and_relays_the_provider_code() -> None:
+    with pytest.raises(BaseLLMException) as upstream:
+        AzureOpenAIResponsesAPIConfig().get_error_class(json.dumps({"error": dict(_PROVIDER_ERROR)}), 400, {})
+
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(model="gpt-5.6", original_exception=upstream.value, custom_llm_provider="azure")
+
+    assert _logged_error_code(caught.value) == "400"
+    assert (relayed_provider_specific_fields(caught.value) or {}).get("code") == "provider_code"
+    assert openai_error_param(caught.value) == "temperature"
+
+
+def _azure_responses_failure(code: str) -> BaseLLMException:
+    with pytest.raises(BaseLLMException) as upstream:
+        AzureOpenAIResponsesAPIConfig().get_error_class(
+            json.dumps({"error": {**_PROVIDER_ERROR, "code": code}}), 400, {}
+        )
+    return upstream.value
+
+
+def _openrouter_failure(code: str) -> openai.APIStatusError:
+    request: Final = httpx.Request("POST", "https://backend.example.test/v1/chat/completions")
+    error: Final = {**_PROVIDER_ERROR, "code": code}
+    response: Final = httpx.Response(400, json={"error": error}, request=request)
+    return openai.APIStatusError(message="rejected", response=response, body=error)
+
+
+def test_azure_content_policy_failure_keeps_logging_its_code() -> None:
+    with pytest.raises(litellm.ContentPolicyViolationError) as caught:
+        exception_type(
+            model="gpt-5.6",
+            original_exception=_azure_responses_failure("content_policy_violation"),
+            custom_llm_provider="azure",
+        )
+
+    assert _logged_error_code(caught.value) == "content_policy_violation"
+
+
+@pytest.mark.parametrize(
+    ("provider", "failure"), [("azure", _azure_responses_failure), ("openrouter", _openrouter_failure)]
+)
+def test_cyber_policy_code_outside_the_openai_mapping_logs_its_status(
+    provider: str, failure: Callable[[str], Exception]
+) -> None:
+    with pytest.raises(openai.APIError) as caught:
+        exception_type(model="gpt-5.6", original_exception=failure("cyber_policy"), custom_llm_provider=provider)
+
+    assert _logged_error_code(caught.value) == "400"
+
+
+def test_openai_sdk_failure_keeps_logging_the_provider_code() -> None:
+    request: Final = httpx.Request("POST", "https://backend.example.test/v1/chat/completions")
+    response: Final = httpx.Response(400, json={"error": dict(_PROVIDER_ERROR)}, request=request)
+    original: Final = openai.BadRequestError(message="rejected", response=response, body=dict(_PROVIDER_ERROR))
+
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(model="gpt-5.6", original_exception=original, custom_llm_provider="openai")
+
+    assert _logged_error_code(caught.value) == "provider_code"
+
+
+@pytest.mark.parametrize("status_code", [400, 422, 500])
+@pytest.mark.parametrize("provider", ["openai", "hosted_vllm", "xai", "mistral"])
+def test_relayed_error_text_logs_its_status_and_relays_the_provider_code(status_code: int, provider: str) -> None:
+    original: Final = BaseLLMException(status_code=status_code, message=json.dumps({"error": dict(_PROVIDER_ERROR)}))
+
+    with pytest.raises(openai.APIError) as caught:
+        exception_type(model="qwen", original_exception=original, custom_llm_provider=provider)
+
+    assert _logged_error_code(caught.value) == str(status_code)
+    assert (relayed_provider_specific_fields(caught.value) or {}).get("code") == "provider_code"
+
+
+@pytest.mark.parametrize("status_code", [400, 422, 500])
+def test_text_completion_failure_logs_its_status_and_relays_the_provider_code(status_code: int) -> None:
+    transport: Final = httpx.MockTransport(
+        lambda _request: httpx.Response(status_code, json={"error": dict(_PROVIDER_ERROR)})
+    )
+    client: Final = openai.OpenAI(
+        api_key="test-key",
+        base_url="https://backend.example.test/v1",
+        http_client=httpx.Client(transport=transport),
+        max_retries=0,
+    )
+
+    with pytest.raises(openai.APIError) as caught:
+        litellm.text_completion(model="openai/qwen", prompt="hi", api_key="test-key", client=client, num_retries=0)
+
+    assert _logged_error_code(caught.value) == str(status_code)
+    assert (relayed_provider_specific_fields(caught.value) or {}).get("code") == "provider_code"
+
+
 def test_branchless_provider_upstream_500_still_maps_to_internal_server_error():
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -2357,6 +2592,193 @@ async def test_exception_with_headers(
                 )
 
 
+_PROVIDER_WIRE_BODY: Final = {"error": {"message": "wire says no", "type": "invalid_request_error"}}
+
+
+@pytest.mark.parametrize(
+    ("status_code", "mapped_error"),
+    [
+        (400, litellm.BadRequestError),
+        (401, litellm.AuthenticationError),
+        (404, litellm.NotFoundError),
+        (429, litellm.RateLimitError),
+    ],
+)
+def test_mapped_anthropic_error_exposes_the_provider_reply(status_code: int, mapped_error: type[Exception]):
+    original: Final = AnthropicError(status_code=status_code, message=json.dumps(_PROVIDER_WIRE_BODY))
+    original.response = httpx.Response(status_code, json=_PROVIDER_WIRE_BODY, request=original.request)
+
+    with pytest.raises(mapped_error) as caught:
+        exception_type(
+            model="claude-sonnet-4-5",
+            original_exception=original,
+            custom_llm_provider="anthropic",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert caught.value.response.status_code == status_code
+    assert caught.value.response.json() == _PROVIDER_WIRE_BODY
+
+
+def test_mapped_anthropic_529_reports_one_status_beside_the_provider_reply(quiet_exception_mapping: None) -> None:
+    wire_body: Final = {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}
+    original: Final = AnthropicError(status_code=529, message=json.dumps(wire_body))
+    original.response = httpx.Response(529, json=wire_body, request=original.request)
+
+    with pytest.raises(litellm.InternalServerError) as caught:
+        exception_type(
+            model="claude-sonnet-4-5",
+            original_exception=original,
+            custom_llm_provider="anthropic",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert (caught.value.status_code, caught.value.response.status_code) == (500, 500)
+    assert caught.value.response.json() == wire_body
+
+
+@pytest.mark.parametrize(
+    ("provider", "wire_status", "message", "mapped_error"),
+    [
+        ("replicate", 402, json.dumps(_PROVIDER_WIRE_BODY), litellm.APIError),
+        ("nlp_cloud", 522, json.dumps(_PROVIDER_WIRE_BODY), litellm.Timeout),
+        ("openai", 524, "A timeout occurred", litellm.Timeout),
+        ("openai", 503, "The server had an error processing your request.", litellm.InternalServerError),
+        ("mistral", 400, "Mistral API raised a streaming error", litellm.APIError),
+        ("openai", 504, "Request timed out", litellm.Timeout),
+    ],
+)
+def test_an_error_mapped_to_another_status_reports_that_status_on_the_provider_reply(
+    provider: str,
+    wire_status: int,
+    message: str,
+    mapped_error: type[litellm.APIError | litellm.Timeout | litellm.InternalServerError],
+    quiet_exception_mapping: None,
+) -> None:
+    request: Final = httpx.Request("POST", "https://provider.example/v1/predictions")
+    original: Final = BaseLLMException(
+        status_code=wire_status,
+        message=message,
+        request=request,
+        response=httpx.Response(wire_status, json=_PROVIDER_WIRE_BODY, request=request),
+    )
+
+    with pytest.raises(mapped_error) as caught:
+        exception_type(
+            model="provider-model",
+            original_exception=original,
+            custom_llm_provider=provider,
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert caught.value.status_code != wire_status
+    assert caught.value.response.status_code == caught.value.status_code
+    assert caught.value.response.json() == _PROVIDER_WIRE_BODY
+
+
+def test_a_streamed_groq_error_with_a_text_code_still_maps_to_an_api_error(quiet_exception_mapping: None) -> None:
+    with pytest.raises(OpenAIError) as streamed_failure:
+        GroqChatCompletionStreamingHandler(streaming_response=iter(()), sync_stream=True).chunk_parser(
+            {"error": {"code": "tool_use_failed", "message": "Failed to call a function"}}
+        )
+
+    with pytest.raises(litellm.APIError) as caught:
+        exception_type(
+            model="llama-3.3-70b-versatile",
+            original_exception=streamed_failure.value,
+            custom_llm_provider="groq",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert type(caught.value) is litellm.APIError
+    assert "Failed to call a function" in str(caught.value)
+
+
+def test_litellm_proxy_error_keeps_the_reply_body_beside_the_forwarded_headers():
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    request: Final = httpx.Request("POST", "https://proxy.example/v1/responses")
+    upstream: Final = httpx.Response(400, json=_PROVIDER_WIRE_BODY, headers=_PROXY_HEADERS, request=request)
+    with pytest.raises(BaseLLMException) as provider_failure:
+        BaseLLMHTTPHandler()._handle_error(
+            e=httpx.HTTPStatusError("rejected", request=request, response=upstream), provider_config=None
+        )
+
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="gpt-5.6",
+            original_exception=provider_failure.value,
+            custom_llm_provider="litellm_proxy",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert caught.value.response.json() == _PROVIDER_WIRE_BODY
+    assert dict(caught.value.response.headers) == dict(upstream.headers)
+
+
+def test_provider_reply_does_not_reclassify_an_invalid_bedrock_model_identifier():
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    wire_body: Final = {"message": "The provided model identifier is invalid."}
+    converse_like_url: Final = "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude/converse"
+    request: Final = httpx.Request("POST", converse_like_url)
+    rejection: Final = httpx.HTTPStatusError(
+        "rejected", request=request, response=httpx.Response(400, json=wire_body, request=request)
+    )
+
+    with pytest.raises(BaseLLMException) as provider_failure:
+        BaseLLMHTTPHandler()._handle_error(e=rejection, provider_config=None)
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+            original_exception=provider_failure.value,
+            custom_llm_provider="bedrock",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert type(caught.value) is litellm.BadRequestError
+    assert caught.value.response.json() == wire_body
+
+
+def _anthropic_failure_answered_with(reply_status: int) -> BaseLLMException:
+    request: Final = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return BaseLLMException(
+        status_code=400,
+        message="invalid_request_error: rejected",
+        request=request,
+        response=httpx.Response(reply_status, content=b"provider reply", request=request),
+    )
+
+
+def test_only_an_http_error_reply_is_exposed_as_the_provider_error():
+    with pytest.raises(litellm.BadRequestError) as answered_with_an_error:
+        exception_type(
+            model="claude-sonnet-4-5",
+            original_exception=_anthropic_failure_answered_with(400),
+            custom_llm_provider="anthropic",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    with pytest.raises(litellm.BadRequestError) as answered_with_success:
+        exception_type(
+            model="claude-sonnet-4-5",
+            original_exception=_anthropic_failure_answered_with(200),
+            custom_llm_provider="anthropic",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+
+    assert answered_with_an_error.value.response.text == "provider reply"
+    assert answered_with_success.value.response.status_code != 200
+    assert answered_with_success.value.response.text == ""
+
+
 @pytest.mark.parametrize(
     "sync_mode",
     [True, False],
@@ -2557,3 +2979,164 @@ def test_missing_aws_dependency_is_not_mapped_to_provider_failure(provider, depe
 def test_non_aws_import_failure_keeps_provider_mapping(failure):
     with pytest.raises(litellm.APIConnectionError):
         exception_type(model="test-model", original_exception=failure, custom_llm_provider="openai")
+
+
+def test_openai_compatible_error_relayed_as_json_text_keeps_its_param_and_plain_message(
+    quiet_exception_mapping: None,
+) -> None:
+    upstream_message: Final = "max_tokens must be at least 1, got -5. (parameter=max_tokens, value=-5)"
+    relayed_text: Final = json.dumps(
+        {"error": {"message": upstream_message, "type": "BadRequestError", "param": "max_tokens", "code": 400}}
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        exception_type(
+            model="zai-org/GLM-5.3",
+            original_exception=OpenAIError(status_code=400, message=relayed_text),
+            custom_llm_provider="hosted_vllm",
+        )
+
+    assert raised.value.param == "max_tokens"
+    assert raised.value.message == f"litellm.BadRequestError: Hosted_vllmException - {upstream_message}"
+
+
+@pytest.mark.parametrize("message", ("plain text failure", '{"error": "plain text failure"}', "[1, 2]"))
+def test_openai_compatible_error_without_a_relayed_error_object_keeps_its_message(
+    message: str, quiet_exception_mapping: None
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as raised:
+        exception_type(
+            model="zai-org/GLM-5.3",
+            original_exception=OpenAIError(status_code=400, message=message),
+            custom_llm_provider="hosted_vllm",
+        )
+
+    assert raised.value.param is None
+    assert raised.value.message == f"litellm.BadRequestError: Hosted_vllmException - {message}"
+
+
+@pytest.mark.parametrize("provider", ("openai", "hosted_vllm"))
+@pytest.mark.parametrize(
+    ("status", "error_type", "error_code", "mapped_error"),
+    [
+        (404, "not_found_error", "thread_not_found", litellm.NotFoundError),
+        (400, "invalid_request_error", "thread_unsupported_request", litellm.BadRequestError),
+    ],
+)
+def test_anthropic_thread_refusals_keep_their_details_on_openai_compatible_legs(
+    provider: str,
+    status: int,
+    error_type: str,
+    error_code: str,
+    mapped_error: type[litellm.NotFoundError] | type[litellm.BadRequestError],
+    quiet_exception_mapping: None,
+) -> None:
+    message: Final = json.dumps(
+        {
+            "type": "error",
+            "error": {
+                "type": error_type,
+                "message": "Threads are not supported.",
+                "details": {"error_code": error_code},
+            },
+        }
+    )
+    with pytest.raises(mapped_error) as raised:
+        exception_type(
+            model="test-model",
+            original_exception=AnthropicError(status_code=status, message=message),
+            custom_llm_provider=provider,
+        )
+
+    assert error_code in raised.value.message
+    assert relayed_provider_specific_fields(raised.value) is None
+
+
+def _status_failure(status_code: int, error: dict[str, object]) -> openai.APIStatusError:
+    request: Final = httpx.Request("POST", "https://backend.example.test/v1/chat/completions")
+    response: Final = httpx.Response(status_code, json={"error": error}, request=request)
+    return openai.APIStatusError(message="rejected", response=response, body=error)
+
+
+@pytest.mark.parametrize("provider", ("openrouter", "openai", "hosted_vllm", "gemini"))
+def test_mapped_error_never_carries_a_credential_in_its_param(provider: str) -> None:
+    fake_key: Final = "sk-test-fake-0123456789abcdefghijklmn"
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="m",
+            original_exception=_status_failure(400, {"message": "rejected", "param": fake_key}),
+            custom_llm_provider=provider,
+        )
+
+    assert fake_key not in str(caught.value.param)
+
+
+def test_mapped_error_keeps_a_plain_field_name_in_its_param() -> None:
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(
+            model="m",
+            original_exception=_status_failure(400, {"message": "rejected", "param": "messages[0].content"}),
+            custom_llm_provider="openrouter",
+        )
+
+    assert caught.value.param == "messages[0].content"
+
+
+def test_openrouter_rate_limit_keeps_its_own_code() -> None:
+    with pytest.raises(litellm.RateLimitError) as caught:
+        exception_type(
+            model="m",
+            original_exception=_status_failure(429, {"message": "busy", "code": "rate_limit_exceeded"}),
+            custom_llm_provider="openrouter",
+        )
+
+    assert caught.value.code == "429"
+    assert relayed_provider_specific_fields(caught.value) == {"code": "rate_limit_exceeded"}
+
+
+def test_azure_responses_rate_limit_keeps_its_own_code() -> None:
+    with pytest.raises(BaseLLMException) as upstream:
+        AzureOpenAIResponsesAPIConfig().get_error_class(
+            json.dumps({"error": {"message": "slow down", "code": "rate_limit_exceeded"}}), 429, {}
+        )
+    with pytest.raises(litellm.RateLimitError) as caught:
+        exception_type(model="m", original_exception=upstream.value, custom_llm_provider="azure")
+
+    assert caught.value.code == "429"
+    assert relayed_provider_specific_fields(caught.value) == {"code": "rate_limit_exceeded"}
+
+
+def test_openrouter_stream_failure_keeps_the_upstream_reason() -> None:
+    error: Final = {"message": "Provider returned error", "code": 400, "metadata": {"raw": "bad schema"}}
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(model="m", original_exception=_status_failure(400, error), custom_llm_provider="openrouter")
+
+    frame: Final = ResponsesStreamErrorState().format_failure(caught.value)
+
+    assert frame is not None
+    assert "bad schema" in json.loads(frame.split("data: ", 1)[1])["response"]["error"]["message"]
+
+
+def test_flat_responses_failure_logs_its_status_and_relays_the_provider_code() -> None:
+    with pytest.raises(BaseLLMException) as upstream:
+        OpenAIResponsesAPIConfig().get_error_class(json.dumps({"code": "provider_code", "message": "rejected"}), 400, {})
+    with pytest.raises(litellm.BadRequestError) as caught:
+        exception_type(model="m", original_exception=upstream.value, custom_llm_provider="openai")
+
+    assert _logged_error_code(caught.value) == "400"
+    assert relayed_provider_specific_fields(caught.value) == {"code": "provider_code"}
+
+
+def test_a_deeply_nested_provider_error_keeps_its_status() -> None:
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm.llms.base_llm.chat.transformation import BaseLLMException
+
+    depth: Final = 200_000
+    nested: Final = '{"error":' * depth + "1" + "}" * depth
+
+    with pytest.raises(litellm.BadRequestError):
+        exception_type(
+            model="qwen",
+            original_exception=BaseLLMException(status_code=400, message=nested),
+            custom_llm_provider="hosted_vllm",
+        )

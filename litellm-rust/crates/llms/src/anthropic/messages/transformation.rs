@@ -31,6 +31,14 @@ use crate::{
 
 const FIRST_VERSION_WITHOUT_SAMPLING_PARAMS: &str = "2026-10-21";
 const ANTHROPIC_API_HOST: &str = "api.anthropic.com";
+const UNSIGNED_THINKING_HOST_SUFFIXES: [&str; 6] = [
+    "deepseek.com",
+    "minimax.io",
+    "minimaxi.com",
+    "tencentcloudmaas.com",
+    "z.ai",
+    "bigmodel.cn",
+];
 const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
     "services.ai.azure.com",
     "openai.azure.com",
@@ -59,6 +67,15 @@ impl BaseMessagesConfig for AnthropicMessagesConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         Ok(complete_anthropic_url(api_base, env_lookup))
+    }
+
+    fn checks_claude_signatures(
+        &self,
+        api_base: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        !url::Url::parse(&complete_anthropic_url(api_base, env_lookup))
+            .is_ok_and(|url| url.host_str().is_some_and(replays_unsigned_thinking))
     }
 
     fn transform_anthropic_messages_request(
@@ -160,7 +177,9 @@ pub(crate) fn transform_messages_request(
         strip_advisor_blocks(request.messages)
     };
     let messages = strip_encrypted_reasoning_blocks(messages);
-    let messages = if context.claude_base_model || is_claude_model(&request.model) {
+    let messages = if (context.claude_base_model || is_claude_model(&request.model))
+        && !context.keeps_unsigned_thinking
+    {
         strip_unsigned_thinking_blocks(messages)
     } else {
         messages
@@ -356,6 +375,12 @@ fn is_foundry_host(host: &str) -> bool {
         .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
 }
 
+fn replays_unsigned_thinking(host: &str) -> bool {
+    UNSIGNED_THINKING_HOST_SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
 fn serves_anthropic_api_versions(url: &str) -> bool {
     url::Url::parse(url).is_ok_and(|url| {
         url.host_str()
@@ -375,7 +400,7 @@ pub(crate) fn drop_sampling_params_removed_by_requested_version(
     drop_sampling_params_removed_by_version(request, requested_api_version(headers), drop_params)
 }
 
-fn drop_sampling_params_removed_by_version(
+pub(crate) fn drop_sampling_params_removed_by_version(
     request: MessagesRequest,
     api_version: &str,
     drop_params: bool,
@@ -756,6 +781,22 @@ mod tests {
     }
 
     #[rstest]
+    #[case::anthropic("https://api.anthropic.com", true)]
+    #[case::gateway("https://llm-gateway.example.com/anthropic", true)]
+    #[case::foundry("https://example.services.ai.azure.com/anthropic", true)]
+    #[case::deepseek("https://api.deepseek.com/anthropic", false)]
+    #[case::z_ai("https://api.z.ai/api/anthropic", false)]
+    fn only_an_anthropic_compatible_host_gets_unsigned_thinking_back(
+        #[case] api_base: &str,
+        #[case] checks: bool,
+    ) {
+        assert_eq!(
+            ANTHROPIC_MESSAGES_CONFIG.checks_claude_signatures(Some(api_base), &|_| None),
+            checks
+        );
+    }
+
+    #[rstest]
     fn unsigned_thinking_is_still_replayed_to_an_open_model(unmapped: MessagesModelCapabilities) {
         let messages = tool_turn(Some(
             json!({"type": "thinking", "thinking": "open model plan", "signature": ""}),
@@ -1113,6 +1154,7 @@ mod tests {
                     },
                     drop_params: true,
                     claude_base_model: false,
+                    keeps_unsigned_thinking: false,
                 }
             );
             return;

@@ -4,12 +4,15 @@ import logging
 import threading
 import time
 from collections import OrderedDict, defaultdict
+from collections.abc import Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
 from typing import Callable, Final, Iterator, Literal, NoReturn, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
+import httpx
 import pytest
+from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
 from openai.types.chat import ChatCompletionChunk, ChatCompletionStreamOptionsParam
 from pydantic import BaseModel, ConfigDict
 
@@ -25,6 +28,7 @@ from litellm.litellm_core_utils.streaming_handler import (
     convert_generic_chunk_to_model_response_stream,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.types.utils import (
     ChatCompletionTokenLogprob,
     ChoiceLogprobs,
@@ -1228,6 +1232,155 @@ async def test_bedrock_validation_error_raises_directly(logging_obj: Logging):
         await response.__anext__()
     assert not isinstance(excinfo.value, MidStreamFallbackError)
     assert getattr(excinfo.value, "status_code", None) == 400
+
+
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+@pytest.mark.parametrize(
+    "upstream_chunks",
+    [
+        pytest.param(
+            (
+                ({"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},),
+                ({"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="one_choice_per_chunk",
+        ),
+        pytest.param(
+            (
+                (
+                    {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+                    {"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+                ),
+                ({"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},),
+                ({"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="choices_opened_in_one_chunk",
+        ),
+        pytest.param(
+            (
+                (
+                    {"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},
+                    {"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},
+                ),
+                (
+                    {"index": 0, "delta": {"content": " there"}, "finish_reason": None},
+                    {"index": 1, "delta": {"content": " there"}, "finish_reason": None},
+                ),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="choices_batched_without_roles",
+        ),
+        pytest.param(
+            (
+                ({"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="choice_with_empty_answer",
+        ),
+        pytest.param(
+            (
+                ({"index": None, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},),
+                ({"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="first_choice_opened_without_index",
+        ),
+        pytest.param(
+            (
+                (
+                    {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+                    {"index": 0, "delta": {"content": "Hello"}, "finish_reason": None},
+                ),
+                ({"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},),
+                ({"index": 1, "delta": {"content": "Hi"}, "finish_reason": None},),
+                ({"index": 0, "delta": {}, "finish_reason": "stop"},),
+                ({"index": 1, "delta": {}, "finish_reason": "stop"},),
+            ),
+            id="choice_repeated_in_one_chunk",
+        ),
+    ],
+)
+async def test_streamed_n_choices_each_open_with_one_assistant_role(
+    async_stream: bool,
+    transport: str,
+    upstream_chunks: tuple[tuple[dict[str, object], ...], ...],
+    logging_obj: Logging,
+) -> None:
+    body: Final = (
+        "".join(
+            "data: "
+            + json.dumps(
+                {
+                    "id": "chatcmpl-n2",
+                    "object": "chat.completion.chunk",
+                    "created": 1,
+                    "model": "test-model",
+                    "choices": list(chunk_choices),
+                }
+            )
+            + "\n\n"
+            for chunk_choices in upstream_chunks
+        )
+        + "data: [DONE]\n\n"
+    )
+    raw_response: Final = httpx.Response(
+        200,
+        content=body,
+        headers={"content-type": "text/event-stream"},
+        request=httpx.Request("POST", "https://provider.example/v1/chat/completions"),
+    )
+    client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
+    stream: Final = (
+        (
+            AsyncStream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+            if isinstance(client, AsyncOpenAI)
+            else Stream(cast_to=ChatCompletionChunk, response=raw_response, client=client)
+        )
+        if transport == "sdk"
+        else OpenAIChatCompletionStreamingHandler(
+            streaming_response=raw_response.aiter_lines() if async_stream else raw_response.iter_lines(),
+            sync_stream=not async_stream,
+        )
+    )
+    response: Final = CustomStreamWrapper(
+        completion_stream=stream,
+        model="test-model",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai" if transport == "sdk" else "hosted_vllm",
+    )
+
+    try:
+        received: Final = [chunk async for chunk in response] if async_stream else list(response)
+    finally:
+        if isinstance(client, AsyncOpenAI):
+            await client.close()
+        else:
+            client.close()
+
+    emitted_choices: Final = tuple(
+        (0 if choice.index is None else choice.index, choice.delta.role)
+        for choice in chain.from_iterable(chunk.choices for chunk in received)
+    )
+    role_indexes: Final = sorted(index for index, role in emitted_choices if role == "assistant")
+    opening_roles: Final = {
+        index: next(role for choice_index, role in emitted_choices if choice_index == index) for index in (0, 1)
+    }
+    assert role_indexes == [0, 1]
+    assert opening_roles == {0: "assistant", 1: "assistant"}
 
 
 def _hosted_vllm_stream_wrapper(logging_obj: Logging, error_payload: dict) -> CustomStreamWrapper:
@@ -4285,6 +4438,218 @@ async def test_azure_streaming_role_preserved_with_include_usage(sync_mode: bool
     )
 
 
+def _wire_dump(chunk: ModelResponseStream) -> dict[str, object]:
+    return chunk.model_dump(exclude_none=True, exclude_unset=True)
+
+
+def _usage_test_logging(caller_stream_options: dict[str, bool] | None, stream_usage_stripped: bool) -> Logging:
+    logging_obj: Final = Logging(
+        model="azure/gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+        kwargs={"_litellm_strip_stream_usage": True} if stream_usage_stripped else {},
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={}, model="azure/gpt-4o", stream_options=caller_stream_options
+    )
+    return logging_obj
+
+
+_AZURE_PROMPT_FILTER_RESULTS: Final = [
+    {"prompt_index": 0, "content_filter_results": {"hate": {"filtered": False, "severity": "safe"}}}
+]
+_AZURE_FINISH_FILTER_RESULTS: Final = {"protected_material_text": {"detected": False, "filtered": False}}
+
+
+def _azure_stream_chunks() -> tuple[ChatCompletionChunk, ...]:
+    def chunk(choices: list[dict[str, object]], **extras: object) -> ChatCompletionChunk:
+        return ChatCompletionChunk.model_validate(
+            {
+                "id": "c1",
+                "created": 1,
+                "model": "gpt-4o",
+                "object": "chat.completion.chunk",
+                "choices": choices,
+                **extras,
+            }
+        )
+
+    return (
+        chunk([], prompt_filter_results=_AZURE_PROMPT_FILTER_RESULTS, obfuscation="held"),
+        chunk(
+            [{"index": 0, "delta": {"role": "assistant", "content": ""}, "content_filter_results": {}}],
+            obfuscation="own",
+        ),
+        chunk([{"index": 0, "delta": {"content": "Red"}, "content_filter_results": {}}]),
+        chunk(
+            [{"index": 0, "delta": {}, "finish_reason": "stop", "content_filter_results": _AZURE_FINISH_FILTER_RESULTS}]
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("caller_stream_options", "stream_usage_stripped", "wrapper_stream_options", "prompt_filter_frame"),
+    [
+        (None, False, None, 0),
+        ({"include_usage": True}, False, {"include_usage": True}, 0),
+        (None, False, {"include_usage": True}, 1),
+        ({"include_usage": True}, True, {"include_usage": True}, 1),
+    ],
+    ids=["no-usage", "caller-asked", "provider-handler-injected", "proxy-injected"],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_azure_stream_passes_on_prompt_filter_results_and_finish_content_filter_results(
+    sync_mode: bool,
+    caller_stream_options: dict[str, bool] | None,
+    stream_usage_stripped: bool,
+    wrapper_stream_options: dict[str, bool] | None,
+    prompt_filter_frame: int,
+) -> None:
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(_azure_stream_chunks()),
+        model="gpt-4o",
+        custom_llm_provider="azure",
+        logging_obj=_usage_test_logging(caller_stream_options, stream_usage_stripped),
+        stream_options=wrapper_stream_options,
+    )
+
+    chunks: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
+    frames: Final = [_wire_dump(chunk) for chunk in chunks]
+    first_choice_frame: Final = next(frame for frame in frames if frame["choices"])
+    finish_frame: Final = next(
+        frame for frame in frames if frame["choices"] and frame["choices"][0].get("finish_reason")
+    )
+
+    assert [index for index, frame in enumerate(frames) if "prompt_filter_results" in frame] == [prompt_filter_frame]
+    assert frames[prompt_filter_frame]["prompt_filter_results"] == _AZURE_PROMPT_FILTER_RESULTS
+    assert first_choice_frame["obfuscation"] == "own"
+    assert finish_frame["choices"][0]["content_filter_results"] == _AZURE_FINISH_FILTER_RESULTS
+
+
+def _openai_sdk_stream_choices(
+    logging_obj: Logging, upstream_choices: Sequence[Mapping[str, object]]
+) -> tuple[dict[str, object], ...]:
+    chunks: Final = tuple(
+        ChatCompletionChunk.model_validate(
+            {"id": "c1", "created": 1, "model": "m", "object": "chat.completion.chunk", "choices": [choice]}
+        )
+        for choice in upstream_choices
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks), model="m", custom_llm_provider="openai", logging_obj=logging_obj
+    )
+    return tuple(chunk.choices[0].model_dump() for chunk in wrapper)
+
+
+def test_openai_sdk_stream_with_two_choices_keeps_choice_extras_on_their_own_choice(logging_obj: Logging) -> None:
+    emitted: Final = _openai_sdk_stream_choices(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 0, "delta": {"content": "1"}, "finish_reason": None},
+            {"index": 1, "delta": {"content": "1"}, "finish_reason": None},
+            {"index": 1, "delta": {}, "finish_reason": "stop", "content_filter_results": {"choice": 1}},
+            {"index": 0, "delta": {}, "finish_reason": "stop", "content_filter_results": {"choice": 0}},
+        ),
+    )
+
+    assert [
+        (choice["index"], choice.get("content_filter_results"))
+        for choice in emitted
+        if choice.get("content_filter_results") not in (None, {"choice": choice["index"]})
+    ] == []
+
+
+@pytest.mark.parametrize(
+    "dropped_extras",
+    [
+        pytest.param({"token_ids": None}, id="null-token-ids"),
+        pytest.param({"content_filter_results": None}, id="null-content-filter-results"),
+        pytest.param({"message": {"role": "assistant", "content": "1"}}, id="message"),
+    ],
+)
+def test_openai_sdk_stream_sends_the_same_finish_frame_without_choice_extras_it_drops(
+    logging_obj: Logging, dropped_extras: Mapping[str, object]
+) -> None:
+    def finish_frame(finish_extras: Mapping[str, object]) -> dict[str, object]:
+        emitted: Final = _openai_sdk_stream_choices(
+            logging_obj,
+            (
+                {"index": 0, "delta": {"role": "assistant", "content": "1"}, "finish_reason": None},
+                {"index": 0, "delta": {}, "finish_reason": "stop", **finish_extras},
+            ),
+        )
+        return emitted[-1]
+
+    assert finish_frame(dropped_extras) == finish_frame({})
+
+
+def test_openai_sdk_stream_does_not_move_a_later_choiceless_chunks_fields_onto_the_next_frame(
+    logging_obj: Logging,
+) -> None:
+    chunks: Final = tuple(
+        ChatCompletionChunk.model_validate(
+            {"id": "c1", "created": 1, "model": "m", "object": "chat.completion.chunk", **fields}
+        )
+        for fields in (
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "1"}}]},
+            {"choices": [], "prompt_filter_results": _AZURE_PROMPT_FILTER_RESULTS},
+            {"choices": [{"index": 0, "delta": {"content": "2"}}]},
+        )
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks), model="m", custom_llm_provider="openai", logging_obj=logging_obj
+    )
+
+    assert not any("prompt_filter_results" in _wire_dump(chunk) for chunk in wrapper)
+
+
+def test_openai_sdk_stream_keeps_token_ids_on_their_own_frame(logging_obj: Logging) -> None:
+    emitted: Final = _openai_sdk_stream_choices(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": "1"}, "finish_reason": None, "token_ids": [16]},
+            {"index": 0, "delta": {}, "finish_reason": "stop", "token_ids": [20]},
+        ),
+    )
+
+    assert [(choice.get("finish_reason"), choice.get("token_ids")) for choice in emitted] == [
+        (None, [16]),
+        ("stop", [20]),
+    ]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_azure_ai_stream_keeps_finish_content_filter_results(sync_mode: bool, logging_obj: Logging) -> None:
+    parser: Final = OpenAIChatCompletionStreamingHandler(streaming_response=iter(()), sync_stream=sync_mode)
+    chunks: Final = tuple(
+        parser.chunk_parser(
+            {"id": "c1", "created": 1, "model": "gpt-4o", "object": "chat.completion.chunk", "choices": [choice]}
+        )
+        for choice in (
+            {"index": 0, "delta": {"role": "assistant", "content": "Red"}, "content_filter_results": {}},
+            {"index": 0, "delta": {}, "finish_reason": "stop", "content_filter_results": _AZURE_FINISH_FILTER_RESULTS},
+        )
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks), model="gpt-4o", custom_llm_provider="azure_ai", logging_obj=logging_obj
+    )
+    emitted: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
+    finish_choices: Final = [
+        choice for frame in map(_wire_dump, emitted) for choice in frame["choices"] if choice.get("finish_reason")
+    ]
+    assert [(choice["finish_reason"], choice["content_filter_results"]) for choice in finish_choices] == [
+        ("stop", _AZURE_FINISH_FILTER_RESULTS)
+    ]
+
+
 def test_gemini_legacy_vertex_stop_finish_reason_normalised():
     """
     The legacy vertex_ai SDK streaming path sets finish_reason from a proto enum
@@ -6771,6 +7136,10 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
         ),
     )
 
+    opening_chunk_positions: Final = frozenset(
+        next(position for position, upstream in enumerate(chunks) if upstream["choices"][0]["index"] == index)
+        for index in {upstream["choices"][0]["index"] for upstream in chunks}
+    )
     for idx, chunk in enumerate(response):
         chunk_dict = {}
         try:
@@ -6782,10 +7151,9 @@ def test_aamazing_unit_test_custom_stream_wrapper_n():
         chunks[idx].pop("created")
         if chunks[idx]["system_fingerprint"] is None:
             chunks[idx].pop("system_fingerprint", None)
-        if idx == 0:
+        if idx in opening_chunk_positions:
             for choice in chunk_dict["choices"]:
-                if "role" in choice["delta"]:
-                    choice["delta"].pop("role")
+                assert choice["delta"].pop("role") == "assistant"
 
         for choice in chunks[idx]["choices"]:
             # ignore finish reason None - since our pydantic object is set to exclude_none = true

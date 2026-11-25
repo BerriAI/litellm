@@ -1,4 +1,5 @@
-from typing import Any, Literal
+from dataclasses import dataclass
+from typing import Any, Final, Literal
 
 from typing_extensions import TypedDict
 
@@ -33,3 +34,12 @@ class ImageEditRequestParams(ImageEditOptionalRequestParams, total=False):
     image: FileTypes
     prompt: str
     model: str | None
+
+
+IMAGE_CONFIG_FIELDS: Final = ("imageConfig", "image_config")
+
+
+@dataclass(frozen=True, slots=True)
+class UnsupportedImageParam:
+    param: str
+    reason: str

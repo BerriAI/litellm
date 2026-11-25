@@ -5,6 +5,7 @@ import logging
 import re
 import traceback
 import uuid
+from collections.abc import Sequence
 from datetime import timedelta
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call, patch
@@ -129,6 +130,40 @@ def test_get_per_item_prompt_tokens_distributes_with_remainder():
     per_item = [cache._get_per_item_prompt_tokens(result, i) for i in range(3)]
     assert sum(per_item) == 10  # 4 + 3 + 3
     assert per_item == [4, 3, 3]
+
+
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("item_usage", [[{"prompt_tokens": 1}, {"prompt_tokens": 2}], None])
+async def test_an_upstream_item_usage_key_still_caches_each_embedding_input(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, item_usage: object
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    route: Final = respx_mock.post("http://upstream.test/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": index, "embedding": [0.1, 0.2]} for index in range(2)],
+                "model": "m",
+                "usage": {"prompt_tokens": 3, "total_tokens": 3},
+                "item_usage": item_usage,
+            },
+        )
+    )
+
+    async def embed(input: Sequence[str]) -> EmbeddingResponse:
+        return await aembedding(
+            model="openai_like/m", input=input, api_base="http://upstream.test/v1", api_key="upstream-test-key"
+        )
+
+    await embed(["alpha", "beta"])
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    hit: Final = await embed(["alpha"])
+
+    assert route.call_count == 1
+    assert hit.usage.prompt_tokens == 2
 
 
 def _semantic_cache(**cache_kwargs):
@@ -463,6 +498,27 @@ def test_cache_key_tells_apart_requests_that_differ_only_in_continuation_token()
     assert cache.get_cache_key(**request, continuation_token="dG9rLTE=") == resumed_key
     assert cache.get_cache_key(**request, continuation_token=None) == first_segment_key
     assert cache.get_cache_key(**request, continuation_token="") == first_segment_key
+
+
+@pytest.mark.parametrize(
+    "audio_format_ask",
+    [
+        {"responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}}},
+        {"generationConfig": {"responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}}}},
+        {"generation_config": {"response_format": {"audio": {"mime_type": "AUDIO_WAV"}}}},
+    ],
+    ids=["responseFormat", "generationConfig", "generation_config"],
+)
+def test_cache_key_tells_apart_requests_that_name_a_gemini_audio_format(audio_format_ask: dict[str, object]) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {
+        "model": "gemini/gemini-3.8-flash-tts",
+        "messages": [{"role": "user", "content": "Say hello"}],
+        "modalities": ["audio"],
+        "audio": {"voice": "Kore"},
+    }
+
+    assert cache.get_cache_key(**request, **audio_format_ask) != cache.get_cache_key(**request)
 
 
 class PhaseRecordingCache(InMemoryCache):

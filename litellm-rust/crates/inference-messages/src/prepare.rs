@@ -98,6 +98,8 @@ fn prepare_provider_request(
                 .base_model
                 .as_deref()
                 .is_some_and(is_claude_model),
+            keeps_unsigned_thinking: !config
+                .checks_claude_signatures(api_base.as_deref(), &env_lookup),
             ..MessagesTransformContext::new(shaping.capabilities, shaping.settings.drop_params)
         },
     )?;
@@ -107,10 +109,8 @@ fn prepare_provider_request(
     let forwarded = string_headers(Some(
         extra_headers.into_iter().flatten().chain(scoped).collect(),
     ))?;
-    let forwarded = config.request_headers(
-        with_default_headers(forwarded, config.default_headers()),
-        &transformed,
-    );
+    let requested = with_default_headers(forwarded, config.default_headers());
+    let forwarded = config.request_headers(requested.clone(), &transformed);
     let environment = config.validate_environment(
         forwarded,
         api_key.as_deref(),
@@ -127,12 +127,7 @@ fn prepare_provider_request(
         &env_lookup,
     )?;
 
-    let body = config.request_body(
-        transformed,
-        &url,
-        &environment.headers,
-        shaping.settings.drop_params,
-    )?;
+    let body = config.request_body(transformed, &url, &requested, shaping.settings.drop_params)?;
 
     Ok(ProviderMessagesRequest {
         provider,
@@ -743,5 +738,78 @@ mod tests {
             detail.to_string(),
             "claude-test does not support temperature=0.2. anthropic-version 2026-10-21 removed temperature, top_p and top_k. To drop unsupported params, set `litellm.drop_params = True`."
         );
+    }
+
+    fn vertex_call_requesting(
+        shaping: MessagesShaping,
+        requested: &str,
+        drop_params: bool,
+    ) -> MessagesCall {
+        MessagesCall {
+            body: body(
+                json!({"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}),
+            ),
+            api_key: None,
+            api_base: Some("https://vertex.test".into()),
+            custom_llm_provider: Some("vertex_ai".into()),
+            litellm_params: Default::default(),
+            extra_headers: Some(Map::from_iter([
+                ("authorization".to_string(), json!("Bearer vertex-token")),
+                ("anthropic-version".to_string(), json!(requested)),
+            ])),
+            provider_specific_header: None,
+            timeout: None,
+            shaping: MessagesShaping {
+                settings: MessagesSettings {
+                    drop_params,
+                    ..shaping.settings
+                },
+                ..shaping
+            },
+        }
+    }
+
+    fn vertex_project(name: &str) -> Option<String> {
+        (name == "VERTEXAI_PROJECT").then(|| "version-project".to_string())
+    }
+
+    #[rstest]
+    #[case::sdk_2("2026-10-21", false, "2026-10-21")]
+    #[case::sdk_1("2023-06-01", false, "vertex-2023-10-16")]
+    #[case::unknown_under_drop_params("latest", true, "vertex-2023-10-16")]
+    fn vertex_gets_the_requested_version_in_the_body_alone(
+        shaping: MessagesShaping,
+        #[case] requested: &str,
+        #[case] drop_params: bool,
+        #[case] body_version: &str,
+    ) {
+        let prepared = prepare_with_secrets(
+            vertex_call_requesting(shaping, requested, drop_params),
+            &vertex_project,
+        )
+        .unwrap();
+        let version_headers: Vec<String> = wire_headers(&prepared)
+            .into_iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("anthropic-version"))
+            .map(|(_, value)| value)
+            .collect();
+        let body = serde_json::to_value(prepared.body).unwrap();
+        assert_eq!(
+            (version_headers, &body["anthropic_version"]),
+            (Vec::<String>::new(), &json!(body_version))
+        );
+    }
+
+    #[rstest]
+    fn vertex_refuses_an_unsupported_version_without_drop_params(shaping: MessagesShaping) {
+        assert!(matches!(
+            prepare_with_secrets(
+                vertex_call_requesting(shaping, "latest", false),
+                &vertex_project
+            ),
+            Err(Error::InvalidRequest(
+                litellm_llms::ErrorDetail::UnsupportedParameter { .. }
+            ))
+        ));
     }
 }
