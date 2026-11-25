@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import logging
 import sys
 from collections.abc import Awaitable, Callable, Iterator, Mapping
@@ -8,6 +10,9 @@ from prometheus_client import REGISTRY
 
 import litellm
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.responses.streaming_iterator import drain_logging_tasks
 
 
 def _clear_prometheus_registry() -> None:
@@ -351,3 +356,169 @@ async def test_fallback_metrics_without_custom_metadata_labels_emit_no_metadata_
 
     assert not any(name.startswith("metadata_") for name in labels)
     assert labels["fallback_model"] == "model-b"
+
+
+_AUTO_ROUTED_LABELS: Final = (
+    "routing_decision.tier",
+    "routing_decision.cause",
+    "routing_decision.routed_model",
+    "nested.caller",
+)
+_LABEL_NAMES: Final = tuple(label.replace(".", "_") for label in _AUTO_ROUTED_LABELS)
+_SUCCESS_REQUEST_METRICS: Final = (
+    "litellm_proxy_total_requests_metric_total",
+    "litellm_requests_metric_total",
+    "litellm_spend_metric_total",
+    "litellm_total_tokens_metric_total",
+    "litellm_request_total_latency_metric_count",
+    "litellm_llm_api_latency_metric_count",
+    "litellm_deployment_total_requests_total",
+    "litellm_deployment_success_responses_total",
+)
+_FAILURE_EVENT_METRICS: Final = (
+    "litellm_llm_api_failed_requests_metric_total",
+    "litellm_deployment_failure_responses_total",
+    "litellm_deployment_total_requests_total",
+)
+_FAILURE_HOOK_METRICS: Final = (
+    "litellm_proxy_failed_requests_metric_total",
+    "litellm_proxy_total_requests_metric_total",
+)
+
+
+def _custom_labels_of(metric_name: str) -> list[tuple[str, ...]]:
+    return [tuple(sample.labels[name] for name in _LABEL_NAMES) for sample in _metric_samples(metric_name)]
+
+
+def _complexity_router_deployment(name: str, target: str) -> dict[str, object]:
+    return {
+        "model_name": name,
+        "litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "tiers": {tier: target for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")}
+            },
+        },
+    }
+
+
+@pytest.fixture
+def auto_routed_logger(monkeypatch: pytest.MonkeyPatch) -> Iterator[PrometheusLogger]:
+    monkeypatch.setattr(litellm, "custom_prometheus_metadata_labels", list(_AUTO_ROUTED_LABELS))
+    _clear_prometheus_registry()
+    logger: Final = PrometheusLogger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    yield logger
+    _clear_prometheus_registry()
+
+
+@pytest.fixture
+def auto_router(auto_routed_logger: PrometheusLogger) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "tier-up",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "unused", "mock_response": "hello"},
+            },
+            {
+                "model_name": "tier-down",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "unused",
+                    "mock_response": "litellm.InternalServerError",
+                },
+            },
+            _complexity_router_deployment("smart-router", "tier-up"),
+            _complexity_router_deployment("smart-router-down", "tier-down"),
+        ],
+        num_retries=0,
+    )
+
+
+async def _call(router: litellm.Router, model: str, **spend_logs_metadata: object) -> None:
+    with contextlib.suppress(litellm.InternalServerError):
+        await router.acompletion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"spend_logs_metadata": spend_logs_metadata},
+        )
+    await drain_logging_tasks()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
+
+
+@pytest.mark.parametrize(
+    ("model", "metric_names", "expected"),
+    [
+        pytest.param(
+            "smart-router",
+            _SUCCESS_REQUEST_METRICS,
+            ("SIMPLE", "heuristic_scorer", "tier-up", "from-header"),
+            id="auto-routed success",
+        ),
+        pytest.param(
+            "tier-up", _SUCCESS_REQUEST_METRICS, ("None", "None", "None", "from-header"), id="direct success"
+        ),
+        pytest.param(
+            "smart-router-down",
+            _FAILURE_EVENT_METRICS,
+            ("SIMPLE", "heuristic_scorer", "tier-down", "from-header"),
+            id="auto-routed failure",
+        ),
+        pytest.param(
+            "tier-down", _FAILURE_EVENT_METRICS, ("None", "None", "None", "from-header"), id="direct failure"
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_request_metrics_carry_the_routing_decision_of_an_auto_routed_call(
+    auto_router: litellm.Router, model: str, metric_names: tuple[str, ...], expected: tuple[str, ...]
+):
+    await _call(auto_router, model, nested={"caller": "from-header"}, routing_decision={"tier": "CALLER"})
+
+    assert {name: _custom_labels_of(name) for name in metric_names} == {name: [expected] for name in metric_names}
+
+
+@pytest.mark.parametrize(
+    ("request_data", "expected"),
+    [
+        pytest.param(
+            {
+                "standard_logging_object": {
+                    "metadata": {
+                        "routing_decision": {"tier": "SIMPLE", "cause": "heuristic_scorer", "routed_model": "tier-down"},
+                        "spend_logs_metadata": {"nested": {"caller": "from-header"}},
+                    }
+                }
+            },
+            ("SIMPLE", "heuristic_scorer", "tier-down", "from-header"),
+            id="logged payload",
+        ),
+        pytest.param(
+            {
+                key: {
+                    "routing_decision": {"tier": "CALLER"},
+                    "nested": {"caller": "body"},
+                    "spend_logs_metadata": {"nested": {"caller": "body"}},
+                }
+                for key in ("metadata", "litellm_metadata")
+            },
+            ("None", "None", "None", "None"),
+            id="caller body without a logged payload",
+        ),
+        pytest.param({"standard_logging_object": None}, ("None", "None", "None", "None"), id="null payload"),
+        pytest.param({}, ("None", "None", "None", "None"), id="no payload"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_proxy_failure_metrics_take_custom_labels_only_from_the_logged_payload(
+    auto_routed_logger: PrometheusLogger, request_data: dict[str, object], expected: tuple[str, ...]
+):
+    await auto_routed_logger.async_post_call_failure_hook(
+        request_data={"model": "smart-router", **request_data},
+        original_exception=litellm.InternalServerError("boom", llm_provider="openai", model="smart-router"),
+        user_api_key_dict=UserAPIKeyAuth(token="test-token"),
+    )
+
+    assert {name: _custom_labels_of(name) for name in _FAILURE_HOOK_METRICS} == {
+        name: [expected] for name in _FAILURE_HOOK_METRICS
+    }

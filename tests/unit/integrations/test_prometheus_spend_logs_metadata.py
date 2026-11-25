@@ -13,6 +13,7 @@ from litellm.integrations.prometheus import (
     _get_combined_custom_metadata_from_standard_logging_payload,
     get_custom_labels_from_metadata,
 )
+from litellm.types.utils import PROMPT_QUOTING_ROUTING_DECISION_FIELDS
 
 
 def test_get_custom_labels_includes_spend_logs_metadata(monkeypatch):
@@ -240,3 +241,97 @@ def test_silent_experiment_label_comes_only_from_the_router_flag(
     )
 
     assert get_custom_labels_from_metadata(combined) == expected_labels
+
+
+_ROUTING_LABELS: Final = (
+    "routing_decision.tier",
+    "metadata.routing_decision.cause",
+    "routing_decision.routed_model",
+)
+_ROUTER_RECORD: Final = {"tier": "SIMPLE", "cause": "heuristic_scorer", "routed_model": "tier-small"}
+_ROUTER_LABELS: Final = {
+    "routing_decision_tier": "SIMPLE",
+    "metadata_routing_decision_cause": "heuristic_scorer",
+    "routing_decision_routed_model": "tier-small",
+}
+_CALLER_RECORD: Final = {"tier": "CALLER", "cause": "caller", "routed_model": "caller-model", "signals": "caller"}
+
+
+@pytest.mark.parametrize(
+    "caller_source",
+    [
+        {},
+        {"requester_metadata": {"routing_decision": _CALLER_RECORD}},
+        {"user_api_key_auth_metadata": {"routing_decision": _CALLER_RECORD}},
+        {"spend_logs_metadata": {"routing_decision": _CALLER_RECORD}},
+        {"spend_logs_metadata": {"routing_decision": "CALLER"}},
+    ],
+    ids=["no caller value", "requester metadata", "key or team metadata", "spend logs header", "scalar value"],
+)
+@pytest.mark.parametrize(
+    ("router_source", "expected_labels"),
+    [
+        ({"routing_decision": _ROUTER_RECORD}, _ROUTER_LABELS),
+        (
+            {"routing_decision": {"cause": "heuristic_scorer", "tier": None}},
+            {"metadata_routing_decision_cause": "heuristic_scorer"},
+        ),
+        ({"routing_decision": None}, {}),
+        ({}, {}),
+    ],
+    ids=["auto-routed call", "record without a tier", "null record", "direct call"],
+)
+def test_routing_decision_labels_come_only_from_the_router_record(
+    monkeypatch: pytest.MonkeyPatch,
+    router_source: dict[str, object],
+    caller_source: dict[str, object],
+    expected_labels: dict[str, str],
+):
+    monkeypatch.setattr("litellm.custom_prometheus_metadata_labels", list(_ROUTING_LABELS))
+
+    combined: Final = _get_combined_custom_metadata_from_standard_logging_payload(
+        {"metadata": {**caller_source, **router_source}}
+    )
+
+    assert get_custom_labels_from_metadata(combined) == expected_labels
+
+
+@pytest.mark.parametrize("field", sorted(PROMPT_QUOTING_ROUTING_DECISION_FIELDS))
+def test_routing_decision_fields_that_quote_the_prompt_never_become_labels(monkeypatch: pytest.MonkeyPatch, field: str):
+    monkeypatch.setattr(
+        "litellm.custom_prometheus_metadata_labels", [f"routing_decision.{field}", "routing_decision.tier"]
+    )
+
+    combined: Final = _get_combined_custom_metadata_from_standard_logging_payload(
+        {"metadata": {"routing_decision": {**_ROUTER_RECORD, field: "text from the prompt"}}}
+    )
+
+    assert get_custom_labels_from_metadata(combined) == {"routing_decision_tier": "SIMPLE"}
+
+
+def test_other_nested_logging_metadata_stays_out_of_the_labels(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(
+        "litellm.custom_prometheus_metadata_labels",
+        ["requester_custom_headers.x-team", "mcp_tool_call_metadata.name", "routing_decision.tier"],
+    )
+
+    combined: Final = _get_combined_custom_metadata_from_standard_logging_payload(
+        {
+            "metadata": {
+                "requester_custom_headers": {"x-team": "from-a-header"},
+                "mcp_tool_call_metadata": {"name": "search"},
+                "routing_decision": _ROUTER_RECORD,
+            }
+        }
+    )
+
+    assert get_custom_labels_from_metadata(combined) == {"routing_decision_tier": "SIMPLE"}
+
+
+def test_combining_the_label_metadata_leaves_the_logged_routing_decision_untouched(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("litellm.custom_prometheus_metadata_labels", ["routing_decision.tier"])
+    logged_record: Final = {**_ROUTER_RECORD, "matched_keyword": "text from the prompt"}
+
+    _get_combined_custom_metadata_from_standard_logging_payload({"metadata": {"routing_decision": logged_record}})
+
+    assert logged_record == {**_ROUTER_RECORD, "matched_keyword": "text from the prompt"}
