@@ -44,7 +44,6 @@ BEDROCK_INVOKE_MODELS = [
     "claude-haiku-5-5-bedrock-invoke",
     "claude-sonnet-5-5-bedrock-invoke",
     "claude-opus-5-5-bedrock-invoke",
-    "claude-fable-5-2-bedrock-invoke",
 ]
 
 # A prompt the model cannot answer from training data alone — it forces

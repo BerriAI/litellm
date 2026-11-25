@@ -11,8 +11,8 @@ The (feature, provider) for this cell is inferred from the file path by
                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^      ^^^^^^^^^^^^^^
                        feature_id                          provider
 
-Per the PRD, every cell exercises Claude Haiku 5.5, Sonnet 5.5, Opus 5.5
-and Fable 5.2; the cell only goes green if all of them pass. The shared
+Per the PRD, every cell exercises Claude Haiku 5.5, Sonnet 5.5 and Opus
+5.5; the cell only goes green if all of them pass. The shared
 `run_basic_messaging_cell` helper fans the three model runs out in
 parallel and reports one `compat_result.add(...)` entry per model so
 the matrix builder still sees three rows for this (feature, provider).
@@ -32,7 +32,6 @@ BEDROCK_INVOKE_MODELS = [
     "claude-haiku-5-5-bedrock-invoke",
     "claude-sonnet-5-5-bedrock-invoke",
     "claude-opus-5-5-bedrock-invoke",
-    "claude-fable-5-2-bedrock-invoke",
 ]
 
 

@@ -127,5 +127,5 @@ features:
     # beta header makes it all the way through the proxy to the
     # upstream. Haiku is intentionally omitted from this row's
     # model list; Sonnet 5.5, Opus 5.5 and Fable 5.2 are the tiers
-    # exercised (no Fable on Vertex). Costs roughly $4/cell/run --
+    # exercised (Fable on Anthropic and Azure only). Costs roughly $4/cell/run --
     # tighten the prompt-token target if pricing changes meaningfully.

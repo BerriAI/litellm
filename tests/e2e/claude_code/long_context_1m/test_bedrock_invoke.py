@@ -72,7 +72,6 @@ from claude_code.cli_driver import (
 BEDROCK_INVOKE_MODELS: Sequence[str] = (
     "claude-sonnet-5-5-bedrock-invoke",
     "claude-opus-5-5-bedrock-invoke",
-    "claude-fable-5-2-bedrock-invoke",
 )
 
 # Beta header that opts an Anthropic-shape model into the 1M context

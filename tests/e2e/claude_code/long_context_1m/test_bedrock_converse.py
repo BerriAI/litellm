@@ -72,7 +72,6 @@ from claude_code.cli_driver import (
 BEDROCK_CONVERSE_MODELS: Sequence[str] = (
     "claude-sonnet-5-5-bedrock-converse",
     "claude-opus-5-5-bedrock-converse",
-    "claude-fable-5-2-bedrock-converse",
 )
 
 # Beta header that opts an Anthropic-shape model into the 1M context

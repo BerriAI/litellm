@@ -40,7 +40,6 @@ BEDROCK_CONVERSE_MODELS = [
     "claude-haiku-5-5-bedrock-converse",
     "claude-sonnet-5-5-bedrock-converse",
     "claude-opus-5-5-bedrock-converse",
-    "claude-fable-5-2-bedrock-converse",
 ]
 
 TOOL_USE_PROMPT = (

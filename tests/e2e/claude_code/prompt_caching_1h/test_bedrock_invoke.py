@@ -39,7 +39,6 @@ BEDROCK_INVOKE_MODELS = [
     "claude-haiku-5-5-bedrock-invoke",
     "claude-sonnet-5-5-bedrock-invoke",
     "claude-opus-5-5-bedrock-invoke",
-    "claude-fable-5-2-bedrock-invoke",
 ]
 
 # Set both the modern and the deprecated-but-honored Bedrock var so we
