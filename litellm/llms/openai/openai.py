@@ -339,7 +339,7 @@ class OpenAIConfig(BaseConfig):
         optional_params: dict[str, object],
         litellm_params: dict[str, object],
         headers: dict[str, object],
-    ) -> dict:
+    ) -> dict[str, object]:
         messages = self._transform_messages(messages=messages, model=model)
         return {"model": model, "messages": messages, **optional_params}
 

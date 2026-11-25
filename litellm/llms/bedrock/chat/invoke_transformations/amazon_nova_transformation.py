@@ -89,7 +89,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
     def __init__(self, **kwargs: object):
         super().__init__(**kwargs)
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return AmazonConverseConfig.get_supported_openai_params(self, model)
 
     def map_openai_params(
@@ -99,7 +99,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         model: str,
         drop_params: bool,
         model_info: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         return AmazonConverseConfig.map_openai_params(
             self,
             {key: value for key, value in non_default_params.items() if key != "requestMetadata"},
@@ -116,7 +116,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         optional_params: dict[str, object],
         litellm_params: dict,
         headers: dict[str, object],
-    ) -> dict:
+    ) -> dict[str, object]:
         _transformed_nova_request: Final = AmazonConverseConfig.transform_request(
             self,
             model=model,

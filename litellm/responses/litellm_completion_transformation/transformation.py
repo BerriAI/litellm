@@ -4080,7 +4080,7 @@ class LiteLLMCompletionResponsesConfig:
         provider_specific_fields["code_interpreter_results"]. This method
         simply retrieves them — no provider-specific parsing here.
         """
-        output_items: Final[list] = []
+        output_items: Final[list[object]] = []
         for choice in chat_completion_response.choices or []:
             message: object = getattr(choice, "message", None)
             if not message:

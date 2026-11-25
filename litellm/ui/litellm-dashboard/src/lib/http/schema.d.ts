@@ -30434,6 +30434,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -30445,6 +30449,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -30456,6 +30464,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
