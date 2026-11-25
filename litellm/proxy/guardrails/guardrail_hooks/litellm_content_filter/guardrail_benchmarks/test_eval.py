@@ -20,29 +20,50 @@ import json
 import os
 import re
 import time
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, Protocol
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import ReadOnly, TypedDict
 
 EVAL_DIR: Final = os.path.join(os.path.dirname(__file__), "evals")
 RESULTS_DIR: Final = os.path.join(os.path.dirname(__file__), "results")
 
 
+class _Checker(Protocol):
+    """Anything _run can drive: check raises HTTPException(400) to block."""
+
+    def check(self, text: str) -> str: ...
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _EvalCase(TypedDict):
+    """One JSONL eval line, limited to the keys the runner reads."""
+
+    sentence: ReadOnly[str]
+    expected: ReadOnly[object]
+    test: ReadOnly[object]
+
+
+_EVAL_CASE: Final = TypeAdapter(_EvalCase)
+
+
 # ── Helpers ───────────────────────────────────────────────────────
 
 
-def _load_jsonl(filename: str) -> list[dict]:
+def _load_jsonl(filename: str) -> list[_EvalCase]:
     """Load eval cases from a JSONL file. One JSON object per line."""
-    cases: Final = []
+    cases: Final[list[_EvalCase]] = []
     path: Final = os.path.join(EVAL_DIR, filename)
     with open(path, "r") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
-            obj = json.loads(line)
+            obj = _EVAL_CASE.validate_python(json.loads(line))
             cases.append(
                 {
                     "sentence": obj["sentence"],
@@ -53,7 +74,7 @@ def _load_jsonl(filename: str) -> list[dict]:
     return cases
 
 
-def _run(checker, text: str) -> dict:
+def _run(checker: _Checker, text: str) -> dict[str, object]:
     """Run a checker's check method, return result dict."""
     try:
         checker.check(text)
@@ -70,7 +91,7 @@ def _run(checker, text: str) -> dict:
         raise
 
 
-def _print_confusion_report(label: str, metrics: dict, wrong: list) -> None:
+def _print_confusion_report(label: str, metrics: Mapping[str, float], wrong: Sequence[str]) -> None:
     """Print the confusion matrix report to stdout."""
     print("\n")  # noqa: T201
     print("=" * 70)  # noqa: T201
@@ -103,7 +124,9 @@ def _print_confusion_report(label: str, metrics: dict, wrong: list) -> None:
     print("=" * 70)  # noqa: T201
 
 
-def _save_confusion_results(label: str, metrics: dict, wrong: list, rows: list) -> dict:
+def _save_confusion_results(
+    label: str, metrics: Mapping[str, float], wrong: Sequence[str], rows: Sequence[Mapping[str, object]]
+) -> Mapping[str, object]:
     """Save confusion matrix results to a JSON file and return the result dict."""
     os.makedirs(RESULTS_DIR, exist_ok=True)
     # Build a short, filesystem-safe filename from the label.
@@ -149,12 +172,12 @@ def _save_confusion_results(label: str, metrics: dict, wrong: list, rows: list) 
     return result
 
 
-def _confusion_matrix(checker, cases: list[dict], label: str):
+def _confusion_matrix(checker: _Checker, cases: Sequence[_EvalCase], label: str):
     """Run all cases, print confusion matrix, save results JSON."""
     tp = fp = tn = fn = 0
-    wrong: Final = []
-    rows: Final = []
-    latencies: Final = []
+    wrong: Final[list[str]] = []
+    rows: Final[list[dict[str, object]]] = []
+    latencies: Final[list[float]] = []
 
     for case in cases:
         expected = case["expected"]
@@ -270,7 +293,7 @@ class TestInsultsContentFilter:
     def cases(self):
         return _load_jsonl("block_insults.jsonl")
 
-    def test_confusion_matrix(self, blocker, cases):
+    def test_confusion_matrix(self, blocker: _Checker, cases: Sequence[_EvalCase]):
         _confusion_matrix(
             blocker,
             cases,
@@ -289,7 +312,7 @@ class TestInvestmentContentFilter:
     def cases(self):
         return _load_jsonl("block_investment.jsonl")
 
-    def test_confusion_matrix(self, blocker, cases):
+    def test_confusion_matrix(self, blocker: _Checker, cases: Sequence[_EvalCase]):
         _confusion_matrix(
             blocker,
             cases,
@@ -308,7 +331,7 @@ class TestMilitaryStatusContentFilter:
     def cases(self):
         return _load_jsonl("block_military_discrimination.jsonl")
 
-    def test_confusion_matrix(self, blocker, cases):
+    def test_confusion_matrix(self, blocker: _Checker, cases: Sequence[_EvalCase]):
         _confusion_matrix(
             blocker,
             cases,
@@ -327,7 +350,7 @@ class TestDisabilityContentFilter:
     def cases(self):
         return _load_jsonl("block_disability_discrimination.jsonl")
 
-    def test_confusion_matrix(self, blocker, cases):
+    def test_confusion_matrix(self, blocker: _Checker, cases: Sequence[_EvalCase]):
         _confusion_matrix(
             blocker,
             cases,
@@ -346,7 +369,7 @@ class TestAgeDiscriminationContentFilter:
     def cases(self):
         return _load_jsonl("block_age_discrimination.jsonl")
 
-    def test_confusion_matrix(self, blocker, cases):
+    def test_confusion_matrix(self, blocker: _Checker, cases: Sequence[_EvalCase]):
         _confusion_matrix(
             blocker,
             cases,
@@ -365,7 +388,7 @@ class TestReligionContentFilter:
     def cases(self):
         return _load_jsonl("block_religion_discrimination.jsonl")
 
-    def test_confusion_matrix(self, blocker, cases):
+    def test_confusion_matrix(self, blocker: _Checker, cases: Sequence[_EvalCase]):
         _confusion_matrix(
             blocker,
             cases,
@@ -384,7 +407,7 @@ class TestGenderContentFilter:
     def cases(self):
         return _load_jsonl("block_gender_discrimination.jsonl")
 
-    def test_confusion_matrix(self, blocker, cases):
+    def test_confusion_matrix(self, blocker: _Checker, cases: Sequence[_EvalCase]):
         _confusion_matrix(
             blocker,
             cases,
@@ -406,7 +429,7 @@ class TestClaimsFraudCoachingContentFilter:
     def cases(self):
         return _load_jsonl("block_claims_fraud_coaching.jsonl")
 
-    def test_confusion_matrix(self, blocker, cases):
+    def test_confusion_matrix(self, blocker: _Checker, cases: Sequence[_EvalCase]):
         _confusion_matrix(
             blocker,
             cases,
@@ -425,7 +448,7 @@ class TestClaimsPhiDisclosureContentFilter:
     def cases(self):
         return _load_jsonl("block_claims_phi_disclosure.jsonl")
 
-    def test_confusion_matrix(self, blocker, cases):
+    def test_confusion_matrix(self, blocker: _Checker, cases: Sequence[_EvalCase]):
         _confusion_matrix(
             blocker,
             cases,
@@ -444,7 +467,7 @@ class TestClaimsPriorAuthGamingContentFilter:
     def cases(self):
         return _load_jsonl("block_claims_prior_auth_gaming.jsonl")
 
-    def test_confusion_matrix(self, blocker, cases):
+    def test_confusion_matrix(self, blocker: _Checker, cases: Sequence[_EvalCase]):
         _confusion_matrix(
             blocker,
             cases,
@@ -463,7 +486,7 @@ class TestClaimsSystemOverrideContentFilter:
     def cases(self):
         return _load_jsonl("block_claims_system_override.jsonl")
 
-    def test_confusion_matrix(self, blocker, cases):
+    def test_confusion_matrix(self, blocker: _Checker, cases: Sequence[_EvalCase]):
         _confusion_matrix(
             blocker,
             cases,
@@ -482,7 +505,7 @@ class TestClaimsMedicalAdviceContentFilter:
     def cases(self):
         return _load_jsonl("block_claims_medical_advice.jsonl")
 
-    def test_confusion_matrix(self, blocker, cases):
+    def test_confusion_matrix(self, blocker: _Checker, cases: Sequence[_EvalCase]):
         _confusion_matrix(
             blocker,
             cases,
@@ -567,7 +590,7 @@ class TestInvestmentLlmJudgeGpt4oMini:
     def cases(self):
         return _load_jsonl("block_investment.jsonl")
 
-    def test_confusion_matrix(self, blocker, cases):
+    def test_confusion_matrix(self, blocker: _Checker, cases: Sequence[_EvalCase]):
         _confusion_matrix(blocker, cases, "Block Investment — LLM Judge (gpt-4o-mini)")
 
 
@@ -586,5 +609,5 @@ class TestInvestmentLlmJudgeClaude:
     def cases(self):
         return _load_jsonl("block_investment.jsonl")
 
-    def test_confusion_matrix(self, blocker, cases):
+    def test_confusion_matrix(self, blocker: _Checker, cases: Sequence[_EvalCase]):
         _confusion_matrix(blocker, cases, "Block Investment — LLM Judge (claude-haiku-4.5)")

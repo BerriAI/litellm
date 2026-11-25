@@ -13,8 +13,8 @@ from litellm.utils import is_cached_message
 
 from .known_cached_contents import names_rejected_cache
 
-Built: Final = TypeVar("Built")
-Sent: Final = TypeVar("Sent")
+Built = TypeVar("Built")
+Sent = TypeVar("Sent")
 
 
 def _build_from_copies(
@@ -24,7 +24,7 @@ def _build_from_copies(
 
 
 def cache_rebuilds(
-    build: Callable[..., Built], messages: list[AllMessageValues], optional_params: dict
+    build: Callable[..., Built], messages: list[AllMessageValues], optional_params: dict[str, object]
 ) -> tuple[Callable[[], Built], Callable[[], Built]] | tuple[None, None]:
     """Returns one build with a fresh cache and one with the history inline, both over a snapshot of the inputs
     taken before the first transform, which pops keys from ``optional_params`` and ``messages``. Each call

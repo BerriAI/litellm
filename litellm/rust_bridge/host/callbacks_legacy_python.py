@@ -31,6 +31,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.rust_bridge._native import NativeReceipt
 
 
 class MetadataUpdater(Protocol):
@@ -49,7 +50,17 @@ class MetadataUpdater(Protocol):
 @dataclass(frozen=True, slots=True)
 class CallSetup:
     logger: Logging
-    kwargs: dict[str, object]
+    arguments: dict[str, object]
+    call_type: str
+    asynchronous: bool
+
+    @property
+    def kwargs(self) -> dict[str, object]:
+        if self.asynchronous:
+            return self.arguments
+        from litellm.utils import resolved_api_key_update
+
+        return {**self.arguments, **resolved_api_key_update(self.arguments, self.call_type)}
 
 
 def setup(
@@ -68,9 +79,9 @@ def setup(
     }
     supplied: Final = arguments.get("litellm_logging_obj")
     if isinstance(supplied, Logging):
-        return _begin_call(CallSetup(supplied, arguments), asynchronous)
+        return _begin_call(CallSetup(supplied, arguments, call_type, asynchronous), asynchronous)
     logger, prepared = function_setup(call_type, Rules(), start_time, *args, is_async_call=asynchronous, **arguments)
-    return _begin_call(CallSetup(logger, prepared), asynchronous)
+    return _begin_call(CallSetup(logger, prepared, call_type, asynchronous), asynchronous)
 
 
 # Loggers whose current native call is async: their sync failure step is followed by the async one
@@ -229,15 +240,21 @@ class StreamingLogBuilder(Protocol):
 
 
 class DeploymentHook(Protocol):
-    def __call__(self, kwargs: dict[str, object], call_type: str) -> Awaitable[object]: ...
+    def __call__(
+        self, kwargs: Mapping[str, object], call_type: str, *, include_v2: bool
+    ) -> Awaitable[Mapping[str, object]]: ...
 
 
 class DeploymentSuccessHook(Protocol):
-    def __call__(self, request_data: dict[str, object], response: object, call_type: object) -> Awaitable[object]: ...
+    def __call__(
+        self, request_data: dict[str, object], response: object, call_type: object, *, include_v2: bool
+    ) -> Awaitable[object]: ...
 
 
 class DeploymentFailureHook(Protocol):
-    def __call__(self, request_data: Mapping[str, object], exception: Exception, call_type: str) -> Awaitable[None]: ...
+    def __call__(
+        self, request_data: Mapping[str, object], exception: Exception, call_type: str, *, include_v2: bool
+    ) -> Awaitable[None]: ...
 
 
 def update_logging(
@@ -323,6 +340,24 @@ def record_response(
     details: Final = logger.model_call_details  # the call's own logger: recording on it is the point
     details["httpx_response"] = response
     details["response_headers"] = dict(response.headers)
+
+
+def record_route_cost(
+    logger: Logging,
+    receipt: NativeReceipt | None,
+    service_tier: str | None,
+    data_residency: str | None,
+    vertex_location: str | None,
+) -> None:
+    """Stores the price the Rust route settled, with its breakdown, so the call's logging bills it unrepriced. No
+    receipt yet means a stream the route prices once its usage is final."""
+    if receipt is None:
+        logger.record_route_metering()
+        return
+    from litellm.cost_calculator import store_receipt_breakdown
+
+    store_receipt_breakdown(logger, receipt, service_tier, data_residency, vertex_location)
+    logger.record_route_cost(receipt.total)
 
 
 class _ThinkingSignatureRetry(TypedDict):
@@ -511,13 +546,14 @@ def is_internal_call() -> bool:
     return internal.get()
 
 
-def before_deployment_call(kwargs: dict[str, object], call_type: str) -> Awaitable[object]:
+async def before_deployment_call(kwargs: Mapping[str, object], call_type: str) -> dict[str, object]:
     from litellm import utils
 
     hook: Final = cast(  # cast-ok: bounded adapter for the untyped deployment hook
         DeploymentHook, utils.async_pre_call_deployment_hook
     )
-    return hook(kwargs, call_type)
+    hooked: Final = await hook(kwargs, call_type, include_v2=True)
+    return {**hooked, **(await utils.aresolved_api_key_update(hooked, call_type))}
 
 
 def after_deployment_success(kwargs: dict[str, object], response: object, call_type: str) -> Awaitable[object]:
@@ -528,7 +564,12 @@ def after_deployment_success(kwargs: dict[str, object], response: object, call_t
         DeploymentSuccessHook, utils.async_post_call_success_deployment_hook
     )
     typed: Final = CallTypes(call_type)
-    return hook(kwargs, _messages_stream(response) if typed == CallTypes.anthropic_messages else response, typed)
+    return hook(
+        kwargs,
+        _messages_stream(response) if typed == CallTypes.anthropic_messages else response,
+        typed,
+        include_v2=True,
+    )
 
 
 def _messages_stream(response: object) -> object:
@@ -558,7 +599,7 @@ def after_deployment_failure(kwargs: dict[str, object], error: Exception, call_t
     hook: Final = cast(  # cast-ok: bounded adapter for the untyped deployment hook
         DeploymentFailureHook, utils.async_post_call_failure_deployment_hook
     )
-    return hook(kwargs, error, call_type)
+    return hook(kwargs, error, call_type, include_v2=True)
 
 
 _STREAM_HEADERS: Final = TypeAdapter(Mapping[str, str])
@@ -698,26 +739,38 @@ def _log_superseded_stream_failure(
         verbose_proxy_logger.error("Error scheduling stream failure logging: %s", e)
 
 
-def stream_failure(
+def _relayed(head: object) -> bool:
+    from litellm.rust_bridge.messages.entrypoints import MessagesStreamHead
+
+    return isinstance(head, MessagesStreamHead) and head.relayed
+
+
+async def stream_failure(
     logger: Logging,
     endpoint_type: str,
     request_body: dict[str, object],
     chunks: list[bytes],
     error: Exception,
-) -> Coroutine[object, object, None]:
+    head: object,
+    detached: bool,
+) -> None:
     from litellm._logging import verbose_proxy_logger
+    from litellm.llms.anthropic.messages.native.streaming_iterator import closing_superseded_attempt
     from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
-    verbose_proxy_logger.error("Error in chunk_processor: %s", error)
+    if not _relayed(head):
+        verbose_proxy_logger.error("Error in chunk_processor: %s", error)
     # Python's stream fails before its success handler records `cache_hit`; only a cache hit
     # stamps it earlier.
     if logger.model_call_details.get("cache_hit") is not True:
         logger.model_call_details.pop("cache_hit", None)
-    return PassThroughStreamingHandler.schedule_stream_failure_logging(
+    await PassThroughStreamingHandler.schedule_stream_failure_logging(
         litellm_logging_obj=logger,
         endpoint_type=EndpointType(endpoint_type),
         request_body=request_body,
         raw_bytes=chunks,
         exception=error,
     )
+    if detached and not closing_superseded_attempt():
+        await logger.report_detached_stream_failure(error)

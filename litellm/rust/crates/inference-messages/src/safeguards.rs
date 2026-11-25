@@ -168,6 +168,8 @@ mod tests {
         MessagesCallResponse::Stream {
             head: MessagesStreamHead {
                 headers: Vec::new(),
+                detached_drain: None,
+                unobserved_tail: None,
             },
             chunks: futures_util::stream::iter(chunks).boxed(),
         }

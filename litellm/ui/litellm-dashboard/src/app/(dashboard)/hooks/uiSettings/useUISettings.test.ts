@@ -13,6 +13,7 @@ vi.mock("@/components/networking", () => ({
 
 // Mock data
 const mockUISettings: Record<string, any> = {
+  values: { aria_internal_user_access: "own_and_team_usage" },
   theme: "dark",
   language: "en",
   notifications: true,

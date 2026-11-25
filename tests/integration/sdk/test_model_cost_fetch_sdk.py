@@ -41,6 +41,14 @@ def _blob_id(body: bytes) -> str:
     return hashlib.sha1(b"blob %d\0" % len(body) + body, usedforsecurity=False).hexdigest()
 
 
+def _marked_utf8(text: str) -> bytes:
+    return b"\xef\xbb\xbf" + text.encode()
+
+
+def _utf16(text: str) -> bytes:
+    return text.encode("utf-16")
+
+
 def _document_with(**rows: Mapping[str, object]) -> bytes:
     """The bundled document with some rows replaced, so it passes the integrity limits."""
     return json.dumps({**json.loads(_BUNDLED), **rows}).encode()
@@ -139,6 +147,10 @@ def test_boot_load_installs_the_served_document_and_records_its_provenance():
         (
             _Reply(body=json.dumps({"only": {"litellm_provider": "openai"}}).encode()),
             "Remote data failed integrity validation",
+        ),
+        (
+            _Reply(body=json.dumps({**json.loads(_BUNDLED), "_comment": "mirrored 2026-11-30"}).encode()),
+            "Remote fetch failed: invalid JSON from ",
         ),
     ],
 )
@@ -320,8 +332,13 @@ def test_reload_retries_a_429_after_its_retry_after():
             "model cost map from {url} failed integrity validation",
             1,
         ),
+        (
+            _Reply(body=json.dumps({**json.loads(_BUNDLED), "_comment": "mirrored 2026-11-30"}).encode()),
+            "invalid JSON from {url}: _comment",
+            1,
+        ),
     ],
-    ids=["gives-up-after-its-attempts", "not-json", "below-integrity-limits"],
+    ids=["gives-up-after-its-attempts", "not-json", "below-integrity-limits", "top-level-value-not-a-row"],
 )
 def test_a_failed_reload_keeps_the_installed_map(reply: _Reply, reason: str, requests: int):
     installed: Final = litellm.model_cost
@@ -334,6 +351,23 @@ def test_a_failed_reload_keeps_the_installed_map(reply: _Reply, reason: str, req
     assert server.requests == requests
     assert litellm.model_cost is installed
     assert get_model_cost_map_provenance() == provenance
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+@pytest.mark.parametrize(
+    "encode",
+    [_marked_utf8, _utf16],
+    ids=["utf-8-byte-order-mark", "utf-16"],
+)
+def test_a_reload_reads_a_document_that_starts_with_a_byte_order_mark(encode: Callable[[str], bytes]):
+    row: Final = {"litellm_provider": "openai", "mode": "chat"}
+    body: Final = encode(_document_with(**{"lit-marked-model": row}).decode())
+    with _serving(_Reply(body=body)) as server:
+        result: Final = asyncio.run(refetch_model_cost_map(url=server.url))
+
+    assert isinstance(result, ModelCostMapReloaded)
+    assert litellm.model_cost["lit-marked-model"] == row
+    assert get_model_cost_map_provenance()["source_revision"] == _blob_id(body)
 
 
 @pytest.mark.usefixtures("remote_source", "own_model_cost")
@@ -655,6 +689,33 @@ def test_register_model_from_a_url_registers_the_served_rows_without_the_fallbac
     assert litellm.model_cost["lit-url-model"]["input_cost_per_token"] == 4e-06
     assert FALLBACK_GENERALIZATIONS_KEY not in litellm.model_cost
     assert model_cost_inputs.registered_keys() == [*GetModelCostMap.loaded_model_cost_map(), "lit-url-model"]
+
+
+@pytest.mark.usefixtures("own_model_cost")
+@pytest.mark.parametrize(
+    ("flag", "requests", "registered"),
+    [("LITELLM_OFFLINE_MODE", 0, False), ("LITELLM_LOCAL_MODEL_COST_MAP", 1, True)],
+    ids=["offline-mode-fetches-nothing", "bundled-map-flag-still-fetches-the-url"],
+)
+def test_register_model_from_a_url_under_a_flag_that_keeps_the_cost_map_local(
+    monkeypatch: pytest.MonkeyPatch, flag: str, requests: int, registered: bool
+):
+    monkeypatch.setenv(flag, "true")
+    document: Final = {"lit-url-model": {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 4e-06}}
+    with _serving(_Reply(body=json.dumps(document).encode())) as server:
+        litellm.register_model(server.url)
+
+    assert server.requests == requests
+    assert ("lit-url-model" in litellm.model_cost) is registered
+
+
+@pytest.mark.usefixtures("remote_source", "own_model_cost")
+def test_register_model_from_a_url_reads_a_document_that_starts_with_a_byte_order_mark():
+    document: Final = {"lit-url-model": {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 4e-06}}
+    with _serving(_Reply(body=b"\xef\xbb\xbf" + json.dumps(document).encode())) as server:
+        litellm.register_model(server.url)
+
+    assert litellm.model_cost["lit-url-model"]["input_cost_per_token"] == 4e-06
 
 
 @pytest.mark.usefixtures("remote_source", "own_model_cost")

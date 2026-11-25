@@ -499,9 +499,7 @@ def test_framing_keeps_the_403_when_the_shipped_count_model_runs_in_the_deployme
                 count_model_status=403,
             )
         assert _runtime_counts(runtime) == ()
-        assert _mantle_count_requests(mantle) == (
-            ((_ACCESS_KEY, "ca-central-1"), _mantle_body(_prompt(200, 403))),
-        )
+        assert _mantle_count_requests(mantle) == (((_ACCESS_KEY, "ca-central-1"), _mantle_body(_prompt(200, 403))),)
 
 
 def test_configured_token_count_model_error_stands_with_framing(
@@ -672,7 +670,13 @@ def test_token_count_model_counts_the_anthropic_body_converted_like_the_provider
             (_OPENAI_COUNT_TARGET, _OPENAI_COUNT_MODEL),
         ), counts
         primary: Final = counts[0][2]
-        assert primary["instructions"] == _SYSTEM, primary
+        assert "instructions" not in primary, primary
+        assert isinstance(primary["input"], list), primary
+        assert primary["input"][0] == {
+            "type": "message",
+            "role": "developer",
+            "content": [{"type": "input_text", "text": _SYSTEM}],
+        }, primary
         text: Final = primary.get("text")
         assert isinstance(text, dict) and isinstance(text.get("format"), dict), primary
         input_items: Final = primary["input"]

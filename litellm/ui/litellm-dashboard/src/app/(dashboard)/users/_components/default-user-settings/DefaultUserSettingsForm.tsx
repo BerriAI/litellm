@@ -1,5 +1,6 @@
 "use client";
 
+import { availableRoleDisplayLabel } from "@/utils/roles";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ParseKeys } from "i18next";
 import * as React from "react";
@@ -212,7 +213,9 @@ interface SettingsViewProps {
 
 const SettingsView = ({ values, roleOptions }: SettingsViewProps) => {
   const { t } = useTranslation();
-  const roleLabel = roleOptions.find((option) => option.value === values.user_role)?.label ?? values.user_role;
+  const roleLabel =
+    roleOptions.find((option) => option.value === values.user_role)?.label ??
+    availableRoleDisplayLabel(values.user_role);
   const durationValue = values.budget_duration === "" ? NO_RESET : values.budget_duration;
   const durationOption = BUDGET_DURATION_OPTIONS.find((option) => option.value === durationValue);
   const durationLabel = durationOption === undefined ? values.budget_duration : t(durationOption.labelKey);
@@ -426,8 +429,12 @@ export const DefaultUserSettingsForm = ({
     () =>
       Object.entries(possibleUIRoles ?? {})
         .filter(([role]) => role.includes("internal_user"))
-        .map(([role, meta]) => ({ value: role, label: meta.ui_label || role, description: meta.description ?? "" })),
-    [possibleUIRoles],
+        .map(([role, meta]) => ({
+          value: role,
+          label: availableRoleDisplayLabel(role, meta.ui_label),
+          description: meta.description ?? "",
+        })),
+    [possibleUIRoles, t],
   );
 
   const initialValues = React.useMemo(() => (data === undefined ? undefined : settingsToForm(data.values)), [data]);

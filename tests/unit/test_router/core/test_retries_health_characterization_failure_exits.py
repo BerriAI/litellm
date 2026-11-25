@@ -27,6 +27,7 @@ from tests.unit.test_router.core.retries_health_helpers import (
     cooled_down,
     fresh,
     not_found,
+    previous_response_rejected,
 )
 from tests.unit.test_router.core.scripted_host import (
     ScriptedHost,
@@ -87,8 +88,12 @@ async def settle() -> None:
 
 @pytest.mark.parametrize(
     ("builder", "params"),
-    [(selection_failure, {}), (auth_error, {"token_exchange_endpoint": TOKEN_EXCHANGE})],
-    ids=["selection-failure", "caller-scoped-oauth"],
+    [
+        (selection_failure, {}),
+        (auth_error, {"token_exchange_endpoint": TOKEN_EXCHANGE}),
+        (previous_response_rejected, {}),
+    ],
+    ids=["selection-failure", "caller-scoped-oauth", "provider-400-naming-the-previous-response"],
 )
 @pytest.mark.asyncio
 async def test_an_attempt_failure_outside_the_deployment_is_neither_counted_nor_cooled(
@@ -105,8 +110,12 @@ async def test_an_attempt_failure_outside_the_deployment_is_neither_counted_nor_
 
 @pytest.mark.parametrize(
     ("builder", "params"),
-    [(selection_failure, {}), (auth_error, {"token_exchange_endpoint": TOKEN_EXCHANGE})],
-    ids=["selection-failure", "caller-scoped-oauth"],
+    [
+        (selection_failure, {}),
+        (auth_error, {"token_exchange_endpoint": TOKEN_EXCHANGE}),
+        (previous_response_rejected, {}),
+    ],
+    ids=["selection-failure", "caller-scoped-oauth", "provider-400-naming-the-previous-response"],
 )
 def test_a_sync_attempt_failure_outside_the_deployment_is_neither_counted_nor_cooled(
     make_core: MakeCore, host: ScriptedHost, builder: ErrorBuilder, params: dict[str, object]

@@ -73,6 +73,7 @@ pub(crate) fn is_secret_param(name: &str) -> bool {
             | "aws_secret_access_key"
             | "aws_session_token"
             | "aws_web_identity_token"
+            | "password"
     )
 }
 
@@ -94,6 +95,7 @@ pub fn consumed_optional_params(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
     #[test]
     fn consumed_params_include_provider_options_and_mark_credentials() {
@@ -118,5 +120,29 @@ mod tests {
                 .iter()
                 .any(|spec| spec.name == "tenant_id" && !spec.secret)
         );
+
+        let nace = consumed_optional_params("nace/parse-low", None).unwrap();
+        assert!(
+            nace.iter()
+                .any(|spec| spec.name == "password" && spec.secret)
+        );
+        assert!(
+            nace.iter()
+                .any(|spec| spec.name == "page_ranges" && !spec.secret)
+        );
+        assert!(nace.iter().any(|spec| spec.name == "pages" && !spec.secret));
+    }
+
+    #[rstest]
+    #[case::locale("locale")]
+    #[case::query_fields("queryFields")]
+    #[case::string_index_type("stringIndexType")]
+    #[case::output("output")]
+    fn document_intelligence_consumes_azure_analyze_options(#[case] name: &str) {
+        let consumed =
+            consumed_optional_param_names("azure_ai/doc-intelligence/prebuilt-layout", None)
+                .unwrap();
+
+        assert!(consumed.contains(&name));
     }
 }

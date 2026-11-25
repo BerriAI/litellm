@@ -16,6 +16,7 @@ SOURCES: Final = (
     "README.md",
     "LICENSE",
 )
+PROXY_SOURCES: Final = ("litellm/proxy/auth/public_key.pem",)
 
 IN_TREE_RUST_PATH: Final = "../../rust/"
 
@@ -81,6 +82,9 @@ def stage_core_distribution(source: Path, destination: Path, *, package: str = "
         raise SystemExit(f"packaging/{package}/pyproject.toml no longer points at {IN_TREE_RUST_PATH}")
     metadata: Final = template.replace(IN_TREE_RUST_PATH, "litellm/rust/")
     (destination / "pyproject.toml").write_text(metadata)
+    for name in PROXY_SOURCES if package == "litellm-proxy" else ():
+        (destination / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / name, destination / name)
     subprocess.run(["uv", "version", version, "--frozen"], cwd=destination, check=True)
 
 

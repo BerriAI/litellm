@@ -25,7 +25,7 @@ def init_rds_client(
     aws_web_identity_token: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     aws_session_token: str | None = None,
-):
+) -> "_RdsAuthTokenClient":
     from litellm.secret_managers.main import get_secret
 
     # check for custom AWS_REGION_NAME and use it if not passed to init_bedrock_client

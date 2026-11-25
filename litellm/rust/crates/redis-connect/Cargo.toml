@@ -6,6 +6,8 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-call-scope.workspace = true
+litellm-env.workspace = true
 litellm-auth-aws.workspace = true
 litellm-auth-azure.workspace = true
 litellm-auth-gcp.workspace = true
@@ -15,7 +17,6 @@ litellm-secret-value.workspace = true
 strum.workspace = true
 litellm-circuit-breaker.workspace = true
 litellm-redis-types.workspace = true
-litellm-core-utils.workspace = true
 litellm-http.workspace = true
 litellm-redis-client.workspace = true
 futures-util.workspace = true

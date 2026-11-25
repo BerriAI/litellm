@@ -1,7 +1,6 @@
 import { test, expect } from "@playwright/test";
 import {
   E2E_INTERNAL_USER_KEY_ALIAS,
-  E2E_TEAM_CRUD_ALIAS,
   E2E_TEAM_CRUD_ID,
   E2E_TEAM_KEYGEN_ALIAS,
   INTERNAL_USER_STORAGE_PATH,
@@ -14,18 +13,16 @@ import { openPlayground, selectModel, sendMessage, enterVirtualKey } from "../..
 test.describe("Internal User", () => {
   test.use({ storageState: INTERNAL_USER_STORAGE_PATH });
 
-  test("Create Key modal shows the team dropdown populated with the user's teams", async ({ page }) => {
+  test("Create Key modal offers the team where the user can create keys", async ({ page }) => {
     await navigateToPage(page, Page.ApiKeys);
 
     await page.getByRole("button", { name: /Create New Key/i }).click();
     await expect(page.getByText("Key Ownership")).toBeVisible({ timeout: 10_000 });
 
-    // Open the team dropdown — seeded internal user is a member of
-    // e2e-team-crud and e2e-team-org, so we expect at least the CRUD alias.
     const teamSelect = page.getByTestId("team-dropdown").getByRole("combobox");
     await teamSelect.click();
-    await page.keyboard.type(E2E_TEAM_CRUD_ALIAS);
-    await expect(page.getByRole("option", { name: E2E_TEAM_CRUD_ALIAS }).first()).toBeVisible({ timeout: 5_000 });
+    await page.keyboard.type(E2E_TEAM_KEYGEN_ALIAS);
+    await expect(page.getByRole("option", { name: E2E_TEAM_KEYGEN_ALIAS }).first()).toBeVisible({ timeout: 5_000 });
   });
 
   test("Team info page omits the Settings tab for non-admin members", async ({ page }) => {

@@ -1,7 +1,7 @@
 import React, { useId } from "react";
 import { useTranslation } from "react-i18next";
 import { useCreateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
-import { applyBudgetPrecision } from "./budgetPrecision";
+import { budgetFormPayload } from "./budgetLimits";
 import { BudgetFormFields, type BudgetFormValues, useBudgetForm } from "./BudgetFormFields";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
@@ -25,7 +25,7 @@ const BudgetModal: React.FC<BudgetModalProps> = ({ isModalVisible, setIsModalVis
   const handleCreate = async (formValues: BudgetFormValues) => {
     try {
       toast.info(t("budgets.createModal.toast.pending"));
-      await createBudget.mutateAsync(applyBudgetPrecision(formValues));
+      await createBudget.mutateAsync(budgetFormPayload(formValues));
       toast.success(t("budgets.createModal.toast.created"));
       form.reset();
       setIsModalVisible(false);

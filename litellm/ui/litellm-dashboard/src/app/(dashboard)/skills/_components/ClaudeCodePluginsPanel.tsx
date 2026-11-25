@@ -1,4 +1,7 @@
 import type { SkillListQuery } from "@/components/claude_code_plugins/types";
+import { PageContent } from "@/components/shared/Page";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
+import { Blocks } from "lucide-react";
 import { SkillFilters } from "@/components/claude_code_plugins/SkillFilters";
 import { useSkillFilters, skillSortQuery } from "@/components/claude_code_plugins/skillCatalog";
 import React, { useState } from "react";
@@ -24,6 +27,7 @@ import { toast } from "@/lib/toast";
 import { isPendingSkill, type SkillHubSkill, type SkillMutationResponse } from "@/components/claude_code_plugins/types";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import SkillSubmissions from "./SkillSubmissions";
+import { useUserIdentityLookup } from "@/app/(dashboard)/hooks/users/useUsers";
 
 interface ClaudeCodePluginsPanelProps {
   accessToken: string | null;
@@ -48,6 +52,8 @@ function skillPermissions(accessToken: string | null, userRole: string, isViewOn
 }
 
 interface CatalogSkillDetailProps {
+  userRole: string;
+  isViewOnly: boolean;
   skill: SkillHubSkill;
   accessToken: string | null;
   queryScope: QueryKey;
@@ -58,6 +64,8 @@ interface CatalogSkillDetailProps {
 }
 
 function CatalogSkillDetail({
+  userRole,
+  isViewOnly,
   skill,
   accessToken,
   queryScope,
@@ -74,6 +82,12 @@ function CatalogSkillDetail({
     queryFn: () => getSkillHubSkill(accessToken!, skill.name),
     enabled: Boolean(accessToken),
   });
+  const displayedSkill = detail.data ?? skill;
+  const users = useUserIdentityLookup([displayedSkill.created_by, displayedSkill.approved_by], {
+    accessToken,
+    userRole,
+    isViewOnly,
+  });
   return (
     <>
       {detail.isError && (
@@ -85,7 +99,8 @@ function CatalogSkillDetail({
         </div>
       )}
       <SkillDetail
-        skill={skillHubDetail(detail.data ?? skill)}
+        skill={skillHubDetail(displayedSkill)}
+        users={users}
         onBack={onBack}
         accessToken={accessToken}
         isAdmin={isAdmin}
@@ -132,6 +147,10 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
     enabled: Boolean(accessToken),
   });
   const pluginsList = plugins.data?.skills ?? [];
+  const users = useUserIdentityLookup(
+    pluginsList.flatMap((skill) => [skill.created_by, skill.approved_by]),
+    { accessToken, userRole, isViewOnly: readOnly },
+  );
   const selectedSkill = pluginsList.find((plugin) => plugin.id === selectedSkillId);
   const refreshSkills = async () => {
     await Promise.all([
@@ -169,9 +188,11 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
   };
 
   return (
-    <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
+    <PageContent>
       {selectedSkill ? (
         <CatalogSkillDetail
+          userRole={userRole}
+          isViewOnly={readOnly}
           skill={selectedSkill}
           isAdmin={isAdmin}
           accessToken={accessToken}
@@ -182,17 +203,24 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
         />
       ) : (
         <>
-          <div className="flex flex-col gap-2 mb-4">
-            <h1 className="text-2xl font-bold">{t("skills.panel.title")}</h1>
-            <p className="text-sm text-muted-foreground">{t("skills.panel.intro")}</p>
-            <div className="mt-2 flex gap-2">
+          <PageHeader>
+            <PageHeaderTitle>
+              <Blocks />
+              {t("skills.panel.title")}
+            </PageHeaderTitle>
+            <PageHeaderDescription>{t("skills.panel.intro")}</PageHeaderDescription>
+            <PageHeaderControls>
               <Button onClick={() => setIsAddModalVisible(true)} disabled={!canWrite}>
                 {t("skills.panel.addButton")}
               </Button>
-            </div>
-          </div>
+            </PageHeaderControls>
+          </PageHeader>
 
-          <Tabs value={tab} onValueChange={(value) => setTab(value === "submissions" ? "submissions" : "skills")}>
+          <Tabs
+            value={tab}
+            onValueChange={(value) => setTab(value === "submissions" ? "submissions" : "skills")}
+            className="gap-6"
+          >
             <TabsList variant="line">
               <TabsTrigger value="skills">{t("skills.panel.tabs.skills")}</TabsTrigger>
               <TabsTrigger value="submissions">
@@ -212,6 +240,7 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
                 </div>
               )}
               <PluginTable
+                users={users}
                 pluginsList={pluginsList}
                 isLoading={plugins.isLoading}
                 filtered={filters.active}
@@ -242,6 +271,8 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
             <TabsContent value="submissions">
               {accessToken && (
                 <SkillSubmissions
+                  userRole={userRole}
+                  isViewOnly={readOnly}
                   accessToken={accessToken}
                   queryScope={queryScope}
                   canReview={isAdmin}
@@ -297,7 +328,7 @@ const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
           </AlertDialogContent>
         </AlertDialog>
       )}
-    </div>
+    </PageContent>
   );
 };
 

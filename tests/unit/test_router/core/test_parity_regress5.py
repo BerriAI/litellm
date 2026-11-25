@@ -313,7 +313,17 @@ async def test_a_call_through_the_provider_spelling_is_served(make_core: MakeCor
 
 # --- #49685: wildcard cache flags -----------------------------------------------------------------
 
-CACHE_FLAGS: Final = {"supports_prompt_cache_breakpoint": True, "supports_prompt_caching": True}
+CACHE_FLAGS: Final = {
+    "supports_prompt_cache_breakpoint": True,
+    "supports_openai_prompt_cache_breakpoint": True,
+    "supports_bedrock_converse_cache_point": True,
+    "supports_prompt_caching": True,
+}
+AZURE_AI_KEPT_FLAGS: Final = {
+    "supports_prompt_cache_breakpoint": True,
+    "supports_openai_prompt_cache_breakpoint": True,
+    "supports_bedrock_converse_cache_point": True,
+}
 
 
 @pytest.mark.asyncio
@@ -321,7 +331,7 @@ CACHE_FLAGS: Final = {"supports_prompt_cache_breakpoint": True, "supports_prompt
     ("pattern", "request_model", "kept"),
     [
         ("openai/*", "openai/gpt-4o", {}),
-        ("azure_ai/*", "azure_ai/gpt-4o", {"supports_prompt_cache_breakpoint": True}),
+        ("azure_ai/*", "azure_ai/gpt-4o", AZURE_AI_KEPT_FLAGS),
     ],
     ids=["any-wildcard", "azure-ai-keeps-the-breakpoint-flag"],
 )

@@ -13,12 +13,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
 import { uiHref } from "@/utils/uiHref";
-import { relativeTimeOptions } from "@/components/shared/date_range_presets";
+import { getUsageTimeRangeOption, relativeTimeOptions } from "@/components/shared/date_range_presets";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import PageVisibilitySettings from "./PageVisibilitySettings";
 import BackgroundChatSettings from "./BackgroundChatSettings";
 import { productNames } from "@/i18n/untranslated/productNames";
+
+const ariaAccessValues = ["none", "own_usage", "own_and_team_usage"] as const;
 
 interface SettingRowProps {
   ariaLabel: string;
@@ -67,7 +69,6 @@ export default function UISettings() {
   const requireAuthForPublicAIHubProperty = schema?.properties?.require_auth_for_public_ai_hub;
   const forwardClientHeadersProperty = schema?.properties?.forward_client_headers_to_llm_api;
   const forwardLLMProviderAuthHeadersProperty = schema?.properties?.forward_llm_provider_auth_headers;
-  const enableProjectsUIProperty = schema?.properties?.enable_projects_ui;
   const enableChatUIProperty = schema?.properties?.enable_chat_ui;
   const enabledPagesProperty = schema?.properties?.enabled_ui_pages_internal_users;
   const disableAgentsProperty = schema?.properties?.disable_agents_for_internal_users;
@@ -77,11 +78,10 @@ export default function UISettings() {
   const scopeUserSearchProperty = schema?.properties?.scope_user_search_to_org;
   const disableCustomApiKeysProperty = schema?.properties?.disable_custom_api_keys;
   const values = data?.values ?? {};
-  const usageRange =
-    relativeTimeOptions.find((option) => option.settingValue === values.usage_default_time_range)?.settingValue ??
-    "last_7_days";
+  const usageRange = getUsageTimeRangeOption(values.usage_default_time_range).settingValue;
   const usageRangeConfigOwned = data?.source?.usage_default_time_range === "config";
   const ariaConfigOwned = data?.source?.disable_aria === "config";
+  const ariaAccessConfigOwned = data?.source?.aria_internal_user_access === "config";
   const moyaiUrl = (values.moyai_url as string | undefined) ?? null;
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
@@ -147,21 +147,6 @@ export default function UISettings() {
       {
         onSuccess: () => {
           toast.success(t("adminPanel.uiSettings.toasts.updated"));
-        },
-        onError: (error) => {
-          toast.fromError(error);
-        },
-      },
-    );
-  };
-
-  const handleToggleEnableProjectsUI = (checked: boolean) => {
-    updateSettings(
-      { enable_projects_ui: checked },
-      {
-        onSuccess: () => {
-          toast.success(t("adminPanel.uiSettings.toasts.updatedRefreshing"));
-          setTimeout(() => window.location.reload(), 1000);
         },
         onError: (error) => {
           toast.fromError(error);
@@ -388,6 +373,47 @@ export default function UISettings() {
                 </p>
               )}
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="aria-internal-user-access">
+                {t("adminPanel.uiSettings.settings.ariaInternalUserAccess.label")}
+              </Label>
+              <p className="text-sm text-muted-foreground">
+                {t("adminPanel.uiSettings.settings.ariaInternalUserAccess.description")}
+              </p>
+              <Select
+                value={values.aria_internal_user_access ?? "own_usage"}
+                items={ariaAccessValues.map((value) => ({
+                  value,
+                  label: t(`adminPanel.uiSettings.settings.ariaInternalUserAccess.${value}`),
+                }))}
+                disabled={isUpdating || ariaAccessConfigOwned}
+                onValueChange={(value) =>
+                  updateSettings(
+                    { aria_internal_user_access: value },
+                    {
+                      onSuccess: () => toast.success(t("adminPanel.uiSettings.toasts.updated")),
+                      onError: (error) => toast.fromError(error),
+                    },
+                  )
+                }
+              >
+                <SelectTrigger id="aria-internal-user-access" className="w-64">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ariaAccessValues.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {t(`adminPanel.uiSettings.settings.ariaInternalUserAccess.${value}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {ariaAccessConfigOwned && (
+                <p className="text-sm text-muted-foreground">
+                  {t("adminPanel.uiSettings.settings.disableAria.managedByConfig")}
+                </p>
+              )}
+            </div>
             <SettingRow
               checked={isDisabledForInternalUsers}
               disabled={isUpdating}
@@ -448,20 +474,6 @@ export default function UISettings() {
                 t("adminPanel.uiSettings.settings.forwardLLMProviderAuthHeaders.description")
               }
             />
-            {enableProjectsUIProperty && (
-              <SettingRow
-                checked={Boolean(values.enable_projects_ui)}
-                disabled={isUpdating}
-                onCheckedChange={handleToggleEnableProjectsUI}
-                ariaLabel={
-                  enableProjectsUIProperty.description ?? t("adminPanel.uiSettings.settings.enableProjects.ariaLabel")
-                }
-                label={t("adminPanel.uiSettings.settings.enableProjects.label")}
-                description={
-                  enableProjectsUIProperty.description ?? t("adminPanel.uiSettings.settings.enableProjects.description")
-                }
-              />
-            )}
             <SettingRow
               checked={Boolean(values.enable_chat_ui)}
               disabled={isUpdating}

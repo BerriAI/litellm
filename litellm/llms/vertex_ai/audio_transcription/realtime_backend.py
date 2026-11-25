@@ -1,6 +1,6 @@
 import asyncio
 import time
-from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import timedelta
 from types import MappingProxyType, TracebackType
@@ -30,7 +30,6 @@ if TYPE_CHECKING:
     from google.cloud.speech_v2.types import (
         StreamingRecognitionConfig,
         StreamingRecognizeRequest,
-        StreamingRecognizeResponse,
     )
 
 SPEECH_SDK_INSTALL_HINT: Final = (
@@ -56,6 +55,40 @@ _SPEECH_EVENTS: Final[MappingProxyType[str, Literal["begin", "end"]]] = MappingP
 )
 
 
+class _SpeechEventType(Protocol):
+    @property
+    def name(self) -> str: ...
+
+
+class _RecognizeAlternative(Protocol):
+    @property
+    def transcript(self) -> str: ...
+
+
+class _RecognizeResult(Protocol):
+    @property
+    def alternatives(self) -> Sequence[_RecognizeAlternative]: ...
+
+    @property
+    def is_final(self) -> bool: ...
+
+
+class _RecognizeMetadata(Protocol):
+    @property
+    def total_billed_duration(self) -> object: ...
+
+
+class _RecognizeResponse(Protocol):
+    @property
+    def speech_event_type(self) -> _SpeechEventType: ...
+
+    @property
+    def results(self) -> Iterable[_RecognizeResult]: ...
+
+    @property
+    def metadata(self) -> _RecognizeMetadata: ...
+
+
 class ClosableTransport(Protocol):
     def close(self) -> Awaitable[None]: ...
 
@@ -63,7 +96,7 @@ class ClosableTransport(Protocol):
 class SpeechStreamingClient(Protocol):
     def streaming_recognize(
         self, requests: "AsyncIterator[StreamingRecognizeRequest] | None" = None
-    ) -> "Awaitable[AsyncIterable[StreamingRecognizeResponse]]": ...
+    ) -> Awaitable[AsyncIterable[_RecognizeResponse]]: ...
 
     @property
     def transport(self) -> ClosableTransport: ...
@@ -135,7 +168,7 @@ def _streaming_config(command: VertexSpeechStreamingConfigure) -> "StreamingReco
     )
 
 
-def _response_event(response: "StreamingRecognizeResponse", billed_seconds: float) -> str:
+def _response_event(response: _RecognizeResponse, billed_seconds: float) -> str:
     return VertexSpeechStreamingResponse(
         speech_event=_SPEECH_EVENTS.get(response.speech_event_type.name, "none"),
         results=tuple(
@@ -149,7 +182,7 @@ def _response_event(response: "StreamingRecognizeResponse", billed_seconds: floa
     ).model_dump_json()
 
 
-def _billed_seconds(response: "StreamingRecognizeResponse") -> float:
+def _billed_seconds(response: _RecognizeResponse) -> float:
     return _TIMEDELTA_ADAPTER.validate_python(response.metadata.total_billed_duration).total_seconds()
 
 
@@ -226,7 +259,7 @@ class _RecognizeStream:
             verbose_logger.warning("Google Speech-to-Text streaming failed: %s", e)
             await outbox.put(_StreamFailure(reason=f"Google Speech-to-Text streaming failed: {e}"))
 
-    def _note(self, response: "StreamingRecognizeResponse") -> None:
+    def _note(self, response: _RecognizeResponse) -> None:
         activity: Final = _SPEECH_EVENTS.get(response.speech_event_type.name)
         if activity is not None:
             self.speech_active = activity == "begin"

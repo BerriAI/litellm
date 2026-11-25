@@ -10,8 +10,14 @@ Model name handling:
 - This module focuses on request/response transformation only
 """
 
-from typing import Final
+from collections.abc import Mapping, Sequence
+from typing import Final, cast  # noqa: TID251  # extra_body carries raw fields the TypedDict lacks
 
+from litellm.llms.base_llm.embedding.transformation import (
+    over_extra_body_items,
+    split_extra_body,
+    split_request_extra_body,
+)
 from litellm.types.utils import EmbeddingResponse, Usage
 
 from .types import (
@@ -57,7 +63,7 @@ class VertexBGEConfig:
         return model_lower.startswith("bge/") or "bge" in model_lower
 
     @staticmethod
-    def transform_request(input: list | str, optional_params: dict, model: str) -> VertexEmbeddingRequest:
+    def transform_request(input: Sequence[str] | str, optional_params: dict, model: str) -> VertexEmbeddingRequest:
         """
         Transforms an OpenAI request to a Vertex BGE embedding request.
 
@@ -83,8 +89,17 @@ class VertexBGEConfig:
             embedding_input = VertexBGEConfig._create_embedding_input(prompt=text, task_type=task_type, title=title)
             vertex_text_embedding_input_list.append(embedding_input)
 
-        vertex_request["instances"] = vertex_text_embedding_input_list
-        vertex_request["parameters"] = EmbeddingParameters(**optional_params)
+        body_params, extra_body = split_extra_body(optional_params)
+        extra_instances, extra_parameters = split_request_extra_body(extra_body, "instances", "parameters")
+        vertex_request["instances"] = cast(  # cast-ok: extra_body carries raw Vertex fields the TypedDict does not list
+            list[TextEmbeddingBGEInput],
+            over_extra_body_items(extra_instances, vertex_text_embedding_input_list),
+        )
+        vertex_request["parameters"] = (
+            cast(  # cast-ok: extra_body carries raw Vertex fields the TypedDict does not list
+                EmbeddingParameters, {**extra_parameters, **body_params}
+            )
+        )
 
         return vertex_request
 
@@ -115,7 +130,9 @@ class VertexBGEConfig:
         return text_embedding_input
 
     @staticmethod
-    def transform_response(response: dict, model: str, model_response: EmbeddingResponse) -> EmbeddingResponse:
+    def transform_response(
+        response: Mapping[str, object], model: str, model_response: EmbeddingResponse
+    ) -> EmbeddingResponse:
         """
         Transforms a Vertex BGE embedding response to OpenAI format.
 

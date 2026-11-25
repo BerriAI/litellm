@@ -87,7 +87,7 @@ impl ChatCompletionsRoute {
             let config = common_utils::chat_completions_provider(provider.provider)
                 .ok_or_else(|| Error::InvalidProvider(<&str>::from(provider.provider).to_string()))?
                 .config();
-            let call = common_utils::resolve_request(call, config)?;
+            let call = common_utils::resolve_request(call, provider.model, config)?;
             litellm_inference::diagnostic::provider(
                 provider.model,
                 <&'static str>::from(provider.provider),

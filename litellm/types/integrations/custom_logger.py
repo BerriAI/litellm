@@ -1,7 +1,7 @@
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Annotated, Any, Final
 
-from pydantic import Field
+from pydantic import AfterValidator, Field
 
 from litellm.types.litellm_params import AgenticSurface
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -48,6 +48,10 @@ CONVERTED_STREAM_KEYS: Final = frozenset(f"{prefix}_converted_stream" for prefix
 
 def converted_stream_requested(params: Mapping[str, object]) -> bool:
     return any(bool(params.get(key)) for key in CONVERTED_STREAM_KEYS)
+
+
+def bridged_from_chat_completion(params: Mapping[str, object]) -> bool:
+    return params.get("_agentic_loop_api_surface") == CHAT_COMPLETION_AGENTIC_SURFACE
 
 
 def as_converted_stream(
@@ -100,11 +104,11 @@ class AgenticLoopRequestPatch(LiteLLMBaseModel):
     """
 
     model: str | None = None
-    messages: list[dict[str, Any]] | None = None
+    messages: Annotated[Sequence[Mapping[str, object]], AfterValidator(list)] | None = None
     tools: list[dict[str, object]] | None = None
     max_tokens: int | None = None
     optional_params: dict[str, object] = Field(default_factory=dict)
-    kwargs: dict[str, Any] = Field(default_factory=dict)
+    kwargs: dict[str, object] = Field(default_factory=dict)
 
 
 class AgenticLoopPlan(LiteLLMBaseModel):

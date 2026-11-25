@@ -1,20 +1,30 @@
-from hashlib import sha256
-from json import dumps
+from dataclasses import dataclass
+from datetime import datetime
 from typing import TYPE_CHECKING, Final
 
 from litellm.accounting.delivery_projection import entity_transactions, project_deliveries
 from litellm.accounting.projection import Contribution
-from litellm.proxy.db.budget_window_spend_writer import commit_window_spend_updates
+from litellm.proxy.db.budget_window_spend_writer import CommittedWindowSpend, commit_window_spend_updates
 from litellm.proxy.db.daily_spend_bulk_upsert import DAILY_SPEND_TABLES, build_bulk_upsert, merge_by_conflict_key
 from litellm.proxy.db.db_span import db_span
-from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendTransaction
+from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
+    WindowSpendTransaction,
+    build_window_spend_transaction,
+)
 from litellm.proxy.db.model_usage_rollup import queue_model_usage_upsert
 from litellm.proxy.db.rollup_lock_timeout import apply_rollup_lock_timeout
+from litellm.proxy.spend_tracking.customer_budget_alerts import CustomerBudgetAlerting
 from litellm.repositories.accounting_delivery_repository import DeliveryProjection, LedgerTransaction
 
 if TYPE_CHECKING:
     from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+
+@dataclass(frozen=True, slots=True)
+class AppliedDeliveries:
+    contributions: tuple[Contribution, ...] = ()
+    windows: tuple[CommittedWindowSpend, ...] = ()
 
 
 async def apply_deliveries(
@@ -24,7 +34,7 @@ async def apply_deliveries(
     prisma_client: "PrismaClient",
     writer: "DBSpendUpdateWriter",
     proxy_logging_obj: "ProxyLogging",
-) -> tuple[Contribution, ...]:
+) -> AppliedDeliveries:
     from litellm.proxy.guardrails.usage_tracking import UsageUnitIncrement, UsageUnitKey, upsert_usage_unit_row
 
     contributions: Final = project_deliveries(deliveries)
@@ -32,7 +42,6 @@ async def apply_deliveries(
     await writer.apply_accounting_entities(
         prisma_client, proxy_logging_obj, transaction, entity_transactions(contributions)
     )
-    await _apply_customer_usage(transaction, contributions)
     for table in sorted(DAILY_SPEND_TABLES.values(), key=lambda item: item.name):
         rows = tuple(
             {**dict(item.key), **dict(item.values), **dict(item.increments)}
@@ -59,57 +68,22 @@ async def apply_deliveries(
                 outer_transaction=transaction,
             )
     windows: Final = tuple(_window(item) for item in contributions if item.table == "LiteLLM_BudgetWindowSpend")
-    await commit_window_spend_updates(prisma_client, windows, outer_transaction=transaction)
-    return contributions
-
-
-async def _apply_customer_usage(transaction: LedgerTransaction, contributions: tuple[Contribution, ...]) -> None:
-    for item in contributions:
-        if item.table == "LiteLLM_DailyCustomerMemberSpend":
-            await _upsert_customer_daily(transaction, item)
-        if item.table == "LiteLLM_CustomerOrganizationTable":
-            await transaction.litellm_customerorganizationtable.update_many(
-                where=dict(item.key), data={"spend": {"increment": dict(item.increments)["spend"]}}
-            )
-        if item.table == "LiteLLM_CustomerTeamTable":
-            await transaction.litellm_customerteamtable.update_many(
-                where=dict(item.key), data={"spend": {"increment": dict(item.increments)["spend"]}}
-            )
-        if item.table == "LiteLLM_CustomerMemberTable":
-            await transaction.litellm_customermembertable.update_many(
-                where=dict(item.key), data={"spend": {"increment": dict(item.increments)["spend"]}}
-            )
-
-
-async def _upsert_customer_daily(transaction: LedgerTransaction, contribution: Contribution) -> None:
-    row_id: Final = _customer_daily_row_id(contribution.key)
-    await transaction.litellm_dailycustomermemberspend.upsert(
-        where={"id": row_id},
-        data={
-            "create": {
-                "id": row_id,
-                **dict(contribution.key),
-                **dict(contribution.values),
-                **dict(contribution.increments),
-            },
-            "update": {name: {"increment": value} for name, value in contribution.increments},
-        },
+    committed: Final = await commit_window_spend_updates(
+        prisma_client, windows, outer_transaction=transaction, capture_spend=bool(CustomerBudgetAlerting.callbacks())
     )
-
-
-def _customer_daily_row_id(key: tuple[tuple[str, str], ...]) -> str:
-    encoded: Final = dumps(sorted(key), separators=(",", ":")).encode("utf-8")
-    return sha256(encoded).hexdigest()
+    return AppliedDeliveries(contributions, committed)
 
 
 def _window(item: Contribution) -> WindowSpendTransaction:
     key: Final = dict(item.key)
     values: Final = dict(item.values)
-    return WindowSpendTransaction(
+    started: Final = values["started_at"]
+    return build_window_spend_transaction(
         entity_type=key["entity_type"],
         entity_id=key["entity_id"],
         window_duration=key["window_duration"],
-        window_start=values["window_start"] or "",
+        window_start=datetime.fromisoformat((values["window_start"] or "").replace("Z", "+00:00")),
         spend=float(dict(item.increments)["spend"]),
-        started_at=values["started_at"],
+        started_at=datetime.fromisoformat(started.replace("Z", "+00:00")) if started else None,
+        reset_at=values.get("reset_at"),
     )

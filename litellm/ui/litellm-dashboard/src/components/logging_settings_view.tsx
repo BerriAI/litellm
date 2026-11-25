@@ -20,7 +20,7 @@ interface LoggingSettingsViewProps {
 
 export function LoggingSettingsView({
   loggingConfigs = [],
-  disabledCallbacks = [],
+  disabledCallbacks,
   variant = "card",
   className = "",
 }: LoggingSettingsViewProps) {
@@ -107,48 +107,51 @@ export function LoggingSettingsView({
         )}
       </div>
 
-      {/* Disabled Callbacks Section */}
-      <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <BanIcon className="h-4 w-4 text-destructive" />
-          <span className="font-semibold text-foreground">{t("loggingSettingsView.disabledCallbacks")}</span>
-          <Badge variant="destructive">{disabledCallbacks.length}</Badge>
-        </div>
+      {disabledCallbacks !== undefined && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <BanIcon className="h-4 w-4 text-destructive" />
+            <span className="font-semibold text-foreground">{t("loggingSettingsView.disabledCallbacks")}</span>
+            <Badge variant="destructive">{disabledCallbacks.length}</Badge>
+          </div>
 
-        {disabledCallbacks.length > 0 ? (
-          <div className="space-y-3">
-            {disabledCallbacks.map((callbackName, index) => {
-              // Handle both display names and internal values
-              const displayName = reverse_callback_map[callbackName] || callbackName;
+          {disabledCallbacks.length > 0 ? (
+            <div className="space-y-3">
+              {disabledCallbacks.map((callbackName, index) => {
+                // Handle both display names and internal values
+                const displayName = reverse_callback_map[callbackName] || callbackName;
 
-              return (
-                <div
-                  key={index}
-                  className="flex items-center justify-between p-3 rounded-lg bg-destructive/10 border border-destructive/20"
-                >
-                  <div className="flex items-center gap-3">
-                    <Logo
-                      src={callbackInfo[displayName]?.logo}
-                      label={displayName}
-                      className="w-5 h-5 object-contain"
-                    />
-                    <div>
-                      <span className="block font-medium text-destructive">{displayName}</span>
-                      <span className="block text-xs text-destructive">{t("loggingSettingsView.disabledForKey")}</span>
+                return (
+                  <div
+                    key={index}
+                    className="flex items-center justify-between p-3 rounded-lg bg-destructive/10 border border-destructive/20"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Logo
+                        src={callbackInfo[displayName]?.logo}
+                        label={displayName}
+                        className="w-5 h-5 object-contain"
+                      />
+                      <div>
+                        <span className="block font-medium text-destructive">{displayName}</span>
+                        <span className="block text-xs text-destructive">
+                          {t("loggingSettingsView.disabledForKey")}
+                        </span>
+                      </div>
                     </div>
+                    <Badge variant="destructive">{t("loggingSettingsView.disabled")}</Badge>
                   </div>
-                  <Badge variant="destructive">{t("loggingSettingsView.disabled")}</Badge>
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border">
-            <BanIcon className="h-4 w-4 text-muted-foreground" />
-            <span className="text-muted-foreground text-sm">{t("loggingSettingsView.noCallbacksDisabled")}</span>
-          </div>
-        )}
-      </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted border border-border">
+              <BanIcon className="h-4 w-4 text-muted-foreground" />
+              <span className="text-muted-foreground text-sm">{t("loggingSettingsView.noCallbacksDisabled")}</span>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 

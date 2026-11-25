@@ -42,6 +42,25 @@ const DURATION_WORD_ALIASES: Record<string, string> = {
 
 const DURATION_PATTERN = /^(\d+)(mo|[smhdw])$/;
 
+export function normalizeBudgetDuration(duration: string): string {
+  const trimmed = duration.trim();
+  const normalized = DURATION_WORD_ALIASES[trimmed.toLowerCase()] ?? trimmed;
+  const match = DURATION_PATTERN.exec(normalized);
+  if (!match) return normalized;
+  const amount = Number(match[1]);
+  if (match[2] === "w") return `${amount * 7}d`;
+  if (match[2] === "d" && amount === 30) return "1mo";
+  return `${amount}${match[2]}`;
+}
+
+export function isValidBudgetDuration(duration: string): boolean {
+  const match = DURATION_PATTERN.exec(normalizeBudgetDuration(duration));
+  if (!match) return false;
+  const amount = Number(match[1]);
+  if (!Number.isSafeInteger(amount) || amount <= 0) return false;
+  return match[2] !== "mo" || amount === 1 || amount === 12;
+}
+
 // Mirrors the proxy's get_budget_window_start: "30d" and "Nmo" span calendar months,
 // everything else is a fixed length, and an unrecognised duration resets at the next midnight.
 export function getBudgetPeriodStart(budgetDuration: string, resetAt: Dayjs): Dayjs {
@@ -123,13 +142,6 @@ export function describeBudgetResetSchedule(
   };
 }
 
-const BUDGET_DURATION_WORD_ALIASES: Record<string, string> = {
-  hourly: "1h",
-  daily: "24h",
-  weekly: "7d",
-  monthly: "30d",
-};
-
 const BUDGET_DURATION_UNITS: Record<string, dayjs.ManipulateType> = {
   s: "second",
   m: "minute",
@@ -153,7 +165,7 @@ export function budgetPeriodRange(
   const end = dayjs.utc(budgetResetAt);
   if (!end.isValid()) return null;
   const normalized = budgetDuration.trim().toLowerCase();
-  const match = /^(\d+)(mo|s|m|h|d|w)$/.exec(BUDGET_DURATION_WORD_ALIASES[normalized] ?? normalized);
+  const match = DURATION_PATTERN.exec(DURATION_WORD_ALIASES[normalized] ?? normalized);
   if (!match) return null;
   const amount = Number(match[1]);
   if (amount <= 0) return null;

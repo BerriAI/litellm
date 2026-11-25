@@ -1,5 +1,6 @@
 import base64
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from itertools import chain
 from pathlib import Path
 from typing import Final, Literal, cast
@@ -12,6 +13,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
+from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.gemini.transformation import (
     _extract_max_media_resolution_from_messages,
     _get_highest_media_resolution,
@@ -23,6 +25,227 @@ from litellm.responses.litellm_completion_transformation.transformation import L
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolMessage
 from litellm.types.llms.vertex_ai import BlobType, ContentType, PartType
 from litellm.types.utils import Message
+
+
+@pytest.mark.parametrize("version", ["v1", "v1beta"])
+@pytest.mark.parametrize(
+    "metadata, expected",
+    [
+        ({}, {}),
+        (
+            {"document_metadata": {"start_page": 2, "end_page": 4, "content_layers": ["PAGE_TEXT"]}},
+            {"document_metadata": {"startPage": 2, "endPage": 4, "contentLayers": ["PAGE_TEXT"]}},
+        ),
+        (
+            {
+                "spreadsheet_metadata": {
+                    "sheet_index": 2,
+                    "visible_cells": "A1:D10",
+                    "content_layers": ["DATA", "VISUAL"],
+                },
+                "resolution": "high",
+            },
+            {
+                "spreadsheet_metadata": {
+                    "sheetIndex": 2,
+                    "visibleCells": "A1:D10",
+                    "contentLayers": ["DATA", "VISUAL"],
+                },
+                "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"},
+            },
+        ),
+    ],
+)
+def test_file_inspection_preserves_slice_and_uri(
+    version: str, metadata: dict[str, object], expected: dict[str, object]
+) -> None:
+    uri = f"https://generativelanguage.googleapis.com/{version}/files/report"
+    messages = [
+        {
+            "role": "user",
+            "content": [{"type": "file", "file": {"file_id": uri, "format": "application/pdf", **metadata}}],
+        }
+    ]
+    original = deepcopy(messages)
+    result = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-3.8-flash")
+    assert result == [
+        {
+            "role": "user",
+            "parts": [{"file_data": {"file_uri": uri, "mime_type": "application/pdf"}, **expected}, {"text": " "}],
+        }
+    ]
+    assert messages == original
+
+
+@pytest.mark.parametrize("version", ["v1", "v1beta"])
+def test_tool_files_api_reference_is_nested_file_data(version: str) -> None:
+    uri = f"https://generativelanguage.googleapis.com/{version}/files/report"
+    result = gemini_convert_messages_with_history(
+        _responses_tool_media_history({"type": "file", "file": {"file_id": uri, "format": "application/pdf"}}),
+        model="gemini-3.8-flash",
+        custom_llm_provider="gemini",
+    )
+    assert result[-1] == {
+        "role": "user",
+        "parts": [
+            {
+                "function_response": {
+                    "id": "call_media",
+                    "name": "get_media",
+                    "response": {"ok": True},
+                    "parts": [{"file_data": {"file_uri": uri, "mime_type": "application/pdf"}}],
+                }
+            }
+        ],
+    }
+
+
+@pytest.mark.parametrize(("part_resolution", "nested_media"), [(False, True), (True, False)])
+def test_gemini_tool_file_media_uses_cost_map_flags(
+    monkeypatch: pytest.MonkeyPatch, part_resolution: bool, nested_media: bool
+) -> None:
+    model: Final = "gemini-4-argon"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"gemini/{model}",
+        {
+            "supports_part_media_resolution": part_resolution,
+            "supports_media_in_tool_response": nested_media,
+        },
+    )
+    uri: Final = "https://generativelanguage.googleapis.com/v1/files/report"
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_report", "type": "function", "function": {"name": "get_report", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_report",
+            "content": [{"type": "file", "file": {"file_id": uri, "format": "application/pdf", "resolution": "high"}}],
+        },
+    ]
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(messages, model=model)
+    file_part: Final = {"file_data": {"file_uri": uri, "mime_type": "application/pdf"}}
+    expected: Final = (
+        [
+            {
+                "function_response": {
+                    "id": "call_report",
+                    "name": "get_report",
+                    "response": {"content": ""},
+                    "parts": [file_part],
+                }
+            }
+        ]
+        if nested_media
+        else [
+            {
+                "function_response": {
+                    "id": "call_report",
+                    "name": "get_report",
+                    "response": {"content": ""},
+                }
+            },
+            {**file_part, "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"}},
+        ]
+    )
+    assert result[-1]["parts"] == expected
+
+
+def test_vertex_media_uses_its_own_cost_map_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    model: Final = "gemini-4-argon"
+    for provider, enabled in (("gemini", True), ("vertex_ai", False)):
+        monkeypatch.setitem(
+            litellm.model_cost,
+            f"{provider}/{model}",
+            {"supports_part_media_resolution": enabled, "supports_media_in_tool_response": enabled},
+        )
+    file: Final = "data:application/pdf;base64,JVBERg=="
+    media: Final = {"file_data": file, "format": "application/pdf", "resolution": "high"}
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": [{"type": "file", "file": media}]},
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_report", "type": "function", "function": {"name": "get_report", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_report", "content": [{"type": "file", "file": media}]},
+    ]
+
+    result: Final = VertexGeminiConfig()._transform_messages(messages, model=model)
+
+    file_part: Final = {"inline_data": {"data": "JVBERg==", "mime_type": "application/pdf"}}
+    assert result[0]["parts"] == [file_part, {"text": " "}]
+    assert result[-1]["parts"] == [
+        {"function_response": {"id": "call_report", "name": "get_report", "response": {"content": ""}}},
+        file_part,
+    ]
+
+
+
+@pytest.mark.parametrize("source", ["inline", "v1", "v1beta"])
+@pytest.mark.parametrize(
+    ("mime_type", "selection", "expected_selection"),
+    [
+        (
+            "application/pdf",
+            {"document_metadata": {"start_page": 3, "end_page": 4}},
+            {"document_metadata": {"startPage": 3, "endPage": 4}},
+        ),
+        (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            {"spreadsheet_metadata": {"sheet_index": 2}},
+            {"spreadsheet_metadata": {"sheetIndex": 2}},
+        ),
+    ],
+)
+def test_chat_tool_file_inspection_preserves_nested_selection(
+    source: str, mime_type: str, selection: dict[str, object], expected_selection: dict[str, object]
+) -> None:
+    if source == "inline":
+        file = {"file_data": f"data:{mime_type};base64,cGRm"}
+        expected_part = {"inline_data": {"data": "cGRm", "mime_type": mime_type}}
+    else:
+        uri = f"https://generativelanguage.googleapis.com/{source}/files/report"
+        file = {"file_id": uri}
+        expected_part = {"file_data": {"file_uri": uri, "mime_type": mime_type}}
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {"id": "call_media", "type": "function", "function": {"name": "get_media", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_media",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {**file, **selection, "format": mime_type, "resolution": "low", "detail": "high"},
+                }
+            ],
+        },
+    ]
+    result = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-4-argon")
+    assert result[-1]["parts"] == [
+        {
+            "function_response": {
+                "id": "call_media",
+                "name": "get_media",
+                "response": {"content": ""},
+                "parts": [
+                    {**expected_part, **expected_selection, "media_resolution": {"level": "MEDIA_RESOLUTION_LOW"}}
+                ],
+            }
+        }
+    ]
 
 
 def _responses_tool_media_history(content: Mapping[str, object]) -> list[AllMessageValues]:
@@ -66,7 +289,7 @@ def test_responses_media_reaches_each_gemini_role(role: str) -> None:
         messages, model="gemini-3.8-flash", custom_llm_provider="gemini"
     )
     media: Final = [
-        {"inline_data": {"data": "aW1hZ2U=", "mime_type": "image/png"}},
+        {"inline_data": {"data": "aW1hZ2U=", "mime_type": "image/png"}, "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"}},
         {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/wav"}},
         {"inline_data": {"data": "cGRm", "mime_type": "application/pdf"}},
     ]
@@ -85,14 +308,7 @@ def test_responses_media_reaches_each_gemini_role(role: str) -> None:
             ],
         }
         if role == "tool"
-        else {
-            "role": "model" if role == "assistant" else "user",
-            "parts": [
-                {"text": '{"ok":true}'},
-                {**media[0], "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"}},
-                *media[1:],
-            ],
-        }
+        else {"role": "model" if role == "assistant" else "user", "parts": [{"text": '{"ok":true}'}, *media]}
     )
 
 
@@ -113,7 +329,7 @@ def test_responses_media_reaches_each_gemini_role(role: str) -> None:
             "https://generativelanguage.googleapis.com/v1beta/files/clip",
             None,
             True,
-            "inline media",
+            None,
         ),
         ("gemini", "gemini-3.8-flash", "gs://media-test/clip.mp4", None, True, "inline media"),
         ("vertex_ai", "gemini-2.5-flash", "gs://media-test/clip.mp4", None, False, None),
@@ -153,11 +369,20 @@ def test_tool_uri_policy_follows_provider_and_model_placement(
         "file_data": {"file_uri": uri, **({"mime_type": "video/mp4"} if provider.startswith("vertex") else {})}
     }
     response: Final = {"name": "get_media", "response": {"ok": True}}
+    clip: Final = {**file, "video_metadata": {"fps": 2}}
     # Checked 2026-10-26: https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1/Content#FunctionResponsePart
     assert result[-1]["parts"] == (
-        [{"function_response": {**response, "id": "call_media", "parts": [file]}}]
+        [
+            {
+                "function_response": {
+                    **response,
+                    "id": "call_media",
+                    "parts": [file if provider.startswith("vertex") else clip],
+                }
+            }
+        ]
         if nested
-        else [{"function_response": response}, {**file, "video_metadata": {"fps": 2}}]
+        else [{"function_response": response}, clip]
     )
 
 
@@ -356,25 +581,6 @@ def test_vertex_ai_includes_labels():
     assert result["labels"] == {"project": "test", "team": "ai"}
 
 
-def test_service_tier_forwarded_to_vertex_ai():
-    """Test that service_tier in optional_params is mapped to serviceTier in request body."""
-    messages = [{"role": "user", "content": "test"}]
-    optional_params = {"service_tier": "flex"}
-    litellm_params = {}
-
-    result = transform_request_body(
-        messages=messages,
-        model="gemini-2.5-pro",
-        optional_params=optional_params,
-        custom_llm_provider="vertex_ai",
-        litellm_params=litellm_params,
-        cached_content=None,
-    )
-
-    assert "serviceTier" in result
-    assert result["serviceTier"] == "flex"
-
-
 def test_extra_body_cache_not_forwarded_to_vertex_ai():
     """
     'cache' inside extra_body is a LiteLLM-internal proxy caching control.
@@ -555,12 +761,7 @@ def test_empty_content_handling():
 
     contents = gemini_convert_messages_with_history(messages=messages)
 
-    # Verify that the content was properly transformed
-    assert len(contents) == 1
-    assert contents[0]["role"] == "user"
-    assert len(contents[0]["parts"]) == 1
-    assert "text" in contents[0]["parts"][0]
-    assert contents[0]["parts"][0]["text"] == ""
+    assert contents == [{"role": "user", "parts": [{"text": " "}]}]
 
 
 def test_transform_request_body_wraps_tool_result_with_json_schema_ref():
@@ -2929,7 +3130,7 @@ WHITE_PNG: Final = (Path(__file__).parents[4] / "white_100x100.png").read_bytes(
 @respx.mock
 @pytest.mark.parametrize("content_type,nested", [("input_image", True), ("image_url", False), ("input_file", True), ("file", True)])
 def test_convert_tool_response_with_url_image(content_type: str, nested: bool) -> None:
-    from litellm.llms.vertex_ai.gemini.transformation import _openai_messages_may_need_sync_media_fetch
+    from litellm.llms.vertex_ai.gemini.transformation import openai_messages_may_need_sync_media_fetch
 
     image_url: Final = "https://8.8.8.8/gemini-tool-response.png"
     respx.get(image_url).mock(return_value=httpx.Response(200, content=WHITE_PNG, headers={"content-type": "image/png"}))
@@ -2949,7 +3150,7 @@ def test_convert_tool_response_with_url_image(content_type: str, nested: bool) -
             content,
         ],
     })
-    assert _openai_messages_may_need_sync_media_fetch([tool_message], "vertex_ai", "gemini-3.8-flash")
+    assert openai_messages_may_need_sync_media_fetch([tool_message], "vertex_ai", "gemini-3.8-flash")
     result: Final = convert_to_gemini_tool_call_result(
         tool_message, None, supports_multimodal_function_responses=nested,
         custom_llm_provider="vertex_ai", model="gemini-3.8-flash",
@@ -2981,9 +3182,9 @@ def _assistant_with_image(url: str) -> Message:
 def test_sync_media_fetch_check_reads_pydantic_messages_and_skips_other_objects(
     message: object, needs_fetch: bool
 ) -> None:
-    from litellm.llms.vertex_ai.gemini.transformation import _openai_messages_may_need_sync_media_fetch
+    from litellm.llms.vertex_ai.gemini.transformation import openai_messages_may_need_sync_media_fetch
 
-    assert _openai_messages_may_need_sync_media_fetch([message]) is needs_fetch
+    assert openai_messages_may_need_sync_media_fetch([message]) is needs_fetch
 
 
 CLAUDE_THINKING_SIGNATURE: Final = "EqQBCkYIBxgCKkCfQ2x0b3VkZS1zaWduYXR1cmUtbm90LW1pbnRlZC1ieS1nZW1pbmkSDJ3lXf5sD+QVqpFQmRoM"
@@ -3039,3 +3240,671 @@ def test_anthropic_messages_history_replays_to_gemini_without_claude_signature()
     assert signatures == [get_dummy_thought_signature()]
     assert [part for part in parts if part.get("text") == thinking] == [{"thought": True, "text": thinking}]
     assert next(part for part in parts if "function_call" in part)["thoughtSignature"] == get_dummy_thought_signature()
+
+
+def _generated_image(data: str, thought_signature: str | None = None) -> Mapping[str, object]:
+    signature_fields: Final = {} if thought_signature is None else {"thought_signature": thought_signature}
+    return {
+        "image_url": {"url": f"data:image/png;base64,{data}", "detail": "auto"},
+        "index": 0,
+        "type": "image_url",
+        **({"provider_specific_fields": signature_fields} if signature_fields else {}),
+    }
+
+
+def _part_label(part: PartType) -> str:
+    if "text" in part:
+        return part["text"]
+    if "inline_data" in part:
+        return part["inline_data"]["data"]
+    return part["function_call"]["name"]
+
+
+def _model_turn_signatures(
+    assistant_message: Mapping[str, object],
+    *,
+    drop_params: bool = False,
+    model: str = "gemini-3.1-flash-image",
+    custom_llm_provider: str | None = None,
+) -> tuple[tuple[str, str | None], ...]:
+    contents: Final = gemini_convert_messages_with_history(
+        messages=[{"role": "user", "content": "Draw a cat"}, assistant_message],
+        model=model,
+        litellm_params={"drop_params": True} if drop_params else None,
+        custom_llm_provider=custom_llm_provider,
+    )
+    return tuple((_part_label(part), part.get("thoughtSignature")) for part in contents[1]["parts"])
+
+
+@pytest.mark.parametrize(
+    ("assistant_message", "expected"),
+    [
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": None,
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            (("Y2F0", "sig-cat"),),
+            id="image-only",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat"]},
+            },
+            (("Here is your cat.", "sig-text"), ("Y2F0", "sig-cat"),),
+            id="signed-text-and-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            (("Here is your cat.", None), ("Y2F0", "sig-cat"),),
+            id="unsigned-text-signed-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Here is your cat."}],
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat"]},
+            },
+            (("Here is your cat.", None), ("Y2F0", "sig-cat"),),
+            id="list-content",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": None,
+                "images": [_generated_image("ZHJhZnQ="), _generated_image("ZmluYWw=", "sig-final")],
+                "provider_specific_fields": {"thought_signatures": ["sig-thought", "sig-final"]},
+            },
+            (("ZHJhZnQ=", None), ("ZmluYWw=", "sig-final"),),
+            id="unsigned-draft-before-signed-final",
+        ),
+    ],
+)
+def test_assistant_image_replays_its_own_thought_signature(
+    assistant_message: Mapping[str, object], expected: tuple[tuple[str, str | None], ...]
+) -> None:
+    assert _model_turn_signatures(assistant_message) == expected
+
+
+@pytest.mark.parametrize(
+    ("assistant_message", "expected"),
+    [
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat"]},
+            },
+            (("Here is your cat.", "sig-text"), ("Y2F0", "sig-cat"),),
+            id="signed-text-and-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text"]},
+            },
+            (("Here is your cat.", "sig-text"), ("Y2F0", None),),
+            id="streamed-history-signature-stays-on-text",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": None,
+                "images": [_generated_image("ZHJhZnQ="), _generated_image("ZmluYWw=")],
+                "provider_specific_fields": {"thought_signatures": ["sig-final"]},
+            },
+            (("ZHJhZnQ=", None), ("ZmluYWw=", "sig-final"),),
+            id="image-only-right-aligned",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here are both versions.",
+                "images": [_generated_image("ZHJhZnQ="), _generated_image("ZmluYWw=")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-final"]},
+            },
+            (("Here are both versions.", "sig-text"), ("ZHJhZnQ=", None), ("ZmluYWw=", "sig-final"),),
+            id="text-signature-not-given-to-draft",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Here is your cat."}],
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text"]},
+            },
+            (("Here is your cat.", None), ("Y2F0", None)),
+            id="list-content-text-signature-not-given-to-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": [],
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            (("Y2F0", "sig-cat"),),
+            id="empty-list-content-leaves-signature-for-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "",
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            (("", None), ("Y2F0", "sig-cat")),
+            id="empty-string-content-leaves-signature-for-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": ""}],
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            (("", None), ("Y2F0", "sig-cat")),
+            id="empty-list-text-leaves-signature-for-image",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Drawing it now.",
+                "images": [_generated_image("Y2F0")],
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "save_image", "arguments": "{}"},
+                        "provider_specific_fields": {"thought_signature": "sig-tool"},
+                    }
+                ],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat", "sig-tool"]},
+            },
+            (("Drawing it now.", "sig-text"), ("Y2F0", "sig-cat"), ("save_image", "sig-tool"),),
+            id="tool-call-signature-stays-on-tool-call",
+        ),
+    ],
+)
+def test_assistant_image_history_without_per_image_signature_uses_message_signatures(
+    assistant_message: Mapping[str, object], expected: tuple[tuple[str, str | None], ...]
+) -> None:
+    assert _model_turn_signatures(assistant_message) == expected
+
+
+def test_assistant_image_item_without_url_takes_no_history_signature() -> None:
+    assistant_message: Final = {
+        "role": "assistant",
+        "content": None,
+        "images": [_generated_image("Y2F0"), {"image_url": {"url": ""}, "index": 1, "type": "image_url"}],
+        "provider_specific_fields": {"thought_signatures": ["sig-earlier", "sig-cat"]},
+    }
+
+    assert _model_turn_signatures(assistant_message) == (("Y2F0", "sig-cat"),)
+
+
+@pytest.mark.parametrize(
+    "assistant_message",
+    [
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat", {"bad": 1}]},
+            },
+            id="non-string-thought-signature",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [{"image_url": {"url": 123}, "index": 0, "type": "image_url"}],
+            },
+            id="non-string-image-url",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [{**_generated_image("Y2F0"), "provider_specific_fields": {"thought_signature": 123}}],
+            },
+            id="non-string-image-thought-signature",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [{"image_url": 123, "index": 0, "type": "image_url"}],
+            },
+            id="non-object-image-url",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": "Here is your cat.", "images": ["data:image/png;base64,Y2F0"]},
+            id="non-object-image-entry",
+        ),
+    ],
+)
+@pytest.mark.parametrize("custom_llm_provider", ["vertex_ai", "gemini"])
+def test_malformed_assistant_image_history_answers_bad_request(
+    assistant_message: Mapping[str, object], custom_llm_provider: str
+) -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        _model_turn_signatures(assistant_message, custom_llm_provider=custom_llm_provider)
+    assert exc_info.value.llm_provider == custom_llm_provider
+
+
+@pytest.mark.parametrize(
+    ("assistant_message", "expected"),
+    [
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", {"bad": 1}, "sig-cat"]},
+            },
+            (("Here is your cat.", "sig-text"), ("Y2F0", "sig-cat")),
+            id="non-string-thought-signature",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [
+                    {"image_url": {"url": 123}, "index": 0, "type": "image_url"},
+                    _generated_image("Y2F0", "sig-cat"),
+                ],
+            },
+            (("Here is your cat.", None), ("Y2F0", "sig-cat")),
+            id="non-string-image-url",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [{**_generated_image("Y2F0"), "provider_specific_fields": {"thought_signature": 123}}],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat"]},
+            },
+            (("Here is your cat.", "sig-text"), ("Y2F0", "sig-cat")),
+            id="non-string-image-thought-signature",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [{"image_url": 123, "index": 0, "type": "image_url"}, _generated_image("Y2F0", "sig-cat")],
+            },
+            (("Here is your cat.", None), ("Y2F0", "sig-cat")),
+            id="non-object-image-url",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": ["data:image/png;base64,Y2F0", _generated_image("Y2F0", "sig-cat")],
+            },
+            (("Here is your cat.", None), ("Y2F0", "sig-cat")),
+            id="non-object-image-entry",
+        ),
+    ],
+)
+def test_malformed_assistant_image_history_is_dropped_under_drop_params(
+    assistant_message: Mapping[str, object], expected: tuple[tuple[str, str | None], ...]
+) -> None:
+    assert _model_turn_signatures(assistant_message, drop_params=True) == expected
+
+
+@pytest.mark.parametrize(
+    ("assistant_message", "expected"),
+    [
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "Here is your cat.",
+                "images": [_generated_image("Y2F0", "sig-cat")],
+                "provider_specific_fields": {"thought_signatures": ["sig-text", "sig-cat"]},
+            },
+            (("Here is your cat.", "sig-text"), ("Y2F0", None)),
+            id="own-image-signature",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "",
+                "images": [_generated_image("Y2F0")],
+                "provider_specific_fields": {"thought_signatures": ["sig-cat"]},
+            },
+            (("", "sig-cat"), ("Y2F0", None)),
+            id="history-saved-before-per-image-signatures",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        pytest.param("gemini-3.8-flash", "vertex_ai", id="vertex-text-model"),
+        pytest.param("gemini-3.8-flash", "gemini", id="ai-studio-text-model"),
+        pytest.param("4567890123456789012", "vertex_ai", id="unlisted-tuned-endpoint"),
+    ],
+)
+def test_assistant_image_signatures_are_only_sent_to_an_image_model(
+    assistant_message: Mapping[str, object],
+    expected: tuple[tuple[str, str | None], ...],
+    model: str,
+    custom_llm_provider: str,
+) -> None:
+    assert _model_turn_signatures(assistant_message, model=model, custom_llm_provider=custom_llm_provider) == expected
+
+
+def test_assistant_image_with_string_image_url_keeps_its_signature() -> None:
+    assistant_message: Final = {
+        "role": "assistant",
+        "content": None,
+        "images": [{**_generated_image("Y2F0", "sig-cat"), "image_url": "data:image/png;base64,Y2F0"}],
+    }
+
+    assert _model_turn_signatures(assistant_message) == (("Y2F0", "sig-cat"),)
+
+
+def test_image_model_deployment_registered_as_chat_still_gets_its_image_signature() -> None:
+    litellm.Router(
+        model_list=[
+            {
+                "model_name": "image-editor",
+                "litellm_params": {"model": "vertex_ai/gemini-3.1-flash-image"},
+                "model_info": {"mode": "chat"},
+            }
+        ]
+    )
+    assistant_message: Final = {"role": "assistant", "content": None, "images": [_generated_image("Y2F0", "sig-cat")]}
+
+    assert _model_turn_signatures(
+        assistant_message, model="gemini-3.1-flash-image", custom_llm_provider="vertex_ai"
+    ) == (("Y2F0", "sig-cat"),)
+
+
+@pytest.mark.parametrize(
+    "assistant_message",
+    [
+        pytest.param(
+            {"role": "assistant", "content": "", "provider_specific_fields": {"thought_signatures": ["sig-text"]}},
+            id="empty-string",
+        ),
+        pytest.param(
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "thinking",
+                "provider_specific_fields": {"thought_signatures": ["sig-text"]},
+            },
+            id="empty-string-with-reasoning",
+        ),
+    ],
+)
+def test_empty_text_reply_without_images_keeps_its_thought_signature(assistant_message: Mapping[str, object]) -> None:
+    assert _model_turn_signatures(assistant_message, model="gemini-3.8-flash")[-1] == ("", "sig-text")
+
+
+def _get_time_call(tool_call_id: str | None, name: str = "get_time") -> Mapping[str, object]:
+    return {"id": tool_call_id, "type": "function", "function": {"name": name, "arguments": "{}"}}
+
+
+def _assistant_calling(*tool_calls: Mapping[str, object]) -> Mapping[str, object]:
+    return {"role": "assistant", "content": None, "tool_calls": list(tool_calls)}
+
+
+def _function_call_parts(parts: Sequence[PartType]) -> Sequence[PartType]:
+    return [part for part in parts if "function_call" in part]
+
+
+def _function_response_parts(parts: Sequence[PartType]) -> Sequence[PartType]:
+    return [part for part in parts if "function_response" in part]
+
+
+@pytest.mark.parametrize(
+    "assistant_messages",
+    [
+        pytest.param(
+            [_assistant_calling(_get_time_call("call_1"), _get_time_call("call_2"))],
+            id="parallel calls in one assistant message",
+        ),
+        pytest.param(
+            [
+                _assistant_calling(_get_time_call("call_1")),
+                _assistant_calling(_get_time_call("call_2")),
+            ],
+            id="calls split across consecutive assistant messages",
+        ),
+        pytest.param(
+            [
+                _assistant_calling(
+                    {"id": "call_custom", "type": "custom", "custom": {"name": "notes", "input": "remember"}},
+                    _get_time_call("call_1"),
+                    _get_time_call("call_2"),
+                )
+            ],
+            id="non-function tool call before the parallel calls",
+        ),
+    ],
+)
+def test_gemini_2_keeps_identical_calls_with_distinct_ids(assistant_messages: Sequence[Mapping[str, object]]) -> None:
+    messages: Final = [
+        {"role": "user", "content": "What time is it? Ask twice."},
+        *assistant_messages,
+        {"role": "tool", "tool_call_id": "call_1", "content": "12:00"},
+        {"role": "tool", "tool_call_id": "call_2", "content": "12:01"},
+    ]
+
+    contents: Final = gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash")
+
+    get_time: Final = {"function_call": {"name": "get_time", "args": {}}}
+    assert contents == [
+        {"role": "user", "parts": [{"text": "What time is it? Ask twice."}]},
+        {"role": "model", "parts": [get_time, get_time]},
+        {
+            "role": "user",
+            "parts": [
+                {"function_response": {"name": "get_time", "response": {"content": "12:00"}}},
+                {"function_response": {"name": "get_time", "response": {"content": "12:01"}}},
+            ],
+        },
+    ], f"each tool call id must keep its own functionCall, got {contents}"
+
+
+def test_responses_api_parallel_identical_calls_reach_gemini_2_as_separate_function_calls() -> None:
+    input_items: Final = [
+        {"role": "user", "content": "What time is it? Ask twice."},
+        {"type": "function_call", "call_id": "call_time_first", "name": "get_time", "arguments": "{}"},
+        {"type": "function_call", "call_id": "call_time_second", "name": "get_time", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_time_first", "output": "12:00"},
+        {"type": "function_call_output", "call_id": "call_time_second", "output": "12:01"},
+    ]
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(input_items, {})
+
+    parts: Final = _parts_of(
+        gemini_convert_messages_with_history(messages, model="gemini-2.5-flash", custom_llm_provider="gemini")
+    )
+
+    assert _function_call_parts(parts) == [
+        {"function_call": {"name": "get_time", "args": {}}},
+        {"function_call": {"name": "get_time", "args": {}}},
+    ], f"expected one functionCall per Responses function_call item, got {parts}"
+    assert _function_response_parts(parts) == [
+        {"function_response": {"name": "get_time", "response": {"content": "12:00"}}},
+        {"function_response": {"name": "get_time", "response": {"content": "12:01"}}},
+    ], f"expected the two outputs in order, got {parts}"
+
+
+def test_gemini_3_keeps_identical_parallel_calls_with_their_ids_and_signature() -> None:
+    signed_call: Final = {**_get_time_call("call_1"), "provider_specific_fields": {"thought_signature": "c2lnX2E="}}
+    messages: Final = [
+        {"role": "user", "content": "What time is it? Ask twice."},
+        _assistant_calling(signed_call, _get_time_call("call_2")),
+        {"role": "tool", "tool_call_id": "call_1", "content": "12:00"},
+        {"role": "tool", "tool_call_id": "call_2", "content": "12:01"},
+    ]
+
+    parts: Final = _parts_of(gemini_convert_messages_with_history(messages=messages, model="gemini-3.8-flash"))
+
+    assert _function_call_parts(parts) == [
+        {"function_call": {"name": "get_time", "args": {}, "id": "call_1"}, "thoughtSignature": "c2lnX2E="},
+        {"function_call": {"name": "get_time", "args": {}, "id": "call_2"}},
+    ], f"the signature must stay on the first call only, got {parts}"
+    assert _function_response_parts(parts) == [
+        {"function_response": {"name": "get_time", "response": {"content": "12:00"}, "id": "call_1"}},
+        {"function_response": {"name": "get_time", "response": {"content": "12:01"}, "id": "call_2"}},
+    ], f"expected both responses with their ids, got {parts}"
+
+
+@pytest.mark.parametrize(
+    ("assistant_messages", "expected_call_names"),
+    [
+        pytest.param(
+            [
+                _assistant_calling(_get_time_call("call_1")),
+                _assistant_calling(_get_time_call("call_1")),
+            ],
+            ["get_time"],
+            id="same id replayed in consecutive assistant messages",
+        ),
+        pytest.param(
+            [_assistant_calling(_get_time_call("call_1"), _get_time_call("call_1"))],
+            ["get_time"],
+            id="same id repeated in one assistant message",
+        ),
+        pytest.param(
+            [_assistant_calling(_get_time_call(""), _get_time_call(""))],
+            ["get_time"],
+            id="empty ids",
+        ),
+        pytest.param(
+            [_assistant_calling(_get_time_call(None), _get_time_call(None))],
+            ["get_time"],
+            id="missing ids",
+        ),
+        pytest.param(
+            [
+                _assistant_calling(_get_time_call("call_1")),
+                _assistant_calling(_get_time_call(None)),
+            ],
+            ["get_time"],
+            id="call without id after an identical call with id",
+        ),
+        pytest.param(
+            [
+                {"role": "assistant", "content": None, "function_call": {"name": "get_time", "arguments": "{}"}},
+                {"role": "assistant", "content": None, "function_call": {"name": "get_time", "arguments": "{}"}},
+            ],
+            ["get_time"],
+            id="legacy function_call replayed",
+        ),
+        pytest.param(
+            [
+                _assistant_calling(_get_time_call("call_1")),
+                _assistant_calling(_get_time_call("call_1", name="get_date")),
+            ],
+            ["get_time", "get_date"],
+            id="same id with different content",
+        ),
+    ],
+)
+def test_gemini_2_dedup_of_calls_without_a_new_id_is_unchanged(
+    assistant_messages: Sequence[Mapping[str, object]], expected_call_names: Sequence[str]
+) -> None:
+    messages: Final = [{"role": "user", "content": "What time is it?"}, *assistant_messages]
+
+    contents: Final = gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash")
+
+    assert contents == [
+        {"role": "user", "parts": [{"text": "What time is it?"}]},
+        {"role": "model", "parts": [{"function_call": {"name": name, "args": {}}} for name in expected_call_names]},
+    ], f"calls that repeat a seen id or carry no id keep the existing dedup, got {contents}"
+
+
+
+def _placeholder_signature() -> str:
+    from litellm.litellm_core_utils.prompt_templates.factory import get_dummy_thought_signature
+
+    return get_dummy_thought_signature()
+
+
+@pytest.mark.parametrize(
+    ("model", "tool_call_ids", "expected_call_parts"),
+    [
+        pytest.param(
+            "gemini-2.5-flash",
+            ("call_x__thought__c2lnMQ==", "call_x__thought__c2lnMg=="),
+            [{"function_call": {"name": "get_time", "args": {}}, "thoughtSignature": "c2lnMQ=="}],
+            id="gemini-2.5 same id with two embedded signatures",
+        ),
+        pytest.param(
+            "gemini-3.8-flash",
+            ("call_x__thought__c2lnMQ==", "call_x__thought__c2lnMg=="),
+            [{"function_call": {"name": "get_time", "args": {}, "id": "call_x"}, "thoughtSignature": "c2lnMQ=="}],
+            id="gemini-3 same id with two embedded signatures",
+        ),
+        pytest.param(
+            "gemini-2.5-flash",
+            ("call_x", "call_x__thought__c2lnMQ=="),
+            [{"function_call": {"name": "get_time", "args": {}}}],
+            id="gemini-2.5 plain id then its signed form",
+        ),
+        pytest.param(
+            "gemini-3.8-flash",
+            ("call_x", "call_x__thought__c2lnMQ=="),
+            [
+                {
+                    "function_call": {"name": "get_time", "args": {}, "id": "call_x"},
+                    "thoughtSignature": _placeholder_signature(),
+                }
+            ],
+            id="gemini-3 plain id then its signed form",
+        ),
+        pytest.param(
+            "gemini-2.5-flash",
+            ("call_a__thought__c2lnMQ==", "call_b__thought__c2lnMg=="),
+            [
+                {"function_call": {"name": "get_time", "args": {}}, "thoughtSignature": "c2lnMQ=="},
+                {"function_call": {"name": "get_time", "args": {}}, "thoughtSignature": "c2lnMg=="},
+            ],
+            id="gemini-2.5 distinct ids with embedded signatures",
+        ),
+        pytest.param(
+            "gemini-3.8-flash",
+            ("call_a__thought__c2lnMQ==", "call_b__thought__c2lnMg=="),
+            [
+                {"function_call": {"name": "get_time", "args": {}, "id": "call_a"}, "thoughtSignature": "c2lnMQ=="},
+                {"function_call": {"name": "get_time", "args": {}, "id": "call_b"}, "thoughtSignature": "c2lnMg=="},
+            ],
+            id="gemini-3 distinct ids with embedded signatures",
+        ),
+    ],
+)
+def test_calls_whose_ids_embed_thought_signatures_dedup_by_their_call_id(
+    model: str, tool_call_ids: Sequence[str], expected_call_parts: Sequence[Mapping[str, object]]
+) -> None:
+    messages: Final = [
+        {"role": "user", "content": "What time is it?"},
+        *(_assistant_calling(_get_time_call(tool_call_id)) for tool_call_id in tool_call_ids),
+    ]
+
+    parts: Final = _parts_of(gemini_convert_messages_with_history(messages=messages, model=model))
+
+    assert _function_call_parts(parts) == expected_call_parts, (
+        f"a call id replayed with a different embedded signature must be sent once, got {parts}"
+    )

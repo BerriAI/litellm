@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from prisma.errors import PrismaError
 
+import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -21,7 +22,9 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 from litellm.proxy.proxy_server import app
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.types.agents import AgentResponse
+from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 
 _ClientAndMocks: TypeAlias = tuple[TestClient, MagicMock, MagicMock, MagicMock, MagicMock]
@@ -143,9 +146,27 @@ def client_and_mocks(monkeypatch: pytest.MonkeyPatch) -> Iterator[_ClientAndMock
     mock_agents_table.find_many = AsyncMock(return_value=[])
     mock_agents_table.update = AsyncMock(return_value=None)
 
+    mock_vector_store_table = MagicMock()
+    mock_vector_store_table.find_many = AsyncMock(return_value=[])
+
+    async def read_transaction_rows(query: str, value: object, *args: Sequence[str]) -> Sequence[Mapping[str, object]]:
+        if "AS assigned_key_ids" in query:
+            record: Final = await mock_access_group_table.find_unique(where={"access_group_id": value})
+            return [record.dict()] if record else []
+        if "owner.access_group_name" in query:
+            return []
+        teams: Final = mock_team_table.find_many.return_value
+        if "AS attached" in query:
+            return [
+                {"team_id": team.team_id, "attached": team.team_id in args[0] or value in team.access_group_ids}
+                for team in teams
+            ]
+        return [{"team_id": team.team_id} for team in teams]
+
     @asynccontextmanager
     async def mock_tx():
         tx = types.SimpleNamespace(
+            query_raw=AsyncMock(side_effect=read_transaction_rows),
             litellm_accessgrouptable=mock_access_group_table,
             litellm_teamtable=mock_team_table,
             litellm_verificationtoken=mock_key_table,
@@ -159,6 +180,7 @@ def client_and_mocks(monkeypatch: pytest.MonkeyPatch) -> Iterator[_ClientAndMock
         litellm_verificationtoken=mock_key_table,
         litellm_mcpservertable=mock_mcp_server_table,
         litellm_agentstable=mock_agents_table,
+        litellm_managedvectorstorestable=mock_vector_store_table,
         tx=mock_tx,
     )
     mock_prisma.db = mock_db
@@ -867,14 +889,14 @@ def test_delete_access_group_patches_cached_team_and_key(
     # inconsistently across Python/unittest versions; sync returns are awaited as immediate results.
     def user_cache_get_side_effect(*args, **kwargs):
         cache_key = kwargs.get("key") if "key" in kwargs else (args[0] if args else None)
-        if cache_key == "team_id:team-1":
+        if cache_key == AuthObject.team("team-1"):
             if team_cache_group_ids is None:
                 return None
             return LiteLLM_TeamTableCachedObj(
                 team_id="team-1",
                 access_group_ids=list(team_cache_group_ids),
             )
-        if cache_key == "hashed-key-1":
+        if cache_key == AuthObject.virtual_key("hashed-key-1"):
             if key_cache_group_ids is None:
                 return None
             return UserAPIKeyAuth(
@@ -898,7 +920,8 @@ def test_delete_access_group_patches_cached_team_and_key(
         team_set_calls = [
             c
             for c in mock_cache.async_set_cache.call_args_list
-            if c.kwargs.get("key", "") == "team_id:team-1" or (len(c.args) >= 1 and c.args[0] == "team_id:team-1")
+            if c.kwargs.get("key") == AuthObject.team("team-1")
+            or (len(c.args) >= 1 and c.args[0] == AuthObject.team("team-1"))
         ]
         assert len(team_set_calls) >= 1, "Expected team cache to be patched"
         # The cached team object should have the updated access_group_ids
@@ -910,7 +933,8 @@ def test_delete_access_group_patches_cached_team_and_key(
         team_set_calls = [
             c
             for c in mock_cache.async_set_cache.call_args_list
-            if c.kwargs.get("key", "") == "team_id:team-1" or (len(c.args) >= 1 and c.args[0] == "team_id:team-1")
+            if c.kwargs.get("key") == AuthObject.team("team-1")
+            or (len(c.args) >= 1 and c.args[0] == AuthObject.team("team-1"))
         ]
         assert len(team_set_calls) == 0, "Should not patch team cache when not cached"
 
@@ -918,7 +942,8 @@ def test_delete_access_group_patches_cached_team_and_key(
         key_set_calls = [
             c
             for c in mock_cache.async_set_cache.call_args_list
-            if c.kwargs.get("key", "") == "hashed-key-1" or (len(c.args) >= 1 and c.args[0] == "hashed-key-1")
+            if c.kwargs.get("key") == AuthObject.virtual_key("hashed-key-1")
+            or (len(c.args) >= 1 and c.args[0] == AuthObject.virtual_key("hashed-key-1"))
         ]
         assert len(key_set_calls) >= 1, "Expected key cache to be patched"
         written_key = key_set_calls[0].kwargs.get("value") or key_set_calls[0].args[1]
@@ -928,7 +953,8 @@ def test_delete_access_group_patches_cached_team_and_key(
         key_set_calls = [
             c
             for c in mock_cache.async_set_cache.call_args_list
-            if c.kwargs.get("key", "") == "hashed-key-1" or (len(c.args) >= 1 and c.args[0] == "hashed-key-1")
+            if c.kwargs.get("key") == AuthObject.virtual_key("hashed-key-1")
+            or (len(c.args) >= 1 and c.args[0] == AuthObject.virtual_key("hashed-key-1"))
         ]
         assert len(key_set_calls) == 0, "Should not patch key cache when not cached"
 
@@ -961,9 +987,9 @@ def test_delete_access_group_patches_key_cached_as_dict(client_and_mocks):
 
     def user_cache_get_dict_when_key_matches(*args, **kwargs):
         cache_key = kwargs.get("key") if "key" in kwargs else (args[0] if args else None)
-        if cache_key == "team_id:team-1":
+        if cache_key == AuthObject.team("team-1"):
             return None
-        if cache_key == "hashed-key-dict":
+        if cache_key == AuthObject.virtual_key("hashed-key-dict"):
             return UserAPIKeyAuth.model_validate(cached_key_payload)
         return None
 
@@ -976,7 +1002,8 @@ def test_delete_access_group_patches_key_cached_as_dict(client_and_mocks):
     key_set_calls = [
         c
         for c in mock_cache.async_set_cache.call_args_list
-        if c.kwargs.get("key", "") == "hashed-key-dict" or (len(c.args) >= 1 and c.args[0] == "hashed-key-dict")
+        if c.kwargs.get("key") == AuthObject.virtual_key("hashed-key-dict")
+        or (len(c.args) >= 1 and c.args[0] == AuthObject.virtual_key("hashed-key-dict"))
     ]
     assert len(key_set_calls) >= 1, "Expected key cache to be patched"
     written_key = key_set_calls[0].kwargs.get("value") or key_set_calls[0].args[1]
@@ -1376,12 +1403,10 @@ def test_delete_access_group_handles_out_of_sync_assigned_teams(client_and_mocks
     )
     mock_access_group_table.find_unique = AsyncMock(return_value=existing)
 
-    # hasSome query finds nothing (team's own access_group_ids is out of sync)
-    mock_team_table.find_many = AsyncMock(return_value=[])
-
     out_of_sync_team = MagicMock()
     out_of_sync_team.team_id = "team-out-of-sync"
     out_of_sync_team.access_group_ids = []  # already clean, no update needed
+    mock_team_table.find_many = AsyncMock(return_value=[out_of_sync_team])
     mock_team_table.find_unique = AsyncMock(return_value=out_of_sync_team)
 
     resp = client.delete("/v1/access_group/ag-to-delete")
@@ -1447,9 +1472,22 @@ def test_update_access_group_null_assigned_ids_treated_as_empty(client_and_mocks
 # ---------------------------------------------------------------------------
 
 
-def _mock_resource_tables(mock_prisma, *, mcp_servers=(), agents=(), teams=(), keys=()):
+def _make_vector_store_record(vector_store_id: str, vector_store_name: str | None = None) -> types.SimpleNamespace:
+    return types.SimpleNamespace(vector_store_id=vector_store_id, vector_store_name=vector_store_name)
+
+
+def _mock_resource_tables(
+    mock_prisma: MagicMock,
+    *,
+    mcp_servers: Sequence[object] = (),
+    agents: Sequence[object] = (),
+    vector_stores: Sequence[object] = (),
+    teams: Sequence[object] = (),
+    keys: Sequence[object] = (),
+) -> None:
     mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=list(mcp_servers))
     mock_prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=list(agents))
+    mock_prisma.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=list(vector_stores))
     mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=list(teams))
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=list(keys))
 
@@ -1463,6 +1501,7 @@ def test_get_access_group_resolves_resource_names(client_and_mocks, base_path):
             access_group_id="ag-123",
             access_mcp_server_ids=["mcp-a", "mcp-b", "mcp-ghost"],
             access_agent_ids=["agent-a", "agent-ghost"],
+            access_vector_store_ids=["store-a", "store-unnamed", "store-ghost"],
             assigned_team_ids=["team-a", "team-b"],
             assigned_key_ids=["key-a", "key-b"],
         )
@@ -1474,6 +1513,10 @@ def test_get_access_group_resolves_resource_names(client_and_mocks, base_path):
             _make_mcp_server_record("mcp-b", server_name="jira_tools"),
         ],
         agents=[_make_agent_record("agent-a", "support-bot")],
+        vector_stores=[
+            _make_vector_store_record("store-a", "Parks knowledge base"),
+            _make_vector_store_record("store-unnamed"),
+        ],
         teams=[
             _make_team_record("team-a", ["ag-123"], team_alias="Platform"),
             _make_team_record("team-b", ["ag-123"]),
@@ -1490,6 +1533,12 @@ def test_get_access_group_resolves_resource_names(client_and_mocks, base_path):
         {"id": "mcp-ghost", "name": None},
     ]
     assert body["access_agents"] == [{"id": "agent-a", "name": "support-bot"}, {"id": "agent-ghost", "name": None}]
+    assert body["access_vector_stores"] == [
+        {"id": "store-a", "name": "Parks knowledge base"},
+        {"id": "store-unnamed", "name": None},
+        {"id": "store-ghost", "name": None},
+    ]
+    assert body["access_vector_store_ids"] == ["store-a", "store-unnamed", "store-ghost"]
     assert body["assigned_teams"] == [{"id": "team-a", "name": "Platform"}, {"id": "team-b", "name": None}]
     assert body["assigned_keys"] == [{"id": "key-a", "name": "ci-key"}, {"id": "key-b", "name": None}]
     assert body["access_mcp_server_ids"] == ["mcp-a", "mcp-b", "mcp-ghost"]
@@ -1499,6 +1548,8 @@ def test_get_access_group_resolves_resource_names(client_and_mocks, base_path):
     assert sorted(mcp_where["server_id"]["in"]) == ["mcp-a", "mcp-b", "mcp-ghost"]
     agent_where = mock_prisma.db.litellm_agentstable.find_many.call_args.kwargs["where"]
     assert sorted(agent_where["agent_id"]["in"]) == ["agent-a", "agent-ghost"]
+    store_where = mock_prisma.db.litellm_managedvectorstorestable.find_many.call_args.kwargs["where"]
+    assert sorted(store_where["vector_store_id"]["in"]) == ["store-a", "store-ghost", "store-unnamed"]
     key_where = mock_prisma.db.litellm_verificationtoken.find_many.call_args.kwargs["where"]
     assert sorted(key_where["token"]["in"]) == ["key-a", "key-b"]
 
@@ -1512,12 +1563,14 @@ def test_list_access_groups_resolves_names_with_one_query_per_table(client_and_m
                 access_group_id="ag-1",
                 access_mcp_server_ids=["mcp-a"],
                 access_agent_ids=["agent-a"],
+                access_vector_store_ids=["store-a"],
                 assigned_key_ids=["key-a"],
             ),
             _make_access_group_record(
                 access_group_id="ag-2",
                 access_mcp_server_ids=["mcp-b"],
                 access_agent_ids=["agent-b"],
+                access_vector_store_ids=["store-b"],
                 assigned_key_ids=["key-b"],
             ),
         ]
@@ -1526,6 +1579,10 @@ def test_list_access_groups_resolves_names_with_one_query_per_table(client_and_m
         mock_prisma,
         mcp_servers=[_make_mcp_server_record("mcp-a", alias="A"), _make_mcp_server_record("mcp-b", alias="B")],
         agents=[_make_agent_record("agent-a", "Agent A"), _make_agent_record("agent-b", "Agent B")],
+        vector_stores=[
+            _make_vector_store_record("store-a", "Store A"),
+            _make_vector_store_record("store-b", "Store B"),
+        ],
         keys=[_make_key_record("key-a", key_alias="Key A"), _make_key_record("key-b", key_alias="Key B")],
     )
 
@@ -1534,14 +1591,17 @@ def test_list_access_groups_resolves_names_with_one_query_per_table(client_and_m
     first, second = resp.json()
     assert first["access_mcp_servers"] == [{"id": "mcp-a", "name": "A"}]
     assert first["access_agents"] == [{"id": "agent-a", "name": "Agent A"}]
+    assert first["access_vector_stores"] == [{"id": "store-a", "name": "Store A"}]
     assert first["assigned_keys"] == [{"id": "key-a", "name": "Key A"}]
     assert second["access_mcp_servers"] == [{"id": "mcp-b", "name": "B"}]
     assert second["access_agents"] == [{"id": "agent-b", "name": "Agent B"}]
+    assert second["access_vector_stores"] == [{"id": "store-b", "name": "Store B"}]
     assert second["assigned_keys"] == [{"id": "key-b", "name": "Key B"}]
 
     for table, column in (
         (mock_prisma.db.litellm_mcpservertable, "server_id"),
         (mock_prisma.db.litellm_agentstable, "agent_id"),
+        (mock_prisma.db.litellm_managedvectorstorestable, "vector_store_id"),
         (mock_prisma.db.litellm_verificationtoken, "token"),
     ):
         table.find_many.assert_awaited_once()
@@ -1561,9 +1621,11 @@ def test_list_access_groups_skips_lookups_when_nothing_to_resolve(client_and_moc
     resp = client.get("/v1/access_group")
     assert resp.status_code == 200
     assert all(group["access_mcp_servers"] == [] and group["assigned_keys"] == [] for group in resp.json())
+    assert all(group["access_vector_stores"] == [] for group in resp.json())
 
     mock_prisma.db.litellm_mcpservertable.find_many.assert_not_awaited()
     mock_prisma.db.litellm_agentstable.find_many.assert_not_awaited()
+    mock_prisma.db.litellm_managedvectorstorestable.find_many.assert_not_awaited()
     mock_prisma.db.litellm_verificationtoken.find_many.assert_not_awaited()
 
 
@@ -1576,6 +1638,7 @@ def test_create_access_group_response_carries_resolved_names(client_and_mocks):
         mock_prisma,
         mcp_servers=[_make_mcp_server_record("mcp-a", alias="GitHub")],
         agents=[_make_agent_record("agent-a", "support-bot")],
+        vector_stores=[_make_vector_store_record("store-a", "Parks knowledge base")],
         teams=[team_record],
     )
 
@@ -1585,6 +1648,7 @@ def test_create_access_group_response_carries_resolved_names(client_and_mocks):
             "access_group_name": "new-group",
             "access_mcp_server_ids": ["mcp-a"],
             "access_agent_ids": ["agent-a"],
+            "access_vector_store_ids": ["store-a"],
             "assigned_team_ids": ["team-1"],
         },
     )
@@ -1592,6 +1656,7 @@ def test_create_access_group_response_carries_resolved_names(client_and_mocks):
     body = resp.json()
     assert body["access_mcp_servers"] == [{"id": "mcp-a", "name": "GitHub"}]
     assert body["access_agents"] == [{"id": "agent-a", "name": "support-bot"}]
+    assert body["access_vector_stores"] == [{"id": "store-a", "name": "Parks knowledge base"}]
     assert body["assigned_teams"] == [{"id": "team-1", "name": "Platform"}]
 
 
@@ -1605,16 +1670,55 @@ def test_update_access_group_response_carries_resolved_names(client_and_mocks):
         mock_prisma,
         mcp_servers=[_make_mcp_server_record("mcp-new", alias="Linear")],
         agents=[_make_agent_record("agent-a", "support-bot")],
+        vector_stores=[_make_vector_store_record("store-new", "HR policies")],
     )
 
     resp = client.put(
-        "/v1/access_group/ag-update", json={"access_mcp_server_ids": ["mcp-new"], "access_agent_ids": ["agent-a"]}
+        "/v1/access_group/ag-update",
+        json={
+            "access_mcp_server_ids": ["mcp-new"],
+            "access_agent_ids": ["agent-a"],
+            "access_vector_store_ids": ["store-new"],
+        },
     )
     assert resp.status_code == 200
     body = resp.json()
     assert body["access_mcp_servers"] == [{"id": "mcp-new", "name": "Linear"}]
     assert body["access_agents"] == [{"id": "agent-a", "name": "support-bot"}]
+    assert body["access_vector_stores"] == [{"id": "store-new", "name": "HR policies"}]
     assert body["access_mcp_server_ids"] == ["mcp-new"]
+
+
+def test_get_access_group_names_a_vector_store_declared_in_the_config_file(
+    client_and_mocks: _ClientAndMocks, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A config-declared store has no row, so its name comes from the registry the config file filled."""
+    client, _, mock_table, *_ = client_and_mocks
+    mock_table.find_unique = AsyncMock(
+        return_value=_make_access_group_record(access_vector_store_ids=["store-config", "store-loaded"])
+    )
+    monkeypatch.setattr(
+        litellm,
+        "vector_store_registry",
+        VectorStoreRegistry(
+            [
+                {
+                    "vector_store_id": "store-config",
+                    "custom_llm_provider": "openai",
+                    "vector_store_name": "Config store",
+                    "is_config": True,
+                },
+                {"vector_store_id": "store-loaded", "custom_llm_provider": "openai", "vector_store_name": "stale"},
+            ]
+        ),
+    )
+
+    resp = client.get("/v1/access_group/ag-123")
+    assert resp.status_code == 200
+    assert resp.json()["access_vector_stores"] == [
+        {"id": "store-config", "name": "Config store"},
+        {"id": "store-loaded", "name": None},
+    ]
 
 
 def test_create_access_group_persists_mcp_tool_permissions_as_json(client_and_mocks):

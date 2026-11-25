@@ -4,6 +4,23 @@ import { createQueryKeys } from "../common/queryKeysFactory";
 
 const uiSettingsKeys = createQueryKeys("uiSettings");
 
+export type AriaInternalUserAccess = "none" | "own_usage" | "own_and_team_usage";
+type UISettings = {
+  supports_similarity_threshold?: boolean;
+  values?: Record<string, unknown> & {
+    aria_internal_user_access?: AriaInternalUserAccess;
+    disable_aria?: boolean;
+    enabled_ui_pages_internal_users?: string[] | null;
+    usage_default_time_range?: string;
+    moyai_url?: string | null;
+  };
+  field_schema?: {
+    description?: string;
+    properties?: Record<string, { description?: string }>;
+  };
+  source?: Record<string, "config" | "db" | "env" | "default" | "unset">;
+};
+
 /**
  * UI settings, cached for an hour by default because they rarely change.
  *
@@ -15,12 +32,13 @@ const uiSettingsKeys = createQueryKeys("uiSettings");
  */
 export const useUISettings = (options?: { staleTime?: number; refetchInterval?: number; enabled?: boolean }) => {
   const proxyBaseUrl = getProxyBaseUrl();
-  return useQuery<Record<string, any>>({
+  const queryOptions = {
     queryKey: [...uiSettingsKeys.list({}), proxyBaseUrl],
     queryFn: async () => await getUiSettings(proxyBaseUrl),
     staleTime: options?.staleTime ?? 60 * 60 * 1000, // 1 hour - data rarely changes
     gcTime: 60 * 60 * 1000, // 1 hour - keep in cache for 1 hour
     refetchInterval: options?.refetchInterval,
     enabled: options?.enabled,
-  });
+  };
+  return useQuery<UISettings>(queryOptions);
 };

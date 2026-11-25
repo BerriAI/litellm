@@ -23,7 +23,7 @@ class InceptionChatConfig(OpenAILikeChatConfig):
     def custom_llm_provider(self) -> str | None:
         return "inception"
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "max_tokens",
             "max_completion_tokens",

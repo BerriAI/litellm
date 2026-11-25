@@ -32,7 +32,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helpe
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import DatabaseClient
 from litellm.repositories.project_repository import ProjectRepository
-from litellm.repositories.table_repositories import TeamMembershipRepository
+from litellm.repositories.team_membership_repository import TeamMembershipRepository
 from litellm.router import Router
 from litellm.router_strategy.auto_router.auto_router_model_naming import (
     classify_strategy_router_model,

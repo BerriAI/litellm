@@ -53,6 +53,33 @@ const buildSettingsResponse = (overrides?: Partial<Record<string, unknown>>) => 
 });
 
 describe("UISettings", () => {
+  it.each([
+    ["No access", "none"],
+    ["Own and team usage", "own_and_team_usage"],
+  ])("saves internal Aria access %s", async (label, value) => {
+    const mutate = vi.fn();
+    mockUseUISettings.mockReturnValue(buildSettingsResponse());
+    mockUseUpdateUISettings.mockReturnValue({ mutate, isPending: false, error: null });
+    render(<UISettings />);
+    const select = screen.getByRole("combobox", { name: "Aria access for internal users" });
+    expect(select).toHaveTextContent("Own usage only");
+    await chooseSelectOption(userEvent.setup(), select, label);
+    expect(mutate).toHaveBeenCalledWith({ aria_internal_user_access: value }, expect.any(Object));
+  });
+
+  it("keeps configuration-owned internal Aria access read-only", () => {
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          values: { aria_internal_user_access: "none" },
+          source: { aria_internal_user_access: "config" },
+        },
+      }),
+    );
+    render(<UISettings />);
+    expect(screen.getByRole("combobox", { name: "Aria access for internal users" })).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Aria access for internal users" })).toHaveTextContent("No access");
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token" });
@@ -68,13 +95,13 @@ describe("UISettings", () => {
     const mutate = vi.fn();
     mockUseUpdateUISettings.mockReturnValue({ mutate, isPending: false, error: null });
     render(<UISettings />);
-    expect(screen.getByRole("combobox", { name: "Default Usage time range" })).toHaveTextContent("Last 7 days");
+    expect(screen.getByRole("combobox", { name: "Default Usage time range" })).toHaveTextContent("Month to date");
     await chooseSelectOption(
       userEvent.setup(),
       screen.getByRole("combobox", { name: "Default Usage time range" }),
-      "Month to date",
+      "Last 7 days",
     );
-    expect(mutate).toHaveBeenCalledWith({ usage_default_time_range: "month_to_date" }, expect.any(Object));
+    expect(mutate).toHaveBeenCalledWith({ usage_default_time_range: "last_7_days" }, expect.any(Object));
   });
 
   it("shows configuration-owned defaults without offering an ineffective override", () => {
