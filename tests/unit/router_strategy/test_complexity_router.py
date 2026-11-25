@@ -25,6 +25,10 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_utils.reasoning_effort_capability import (
+    REASONING_EFFORT_ADVERTISEMENT_ORDER,
+    declared_reasoning_efforts_for_map_key,
+)
 from litellm.types.utils import StandardLoggingRoutingDecision
 from litellm.router_utils.auto_router_model_naming import (
     CUSTOMIZATION_CAPABILITY,
@@ -344,6 +348,52 @@ class TestComplexityRouterInit:
             "tier-probability:SIMPLE=0.100000",
             "tier-probability:MEDIUM=0.900000",
         )
+
+    @pytest.mark.asyncio
+    async def test_jev_choice_without_confidence_routes_and_reports_no_confidence(self, mock_router_instance):
+        client = _StaticJevClient(
+            JevSystemOneResponse(
+                answers={
+                    "tier": JevChoiceAnswer(
+                        type="choice",
+                        choice="MEDIUM",
+                        probabilities={"SIMPLE": 0.1, "MEDIUM": 0.9},
+                    )
+                },
+            )
+        )
+        router = ComplexityRouter(
+            "test-router",
+            mock_router_instance,
+            {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"api_key": "test", "timeout_ms": 100},
+                "tiers": {"SIMPLE": "cheap", "MEDIUM": "mid", "COMPLEX": "strong", "REASONING": "top"},
+            },
+            derive_savings_baseline=False,
+            jev_client=client,
+        )
+
+        outcome = await router.aclassify("Explain this")
+        result = await router.async_pre_routing_hook(
+            model="test-router",
+            request_kwargs={},
+            messages=[{"role": "user", "content": "Explain this"}],
+        )
+
+        assert outcome.tier == ComplexityTier.MEDIUM
+        assert outcome.cause == "jev_classifier"
+        assert outcome.jev_verdict is not None
+        assert outcome.jev_verdict.confidence is None
+        assert outcome.signals == (
+            "jev-classifier:MEDIUM",
+            "tier-probability:SIMPLE=0.100000",
+            "tier-probability:MEDIUM=0.900000",
+        )
+        assert result is not None
+        assert result.routing_decision is not None
+        assert result.routing_decision["classifier_probabilities"] == {"SIMPLE": 0.1, "MEDIUM": 0.9}
+        assert "classifier_confidence" not in result.routing_decision
 
     @pytest.mark.asyncio
     async def test_jev_pre_routing_hook_exposes_routing_decision_provenance(
@@ -5051,6 +5101,77 @@ class TestRouterPreRoutingAliasOverrides:
         assert request_kwargs["thinking"] == {"type": "adaptive"}
         assert request_kwargs["output_config"] == {"effort": "max"}
         assert request_kwargs["temperature"] == 0.2
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("level", REASONING_EFFORT_ADVERTISEMENT_ORDER)
+    async def test_tier_pins_only_the_efforts_the_chat_latest_row_lists(self, level):
+        declared = declared_reasoning_efforts_for_map_key("chat-latest")
+        assert declared
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {
+                            "tiers": {
+                                "SIMPLE": {"model_name": "chat-latest", "litellm_params": {"reasoning_effort": level}}
+                            }
+                        },
+                    },
+                },
+                {"model_name": "chat-latest", "litellm_params": {"model": "openai/chat-latest"}},
+            ]
+        )
+        request_kwargs: Dict = {}
+
+        await router.async_get_available_deployment(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert request_kwargs.get("reasoning_effort") == (level if level in declared else None)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("level", REASONING_EFFORT_ADVERTISEMENT_ORDER)
+    async def test_tier_effort_follows_the_base_model_the_request_path_reads(self, level):
+        declared = declared_reasoning_efforts_for_map_key("azure_ai/gpt-chat-latest")
+        assert declared
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "smart-router",
+                    "litellm_params": {
+                        "model": "auto_router/complexity_router",
+                        "complexity_router_config": {
+                            "tiers": {
+                                "SIMPLE": {"model_name": "foundry-custom", "litellm_params": {"reasoning_effort": level}}
+                            }
+                        },
+                    },
+                },
+                {
+                    "model_name": "foundry-custom",
+                    "litellm_params": {
+                        "model": "azure_ai/my-reasoner",
+                        "api_base": "https://example.services.ai.azure.com",
+                        "api_key": "test-key",
+                        "base_model": "azure_ai/gpt-chat-latest",
+                    },
+                    "model_info": {"base_model": "azure_ai/gpt-5.5"},
+                },
+            ]
+        )
+        request_kwargs: Dict = {}
+
+        await router.async_get_available_deployment(
+            model="smart-router",
+            request_kwargs=request_kwargs,
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert request_kwargs.get("reasoning_effort") == (level if level in declared else None)
 
     @pytest.mark.asyncio
     async def test_routing_never_resolves_an_authenticating_provider(self, monkeypatch, tmp_path):

@@ -58,7 +58,7 @@ class DallE2ImageEditConfig(OpenAIImageEditConfig):
         #########################################################
         _image_list: Final = request_dict.get("image")
         _mask = request_dict.get("mask")
-        data_without_files: Final = {k: v for k, v in request_dict.items() if k not in ["image", "mask"]}
+        data_without_files: Final = {k: v for k, v in request_dict.items() if k not in ["image", "mask", "markup"]}
         files_list: Final[list[tuple[str, Any]]] = []
 
         # Handle image parameter - DALL-E-2 only supports single image

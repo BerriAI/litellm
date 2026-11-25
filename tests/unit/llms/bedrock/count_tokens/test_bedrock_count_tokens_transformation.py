@@ -1,10 +1,15 @@
 import base64
 import json
+from typing import Final
 
 from litellm.llms.bedrock.count_tokens.transformation import (
     DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS,
     BedrockCountTokensConfig,
 )
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+    AmazonAnthropicClaudeMessagesConfig,
+)
+from litellm.types.router import GenericLiteLLMParams
 
 
 def test_detect_input_type():
@@ -64,7 +69,7 @@ def test_transform_to_invoke_model_format_base64_encodes_body():
         "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
     }
 
-    result = config.transform_anthropic_to_bedrock_count_tokens(request)
+    result = config.transform_anthropic_to_bedrock_count_tokens(request, request["model"])
 
     body = json.loads(base64.b64decode(result["input"]["invokeModel"]["body"]))
     assert body["messages"] == request["messages"]
@@ -78,7 +83,7 @@ def test_transform_to_invoke_model_format_raw_body_unchanged():
     config = BedrockCountTokensConfig()
 
     result = config.transform_anthropic_to_bedrock_count_tokens(
-        {"model": "amazon.titan-text-express-v1", "inputText": "hello"}
+        {"model": "amazon.titan-text-express-v1", "inputText": "hello"}, "amazon.titan-text-express-v1"
     )
 
     body = json.loads(base64.b64decode(result["input"]["invokeModel"]["body"]))
@@ -94,7 +99,7 @@ def test_transform_anthropic_to_bedrock_request():
         "messages": [{"role": "user", "content": "Hello"}],
     }
 
-    result = config.transform_anthropic_to_bedrock_count_tokens(anthropic_request)
+    result = config.transform_anthropic_to_bedrock_count_tokens(anthropic_request, anthropic_request["model"])
 
     assert "input" in result
     assert "converse" in result["input"]
@@ -111,7 +116,7 @@ def test_transform_includes_system_prompt():
         "system": "You are a helpful assistant.",
     }
 
-    result = config.transform_anthropic_to_bedrock_count_tokens(request)
+    result = config.transform_anthropic_to_bedrock_count_tokens(request, request["model"])
 
     converse = result["input"]["converse"]
     assert "system" in converse
@@ -131,7 +136,7 @@ def test_transform_includes_system_prompt_as_list():
         ],
     }
 
-    result = config.transform_anthropic_to_bedrock_count_tokens(request)
+    result = config.transform_anthropic_to_bedrock_count_tokens(request, request["model"])
 
     converse = result["input"]["converse"]
     assert converse["system"] == [{"text": "Block 1"}, {"text": "Block 2"}]
@@ -157,7 +162,7 @@ def test_transform_includes_tools():
         ],
     }
 
-    result = config.transform_anthropic_to_bedrock_count_tokens(request)
+    result = config.transform_anthropic_to_bedrock_count_tokens(request, request["model"])
 
     converse = result["input"]["converse"]
     assert "toolConfig" in converse
@@ -185,7 +190,7 @@ def test_transform_includes_system_and_tools_together():
         ],
     }
 
-    result = config.transform_anthropic_to_bedrock_count_tokens(request)
+    result = config.transform_anthropic_to_bedrock_count_tokens(request, request["model"])
 
     converse = result["input"]["converse"]
     assert "system" in converse
@@ -202,7 +207,7 @@ def test_transform_no_system_no_tools():
         "messages": [{"role": "user", "content": "Hello"}],
     }
 
-    result = config.transform_anthropic_to_bedrock_count_tokens(request)
+    result = config.transform_anthropic_to_bedrock_count_tokens(request, request["model"])
 
     converse = result["input"]["converse"]
     assert "system" not in converse
@@ -225,7 +230,7 @@ def test_tool_name_sanitization():
         ],
     }
 
-    result = config.transform_anthropic_to_bedrock_count_tokens(request)
+    result = config.transform_anthropic_to_bedrock_count_tokens(request, request["model"])
 
     tool_name = result["input"]["converse"]["toolConfig"]["tools"][0]["toolSpec"][
         "name"
@@ -253,3 +258,104 @@ def test_count_tokens_endpoint_encodes_model_id(monkeypatch):
         endpoint
         == "https://bedrock-runtime.us-east-1.amazonaws.com/model/..%2F..%2Fmodel%2Fother%3Fx%3D1%23frag/count-tokens"
     )
+
+
+_GEMINI_THOUGHT_HISTORY: Final = [
+    {"role": "user", "content": "Pick a number."},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "plan", "signature": "EqQBCkYIAxgCIkA_anthropic_signed"},
+            {"type": "text", "text": "Seven."},
+        ],
+    },
+    {"role": "user", "content": "Double it."},
+    {
+        "role": "assistant",
+        "content": [
+            {"type": "thinking", "thinking": "Gemini reasoning", "signature": ""},
+            {"type": "text", "text": "Fourteen."},
+        ],
+    },
+    {"role": "user", "content": "Halve it."},
+]
+
+
+def _counted_invoke_body(request_model: str, messages: list[object], model: str) -> dict[str, object]:
+    transformed: Final = BedrockCountTokensConfig().transform_anthropic_to_bedrock_count_tokens(
+        {"model": request_model, "messages": messages}, model
+    )
+    return json.loads(base64.b64decode(transformed["input"]["invokeModel"]["body"]))
+
+
+def test_count_tokens_counts_the_thinking_history_bedrock_invoke_sends():
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    messages: Final = _GEMINI_THOUGHT_HISTORY
+    sent: Final = AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=messages,
+        anthropic_messages_optional_request_params={"max_tokens": 1024},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    transformed: Final = BedrockCountTokensConfig().transform_anthropic_to_bedrock_count_tokens(
+        {"model": model, "messages": messages}, model
+    )
+    counted: Final = json.loads(base64.b64decode(transformed["input"]["invokeModel"]["body"]))
+
+    assert counted["messages"] == sent["messages"]
+    assert counted["messages"] != messages
+
+
+def test_count_tokens_judges_the_deployment_model_and_not_the_alias_the_caller_named():
+    counted: Final = _counted_invoke_body(
+        "team-sonnet", _GEMINI_THOUGHT_HISTORY, "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
+
+    assert counted["messages"] != _GEMINI_THOUGHT_HISTORY
+
+
+def test_count_tokens_keeps_unsigned_thinking_for_a_model_that_is_not_claude():
+    model: Final = "us.amazon.nova-2-lite-v1:0"
+
+    assert _counted_invoke_body(model, _GEMINI_THOUGHT_HISTORY, model)["messages"] == _GEMINI_THOUGHT_HISTORY
+
+
+def test_count_tokens_leaves_a_message_that_is_not_an_object_for_bedrock_to_judge():
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    messages: Final = ["hi", *_GEMINI_THOUGHT_HISTORY]
+
+    assert _counted_invoke_body(model, messages, model)["messages"] == messages
+
+
+_GEMINI_TOOL_TURN: Final = [
+    {"role": "user", "content": "What is the weather in Oslo?"},
+    {
+        "role": "assistant",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_01",
+                "name": "get_weather",
+                "input": {"city": "Oslo"},
+                "provider_specific_fields": {"signature": "gemini-thought-signature"},
+            }
+        ],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "4 C"}]},
+]
+_GEMINI_TOOL_TURN_AS_SENT: Final = [
+    {"role": "user", "content": "What is the weather in Oslo?"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_01", "name": "get_weather", "input": {"city": "Oslo"}}],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "4 C"}]},
+]
+
+
+def test_count_tokens_drops_the_provider_specific_fields_litellm_puts_on_a_returned_block():
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+    assert _counted_invoke_body(model, _GEMINI_TOOL_TURN, model)["messages"] == _GEMINI_TOOL_TURN_AS_SENT

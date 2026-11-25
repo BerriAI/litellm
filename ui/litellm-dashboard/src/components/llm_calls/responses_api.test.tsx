@@ -16,13 +16,17 @@ const mockClient = {
   },
 };
 
-vi.mock("openai", () => ({
-  default: {
-    OpenAI: vi.fn(function () {
-      return mockClient;
-    }),
-  },
-}));
+vi.mock("openai", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openai")>();
+  return {
+    default: {
+      OpenAI: vi.fn(function () {
+        return mockClient;
+      }),
+      APIError: actual.APIError,
+    },
+  };
+});
 
 const nonStreamingResponse = (data: unknown, headers: Record<string, string> = {}) => ({
   withResponse: async () => ({ data, response: { headers: new Headers(headers) } }),
@@ -696,5 +700,132 @@ describe("responses_api custom headers", () => {
     expect(vi.mocked(openai.OpenAI).mock.calls[0][0]).toMatchObject({
       defaultHeaders: { "x-litellm-tags": "team-a", "anthropic-beta": "context-1m-2025-08-07" },
     });
+  });
+});
+
+describe("responses_api when the proxy cannot resolve previous_response_id", () => {
+  const mockUpdateTextUI = vi.fn();
+
+  beforeEach(() => {
+    async function* stream() {
+      yield { type: "response.output_text.delta", delta: "Hi" };
+      yield { type: "response.completed", response: { id: "resp_123" } };
+    }
+    mockResponsesCreate.mockResolvedValue(stream());
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const earlierTurns: MessageType[] = [
+    { role: "user", content: "My name is Ada" },
+    { role: "assistant", content: "Nice to meet you, Ada" },
+  ];
+  const followUp: MessageType = { role: "user", content: "What is my name?" };
+  const wholeConversation = [
+    { role: "user", content: "My name is Ada", type: "message" },
+    { role: "assistant", content: "Nice to meet you, Ada", type: "message" },
+    { role: "user", content: "What is my name?", type: "message" },
+  ];
+  const rejection = (status: number, param: string) =>
+    openai.APIError.generate(
+      status,
+      { error: { message: "rejected", type: "invalid_request_error", param, code: String(status) } },
+      undefined,
+      new Headers(),
+    );
+  const sendFollowUp = (onResponseId: (id: string) => void, replayHistory?: () => MessageType[], streaming = true) =>
+    makeOpenAIResponsesRequest(
+      [followUp],
+      mockUpdateTextUI,
+      "bridged-model",
+      "test-token",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "resp_unknown",
+      onResponseId,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      streaming,
+      undefined,
+      undefined,
+      replayHistory,
+    );
+
+  it("resends the whole conversation without the id and continues the session from the new response", async () => {
+    mockResponsesCreate.mockRejectedValueOnce(rejection(400, "previous_response_id"));
+    const onResponseId = vi.fn();
+
+    await sendFollowUp(onResponseId, () => [...earlierTurns, followUp]);
+
+    expect(mockResponsesCreate).toHaveBeenCalledTimes(2);
+    expect(mockResponsesCreate.mock.calls[0][0]).toMatchObject({
+      previous_response_id: "resp_unknown",
+      input: [wholeConversation[2]],
+    });
+    const replay = mockResponsesCreate.mock.calls[1][0];
+    expect(replay).not.toHaveProperty("previous_response_id");
+    expect(replay).toMatchObject({ model: "bridged-model", stream: true, input: wholeConversation });
+    expect(mockUpdateTextUI).toHaveBeenCalledWith("assistant", "Hi", "bridged-model");
+    expect(onResponseId).toHaveBeenCalledWith("resp_123");
+  });
+
+  it("resends the whole conversation when streaming is off", async () => {
+    mockResponsesCreate
+      .mockImplementationOnce(() => ({
+        withResponse: () => Promise.reject(rejection(400, "previous_response_id")),
+      }))
+      .mockReturnValueOnce(
+        nonStreamingResponse({
+          id: "resp_replayed",
+          output: [{ type: "message", content: [{ type: "output_text", text: "Ada" }] }],
+        }),
+      );
+    const onResponseId = vi.fn();
+
+    await sendFollowUp(onResponseId, () => [...earlierTurns, followUp], false);
+
+    expect(mockResponsesCreate).toHaveBeenCalledTimes(2);
+    const replay = mockResponsesCreate.mock.calls[1][0];
+    expect(replay).not.toHaveProperty("previous_response_id");
+    expect(replay).toMatchObject({ stream: false, input: wholeConversation });
+    expect(mockUpdateTextUI).toHaveBeenCalledWith("assistant", "Ada", "bridged-model");
+    expect(onResponseId).toHaveBeenCalledWith("resp_replayed");
+  });
+
+  it.each([
+    ["a 400 about another parameter", rejection(400, "model")],
+    ["a server error", rejection(500, "previous_response_id")],
+  ])("surfaces %s without resending", async (_case, error) => {
+    mockResponsesCreate.mockRejectedValueOnce(error);
+    const replayHistory = vi.fn(() => [...earlierTurns, followUp]);
+
+    await expect(sendFollowUp(vi.fn(), replayHistory)).rejects.toBe(error);
+
+    expect(mockResponsesCreate).toHaveBeenCalledTimes(1);
+    expect(replayHistory).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the error when the caller has no conversation to resend", async () => {
+    const error = rejection(400, "previous_response_id");
+    mockResponsesCreate.mockRejectedValueOnce(error);
+
+    await expect(sendFollowUp(vi.fn())).rejects.toBe(error);
+
+    expect(mockResponsesCreate).toHaveBeenCalledTimes(1);
   });
 });

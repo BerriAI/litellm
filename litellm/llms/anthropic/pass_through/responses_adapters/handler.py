@@ -4,20 +4,31 @@ Handler for the Anthropic v1/messages -> OpenAI Responses API path.
 Used when the target model is an OpenAI or Azure model.
 """
 
-from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from typing import Final, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
+from litellm._internal_context import resent_on
+from litellm._logging import verbose_logger
 from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     supports_openai_prompt_cache_breakpoint,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    drops_unsupported_params,
+    iter_items,
+    normalize_drop_params,
+)
 from litellm.litellm_core_utils.prompt_templates.common_utils import cache_control_as_prompt_cache_breakpoint
 from litellm.litellm_core_utils.tool_fields import drop_policy, drops_mcp_servers, tools_without_mcp_servers
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.responses.stored_system_prompt import awithout_stored_instructions, without_stored_instructions
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from litellm.rust_bridge.public_call import optional_str
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
@@ -30,6 +41,7 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 from ..adapters.handler import (
@@ -37,8 +49,22 @@ from ..adapters.handler import (
     request_safeguards_evaluator,
     resent_without_rejected_reasoning,
 )
+from ..deferred_tools import native_tool_search_name, usable_deferred_tools_mode
 from ..safeguards import with_safeguard_results
-from ..utils import litellm_logging_obj_from_kwargs, local_model_name
+from ..utils import (
+    KNOWN_REASONING_EFFORTS,
+    REASONING_EFFORT_OFF,
+    ClientEffort,
+    ThinkingOffSwitch,
+    deployment_reasoning_efforts,
+    is_unconfirmed_none,
+    litellm_logging_obj_from_kwargs,
+    local_model_name,
+    maps_bare_output_effort,
+    normalize_reasoning_effort_value,
+    reasoning_off_level,
+    thinking_off_switch,
+)
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
 
@@ -47,12 +73,33 @@ BlockRewrite: TypeAlias = Callable[[Mapping[str, object]], Mapping[str, object]]
 _BLOCK_LIST: Final = TypeAdapter(list[dict[str, object]])
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
+_UNVERIFIED_ORGANIZATION_SUMMARY_REFUSAL: Final = "must be verified to generate reasoning summaries"
 
 
 def _record_bridged_response(responses_kwargs: Mapping[str, object], result: ResponsesAPIResponse) -> None:
     logging_obj: Final = litellm_logging_obj_from_kwargs(responses_kwargs)
     if logging_obj is not None:
         logging_obj.record_bridged_responses_api_response(result)
+
+
+SYSTEM_PLACEMENT_PARAMS: Final = (
+    "additional_drop_params",
+    "store",
+    "extra_body",
+    "previous_response_id",
+    "conversation",
+    "truncation",
+)
+
+
+def preserves_system_instructions(request_params: Mapping[str, object]) -> bool:
+    extra_body: Final = as_str_mapping(request_params.get("extra_body")) or {}
+    dropped: Final = drop_policy(request_params).additional_drop_params
+    top_level: Final = {key: request_params.get(key) for key in SYSTEM_PLACEMENT_PARAMS if key not in dropped}
+    effective: Final = {**top_level, **extra_body}
+    return bool(effective.get("previous_response_id") or effective.get("conversation")) or (
+        effective.get("truncation") == "auto"
+    )
 
 
 def _forwarded_kwargs(extra_kwargs: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -150,6 +197,118 @@ def _rewritten_blocks(content: object, rewrite: BlockRewrite) -> Sequence[Mappin
         return ()
 
 
+def _reasoning_for_target(
+    reasoning: object,
+    *,
+    model: str,
+    custom_llm_provider: str | None,
+    deployment_model_info: object,
+    drop_params: bool,
+    off_switch: ThinkingOffSwitch | None,
+) -> object:
+    reasoning_params: Final = as_str_mapping(reasoning)
+    effort: Final = reasoning_params.get("effort") if reasoning_params is not None else None
+    if reasoning_params is None or not isinstance(effort, str):
+        return reasoning
+    if effort == REASONING_EFFORT_OFF and off_switch is not None:
+        off_level: Final = reasoning_off_level(
+            model,
+            custom_llm_provider,
+            deployment_model_info=deployment_model_info,
+            drop_params=drop_params,
+            between_tools=off_switch == "between_tools",
+        )
+        if off_level is ClientEffort.DROPPED:
+            verbose_logger.warning(
+                "Dropping reasoning.effort=none for %s, its model cost map entry does not set "
+                "supports_none_reasoning_effort, because drop_params is set",
+                model,
+            )
+            return off_level
+        if off_level is None or _responses_api_refuses_reasoning_effort(model, custom_llm_provider):
+            return None
+        return {**reasoning_params, "effort": off_level}
+    if drop_params and effort not in KNOWN_REASONING_EFFORTS:
+        verbose_logger.warning(
+            "Dropping reasoning.effort=%r for %s, no reasoning API defines it, because drop_params is set",
+            effort,
+            model,
+        )
+        return ClientEffort.DROPPED
+    normalized: Final = normalize_reasoning_effort_value(effort, model=model, custom_llm_provider=custom_llm_provider)
+    if drop_params and _model_excludes_effort(
+        normalized, model=model, custom_llm_provider=custom_llm_provider, deployment_model_info=deployment_model_info
+    ):
+        verbose_logger.warning(
+            "Dropping reasoning.effort=%r for %s, its model cost map entry does not list it, because drop_params is set",
+            normalized,
+            model,
+        )
+        return ClientEffort.DROPPED
+    return reasoning if normalized == effort else {**reasoning_params, "effort": normalized}
+
+
+def _responses_api_refuses_reasoning_effort(model: str, custom_llm_provider: str | None) -> bool:
+    return custom_llm_provider == LlmProviders.OPENAI.value and not OpenAIResponsesAPIConfig.supports_reasoning_param(
+        model
+    )
+
+
+def _model_excludes_effort(
+    effort: str, *, model: str, custom_llm_provider: str | None, deployment_model_info: object
+) -> bool:
+    levels: Final = deployment_reasoning_efforts(model, custom_llm_provider, deployment_model_info) or ()
+    return (bool(levels) and effort not in levels) or is_unconfirmed_none(
+        effort, model, custom_llm_provider, deployment_model_info=deployment_model_info
+    )
+
+
+def _drops_refused_summary(responses_kwargs: Mapping[str, object], *, drop_params: bool) -> bool:
+    reasoning: Final = as_str_mapping(responses_kwargs.get("reasoning"))
+    return drop_params and reasoning is not None and "summary" in reasoning
+
+
+def _is_refused_summary(error: Exception) -> bool:
+    return isinstance(error, litellm.BadRequestError) and _UNVERIFIED_ORGANIZATION_SUMMARY_REFUSAL in error.message
+
+
+def _resent_without_refused_summary(
+    responses_kwargs: Mapping[str, object], *, drop_params: bool
+) -> AbstractContextManager[None]:
+    return (
+        resent_on(_is_refused_summary)
+        if _drops_refused_summary(responses_kwargs, drop_params=drop_params)
+        else nullcontext()
+    )
+
+
+def _retry_without_refused_summary(
+    responses_kwargs: Mapping[str, object], error: litellm.BadRequestError, *, model: str, drop_params: bool
+) -> Mapping[str, object] | None:
+    reasoning: Final = as_str_mapping(responses_kwargs.get("reasoning"))
+    if (
+        reasoning is None
+        or not _drops_refused_summary(responses_kwargs, drop_params=drop_params)
+        or not _is_refused_summary(error)
+    ):
+        return None
+    verbose_logger.warning(
+        "Retrying %s without reasoning.summary, its OpenAI organization cannot get reasoning summaries until it is "
+        "verified, because drop_params is set",
+        model,
+    )
+    return {**responses_kwargs, "reasoning": {key: value for key, value in reasoning.items() if key != "summary"}}
+
+
+def _maps_reasoning(
+    thinking: Mapping[str, object] | None, model: str, provider: str | None, forwarded_kwargs: Mapping[str, object]
+) -> bool:
+    return bool(thinking) or (
+        forwarded_kwargs.get("reasoning_effort") is None
+        and maps_bare_output_effort(model, provider, deployment_model_info=forwarded_kwargs.get("model_info"))
+    )
+
+
 def _build_responses_kwargs(
     *,
     max_tokens: int,
@@ -225,37 +384,47 @@ def _build_responses_kwargs(
         request_data["output_format"] = output_format
 
     anthropic_request: Final = AnthropicMessagesRequest(**request_data)
+    drop_params: Final = drops_unsupported_params(forwarded_kwargs.get("drop_params"))
     responses_kwargs: Final = _ADAPTER.translate_request(
         anthropic_request,
         include_encrypted_reasoning=_provider_returns_encrypted_reasoning(
             model, forwarded_kwargs.get("custom_llm_provider")
         ),
+        preserve_system_instructions=preserves_system_instructions(forwarded_kwargs),
+        deferred_tools=usable_deferred_tools_mode(
+            forwarded_kwargs.get("model_info"), optional_str(forwarded_kwargs.get("custom_llm_provider"))
+        ),
     )
+    system_instructions: Final = responses_kwargs.get("instructions")
 
-    # Normalize reasoning effort based on model capabilities
-    # (e.g. "max" → "xhigh"/"high", "minimal" → "low" if unsupported)
-    reasoning: Final = responses_kwargs.get("reasoning")
-    if isinstance(reasoning, dict):
-        effort: Final[object] = reasoning.get("effort")
-        if isinstance(effort, str):
-            from litellm.llms.anthropic.pass_through.utils import (
-                normalize_reasoning_effort_value,
-            )
-
-            provider_hint: Final = forwarded_kwargs.get("custom_llm_provider")
-            normalized: Final = normalize_reasoning_effort_value(
-                effort,
-                model=model,
-                custom_llm_provider=provider_hint if isinstance(provider_hint, str) else None,
-            )
-            if normalized != effort:
-                responses_kwargs["reasoning"] = {**reasoning, "effort": normalized}
+    provider_hint: Final = forwarded_kwargs.get("custom_llm_provider")
+    provider: Final = provider_hint if isinstance(provider_hint, str) else None
+    bridged_reasoning: Final[object] = responses_kwargs.pop("reasoning", None)
+    target_reasoning: Final = (
+        _reasoning_for_target(
+            bridged_reasoning,
+            model=model,
+            custom_llm_provider=provider,
+            deployment_model_info=forwarded_kwargs.get("model_info"),
+            drop_params=drop_params,
+            off_switch=thinking_off_switch(anthropic_request),
+        )
+        if _maps_reasoning(thinking, model, provider, forwarded_kwargs)
+        else None
+    )
+    client_effort_dropped: Final = target_reasoning is ClientEffort.DROPPED
+    if target_reasoning is not None and not client_effort_dropped:
+        responses_kwargs["reasoning"] = target_reasoning
 
     if stream:
         responses_kwargs["stream"] = True
 
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
-    excluded: Final = CONVERTED_STREAM_KEYS | {"anthropic_messages", "background", "mcp_servers"}
+    excluded: Final = (
+        CONVERTED_STREAM_KEYS
+        | {"anthropic_messages", "background", "mcp_servers"}
+        | (frozenset({"reasoning_effort"}) if client_effort_dropped else frozenset())
+    )
     for key, value in forwarded_kwargs.items():
         if key == "litellm_logging_obj" and value is not None:
             from litellm.litellm_core_utils.litellm_logging import (
@@ -273,6 +442,16 @@ def _build_responses_kwargs(
             responses_kwargs[key] = _without_background(extra_body)
         elif key not in excluded and key not in responses_kwargs and value is not None:
             responses_kwargs[key] = value
+
+    caller_extra_body: Final = as_str_mapping(responses_kwargs.get("extra_body")) or {}
+    caller_instructions: Final = caller_extra_body.get("instructions", forwarded_kwargs.get("instructions"))
+    if isinstance(system_instructions, str) and isinstance(caller_instructions, str):
+        combined_instructions: Final = (
+            f"{system_instructions}\n{caller_instructions}" if caller_instructions else system_instructions
+        )
+        responses_kwargs["instructions"] = combined_instructions
+        if "instructions" in caller_extra_body:
+            responses_kwargs["extra_body"] = {**caller_extra_body, "instructions": combined_instructions}
 
     explicit_prompt_cache_key: Final = forwarded_kwargs.get("prompt_cache_key")
     if explicit_prompt_cache_key is not None:
@@ -310,6 +489,32 @@ def _kwarg_text(responses_kwargs: Mapping[str, object], key: str) -> str:
     return value if isinstance(value, str) else ""
 
 
+async def _aresponses(responses_kwargs: Mapping[str, object], *, drop_params: bool) -> _ResponsesResult:
+    try:
+        with _resent_without_refused_summary(responses_kwargs, drop_params=drop_params):
+            return await litellm.aresponses(**responses_kwargs)
+    except litellm.BadRequestError as error:
+        retry_kwargs: Final = _retry_without_refused_summary(
+            responses_kwargs, error, model=_kwarg_text(responses_kwargs, "model"), drop_params=drop_params
+        )
+        if retry_kwargs is None:
+            raise
+        return await litellm.aresponses(**retry_kwargs)
+
+
+def _responses(responses_kwargs: Mapping[str, object], *, drop_params: bool) -> _SyncResponsesResult:
+    try:
+        with _resent_without_refused_summary(responses_kwargs, drop_params=drop_params):
+            return litellm.responses(**responses_kwargs)
+    except litellm.BadRequestError as error:
+        retry_kwargs: Final = _retry_without_refused_summary(
+            responses_kwargs, error, model=_kwarg_text(responses_kwargs, "model"), drop_params=drop_params
+        )
+        if retry_kwargs is None:
+            raise
+        return litellm.responses(**retry_kwargs)
+
+
 def _messages_without_rejected_reasoning(
     messages: AnthropicRequestMessages,
     error: litellm.BadRequestError,
@@ -326,39 +531,39 @@ def _messages_without_rejected_reasoning(
 
 
 async def _aresponses_without_rejected_reasoning(
-    messages: AnthropicRequestMessages, responses_kwargs_for: _ResponsesKwargsFor
+    messages: AnthropicRequestMessages, responses_kwargs_for: _ResponsesKwargsFor, *, drop_params: bool
 ) -> tuple[Mapping[str, object], _ResponsesResult]:
-    responses_kwargs: Final = responses_kwargs_for(messages)
+    responses_kwargs: Final = await awithout_stored_instructions(responses_kwargs_for(messages))
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
     try:
         with resent_without_rejected_reasoning(sent_encrypted_reasoning):
-            return responses_kwargs, await litellm.aresponses(**responses_kwargs)
+            return responses_kwargs, await _aresponses(responses_kwargs, drop_params=drop_params)
     except litellm.BadRequestError as error:
         replayed_messages: Final = _messages_without_rejected_reasoning(
             messages, error, responses_kwargs, sent_encrypted_reasoning
         )
         if replayed_messages is None:
             raise
-        replay_kwargs: Final = responses_kwargs_for(replayed_messages)
-        return replay_kwargs, await litellm.aresponses(**replay_kwargs)
+        replay_kwargs: Final = await awithout_stored_instructions(responses_kwargs_for(replayed_messages))
+        return replay_kwargs, await _aresponses(replay_kwargs, drop_params=drop_params)
 
 
 def _responses_without_rejected_reasoning(
-    messages: AnthropicRequestMessages, responses_kwargs_for: _ResponsesKwargsFor
+    messages: AnthropicRequestMessages, responses_kwargs_for: _ResponsesKwargsFor, *, drop_params: bool
 ) -> tuple[Mapping[str, object], _SyncResponsesResult]:
-    responses_kwargs: Final = responses_kwargs_for(messages)
+    responses_kwargs: Final = without_stored_instructions(responses_kwargs_for(messages))
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
     try:
         with resent_without_rejected_reasoning(sent_encrypted_reasoning):
-            return responses_kwargs, litellm.responses(**responses_kwargs)
+            return responses_kwargs, _responses(responses_kwargs, drop_params=drop_params)
     except litellm.BadRequestError as error:
         replayed_messages: Final = _messages_without_rejected_reasoning(
             messages, error, responses_kwargs, sent_encrypted_reasoning
         )
         if replayed_messages is None:
             raise
-        replay_kwargs: Final = responses_kwargs_for(replayed_messages)
-        return replay_kwargs, litellm.responses(**replay_kwargs)
+        replay_kwargs: Final = without_stored_instructions(responses_kwargs_for(replayed_messages))
+        return replay_kwargs, _responses(replay_kwargs, drop_params=drop_params)
 
 
 class LiteLLMMessagesToResponsesAPIHandler:
@@ -411,7 +616,12 @@ class LiteLLMMessagesToResponsesAPIHandler:
             )
 
         safeguards_evaluator: Final = request_safeguards_evaluator(kwargs, messages)
-        responses_kwargs, result = await _aresponses_without_rejected_reasoning(messages, responses_kwargs_for)
+        tool_search_name: Final = native_tool_search_name(
+            kwargs.get("model_info"), optional_str(kwargs.get("custom_llm_provider")), tools
+        )
+        responses_kwargs, result = await _aresponses_without_rejected_reasoning(
+            messages, responses_kwargs_for, drop_params=drops_unsupported_params(kwargs.get("drop_params"))
+        )
 
         if stream:
             wrapper: Final = AnthropicResponsesStreamWrapper(
@@ -419,13 +629,16 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
                 safeguards_evaluator=safeguards_evaluator,
+                tool_search_name=tool_search_name,
             )
             return wrapper.async_anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")
 
-        served: Final = await with_safeguard_results(_ADAPTER.translate_response(result), safeguards_evaluator)
+        served: Final = await with_safeguard_results(
+            _ADAPTER.translate_response(result, tool_search_name), safeguards_evaluator
+        )
         _record_bridged_response(responses_kwargs, result)
         return served
 
@@ -451,7 +664,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
         **kwargs: object,
     ) -> (
         AnthropicMessagesResponse
-        | AsyncIterator[bytes]
+        | Iterator[bytes]
         | Coroutine[None, None, AnthropicMessagesResponse | AsyncIterator[bytes]]
     ):
         if _is_async:
@@ -496,17 +709,23 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 extra_kwargs=kwargs,
             )
 
-        responses_kwargs, result = _responses_without_rejected_reasoning(messages, responses_kwargs_for)
+        tool_search_name: Final = native_tool_search_name(
+            kwargs.get("model_info"), optional_str(kwargs.get("custom_llm_provider")), tools
+        )
+        responses_kwargs, result = _responses_without_rejected_reasoning(
+            messages, responses_kwargs_for, drop_params=drops_unsupported_params(kwargs.get("drop_params"))
+        )
 
         if stream:
             wrapper: Final = AnthropicResponsesStreamWrapper(
                 responses_stream=result,
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
+                tool_search_name=tool_search_name,
             )
-            return wrapper.async_anthropic_sse_wrapper()
+            return wrapper.anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")
 
-        return _ADAPTER.translate_response(result)
+        return _ADAPTER.translate_response(result, tool_search_name)

@@ -744,6 +744,77 @@ async def test_streaming_long_decode_chains_hops_into_one_stream_with_one_finish
     assert chunks[-1].usage.prompt_tokens_details.initial_prompt_tokens == 10
 
 
+THOUGHT_IMAGE_PART: Final = {"inlineData": {"mimeType": "image/png", "data": "ZHJhZnQ="}, "thought": True}
+FINAL_IMAGE_PART: Final = {"inlineData": {"mimeType": "image/png", "data": "ZmluYWw="}}
+
+
+def _hop_2_ending_with(candidate: Mapping[str, object]) -> httpx.Response:
+    return _sse({"candidates": [candidate], "usageMetadata": HOP_2["usageMetadata"]})
+
+
+@pytest.mark.parametrize(
+    ("hop_2", "expected_images", "expected_finish_reasons", "expected_tokens"),
+    [
+        pytest.param(
+            lambda: _hop_2_ending_with(
+                {"content": {"role": "model", "parts": [FINAL_IMAGE_PART]}, "finishReason": "STOP"}
+            ),
+            ["data:image/png;base64,ZmluYWw="],
+            ["stop"],
+            [],
+            id="later-hop-renders-the-final-image",
+        ),
+        pytest.param(
+            lambda: _hop_2_ending_with(
+                {"content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "MAX_TOKENS"}
+            ),
+            ["data:image/png;base64,ZHJhZnQ="],
+            ["length"],
+            [],
+            id="later-hop-is-cut-off",
+        ),
+        pytest.param(
+            lambda: httpx.Response(500, json={"error": {"code": 500}}),
+            ["data:image/png;base64,ZHJhZnQ="],
+            ["length"],
+            ["dG9rLTE="],
+            id="later-hop-is-refused",
+        ),
+        pytest.param(
+            lambda: httpx.Response(200, stream=_BodyThatDropsBeforeItsFirstFrame()),
+            ["data:image/png;base64,ZHJhZnQ="],
+            ["length"],
+            ["dG9rLTE="],
+            id="later-hop-drops",
+        ),
+    ],
+)
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_long_decode_holds_a_thought_image_until_the_stream_ends(
+    is_async: bool,
+    hop_2: Callable[[], httpx.Response],
+    expected_images: list[str],
+    expected_finish_reasons: list[str],
+    expected_tokens: list[str],
+):
+    hop_1_end: Final = {
+        "candidates": [{**HOP_1["candidates"][0], "content": {"role": "model", "parts": [THOUGHT_IMAGE_PART]}}],
+        "usageMetadata": HOP_1["usageMetadata"],
+    }
+
+    chunks: Final = await _collect_stream(is_async, (_sse(STREAM_FIRST_CHUNK, hop_1_end), hop_2()), [])
+
+    assert [
+        image["image_url"]["url"]
+        for image in chain.from_iterable(
+            getattr(chunk.choices[0].delta, "images", None) or [] for chunk in chunks if chunk.choices
+        )
+    ] == expected_images
+    assert _stream_finish_reasons(chunks) == expected_finish_reasons
+    assert _client_tokens(chunks) == expected_tokens
+
+
 TOOL_CALL_PART: Final = {
     "functionCall": {"name": "get_weather", "args": {"city": "Paris"}},
     "thoughtSignature": "c2lnLTI=",

@@ -953,6 +953,153 @@ async def test_anthropic_assistant_history_never_reaches_compression_service(gua
     assert result["messages"][1]["content"] == [{"type": "text", "text": table}]
 
 
+@pytest.mark.asyncio
+async def test_responses_retrieve_result_in_a_long_namespace_never_reaches_compression_service(
+    guardrail: HeadroomGuardrail,
+):
+    """The Responses bridge truncates a qualified tool name over 64 chars, which
+    drops the ``__headroom_retrieve`` suffix from the chat view, so the hold-back
+    has to pair the result with the call id read from the raw ``input``."""
+    from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIResponsesHandler
+
+    expansion: Final = "Recovered original content. " + "R" * 5000
+    responses_input: Final = [
+        {"type": "message", "role": "user", "content": "Earlier question. " + "A" * 5000},
+        {
+            "type": "function_call",
+            "call_id": "call_retrieve",
+            "name": HEADROOM_RETRIEVE_TOOL_NAME,
+            "namespace": "mcp__" + "s" * 45,
+            "arguments": json.dumps({"hash": "b573993006976af767214fac"}),
+        },
+        {"type": "function_call_output", "call_id": "call_retrieve", "output": expansion},
+        {"type": "message", "role": "assistant", "content": "The recovered content is a log."},
+        {"type": "message", "role": "user", "content": "Quote its first line."},
+    ]
+
+    def _echo(**kwargs):
+        return _make_compress_response(json.loads(json.dumps(kwargs["json"]["messages"])))
+
+    data: Final = {"model": "gpt-5.6", "input": json.loads(json.dumps(responses_input))}
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_echo) as post:
+        await OpenAIResponsesHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+    sent: Final = json.dumps(post.call_args.kwargs["json"]["messages"])
+    assert "Earlier question" in sent
+    assert expansion not in sent
+
+
+CLAUDE_CODE_TICKETS: Final = json.dumps([{"id": i, "title": f"Ticket {i}", "status": "open"} for i in range(500)])
+
+
+@pytest.fixture
+def model_groups() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {"model_name": "best-sonnet", "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5-5"}},
+            {"model_name": "best-gpt", "litellm_params": {"model": "openai/gpt-5.6"}},
+            {"model_name": "best-mixed", "litellm_params": {"model": "openai/gpt-5.6"}},
+            {"model_name": "best-mixed", "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5-5"}},
+            {"model_name": "best-flash", "litellm_params": {"model": "gemini/gemini-3.8-flash"}},
+            {
+                "model_name": "best-arn",
+                "litellm_params": {
+                    "model": "bedrock/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123"
+                },
+            },
+            {
+                "model_name": "model_name_team-1_sonnet",
+                "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5-5"},
+                "model_info": {"id": "team-sonnet", "team_id": "team-1", "team_public_model_name": "team-sonnet"},
+            },
+        ]
+    )
+
+
+def _claude_code_request(model: str, team_id: str | None = None) -> dict[str, object]:
+    return {
+        "model": model,
+        "metadata": {"user_api_key_team_id": team_id},
+        "system": [{"type": "text", "text": "You are a coding agent.", "cache_control": {"type": "ephemeral"}}],
+        "tools": [
+            {
+                "name": "search_tickets",
+                "description": "Search the ticket tracker",
+                "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+            }
+        ],
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "List the open tickets."}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "tu_1", "name": "search_tickets", "input": {"query": "status:open"}}
+                ],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "tu_1", "content": CLAUDE_CODE_TICKETS}],
+            },
+            {"role": "assistant", "content": [{"type": "text", "text": "There are 500 open tickets."}]},
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "Which ones are P1?", "cache_control": {"type": "ephemeral"}}],
+            },
+        ],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "team_id"),
+    [
+        pytest.param("best-sonnet", None, id="alias"),
+        pytest.param("best-mixed", None, id="group_with_one_claude_deployment"),
+        pytest.param("best-flash", None, id="gemini_alias"),
+        pytest.param("best-arn", None, id="bedrock_arn_alias"),
+        pytest.param("team-sonnet", "team-1", id="team"),
+    ],
+)
+async def test_claude_code_cached_prefix_is_never_compressed_on_an_alias_that_caches(
+    guardrail: HeadroomGuardrail, model_groups: litellm.Router, model: str, team_id: str | None
+):
+    from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+
+    data: Final = _claude_code_request(model, team_id)
+    client_request: Final = json.loads(json.dumps(data))
+    reached_compression_service: Final = AssertionError("the cached prefix was sent to the compression service")
+
+    with patch.object(
+        guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=reached_compression_service
+    ) as mock_post:
+        result = await AnthropicMessagesHandler(deployment_lookup=lambda: model_groups).process_input_messages(
+            data=data, guardrail_to_apply=guardrail
+        )
+
+    mock_post.assert_not_awaited()
+    assert result["messages"] == client_request["messages"]
+
+
+@pytest.mark.asyncio
+async def test_claude_code_history_is_compressed_on_an_alias_that_ignores_cache_control(
+    guardrail: HeadroomGuardrail, model_groups: litellm.Router
+):
+    from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
+
+    sent: Final[dict[str, object]] = {}
+
+    def _echo(**kwargs):
+        sent["messages"] = kwargs["json"]["messages"]
+        return _make_compress_response(json.loads(json.dumps(sent["messages"])))
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_echo):
+        await AnthropicMessagesHandler(deployment_lookup=lambda: model_groups).process_input_messages(
+            data=_claude_code_request("best-gpt"), guardrail_to_apply=guardrail
+        )
+
+    assert {"role": "tool", "tool_call_id": "tu_1", "content": CLAUDE_CODE_TICKETS} in sent["messages"]
+
+
 def test_has_headroom_retrieve_tool_recognizes_anthropic_native_shape():
     """By the time an Anthropic Messages API response reaches the agentic-loop
     gate, the OpenAI-shaped tool this guardrail injects (type: "function")

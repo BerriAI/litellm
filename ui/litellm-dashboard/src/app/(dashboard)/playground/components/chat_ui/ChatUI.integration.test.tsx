@@ -6,6 +6,7 @@ import ChatUI from "./ChatUI";
 import * as fetchModelsModule from "@/components/llm_calls/fetch_models";
 import { makeOpenAIChatCompletionRequest } from "@/components/llm_calls/chat_completion";
 import { makeAnthropicMessagesRequest } from "../../llm_calls/anthropic_messages";
+import { makeOpenAIResponsesRequest } from "@/components/llm_calls/responses_api";
 
 vi.mock("@/components/llm_calls/fetch_models", () => ({
   fetchAvailableModels: vi.fn(),
@@ -17,6 +18,10 @@ vi.mock("@/components/llm_calls/chat_completion", () => ({
 
 vi.mock("../../llm_calls/anthropic_messages", () => ({
   makeAnthropicMessagesRequest: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@/components/llm_calls/responses_api", () => ({
+  makeOpenAIResponsesRequest: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/components/networking", () => ({
@@ -575,6 +580,149 @@ describe("ChatUI", () => {
     expect(await screen.findByRole("checkbox", { name: /Stream responses/i })).toBeChecked();
     expect(screen.queryByText("Temperature")).not.toBeInTheDocument();
     expect(screen.queryByText("Use Advanced Parameters")).not.toBeInTheDocument();
+  });
+
+  it("continues an API session with only the new message, then sends the whole conversation once it was resent", async () => {
+    type ResponsesArgs = Parameters<typeof makeOpenAIResponsesRequest>;
+    const responsesRequest = vi.mocked(makeOpenAIResponsesRequest);
+    const resentHistories: unknown[] = [];
+    responsesRequest
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[15]?.("resp-first");
+        args[1]("assistant", "Hi Ada", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        resentHistories.push(args[26]?.());
+        args[15]?.("resp-second");
+        args[1]("assistant", "You are Ada", args[2]);
+      })
+      .mockResolvedValueOnce(undefined);
+    (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { model_group: "ResponsesModel", mode: "responses" },
+    ]);
+    sessionStorage.setItem("useApiSessionManagement", "true");
+
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+    await selectComboboxOption("Select an endpoint", "/v1/responses");
+    await selectComboboxOption("Select a Model", "ResponsesModel");
+
+    const sendMessage = async (text: string) => {
+      const messageInput = screen.getByPlaceholderText("Type your message... (Shift+Enter for new line)");
+      await act(async () => {
+        fireEvent.change(messageInput, { target: { value: text } });
+      });
+      await act(async () => {
+        fireEvent.keyDown(messageInput, { key: "Enter", code: "Enter" });
+      });
+    };
+    await sendMessage("I am Ada");
+    expect(await screen.findByText("Hi Ada")).toBeInTheDocument();
+    await sendMessage("Who am I?");
+    expect(await screen.findByText("You are Ada")).toBeInTheDocument();
+    await sendMessage("Thanks");
+
+    await waitFor(() => expect(responsesRequest).toHaveBeenCalledTimes(3));
+    const [, followUp, afterResend] = responsesRequest.mock.calls;
+    expect(followUp[14]).toBe("resp-first");
+    expect(followUp[0]).toEqual([{ role: "user", content: "Who am I?" }]);
+    expect(resentHistories).toEqual([
+      [
+        { role: "user", content: "I am Ada" },
+        { role: "assistant", content: "Hi Ada" },
+        { role: "user", content: "Who am I?" },
+      ],
+    ]);
+    expect(afterResend[14]).toBeNull();
+    expect(afterResend[0]).toEqual([
+      { role: "user", content: "I am Ada" },
+      { role: "assistant", content: "Hi Ada" },
+      { role: "user", content: "Who am I?" },
+      { role: "assistant", content: "You are Ada" },
+      { role: "user", content: "Thanks" },
+    ]);
+  });
+
+  it("starts a fresh session on the model picked after a resend and continues it by response id", async () => {
+    type ResponsesArgs = Parameters<typeof makeOpenAIResponsesRequest>;
+    const responsesRequest = vi.mocked(makeOpenAIResponsesRequest);
+    responsesRequest
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[15]?.("resp-first");
+        args[1]("assistant", "Hi Ada", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[26]?.();
+        args[15]?.("resp-resent");
+        args[1]("assistant", "You are Ada", args[2]);
+      })
+      .mockImplementationOnce(async (...args: ResponsesArgs) => {
+        args[15]?.("resp-switched");
+        args[1]("assistant", "Ada again", args[2]);
+      })
+      .mockResolvedValueOnce(undefined);
+    (fetchModelsModule.fetchAvailableModels as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { model_group: "ResponsesModel", mode: "responses" },
+      { model_group: "ChainedModel", mode: "responses" },
+    ]);
+    sessionStorage.setItem("useApiSessionManagement", "true");
+
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+    await selectComboboxOption("Select an endpoint", "/v1/responses");
+    await selectComboboxOption("Select a Model", "ResponsesModel");
+
+    const sendMessage = async (text: string) => {
+      const messageInput = screen.getByPlaceholderText("Type your message... (Shift+Enter for new line)");
+      await act(async () => {
+        fireEvent.change(messageInput, { target: { value: text } });
+      });
+      await act(async () => {
+        fireEvent.keyDown(messageInput, { key: "Enter", code: "Enter" });
+      });
+    };
+    await sendMessage("I am Ada");
+    expect(await screen.findByText("Hi Ada")).toBeInTheDocument();
+    await sendMessage("Who am I?");
+    expect(await screen.findByText("You are Ada")).toBeInTheDocument();
+    await selectComboboxOption("Select a Model", "ChainedModel");
+    await sendMessage("Again?");
+    expect(await screen.findByText("Ada again")).toBeInTheDocument();
+    await sendMessage("And now?");
+
+    await waitFor(() => expect(responsesRequest).toHaveBeenCalledTimes(4));
+    const [, , switched, continued] = responsesRequest.mock.calls;
+    expect(switched[2]).toBe("ChainedModel");
+    expect(switched[14]).toBeNull();
+    expect(switched[0]).toEqual([
+      { role: "user", content: "I am Ada" },
+      { role: "assistant", content: "Hi Ada" },
+      { role: "user", content: "Who am I?" },
+      { role: "assistant", content: "You are Ada" },
+      { role: "user", content: "Again?" },
+    ]);
+    expect(continued[14]).toBe("resp-switched");
+    expect(continued[0]).toEqual([{ role: "user", content: "And now?" }]);
   });
 
   it("should show Fill button and populate customProxyBaseUrl when proxySettings.LITELLM_UI_API_DOC_BASE_URL is provided", async () => {

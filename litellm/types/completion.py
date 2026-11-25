@@ -216,7 +216,7 @@ class CompletionDispatchContext:
     custom_llm_provider: str
     custom_prompt_dict: dict
     extra_headers: dict | None
-    headers: dict
+    headers: dict[str, object]
     hf_model_name: str | None
     kwargs: dict
     litellm_params: dict[str, object]

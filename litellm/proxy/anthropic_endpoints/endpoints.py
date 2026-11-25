@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.tool_fields import first_validation_error
 from litellm.llms.anthropic.pass_through.context_management import (
     AnthropicContextManagementError,
 )
+from litellm.llms.anthropic.pass_through.responses_adapters.handler import SYSTEM_PLACEMENT_PARAMS
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_response_usage as _blocked_response_usage,
 )
@@ -47,6 +48,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
     openai_error_param,
     openai_error_type,
+    relayed_provider_specific_fields,
     with_litellm_call_id,
 )
 from litellm.proxy.common_utils.token_count_settings import count_source_fields
@@ -319,6 +321,7 @@ async def anthropic_response(
                 param=openai_error_param(e),
                 code=error_status_code(e, 500),
                 headers=headers,
+                provider_specific_fields=relayed_provider_specific_fields(e),
             ),
             request,
         )
@@ -332,7 +335,7 @@ def _requested_output_format(data: Mapping[str, JsonValue]) -> JsonValue:
     return output_config.get("format")
 
 
-_COUNTED_LITELLM_PARAMS: Final = ("additional_drop_params", "drop_params")
+_COUNTED_LITELLM_PARAMS: Final = (*SYSTEM_PLACEMENT_PARAMS, "drop_params")
 
 
 class _CountTokensBodyOptions(TypedDict):

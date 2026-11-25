@@ -992,7 +992,6 @@ def _assert_no_events_error(error: BedrockError, body: bytes) -> None:
     assert f"{len(body)} bytes received" in error.message
     assert "application/vnd.amazon.eventstream" in error.message
     assert "req-empty-1" in error.message
-    assert f"first bytes={body[:200]!r}" in error.message
 
 
 @pytest.mark.parametrize("body", _UNDECODABLE_STREAM_BODIES)
@@ -1019,6 +1018,50 @@ async def test_aiter_bytes_raises_when_a_200_body_decodes_to_no_events(body: byt
     _assert_no_events_error(exc_info.value, body)
 
 
+_NOT_AN_EVENT_STREAM_BODIES: Final = (
+    pytest.param(b"<html><body>Service Unavailable</body></html>", "text/html", id="html-page"),
+    pytest.param(b'{"message":"Service Unavailable"}', "application/json", id="json-body"),
+    pytest.param(b"\x00" * 16, "application/vnd.amazon.eventstream", id="zero-bytes"),
+)
+
+
+def _assert_not_an_event_stream_error(error: BedrockError, body: bytes, content_type: str) -> None:
+    assert error.status_code == 502
+    assert "stopped decoding as an AWS event stream after 0 events" in error.message
+    assert f"content-type='{content_type}'" in error.message
+    assert f"{len(body)} bytes received" in error.message
+    assert "req-empty-1" in error.message
+    assert "Service Unavailable" not in error.message
+
+
+@pytest.mark.parametrize(("body", "content_type"), _NOT_AN_EVENT_STREAM_BODIES)
+def test_iter_bytes_raises_bad_gateway_when_a_200_body_is_not_an_event_stream(body: bytes, content_type: str) -> None:
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+    response_headers: Final = httpx.Headers({"content-type": content_type, "x-amzn-RequestId": "req-empty-1"})
+
+    with pytest.raises(BedrockError) as exc_info:
+        list(decoder.iter_bytes(iter([body]), response_headers=response_headers))
+
+    _assert_not_an_event_stream_error(exc_info.value, body, content_type)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("body", "content_type"), _NOT_AN_EVENT_STREAM_BODIES)
+async def test_aiter_bytes_raises_bad_gateway_when_a_200_body_is_not_an_event_stream(
+    body: bytes, content_type: str
+) -> None:
+    async def _chunks() -> AsyncIterator[bytes]:
+        yield body
+
+    decoder: Final = AWSEventStreamDecoder(model="us.moonshotai.kimi-k3")
+    response_headers: Final = httpx.Headers({"content-type": content_type, "x-amzn-RequestId": "req-empty-1"})
+
+    with pytest.raises(BedrockError) as exc_info:
+        _ = [chunk async for chunk in decoder.aiter_bytes(_chunks(), response_headers=response_headers)]
+
+    _assert_not_an_event_stream_error(exc_info.value, body, content_type)
+
+
 def test_iter_bytes_raises_when_the_stream_ends_mid_message() -> None:
     decoder: Final = AmazonOpenAICompatibleStreamDecoder(model="moonshot.kimi-k2-thinking", sync_stream=True)
     stream: Final = decoder.iter_bytes(iter([_MOONSHOT_RAW_STREAM, _truncated_frame()]))
@@ -1030,7 +1073,6 @@ def test_iter_bytes_raises_when_the_stream_ends_mid_message() -> None:
     _assert_moonshot_stream_content(chunks)
     assert exc_info.value.status_code == 502
     assert f"{len(_truncated_frame())} undecoded bytes after 4 events" in exc_info.value.message
-    assert "first bytes=" not in exc_info.value.message
 
 
 def test_iter_bytes_yields_a_complete_stream_without_raising() -> None:

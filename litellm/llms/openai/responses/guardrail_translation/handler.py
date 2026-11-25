@@ -36,7 +36,7 @@ from collections.abc import Mapping, MutableSequence, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain, repeat
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, NamedTuple, Union, cast
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, Union, cast, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
@@ -47,6 +47,8 @@ from litellm.completion_extras.litellm_responses_transformation.transformation i
     OpenAiResponsesToChatCompletionStreamIterator,
     tool_call_dict_from_output_item,
 )
+from litellm.litellm_core_utils.core_helpers import attribute_items
+from litellm.litellm_core_utils.tool_fields import qualified_member_name
 from litellm.llms.base_llm.guardrail_translation.base_translation import (
     BaseTranslation,
     StreamingScanKey,
@@ -222,6 +224,18 @@ class ResponsesStreamChunk(TypedDict, total=False):
     content_index: ReadOnly[int]
 
 
+@runtime_checkable
+class _TextPart(Protocol):
+    text: str
+
+
+def _set_content_part_text(item: object, index: int, text: str) -> None:
+    parts: Final = tuple(attribute_items(item, "content"))
+    part: Final = parts[index] if index < len(parts) else None
+    if isinstance(part, _TextPart):
+        part.text = text
+
+
 _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
     {
         ResponsesAPIStreamEvents.RESPONSE_COMPLETED.value,
@@ -234,8 +248,10 @@ _TERMINAL_ENVELOPE_EVENT_TYPES: Final = frozenset(
 _TOOL_CALL_ITEM_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
 _TOOL_SEARCH_CALL_TYPE: Final = "tool_search_call"
 _OUTPUT_TOOL_CALL_ITEM_TYPES: Final = _TOOL_CALL_ITEM_TYPES | {_TOOL_SEARCH_CALL_TYPE}
+_TOOL_SEARCH_ITEM_TYPES: Final = frozenset({_TOOL_SEARCH_CALL_TYPE, "tool_search_output"})
 _SCANNED_TOOL_SEARCH_NAME: Final = "tool_search"
 _TOOL_SEARCH_ARGUMENTS_ADAPTER: Final = TypeAdapter(dict[str, object])
+_RAW_ITEMS_ADAPTER: Final = TypeAdapter(tuple[object, ...])
 _TOOL_CALL_PAYLOAD_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call": "arguments", "custom_tool_call": "input"}
 )
@@ -288,6 +304,14 @@ def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapp
 
 def _is_tool_call_item(item: object) -> bool:
     return isinstance(item, Mapping) and item.get("type") in _TOOL_CALL_ITEM_TYPES
+
+
+def _is_tool_search_item(item: object) -> bool:
+    return isinstance(item, Mapping) and item.get("type") in _TOOL_SEARCH_ITEM_TYPES
+
+
+def _joins_assistant_turn(item: object) -> bool:
+    return _is_tool_call_item(item) or _is_tool_search_item(item)
 
 
 def _tool_call_output_item_mapping(item: object) -> Mapping[str, object] | None:
@@ -407,14 +431,17 @@ def _provenance_unit_bounds(
 ) -> tuple[tuple[int, int], ...]:
     trailing_roles: Final = tuple(
         accumulate(
-            (_last_message_role(messages) for messages in solo_conversions),
+            (
+                "assistant" if _is_tool_search_item(item) else _last_message_role(messages)
+                for item, messages in zip(raw_input, solo_conversions)
+            ),
             lambda previous, current: current if current is not None else previous,
         )
     )
     start_indexes: Final = tuple(
         index
         for index in range(len(raw_input))
-        if index == 0 or not (_is_tool_call_item(raw_input[index]) and trailing_roles[index - 1] == "assistant")
+        if index == 0 or not (_joins_assistant_turn(raw_input[index]) and trailing_roles[index - 1] == "assistant")
     )
     return tuple(zip(start_indexes, (*start_indexes[1:], len(raw_input))))
 
@@ -429,6 +456,8 @@ def _input_item_provenance(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=cast("ResponseInputParam", [item]),  # cast-ok: items checked as Mappings above
             responses_api_request=_EMPTY_RESPONSES_REQUEST,
+            replay_tool_search=True,
+            member_name=qualified_member_name,
         )
         for item in raw_input
     )
@@ -436,6 +465,8 @@ def _input_item_provenance(
         LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=cast("ResponseInputParam", list(raw_input)),  # cast-ok: items checked as Mappings above
             responses_api_request=_EMPTY_RESPONSES_REQUEST,
+            replay_tool_search=True,
+            member_name=qualified_member_name,
         )
     )
     if full_conversion != tuple(expected_messages):
@@ -448,6 +479,8 @@ def _input_item_provenance(
             LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=cast("ResponseInputParam", list(raw_input[start:end])),  # cast-ok: checked as Mappings above
                 responses_api_request=_EMPTY_RESPONSES_REQUEST,
+                replay_tool_search=True,
+                member_name=qualified_member_name,
             )
         )
         for start, end in units
@@ -554,7 +587,42 @@ def _patch_or_convert_request_fields(
     input_items, converted_instructions = (
         LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(structured_messages)
     )
-    return _RequestFields(input=tuple(input_items), instructions=converted_instructions)
+    return _RequestFields(
+        input=_with_tool_searches_restored(input_items, raw_input), instructions=converted_instructions
+    )
+
+
+def _tool_search_items_by_call_id(raw_input: Sequence[object], item_type: str) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            call_id: item
+            for item in raw_input
+            if stream_item_field(item, "type") == item_type
+            and isinstance(call_id := stream_item_field(item, "call_id"), str)
+        }
+    )
+
+
+def _restored_tool_search(
+    item: object, calls: Mapping[str, object], outputs: Mapping[str, object]
+) -> tuple[object, ...]:
+    call_id: Final = stream_item_field(item, "call_id")
+    if stream_item_field(item, "type") != "function_call" or not isinstance(call_id, str) or call_id not in calls:
+        return (item,)
+    arguments: Final = stream_item_field(item, "arguments")
+    restored_call: Final = _rewritten_tool_search_call(
+        calls[call_id], arguments if isinstance(arguments, str) else None
+    )
+    return (restored_call, outputs[call_id]) if call_id in outputs else (restored_call,)
+
+
+def _with_tool_searches_restored(input_items: Sequence[object], raw_input: object) -> tuple[object, ...]:
+    raw_items: Final = _RAW_ITEMS_ADAPTER.validate_python(raw_input) if isinstance(raw_input, list) else ()
+    if not any(map(_is_tool_search_item, raw_items)):
+        return tuple(input_items)
+    calls: Final = _tool_search_items_by_call_id(raw_items, _TOOL_SEARCH_CALL_TYPE)
+    outputs: Final = _tool_search_items_by_call_id(raw_items, "tool_search_output")
+    return tuple(chain.from_iterable(_restored_tool_search(item, calls, outputs) for item in input_items))
 
 
 def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> int:
@@ -592,6 +660,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
             input=input_data,
             responses_api_request=data,
+            replay_tool_search=True,
+            member_name=qualified_member_name,
         )
         return cast(list[AllMessageValues], messages) if messages else None
 
@@ -626,7 +696,7 @@ class OpenAIResponsesHandler(BaseTranslation):
             () if is_server_tool_search_tool(tool) else form.chat_tools
             for tool, form in zip(
                 scanned_tools,
-                LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(scanned_tools),
+                LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(scanned_tools, qualified_member_name),
                 strict=True,
             )
         )
@@ -644,7 +714,11 @@ class OpenAIResponsesHandler(BaseTranslation):
             logging_obj=litellm_logging_obj,
         )
         self._apply_guardrailed_tools_to_data(
-            data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools")
+            data,
+            original_tools,
+            flattened_tool_groups,
+            guardrailed_inputs.get("tools"),
+            guardrail_name=guardrail_to_apply.guardrail_name,
         )
         written_back: Final = self._written_back_request_fields(
             data,
@@ -784,12 +858,15 @@ class OpenAIResponsesHandler(BaseTranslation):
         original_tools: Sequence[Mapping[str, object]],
         flattened_tool_groups: Sequence[Sequence[Mapping[str, object]]],
         guardrailed_tools: Sequence[ChatCompletionToolParam] | None,
+        *,
+        guardrail_name: str | None,
     ) -> None:
         if guardrailed_tools is None:
             return
-        data["tools"] = list(  # rebind-ok: in-place request rewrite
-            merge_guardrailed_tools(original_tools, flattened_tool_groups, guardrailed_tools)
-        )
+        merged: Final = merge_guardrailed_tools(original_tools, flattened_tool_groups, guardrailed_tools)
+        if merged is None:
+            raise unappliable_request_rewrite(guardrail_name)
+        data["tools"] = list(merged)  # rebind-ok: in-place request rewrite
 
     def _extract_input_text_and_images(
         self,
@@ -1694,10 +1771,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                         if isinstance(content_item, OutputText):
                             content_item.text = guardrail_response
                             # Update the original response output
-                            if hasattr(output_item, "content") and output_item.content:
-                                original_content = output_item.content[content_idx]
-                                if hasattr(original_content, "text"):
-                                    original_content.text = guardrail_response
+                            _set_content_part_text(output_item, content_idx, guardrail_response)
                 except Exception:
                     pass
             elif isinstance(output_item, dict):

@@ -21,6 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import anyio
 import httpx
 import pytest
+import respx
 import tiktoken
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, JsonValue
@@ -36,11 +37,16 @@ load_dotenv()
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from starlette.types import Message
 
 import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.anthropic.count_tokens import handler as anthropic_count_tokens_handler
+from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+from litellm.llms.anthropic.pass_through.responses_adapters.transformation import (
+    LiteLLMAnthropicToResponsesAPIAdapter,
+)
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
@@ -55,6 +61,7 @@ from litellm.llms.bedrock.count_tokens.kimi_k3 import (
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.count_tokens import handler as gemini_count_tokens_handler
+from litellm.llms.openai.responses.count_tokens import handler as openai_count_tokens_handler
 from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import VertexAIPartnerModelsTokenCounter
 from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.anthropic_endpoints.endpoints import (
@@ -76,6 +83,7 @@ from litellm.proxy.proxy_server import (
     token_counter,
 )
 from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted
+from litellm.types.llms.anthropic import AnthropicMessagesRequest
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from litellm.types.utils import SelectTokenizerResponse, TokenCountMessagesFormat, TokenCountResponse
 
@@ -2274,6 +2282,117 @@ def _shipped_kimi_k3_framing() -> int:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+@pytest.mark.parametrize(
+    "model", ["azure/responses/gpt-6.2-sol", "bedrock_mantle/openai.gpt-6.2-sol", "openai/gpt-6.2-sol"]
+)
+async def test_bridged_messages_local_count_ignores_leading_claude_code_billing_header(
+    monkeypatch: pytest.MonkeyPatch, as_blocks: bool, model: str
+) -> None:
+    router: Final = Router(model_list=[{"model_name": "counted", "litellm_params": {"model": model}}])
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    billing: Final = "x-anthropic-billing-header: cc_version=2.1.263.abc; cc_entrypoint=cli; cch=781fd;"
+    system: Final = [{"type": "text", "text": "Be concise."}] if as_blocks else "Be concise."
+    with_billing: Final = (
+        [{"type": "text", "text": billing}, *system] if isinstance(system, list) else billing + "\n" + system
+    )
+    request: Final = TokenCountRequest(model="counted", messages=[{"role": "user", "content": "Hello"}], system=system)
+
+    baseline: Final = await count_request_tokens(request=request, messages_format="anthropic")
+    counted: Final = await count_request_tokens(
+        request=request.model_copy(update={"system": with_billing}), messages_format="anthropic"
+    )
+
+    assert counted.total_tokens == baseline.total_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+async def test_openai_provider_count_and_generation_keep_second_adjacent_billing_block(
+    monkeypatch: pytest.MonkeyPatch, as_blocks: bool
+) -> None:
+    first: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    second: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    system: Final = (
+        [{"type": "text", "text": text} for text in (first, second, "Be concise.")]
+        if as_blocks
+        else first + "\n" + second + "\nBe concise."
+    )
+    request: Final[AnthropicMessagesRequest] = {
+        "model": "gpt-6.2-sol",
+        "max_tokens": 32,
+        "messages": [{"role": "user", "content": "Hello"}],
+        "system": system,
+    }
+    chat, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+    translated: Final = LiteLLMAnthropicToResponsesAPIAdapter().translate_request(
+        request, preserve_system_instructions=False
+    )
+    assert chat["messages"][0] == {
+        "role": "system",
+        "content": [{"type": "text", "text": second}, {"type": "text", "text": "Be concise."}]
+        if as_blocks
+        else second + "\nBe concise.",
+    }
+    assert translated["input"][0] == {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": second}, {"type": "input_text", "text": "Be concise."}]
+        if as_blocks
+        else [{"type": "input_text", "text": second + "\nBe concise."}],
+    }
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "counted",
+                "litellm_params": {"model": "openai/responses/gpt-6.2-sol", "api_key": "test-key", "store": False},
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+
+    def peer(http_request: httpx.Request) -> httpx.Response:
+        assert json.loads(http_request.content)["input"] == translated["input"]
+        return httpx.Response(200, json={"object": "response.input_tokens", "input_tokens": 47})
+
+    with patch.object(
+        openai_count_tokens_handler,
+        "get_async_httpx_client",
+        return_value=AsyncHTTPHandler(transport=httpx.MockTransport(peer)),
+    ):
+        result: Final = await count_request_tokens(
+            request=TokenCountRequest(model="counted", messages=[{"role": "user", "content": "Hello"}], system=system),
+            messages_format="anthropic",
+            call_endpoint=True,
+        )
+    assert (result.count_source, result.total_tokens) == ("provider", 47)
+
+
+@pytest.mark.asyncio
+async def test_bedrock_kimi_k3_count_drops_only_the_first_of_two_leading_billing_blocks(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    _framed_kimi(monkeypatch)
+    _available_kimi_k3(monkeypatch, tmp_path)
+    first: Final = {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1; cc_entrypoint=cli; cch=A;"}
+    second: Final = {"type": "text", "text": "x-anthropic-billing-header: cc_version=2.1; cc_entrypoint=cli; cch=B;"}
+    instructions: Final = {"type": "text", "text": "Be terse."}
+
+    async def counted(system: list[dict[str, str]]) -> int:
+        result: Final = await count_request_tokens(
+            request=TokenCountRequest(model="kimi", system=system, messages=[{"role": "user", "content": "Hello"}]),
+            messages_format="anthropic",
+            call_endpoint=True,
+        )
+        return result.total_tokens
+
+    one_header: Final = await counted([first, instructions])
+    assert one_header == await counted([instructions])
+    assert await counted([first, second, instructions]) > one_header
+
+
+@pytest.mark.asyncio
 async def test_bedrock_kimi_k3_is_counted_with_its_tokenizer_plus_the_shipped_framing_in_both_request_formats(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
@@ -2702,6 +2821,28 @@ async def _count_through_the_messages_endpoint(
     ):
         response: Final = await anthropic_count_tokens(mock_request, MagicMock())
     return response, peer.request_bodies
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("as_blocks", [False, True])
+async def test_gemini_provider_count_removes_only_the_first_billing_block(as_blocks: bool) -> None:
+    first: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=A;"
+    second: Final = "x-anthropic-billing-header: cc_version=2; cc_entrypoint=cli; cch=B;"
+    router: Final = Router(model_list=[_gemini_deployment("gemini-agent", {})])
+    response, bodies = await _count_through_the_messages_endpoint(
+        router,
+        {
+            "model": "gemini-agent",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "system": [{"type": "text", "text": text} for text in (first, second, "Be concise.")]
+            if as_blocks
+            else first + "\n" + second + "\nBe concise.",
+        },
+    )
+    assert response == {"input_tokens": 41, "litellm_count_source": "provider"}
+    assert json.loads(bodies[0])["generateContentRequest"]["systemInstruction"] == {
+        "parts": [{"text": second}, {"text": "Be concise."}] if as_blocks else [{"text": second + "\nBe concise."}]
+    }
 
 
 @pytest.mark.asyncio
@@ -3230,3 +3371,388 @@ async def test_call_endpoint_prompt_keeps_the_local_count_on_a_counter_that_need
         local.total_tokens,
         local.tokenizer_type,
     )
+
+
+_MAX_TOKENS_OVER_A_FLAT_HOST_BILL: Final = 4
+
+
+# usage.input_tokens that POST /v1/messages billed for the user turn "What is the weather in Paris?" through xAI
+# grok-4.3-latest, Azure AI Foundry grok-4-1-fast-non-reasoning, Vertex AI xai/grok-4.3 and Bedrock Mantle xai.grok-4.3,
+# and that POST /v1/responses billed for the same input through Perplexity xai/grok-4.3, on 2026-11-17, and that
+# POST /v1/messages billed through Azure AI Foundry grok-4.3 on 2026-11-21
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "billed_prompt_tokens"),
+    [
+        ("xai/grok-4.3-latest", 199),
+        ("azure_ai/grok-4-1-fast-non-reasoning", 175),
+        ("vertex_ai/xai/grok-4.3", 342),
+        ("bedrock_mantle/xai.grok-4.3", 37),
+        ("perplexity/xai/grok-4.3", 218),
+        ("azure_ai/grok-4.3", 11),
+    ],
+)
+async def test_local_estimate_matches_the_billed_prompt_with_the_shipped_framing(
+    monkeypatch: pytest.MonkeyPatch, model: str, billed_prompt_tokens: int
+):
+    counted: Final = await _count_the_paris_weather_turn(monkeypatch, model)
+
+    assert counted.count_source == "local_estimate"
+    assert 0 <= counted.total_tokens - billed_prompt_tokens <= _MAX_TOKENS_OVER_A_FLAT_HOST_BILL
+
+
+@pytest.mark.asyncio
+async def test_the_govcloud_mantle_grok_row_counts_like_the_commercial_row(monkeypatch: pytest.MonkeyPatch):
+    govcloud: Final = await _count_the_paris_weather_turn(monkeypatch, "bedrock_mantle/us-gov-west-1/xai.grok-4.3")
+    commercial: Final = await _count_the_paris_weather_turn(monkeypatch, "bedrock_mantle/xai.grok-4.3")
+
+    assert govcloud.total_tokens == commercial.total_tokens
+
+
+@pytest.mark.asyncio
+async def test_an_openai_deployment_of_azure_grok_answers_the_provider_400_unless_its_row_changes_the_count(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    def foundry_openai(name: str, base_model: str) -> dict[str, object]:
+        return {
+            "model_name": name,
+            "litellm_params": {
+                "model": f"openai/{name}",
+                "api_key": "unused",
+                "api_base": "https://foundry.invalid/openai/v1",
+            },
+            "model_info": {"base_model": base_model},
+        }
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    count_route: Final = respx_mock.post("https://foundry.invalid/openai/v1/responses/input_tokens").mock(
+        return_value=httpx.Response(400, json={"error": {"message": "input_tokens is not supported for this model"}})
+    )
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                foundry_openai("grok-4.3", "azure_ai/grok-4.3"),
+                foundry_openai("grok-4-1-fast-non-reasoning", "azure_ai/grok-4-1-fast-non-reasoning"),
+            ]
+        ),
+    )
+    messages: Final = [{"role": "user", "content": "What is the weather in Paris?"}]
+
+    with pytest.raises(ProxyException) as raised:
+        await token_counter(request=TokenCountRequest(model="grok-4.3", messages=messages), call_endpoint=True)
+    framed: Final = await token_counter(
+        request=TokenCountRequest(model="grok-4-1-fast-non-reasoning", messages=messages), call_endpoint=True
+    )
+
+    assert raised.value.code == "400"
+    assert "input_tokens is not supported for this model" in raised.value.message
+    assert framed.count_source == "local_estimate"
+    assert count_route.call_count == 2
+
+
+async def _count_the_paris_weather_turn(monkeypatch: pytest.MonkeyPatch, model: str) -> TokenCountResponse:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "billed",
+                    "litellm_params": {"model": model, "api_key": "unused", "api_base": "https://unused.invalid"},
+                }
+            ]
+        ),
+    )
+    return await count_request_tokens(
+        request=TokenCountRequest(
+            model="billed", messages=[{"role": "user", "content": "What is the weather in Paris?"}]
+        )
+    )
+
+
+def _prompt_beside(text_block: Mapping[str, JsonValue]) -> list[dict[str, JsonValue]]:
+    return [{"role": "user", "content": [{"type": "text", "text": "run the build"}, dict(text_block)]}]
+
+
+_CLEAN_PROMPT: Final[list[dict[str, JsonValue]]] = [
+    {"role": "user", "content": [{"type": "text", "text": "run the build"}]}
+]
+
+_BLANK_BEFORE_NULL_PROMPT: Final[list[dict[str, JsonValue]]] = [
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": ""},
+            {"type": "text", "text": None},
+            {"type": "text", "text": "run the build"},
+        ],
+    }
+]
+
+
+async def _count_through_the_anthropic_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    body: Mapping[str, JsonValue],
+    deployment_params: Mapping[str, object],
+    router_defaults: Mapping[str, object] = MappingProxyType({}),
+) -> tuple[object, respx.Route]:
+    import litellm.proxy.proxy_server as proxy_server
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "user-text-count",
+                "litellm_params": {"model": model, "api_key": "sk-test", **deployment_params},
+            }
+        ],
+        default_litellm_params=dict(router_defaults),
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    payload: Final = json.dumps({"model": "user-text-count", **body}).encode()
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/messages/count_tokens",
+            "query_string": b"",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+
+    with respx.mock(assert_all_called=False) as upstream_mock:
+        upstream: Final = upstream_mock.route().mock(
+            return_value=httpx.Response(200, json={"input_tokens": 7, "totalTokens": 7})
+        )
+        response: Final = await anthropic_count_tokens(request, MagicMock())
+    return response, upstream
+
+
+async def _body_sent_to_anthropic_count(
+    monkeypatch: pytest.MonkeyPatch,
+    body: Mapping[str, JsonValue],
+    deployment_params: Mapping[str, object],
+    router_defaults: Mapping[str, object] = MappingProxyType({}),
+) -> Mapping[str, JsonValue]:
+    response, upstream = await _count_through_the_anthropic_endpoint(
+        monkeypatch, "anthropic/claude-sonnet-5-5", body, deployment_params, router_defaults
+    )
+
+    assert isinstance(response, dict)
+    assert response["input_tokens"] == 7
+    return json.loads(upstream.calls.last.request.content)
+
+
+async def _messages_sent_to_anthropic_count(
+    monkeypatch: pytest.MonkeyPatch,
+    body: Mapping[str, JsonValue],
+    deployment_params: Mapping[str, object],
+    router_defaults: Mapping[str, object] = MappingProxyType({}),
+) -> JsonValue:
+    return (await _body_sent_to_anthropic_count(monkeypatch, body, deployment_params, router_defaults))["messages"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "text_block",
+    ({"type": "text", "text": ""}, {"type": "text", "text": " \n"}, {"type": "text"}),
+    ids=("empty", "blank", "missing"),
+)
+async def test_anthropic_count_tokens_on_a_claude_deployment_strips_empty_user_text_like_inference(
+    monkeypatch: pytest.MonkeyPatch, text_block: Mapping[str, JsonValue]
+) -> None:
+    sent: Final = await _messages_sent_to_anthropic_count(monkeypatch, {"messages": _prompt_beside(text_block)}, {})
+
+    assert sent == _CLEAN_PROMPT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", (None, 5), ids=("null", "number"))
+@pytest.mark.parametrize(
+    ("request_params", "deployment_params", "router_defaults"),
+    (({"drop_params": True}, {}, {}), ({}, {"drop_params": True}, {}), ({}, {}, {"drop_params": True})),
+    ids=("body", "deployment", "router-defaults"),
+)
+async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_non_string_user_text_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    text: JsonValue,
+    request_params: Mapping[str, JsonValue],
+    deployment_params: Mapping[str, JsonValue],
+    router_defaults: Mapping[str, JsonValue],
+) -> None:
+    sent: Final = await _messages_sent_to_anthropic_count(
+        monkeypatch,
+        {"messages": _prompt_beside({"type": "text", "text": text}), **request_params},
+        deployment_params,
+        router_defaults,
+    )
+
+    assert sent == _CLEAN_PROMPT
+
+
+_SYSTEM_TEXT: Final[dict[str, JsonValue]] = {"type": "text", "text": "Answer in one word"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", (None, 5), ids=("null", "number"))
+@pytest.mark.parametrize(
+    ("request_params", "deployment_params", "router_defaults"),
+    (({"drop_params": True}, {}, {}), ({}, {"drop_params": True}, {}), ({}, {}, {"drop_params": True})),
+    ids=("body", "deployment", "router-defaults"),
+)
+async def test_anthropic_count_tokens_on_a_claude_deployment_drops_a_non_string_system_text_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    text: JsonValue,
+    request_params: Mapping[str, JsonValue],
+    deployment_params: Mapping[str, JsonValue],
+    router_defaults: Mapping[str, JsonValue],
+) -> None:
+    non_string: Final[dict[str, JsonValue]] = {"type": "text", "text": text}
+
+    dropped: Final = await _body_sent_to_anthropic_count(
+        monkeypatch,
+        {"messages": _CLEAN_PROMPT, "system": [non_string, _SYSTEM_TEXT], **request_params},
+        deployment_params,
+        router_defaults,
+    )
+    emptied: Final = await _body_sent_to_anthropic_count(
+        monkeypatch,
+        {"messages": _CLEAN_PROMPT, "system": [non_string], **request_params},
+        deployment_params,
+        router_defaults,
+    )
+
+    assert dropped["system"] == [_SYSTEM_TEXT]
+    assert dropped["messages"] == emptied["messages"] == _CLEAN_PROMPT
+    assert emptied.get("system") is None
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_on_a_claude_deployment_sends_the_messages_inference_sends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.anthropic.pass_through.messages.utils import normalize_native_messages
+
+    history: Final[list[dict[str, JsonValue]]] = [
+        {"role": "user", "content": "run the build"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "functions.Bash:0", "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "functions.Bash:0", "content": "ok"}]},
+    ]
+
+    sent: Final = await _messages_sent_to_anthropic_count(monkeypatch, {"messages": history}, {})
+
+    assert sent == normalize_native_messages(history)
+    assert sent != history
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ("", " \n"), ids=("empty", "blank"))
+async def test_anthropic_count_tokens_counts_a_request_with_only_blank_user_text_as_sent(
+    monkeypatch: pytest.MonkeyPatch, text: str
+) -> None:
+    messages: Final[list[dict[str, JsonValue]]] = [{"role": "user", "content": [{"type": "text", "text": text}]}]
+
+    assert await _messages_sent_to_anthropic_count(monkeypatch, {"messages": messages}, {}) == messages
+
+
+_EMPTIED_MESSAGES_ERROR: Final = "messages: no message has content left after dropping empty or non-string text blocks"
+
+
+def _non_string_text_error(field: str) -> str:
+    return f"{field}: Input should be a valid string"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("messages", "request_params", "error"),
+    (
+        (
+            [{"role": "user", "content": [{"type": "text", "text": None}]}],
+            {"drop_params": True},
+            _EMPTIED_MESSAGES_ERROR,
+        ),
+        (_prompt_beside({"type": "text", "text": None}), {}, _non_string_text_error("messages.0.content.1.text")),
+        (_prompt_beside({"type": "text", "text": 5}), {}, _non_string_text_error("messages.0.content.1.text")),
+        (_BLANK_BEFORE_NULL_PROMPT, {}, _non_string_text_error("messages.0.content.1.text")),
+        (
+            _CLEAN_PROMPT,
+            {"system": [{"type": "text", "text": "Answer in one word"}, {"type": "text", "text": None}]},
+            _non_string_text_error("system.1.text"),
+        ),
+        (
+            _prompt_beside({"type": "text", "text": None}),
+            {"system": [{"type": "text", "text": "Answer in one word"}, {"type": "text", "text": None}]},
+            _non_string_text_error("messages.0.content.1.text"),
+        ),
+    ),
+    ids=(
+        "only-null-dropped",
+        "null-beside-text",
+        "number-beside-text",
+        "blank-before-null",
+        "null-system-text",
+        "null-user-text-before-null-system-text",
+    ),
+)
+@pytest.mark.parametrize(
+    "model",
+    (
+        "anthropic/claude-sonnet-5-5",
+        "openai/gpt-5.6",
+        "gemini/gemini-3.8-flash",
+        "mistral/mistral-small-latest",
+    ),
+)
+async def test_anthropic_count_tokens_answers_the_inference_400_before_any_provider_call(
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    messages: list[dict[str, JsonValue]],
+    request_params: Mapping[str, JsonValue],
+    error: str,
+) -> None:
+    response, upstream = await _count_through_the_anthropic_endpoint(
+        monkeypatch, model, {"messages": messages, **request_params}, {}
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(bytes(response.body))["error"] == {"type": "invalid_request_error", "message": error}
+    assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_params", "deployment_params", "router_defaults"),
+    (({"drop_params": False}, {}, {"drop_params": True}), ({}, {"drop_params": True}, {"drop_params": False})),
+    ids=("request-over-router-defaults", "router-defaults-over-deployment"),
+)
+async def test_anthropic_count_tokens_takes_drop_params_in_the_order_inference_does(
+    monkeypatch: pytest.MonkeyPatch,
+    request_params: Mapping[str, JsonValue],
+    deployment_params: Mapping[str, JsonValue],
+    router_defaults: Mapping[str, JsonValue],
+) -> None:
+    response, upstream = await _count_through_the_anthropic_endpoint(
+        monkeypatch,
+        "anthropic/claude-sonnet-5-5",
+        {"messages": _prompt_beside({"type": "text", "text": None}), **request_params},
+        deployment_params,
+        router_defaults,
+    )
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 400
+    assert json.loads(bytes(response.body))["error"] == {
+        "type": "invalid_request_error",
+        "message": _non_string_text_error("messages.0.content.1.text"),
+    }
+    assert upstream.call_count == 0
