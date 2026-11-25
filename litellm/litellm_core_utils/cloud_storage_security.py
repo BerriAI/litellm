@@ -275,11 +275,10 @@ def sanitize_cloud_object_path(value: str | None, fallback: str = "file") -> str
     if not isinstance(value, str):
         return fallback
 
-    segments: Final = []
-    for segment in value.replace("\\", "/").split("/"):
-        sanitized_segment = sanitize_cloud_object_component(segment, fallback="")
-        if sanitized_segment:
-            segments.append(sanitized_segment)
+    sanitized_segments: Final = (
+        sanitize_cloud_object_component(segment, fallback="") for segment in value.replace("\\", "/").split("/")
+    )
+    segments: Final = tuple(sanitized_segment for sanitized_segment in sanitized_segments if sanitized_segment)
 
     if not segments:
         return fallback

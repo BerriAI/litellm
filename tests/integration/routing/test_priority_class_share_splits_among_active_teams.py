@@ -42,7 +42,7 @@ def saturated_model(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[
         "priority_reservation_settings": {
             "default_priority": 1.0,
             "saturation_threshold": 0.0,
-            "priority_class_share_splits_equally_among_active_teams": True,
+            "priority_class_share_config": {"split_equally_among_active": ["team"]},
         },
     }
     path: Final = directory / "priority_class_share.yaml"

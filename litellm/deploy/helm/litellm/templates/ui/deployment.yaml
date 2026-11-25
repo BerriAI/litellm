@@ -1,4 +1,7 @@
 {{- if include "litellm.ui.render" . }}
+{{- if and .Values.ui.hpa.enabled .Values.ui.keda.enabled }}
+{{- fail "ui.hpa.enabled and ui.keda.enabled are mutually exclusive: two autoscalers on one Deployment fight over the replica count, so set ui.hpa.enabled: false when using KEDA" }}
+{{- end }}
 {{- $componentHosts := .Values.ingress.componentHosts | default dict -}}
 {{- $hasComponentHosts := or $componentHosts.ui $componentHosts.backend $componentHosts.gateway -}}
 apiVersion: apps/v1
@@ -16,7 +19,7 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  {{- if and (not .Values.ui.hpa.enabled) (not (kindIs "invalid" .Values.ui.replicaCount)) }}
+  {{- if and (not .Values.ui.hpa.enabled) (not .Values.ui.keda.enabled) (not (kindIs "invalid" .Values.ui.replicaCount)) }}
   replicas: {{ .Values.ui.replicaCount }}
   {{- end }}
   {{- $minReady := .Values.ui.minReadySeconds }}

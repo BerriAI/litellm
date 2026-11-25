@@ -388,7 +388,7 @@ if MCP_AVAILABLE:
         )
         payload.oauth2_flow = "client_credentials" if has_m2m_shape else "authorization_code"
 
-    _VALID_MCP_REQUIRED_FIELDS: Final[frozenset] = frozenset(NewMCPServerRequest.model_fields)
+    _VALID_MCP_REQUIRED_FIELDS: Final[frozenset[str]] = frozenset(NewMCPServerRequest.model_fields)
 
     def _validate_mcp_required_fields(payload: NewMCPServerRequest) -> None:
         """Validate submission payload against admin-configured mcp_required_fields."""
@@ -469,8 +469,11 @@ if MCP_AVAILABLE:
 
     def _build_mcp_registry_entry_for_server(server: MCPServer, base_url: str) -> _McpRegistryEntry:
         server_name: Final = _build_mcp_registry_server_name(server)
-        title: Final = server_name
-        description: Final = server_name
+        title: Final = server.server_name or server_name
+        stored_description: Final[object] = (server.mcp_info or {}).get("description")
+        description: Final = (
+            stored_description if isinstance(stored_description, str) and stored_description else server_name
+        )
         version: Final = DEFAULT_MCP_REGISTRY_VERSION
 
         server_prefix: Final = get_server_prefix(server)
@@ -1072,6 +1075,7 @@ if MCP_AVAILABLE:
             timeout=payload.timeout,
             max_concurrent_requests=payload.max_concurrent_requests,
             rpm=payload.rpm,
+            events=payload.events,
         )
 
     def get_prisma_client_or_throw(message: str):
@@ -1127,7 +1131,7 @@ if MCP_AVAILABLE:
         )
         from litellm.proxy.proxy_server import prisma_client
 
-        access_groups: Final = set()
+        access_groups: Final = set[str]()
 
         # Get from config-loaded servers
         for server in global_mcp_server_manager.config_mcp_servers.values():
@@ -2292,6 +2296,8 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials(temp_record)
 
+    _PATH_PARAM_VALUE: Final = TypeAdapter(object)
+
     @public_catalog_operation
     async def _mcp_oauth_user_api_key_auth(request: Request) -> UserAPIKeyAuth:
         """
@@ -2349,7 +2355,8 @@ if MCP_AVAILABLE:
                 global_mcp_server_manager,
             )
 
-            server_id: Final[str] = request.path_params.get("server_id", "")
+            raw_server_id: Final = _PATH_PARAM_VALUE.validate_python(request.path_params.get("server_id", ""))
+            server_id: Final = raw_server_id if isinstance(raw_server_id, str) else ""
             if server_id:
                 _s = await global_mcp_server_manager.catalog.resolve(server_id)
                 if (
@@ -2959,7 +2966,7 @@ if MCP_AVAILABLE:
 
     @catalog_operation(lambda: global_mcp_server_manager)
     async def _authorize_and_fetch_mcp_server(
-        prisma_client,
+        prisma_client: "PrismaClient",
         user_api_key_dict: UserAPIKeyAuth,
         server_id: str,
     ) -> LiteLLM_MCPServerTable:
@@ -3034,10 +3041,12 @@ if MCP_AVAILABLE:
             if not is_set:
                 missing_count += 1
             required.append(
-                MCPUserEnvVarSpec(
-                    name=name,
-                    description=spec.get("description"),
-                    is_set=is_set,
+                MCPUserEnvVarSpec.model_validate(
+                    {
+                        "name": name,
+                        "description": spec.get("description"),
+                        "is_set": is_set,
+                    }
                 )
             )
 

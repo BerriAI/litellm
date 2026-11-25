@@ -410,7 +410,7 @@ describe("MCPServerEdit (true passthrough warning)", () => {
     renderWithAuthType("true_passthrough");
 
     await waitFor(() => {
-      expect(screen.getByText("True Passthrough disables LiteLLM authentication for this server")).toBeInTheDocument();
+      expect(screen.getByText("True Pass-Through disables LiteLLM authentication for this server")).toBeInTheDocument();
     });
   });
 
@@ -421,7 +421,7 @@ describe("MCPServerEdit (true passthrough warning)", () => {
       expect(screen.getAllByRole("button", { name: "Save Changes" }).length).toBeGreaterThan(0);
     });
     expect(
-      screen.queryByText("True Passthrough disables LiteLLM authentication for this server"),
+      screen.queryByText("True Pass-Through disables LiteLLM authentication for this server"),
     ).not.toBeInTheDocument();
   });
 
@@ -439,7 +439,7 @@ describe("MCPServerEdit (true passthrough warning)", () => {
       />,
     );
 
-    await selectOption("Authentication", "True Passthrough (no LiteLLM auth)");
+    await selectOption("Authentication", "True Pass-Through (no LiteLLM auth)");
 
     await waitFor(() => {
       expect(mockOauth.getTemporaryPayload).toBeTruthy();
@@ -1921,7 +1921,7 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
 
     await selectOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
     mockOauth.tokenResponse = { access_token: "fresh-tok", token_type: "bearer" };
-    await selectOption("Authentication", "True Passthrough (no LiteLLM auth)");
+    await selectOption("Authentication", "True Pass-Through (no LiteLLM auth)");
 
     await waitFor(() => {
       const withHeaders = vi

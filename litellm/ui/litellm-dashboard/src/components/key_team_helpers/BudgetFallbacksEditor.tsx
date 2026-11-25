@@ -86,6 +86,9 @@ export function BudgetFallbacksEditor({ value, onChange, availableModels }: Budg
           <div key={entry.id} className="relative rounded-lg border border-border bg-muted p-4">
             <button
               type="button"
+              aria-label={t("routerSettings.fallbackSelectionForm.removeGroup", {
+                group: entry.primaryModel ?? t("keyTeamHelpers.budgetFallbacksEditor.fallbackModels"),
+              })}
               onClick={() => removeEntry(entry.id)}
               className="absolute top-2 right-2 text-muted-foreground hover:text-destructive transition-colors p-1"
             >

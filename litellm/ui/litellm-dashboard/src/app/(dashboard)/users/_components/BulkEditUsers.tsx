@@ -1,3 +1,4 @@
+import { availableRoleDisplayLabel } from "@/utils/roles";
 import React, { useId, useState } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { userBulkUpdateUserCall, teamBulkMemberAddCall, Member } from "@/components/networking";
@@ -278,7 +279,7 @@ const BulkEditUserModal: React.FC<BulkEditUserModalProps> = ({
                         {user.user_email || t("users.bulkEdit.table.noEmail")}
                       </TableCell>
                       <TableCell className="text-xs text-foreground">
-                        {possibleUIRoles?.[user.user_role]?.ui_label || user.user_role}
+                        {availableRoleDisplayLabel(user.user_role, possibleUIRoles?.[user.user_role]?.ui_label)}
                       </TableCell>
                       <TableCell className={NUMERIC_CELL_CLASS}>
                         <MoneyCell

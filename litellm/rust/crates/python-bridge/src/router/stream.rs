@@ -8,7 +8,10 @@ use litellm_router_core::{
 };
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
 
-use super::{RouterCall, attempt_outcome, config, config_error_to_pyerr, document, host::Finish};
+use super::{
+    RouterCall, attempt_outcome, config, config_error_to_pyerr, document,
+    host::{Finish, PythonRouterHost},
+};
 
 /// A stream recovery a host wrapper asks for.
 #[derive(Clone, Copy)]
@@ -32,8 +35,8 @@ fn kind(kind: Option<&str>) -> PyResult<Option<FailureKind>> {
     .transpose()
 }
 
-/// `{"can_retry", "can_fall_back", "refusal_fallback", "retry_budget": int | None,
-/// "policy_applies": bool}`.
+/// `{"can_retry", "can_fall_back", "refusal_fallback", "context_window_fallback",
+/// "retry_budget": int | None, "policy_applies": bool}`.
 pub(super) fn policy<'py>(
     py: Python<'py>,
     router: &Router,
@@ -46,12 +49,14 @@ pub(super) fn policy<'py>(
         can_retry,
         can_fall_back,
         refusal_fallback,
+        context_window_fallback,
         retry_budget,
     } = router.stream_policy(&request, &origin(stream_origin)?, kind(failure_kind)?);
     let dict = PyDict::new(py);
     dict.set_item("can_retry", can_retry)?;
     dict.set_item("can_fall_back", can_fall_back)?;
     dict.set_item("refusal_fallback", refusal_fallback)?;
+    dict.set_item("context_window_fallback", context_window_fallback)?;
     dict.set_item("retry_budget", retry_budget.map(|(budget, _)| budget))?;
     dict.set_item(
         "policy_applies",
@@ -80,15 +85,15 @@ pub(super) fn recover(
         let response = match recovery {
             Recovery::Retry => {
                 router
-                    .retry_stream(op, request, stream_origin, failure)
+                    .retry_stream(&PythonRouterHost, op, request, stream_origin, failure)
                     .await
             }
             Recovery::Fallback => {
                 router
-                    .fallback_stream(op, request, stream_origin, failure)
+                    .fallback_stream(&PythonRouterHost, op, request, stream_origin, failure)
                     .await
             }
         };
-        response.map(Finish::Call)
+        response.map(Finish::Call).map_err(|ended| ended.error)
     }))
 }

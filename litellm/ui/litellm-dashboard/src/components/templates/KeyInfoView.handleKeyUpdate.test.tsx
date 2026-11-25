@@ -61,7 +61,8 @@ vi.mock("@/utils/dataUtils", () => ({
   formatNumberWithCommas: (n: any) => String(n),
 }));
 vi.mock("../key_info_utils", () => ({
-  extractLoggingSettings: () => ({}),
+  extractLoggingSettings: () => [],
+  filterSensitiveMetadata: (m: any) => m ?? {},
   formatMetadataForDisplay: (m: any) => JSON.stringify(m, null, 2),
   stripTagsFromMetadata: (m: any) => m,
 }));

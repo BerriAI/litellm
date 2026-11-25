@@ -2,10 +2,12 @@
 Unit tests for the context_management polyfill dispatcher.
 """
 
+import pytest
+
 from litellm.llms.anthropic.messages.context_management import (
     apply_context_management,
 )
-from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_tool_result_texts
+from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_texts
 
 MODEL = "xai/grok-4"
 
@@ -131,15 +133,15 @@ async def test_malformed_edit_entries_are_skipped():
 
 
 async def test_sync_editor_counts_tokens_off_the_event_loop():
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
     warm_tokenizer(MODEL)
-    messages = [{"role": "user", "content": text * 100}, *_history_with_two_tool_pairs()]
+    messages = [{"role": "user", "content": uncounted_text()}, *_history_with_two_tool_pairs()]
 
     result, took, lags = await timed_with_loop_lags(
         lambda: apply_context_management(
@@ -184,7 +186,17 @@ def _history_with_null_text_beside_a_short_first_result():
     ]
 
 
-async def test_drop_invalid_edits_clears_as_if_malformed_tool_result_text_was_never_sent():
+def _history_with_null_user_text():
+    return [
+        {"role": "user", "content": [{"type": "text", "text": "Hi"}, {"type": "text", "text": None}]},
+        *_history_with_two_tool_pairs()[1:],
+    ]
+
+
+@pytest.mark.parametrize(
+    "history_factory", [_history_with_null_text_beside_a_short_first_result, _history_with_null_user_text]
+)
+async def test_drop_invalid_edits_clears_as_if_malformed_text_was_never_sent(history_factory):
     spec = {
         "edits": [
             {
@@ -194,7 +206,7 @@ async def test_drop_invalid_edits_clears_as_if_malformed_tool_result_text_was_ne
             }
         ]
     }
-    history = _history_with_null_text_beside_a_short_first_result()
+    history = history_factory()
 
     from_raw = await apply_context_management(
         model=MODEL,
@@ -206,7 +218,7 @@ async def test_drop_invalid_edits_clears_as_if_malformed_tool_result_text_was_ne
     )
     from_sent = await apply_context_management(
         model=MODEL,
-        messages=list(drop_non_string_tool_result_texts(history, True)),
+        messages=list(drop_non_string_texts(history, True)),
         tools=None,
         system=None,
         context_management_spec=spec,

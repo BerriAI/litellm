@@ -9,13 +9,13 @@ import { useHealthReadinessDetails } from "@/app/(dashboard)/hooks/healthReadine
 import { getProxyBaseUrl } from "@/components/networking";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { SidebarHeader } from "@/components/shared/Sidebar";
+import { SidebarHeader, useSidebar } from "@/components/ui/sidebar";
 import { uiHref } from "@/utils/uiHref";
 import { cn } from "@/lib/cva.config";
 import { productNames } from "@/i18n/untranslated/productNames";
 
 const LOGO_CLASS_NAME =
-  "h-5 w-auto max-w-[150px] object-contain group-data-[collapsed=true]/sidebar:h-6 group-data-[collapsed=true]/sidebar:w-6";
+  "h-5 w-auto max-w-[150px] object-contain group-data-[collapsible=icon]:h-6 group-data-[collapsible=icon]:w-6";
 
 function bundledLogoSrc(baseUrl: string, { dark, monogram }: { dark: boolean; monogram: boolean }): string {
   const query = [dark && "theme=dark", monogram && "variant=monogram"].filter(Boolean).join("&");
@@ -26,18 +26,14 @@ export function SidebarBrand({
   accessToken,
   homeHref = uiHref(""),
   homeLabel = "LiteLLM home",
-  collapsed = false,
-  onToggleCollapsed,
-  onHomeClick,
 }: {
   accessToken: string | null;
   homeHref?: string;
   homeLabel?: string;
-  collapsed?: boolean;
-  onToggleCollapsed?: () => void;
-  onHomeClick?: () => void;
 }) {
   const { t } = useTranslation();
+  const { state, isMobile, toggleSidebar, setOpenMobile } = useSidebar();
+  const collapsed = state === "collapsed" && !isMobile;
   const { logoUrl, logoUrlDark } = useTheme();
   const [erroredDarkLogo, setErroredDarkLogo] = useState<string | null>(null);
   const { data: healthData } = useHealthReadinessDetails(accessToken);
@@ -47,10 +43,15 @@ export function SidebarBrand({
   const reachableDarkLogo = logoUrlDark === erroredDarkLogo ? null : logoUrlDark;
   const darkLogoSrc = reachableDarkLogo || logoUrl || bundledLogoSrc(baseUrl, { dark: true, monogram: collapsed });
   return (
-    <SidebarHeader className="h-14 border-b border-border group-data-[collapsed=true]/sidebar:h-auto group-data-[collapsed=true]/sidebar:py-2">
-      <div className="flex items-center justify-between gap-2 group-data-[collapsed=true]/sidebar:flex-col group-data-[collapsed=true]/sidebar:gap-1">
+    <SidebarHeader className="h-14 flex-none border-b border-border p-3 group-data-[collapsible=icon]:h-auto group-data-[collapsible=icon]:py-2">
+      <div className="flex items-center justify-between gap-2 group-data-[collapsible=icon]:flex-col group-data-[collapsible=icon]:gap-1">
         <div className="flex min-w-0 items-center gap-2">
-          <Link href={homeHref} onClick={onHomeClick} className="flex min-w-0 items-center" aria-label={homeLabel}>
+          <Link
+            href={homeHref}
+            onClick={() => setOpenMobile(false)}
+            className="flex min-w-0 items-center"
+            aria-label={homeLabel}
+          >
             <img src={logoSrc} alt={productNames.liteLLM} className={cn(LOGO_CLASS_NAME, "dark:hidden")} />
             <img
               src={darkLogoSrc}
@@ -64,24 +65,22 @@ export function SidebarBrand({
             <Badge
               variant="outline"
               render={<a href="https://docs.litellm.ai/release_notes" target="_blank" rel="noopener noreferrer" />}
-              className="px-1.5 py-0 font-mono text-[10px] font-medium text-muted-foreground group-data-[collapsed=true]/sidebar:hidden"
+              className="px-1.5 py-0 font-mono text-[10px] font-medium text-muted-foreground group-data-[collapsible=icon]:hidden"
             >
               v{version}
             </Badge>
           )}
         </div>
-        {onToggleCollapsed && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            onClick={onToggleCollapsed}
-            aria-expanded={!collapsed}
-            aria-label={collapsed ? t("shell.navbar.expandSidebar") : t("shell.navbar.collapseSidebar")}
-            className="flex-none text-muted-foreground group-data-[collapsed=true]/sidebar:size-9"
-          >
-            {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={toggleSidebar}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? t("shell.navbar.expandSidebar") : t("shell.navbar.collapseSidebar")}
+          className="flex-none text-muted-foreground group-data-[collapsible=icon]:size-9"
+        >
+          {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+        </Button>
       </div>
     </SidebarHeader>
   );

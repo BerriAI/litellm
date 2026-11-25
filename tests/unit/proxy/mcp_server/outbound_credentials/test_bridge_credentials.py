@@ -342,8 +342,8 @@ def test_envelope_keys_on_a_fips_openssl_without_fips_mode_stay_the_scrypt_keys(
 
 
 @pytest.mark.usefixtures("fips_mode_on")
-@pytest.mark.parametrize("salt_key", ["", "sk-salt-change-me", _MASTER_KEY, "sk-" + "5a" * 31])
-def test_envelope_keys_under_fips_refuse_a_salt_key_that_is_not_32_bytes_of_hex(
+@pytest.mark.parametrize("salt_key", ["", "thirteen-byte"], ids=["empty", "13-bytes"])
+def test_envelope_keys_under_fips_refuse_a_salt_key_under_112_bits(
     monkeypatch: pytest.MonkeyPatch, salt_key: str
 ) -> None:
     monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)

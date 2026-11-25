@@ -909,3 +909,51 @@ async def test_async_batch_reads_of_missing_keys_hit_redis_once_per_expiry_windo
     dual_cache.last_redis_batch_access_time.update({key: time.time() - 61 for key in keys})
     await dual_cache.async_batch_get_cache(keys)
     assert redis_cache.async_batch_get_cache.await_count == 2
+
+
+class _FormatCountingValue:
+    def __init__(self) -> None:
+        self.format_calls = 0
+
+    def __repr__(self) -> str:
+        self.format_calls += 1
+        return "formatted-cached-value"
+
+    __str__ = __repr__
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_does_not_format_cached_values_when_verbose_is_off(monkeypatch, capsys):
+    from litellm import _logging
+
+    monkeypatch.setattr(_logging, "set_verbose", False)
+    value: Final = _FormatCountingValue()
+    cache: Final = DualCache(in_memory_cache=InMemoryCache())
+
+    await cache.async_set_cache("k", value)
+    assert await cache.async_get_cache("k") is value
+    assert cache.get_cache("k") is value
+
+    assert value.format_calls == 0
+    assert "formatted-cached-value" not in capsys.readouterr().out
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_debug_output_still_includes_cached_values_when_verbose_is_on(monkeypatch, capsys):
+    from litellm import _logging
+
+    monkeypatch.setattr(_logging, "set_verbose", True)
+    value: Final = _FormatCountingValue()
+    cache: Final = DualCache(in_memory_cache=InMemoryCache())
+
+    await cache.async_set_cache("k", value)
+    await cache.async_set_cache_pipeline([("k2", value)])
+    await cache.async_get_cache("k")
+    cache.get_cache("k")
+
+    out: Final = capsys.readouterr().out
+    assert "async set cache: cache key: k; local_only: False; value: formatted-cached-value" in out
+    assert "async batch set cache: cache keys: [('k2', formatted-cached-value)]; local_only: False" in out
+    assert "async get cache: cache key: k; local_only: False" in out
+    assert "in_memory_result: formatted-cached-value" in out
+    assert out.count("get cache: cache result: formatted-cached-value") == 2

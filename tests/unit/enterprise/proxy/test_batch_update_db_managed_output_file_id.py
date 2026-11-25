@@ -3,16 +3,19 @@
 import json
 from types import SimpleNamespace
 from typing import Optional
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy.openai_files_endpoints.common_utils import (
     ManagedBatchOutputFileWriter,
     ensure_batch_response_managed_file_ids,
     update_batch_in_database,
 )
 from litellm.types.utils import LiteLLMBatch
+from tests.unit.proxy.rust_auth_stores import FakeTeamStore, RustAuthStores, install_rust_auth_stores
 
 
 def _build_batch_response(
@@ -370,7 +373,6 @@ def _in_memory_managed_files():
     table.upsert = AsyncMock(side_effect=_upsert)
     prisma = MagicMock()
     prisma.db.litellm_managedobjecttable = table
-    prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
 
     cache = MagicMock()
     cache.async_set_cache = AsyncMock()
@@ -408,17 +410,18 @@ async def test_store_unified_object_id_persists_key_and_tags_on_create():
 
 
 @pytest.mark.asyncio
-async def test_store_unified_object_id_resolves_org_through_the_cached_team():
+async def test_store_unified_object_id_resolves_org_through_the_cached_team(monkeypatch: pytest.MonkeyPatch):
     """Most keys belong to an org only through their team, so the auth object carries no
     org_id. The create reads the team that auth already cached, so org spend is snapshotted
     at submission time without a database query in the request path."""
     from litellm.models.team import LiteLLM_TeamTableCachedObj
     from litellm.proxy.proxy_server import user_api_key_cache
 
+    stores = install_rust_auth_stores(monkeypatch)
     instance, store = _in_memory_managed_files()
     creator = UserAPIKeyAuth(user_id="alice", team_id="team-cached", api_key="hash-alice")
     await user_api_key_cache.async_set_cache(
-        key="team_id:team-cached",
+        key=AuthObject.team("team-cached"),
         value=LiteLLM_TeamTableCachedObj(team_id="team-cached", organization_id="org-via-team"),
         model_type=LiteLLM_TeamTableCachedObj,
     )
@@ -433,23 +436,30 @@ async def test_store_unified_object_id_resolves_org_through_the_cached_team():
             persist_attribution=True,
         )
     finally:
-        user_api_key_cache.delete_cache(key="team_id:team-cached")
+        user_api_key_cache.delete_cache(key=AuthObject.team("team-cached").key)
 
     assert store["unified-b"]["org_id"] == "org-via-team"
-    instance.prisma_client.db.litellm_teamtable.find_unique.assert_not_awaited()
+    assert stores.team.lookups == []
 
 
 @pytest.mark.asyncio
-async def test_store_unified_object_id_resolves_org_from_the_db_when_the_team_is_not_cached():
+async def test_store_unified_object_id_resolves_org_from_the_db_when_the_team_is_not_cached(
+    monkeypatch: pytest.MonkeyPatch,
+):
     """A team no request has run under yet is absent from the auth cache; its organization
     still comes back from the table so the org is billed rather than dropped."""
     from litellm.models.team import LiteLLM_TeamTable
     from litellm.proxy.proxy_server import user_api_key_cache
 
-    instance, store = _in_memory_managed_files()
-    instance.prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
-        return_value=LiteLLM_TeamTable(team_id="team-uncached", organization_id="org-via-db")
+    install_rust_auth_stores(
+        monkeypatch,
+        RustAuthStores(
+            team=FakeTeamStore(
+                rows={"team-uncached": LiteLLM_TeamTable(team_id="team-uncached", organization_id="org-via-db")}
+            )
+        ),
     )
+    instance, store = _in_memory_managed_files()
     creator = UserAPIKeyAuth(user_id="alice", team_id="team-uncached", api_key="hash-alice")
     try:
         await instance.store_unified_object_id(
@@ -462,7 +472,7 @@ async def test_store_unified_object_id_resolves_org_from_the_db_when_the_team_is
             persist_attribution=True,
         )
     finally:
-        user_api_key_cache.delete_cache(key="team_id:team-uncached")
+        user_api_key_cache.delete_cache(key=AuthObject.team("team-uncached").key)
 
     assert store["unified-b"]["org_id"] == "org-via-db"
 

@@ -78,6 +78,9 @@ INPUTS_BY_BUILDER: Final[Mapping[str, BuilderInputs]] = MappingProxyType(
         "black_forest_labs.image_generation.transformation.BlackForestLabsImageGenerationConfig": BuilderInputs(
             call={"model": "flux-pro-1.1"}
         ),
+        "elevenlabs.realtime.transformation.ElevenLabsRealtimeConfig": BuilderInputs(
+            call={"model": "scribe_v2_realtime"}
+        ),
         "elevenlabs.text_to_speech.transformation.ElevenLabsTextToSpeechConfig": BuilderInputs(
             call={"litellm_params": {ElevenLabsTextToSpeechConfig.ELEVENLABS_VOICE_ID_KEY: "voice-id"}}
         ),
@@ -147,8 +150,6 @@ API_BASE_IS_THE_FULL_URL: Final[Mapping[str, str]] = MappingProxyType(
             "soniox.realtime.transformation.SonioxRealtimeConfig",
             "tinyfish.search.transformation.TinyfishSearchConfig",
             "vertex_ai.text_to_speech.transformation.VertexAITextToSpeechConfig",
-            "vertex_ai.vertex_ai_partner_models.anthropic.messages.transformation."
-            "VertexAIPartnerModelsAnthropicMessagesConfig",
         )
     }
 )

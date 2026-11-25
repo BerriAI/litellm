@@ -6,6 +6,13 @@ metadata:
   labels:
     {{- include "litellm.commonLabels" . | nindent 4 }}
     app.kubernetes.io/component: {{ include "litellm.workload.componentName" . }}
+    {{- with .Values.gateway.config.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.gateway.config.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 data:
   config.yaml: |
 {{ .Values.gateway.config.proxy_config | toYaml | indent 6 }}

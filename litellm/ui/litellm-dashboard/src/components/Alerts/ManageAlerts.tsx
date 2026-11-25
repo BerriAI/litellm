@@ -1,4 +1,4 @@
-import { Settings } from "lucide-react";
+import { Bell, Settings } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -15,6 +15,8 @@ import { Switch } from "@/components/ui/switch";
 import { backgroundFetchClient } from "@/lib/http/api";
 import { getProxyBaseUrl } from "@/components/networking";
 import type { components } from "@/lib/http/schema";
+import AlertThresholds from "./AlertThresholds";
+import { PageHeader, PageHeaderTitle, PageHeaderDescription, PageHeaderControls } from "@/components/shared/PageHeader";
 
 function statusMessage(data: components["schemas"]["AlertMonitoring"]) {
   if (data.disabled_by_config) return "alerts.monitoring.disabledByConfig";
@@ -41,7 +43,10 @@ export default function ManageAlerts({ scope, readOnly }: { scope: string; readO
   const query = useQuery(queryOptions);
   const mutation = useMutation({
     mutationFn: async (
-      body: components["schemas"]["AlertMonitoringUpdate"] | components["schemas"]["ModelDeprecationMonitoringUpdate"],
+      body:
+        | components["schemas"]["AlertMonitoringUpdate"]
+        | components["schemas"]["ModelDeprecationMonitoringUpdate"]
+        | components["schemas"]["AlertThresholdsUpdate"],
     ) => {
       const { data } = await backgroundFetchClient.PATCH("/alerts/monitoring", { body });
       if (!data) throw new Error("Could not save monitoring settings");
@@ -56,15 +61,19 @@ export default function ManageAlerts({ scope, readOnly }: { scope: string; readO
   const data = query.data;
   const messageKey = data ? statusMessage(data) : undefined;
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-2xl font-semibold">{t("alerts.unified.title")}</h1>
+    <PageHeader>
+      <PageHeaderTitle>
+        <Bell />
+        {t("alerts.unified.title")}
+      </PageHeaderTitle>
+      <PageHeaderDescription>{t("alerts.unified.inboxDescription")}</PageHeaderDescription>
+      <PageHeaderControls>
         <Dialog>
-          <DialogTrigger render={<Button variant="outline" size="sm" />}>
+          <DialogTrigger render={<Button />}>
             <Settings className="size-4" aria-hidden />
             {t("alerts.monitoring.manage")}
           </DialogTrigger>
-          <DialogContent>
+          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
             <DialogHeader>
               <DialogTitle>{t("alerts.monitoring.manage")}</DialogTitle>
               <DialogDescription>{t("alerts.monitoring.description")}</DialogDescription>
@@ -125,6 +134,13 @@ export default function ManageAlerts({ scope, readOnly }: { scope: string; readO
                     aria-describedby="performance-monitoring-status"
                   />
                 </div>
+                <AlertThresholds
+                  thresholds={data.thresholds}
+                  enterprise={data.alert_limit === null}
+                  readOnly={readOnly}
+                  pending={mutation.isPending}
+                  save={(thresholds) => mutation.mutateAsync({ thresholds })}
+                />
               </div>
             )}
             {mutation.isError && (
@@ -139,12 +155,12 @@ export default function ManageAlerts({ scope, readOnly }: { scope: string; readO
             </a>
           </DialogContent>
         </Dialog>
-      </div>
+      </PageHeaderControls>
       {data && (
-        <p className="text-xs text-muted-foreground">
+        <p className="mt-2 text-xs text-muted-foreground">
           {t(data.alert_limit === null ? "alerts.monitoring.enterpriseNote" : "alerts.monitoring.freeNote")}
         </p>
       )}
-    </div>
+    </PageHeader>
   );
 }
