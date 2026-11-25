@@ -82,7 +82,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Map OpenAI params to Agent Engine params."""
         # Map 'user' to 'user_id' for session management
         if "user" in non_default_params:
@@ -241,7 +241,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Validate environment and set up authentication headers."""
         auth_headers: Final = self._get_auth_headers(optional_params, litellm_params)
         headers.update(auth_headers)

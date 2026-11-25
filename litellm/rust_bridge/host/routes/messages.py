@@ -693,6 +693,7 @@ def python_stream_types(head: object, kwargs: dict[str, object]) -> None:  # mut
     head.python_types = True  # rebind-ok: the head carries it back
     if not isinstance(logger, LiteLLMLoggingObj):
         return
+    head.logger = logger  # rebind-ok: the head carries it back
     hit: Final = cache.stream_hit(logger)
     if hit is None:
         head.cache_writer = functools.partial(cache.stream_writer, logger)  # rebind-ok: the head carries it back
@@ -2307,6 +2308,7 @@ def _agentic_stream(stream: AsyncStream, call: _AgenticCall, held: frozenset[str
             AnthropicMessagesStreamHiddenParams,
             stream._hidden_params,  # pyright: ignore[reportPrivateUsage]  # the native stream's own hidden params
         ),
+        litellm_logging_obj=call.logger,
     )
 
 

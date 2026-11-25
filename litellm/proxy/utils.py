@@ -148,6 +148,7 @@ from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.exceptions import (
+    BlockedPiiEntityError,
     GuardrailRaisedException,
     MissingMessageRoleError,
     RejectedRequestError,
@@ -209,6 +210,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     MESSAGE_REDACTION_ENABLE_HEADERS,
     TokenDataCheckedFields,
@@ -227,7 +229,9 @@ from litellm.litellm_core_utils.total_deadline import TotalTimeoutExpired
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 from litellm.proxy._types import (
+    CLAUDE_CODE_GATEWAY_PREFIX,
     AlertType,
     CallInfo,
     Litellm_EntityType,
@@ -831,6 +835,36 @@ async def _without_token_id_only_chunks(response: AsyncIterable[object]) -> Asyn
             _drop_stream_chunk_token_ids(chunk)
             continue
         yield chunk
+
+
+def _is_messages_route(user_api_key_dict: UserAPIKeyAuth) -> bool:
+    route: Final = user_api_key_dict.request_route
+    call_types: Final = get_call_types_for_route(route.removeprefix(CLAUDE_CODE_GATEWAY_PREFIX)) if route else None
+    return bool(call_types) and call_types[0] == CallTypes.anthropic_messages
+
+
+class _ReadBytesTap(Generic[_T]):
+    __slots__ = ("_source", "_upstream", "read")
+
+    def __init__(self, upstream: AsyncIterable[_T]) -> None:
+        self._source: Final = upstream
+        self._upstream: Final = upstream.__aiter__()
+        self.read: Final[list[bytes]] = []  # mutable-ok: appended while the stream is read
+
+    def __getattr__(self, name: str) -> object:
+        return _DELEGATED_ATTRIBUTE.validate_python(getattr(self._source, name))
+
+    def __aiter__(self) -> "_ReadBytesTap[_T]":
+        return self
+
+    async def __anext__(self) -> _T:
+        chunk: Final = await self._upstream.__anext__()
+        if isinstance(chunk, bytes):
+            self.read.append(chunk)
+        return chunk
+
+    async def aclose(self) -> None:
+        await aclose_if_supported(self._source)
 
 
 def _pipelines_stream_live(pipelines: Sequence[tuple[str, "GuardrailPipeline"]]) -> bool:
@@ -1741,6 +1775,12 @@ def _failure_usage_to_lift(
 _EMPTY_LIFT: Final[Mapping[str, object]] = MappingProxyType({})
 
 
+def _is_refused_stream(litellm_logging_obj: object) -> bool:
+    return isinstance(litellm_logging_obj, Logging) and (
+        litellm_logging_obj.stream_success_refused or litellm_logging_obj.stream_success_claimed
+    )
+
+
 def _reached_deployment(litellm_logging_obj: Logging) -> bool:
     """A provider handoff or a cached response both mean the router selected a deployment."""
     caching_details: Final = litellm_logging_obj.caching_details
@@ -1877,9 +1917,11 @@ GUARDRAIL_ENDPOINT_FAILURE: Final = object()
 spend logs keep that failure although the route is not an LLM API route. A sentinel for the same reason as above."""
 
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
+_STREAM_REFUSAL_ERRORS: Final = (*_PROXY_ONLY_LLM_API_ERRORS, BlockedPiiEntityError)
 _PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
     {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}
 )
+_PROMPT_FIELDS: Final = frozenset(ModelParamHelper.get_exclude_params_for_model_parameters())
 _PROMPT_FIELD_BY_SETUP_CALL_TYPE: Final[Mapping[str | None, str]] = {
     CallTypes.aresponses.value: "input",
     CallTypes.atext_completion.value: "prompt",
@@ -2678,7 +2720,9 @@ class ProxyLogging:
                 return user_api_key_auth_obj.__dict__
         return {}
 
-    def _convert_mcp_to_llm_format(self, request_obj: MCPPreCallRequestObject, kwargs: Mapping[str, object]) -> dict:
+    def _convert_mcp_to_llm_format(
+        self, request_obj: MCPPreCallRequestObject, kwargs: Mapping[str, object]
+    ) -> dict[str, object]:
         """
         Convert MCP tool call to LLM message format for existing guardrail validation.
         """
@@ -4554,6 +4598,7 @@ class ProxyLogging:
             error_type=error_type,
             route=user_api_key_dict.request_route,
             team_id=user_api_key_dict.team_id,
+            stream_refused=_is_refused_stream(logging_obj),
         ):
             await self._handle_logging_proxy_only_error(
                 request_data=request_data,
@@ -4639,6 +4684,7 @@ class ProxyLogging:
         error_type: ProxyErrorTypes | None = None,
         route: str | None = None,
         team_id: str | None = None,
+        stream_refused: bool = False,
     ) -> bool:
         """
         Return True if the error is a Proxy Only LLM API Error
@@ -4670,6 +4716,7 @@ class ProxyLogging:
 
         return (
             isinstance(original_exception, _PROXY_ONLY_LLM_API_ERRORS)
+            or (stream_refused and isinstance(original_exception, BlockedPiiEntityError))
             or (error_type == ProxyErrorTypes.auth_error)
             or (isinstance(original_exception, ModifyResponseException) and original_exception.log_as_failure)
         )
@@ -4735,10 +4782,11 @@ class ProxyLogging:
             _litellm_params: Final[dict[str, object]] = {}  # mutable-ok: filled below, then handed to the logger
 
             litellm_param_keys: Final = LoggedLiteLLMParams.__annotations__.keys()
-            for k, v in _proxy_only_error_log_fields(request_fields, logged_metadata_keys).items():
+            logged_fields: Final = _proxy_only_error_log_fields(request_fields, logged_metadata_keys)
+            for k, v in logged_fields.items():
                 if k in litellm_param_keys:
                     _litellm_params[k] = v
-                elif k not in ("model", "user", "litellm_logging_obj"):
+                elif k not in ("model", "user", "litellm_logging_obj") and k not in _PROMPT_FIELDS:
                     _optional_params[k] = v
 
             existing: Final = _as_str_mapping(
@@ -4779,6 +4827,7 @@ class ProxyLogging:
                     if "custom_llm_provider" in attribution
                     else {}
                 ),
+                **{key: value for key, value in logged_fields.items() if key in _PROMPT_FIELDS},
             )
 
             input: list | str | dict = ""
@@ -4816,6 +4865,8 @@ class ProxyLogging:
                 input=input,
                 api_key="",
             )
+            if isinstance(litellm_logging_obj, Logging) and _is_refused_stream(litellm_logging_obj):
+                await litellm_logging_obj.mask_refused_stream_failure_log()
 
             await self._dispatch_proxy_only_failure_handlers(
                 litellm_logging_obj=litellm_logging_obj,
@@ -5414,7 +5465,10 @@ class ProxyLogging:
         )
         if drops_token_ids:
             _drop_built_stream_token_ids(request_data)
-        current_response = _without_token_id_only_chunks(response) if drops_token_ids else response
+        upstream: Final = cast(AsyncIterable[object], response)  # cast-ok: the hook's response parameter is untyped
+        read_tap: Final = _ReadBytesTap(upstream) if _is_messages_route(user_api_key_dict) else None
+        source: Final = upstream if read_tap is None else read_tap
+        current_response = _without_token_id_only_chunks(source) if drops_token_ids else source
         guarded_layers: Final[list[AsyncGenerator[object, None]]] = []  # mutable-ok: closed on disconnect
         for resolved_callback, kind in running_overrides:
             effective_kind = (
@@ -5483,7 +5537,10 @@ class ProxyLogging:
             raise
         except Exception as e:
             await ProxyLogging._record_served_stream_output(request_data, served_chunks)
-            if not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
+            refused_messages: Final = read_tap is not None and await ProxyLogging._refuse_messages_stream(
+                request_data, e, read_tap
+            )
+            if not refused_messages and not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
                 ProxyLogging.fire_deferred_stream_logging(request_data)
             raise
 
@@ -5548,7 +5605,7 @@ class ProxyLogging:
 
     async def _pipeline_gated_stream(
         self,
-        response: "AsyncGenerator[object, None]",
+        response: AsyncIterable[object],
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict[str, object],  # mutable-ok: same request-payload shape the hooks mutate
         pipelines: "tuple[tuple[str, GuardrailPipeline], ...]",
@@ -5621,7 +5678,7 @@ class ProxyLogging:
 
     async def _pipeline_scanned_live_stream(
         self,
-        response: "AsyncGenerator[object, None]",
+        response: AsyncIterable[object],
         user_api_key_dict: UserAPIKeyAuth,
         request_data: dict[str, object],  # mutable-ok: same request-payload shape the hooks mutate
         pipelines: "tuple[tuple[str, GuardrailPipeline], ...]",
@@ -5821,7 +5878,7 @@ class ProxyLogging:
         if not isinstance(logging_obj, Logging):
             return False
         _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
-        if not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS):
+        if not isinstance(error, _STREAM_REFUSAL_ERRORS):
             return False
         match _args:
             case (ModelResponse(), *_) if (held := held_round_spend(logging_obj)) is not None:
@@ -5833,8 +5890,54 @@ class ProxyLogging:
                 logging_obj.record_billed_rounds_for_failure(billed.spend)
             case _:
                 return False
+        logging_obj.refuse_stream_success()
         logging_obj._on_deferred_stream_complete = None
         logging_obj._deferred_stream_complete_args = None
+        return True
+
+    @staticmethod
+    async def _refuse_messages_stream(
+        request_data: Mapping[str, object], error: Exception, read_tap: "_ReadBytesTap[object]"
+    ) -> bool:
+        """Drop the success log of a /v1/messages byte stream that ends in an error ``post_call_failure_hook`` logs
+        as a failure, parked or still to come at teardown, and bill the stream on the failure row instead: the
+        provider stream is closed and billed for the bytes the hooks read. Returns False when the error is not one,
+        when the stream's success log already ran, or when the stream parked an assembled chat response instead, so
+        the caller handles it as a chat stream."""
+        from litellm.litellm_core_utils.asyncify import asyncify
+        from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+            AnthropicPassthroughLoggingHandler,
+        )
+
+        logging_obj: Final = request_data.get("litellm_logging_obj")
+        if not isinstance(logging_obj, Logging) or not isinstance(error, _STREAM_REFUSAL_ERRORS):
+            return False
+        if logging_obj.stream_success_claimed:
+            return False
+        parked_args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
+        match parked_args:
+            case (parked,) if asyncio.iscoroutine(parked):
+                parked.close()
+            case None:
+                pass
+            case _:
+                return False
+        logging_obj.refuse_stream_success()
+        logging_obj._on_deferred_stream_complete = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
+        logging_obj._deferred_stream_complete_args = None  # pyright: ignore[reportAttributeAccessIssue]  # slot parked by the stream iterators
+        try:
+            await read_tap.aclose()
+        except Exception as exc:  # noqa: BLE001  # closing is best-effort, so the refusal still reaches the client
+            verbose_proxy_logger.warning(
+                "Closing a refused /v1/messages stream failed: %s(%s)", type(exc).__name__, exc
+            )
+        pricing_request: Final[Mapping[str, object]] = (
+            {"speed": request_data["speed"]} if "speed" in request_data else {}
+        )
+        read_text: Final = b"".join(read_tap.read).decode("utf-8", errors="replace")
+        await asyncify(AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure)(
+            litellm_logging_obj=logging_obj, request_body=pricing_request, all_chunks=(read_text,) if read_text else ()
+        )
         return True
 
     async def arelease_max_parallel_requests(
@@ -10106,8 +10209,8 @@ def check_and_merge_model_level_guardrails(
         # route_request resolves them; otherwise team-scoped deployments are
         # invisible to this lookup and their guardrails are silently dropped.
         deployments: Final = llm_router.registry().deployments(model_name=alias, team_id=team_id) or []
-        seen: Final[set] = set()
-        union: Final[list] = []
+        seen: Final[set[str]] = set()
+        union: Final[list[object]] = []
         for dep in deployments:
             litellm_params_dep = dep.get("litellm_params") or {}
             guardrails = litellm_params_dep.get("guardrails")

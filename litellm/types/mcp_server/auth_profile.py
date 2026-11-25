@@ -21,7 +21,12 @@ from pydantic_core import InitErrorDetails, PydanticCustomError
 from litellm.types.llms.base_model import LiteLLMBaseModel
 from litellm.types.mcp import MCPAuth, MCPTokenEndpointAuthMethod
 
+RESERVED_PROFILE_ID: Final = "default"
 _FIELDS: Final = TypeAdapter(Mapping[str, object])
+
+
+def profile_id_key(value: str) -> str:
+    return value.lower() if value.isascii() else value
 
 
 @contextmanager
@@ -67,7 +72,7 @@ class _AuthProfile(LiteLLMBaseModel):
     @field_validator("id")
     @classmethod
     def _reject_reserved_id(cls, value: str) -> str:
-        if value.lower() == "default":
+        if profile_id_key(value) == RESERVED_PROFILE_ID:
             raise ValueError("the default credential has no profile id")
         return value
 
