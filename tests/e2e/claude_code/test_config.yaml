@@ -165,8 +165,7 @@ model_list:
       api_key: os.environ/OPENAI_API_KEY
 
   # ---- Azure OpenAI (GPT-6) ----
-  # Azure trails OpenAI: its catalog stops at gpt-6.1-sol, gpt-6-luna and
-  # gpt-6-astra, and has no GPT-6 Terra, so Terra stays on gpt-5.6-terra.
+  # TODO: move Terra off gpt-5.6-terra once Azure lists a GPT-6 Terra. Its catalog stops at gpt-6.1-sol, gpt-6-luna and gpt-6-astra
   - model_name: gpt-6-1-sol-azure-openai
     litellm_params:
       model: azure/gpt-6.1-sol

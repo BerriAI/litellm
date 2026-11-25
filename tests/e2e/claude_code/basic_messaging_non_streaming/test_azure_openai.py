@@ -30,7 +30,6 @@ from claude_code._basic_messaging import run_basic_messaging_cell
 
 AZURE_OPENAI_MODELS = [
     "gpt-6-1-sol-azure-openai",
-    # Terra stays on 5.6: Azure has no gpt-6.1-terra yet, the probe answers 404 "The API deployment for this resource does not exist".
     "gpt-5-6-terra-azure-openai",
     "gpt-6-luna-azure-openai",
     "gpt-6-astra-azure-openai",
