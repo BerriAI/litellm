@@ -192,6 +192,9 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         self.fetch_image = fetch_image
         self.async_fetch_image = async_fetch_image
 
+    def forwards_background(self) -> bool:
+        return "background" not in BEDROCK_RUNTIME_UNSUPPORTED_RESPONSE_PARAMS
+
     @classmethod
     def for_model(cls, model: str | None) -> "BedrockOpenAIResponsesConfig | None":
         """This config when ``model`` is served on the OpenAI Responses surface, else ``None``.

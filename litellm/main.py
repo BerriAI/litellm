@@ -219,6 +219,7 @@ from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
 from .litellm_core_utils.core_helpers import (
     allowed_openai_param_names,
+    as_str_mapping,
     drops_unsupported_params,
     normalize_drop_params,
     safe_deep_copy,
@@ -5438,7 +5439,15 @@ def _bridge_params_without_unretrievable_background_run(
     model: str,
     custom_llm_provider: str,
 ) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
-    if streams_upstream is True and not _responses_bridge_fakes_stream(model, custom_llm_provider, optional_params):
+    extra_body: Final = as_str_mapping(optional_params.get("extra_body")) or {}
+    if extra_body.get("stream", streams_upstream) is True and not _responses_bridge_fakes_stream(
+        model, custom_llm_provider, optional_params
+    ):
+        return optional_params
+    responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
+        provider=custom_llm_provider, model=model
+    )
+    if responses_config is None or not responses_config.forwards_background():
         return optional_params
     from litellm.completion_extras.litellm_responses_transformation.transformation import without_background_run
     from litellm.litellm_core_utils.tool_fields import drop_policy

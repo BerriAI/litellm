@@ -293,7 +293,9 @@ def _requests_background_run(optional_params: Mapping[str, object]) -> bool:
 def without_background_run(
     optional_params: Mapping[str, object], policy: DropPolicy, model: str, custom_llm_provider: str
 ) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
-    if _requests_background_run(optional_params) and not policy.drops("background"):
+    if not _requests_background_run(optional_params):
+        return dict(optional_params)
+    if not policy.drops("background"):
         raise litellm.UnsupportedParamsError(
             model=model,
             llm_provider=custom_llm_provider,
@@ -301,7 +303,8 @@ def without_background_run(
                 f"/chat/completions does not support parameters: ['background'], for model={model}. "
                 "Unless the provider streams the run live, a background run answers with a response id that "
                 "/chat/completions has no way to retrieve. "
-                "To drop it, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
+                "To drop it, pass `additional_drop_params=['background']`, set `litellm.drop_params=True`, "
+                "or for proxy:\n\n`litellm_settings:\n drop_params: true`\n"
             ),
         )
     kept: Final = {key: value for key, value in optional_params.items() if key != "background"}
