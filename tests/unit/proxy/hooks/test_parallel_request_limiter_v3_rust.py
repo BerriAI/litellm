@@ -6340,6 +6340,14 @@ async def test_fail_closed_read_from_the_bound_settings_store_rejects_a_limited_
     limited: Final = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-store"), rpm_limit=50, tpm_limit=100000)
     unlimited: Final = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-store-plain"))
 
+    rejection: Final = (
+        "fail_closed_rate_limit_enforcement: rejecting request, batch_rate_limiter_script could not verify the "
+        "counters against Redis"
+    )
+
+    def rejections() -> list[str]:
+        return [record.getMessage() for record in caplog.records if rejection in record.getMessage()]
+
     with _redis_that_breaks_the_pipe() as port:
         handler: Final = PROXY_MaxParallelRequestsHandler_v3(
             internal_usage_cache=InternalUsageCache(DualCache(redis_cache=RedisCache(host="127.0.0.1", port=port)))
@@ -6349,14 +6357,15 @@ async def test_fail_closed_read_from_the_bound_settings_store_rejects_a_limited_
             with pytest.raises(HTTPException) as exc:
                 await _admit(handler, limited)
             await _admit(handler, unlimited)
+            # The Rust limiter's record reaches Python's logging from a background queue, after the call returned
+            for _ in range(500):
+                if rejections():
+                    break
+                await asyncio.sleep(0.01)
 
     assert exc.value.status_code == 503
     assert exc.value.detail == {"error": RATE_LIMIT_UNVERIFIABLE_MESSAGE}
-    assert any(
-        "fail_closed_rate_limit_enforcement: rejecting request, batch_rate_limiter_script could not verify the "
-        "counters against Redis" in record.getMessage()
-        for record in caplog.records
-    )
+    assert len(rejections()) == 1, [record.getMessage() for record in caplog.records]
 
 
 def test_default_hash_tag_grouping_resolver_uses_litellm_setting(monkeypatch: pytest.MonkeyPatch):
