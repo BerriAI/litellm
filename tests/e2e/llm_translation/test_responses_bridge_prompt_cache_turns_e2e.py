@@ -24,11 +24,12 @@ from sdk_clients import NO_PROXY_CACHE, SdkClients
 pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
 CONVERSATION_ATTEMPTS: Final = 3
-SHARE_OF_DIRECT_CACHE: Final = 0.9
-SHARE_OF_FIRST_PROMPT: Final = 0.9
+SYSTEM_PROMPT_STAND_IN: Final = "."
 RULES: Final = 160
+NOTES_BEFORE_THE_FIRST_QUESTION: Final = 12
 QUESTIONS: Final = (
-    "In one short sentence, what does rule 3 ask for?",
+    " ".join(f"Note {index} is that the weather can wait." for index in range(NOTES_BEFORE_THE_FIRST_QUESTION))
+    + " In one short sentence, what does rule 3 ask for?",
     "In one short sentence, does rule 7 ask for the same thing?",
     "In one short sentence, how many rules are there?",
 )
@@ -333,17 +334,18 @@ def _continued(turns: tuple[Turn, ...]) -> tuple[Turn, ...]:
     return turns[1:]
 
 
-def _direct_caches_the_first_prompt_on_every_continued_turn(turns: tuple[Turn, ...]) -> bool:
-    floor: Final = SHARE_OF_FIRST_PROMPT * turns[0].input_tokens
-    return turns[0].input_tokens > 0 and all(turn.cached_tokens >= floor for turn in _continued(turns))
+def _tokens_besides_the_system_prompt(send: TurnSender) -> int:
+    return send(SYSTEM_PROMPT_STAND_IN, ()).input_tokens
 
 
-def _matches_direct(direct: tuple[Turn, ...]) -> Callable[[tuple[Turn, ...]], bool]:
+def _system_prompt_tokens(turns: tuple[Turn, ...], other_tokens: int) -> int:
+    return turns[0].input_tokens - other_tokens
+
+
+def _caches_the_system_prompt_on_every_continued_turn(other_tokens: int) -> Callable[[tuple[Turn, ...]], bool]:
     def accepts(turns: tuple[Turn, ...]) -> bool:
-        return all(
-            bridged.cached_tokens >= SHARE_OF_DIRECT_CACHE * yardstick.cached_tokens
-            for bridged, yardstick in zip(_continued(turns), _continued(direct), strict=True)
-        )
+        floor: Final = _system_prompt_tokens(turns, other_tokens)
+        return floor > 0 and all(turn.cached_tokens >= floor for turn in _continued(turns))
 
     return accepts
 
@@ -358,23 +360,26 @@ def _register(proxy: ProxyClient, resources: ResourceManager, backend: Backend) 
 def _assert_bridged_conversation_caches_like_direct(
     sdk: SdkClients, key: str, backend: Backend, model: str, store: bool | None, bridged: TurnSender
 ) -> None:
-    direct: Final = _converse_until(
-        _direct_sender(sdk, key, backend, model, store),
-        _direct_caches_the_first_prompt_on_every_continued_turn,
-        CONVERSATION_ATTEMPTS,
+    direct_send: Final = _direct_sender(sdk, key, backend, model, store)
+    direct_caches: Final = _caches_the_system_prompt_on_every_continued_turn(
+        _tokens_besides_the_system_prompt(direct_send)
     )
-    assert _direct_caches_the_first_prompt_on_every_continued_turn(direct), (
-        f"{backend.id} cached less than {SHARE_OF_FIRST_PROMPT:.0%} of the first turn's "
-        f"{direct[0].input_tokens} input tokens on a continued turn of the conversation sent as Responses input, "
-        f"so it is no yardstick: {direct}"
+    direct: Final = _converse_until(direct_send, direct_caches, CONVERSATION_ATTEMPTS)
+    assert direct_caches(direct), (
+        f"{backend.id} cached less than the system prompt on a continued turn of the conversation sent as "
+        f"Responses input, so it is no yardstick: {direct}"
     )
 
-    turns: Final = _converse_until(bridged, _matches_direct(direct), CONVERSATION_ATTEMPTS)
+    bridged_other_tokens: Final = _tokens_besides_the_system_prompt(bridged)
+    turns: Final = _converse_until(
+        bridged, _caches_the_system_prompt_on_every_continued_turn(bridged_other_tokens), CONVERSATION_ATTEMPTS
+    )
 
     assert all(turn.text for turn in turns), turns
-    assert _matches_direct(direct)(turns), (
+    assert _caches_the_system_prompt_on_every_continued_turn(bridged_other_tokens)(turns), (
         f"continued turns sent to {backend.id} through litellm cached "
-        f"{[turn.cached_tokens for turn in _continued(turns)]} tokens, "
+        f"{[turn.cached_tokens for turn in _continued(turns)]} tokens of a "
+        f"{_system_prompt_tokens(turns, bridged_other_tokens)}-token system prompt, "
         f"the same conversation sent as Responses input cached "
         f"{[turn.cached_tokens for turn in _continued(direct)]}"
     )

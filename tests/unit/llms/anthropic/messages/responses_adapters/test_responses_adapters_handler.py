@@ -116,6 +116,15 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
     ]
 
 
+def _messages_history(history: tuple[tuple[str, str], ...]) -> tuple[dict[str, str], ...]:
+    return tuple(
+        chain.from_iterable(
+            ({"role": "user", "content": question}, {"role": "assistant", "content": answer})
+            for question, answer in history
+        )
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_params,wire_controls,preserve_instructions",
@@ -177,10 +186,12 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
         ),
     ],
 )
+@pytest.mark.parametrize("history", [(), (("earlier", "answer"),)], ids=["first_turn", "continued_turn"])
 async def test_messages_system_goes_in_input_unless_a_conversation_or_truncation_holds_it(
     request_params: dict[str, object],
     wire_controls: dict[str, object],
     preserve_instructions: bool,
+    history: tuple[tuple[str, str], ...],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -212,14 +223,14 @@ async def test_messages_system_goes_in_input_unless_a_conversation_or_truncation
             model="openai/responses/gpt-6.2-sol",
             max_tokens=16,
             system="Stable prefix",
-            messages=[{"role": "user", "content": "hi"}],
+            messages=[*_messages_history(history), {"role": "user", "content": "hi"}],
             api_key="sk-test",
             cache={"no-cache": True},
             **request_params,
         )
         await OpenAITokenCounter().count_tokens(
             model_to_use="gpt-6.2-sol",
-            messages=[{"role": "user", "content": "hi"}],
+            messages=[*_messages_history(history), {"role": "user", "content": "hi"}],
             contents=None,
             system="Stable prefix",
             messages_format="anthropic",
@@ -237,13 +248,23 @@ async def test_messages_system_goes_in_input_unless_a_conversation_or_truncation
         if key in request_body
     } == wire_controls
     user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    earlier_input: Final = tuple(
+        chain.from_iterable(
+            (
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": question}]},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": answer}]},
+            )
+            for question, answer in history
+        )
+    )
     if preserve_instructions:
         assert request_body["instructions"] == "Stable prefix"
-        assert request_body["input"] == [user_input]
+        assert request_body["input"] == [*earlier_input, user_input]
     else:
         assert "instructions" not in request_body
         assert request_body["input"] == [
             {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Stable prefix"}]},
+            *earlier_input,
             user_input,
         ]
 

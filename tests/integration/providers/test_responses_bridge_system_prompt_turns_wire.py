@@ -135,7 +135,6 @@ class _Conversation:
             "tools": _MESSAGES_TOOLS,
         }
 
-
     @property
     def _messages_system(self) -> JsonValue:
         if self.system_shape == "text":

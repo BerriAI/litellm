@@ -586,10 +586,12 @@ async def test_bridged_chat_stream_keeps_the_upstream_headers_when_its_output_ca
         ({"store": True, "truncation": "auto"}, {"store": True, "truncation": "auto"}, True),
     ],
 )
+@pytest.mark.parametrize("history", [(), (("earlier", "answer"),)], ids=["first_turn", "continued_turn"])
 async def test_acompletion_system_goes_in_input_unless_truncation_may_cut_it(
     request_params: dict[str, object],
     wire_controls: dict[str, object],
     preserve_instructions: bool,
+    history: tuple[tuple[str, str], ...],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -616,7 +618,11 @@ async def test_acompletion_system_goes_in_input_unless_truncation_may_cut_it(
         )
         await litellm.acompletion(
             model="openai/responses/gpt-6.2-sol",
-            messages=[{"role": "system", "content": "Stable prefix"}, {"role": "user", "content": "hi"}],
+            messages=[
+                {"role": "system", "content": "Stable prefix"},
+                *_chat_history(history),
+                {"role": "user", "content": "hi"},
+            ],
             api_key="sk-test",
             cache={"no-cache": True},
             **request_params,
@@ -631,10 +637,10 @@ async def test_acompletion_system_goes_in_input_unless_truncation_may_cut_it(
     user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
     if preserve_instructions:
         assert request_body["instructions"] == "Stable prefix"
-        assert request_body["input"] == [user_input]
+        assert request_body["input"] == [*_history_input(history), user_input]
     else:
         assert "instructions" not in request_body
-        assert request_body["input"] == [_system_input_item("Stable prefix"), user_input]
+        assert request_body["input"] == [_system_input_item("Stable prefix"), *_history_input(history), user_input]
 
 
 @pytest.mark.parametrize("request_shape", ["system_only", "json_object", "midturn_system", "marked_system"])
@@ -6097,6 +6103,27 @@ def test_streaming_final_chunk_carries_provider_metadata():
 
 def _system_input_item(text: str) -> dict[str, object]:
     return {"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]}
+
+
+def _chat_history(history: tuple[tuple[str, str], ...]) -> tuple[dict[str, str], ...]:
+    return tuple(
+        itertools.chain.from_iterable(
+            ({"role": "user", "content": question}, {"role": "assistant", "content": answer})
+            for question, answer in history
+        )
+    )
+
+
+def _history_input(history: tuple[tuple[str, str], ...]) -> tuple[dict[str, object], ...]:
+    return tuple(
+        itertools.chain.from_iterable(
+            (
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": question}]},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": answer}]},
+            )
+            for question, answer in history
+        )
+    )
 
 
 @pytest.mark.asyncio
