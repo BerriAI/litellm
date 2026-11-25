@@ -21,6 +21,7 @@ from litellm.llms.anthropic.common_utils import (
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.responses.transformation import is_vertex_muse_model
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 
@@ -35,6 +36,8 @@ _JSON_LIST: Final = TypeAdapter(list[JsonValue])
 
 
 def count_tokens_publisher(model: str) -> str | None:
+    if is_vertex_muse_model(model):
+        return None
     return next((publisher for marker, publisher in _COUNT_TOKENS_PUBLISHERS if marker in model), None)
 
 

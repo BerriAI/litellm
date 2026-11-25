@@ -21,6 +21,7 @@ from pydantic import TypeAdapter
 import litellm
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
+from litellm.litellm_core_utils.tool_fields import chat_member_name
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     anthropic_messages_pt,
@@ -1004,6 +1005,184 @@ class TestLiteLLMCompletionResponsesConfig:
         assert tool_calls[0].name == "spawn_agent"
         assert tool_calls[0].namespace == "collaboration"
         assert tool_calls[0].arguments == '{"message":"hello"}'
+
+    def test_namespace_member_past_64_characters_round_trips_through_a_chat_name_within_64(self):
+        namespace = "mcp__codex_apps__codex_document_control"
+        member = "_get_document_tool_schemas"
+        sibling = "_get_document_tool_schemas_v2"
+        request_tools = [
+            {
+                "type": "namespace",
+                "name": namespace,
+                "description": "Document control",
+                "tools": [
+                    {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
+                    for name in (member, sibling)
+                ],
+            }
+        ]
+        chat_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=request_tools
+        )
+        chat_names = [tool["function"]["name"] for tool in chat_tools]
+        assert len(f"{namespace}__{member}") > 64
+        assert all(len(name) <= 64 for name in chat_names)
+        assert len(set(chat_names)) == 2
+
+        echoed = LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
+            function_call={
+                "type": "function_call",
+                "name": member,
+                "namespace": namespace,
+                "call_id": "call_echo",
+                "arguments": "{}",
+            }
+        )
+        assert echoed[0]["tool_calls"][0]["function"]["name"] == chat_names[0]
+
+        tool_call_id = "call_long_namespace_member"
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="muse-ember-1.0",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="tool_calls",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        tool_calls=[
+                            ChatCompletionMessageToolCall(
+                                id=tool_call_id,
+                                type="function",
+                                function=Function(name=chat_names[0], arguments="{}"),
+                            )
+                        ],
+                    ),
+                )
+            ],
+        )
+        try:
+            responses_api_response = (
+                LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                    request_input="List the document tools",
+                    responses_api_request={"tools": request_tools},
+                    chat_completion_response=chat_completion_response,
+                )
+            )
+        finally:
+            TOOL_CALLS_CACHE.delete_cache(key=tool_call_id)
+
+        tool_calls = [item for item in responses_api_response.output if item.type == "function_call"]
+        assert [(call.namespace, call.name) for call in tool_calls] == [(namespace, member)]
+
+    def test_forced_tool_choice_on_a_namespace_member_past_64_characters_names_its_chat_tool(self) -> None:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        member: Final = "_get_document_tool_schemas"
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="azure_ai/grok-4.3",
+            input="Fetch the document tool schemas",
+            responses_api_request={
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "description": "Document control",
+                        "tools": [
+                            {"type": "function", "name": member, "parameters": {"type": "object", "properties": {}}}
+                        ],
+                    }
+                ],
+                "tool_choice": {"type": "function", "name": f"{namespace}__{member}"},
+            },
+            custom_llm_provider="azure_ai",
+        )
+
+        declared_names: Final = [tool["function"]["name"] for tool in result["tools"]]
+        assert len(declared_names[0]) <= 64
+        assert result["tool_choice"] == {"type": "function", "function": {"name": declared_names[0]}}
+
+    def test_replayed_function_call_with_a_joined_name_past_64_characters_names_its_chat_tool(self) -> None:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        member: Final = "_get_document_tool_schemas"
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic/claude-haiku-5-5",
+            input=[
+                {"type": "message", "role": "user", "content": "Fetch the document tool schemas"},
+                {
+                    "type": "function_call",
+                    "name": f"{namespace}__{member}",
+                    "call_id": "call_flattened_history",
+                    "arguments": "{}",
+                },
+                {"type": "function_call_output", "call_id": "call_flattened_history", "output": "[]"},
+            ],
+            responses_api_request={
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "description": "Document control",
+                        "tools": [
+                            {"type": "function", "name": member, "parameters": {"type": "object", "properties": {}}}
+                        ],
+                    }
+                ]
+            },
+            custom_llm_provider="anthropic",
+        )
+
+        declared_names: Final = [tool["function"]["name"] for tool in result["tools"]]
+        replayed_names: Final = [
+            call["function"]["name"] for message in result["messages"] for call in message.get("tool_calls") or ()
+        ]
+        assert len(declared_names[0]) <= 64
+        assert replayed_names == declared_names
+
+    def test_transform_tools_rejects_a_top_level_function_named_like_a_namespace_member_past_64_characters(
+        self,
+    ) -> None:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        member: Final = "_get_document_tool_schemas"
+        with pytest.raises(
+            litellm.BadRequestError,
+            match=f"Top-level function names conflict with flattened namespace tools: {namespace}__{member}",
+        ) as exc_info:
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[
+                    {"type": "function", "name": f"{namespace}__{member}", "parameters": {"type": "object"}},
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "tools": [{"type": "function", "name": member, "parameters": {"type": "object"}}],
+                    },
+                ]
+            )
+        assert exc_info.value.status_code == 400
+
+    def test_transform_tools_rejects_a_namespace_member_named_like_another_members_shortened_name(self) -> None:
+        namespace: Final = "mcp__codex_apps__codex_document_control"
+        long_member: Final = "_get_document_tool_schemas"
+        shortened: Final = chat_member_name(namespace, long_member)
+        with pytest.raises(litellm.BadRequestError, match=f"Flattened namespace tools share a name: {shortened}"):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "tools": [
+                            {"type": "function", "name": long_member, "parameters": {"type": "object"}},
+                            {
+                                "type": "function",
+                                "name": shortened.removeprefix(f"{namespace}__"),
+                                "parameters": {"type": "object"},
+                            },
+                        ],
+                    },
+                ]
+            )
 
     def test_transform_chat_completion_response_plain_tool_call_has_no_namespace(self):
         """A non-namespace function call must not gain a namespace attribute, matching
@@ -3420,6 +3599,25 @@ class TestToolTransformation:
         assert result["admin__run"] == ("admin", "run")
         assert "run" not in result
 
+    def test_namespace_tool_name_map_prefers_a_sent_name_over_another_members_bare_name(self):
+        tools = [
+            {
+                "type": "namespace",
+                "name": "x",
+                "tools": [{"type": "function", "name": "foo", "parameters": {"type": "object"}}],
+            },
+            {
+                "type": "namespace",
+                "name": "y",
+                "tools": [{"type": "function", "name": "x__foo", "parameters": {"type": "object"}}],
+            },
+        ]
+
+        result = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(tools)
+
+        assert result["x__foo"] == ("x", "foo")
+        assert result["y__x__foo"] == ("y", "x__foo")
+
     def test_transform_tools_rejects_flattened_name_collision(self):
         tools = [
             {
@@ -3441,7 +3639,7 @@ class TestToolTransformation:
         ]
 
         with pytest.raises(
-            ValueError,
+            litellm.BadRequestError,
             match="Top-level function names conflict with flattened namespace tools: admin__run",
         ):
             LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(tools=tools)
