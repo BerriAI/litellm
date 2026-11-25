@@ -22,7 +22,6 @@ from typing_extensions import NotRequired, TypedDict
 import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
-from litellm.exceptions import InternalServerError
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params, set_hidden_param
 from litellm.litellm_core_utils.model_response_utils import (
@@ -30,7 +29,7 @@ from litellm.litellm_core_utils.model_response_utils import (
 )
 from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
 from litellm.litellm_core_utils.thread_pool_executor import executor
-from litellm.llms.base_llm.base_model_iterator import UPSTREAM_ABORT_MESSAGE
+from litellm.llms.base_llm.base_model_iterator import UpstreamAbortError, upstream_abort_error
 from litellm.llms.ollama.common_utils import OllamaResponseIdNormalizer
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import OpenAIChatCompletionChunk
@@ -40,6 +39,7 @@ from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
     Delta,
     LlmProviders,
+    LlmProvidersSet,
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
@@ -210,6 +210,11 @@ class _TextCompletionChoiceLike(Protocol):
     finish_reason: str | None
 
 
+def _raise_on_text_completion_abort(choices: Sequence[_TextCompletionChoiceLike]) -> None:
+    if any(choice.finish_reason == "abort" for choice in choices):
+        raise upstream_abort_error()
+
+
 class _VertexFunctionCallLike(Protocol):
     name: str
     args: Mapping[str, Iterable[object]]
@@ -243,7 +248,8 @@ class _ParsedChunkHiddenParams(LiteLLMBaseModel):
 
 
 def _provider_response_model(chunk: object) -> str | None:
-    model: Final[object] = chunk.get("model") if isinstance(chunk, Mapping) else getattr(chunk, "model", None)
+    mapping: Final = as_str_mapping(chunk)
+    model: Final[object] = mapping.get("model") if mapping is not None else getattr(chunk, "model", None)
     return model if isinstance(model, str) and model else None
 
 
@@ -778,7 +784,7 @@ class CustomStreamWrapper:
             is_finished = False
             finish_reason = None
             choices: Final[Sequence[_TextCompletionChoiceLike]] = getattr(chunk, "choices", [])
-            self._raise_on_text_completion_abort(chunk, choices)
+            _raise_on_text_completion_abort(choices)
             if len(choices) > 0:
                 text = choices[0].text
                 if choices[0].finish_reason is not None:
@@ -793,17 +799,16 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def _upstream_abort_error(self, model: str) -> InternalServerError:
-        return InternalServerError(
-            message=UPSTREAM_ABORT_MESSAGE,
-            model=model,
-            llm_provider=self.custom_llm_provider,
+    def _route_error(self, error: Exception) -> Exception:
+        provider: Final = self.custom_llm_provider
+        if not isinstance(error, UpstreamAbortError) or provider not in LlmProvidersSet:
+            return error
+        provider_config: Final = litellm.ProviderConfigManager.get_provider_chat_config(
+            model=self.logging_obj.model, provider=LlmProviders(provider)
         )
-
-    def _raise_on_text_completion_abort(self, chunk: object, choices: Sequence[_TextCompletionChoiceLike]) -> None:
-        if any(choice.finish_reason == "abort" for choice in choices):
-            chunk_model: Final[str] = getattr(chunk, "model", "")
-            raise self._upstream_abort_error(chunk_model)
+        if provider_config is None:
+            return error
+        return provider_config.get_error_class(error.message, error.status_code, {})
 
     def handle_openai_text_completion_chunk(self, chunk: object):
         try:
@@ -812,7 +817,7 @@ class CustomStreamWrapper:
             finish_reason = None
             usage = None
             choices: Final[Sequence[_TextCompletionChoiceLike]] = getattr(chunk, "choices", [])
-            self._raise_on_text_completion_abort(chunk, choices)
+            _raise_on_text_completion_abort(choices)
             if len(choices) > 0:
                 text = choices[0].text
                 if choices[0].finish_reason is not None:
@@ -1516,7 +1521,7 @@ class CustomStreamWrapper:
             if isinstance(chunk, ChatCompletionChunk) and any(
                 str(choice.finish_reason) == "abort" for choice in chunk.choices or ()
             ):
-                raise self._upstream_abort_error(chunk.model)
+                raise upstream_abort_error()
             if self.custom_llm_provider in [
                 LlmProviders.AZURE.value,
                 LlmProviders.AZURE_AI.value,
@@ -1705,6 +1710,8 @@ class CustomStreamWrapper:
 
         except StopIteration:
             raise StopIteration
+        except UpstreamAbortError:
+            raise
         except Exception as e:
             traceback.format_exc()
             setattr(e, "message", str(e))
@@ -2210,12 +2217,13 @@ class CustomStreamWrapper:
                 # __del__ guard instead.
                 return processed_chunk
         except Exception as e:
+            route_error: Final = self._route_error(e)
             traceback_exception: Final = traceback.format_exc()
             self._record_partial_usage_for_failure()
             # LOG FAILURE - handle streaming failure logging in the _next_ object, remove `handle_failure` once it's deprecated
-            threading.Thread(target=self.logging_obj.failure_handler, args=(e, traceback_exception)).start()
+            threading.Thread(target=self.logging_obj.failure_handler, args=(route_error, traceback_exception)).start()
             self.close()
-            self._handle_stream_fallback_error(e)
+            self._handle_stream_fallback_error(route_error)
 
     def fetch_sync_stream(self):
         if self.completion_stream is None and self.make_call is not None:
@@ -2472,14 +2480,15 @@ class CustomStreamWrapper:
             return processed_chunk
 
     def _log_stream_failure_and_raise(self, e: Exception) -> NoReturn:
+        route_error: Final = self._route_error(e)
         traceback_exception: Final = traceback.format_exc()
         if self.logging_obj is not None:
             self._record_partial_usage_for_failure()
             ## LOGGING
             asyncio.create_task(
-                self.logging_obj.dispatch_failure_handlers(e, traceback_exception, prefer_async_handlers=True)
+                self.logging_obj.dispatch_failure_handlers(route_error, traceback_exception, prefer_async_handlers=True)
             )
-        self._handle_stream_fallback_error(e)
+        self._handle_stream_fallback_error(route_error)
 
     def _record_partial_usage_for_failure(self) -> None:
         """

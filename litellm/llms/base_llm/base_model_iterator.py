@@ -1,5 +1,5 @@
 from abc import abstractmethod
-from typing import TYPE_CHECKING, ClassVar, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -87,18 +87,24 @@ class _StreamedChunk(BaseModel):
     choices: tuple[_StreamedChoice, ...] | None = None
 
 
-def raise_on_upstream_abort(chunk: object, error: type[BaseLLMException] = BaseLLMException) -> None:
+class UpstreamAbortError(BaseLLMException):
+    pass
+
+
+def upstream_abort_error() -> UpstreamAbortError:
+    return UpstreamAbortError(status_code=500, message=UPSTREAM_ABORT_MESSAGE)
+
+
+def raise_on_upstream_abort(chunk: object) -> None:
     try:
         choices: Final = _StreamedChunk.model_validate(chunk).choices or ()
     except ValidationError:
         return
     if any(choice.finish_reason == "abort" for choice in choices):
-        raise error(status_code=500, message=UPSTREAM_ABORT_MESSAGE)
+        raise upstream_abort_error()
 
 
 class BaseModelResponseIterator:
-    upstream_abort_error: ClassVar[type[BaseLLMException]] = BaseLLMException
-
     def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
         self.streaming_response = streaming_response
         self.response_iterator = self.streaming_response
@@ -160,7 +166,7 @@ class BaseModelResponseIterator:
                 tool_use=None,
             )
         elif stripped_json_chunk:
-            raise_on_upstream_abort(stripped_json_chunk, self.upstream_abort_error)
+            raise_on_upstream_abort(stripped_json_chunk)
             return self.chunk_parser(chunk=stripped_json_chunk)
         else:
             return GenericStreamingChunk(

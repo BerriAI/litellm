@@ -28,10 +28,10 @@ from litellm.llms.bedrock.chat.invoke_handler import (
     make_sync_call,
     response_format_schema_from_request,
 )
+from litellm.llms.base_llm.base_model_iterator import UpstreamAbortError
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_stream_event_statuses
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.stream_close import aclose_if_supported
-from litellm.llms.openai.common_utils import OpenAIError
 from litellm.types.llms.bedrock import BedrockInvokeNovaRequest
 from litellm.types.utils import ModelResponseStream
 from tests.unit.llms.bedrock.slow_upstream import (
@@ -1101,7 +1101,7 @@ def test_iter_bytes_raises_when_the_stream_ends_mid_message() -> None:
     assert f"{len(_truncated_frame())} undecoded bytes after 4 events" in exc_info.value.message
 
 
-def test_iter_bytes_raises_the_openai_error_when_upstream_aborts() -> None:
+def test_iter_bytes_raises_an_upstream_abort_error_when_upstream_aborts() -> None:
     decoder: Final = AmazonOpenAICompatibleStreamDecoder(model="moonshot.kimi-k2-thinking", sync_stream=True)
     raw_stream: Final = b"".join(
         _bedrock_event_stream_frame(chunk)
@@ -1111,7 +1111,7 @@ def test_iter_bytes_raises_the_openai_error_when_upstream_aborts() -> None:
         )
     )
 
-    with pytest.raises(OpenAIError, match="finish_reason=abort") as exc_info:
+    with pytest.raises(UpstreamAbortError, match="finish_reason=abort") as exc_info:
         _chunks: Final = list(decoder.iter_bytes(iter([raw_stream])))
 
     assert exc_info.value.status_code == 500
