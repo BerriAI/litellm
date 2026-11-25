@@ -8,12 +8,14 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.tool_fields import truncate_tool_name
 from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
 from litellm.llms.anthropic.pass_through.deferred_tools import is_deferred, routed_deferred_tools_mode
 from litellm.llms.anthropic.pass_through.utils import (
+    KNOWN_REASONING_EFFORTS,
     REASONING_EFFORT_OFF,
     RESPONSES_API_PROVIDERS,
     ClientEffort,
@@ -1220,6 +1222,19 @@ class LiteLLMAnthropicMessagesAdapter:
         )
 
     @staticmethod
+    def _effort_within_thinking_budget(
+        output_effort: object, budget_effort: str | None, model: str, *, drop_params: bool
+    ) -> str | None:
+        if not drop_params or not isinstance(output_effort, str) or output_effort in KNOWN_REASONING_EFFORTS:
+            return reasoning_effort_within_thinking_budget(output_effort, budget_effort)
+        verbose_logger.warning(
+            "Dropping output_config.effort=%r for %s, no reasoning API defines it, because drop_params is set",
+            output_effort,
+            model,
+        )
+        return budget_effort
+
+    @staticmethod
     def _between_tools_reasoning_effort(anthropic_message_request: Mapping[str, object], output_effort: object) -> str:
         if not is_between_tool_calls(anthropic_message_request):
             return REASONING_EFFORT_OFF
@@ -1288,9 +1303,11 @@ class LiteLLMAnthropicMessagesAdapter:
         reasoning_effort: Final = declared_effort or (
             self._between_tools_reasoning_effort(anthropic_message_request, output_effort)
             if is_between_tools and mirrors_responses_bridge
-            else reasoning_effort_within_thinking_budget(
+            else self._effort_within_thinking_budget(
                 output_effort,
                 self.translate_anthropic_thinking_to_reasoning_effort(cast(AnthropicThinkingParam, thinking)),
+                model,
+                drop_params=drop_params,
             )
             if thinking
             else self._bare_output_effort(output_effort, model, custom_llm_provider, deployment_model_info)
