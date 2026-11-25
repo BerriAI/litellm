@@ -51,7 +51,7 @@ from litellm.integrations.otel.model.payloads import (
 )
 from litellm.integrations.otel.model.semconv import Error
 from litellm.integrations.otel.model.spans import SpanRole, span_role_for_service
-from litellm.integrations.otel.model.utils import to_ns
+from litellm.integrations.otel.model.utils import as_str_mapping, to_ns
 from litellm.integrations.otel.plumbing.context import (
     active_phase,
     active_phase_span,
@@ -74,6 +74,7 @@ from litellm.integrations.otel.plumbing.metrics import (
     GenAIMetricRecorder,
     create_genai_metrics,
 )
+from litellm.integrations.otel.plumbing.named_trace import named_trace_scope, sdk_named_trace_id
 from litellm.integrations.otel.plumbing.providers import (
     LITELLM_TRACER_NAME,
     attach_tenant_fan_out,
@@ -568,7 +569,13 @@ class OpenTelemetryV2(CustomLogger):
         if carrier is None and not call.reached_a_provider:
             return None
         try:
-            return self._finish_carrier(carrier, call, start_time, end_time)
+            return self._finish_carrier(
+                carrier,
+                call,
+                start_time,
+                end_time,
+                sdk_named_trace_id(as_str_mapping(kwargs.get("litellm_params")) or MappingProxyType({})),
+            )
         finally:
             # After the span has ended, so a release-triggered provider shutdown
             # force-flushes it out rather than racing its enqueue.
@@ -604,6 +611,7 @@ class OpenTelemetryV2(CustomLogger):
         call: LLMCallEvent,
         start_time: datetime | float | None,
         end_time: datetime | float | None,
+        named_trace_id: int | None,
     ) -> Span | None:
         payload: Final = call.payload
         call_id: Final = _llm_attempt_key(call)
@@ -650,20 +658,21 @@ class OpenTelemetryV2(CustomLogger):
             parent_ctx: Final = self._seed_identity_baggage(
                 data.identity, data.request_model, _llm_call_parent_context(call)
             )
-            return self._emitter.emit(
-                SpanRole.LLM_CALL,
-                data,
-                parent_context=(set_span_in_context(INVALID_SPAN, parent_ctx) if route.detached else parent_ctx),
-                start_time_ns=(
-                    carrier.start_time_ns
-                    if carrier is not None
-                    else to_ns(call.upstream_start_seconds) or to_ns(start_time)
-                ),
-                end_time_ns=end_time_ns,
-                tracer=route.tracer,
-                links=_request_trace_links(parent_ctx) if route.detached else None,
-                attempt_key=call_id,
-            )
+            with named_trace_scope(named_trace_id):
+                return self._emitter.emit(
+                    SpanRole.LLM_CALL,
+                    data,
+                    parent_context=(set_span_in_context(INVALID_SPAN, parent_ctx) if route.detached else parent_ctx),
+                    start_time_ns=(
+                        carrier.start_time_ns
+                        if carrier is not None
+                        else to_ns(call.upstream_start_seconds) or to_ns(start_time)
+                    ),
+                    end_time_ns=end_time_ns,
+                    tracer=route.tracer,
+                    links=_request_trace_links(parent_ctx) if route.detached else None,
+                    attempt_key=call_id,
+                )
         finally:
             self._tenant_tracers.release(route.provider)
 

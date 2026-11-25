@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, runtime_checka
 
 from opentelemetry import trace
 from opentelemetry.context import Context
+from opentelemetry.sdk import trace as sdk_trace
+from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
 from pydantic import TypeAdapter
 
 import litellm
@@ -127,6 +129,12 @@ def _litellm_proxy_span(kwargs: Mapping[str, object]) -> trace.Span | None:
     )
 
 
+def _is_litellm_request_root(span: trace.Span, kwargs: Mapping[str, object]) -> bool:
+    """Whether ``span`` is the request span another OTel logger started for a request that continued no trace,
+    which is LiteLLM's own trace and not one the caller chose."""
+    return span is _litellm_proxy_span(kwargs) and _parent_of(span) is None
+
+
 def _starts_its_own_trace(span: object, kwargs: Mapping[str, object]) -> bool:
     if span is trace.get_current_span():
         return False
@@ -164,9 +172,10 @@ def _caller_trace_anchor(kwargs: Mapping[str, object]) -> tuple[trace.SpanContex
     """The parent a call hangs under so that it lands in the trace the caller named in ``metadata`` or
     ``litellm_metadata`` (or a ``langfuse_*`` header), and whether the caller named it with ``existing_trace_id``.
     A UUID or 32 hex characters are used as they are and anything else is hashed, as the ``langfuse`` callback does.
-    The parent is never exported and its span id follows from the trace id, so every call of the trace is a sibling.
-    A trace id the proxy copied from a session header is not one the caller named, so each of that session's calls
-    keeps its own trace."""
+    The parent is never exported and its span id follows from the trace id, so every call of the trace hangs under
+    the same one and goes out as one of the trace's roots, while a call joining with ``existing_trace_id`` stays
+    under its own and so never becomes a root. A trace id the proxy copied from a session header is not one the
+    caller named, so each of that session's calls keeps its own trace."""
     from litellm.integrations.langfuse.trace_id import resolve_trace_id
 
     litellm_params: Final = _as_gettable(kwargs.get("litellm_params"))
@@ -183,11 +192,57 @@ def _caller_trace_anchor(kwargs: Mapping[str, object]) -> tuple[trace.SpanContex
         return None
     anchor: Final = trace.SpanContext(
         trace_id=trace_id,
-        span_id=int.from_bytes(sha256(trace_id.to_bytes(16, "big")).digest()[:8], "big") or 1,
+        span_id=_anchor_span_id(trace_id, joins=caller_trace[1]),
         is_remote=False,
         trace_flags=trace.TraceFlags(trace.TraceFlags.SAMPLED),
     )
     return anchor, caller_trace[1]
+
+
+def _anchor_span_id(trace_id: int, joins: bool) -> int:
+    digest: Final = sha256(trace_id.to_bytes(16, "big") + (b"existing_trace_id" if joins else b"")).digest()
+    return int.from_bytes(digest[:8], "big") or 1
+
+
+def _as_trace_root(span: ReadableSpan) -> ReadableSpan:
+    context: Final = span.context
+    parent: Final = span.parent
+    if context is None or parent is None or parent.span_id != _anchor_span_id(context.trace_id, joins=False):
+        return span
+    return ReadableSpan(
+        name=span.name,
+        context=context,
+        parent=None,
+        resource=span.resource,
+        attributes=span.attributes,
+        events=span.events,
+        links=span.links,
+        kind=span.kind,
+        status=span.status,
+        start_time=span.start_time,
+        end_time=span.end_time,
+        instrumentation_scope=span.instrumentation_scope,
+    )
+
+
+class _NamedTraceRoots(SpanProcessor):
+    """Exports a call that hangs under its named trace's anchor as a root of that trace, since the anchor itself is
+    never exported and Langfuse takes a trace's input and output from its root."""
+
+    def __init__(self, inner: SpanProcessor) -> None:
+        self.inner: Final = inner
+
+    def on_start(self, span: sdk_trace.Span, parent_context: Context | None = None) -> None:
+        self.inner.on_start(span, parent_context=parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        self.inner.on_end(_as_trace_root(span))
+
+    def shutdown(self) -> None:
+        self.inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self.inner.force_flush(timeout_millis)
 
 
 def _a_destination_records_the_call(kwargs: Mapping[str, object]) -> bool:
@@ -629,12 +684,22 @@ class LangfuseOtelLogger(OpenTelemetry):
         self, kwargs: Mapping[str, object], default_span: Span | None = None
     ) -> tuple[Context, Span] | tuple[Context | None, None]:
         inherited: Final = super()._get_span_context(kwargs, default_span=default_span)
-        if inherited[1] is not None or trace.get_current_span(inherited[0]).get_span_context().is_valid:
+        parent: Final = inherited[1] if inherited[1] is not None else trace.get_current_span(inherited[0])
+        if parent.get_span_context().is_valid and not _is_litellm_request_root(parent, kwargs):
             return inherited
         anchor: Final = _caller_trace_anchor(kwargs)
         if anchor is None:
             return inherited
         return trace.set_span_in_context(trace.NonRecordingSpan(anchor[0]), inherited[0]), None
+
+    def _get_span_processor(
+        self,
+        dynamic_headers: Mapping[str, str] | None = None,
+        config_override: OpenTelemetryConfig | None = None,
+    ) -> SpanProcessor:
+        return _NamedTraceRoots(
+            super()._get_span_processor(dynamic_headers=dynamic_headers, config_override=config_override)
+        )
 
     def create_litellm_proxy_request_started_span(
         self,

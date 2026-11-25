@@ -12,7 +12,9 @@ when the feature gate is off.
 """
 
 import os
+import time
 from collections.abc import Callable, Mapping
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -71,7 +73,7 @@ class _RequestTraceExclusionMiddleware:
             request_trace_scope,
             request_traces_excluded,
         )
-        from litellm.integrations.otel.plumbing.named_trace import named_trace_scope, read_named_trace
+        from litellm.integrations.otel.plumbing.named_trace import read_named_trace, request_trace_naming
 
         url: Final = str(get_host_port_url_tuple(scope)[2])  # pyright: ignore[reportUnknownArgumentType]  # upstream constructs a str URL but leaves its return type unannotated
         excluded: Final = request_traces_excluded() or self.excluded_urls.url_disabled(url)
@@ -79,12 +81,20 @@ class _RequestTraceExclusionMiddleware:
             with request_trace_scope(excluded):
                 await self.app(scope, receive, send)
             return
+        started_ns: Final = time.time_ns()
+        _stamp_arrival(scope, datetime.fromtimestamp(started_ns / 1e9, tz=timezone.utc))
         async with read_named_trace(scope, receive, self.lookahead_budget, self.max_request_body_bytes(scope)) as (
             named,
             request_receive,
         ):
-            with request_trace_scope(excluded), named_trace_scope(named):
+            with request_trace_scope(excluded), request_trace_naming(named, started_ns):
                 await self.app(scope, request_receive, send)
+
+
+def _stamp_arrival(scope: "Scope", received_at: datetime) -> None:
+    state: Final[object] = scope.setdefault("state", {})
+    if isinstance(state, dict) and "litellm_received_at" not in state:
+        state["litellm_received_at"] = received_at
 
 
 # Passthrough routes are catch-alls (e.g. "/openai/{endpoint:path}"), so the
@@ -186,13 +196,14 @@ def instrument_fastapi_app(
         # base ``litellm[proxy]`` install. Importing it at module top would make
         # ``proxy_server``'s unconditional ``import`` of this module crash when the
         # package is absent, even with the gate off.
+        from opentelemetry import trace
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
         from opentelemetry.instrumentation.propagators import (
             get_global_response_propagator,
             set_global_response_propagator,  # pyright: ignore[reportUnknownVariableType]  # upstream leaves its parameter unannotated
         )
 
-        from litellm.integrations.otel.plumbing.named_trace import forget_named_trace
+        from litellm.integrations.otel.plumbing.named_trace import ArrivalTimedTracerProvider, forget_named_trace
         from litellm.integrations.otel.trace_response import (
             UpstreamFirstTraceResponsePropagator,
             claim_server_span,
@@ -207,7 +218,7 @@ def instrument_fastapi_app(
         excluded_urls: Final = os.environ.get("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS", _DEFAULT_EXCLUDED_URLS)
         FastAPIInstrumentor.instrument_app(
             app,
-            tracer_provider=tracer_provider,
+            tracer_provider=ArrivalTimedTracerProvider(tracer_provider or trace.get_tracer_provider()),
             excluded_urls=excluded_urls,
             server_request_hook=server_request_hook,
             # Drop the ASGI "http receive"/"http send" lifecycle sub-spans: they

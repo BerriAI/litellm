@@ -1,6 +1,9 @@
 """Proxy requests that name a trace (``trace_id`` in ``metadata`` / ``litellm_metadata``) share that OTel trace on V2."""
 
+import asyncio
 import json
+import logging
+import time
 from hashlib import sha256
 from typing import Final
 
@@ -19,7 +22,9 @@ from opentelemetry.trace import SpanKind  # noqa: E402
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config, is_otel_v2_enabled  # noqa: E402
 from litellm.integrations.otel.mount import instrument_fastapi_app  # noqa: E402
+from litellm.integrations.otel.plumbing import named_trace, providers  # noqa: E402
 from litellm.integrations.otel.plumbing.context import resolve_request_span_context  # noqa: E402
+from litellm.proxy.litellm_pre_call_utils import add_otel_trace_id_to_request  # noqa: E402
 
 UUID: Final = "0b6f3a1c-9d2e-4f5a-8b7c-1d2e3f4a5b6c"
 UUID_HEX: Final = UUID.replace("-", "")
@@ -33,6 +38,7 @@ def _isolate():
 
     _otel_context._request_root_span.set(None)
     is_otel_v2_enabled.cache_clear()
+    named_trace._warn_once.cache_clear()
     yield
     _otel_context._request_root_span.set(None)
     set_global_response_propagator(None)
@@ -46,7 +52,16 @@ def proxy(monkeypatch):
     return _instrumented(monkeypatch)
 
 
-def _instrumented(monkeypatch, **instrument_kwargs):
+async def _spend_session(request: fastapi.Request):
+    data: Final = await request.json()
+    add_otel_trace_id_to_request(data, "metadata", trace.get_current_span())
+    return {
+        "litellm_trace_id": data.get("litellm_trace_id"),
+        "server_trace": f"{trace.get_current_span().get_span_context().trace_id:032x}",
+    }
+
+
+def _instrumented(monkeypatch, route=None, **instrument_kwargs):
     monkeypatch.setenv("LITELLM_OTEL_V2", "1")
     is_otel_v2_enabled.cache_clear()
     logger: Final = OpenTelemetryV2(config=OpenTelemetryV2Config(exporter="in_memory"))
@@ -60,10 +75,15 @@ def _instrumented(monkeypatch, **instrument_kwargs):
         body: Final = await request.body()
         tracer.start_span("llm", context=resolve_request_span_context()).end()
         tracer.start_span("detached", context=trace.set_span_in_context(trace.INVALID_SPAN)).end()
-        return fastapi.Response(content=body, media_type=request.headers.get("content-type"))
+        received_at: Final = getattr(request.state, "litellm_received_at", None)
+        return fastapi.Response(
+            content=body,
+            media_type=request.headers.get("content-type"),
+            headers={} if received_at is None else {"x-received-at": f"{received_at.timestamp()}"},
+        )
 
     for path in PATHS:
-        app.add_api_route(path, llm_route, methods=["POST"])
+        app.add_api_route(path, route or llm_route, methods=["POST"])
     instrument_fastapi_app(app, tracer_provider=provider, **instrument_kwargs)
     return TestClient(app), exporter
 
@@ -84,12 +104,6 @@ def _trace_ids(exporter, name=None):
         pytest.param({"metadata": {"trace_id": UUID_HEX.upper()}}, UUID_HEX, id="metadata-32-hex"),
         pytest.param({"litellm_metadata": {"trace_id": UUID}}, UUID_HEX, id="litellm_metadata-uuid"),
         pytest.param(
-            {"metadata": {"trace_id": UUID, "existing_trace_id": OTHER_HEX}}, UUID_HEX, id="existing_trace_id-not-read"
-        ),
-        pytest.param(
-            {"metadata": {"trace_id": UUID}, "litellm_metadata": {"trace_id": OTHER_HEX}}, UUID_HEX, id="metadata-wins"
-        ),
-        pytest.param(
             {"metadata": {"trace_id": "order-42"}}, sha256(b"order-42").digest()[:16].hex(), id="not-hex-is-hashed"
         ),
         pytest.param(
@@ -108,12 +122,37 @@ def test_requests_naming_one_trace_share_that_otel_trace(proxy, path, body, expe
     assert [r.headers["traceresponse"].split("-")[1] for r in responses] == [expected, expected]
 
 
-@pytest.mark.parametrize("header", ["langfuse_trace_id", "x-litellm-trace-id"])
-def test_a_trace_id_header_names_the_trace(proxy, header):
+@pytest.mark.parametrize(
+    ("path", "own", "other"),
+    [(PATHS[0], "metadata", "litellm_metadata"), (PATHS[1], "litellm_metadata", "metadata")],
+)
+def test_the_routes_own_metadata_field_names_the_trace_over_the_other(proxy, path, own, other):
+    client, exporter = proxy
+
+    client.post(path, json={own: {"trace_id": UUID}, other: {"trace_id": OTHER_HEX}})
+
+    assert _trace_ids(exporter) == [UUID_HEX]
+
+
+def test_only_a_trace_id_the_proxy_generated_is_flagged_random(proxy):
+    client, exporter = proxy
+
+    client.post(PATHS[0], json={"metadata": {"trace_id": UUID}})
+    client.post(PATHS[0], json={"model": "m"})
+
+    named, unnamed = [span for span in exporter.get_finished_spans() if span.kind is SpanKind.SERVER]
+    assert (named.context.trace_flags.random_trace_id, unnamed.context.trace_flags.random_trace_id) == (False, True)
+    assert all(
+        span.context.trace_flags.random_trace_id is (span.context.trace_id != int(UUID_HEX, 16))
+        for span in exporter.get_finished_spans()
+    )
+
+
+def test_a_langfuse_trace_id_header_names_the_trace(proxy):
     client, exporter = proxy
 
     for _ in range(2):
-        client.post(PATHS[0], json={"model": "m"}, headers={header: UUID})
+        client.post(PATHS[0], json={"model": "m"}, headers={"langfuse_trace_id": UUID})
 
     assert _trace_ids(exporter) == [UUID_HEX, UUID_HEX]
 
@@ -121,11 +160,14 @@ def test_a_trace_id_header_names_the_trace(proxy, header):
 @pytest.mark.parametrize(
     "headers, expected",
     [
-        pytest.param({"langfuse_trace_id": UUID, "x-litellm-trace-id": OTHER_HEX}, UUID_HEX, id="langfuse-header"),
-        pytest.param({"x-litellm-trace-id": UUID}, UUID_HEX, id="litellm-header"),
+        pytest.param({"langfuse_trace_id": UUID}, UUID_HEX, id="langfuse-header-wins"),
+        pytest.param(
+            [("langfuse_trace_id", UUID), ("langfuse_trace_id", OTHER_HEX)], UUID_HEX, id="first-repeated-header-wins"
+        ),
+        pytest.param({"x-litellm-trace-id": UUID}, sha256(b"body-trace").digest()[:16].hex(), id="litellm-header-unread"),
     ],
 )
-def test_a_trace_id_header_wins_over_the_body(proxy, headers, expected):
+def test_only_the_langfuse_trace_id_header_wins_over_the_body(proxy, headers, expected):
     client, exporter = proxy
 
     client.post(PATHS[1], json={"litellm_metadata": {"trace_id": "body-trace"}}, headers=headers)
@@ -140,6 +182,19 @@ def test_requests_naming_different_traces_stay_apart(proxy):
     client.post(PATHS[1], json={"litellm_metadata": {"trace_id": OTHER_HEX}})
 
     assert _trace_ids(exporter) == [UUID_HEX, OTHER_HEX]
+
+
+@pytest.mark.parametrize(
+    "traceparent",
+    [f"00-{'0' * 32}-00f067aa0ba902b7-01", "not-a-traceparent", f"00-{OTHER_HEX}-{'0' * 16}-01"],
+    ids=["all-zero-trace", "malformed", "all-zero-parent"],
+)
+def test_a_traceparent_carrying_no_valid_trace_leaves_the_named_trace(proxy, traceparent):
+    client, exporter = proxy
+
+    client.post(PATHS[1], json={"litellm_metadata": {"trace_id": UUID}}, headers={"traceparent": traceparent})
+
+    assert _trace_ids(exporter) == [UUID_HEX]
 
 
 def test_traceparent_wins_over_a_named_trace(proxy):
@@ -177,8 +232,15 @@ def test_work_the_request_detaches_keeps_its_own_trace(proxy):
         pytest.param({"json": {"metadata": "trace_id"}}, id="metadata-not-an-object"),
         pytest.param({"json": ["trace_id"]}, id="body-not-an-object"),
         pytest.param({"json": {"model": "m"}, "headers": {"x-litellm-session-id": UUID}}, id="session-header"),
+        pytest.param({"json": {"model": "m"}, "headers": {"x-litellm-trace-id": UUID}}, id="litellm-trace-header"),
         pytest.param({"json": {"metadata": {"existing_trace_id": UUID}}}, id="existing_trace_id"),
-        pytest.param({"json": {"model": "m"}, "headers": {"langfuse_existing_trace_id": UUID}}, id="existing-header"),
+        pytest.param(
+            {"json": {"metadata": {"trace_id": UUID, "existing_trace_id": OTHER_HEX}}}, id="trace_id-joining-a-trace"
+        ),
+        pytest.param(
+            {"json": {"litellm_metadata": {"trace_id": UUID}}, "headers": {"langfuse_existing_trace_id": OTHER_HEX}},
+            id="existing-header",
+        ),
         pytest.param(
             {"content": b'{"metadata": {"trace_id": ', "headers": {"content-type": "application/json"}},
             id="invalid-json",
@@ -199,6 +261,122 @@ def test_requests_naming_no_trace_each_get_their_own(proxy, request_kwargs):
     server: Final = _trace_ids(exporter)
     assert len(set(server)) == 2
     assert UUID_HEX not in server
+
+
+def test_the_time_spent_reading_a_body_for_its_trace_name_counts_from_when_the_request_arrived(proxy):
+    client, exporter = proxy
+    payload: Final = b'{"litellm_metadata": {"trace_id": "%s"}}' % UUID.encode()
+    upload_seconds: Final = 0.2
+    rest_sent_at: Final = []
+
+    def slow_upload():
+        yield payload[:10]
+        time.sleep(upload_seconds)
+        rest_sent_at.append(time.time())
+        yield payload[10:]
+
+    response: Final = client.post(PATHS[1], content=slow_upload(), headers={"content-type": "application/json"})
+
+    (server,) = [span for span in exporter.get_finished_spans() if span.kind is SpanKind.SERVER]
+    assert response.content == payload
+    assert f"{server.context.trace_id:032x}" == UUID_HEX
+    assert server.end_time - server.start_time >= upload_seconds * 1e9
+    assert float(response.headers["x-received-at"]) <= rest_sent_at[0] - upload_seconds
+    assert abs(float(response.headers["x-received-at"]) * 1e9 - server.start_time) < 1e6
+
+
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [
+        pytest.param({"json": {"metadata": {}}, "headers": {"langfuse_trace_id": UUID}}, id="header"),
+        pytest.param({"json": {"metadata": {}, "litellm_metadata": {"trace_id": UUID}}}, id="other-metadata-field"),
+    ],
+)
+def test_a_named_trace_does_not_become_the_requests_spend_session(monkeypatch, request_kwargs):
+    client, _ = _instrumented(monkeypatch, route=_spend_session)
+
+    responses: Final = [client.post(PATHS[0], **request_kwargs).json() for _ in range(2)]
+
+    assert responses == [{"litellm_trace_id": None, "server_trace": UUID_HEX}] * 2
+
+
+def test_a_request_naming_no_trace_keeps_its_server_trace_as_its_spend_session(monkeypatch):
+    client, _ = _instrumented(monkeypatch, route=_spend_session)
+
+    response: Final = client.post(PATHS[0], json={"metadata": {}}).json()
+
+    assert response["litellm_trace_id"] == response["server_trace"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param({"metadata": {"trace_id": UUID, "existing_trace_id": OTHER_HEX}}, id="existing_trace_id"),
+        pytest.param({"metadata": {"trace_id": UUID}, "input": "x" * 200}, id="over-the-lookahead-cap"),
+    ],
+)
+def test_a_request_whose_name_is_skipped_warns_once_and_logs_each_later_one_at_debug(proxy, monkeypatch, caplog, body):
+    monkeypatch.setattr(named_trace, "_MAX_LOOKAHEAD_BYTES", 150)
+    client, exporter = proxy
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
+        for _ in range(3):
+            client.post(PATHS[0], json=body)
+
+    skipped: Final = [record for record in caplog.records if "OTel V2" in record.getMessage()]
+    assert [record.levelno for record in skipped].count(logging.WARNING) == 1
+    assert [record.levelno for record in skipped].count(logging.DEBUG) == 3
+    assert UUID_HEX not in _trace_ids(exporter)
+
+
+def _sdk_logger():
+    config: Final = OpenTelemetryV2Config(exporter="in_memory")
+    exporter: Final = InMemorySpanExporter()
+    return OpenTelemetryV2(config=config, tracer_provider=providers.build_tracer_provider(config, exporter=exporter)), exporter
+
+
+async def _sdk_call_traces(monkeypatch, *metadatas, parent=None):
+    import litellm
+
+    logger, exporter = _sdk_logger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    for metadata in metadatas:
+        with trace.use_span(parent, end_on_exit=False) if parent is not None else _no_span():
+            await litellm.acompletion(
+                model="gpt-4o", messages=[{"role": "user", "content": "hi"}], mock_response="ok", metadata=metadata
+            )
+    for _ in range(200):
+        if len(exporter.get_finished_spans()) >= len(metadatas):
+            break
+        await asyncio.sleep(0.01)
+    return [f"{span.context.trace_id:032x}" for span in exporter.get_finished_spans() if span.parent is None or parent]
+
+
+def _no_span():
+    import contextlib
+
+    return contextlib.nullcontext()
+
+
+@pytest.mark.asyncio
+async def test_sdk_calls_naming_one_trace_share_that_otel_trace(monkeypatch):
+    assert await _sdk_call_traces(monkeypatch, {"trace_id": UUID}, {"trace_id": UUID}) == [UUID_HEX, UUID_HEX]
+
+
+@pytest.mark.asyncio
+async def test_sdk_calls_naming_no_trace_each_get_their_own(monkeypatch):
+    traces: Final = await _sdk_call_traces(monkeypatch, {}, {})
+
+    assert len(set(traces)) == 2
+
+
+@pytest.mark.asyncio
+async def test_an_sdk_call_under_an_app_span_stays_in_the_app_trace(monkeypatch):
+    app_span: Final = trace.NonRecordingSpan(
+        trace.SpanContext(int(OTHER_HEX, 16), 0x00F067AA0BA902B7, is_remote=False, trace_flags=trace.TraceFlags(1))
+    )
+
+    assert set(await _sdk_call_traces(monkeypatch, {"trace_id": UUID}, parent=app_span)) == {OTHER_HEX}
 
 
 def test_a_body_sent_in_chunks_reaches_the_route_whole(proxy):

@@ -27,7 +27,7 @@ from litellm.constants import (
     LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
     REDACTED_BY_LITELLM,
 )
-from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger
+from litellm.integrations.langfuse.langfuse_otel import LangfuseOtelLogger, _NamedTraceRoots
 from litellm.integrations.langfuse.trace_id import resolve_trace_id
 from litellm.integrations.langfuse.langfuse_otel_attributes import LangfuseLLMObsOTELAttributes
 from litellm.integrations.opentelemetry import LITELLM_PROXY_REQUEST_SPAN_NAME, OpenTelemetry, OpenTelemetryConfig
@@ -664,9 +664,10 @@ class TestLangfuseOtelKeyDynamicConfig:
         provider = next(iter(logger._tracer_provider_cache.values())).provider
         span_processors = provider._active_span_processor._span_processors
         assert len(span_processors) == 1
-        assert isinstance(span_processors[0], BatchSpanProcessor)
+        assert isinstance(span_processors[0], _NamedTraceRoots)
+        assert isinstance(span_processors[0].inner, BatchSpanProcessor)
 
-        exporter = span_processors[0].span_exporter
+        exporter = span_processors[0].inner.span_exporter
         assert isinstance(exporter, OTLPSpanExporter)
         import base64
 
@@ -799,7 +800,9 @@ class TestLangfuseOtelKeyDynamicConfig:
         assert f"Basic {secret}" not in logged
 
         provider = next(iter(logger._tracer_provider_cache.values())).provider
-        exporter = provider._active_span_processor._span_processors[0].span_exporter
+        processor = provider._active_span_processor._span_processors[0]
+        assert isinstance(processor, _NamedTraceRoots)
+        exporter = processor.inner.span_exporter
         assert isinstance(exporter, OTLPSpanExporter)
         assert _exported_auth_headers(exporter) == [
             (
@@ -1819,12 +1822,12 @@ def test_observation_input_carries_the_request_functions_and_tools(
     assert json.loads(str(span.attributes["langfuse.observation.input"])) == expected_input
 
 
-def _trace_ids_of_calls(*calls: Mapping[str, object]) -> tuple[str, ...]:
+def _exported_calls(*calls: Mapping[str, object]) -> tuple[ReadableSpan, ...]:
     exporter: Final = InMemorySpanExporter()
     provider: Final = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
     with patch.dict(os.environ, LANGFUSE_ENV_ONLY, clear=True):
-        logger: Final = LangfuseOtelLogger(tracer_provider=provider)
+        logger: Final = LangfuseOtelLogger(config=OpenTelemetryConfig(exporter=exporter), tracer_provider=provider)
+    provider.add_span_processor(logger._get_span_processor())
     at: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
     def log() -> None:
@@ -1834,13 +1837,13 @@ def _trace_ids_of_calls(*calls: Mapping[str, object]) -> tuple[str, ...]:
 
     try:
         contextvars.copy_context().run(log)
-        return tuple(
-            trace.format_trace_id(span.context.trace_id)
-            for span in exporter.get_finished_spans()
-            if span.name == "litellm_request"
-        )
+        return tuple(span for span in exporter.get_finished_spans() if span.name == "litellm_request")
     finally:
         provider.shutdown()
+
+
+def _trace_ids_of_calls(*calls: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(trace.format_trace_id(span.context.trace_id) for span in _exported_calls(*calls))
 
 
 _NAMED_TRACE: Final = "0af7651916cd43dd8448eb211c80319c"
@@ -1865,6 +1868,23 @@ def test_calls_naming_one_trace_id_share_that_otel_trace(
     first: Mapping[str, object], second: Mapping[str, object]
 ) -> None:
     assert _trace_ids_of_calls(first, second) == (_NAMED_TRACE, _NAMED_TRACE)
+
+
+@pytest.mark.parametrize(("field", "exported_as_a_root"), [("trace_id", True), ("existing_trace_id", False)])
+def test_a_call_naming_a_trace_is_exported_as_its_root_unless_it_joins_an_existing_one(
+    field: str, exported_as_a_root: bool
+) -> None:
+    (span,) = _exported_calls({"metadata": {field: _NAMED_TRACE}})
+
+    assert trace.format_trace_id(span.context.trace_id) == _NAMED_TRACE
+    assert (span.parent is None) is exported_as_a_root
+
+
+def test_calls_naming_one_trace_share_it_under_the_request_span_another_otel_logger_started() -> None:
+    def call() -> Mapping[str, object]:
+        return {"metadata": {"trace_id": _NAMED_TRACE, "litellm_parent_otel_span": _proxy_span()}}
+
+    assert _trace_ids_of_calls(call(), call()) == (_NAMED_TRACE, _NAMED_TRACE)
 
 
 def test_calls_naming_one_trace_id_that_is_not_hex_share_the_trace_the_langfuse_callback_hashes_it_to() -> None:

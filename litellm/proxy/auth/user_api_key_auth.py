@@ -1658,7 +1658,8 @@ def pass_through_key(
 def _ensure_litellm_received_at_on_request_state(request: Request) -> datetime:
     """Idempotently stamp ``request.state.litellm_received_at`` with the moment
     litellm's own code started handling this request -- the first line of
-    ``user_api_key_auth``, before any auth/pre-call work runs. This is the
+    ``user_api_key_auth``, before any auth/pre-call work runs, unless OTel V2
+    stamped it when the request reached the proxy. This is the
     basis for the request-latency Prometheus metrics (see
     ``litellm/integrations/prometheus.py``), and unlike the OTEL SERVER span
     below, it is set unconditionally so those metrics don't depend on OTEL
