@@ -693,6 +693,66 @@ def test_a_system_first_flag_on_one_deployment_does_not_move_its_siblings_later_
 
 
 @pytest.mark.parametrize(
+    ("backend_model", "sent_roles"),
+    (
+        ("hosted_vllm/qa-withdrawn-system-anywhere-backend", ["user", "assistant", "system", "user"]),
+        ("fireworks_ai/qwen3p8-max", ["user", "assistant", "user", "user"]),
+    ),
+    ids=("catalog-undeclared-sends-as-written", "catalog-system-first-moves-it"),
+)
+def test_deleting_the_last_deployment_allowing_mid_conversation_system_restores_the_catalogs_declaration(
+    backend_model: str, sent_roles: list[str], respx_mock: respx.MockRouter
+) -> None:
+    api_base: Final = "http://localhost:12363/v1"
+    messages: Final = [
+        {"role": "user", "content": "Hi there"},
+        {"role": "assistant", "content": "Hello!"},
+        {"role": "system", "content": "Reply in French."},
+        {"role": "user", "content": "What is the capital of France?"},
+    ]
+    route: Final = respx_mock.post(url__regex=rf"{api_base}/chat/completions.*").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "id": "chatcmpl-withdrawn",
+                "object": "chat.completion",
+                "created": 1712697600,
+                "model": backend_model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+    model_keys: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in ("qa-system-anywhere-marked", "qa-system-anywhere-unmarked", backend_model)
+    }
+    litellm_params: Final = {"model": backend_model, "api_base": api_base, "api_key": "fake-key"}
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "system-anywhere",
+                "litellm_params": litellm_params,
+                "model_info": {"id": "qa-system-anywhere-marked", "supports_mid_conversation_system": True},
+            },
+            {
+                "model_name": "system-unmarked",
+                "litellm_params": litellm_params,
+                "model_info": {"id": "qa-system-anywhere-unmarked"},
+            },
+        ],
+    )
+    try:
+        _ = router.apply(ChangeSet(delete=["qa-system-anywhere-marked"]))
+        router.completion(model="system-unmarked", messages=messages)
+
+        assert [message["role"] for message in json.loads(route.calls[0].request.content)["messages"]] == sent_roles
+    finally:
+        router.retire()
+        _restore_model_cost_entries(model_keys)
+
+
+@pytest.mark.parametrize(
     ("catalog_flag", "sibling_flag", "shared_flag"),
     ((True, False, True), (True, "true", True), (None, True, True)),
     ids=("false-keeps-catalog-true", "string-keeps-catalog-true", "true-reaches-shared"),

@@ -72,7 +72,11 @@ class HostedVLLMResponsesAPIConfig(OpenAIResponsesAPIConfig):
         return join_api_base(api_base, "v1/responses")
 
     def _places_system_items_first(
-        self, model: str, input: str | ResponseInputParam, litellm_params: GenericLiteLLMParams
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        continues_conversation: bool,
+        litellm_params: GenericLiteLLMParams,
     ) -> bool:
         return declares_system_first(model, self.custom_llm_provider.value, deployment_model_info(litellm_params))
 

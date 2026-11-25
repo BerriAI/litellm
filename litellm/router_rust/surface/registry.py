@@ -124,6 +124,7 @@ from litellm.types.router import (
 )
 from litellm.types.utils import (
     DEPLOYMENT_SCOPED_TOKEN_LIMIT_FIELDS,
+    OPT_OUT_CAPABILITY_FIELDS,
     SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS,
     CustomPricingLiteLLMParams,
     LlmProviders,
@@ -609,9 +610,26 @@ def _row_sets_true(host: "PythonHost", key: str, fields: frozenset[str]) -> bool
     )
 
 
-def _catalog_sets_true(catalog: Mapping[str, Mapping[str, object]], catalog_keys: tuple[str, ...], field: str) -> bool:
+def _catalog_flag(
+    catalog: Mapping[str, Mapping[str, object]], catalog_keys: tuple[str, ...], field: str
+) -> bool | None:
     entry: Final = next((catalog[key] for key in catalog_keys if key in catalog), None)
-    return entry is not None and entry.get(field) is True
+    value: Final = None if entry is None else entry.get(field)
+    return value if isinstance(value, bool) else None
+
+
+def _restored_flag(
+    field: str,
+    siblings_set_true: frozenset[str],
+    catalog: Mapping[str, Mapping[str, object]],
+    catalog_keys: tuple[str, ...],
+) -> bool | None:
+    if field in siblings_set_true:
+        return True
+    declared: Final = _catalog_flag(catalog, catalog_keys, field)
+    if declared is not None:
+        return declared
+    return None if field in OPT_OUT_CAPABILITY_FIELDS else False
 
 
 def withdraw_shared_capabilities(
@@ -621,8 +639,10 @@ def withdraw_shared_capabilities(
     served: Iterable[Mapping[str, object]],
 ) -> None:
     """For each ``SHARED_ONLY_WHEN_TRUE_CAPABILITY_FIELDS`` flag ``removed`` set ``True``, set the shared
-    ``litellm.model_cost`` row(s) ``removed`` registers onto that still hold it ``True`` to whether ``replacement``,
-    a ``served`` deployment registering onto one of them, or the catalog still sets it ``True``."""
+    ``litellm.model_cost`` row(s) ``removed`` registers onto that still hold it ``True`` back to ``True`` when
+    ``replacement`` or a ``served`` deployment registering onto one of them still sets it, else to the catalog's
+    own value. With no catalog value the flag becomes ``False``, except an ``OPT_OUT_CAPABILITY_FIELDS`` flag,
+    whose ``False`` would declare the opt-out for every same-model deployment, so its row is left as it is."""
     backend: Final = _entry_backend(removed)
     set_true: Final = _shared_capabilities_set_true(removed)
     if backend is None or not set_true:
@@ -654,8 +674,12 @@ def withdraw_shared_capabilities(
     catalog: Final = catalog_with_runtime_registrations()
     catalog_keys: Final = _catalog_backend_keys(*backend, _backend_cost_map_keys(*backend))
     restored: Final = {
-        field: field in siblings_set_true or _catalog_sets_true(catalog, catalog_keys, field) for field in withdrawn
+        field: flag
+        for field in withdrawn
+        if (flag := _restored_flag(field, siblings_set_true, catalog, catalog_keys)) is not None
     }
+    if not restored:
+        return
     host.invoke("register_model")(model_cost={key: restored for key in held}, persist_across_reloads=False)
 
 

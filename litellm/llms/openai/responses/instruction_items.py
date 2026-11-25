@@ -168,8 +168,9 @@ def later_system_items_as_user(input: str | ResponseInputParam) -> str | Respons
     return [*items[:conversation_start], *_conversation_with_system_items_as_user(conversation)]
 
 
-def has_later_instruction_items(input: str | ResponseInputParam) -> bool:
-    return not isinstance(input, str) and any(_role(item) in _INSTRUCTION_ROLES for item in input[1:])
+def has_later_instruction_items(input: str | ResponseInputParam, continues_conversation: bool) -> bool:
+    conversation_start: Final = 0 if continues_conversation else 1
+    return not isinstance(input, str) and any(_role(item) in _INSTRUCTION_ROLES for item in input[conversation_start:])
 
 
 def system_first_input_and_params(

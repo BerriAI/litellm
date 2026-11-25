@@ -649,7 +649,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         )
         placed: Final = (
             system_first_input_and_params(self._validate_input_param(input), request_params)
-            if self._places_system_items_first(model, input, litellm_params)
+            if self._places_system_items_first(
+                model, input, request_params.get("previous_response_id") is not None, litellm_params
+            )
             else None
         )
         placed_input: Final = input if placed is None else placed[0]
@@ -678,12 +680,16 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         return final_request_params
 
     def _places_system_items_first(
-        self, model: str, input: str | ResponseInputParam, litellm_params: GenericLiteLLMParams
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        continues_conversation: bool,
+        litellm_params: GenericLiteLLMParams,
     ) -> bool:
         return (
             self.custom_llm_provider is LlmProviders.OPENAI
             and not self._targets_openai_api(litellm_params)
-            and has_later_instruction_items(self._validate_input_param(input))
+            and has_later_instruction_items(self._validate_input_param(input), continues_conversation)
             and declares_system_first(model, LlmProviders.OPENAI.value, deployment_model_info(litellm_params))
         )
 

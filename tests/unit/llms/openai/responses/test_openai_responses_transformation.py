@@ -1,7 +1,7 @@
 import copy
 import json
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from types import SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -5143,7 +5143,18 @@ _LATER_SYSTEM_INPUT: Final = (
 )
 
 
-def _input_sent_for_a_later_system_item(api_base: str, model_info: Mapping[str, object] | None) -> JsonValue:
+_CONTINUED_TURN_INPUT: Final = (
+    {"role": "system", "content": "Reply in French."},
+    {"role": "user", "content": "What is the capital of France?"},
+)
+
+
+def _responses_request_sent(
+    api_base: str,
+    model_info: Mapping[str, object] | None,
+    input: Sequence[Mapping[str, str]],
+    previous_response_id: str | None = None,
+) -> Mapping[str, JsonValue]:
     with respx.mock() as router:
         route: Final = router.post(f"{api_base}/responses").mock(
             return_value=httpx.Response(
@@ -5163,10 +5174,15 @@ def _input_sent_for_a_later_system_item(api_base: str, model_info: Mapping[str, 
             model="openai/accounts/fireworks/models/qwen3p8-2p4t-a95b",
             api_key="sk-test",
             api_base=api_base,
-            input=list(_LATER_SYSTEM_INPUT),
+            input=[dict(item) for item in input],
             model_info=model_info,
+            previous_response_id=previous_response_id,
         )
-    return TypeAdapter(dict[str, JsonValue]).validate_json(route.calls.last.request.content)["input"]
+    return TypeAdapter(dict[str, JsonValue]).validate_json(route.calls.last.request.content)
+
+
+def _input_sent_for_a_later_system_item(api_base: str, model_info: Mapping[str, object] | None) -> JsonValue:
+    return _responses_request_sent(api_base, model_info, _LATER_SYSTEM_INPUT)["input"]
 
 
 def test_a_system_first_openai_compatible_deployment_gets_a_later_system_item_as_a_user_turn() -> None:
@@ -5200,3 +5216,17 @@ def test_an_openai_deployment_keeps_a_later_system_item_in_place_unless_a_compat
     api_base: str, model_info: Mapping[str, object] | None
 ) -> None:
     assert _input_sent_for_a_later_system_item(api_base, model_info) == list(_LATER_SYSTEM_INPUT)
+
+
+def test_a_system_first_openai_compatible_deployment_moves_a_continued_turns_leading_system_item_out_of_input() -> None:
+    request: Final = _responses_request_sent(
+        _FIREWORKS_API_BASE, _SYSTEM_FIRST_DEPLOYMENT, _CONTINUED_TURN_INPUT, previous_response_id="resp_turn_1"
+    )
+
+    assert (request["instructions"], request["input"]) == ("Reply in French.", [_CONTINUED_TURN_INPUT[1]])
+
+
+def test_a_system_first_openai_compatible_deployment_keeps_a_first_turns_leading_system_item_in_input() -> None:
+    request: Final = _responses_request_sent(_FIREWORKS_API_BASE, _SYSTEM_FIRST_DEPLOYMENT, _CONTINUED_TURN_INPUT)
+
+    assert ("instructions" in request, request["input"]) == (False, list(_CONTINUED_TURN_INPUT))
