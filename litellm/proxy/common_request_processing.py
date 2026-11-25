@@ -508,7 +508,7 @@ _LOGGED_MESSAGES: Final[TypeAdapter[str | Sequence[object]]] = TypeAdapter(
 
 
 def _is_responses_body_with_input(data: Mapping[str, object], route_type: str) -> bool:
-    return route_type in {"aresponses", "_aresponses_websocket"} and bool(data.get("input"))
+    return route_type == "aresponses" and bool(data.get("input"))
 
 
 def _messages_beside_responses_input(data: Mapping[str, object], route_type: str) -> object:

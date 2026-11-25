@@ -5998,10 +5998,10 @@ class TestNativeWebSocketEncryptedContentAffinity:
         class PreCallRecorder(CustomLogger):
             def __init__(self) -> None:
                 super().__init__()
-                self.logged_messages: tuple[object, ...] = ()
+                self.logged_messages: tuple[tuple[object, object], ...] = ()
 
             def log_pre_api_call(self, model: str, messages: object, kwargs: Mapping[str, object]) -> None:
-                self.logged_messages = (*self.logged_messages, kwargs["messages"])
+                self.logged_messages = (*self.logged_messages, (messages, kwargs["messages"]))
 
         turn_input: Final = [
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Weather in Bogota?"}]},
@@ -6027,7 +6027,7 @@ class TestNativeWebSocketEncryptedContentAffinity:
 
         handler._record_client_frame(json.dumps(frame))
 
-        assert recorder.logged_messages == (turn_input,)
+        assert recorder.logged_messages == ((turn_input, turn_input),)
 
     @pytest.mark.asyncio
     async def test_bidirectional_forward_returns_the_provider_failure(self):

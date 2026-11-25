@@ -2739,7 +2739,7 @@ class ResponsesWebSocketStreaming:
         self._detach_budget_reservation()
         _set_turn_guardrail_information(turn_logging_obj, guardrail_information)
         _set_turn_io_token_reservation(turn_logging_obj, io_token_reservation)
-        turn_logging_obj.model_call_details["messages"] = list(_logged_input_items(client_frame))
+        turn_logging_obj.update_messages(list(_logged_input_items(client_frame)))
         turn_logging_obj.pre_call(input=client_frame, api_key="")
         self._open_turns = (*self._open_turns, _ResponsesWsTurn(logging_obj=turn_logging_obj))
 
