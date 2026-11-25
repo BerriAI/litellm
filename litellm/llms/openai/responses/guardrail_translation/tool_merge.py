@@ -174,10 +174,9 @@ def _class_resolution(
     if any(rebuildable[candidate] is None for candidate in candidates):
         return None
     rebuilt: Final = any(rebuildable[candidate] != rebuildable[candidates[0]] for candidate in candidates)
-    pairs: Final = _nearest_pairs(kept, candidates, distance)
-    claimed: Final = frozenset(candidate for _, candidate in pairs)
+    claimed: Final = frozenset(candidate for _, candidate in _nearest_pairs(kept, candidates, distance))
     return _Resolution(
-        pairs=tuple((index, _Match(candidate, rebuilt)) for index, candidate in pairs),
+        pairs=_paired(kept, sorted(claimed), rebuilt=rebuilt),
         remaining=tuple(candidate for candidate in candidates if candidate not in claimed),
     )
 
