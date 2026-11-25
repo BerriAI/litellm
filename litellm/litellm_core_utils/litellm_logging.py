@@ -622,8 +622,12 @@ def deployment_pricing_model_info(model_id: str | None, deployment_model: str | 
     registered: Final = litellm.model_cost.get(model_id)
     if not isinstance(registered, dict) or not any(registered.get(key) is not None for key in _DEPLOYMENT_PRICING_KEYS):
         return None
+    registered_provider: Final = registered.get("litellm_provider")
     try:
-        merged: Final = litellm.get_model_info(model=model_id).copy()
+        merged: Final = litellm.get_model_info(
+            model=model_id,
+            custom_llm_provider=registered_provider if isinstance(registered_provider, str) else None,
+        ).copy()
     except Exception:  # noqa: BLE001  # get_model_info raises for ids it cannot resolve a provider for
         return None
     published: Final = _published_pricing(deployment_model)

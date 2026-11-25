@@ -12505,6 +12505,42 @@ def test_deployment_pricing_model_info_honors_a_200k_tier_batch_override(
     assert {key: info[key] for key in carried_keys} == {key: _PUBLISHED_BATCH_RATES[key] for key in carried_keys}
 
 
+def test_deployment_pricing_model_info_keeps_custom_pricing_when_the_id_is_another_providers_builtin_model(
+    _published_batch_model: None,
+) -> None:
+    from litellm import Router
+    from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+
+    anthropic_model_id: Final = next(
+        key
+        for key, entry in litellm.model_cost.items()
+        if entry.get("litellm_provider") == "anthropic" and "/" not in key
+    )
+    declared_rates: Final = MappingProxyType(
+        {
+            "input_cost_per_token": 2.775e-06,
+            "output_cost_per_token": 1.3875e-05,
+            "input_cost_per_token_batches": 1.3875e-06,
+            "output_cost_per_token_batches": 6.9375e-06,
+        }
+    )
+    litellm.get_model_info.cache_clear()
+    Router(
+        model_list=[
+            {
+                "model_name": "colliding-id",
+                "litellm_params": {"model": f"bedrock/{anthropic_model_id}", "aws_region_name": "us-east-1"},
+                "model_info": {"id": anthropic_model_id, "litellm_provider": "bedrock", **declared_rates},
+            }
+        ]
+    )
+
+    info: Final = deployment_pricing_model_info(anthropic_model_id, f"bedrock/{anthropic_model_id}")
+
+    assert info is not None, f"deployment pricing for id {anthropic_model_id!r} fell back to the global cost map"
+    assert {key: info[key] for key in declared_rates} == dict(declared_rates)
+
+
 def test_get_status_fields_ranks_guardrail_flagged_between_success_and_intervened():
     """LIT-6894: a non-blocking flagged verdict must outrank success in the
     request-level guardrail_status but never mask an intervention."""
