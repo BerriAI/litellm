@@ -1,6 +1,6 @@
 import asyncio
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final, Protocol
 
@@ -245,7 +245,7 @@ class KeyManagementEventHooks:
     async def async_key_deleted_hook(
         data: KeyRequest,
         keys_being_deleted: list[LiteLLM_VerificationToken],
-        response: dict,
+        response: Mapping[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         litellm_changed_by: str | None = None,
     ):
@@ -445,7 +445,7 @@ class KeyManagementEventHooks:
                 )
 
                 if isinstance(litellm.secret_manager_client, BaseSecretManager):
-                    team_settings_cache: Final[dict[str | None, dict | None]] = {}
+                    team_settings_cache: Final[dict[str | None, dict[object, object] | None]] = {}
                     for key in keys_being_deleted:
                         if key.key_alias is not None:
                             team_id = getattr(key, "team_id", None)
@@ -467,7 +467,7 @@ class KeyManagementEventHooks:
     @staticmethod
     async def _get_secret_manager_optional_params(
         team_id: str | None,
-    ) -> dict | None:
+    ) -> dict[object, object] | None:
         if team_id is None:
             return None
 
@@ -619,7 +619,7 @@ class KeyManagementEventHooks:
             )
 
     @staticmethod
-    async def _send_key_rotated_email(response: dict, existing_key_alias: str | None):
+    async def _send_key_rotated_email(response: dict[str, object], existing_key_alias: str | None):
         """
         Send key rotated email if email sending is enabled.
 

@@ -1,24 +1,31 @@
 import asyncio
 import base64
+import contextlib
 import json
 from collections.abc import Callable, Coroutine, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 from websockets.exceptions import ConnectionClosed
 from websockets.frames import Close
 
 import litellm
+from litellm.caching.caching import DualCache
 from litellm.constants import (
     BEDROCK_REALTIME_PENDING_OPENING_MESSAGE_SCOPE_KEY,
     REALTIME_LAZY_SETUP_DEADLINE_SECONDS,
     REALTIME_METERED_USAGE_KEY,
+    REALTIME_SESSION_ENDED_ABNORMALLY_KEY,
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
+    REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY,
 )
+from litellm.exceptions import RateLimitError, ServiceUnavailableError
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.realtime_streaming import (
     RealTimeStreaming,
@@ -26,16 +33,25 @@ from litellm.litellm_core_utils.realtime_streaming import (
     client_sent_openai_beta_realtime_header,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.realtime_turn_limits import TURN_LIMIT_CHECK_FAILED_MESSAGE
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
-from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig, RealtimeBackend
+from litellm.llms.elevenlabs.common_utils import ElevenLabsException
+from litellm.llms.elevenlabs.realtime.transformation import ElevenLabsRealtimeConfig
+from litellm.types.llms.elevenlabs import ElevenLabsRealtimeOptions
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.llms.xai.realtime.usage_meter import XAIRealtimeUsageMeter
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.hooks.parallel_request_limiter_v3 import TagRateLimit
+from litellm.proxy.utils import InternalUsageCache, hash_token
+from litellm.redis.stores.rate_limits import RateLimitScope
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.xai import RealtimeMeteredUsage
 from litellm.types.realtime import RealtimeResponseTransformInput, RealtimeResponseTypedDict
-from litellm.types.utils import GenericGuardrailAPIInputs
+from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs, Usage
+from tests._support.rust_parallel_request_limiter import PROXY_MaxParallelRequestsHandler_v3
 
 
 def _mock_logging() -> MagicMock:
@@ -1110,6 +1126,36 @@ async def test_a_non_string_transcript_fails_the_session_when_a_transcript_guard
     backend_ws.send.assert_not_called()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("listens_only", "sent_into_the_call"), [(True, []), (False, ["session.update", "response.create"])]
+)
+async def test_a_session_that_only_listens_to_a_call_sends_nothing_into_it_when_a_transcript_guardrail_applies(
+    listens_only: bool, sent_into_the_call: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_transcription_guardrail()])
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock()
+    events: Final = (
+        {"type": "session.created", "session": {"id": "sess_1"}},
+        {"type": "conversation.item.input_audio_transcription.completed", "transcript": "hello", "item_id": "i"},
+    )
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[*(json.dumps(event).encode() for event in events), ConnectionClosed(None, None)]
+    )
+    backend_ws.send = AsyncMock()
+    logging_obj: Final = _mock_logging()
+    logging_obj.model_call_details = {}
+    logging_obj.dispatch_success_handlers = AsyncMock()
+
+    await RealTimeStreaming(
+        client_ws, backend_ws, logging_obj, listens_only=listens_only
+    ).backend_to_client_send_messages()
+
+    assert [json.loads(call.args[0])["type"] for call in backend_ws.send.call_args_list] == sent_into_the_call
+
+
 def _native_lifecycle_transcription_guardrail() -> CustomGuardrail:
     class _NativeLifecycleGuardrail(CustomGuardrail):
         use_native_lifecycle_hooks = True
@@ -2095,7 +2141,11 @@ async def test_the_next_clean_turn_is_answered_after_a_blocked_item_with_no_resp
     monkeypatch.setattr(
         litellm,
         "callbacks",
-        [SecretBlockingGuardrail(guardrail_name="no-secrets", event_hook=GuardrailEventHooks.pre_call, default_on=True)],
+        [
+            SecretBlockingGuardrail(
+                guardrail_name="no-secrets", event_hook=GuardrailEventHooks.pre_call, default_on=True
+            )
+        ],
     )
     client_ws: Final = MagicMock()
     client_ws.send_text = AsyncMock()
@@ -3060,7 +3110,9 @@ async def test_default_mode_merges_every_session_update_sent_before_the_first_co
     instructions_update = json.dumps({"type": "session.update", "session": {"instructions": "Be brief."}})
     modalities_update = json.dumps({"type": "session.update", "session": {"modalities": ["text"]}})
     streaming, backend_ws = _gemini_default_mode_streaming(
-        monkeypatch, [instructions_update, modalities_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE], model="gemini-live-2.5-flash"
+        monkeypatch,
+        [instructions_update, modalities_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE],
+        model="gemini-live-2.5-flash",
     )
 
     await streaming.client_ack_messages()
@@ -3163,9 +3215,7 @@ async def test_default_mode_drops_a_late_session_update_quietly_under_drop_param
     ],
 )
 async def test_default_mode_rejects_an_output_modality_the_model_cannot_produce(monkeypatch, model, requested_output):
-    update: Final = json.dumps(
-        {"type": "session.update", "session": {**requested_output, "instructions": "Be brief."}}
-    )
+    update: Final = json.dumps({"type": "session.update", "session": {**requested_output, "instructions": "Be brief."}})
     streaming, backend_ws = _gemini_default_mode_streaming(monkeypatch, [update, _TEXT_ITEM_CREATE], model=model)
 
     await streaming.client_ack_messages()
@@ -3240,7 +3290,9 @@ async def test_default_mode_folds_transcription_guardrail_vad_disable_into_the_m
         {"type": "session.update", "session": {"turn_detection": {"type": "server_vad", "silence_duration_ms": 900}}}
     )
     streaming, backend_ws = _gemini_default_mode_streaming(
-        monkeypatch, [instructions_update, vad_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE], model="gemini-live-2.5-flash"
+        monkeypatch,
+        [instructions_update, vad_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE],
+        model="gemini-live-2.5-flash",
     )
 
     await streaming.client_ack_messages()
@@ -3339,7 +3391,9 @@ async def test_default_mode_sends_the_held_setup_when_no_content_arrives_before_
     backend_ws: Final = MagicMock()
     backend_ws.send = AsyncMock(side_effect=lambda frame: setup_sent.set())
     streaming: Final = RealTimeStreaming(
-        _client_ws_receiving(instructions_update_then_the_deadline_passes, late_update_once_the_setup_is_out, disconnect),
+        _client_ws_receiving(
+            instructions_update_then_the_deadline_passes, late_update_once_the_setup_is_out, disconnect
+        ),
         backend_ws,
         MagicMock(),
         provider_config=GeminiRealtimeConfig(),
@@ -3367,7 +3421,12 @@ async def test_default_mode_refuses_held_session_updates_past_the_size_cap(monke
     half_the_cap: Final = RealTimeStreaming._MAX_BUFFERED_BYTES // 2
     streaming, backend_ws = _gemini_default_mode_streaming(
         monkeypatch,
-        [instructions_update("a" * half_the_cap), instructions_update("b" * half_the_cap), _TEXT_ITEM_CREATE, _RESPONSE_CREATE],
+        [
+            instructions_update("a" * half_the_cap),
+            instructions_update("b" * half_the_cap),
+            _TEXT_ITEM_CREATE,
+            _RESPONSE_CREATE,
+        ],
         model="gemini-live-2.5-flash",
     )
 
@@ -3470,7 +3529,9 @@ async def test_default_mode_acknowledges_an_unchanged_session_update_after_conte
         {"type": "session.update", "session": {"modalities": ["text"], "instructions": "Be brief."}}
     )
     streaming, backend_ws = _gemini_default_mode_streaming(
-        monkeypatch, [session_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE, session_update], model="gemini-live-2.5-flash"
+        monkeypatch,
+        [session_update, _TEXT_ITEM_CREATE, _RESPONSE_CREATE, session_update],
+        model="gemini-live-2.5-flash",
     )
 
     await streaming.client_ack_messages()
@@ -3684,6 +3745,29 @@ async def test_deferred_setup_sends_the_held_session_update_when_more_audio_arri
 
 
 @pytest.mark.asyncio
+async def test_deferred_transcription_update_configures_backend_after_early_audio():
+    client_ws: Final = MagicMock()
+    audio: Final = json.dumps({"type": "input_audio_buffer.append", "audio": "AAAA"})
+    update: Final = json.dumps({"type": "transcription_session.update", "session": {"type": "transcription"}})
+    client_ws.receive_text = AsyncMock(side_effect=[audio, update, ConnectionClosed(None, None)])
+    backend_ws: Final = MagicMock(spec=RealtimeBackend)
+    backend_ws.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        provider_config=ElevenLabsRealtimeConfig(),
+        model="scribe_v2_realtime",
+    )
+
+    await streaming.client_ack_messages()
+
+    sent: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert len(sent) == 1
+    assert sent[0]["kind"] == "configure"
+
+
+@pytest.mark.asyncio
 async def test_deferred_setup_flush_buffers_audio_received_during_flush():
     import asyncio
 
@@ -3865,6 +3949,7 @@ async def test_deferred_setup_caps_non_audio_buffered_bytes(monkeypatch):
 
     client_ws = MagicMock()
     client_ws.receive_text = AsyncMock(side_effect=[audio_msg, big_non_audio, ConnectionClosed(None, None)])
+    client_ws.send_text = AsyncMock()
     backend_ws = MagicMock()
     backend_ws.send = AsyncMock()
     logging_obj: Final = _mock_logging()
@@ -4115,6 +4200,56 @@ async def test_translation_disconnect_bills_sent_input_audio(
             "usage": {"type": "duration", "input_seconds": 2.0, "output_seconds": output_bytes / 48000},
         }
     ]
+
+
+@pytest.mark.parametrize(
+    ("closed_event_at", "billed_seconds"),
+    [(None, 30.0), (12.0, 12.0)],
+    ids=["until-the-sideband-ends", "until-the-provider-closes-the-session"],
+)
+def test_translation_call_the_proxy_listens_to_bills_the_time_it_ran(
+    closed_event_at: float | None, billed_seconds: float
+) -> None:
+    clock: Final = _SteppedClock(1000.0)
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(),
+        backend_ws=MagicMock(),
+        logging_obj=_mock_logging(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+        listens_only=True,
+        clock=clock,
+    )
+    if closed_event_at is not None:
+        clock.now = 1000.0 + closed_event_at
+        streaming._capture_translation_output_audio({"type": "session.closed"})
+    clock.now = 1030.0
+    streaming._finalize_translation_usage()
+    clock.now = 1090.0
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages == [
+        {
+            "type": "session.closed",
+            "usage": {"type": "duration", "input_seconds": billed_seconds, "output_seconds": 0.0},
+        }
+    ]
+
+
+def test_translation_session_the_proxy_relays_is_not_billed_by_the_clock() -> None:
+    clock: Final = _SteppedClock(1000.0)
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(),
+        backend_ws=MagicMock(),
+        logging_obj=_mock_logging(),
+        model="gpt-realtime-translate",
+        translation_session=True,
+        clock=clock,
+    )
+    clock.now = 1030.0
+    streaming._finalize_translation_usage()
+
+    assert streaming.messages == []
 
 
 @pytest.mark.asyncio
@@ -4787,7 +4922,9 @@ async def test_session_closed_after_gemini_barge_in_still_bills_the_interrupted_
 
     from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
-    audio_turn: Final = {"serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "QUJD"}}]}}}
+    audio_turn: Final = {
+        "serverContent": {"modelTurn": {"parts": [{"inlineData": {"mimeType": "audio/pcm", "data": "QUJD"}}]}}
+    }
     interrupted_with_usage: Final = {
         "serverContent": {"interrupted": True},
         "usageMetadata": {"promptTokenCount": 30, "responseTokenCount": 12, "totalTokenCount": 42},
@@ -5017,6 +5154,52 @@ async def test_upstream_refusal_before_any_frame_logs_a_failure_not_a_success():
     assert session.logging.logged_sessions == ()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("upstream_close", "billed"),
+    [
+        (ConnectionClosed(None, None), True),
+        (ConnectionClosed(Close(1000, "observer_writer_exit"), None), True),
+        (ConnectionClosed(Close(1008, _UPSTREAM_REFUSAL), None), False),
+    ],
+    ids=["dropped", "closed-normally", "refused"],
+)
+async def test_translation_call_nobody_spoke_on_is_billed_for_the_time_the_proxy_listened(
+    upstream_close: ConnectionClosed, billed: bool
+) -> None:
+    clock: Final = _SteppedClock(1000.0)
+    logging: Final = _RecordingLogging()
+    worker: Final = _InlineLoggingWorker()
+
+    async def recv(**_kwargs: object) -> str:
+        clock.now = 1040.0
+        raise upstream_close
+
+    backend_ws: Final = MagicMock()
+    backend_ws.recv = recv
+    streaming: Final = RealTimeStreaming(
+        _client_ws_that_never_sends(),
+        backend_ws,
+        logging,
+        model="gpt-realtime-translate",
+        logging_worker=worker,
+        translation_session=True,
+        listens_only=True,
+        clock=clock,
+    )
+
+    await streaming.backend_to_client_send_messages()
+    await worker.drain()
+
+    expected_sessions: Final = (
+        (({"type": "session.closed", "usage": {"type": "duration", "input_seconds": 40.0, "output_seconds": 0.0}},),)
+        if billed
+        else ()
+    )
+    assert logging.logged_sessions == expected_sessions
+    assert logging.logged_failures == (() if billed else (upstream_close,))
+
+
 class _RefusingRealtimeConfig(_PassthroughRealtimeConfig):
     def __init__(self, refusal: Exception | None) -> None:
         self._refusal: Final = refusal
@@ -5044,6 +5227,54 @@ async def test_a_session_the_provider_refused_in_band_logs_a_failure_even_after_
 
     assert session.logging.logged_failures == (refusal,)
     assert session.logging.logged_sessions == ()
+
+
+@pytest.mark.asyncio
+async def test_an_elevenlabs_error_before_session_started_logs_a_failure_and_no_success():
+    provider_config: Final = ElevenLabsRealtimeConfig()
+    provider_config.transform_realtime_request(
+        json.dumps({"type": "transcription_session.update", "session": {"type": "transcription"}}),
+        "scribe_v2_realtime",
+    )
+    session: Final = _relay_session(
+        _client_ws_that_never_sends(),
+        _backend_ws_closing_with(
+            json.dumps({"message_type": "auth_error", "error": "Invalid API key"}).encode(),
+            ConnectionClosed(Close(1000, ""), None),
+        ),
+        provider_config,
+    )
+
+    await session.run()
+
+    (failure,) = session.logging.logged_failures
+    assert isinstance(failure, ElevenLabsException)
+    assert (failure.status_code, failure.message) == (401, "ElevenLabs realtime transcription failed: auth_error")
+    assert session.logging.logged_sessions == ()
+
+
+@pytest.mark.asyncio
+async def test_an_elevenlabs_keyterm_session_records_its_priced_addon_for_cost_tracking():
+    provider_config: Final = ElevenLabsRealtimeConfig(options=ElevenLabsRealtimeOptions(keyterms=("LiteLLM",)))
+    provider_config.transform_realtime_request(
+        json.dumps({"type": "transcription_session.update", "session": {"type": "transcription"}}),
+        "scribe_v2_realtime",
+    )
+    session: Final = _relay_session(
+        _client_ws_that_never_sends(),
+        _backend_ws_closing_with(
+            json.dumps({"message_type": "session_started", "session_id": "el_sess_1"}).encode(),
+            ConnectionClosed(Close(1000, ""), None),
+        ),
+        provider_config,
+    )
+
+    await session.run()
+
+    addons: Final = session.logging.model_call_details[REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY]
+    assert len(session.logging.logged_sessions) == 1
+    assert isinstance(addons, tuple) and len(addons) == 1
+    assert (litellm.get_model_info(addons[0])["input_cost_per_second"] or 0) > 0
 
 
 @pytest.mark.asyncio
@@ -5362,6 +5593,44 @@ async def test_transformed_transcription_completion_never_sends_response_create(
 
     assert json.loads(client_ws.send_text.await_args.args[0]) == completed_event
     backend_ws.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_client_disconnect_before_the_completed_event_still_logs_its_usage():
+    usage: Final = {"type": "duration", "seconds": 90.0}
+    batch: Final = [
+        {"type": "conversation.item.input_audio_transcription.delta", "item_id": "turn_1", "delta": "Hello"},
+        {"type": "input_audio_buffer.speech_stopped", "item_id": "turn_1"},
+        {"type": "conversation.item.input_audio_transcription.completed", "item_id": "turn_1", "transcript": "Hello.", "usage": usage},
+    ]
+    provider_config: Final = MagicMock()
+    provider_config.requires_session_configuration.return_value = True
+    provider_config.transform_realtime_response.return_value = {
+        "response": batch,
+        "current_output_item_id": None,
+        "current_response_id": None,
+        "current_delta_chunks": None,
+        "current_conversation_id": None,
+        "current_item_chunks": None,
+        "current_delta_type": None,
+        "session_configuration_request": None,
+    }
+    client_ws: Final = MagicMock()
+    client_ws.send_text = AsyncMock(side_effect=asyncio.CancelledError)
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        MagicMock(),
+        MagicMock(),
+        provider_config=provider_config,
+        model="scribe_v2_realtime",
+        force_transcription_model="scribe_v2_realtime",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await streaming._handle_provider_config_message("{}")
+
+    logged: Final = [dict(message) for message in streaming.messages]
+    assert {"type": "conversation.item.input_audio_transcription.completed", "usage": usage} in logged
 
 
 @pytest.mark.asyncio
@@ -6338,6 +6607,1380 @@ async def test_unbridged_backend_receives_session_update_and_response_create_as_
     await streaming.client_ack_messages()
 
     assert tuple(json.loads(call.args[0]) for call in backend_ws.send.call_args_list) == client_events
+
+
+_TURN_LIMITED_MODEL: Final = "gpt-realtime"
+_TURN_TPM_LIMIT: Final = 1000
+_TURN_TAG: Final = "realtime-turn-tag"
+_CLIENT_RESPONSE_CREATE: Final = json.dumps({"type": "response.create"})
+_CLIENT_ITEM_CREATE: Final = json.dumps(
+    {
+        "type": "conversation.item.create",
+        "item": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+    }
+)
+
+
+def _response_done(total_tokens: int, response_id: str = "resp_1") -> str:
+    return json.dumps(
+        {
+            "type": "response.done",
+            "response": {
+                "id": response_id,
+                "status": "completed",
+                "usage": {"input_tokens": total_tokens - 10, "output_tokens": 10, "total_tokens": total_tokens},
+            },
+        }
+    )
+
+
+def _response_created(response_id: str) -> str:
+    return json.dumps({"type": "response.created", "response": {"id": response_id, "status": "in_progress"}})
+
+
+class _SentError(TypedDict):
+    type: ReadOnly[str]
+
+
+class _SentFrame(TypedDict):
+    type: ReadOnly[str]
+    error: ReadOnly[NotRequired[_SentError]]
+    response_id: ReadOnly[NotRequired[str]]
+
+
+_SENT_FRAME: Final = TypeAdapter(_SentFrame)
+
+
+@dataclass(frozen=True, slots=True)
+class _TurnLimitedSession:
+    limiter: PROXY_MaxParallelRequestsHandler_v3
+    auth: UserAPIKeyAuth
+    client_ws: MagicMock
+    backend_ws: MagicMock
+    streaming: RealTimeStreaming
+
+    def tokens_counted(self, scope: str, value: str) -> int:
+        counter: Final = RateLimitScope(scope, value).counter("tokens")
+        return int(self.limiter.rate_limits.local((counter,))[0] or 0)
+
+    def sent_upstream(self) -> list[_SentFrame]:
+        return [_SENT_FRAME.validate_json(call.args[0]) for call in self.backend_ws.send.await_args_list]
+
+    def sent_to_client(self) -> list[_SentFrame]:
+        return [_SENT_FRAME.validate_json(call.args[0]) for call in self.client_ws.send_text.await_args_list]
+
+    def error_types_sent_to_client(self) -> list[str]:
+        return [error["type"] for frame in self.sent_to_client() if (error := frame.get("error")) is not None]
+
+
+async def _turn_limited_session(
+    *,
+    client_frames: Sequence[str] = (),
+    backend_frames: Sequence[str] = (),
+    auth_limits: Mapping[str, object] = MappingProxyType({}),
+    tag_tpm_limit: int | None = None,
+    logging_obj: object | None = None,
+    listens_only: bool = False,
+) -> _TurnLimitedSession:
+    tag_limits: Final = MappingProxyType(
+        {} if tag_tpm_limit is None else {_TURN_TAG: TagRateLimit(rpm_limit=None, tpm_limit=tag_tpm_limit)}
+    )
+
+    async def resolve_tag_limits(tag_names: Sequence[str]) -> Mapping[str, TagRateLimit]:
+        return {name: tag_limits[name] for name in tag_names if name in tag_limits}
+
+    local_cache: Final = DualCache()
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(local_cache), tag_rate_limit_resolver=resolve_tag_limits
+    )
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-realtime-turn-limits"), **auth_limits)
+    await limiter.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=local_cache,
+        data={"model": _TURN_LIMITED_MODEL, "litellm_call_id": "realtime-session", "metadata": {"tags": [_TURN_TAG]}},
+        call_type=CallTypes.arealtime.value,
+    )
+    client_ws: Final = _ga_client_ws()
+    client_ws.receive_text = AsyncMock(side_effect=[*client_frames, Exception("connection closed")])
+    client_ws.close = AsyncMock()
+    backend_ws: Final = MagicMock(send=AsyncMock(), close=AsyncMock())
+    backend_ws.recv = AsyncMock(side_effect=[*backend_frames, ConnectionClosed(None, None)])
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj or _mock_logging(),
+        model=_TURN_LIMITED_MODEL,
+        user_api_key_dict=auth,
+        turn_limiters=lambda: (limiter,),
+        listens_only=listens_only,
+    )
+    return _TurnLimitedSession(limiter, auth, client_ws, backend_ws, streaming)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("auth_limits", "tag_tpm_limit"),
+    [({"tpm_limit": _TURN_TPM_LIMIT}, None), ({}, _TURN_TPM_LIMIT)],
+    ids=["key", "tag"],
+)
+async def test_a_response_create_over_a_tpm_limit_after_earlier_turns_is_refused_and_the_session_stays_open(
+    auth_limits: Mapping[str, object], tag_tpm_limit: int | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    session: Final = await _turn_limited_session(
+        client_frames=(_CLIENT_RESPONSE_CREATE, _CLIENT_ITEM_CREATE),
+        backend_frames=(_response_done(600, "resp_1"), _response_done(600, "resp_2")),
+        auth_limits=auth_limits,
+        tag_tpm_limit=tag_tpm_limit,
+    )
+
+    await session.streaming.backend_to_client_send_messages()
+    await session.streaming.client_ack_messages()
+
+    refusals: Final = [event for event in session.sent_to_client() if event["type"] == "error"]
+    assert [refusal["error"]["type"] for refusal in refusals] == ["rate_limit_exceeded"]
+    assert [event["type"] for event in session.sent_upstream()] == ["conversation.item.create"]
+    session.client_ws.close.assert_not_awaited()
+    session.backend_ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_response_create_under_the_tpm_limit_reaches_the_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    session: Final = await _turn_limited_session(
+        client_frames=(_CLIENT_RESPONSE_CREATE,),
+        backend_frames=(_response_done(400),),
+        auth_limits={"tpm_limit": _TURN_TPM_LIMIT},
+    )
+
+    await session.streaming.backend_to_client_send_messages()
+    await session.streaming.client_ack_messages()
+
+    assert [event["type"] for event in session.sent_upstream()] == ["response.create"]
+    assert not [event for event in session.sent_to_client() if event["type"] == "error"]
+
+
+@pytest.mark.asyncio
+async def test_each_response_done_is_charged_to_the_session_windows_before_the_client_sees_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    session: Final = await _turn_limited_session(
+        backend_frames=(_response_done(300, "resp_1"), _response_done(450, "resp_2")),
+        auth_limits={"tpm_limit": 10**9, "metadata": {"model_tpm_limit": {_TURN_LIMITED_MODEL: 10**9}}},
+        tag_tpm_limit=10**9,
+    )
+    recorder: Final = _WindowsWhenClientReceives(session)
+    session.client_ws.send_text = recorder
+
+    await session.streaming.backend_to_client_send_messages()
+
+    assert recorder.seen == (("resp_1", (300, 300, 300)), ("resp_2", (750, 750, 750)))
+
+
+class _WindowsWhenClientReceives:
+    def __init__(self, session: _TurnLimitedSession) -> None:
+        self.session: Final = session
+        self.at_open: Final = self.windows()
+        self.seen: tuple[tuple[str, tuple[int, ...]], ...] = ()
+
+    def windows(self) -> tuple[int, ...]:
+        key: Final = self.session.auth.api_key or ""
+        return (
+            self.session.tokens_counted("api_key", key),
+            self.session.tokens_counted("model_per_key", f"{key}:{_TURN_LIMITED_MODEL}"),
+            self.session.tokens_counted("tag", _TURN_TAG),
+        )
+
+    async def __call__(self, text: str) -> None:
+        charged_since_open: Final = tuple(now - opened for now, opened in zip(self.windows(), self.at_open))
+        self.seen = (*self.seen, (json.loads(text)["response"]["id"], charged_since_open))
+
+
+@pytest.mark.asyncio
+async def test_a_backend_started_response_over_the_tpm_limit_is_cancelled_upstream_and_the_client_told(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    session: Final = await _turn_limited_session(
+        backend_frames=(_response_done(1200, "resp_1"), _response_created("resp_vad")),
+        auth_limits={"tpm_limit": _TURN_TPM_LIMIT},
+    )
+
+    await session.streaming.backend_to_client_send_messages()
+
+    assert [(event["type"], event.get("response_id")) for event in session.sent_upstream()] == [
+        ("response.cancel", "resp_vad")
+    ]
+    assert session.error_types_sent_to_client() == ["rate_limit_exceeded"]
+    session.backend_ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_response_the_provider_reports_done_twice_counts_once_toward_the_tpm_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    session: Final = await _turn_limited_session(
+        backend_frames=(
+            _response_done(300, "resp_1"),
+            _response_done(300, "resp_1"),
+            _response_done(200, "resp_2"),
+        ),
+        auth_limits={"tpm_limit": _TURN_TPM_LIMIT},
+    )
+    key: Final = session.auth.api_key or ""
+    counted_at_open: Final = session.tokens_counted("api_key", key)
+
+    await session.streaming.backend_to_client_send_messages()
+
+    assert session.tokens_counted("api_key", key) - counted_at_open == 500
+    assert [event["type"] for event in session.sent_to_client()].count("response.done") == 3
+
+
+@pytest.mark.asyncio
+async def test_a_session_that_only_listens_to_a_call_counts_its_turns_and_sends_no_cancel_into_it_over_the_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    session: Final = await _turn_limited_session(
+        backend_frames=(_response_done(1200, "resp_1"), _response_created("resp_vad")),
+        auth_limits={"tpm_limit": _TURN_TPM_LIMIT},
+        listens_only=True,
+    )
+    key: Final = session.auth.api_key or ""
+    counted_at_open: Final = session.tokens_counted("api_key", key)
+
+    await session.streaming.backend_to_client_send_messages()
+
+    assert session.sent_upstream() == []
+    assert [event for event in session.sent_to_client() if event["type"] == "error"] == []
+    assert session.tokens_counted("api_key", key) - counted_at_open == 1200
+
+
+@pytest.mark.asyncio
+async def test_a_response_create_the_provider_rejected_does_not_exempt_the_next_response_from_the_tpm_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    rejected_create: Final = json.dumps(
+        {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "code": "conversation_already_has_active_response",
+                "message": "Conversation already has an active response",
+            },
+        }
+    )
+    session: Final = await _turn_limited_session(
+        client_frames=(_CLIENT_RESPONSE_CREATE,),
+        backend_frames=(rejected_create, _response_created("resp_vad")),
+        auth_limits={"tpm_limit": _TURN_TPM_LIMIT},
+    )
+    await session.streaming.client_ack_messages()
+    await session.limiter.charge_realtime_turn_usage(
+        session.auth, _TURN_LIMITED_MODEL, Usage(prompt_tokens=1190, completion_tokens=10, total_tokens=1200)
+    )
+
+    await session.streaming.backend_to_client_send_messages()
+
+    assert [event["type"] for event in session.sent_upstream()] == ["response.create", "response.cancel"]
+    assert session.error_types_sent_to_client() == ["invalid_request_error", "rate_limit_exceeded"]
+
+
+@pytest.mark.asyncio
+async def test_a_proxy_started_response_over_the_tpm_limit_is_not_sent_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    session: Final = await _turn_limited_session(auth_limits={"tpm_limit": _TURN_TPM_LIMIT})
+    await session.limiter.charge_realtime_turn_usage(
+        session.auth, _TURN_LIMITED_MODEL, Usage(prompt_tokens=1190, completion_tokens=10, total_tokens=1200)
+    )
+
+    await session.streaming._send_proxy_response_create((_CLIENT_ITEM_CREATE, _CLIENT_RESPONSE_CREATE))
+
+    assert session.sent_upstream() == []
+    assert [event["type"] for event in session.sent_to_client()] == ["error"]
+    assert session.error_types_sent_to_client() == ["rate_limit_exceeded"]
+
+
+@dataclass(slots=True)
+class _ScriptedTurnLimiter:
+    check_error: Exception | None = None
+    charge_error: Exception | None = None
+    checks: tuple[tuple[str | None, str], ...] = ()
+    charges: tuple[tuple[str | None, int], ...] = ()
+
+    async def enforce_token_limits_for_frame(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, call_type: str = ""
+    ) -> None:
+        self.checks = (*self.checks, (requested_model, call_type))
+        if self.check_error is not None:
+            raise self.check_error
+
+    async def charge_realtime_turn_usage(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
+    ) -> None:
+        self.charges = (*self.charges, (requested_model, usage.total_tokens))
+        if self.charge_error is not None:
+            raise self.charge_error
+
+
+def _scripted_session(
+    limiter: object,
+    *,
+    client_frames: Sequence[str] = (),
+    backend_frames: Sequence[str] = (),
+    user_api_key_dict: UserAPIKeyAuth | None = None,
+    logging_obj: object | None = None,
+    model: str = _TURN_LIMITED_MODEL,
+    provider_config: BaseRealtimeConfig | MagicMock | None = None,
+    beta_client: bool = False,
+) -> tuple[RealTimeStreaming, MagicMock, MagicMock]:
+    client_ws: Final = _beta_client_ws() if beta_client else _ga_client_ws()
+    client_ws.receive_text = AsyncMock(side_effect=[*client_frames, Exception("connection closed")])
+    client_ws.close = AsyncMock()
+    backend_ws: Final = MagicMock(send=AsyncMock(), close=AsyncMock())
+    backend_ws.recv = AsyncMock(side_effect=[*backend_frames, ConnectionClosed(None, None)])
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj or _mock_logging(),
+        provider_config=provider_config,
+        model=model,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key") if user_api_key_dict is None else user_api_key_dict,
+        turn_limiters=lambda: (limiter,),
+    )
+    return streaming, client_ws, backend_ws
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("check_error", "expected_error_type", "expected_message"),
+    [
+        (
+            ServiceUnavailableError(message="limits unreachable", llm_provider="litellm_proxy", model="m"),
+            "server_error",
+            "limits unreachable",
+        ),
+        (RuntimeError("redis exploded with internal detail"), "server_error", TURN_LIMIT_CHECK_FAILED_MESSAGE),
+    ],
+    ids=["unverifiable", "unexpected"],
+)
+async def test_a_response_create_whose_limits_cannot_be_checked_is_refused_and_not_forwarded(
+    check_error: Exception, expected_error_type: str, expected_message: str
+) -> None:
+    streaming, client_ws, backend_ws = _scripted_session(
+        _ScriptedTurnLimiter(check_error=check_error), client_frames=(_CLIENT_RESPONSE_CREATE, _CLIENT_ITEM_CREATE)
+    )
+
+    await streaming.client_ack_messages()
+
+    errors: Final = [json.loads(call.args[0])["error"] for call in client_ws.send_text.await_args_list]
+    assert [error["type"] for error in errors] == [expected_error_type]
+    assert expected_message in errors[0]["message"]
+    assert [json.loads(call.args[0])["type"] for call in backend_ws.send.await_args_list] == [
+        "conversation.item.create"
+    ]
+    client_ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_turn_charge_still_delivers_the_response_done_to_the_client() -> None:
+    limiter: Final = _ScriptedTurnLimiter(charge_error=RuntimeError("store down"))
+    streaming, client_ws, _ = _scripted_session(limiter, backend_frames=(_response_done(300),))
+
+    await streaming.backend_to_client_send_messages()
+
+    assert limiter.charges == ((_TURN_LIMITED_MODEL, 300),)
+    assert [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list] == ["response.done"]
+
+
+_CLOSE_TOKEN_USAGE: Final = MappingProxyType(
+    {"type": "tokens", "input_tokens": 140, "output_tokens": 10, "total_tokens": 150}
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "close_error",
+    [ConnectionClosed(None, None), asyncio.CancelledError(), RuntimeError("relay failed")],
+    ids=["provider_closed", "cancelled", "relay_failed"],
+)
+@pytest.mark.parametrize(
+    ("unbilled_response", "unbilled_usage", "expected_tokens"),
+    [
+        (_response_done(300, "resp_interrupted"), None, (300,)),
+        (None, _CLOSE_TOKEN_USAGE, (150,)),
+        (_response_done(300, "resp_interrupted"), _CLOSE_TOKEN_USAGE, (300, 150)),
+        (None, MappingProxyType({"type": "duration", "seconds": 3}), ()),
+    ],
+    ids=["interrupted_response", "transcription_tokens", "both", "transcription_duration"],
+)
+async def test_tokens_a_provider_reports_only_at_session_close_count_toward_the_tpm_limit(
+    close_error: BaseException,
+    unbilled_response: str | None,
+    unbilled_usage: Mapping[str, object] | None,
+    expected_tokens: tuple[int, ...],
+) -> None:
+    limiter: Final = _ScriptedTurnLimiter()
+    provider_config: Final = MagicMock()
+    provider_config.unbilled_response_on_session_close.return_value = (
+        None if unbilled_response is None else json.loads(unbilled_response)
+    )
+    provider_config.unbilled_usage_on_session_close.return_value = (
+        None if unbilled_usage is None else dict(unbilled_usage)
+    )
+    provider_config.session_refusal.return_value = None
+    charged_when_logged: Final = MagicMock()
+
+    def log_session_end(*args: object, **kwargs: object) -> Coroutine[object, object, None]:
+        charged_when_logged(limiter.charges)
+        return asyncio.sleep(0)
+
+    logging_obj: Final = MagicMock(dispatch_success_handlers=log_session_end, dispatch_failure_handlers=log_session_end)
+    streaming, _, backend_ws = _scripted_session(limiter, provider_config=provider_config, logging_obj=logging_obj)
+    backend_ws.recv = AsyncMock(side_effect=close_error)
+
+    with contextlib.suppress(asyncio.CancelledError):
+        await streaming.backend_to_client_send_messages()
+
+    expected_charges: Final = tuple((_TURN_LIMITED_MODEL, tokens) for tokens in expected_tokens)
+    assert limiter.charges == expected_charges
+    charged_when_logged.assert_called_once_with(expected_charges)
+
+
+@dataclass(slots=True)
+class _RecoveringTurnLimiter(_ScriptedTurnLimiter):
+    failed_charges_left: int = 2
+
+    async def charge_realtime_turn_usage(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
+    ) -> None:
+        self.charges = (*self.charges, (requested_model, usage.total_tokens))
+        if self.failed_charges_left > 0:
+            self.failed_charges_left -= 1
+            raise RuntimeError("store down")
+
+
+@pytest.mark.asyncio
+async def test_a_failed_turn_charge_is_retried_before_the_next_turns_without_refusing_them() -> None:
+    limiter: Final = _RecoveringTurnLimiter()
+    streaming, client_ws, backend_ws = _scripted_session(
+        limiter,
+        client_frames=(_CLIENT_RESPONSE_CREATE, _CLIENT_RESPONSE_CREATE),
+        backend_frames=(_response_done(300),),
+    )
+
+    await streaming.backend_to_client_send_messages()
+    await streaming.client_ack_messages()
+
+    assert limiter.charges == ((_TURN_LIMITED_MODEL, 300),) * 3
+    assert [json.loads(call.args[0])["type"] for call in backend_ws.send.await_args_list] == [
+        "response.create",
+        "response.create",
+    ]
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert not [event for event in sent if event["type"] == "error"]
+
+
+@dataclass(slots=True)
+class _CapacityOnlyCheck:
+    error: Exception
+
+    async def enforce_token_limits_for_frame(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
+    ) -> None:
+        raise self.error
+
+
+@pytest.mark.asyncio
+async def test_a_turn_over_deployment_capacity_is_refused_and_not_sent_upstream() -> None:
+    capacity: Final = _CapacityOnlyCheck(
+        RateLimitError(message="deployment capacity reached", llm_provider="litellm_proxy", model="m")
+    )
+    streaming, client_ws, backend_ws = _scripted_session(capacity, client_frames=(_CLIENT_RESPONSE_CREATE,))
+
+    await streaming.client_ack_messages()
+
+    backend_ws.send.assert_not_awaited()
+    assert [json.loads(call.args[0])["error"]["type"] for call in client_ws.send_text.await_args_list] == [
+        "rate_limit_exceeded"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_response_the_provider_cannot_cancel_over_the_limit_ends_the_session_before_its_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model="m")
+    )
+    client_ws: Final = _ga_client_ws()
+    client_ws.close = AsyncMock()
+    backend_ws: Final = MagicMock(send=AsyncMock(), close=AsyncMock())
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps({"setupComplete": {}}),
+            json.dumps({"serverContent": {"modelTurn": {"parts": [{"text": "Hello"}]}}}),
+            json.dumps({"serverContent": {"modelTurn": {"parts": [{"text": " again"}]}}}),
+            json.dumps(
+                {
+                    "serverContent": {"turnComplete": True},
+                    "usageMetadata": {"promptTokenCount": 10, "responseTokenCount": 20, "totalTokenCount": 30},
+                }
+            ),
+            ConnectionClosed(None, None),
+        ]
+    )
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        provider_config=GeminiRealtimeConfig(),
+        model="gemini-live-2.5-flash",
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        turn_limiters=lambda: (limiter,),
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [event["error"]["type"] for event in sent if event["type"] == "error"] == ["rate_limit_exceeded"]
+    assert not [event for event in sent if event["type"].endswith(".delta") or event["type"] == "response.done"]
+    assert [charge[1] for charge in limiter.charges] == [30]
+    backend_ws.close.assert_awaited_once()
+
+
+_GEMINI_TURN_STARTED: Final = json.dumps({"serverContent": {"modelTurn": {"parts": [{"text": "Hello"}]}}})
+_GEMINI_TURN_USAGE: Final = json.dumps(
+    {
+        "serverContent": {"turnComplete": True},
+        "usageMetadata": {"promptTokenCount": 10, "responseTokenCount": 20, "totalTokenCount": 30},
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class _ClosableBackend:
+    ws: MagicMock
+    closed: asyncio.Event
+    drained: asyncio.Event
+
+
+def _closable_backend(frames: Sequence[str], *, stays_open_after_frames: bool) -> _ClosableBackend:
+    closed: Final = asyncio.Event()
+    drained: Final = asyncio.Event()
+    remaining: Final = iter(frames)
+
+    async def recv(*_args: object, **_kwargs: object) -> str:
+        if closed.is_set():
+            raise ConnectionClosed(None, None)
+        frame: Final = next(remaining, None)
+        if frame is not None:
+            return frame
+        drained.set()
+        if stays_open_after_frames:
+            await closed.wait()
+        raise ConnectionClosed(None, None)
+
+    async def close(*_args: object, **_kwargs: object) -> None:
+        closed.set()
+
+    return _ClosableBackend(
+        MagicMock(send=AsyncMock(), close=AsyncMock(side_effect=close), recv=AsyncMock(side_effect=recv)),
+        closed,
+        drained,
+    )
+
+
+def _gemini_turn_limited_session(
+    limiter: object, backend: _ClosableBackend, client_frames: Sequence[str] = ()
+) -> tuple[RealTimeStreaming, MagicMock]:
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    client_ws: Final = _ga_client_ws()
+    client_ws.receive_text = AsyncMock(side_effect=[*client_frames, Exception("connection closed")])
+    client_ws.close = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend.ws,
+        _mock_logging(),
+        provider_config=GeminiRealtimeConfig(),
+        model="gemini-live-2.5-flash",
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        turn_limiters=lambda: (limiter,),
+    )
+    return streaming, client_ws
+
+
+def _over_limit_turn_limiter() -> _ScriptedTurnLimiter:
+    return _ScriptedTurnLimiter(
+        check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model="m")
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_refused_response_the_provider_cannot_cancel_still_counts_the_tokens_it_reports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    limiter: Final = _over_limit_turn_limiter()
+    backend: Final = _closable_backend(
+        (json.dumps({"setupComplete": {}}), _GEMINI_TURN_STARTED, _GEMINI_TURN_USAGE), stays_open_after_frames=True
+    )
+    streaming, _ = _gemini_turn_limited_session(limiter, backend)
+
+    close: Final = await asyncio.wait_for(streaming.backend_to_client_send_messages(), timeout=5)
+
+    assert [charge[1] for charge in limiter.charges] == [30]
+    assert close.code == 1013
+    backend.ws.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_session_ended_over_its_limit_is_not_reported_as_a_provider_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    backend: Final = _closable_backend(
+        (json.dumps({"setupComplete": {}}), _GEMINI_TURN_STARTED, _GEMINI_TURN_USAGE), stays_open_after_frames=True
+    )
+    streaming, client_ws = _gemini_turn_limited_session(_over_limit_turn_limiter(), backend)
+    client_ws.receive_text = AsyncMock(side_effect=asyncio.Event().wait)
+    streaming.logging_obj.model_call_details = {}
+
+    await asyncio.wait_for(streaming.bidirectional_forward(), timeout=5)
+
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [event["error"]["type"] for event in sent if event["type"] == "error"] == ["rate_limit_exceeded"]
+    assert client_ws.close.await_args.kwargs["code"] == 1013
+    assert REALTIME_SESSION_ENDED_ABNORMALLY_KEY not in streaming.logging_obj.model_call_details
+
+
+@pytest.mark.asyncio
+async def test_a_client_that_leaves_when_its_session_ends_over_the_limit_still_has_the_refused_turn_counted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    limiter: Final = _over_limit_turn_limiter()
+    client_closed: Final = asyncio.Event()
+    client_left: Final = asyncio.Event()
+    usage_reported: Final = asyncio.Event()
+    frames: Final = iter((json.dumps({"setupComplete": {}}), _GEMINI_TURN_STARTED))
+
+    async def recv(*_args: object, **_kwargs: object) -> str:
+        frame: Final = next(frames, None)
+        if frame is not None:
+            return frame
+        if usage_reported.is_set():
+            raise ConnectionClosed(None, None)
+        await client_left.wait()
+        await asyncio.sleep(0.05)
+        usage_reported.set()
+        return _GEMINI_TURN_USAGE
+
+    async def receive_text() -> str:
+        await client_closed.wait()
+        client_left.set()
+        raise RuntimeError("connection closed")
+
+    backend: Final = _ClosableBackend(
+        MagicMock(send=AsyncMock(), close=AsyncMock(), recv=AsyncMock(side_effect=recv)),
+        asyncio.Event(),
+        asyncio.Event(),
+    )
+    streaming, client_ws = _gemini_turn_limited_session(limiter, backend)
+    client_ws.receive_text = AsyncMock(side_effect=receive_text)
+    client_ws.close = AsyncMock(side_effect=lambda *_args, **_kwargs: client_closed.set())
+
+    await asyncio.wait_for(streaming.bidirectional_forward(), timeout=5)
+
+    assert [charge[1] for charge in limiter.charges] == [30]
+    assert client_ws.close.await_args.kwargs["code"] == 1013
+
+
+@pytest.mark.asyncio
+async def test_a_turn_the_provider_started_while_limits_cannot_be_checked_runs_and_keeps_the_session_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    limiter: Final = _ScriptedTurnLimiter(check_error=RuntimeError("redis exploded with internal detail"))
+    backend: Final = _closable_backend(
+        (json.dumps({"setupComplete": {}}), _GEMINI_TURN_STARTED, _GEMINI_TURN_USAGE), stays_open_after_frames=False
+    )
+    streaming, client_ws = _gemini_turn_limited_session(limiter, backend)
+
+    close: Final = await asyncio.wait_for(streaming.backend_to_client_send_messages(), timeout=5)
+
+    sent: Final = [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list]
+    assert "response.done" in sent
+    assert close.code != 1013
+    assert [charge[1] for charge in limiter.charges] == [30]
+
+
+@pytest.mark.asyncio
+async def test_an_openai_turn_the_provider_started_while_limits_cannot_be_checked_is_not_cancelled() -> None:
+    limiter: Final = _ScriptedTurnLimiter(check_error=RuntimeError("redis exploded with internal detail"))
+    streaming, client_ws, backend_ws = _scripted_session(
+        limiter, backend_frames=(_response_created("resp_vad"), _response_done(300, "resp_vad"))
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    backend_ws.send.assert_not_awaited()
+    sent: Final = [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list]
+    assert sent == ["response.created", "response.done"]
+    assert [charge[1] for charge in limiter.charges] == [300]
+
+
+@pytest.mark.asyncio
+async def test_an_openai_turn_the_provider_started_while_fail_closed_limits_cannot_be_verified_is_cancelled() -> None:
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=ServiceUnavailableError(message="limits unverifiable", llm_provider="litellm_proxy", model="m")
+    )
+    streaming, client_ws, backend_ws = _scripted_session(
+        limiter, backend_frames=(_response_created("resp_vad"), _response_done(300, "resp_vad"))
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    cancels: Final = [json.loads(call.args[0]) for call in backend_ws.send.await_args_list]
+    assert [(event["type"], event.get("response_id")) for event in cancels] == [("response.cancel", "resp_vad")]
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [(event["type"], event.get("error", {}).get("type")) for event in sent] == [
+        ("error", "server_error"),
+        ("response.created", None),
+        ("response.done", None),
+    ]
+    assert [charge[1] for charge in limiter.charges] == [300]
+
+
+def _response_text_delta(response_id: str) -> str:
+    return json.dumps(
+        {"type": "response.output_text.delta", "response_id": response_id, "item_id": "item_1", "delta": "partial"}
+    )
+
+
+def _answer_item(item_id: str) -> Mapping[str, object]:
+    return {"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "x"}]}
+
+
+def _response_done_with_answer(total_tokens: int, response_id: str, item_id: str) -> str:
+    usage: Final = {"input_tokens": total_tokens - 10, "output_tokens": 10, "total_tokens": total_tokens}
+    response: Final = {"id": response_id, "status": "completed", "usage": usage, "output": [_answer_item(item_id)]}
+    return json.dumps({"type": "response.done", "response": response})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("through_provider_config", "beta_client", "later_output"),
+    [
+        (False, False, ["conversation.item.added", "response.output_text.delta"]),
+        (True, False, ["conversation.item.added", "response.output_text.delta"]),
+        (False, True, ["conversation.item.created", "response.text.delta"]),
+    ],
+    ids=["raw", "provider_config", "raw_beta_client"],
+)
+async def test_a_refused_turn_the_provider_started_sends_none_of_its_output_but_still_counts_its_tokens(
+    through_provider_config: bool, beta_client: bool, later_output: list[str]
+) -> None:
+    limiter: Final = _over_limit_turn_limiter()
+    streaming, client_ws, _backend_ws = _scripted_session(
+        limiter,
+        provider_config=_PassthroughRealtimeConfig() if through_provider_config else None,
+        beta_client=beta_client,
+        backend_frames=(
+            _response_created("resp_vad"),
+            json.dumps({"type": "response.output_item.added", "response_id": "resp_vad", "item": _answer_item("it_a")}),
+            json.dumps({"type": "conversation.item.added", "item": _answer_item("it_a")}),
+            _response_text_delta("resp_vad"),
+            json.dumps({"type": "conversation.item.done", "item": _answer_item("it_a")}),
+            _response_done_with_answer(300, "resp_vad", "it_a"),
+            json.dumps({"type": "conversation.item.added", "item": _answer_item("it_b")}),
+            _response_text_delta("resp_next"),
+        ),
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [event["type"] for event in sent] == ["error", "response.created", "response.done", *later_output]
+    assert sent[2]["response"]["output"] == []
+    assert sent[2]["response"]["usage"]["total_tokens"] == 300
+    assert [charge[1] for charge in limiter.charges] == [300]
+
+
+@dataclass(slots=True)
+class _ChargeThatNeverSettles(_ScriptedTurnLimiter):
+    charge_started: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def charge_realtime_turn_usage(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
+    ) -> None:
+        self.charge_started.set()
+        await asyncio.Event().wait()
+
+
+@pytest.mark.asyncio
+async def test_a_turn_still_being_counted_when_the_client_leaves_stays_in_the_session_spend_log() -> None:
+    limiter: Final = _ChargeThatNeverSettles()
+    streaming, _client_ws, _backend_ws = _scripted_session(limiter, backend_frames=(_response_done(300, "resp_1"),))
+    relay: Final = asyncio.create_task(streaming.backend_to_client_send_messages())
+    await asyncio.wait_for(limiter.charge_started.wait(), timeout=5)
+
+    relay.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await relay
+
+    assert [message["type"] for message in streaming.messages] == ["response.done"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limiter", "reaches_the_provider", "client_errors"),
+    [(_ScriptedTurnLimiter(), True, []), (_over_limit_turn_limiter(), False, ["rate_limit_exceeded"])],
+    ids=["under_the_limit", "over_the_limit"],
+)
+async def test_a_gemini_text_turn_is_checked_before_it_reaches_the_provider_and_a_plain_response_create_is_not(
+    monkeypatch: pytest.MonkeyPatch,
+    limiter: _ScriptedTurnLimiter,
+    reaches_the_provider: bool,
+    client_errors: list[str],
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    backend: Final = _closable_backend((), stays_open_after_frames=False)
+    streaming, client_ws = _gemini_turn_limited_session(
+        limiter, backend, client_frames=(_CLIENT_ITEM_CREATE, _CLIENT_RESPONSE_CREATE)
+    )
+
+    await streaming.client_ack_messages()
+
+    sent_to_provider: Final = [str(call.args[0]) for call in backend.ws.send.await_args_list]
+    assert any("clientContent" in frame for frame in sent_to_provider) is reaches_the_provider
+    assert len(limiter.checks) == 1
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [event["error"]["type"] for event in sent if event["type"] == "error"] == client_errors
+
+
+@pytest.mark.asyncio
+async def test_a_refused_response_that_never_reports_usage_ends_the_session_after_the_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    monkeypatch.setattr("litellm.litellm_core_utils.realtime_streaming.REALTIME_OVER_LIMIT_USAGE_WAIT_SECONDS", 0.01)
+    limiter: Final = _over_limit_turn_limiter()
+    backend: Final = _closable_backend(
+        (json.dumps({"setupComplete": {}}), _GEMINI_TURN_STARTED), stays_open_after_frames=True
+    )
+    streaming, _ = _gemini_turn_limited_session(limiter, backend)
+
+    close: Final = await asyncio.wait_for(streaming.backend_to_client_send_messages(), timeout=5)
+
+    assert close.code == 1013
+    backend.ws.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_client_frames_after_a_session_ended_over_its_limit_never_reach_the_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    backend: Final = _closable_backend(
+        (json.dumps({"setupComplete": {}}), _GEMINI_TURN_STARTED), stays_open_after_frames=True
+    )
+    streaming, _ = _gemini_turn_limited_session(
+        _over_limit_turn_limiter(), backend, client_frames=(_CLIENT_ITEM_CREATE,)
+    )
+    relay: Final = asyncio.create_task(streaming.backend_to_client_send_messages())
+    await asyncio.wait_for(backend.drained.wait(), timeout=5)
+
+    await streaming.client_ack_messages()
+    await backend.ws.close()
+    await asyncio.wait_for(relay, timeout=5)
+
+    assert not [call for call in backend.ws.send.await_args_list if "clientContent" in str(call.args[0])]
+
+
+@pytest.mark.asyncio
+async def test_a_turn_refused_at_response_create_sends_one_error_when_the_provider_starts_it_anyway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", False, raising=False)
+    backend: Final = _closable_backend(
+        (json.dumps({"setupComplete": {}}), _GEMINI_TURN_STARTED, _GEMINI_TURN_USAGE), stays_open_after_frames=True
+    )
+    streaming, client_ws = _gemini_turn_limited_session(
+        _over_limit_turn_limiter(), backend, client_frames=(_CLIENT_RESPONSE_CREATE,)
+    )
+
+    await streaming.client_ack_messages()
+    await asyncio.wait_for(streaming.backend_to_client_send_messages(), timeout=5)
+
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [event["error"]["type"] for event in sent if event["type"] == "error"] == ["rate_limit_exceeded"]
+
+
+@dataclass(slots=True)
+class _ChargedCapacity:
+    charges: tuple[int, ...] = ()
+
+    async def enforce_token_limits_for_frame(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None
+    ) -> None:
+        return None
+
+    async def charge_realtime_capacity_turn(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
+    ) -> None:
+        self.charges = (*self.charges, usage.total_tokens)
+
+
+@pytest.mark.asyncio
+async def test_each_finished_turn_is_charged_to_deployment_capacity_as_it_arrives() -> None:
+    capacity: Final = _ChargedCapacity()
+    streaming, _, _ = _scripted_session(
+        capacity, backend_frames=(_response_done(300, "resp_1"), _response_done(200, "resp_2"))
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert capacity.charges == (300, 200)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "unusable_usage",
+    [
+        {"input_tokens": None, "output_tokens": None, "total_tokens": None},
+        {"input_tokens": 1.5, "output_tokens": 2.5, "total_tokens": 4.5},
+    ],
+    ids=["null_counts", "fractional_counts"],
+)
+async def test_usage_in_an_unusable_shape_is_not_charged_and_keeps_the_session_open(
+    unusable_usage: Mapping[str, object],
+) -> None:
+    limiter: Final = _ScriptedTurnLimiter()
+    unusable_turn: Final = json.dumps(
+        {
+            "type": "response.done",
+            "response": {"id": "resp_unusable", "status": "completed", "usage": dict(unusable_usage)},
+        }
+    )
+    streaming, client_ws, _ = _scripted_session(
+        limiter, backend_frames=(unusable_turn, _response_done(100, "resp_next"))
+    )
+
+    close: Final = await streaming.backend_to_client_send_messages()
+
+    assert close.code != 1011
+    assert limiter.charges == ((_TURN_LIMITED_MODEL, 100),)
+    assert [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list] == [
+        "response.done",
+        "response.done",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_idle_realtime_sessions_leave_a_small_tpm_limit_free_and_a_spent_key_is_still_refused() -> None:
+    local_cache: Final = DualCache()
+    limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(local_cache))
+    auth: Final = UserAPIKeyAuth(api_key=hash_token("sk-idle-realtime"), tpm_limit=1000)
+
+    async def open_session(call_id: str) -> None:
+        await limiter.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=local_cache,
+            data={"model": _TURN_LIMITED_MODEL, "litellm_call_id": call_id},
+            call_type=CallTypes.arealtime.value,
+        )
+
+    async def first_turn_of_a_new_session(call_id: str) -> None:
+        await open_session(call_id)
+        await limiter.enforce_token_limits_for_frame(
+            user_api_key_dict=auth, requested_model=_TURN_LIMITED_MODEL, call_type=CallTypes.arealtime.value
+        )
+
+    await asyncio.gather(*(asyncio.create_task(first_turn_of_a_new_session(f"idle-{index}")) for index in range(4)))
+    await limiter.charge_realtime_turn_usage(
+        auth, _TURN_LIMITED_MODEL, Usage(prompt_tokens=990, completion_tokens=10, total_tokens=1000)
+    )
+
+    with pytest.raises(ProxyRateLimitError):
+        await asyncio.create_task(open_session("after-the-limit"))
+
+
+def _transcription_completed(usage: Mapping[str, object]) -> str:
+    return json.dumps(
+        {
+            "type": "conversation.item.input_audio_transcription.completed",
+            "item_id": "item_1",
+            "content_index": 0,
+            "transcript": "hello",
+            "usage": dict(usage),
+        }
+    )
+
+
+_TRANSCRIPTION_TOKEN_USAGE: Final = MappingProxyType(
+    {"type": "tokens", "input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+)
+
+
+def _transcription_session(
+    limiter: _ScriptedTurnLimiter,
+    usage: Mapping[str, object],
+    *,
+    through_provider_config: bool,
+    listens_only: bool,
+    buffered_frames: Sequence[str] = (),
+) -> tuple[RealTimeStreaming, MagicMock, MagicMock]:
+    client_ws: Final = _ga_client_ws()
+    client_ws.close = AsyncMock()
+    backend_ws: Final = MagicMock(send=AsyncMock(), close=AsyncMock())
+    backend_ws.recv = AsyncMock(
+        side_effect=[_transcription_completed(usage), *buffered_frames, ConnectionClosed(None, None)]
+    )
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        provider_config=_PassthroughRealtimeConfig() if through_provider_config else None,
+        model="gpt-4o-transcribe",
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        turn_limiters=lambda: (limiter,),
+        force_transcription_model="gpt-4o-transcribe",
+        listens_only=listens_only,
+    )
+    return streaming, client_ws, backend_ws
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("through_provider_config", [False, True], ids=["raw", "provider_config"])
+async def test_a_transcription_turn_counts_its_tokens_and_ends_the_session_over_the_limit(
+    through_provider_config: bool,
+) -> None:
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model="m")
+    )
+    streaming, client_ws, backend_ws = _transcription_session(
+        limiter, _TRANSCRIPTION_TOKEN_USAGE, through_provider_config=through_provider_config, listens_only=False
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert [charge[1] for charge in limiter.charges] == [120]
+    sent: Final = [json.loads(call.args[0]) for call in client_ws.send_text.await_args_list]
+    assert [event["type"] for event in sent] == ["conversation.item.input_audio_transcription.completed", "error"]
+    assert sent[1]["error"]["type"] == "rate_limit_exceeded"
+    backend_ws.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("through_provider_config", [False, True], ids=["raw", "provider_config"])
+async def test_frames_buffered_when_the_session_ends_are_counted_and_never_reach_the_client(
+    through_provider_config: bool,
+) -> None:
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model="m")
+    )
+    streaming, client_ws, _ = _transcription_session(
+        limiter,
+        _TRANSCRIPTION_TOKEN_USAGE,
+        through_provider_config=through_provider_config,
+        listens_only=False,
+        buffered_frames=(_transcription_completed(_TRANSCRIPTION_TOKEN_USAGE), "not json"),
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert ([charge[1] for charge in limiter.charges], len(limiter.checks)) == ([120, 120], 1)
+    assert [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list] == [
+        "conversation.item.input_audio_transcription.completed",
+        "error",
+    ]
+
+
+class _BatchRealtimeConfig(_PassthroughRealtimeConfig):
+    def transform_realtime_response(
+        self,
+        message: str | bytes,
+        model: str,
+        logging_obj: LiteLLMLoggingObj,
+        realtime_response_transform_input: RealtimeResponseTransformInput,
+    ) -> RealtimeResponseTypedDict:
+        passthrough: Final = super().transform_realtime_response(
+            message, model, logging_obj, realtime_response_transform_input
+        )
+        return {**passthrough, "response": json.loads(message)}
+
+
+def _billed_transcriptions(streaming: RealTimeStreaming) -> tuple[object, ...]:
+    return tuple(
+        message
+        for message in streaming.messages
+        if isinstance(message, dict)
+        and message.get("type") == "conversation.item.input_audio_transcription.completed"
+        and "usage" in message
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_client_that_drops_mid_batch_still_has_the_batch_transcription_billed() -> None:
+    usage: Final = {"type": "duration", "seconds": 90.0}
+    batch: Final = json.dumps(
+        [
+            {"type": "input_audio_buffer.speech_stopped", "item_id": "item_1", "audio_end_ms": 0},
+            json.loads(_transcription_completed(usage)),
+        ]
+    )
+    client_ws: Final = _ga_client_ws()
+    client_ws.send_text = AsyncMock(side_effect=RuntimeError("client went away"))
+    backend_ws: Final = MagicMock(send=AsyncMock(), close=AsyncMock())
+    backend_ws.recv = AsyncMock(side_effect=[batch, ConnectionClosed(None, None)])
+    streaming: Final = RealTimeStreaming(
+        client_ws, backend_ws, _mock_logging(), provider_config=_BatchRealtimeConfig(), model="scribe_v2_realtime"
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert [message["usage"] for message in _billed_transcriptions(streaming)] == [usage]
+
+
+@pytest.mark.asyncio
+async def test_a_batch_that_crosses_the_limit_bills_each_transcription_once() -> None:
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model="m")
+    )
+    batch: Final = json.dumps(
+        [json.loads(_transcription_completed(_TRANSCRIPTION_TOKEN_USAGE)) for _ in range(2)]
+    )
+    client_ws: Final = _ga_client_ws()
+    client_ws.close = AsyncMock()
+    backend_ws: Final = MagicMock(send=AsyncMock(), close=AsyncMock())
+    backend_ws.recv = AsyncMock(side_effect=[batch, ConnectionClosed(None, None)])
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        provider_config=_BatchRealtimeConfig(),
+        model="gpt-4o-transcribe",
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        turn_limiters=lambda: (limiter,),
+        force_transcription_model="gpt-4o-transcribe",
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert [charge[1] for charge in limiter.charges] == [120, 120]
+    assert len(_billed_transcriptions(streaming)) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_transcription_turn_under_the_limit_keeps_the_session_open() -> None:
+    limiter: Final = _ScriptedTurnLimiter()
+    streaming, client_ws, backend_ws = _transcription_session(
+        limiter, _TRANSCRIPTION_TOKEN_USAGE, through_provider_config=False, listens_only=False
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert ([charge[1] for charge in limiter.charges], len(limiter.checks)) == ([120], 1)
+    assert [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list] == [
+        "conversation.item.input_audio_transcription.completed"
+    ]
+    backend_ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_response_under_the_tpm_limit_streams_to_the_client_without_a_cancel() -> None:
+    limiter: Final = _ScriptedTurnLimiter()
+    streaming, client_ws, backend_ws = _scripted_session(
+        limiter, backend_frames=(_response_created("resp_vad"), _response_done(300))
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert len(limiter.checks) == 1
+    assert [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list] == [
+        "response.created",
+        "response.done",
+    ]
+    backend_ws.send.assert_not_awaited()
+    backend_ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_transcription_turn_billed_by_duration_is_neither_counted_nor_refused() -> None:
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model="m")
+    )
+    streaming, client_ws, backend_ws = _transcription_session(
+        limiter, {"type": "duration", "seconds": 4.2}, through_provider_config=False, listens_only=False
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert (limiter.checks, limiter.charges) == ((), ())
+    assert [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list] == [
+        "conversation.item.input_audio_transcription.completed"
+    ]
+    backend_ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_a_transcription_session_that_only_listens_is_counted_and_never_ended() -> None:
+    limiter: Final = _ScriptedTurnLimiter(
+        check_error=RateLimitError(message="tpm limit reached", llm_provider="litellm_proxy", model="m")
+    )
+    streaming, client_ws, backend_ws = _transcription_session(
+        limiter, _TRANSCRIPTION_TOKEN_USAGE, through_provider_config=False, listens_only=True
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert ([charge[1] for charge in limiter.charges], limiter.checks) == ([120], ())
+    assert not [
+        event
+        for event in (json.loads(call.args[0]) for call in client_ws.send_text.await_args_list)
+        if event["type"] == "error"
+    ]
+    backend_ws.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_turns_are_checked_and_charged_against_the_sessions_model_group() -> None:
+    limiter: Final = _ScriptedTurnLimiter()
+    logging_obj: Final = _RecordingLogging()
+    logging_obj.model_call_details = {
+        "litellm_params": {
+            "metadata": {"model_group": "caller-supplied"},
+            "litellm_metadata": {"model_group": "realtime-group"},
+        }
+    }
+    streaming, _, _ = _scripted_session(
+        limiter,
+        client_frames=(_CLIENT_RESPONSE_CREATE,),
+        backend_frames=(_response_done(300),),
+        logging_obj=logging_obj,
+        model="gpt-realtime-deployment",
+    )
+
+    await streaming.client_ack_messages()
+    await streaming.backend_to_client_send_messages()
+
+    assert limiter.checks == (("realtime-group", CallTypes.arealtime.value),)
+    assert limiter.charges == (("realtime-group", 300),)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response_done",
+    [
+        json.dumps({"type": "response.done", "response": {"id": "resp_1"}}),
+        json.dumps({"type": "response.done", "response": {"id": "resp_1", "usage": None}}),
+        json.dumps(
+            {
+                "type": "response.done",
+                "response": {"id": "resp_1", "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}},
+            }
+        ),
+    ],
+    ids=["no-usage", "null-usage", "zero-usage"],
+)
+async def test_a_response_done_without_tokens_charges_nothing(response_done: str) -> None:
+    limiter: Final = _ScriptedTurnLimiter()
+    streaming, client_ws, _ = _scripted_session(limiter, backend_frames=(response_done,))
+
+    await streaming.backend_to_client_send_messages()
+
+    assert limiter.charges == ()
+    assert [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list] == ["response.done"]
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_response_done_with_usage_is_charged() -> None:
+    limiter: Final = _ScriptedTurnLimiter()
+    cancelled: Final = json.dumps(
+        {
+            "type": "response.done",
+            "response": {
+                "id": "resp_1",
+                "status": "cancelled",
+                "usage": {
+                    "input_tokens": 200,
+                    "output_tokens": 40,
+                    "total_tokens": 240,
+                    "input_token_details": {"cached_tokens": 0, "audio_tokens": 150, "text_tokens": 50},
+                },
+            },
+        }
+    )
+    streaming, _, _ = _scripted_session(limiter, backend_frames=(cancelled,))
+
+    await streaming.backend_to_client_send_messages()
+
+    assert limiter.charges == ((_TURN_LIMITED_MODEL, 240),)
+
+
+@pytest.mark.asyncio
+async def test_backend_events_that_neither_start_nor_finish_a_response_pass_through_a_session_over_its_limit() -> None:
+    limiter: Final = _ScriptedTurnLimiter(check_error=RuntimeError("over the limit"))
+    passthrough_events: Final = (
+        json.dumps({"type": "session.updated", "session": {}}),
+        json.dumps({"type": "response.output_audio.delta", "response_id": "resp_1", "delta": "AAAA"}),
+    )
+    streaming, client_ws, backend_ws = _scripted_session(limiter, backend_frames=passthrough_events)
+
+    await streaming.backend_to_client_send_messages()
+
+    assert limiter.checks == ()
+    backend_ws.send.assert_not_awaited()
+    assert [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list] == [
+        "session.updated",
+        "response.output_audio.delta",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("limiter", "user_api_key_dict"),
+    [(_ScriptedTurnLimiter(), None), (object(), UserAPIKeyAuth(api_key="hashed-key"))],
+    ids=["no-proxy-auth", "no-token-limiter"],
+)
+async def test_sessions_without_proxy_auth_or_a_token_limiter_relay_turns_unchanged(
+    limiter: object, user_api_key_dict: UserAPIKeyAuth | None
+) -> None:
+    client_ws: Final = _ga_client_ws()
+    client_ws.receive_text = AsyncMock(side_effect=[_CLIENT_RESPONSE_CREATE, Exception("connection closed")])
+    backend_ws: Final = MagicMock(send=AsyncMock())
+    backend_ws.recv = AsyncMock(
+        side_effect=[_response_created("resp_vad"), _response_done(5000), ConnectionClosed(None, None)]
+    )
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        _mock_logging(),
+        model=_TURN_LIMITED_MODEL,
+        user_api_key_dict=user_api_key_dict,
+        turn_limiters=lambda: (limiter,),
+    )
+
+    await streaming.client_ack_messages()
+    await streaming.backend_to_client_send_messages()
+
+    assert [json.loads(call.args[0])["type"] for call in backend_ws.send.await_args_list] == ["response.create"]
+    assert [json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list] == [
+        "response.created",
+        "response.done",
+    ]
+    if isinstance(limiter, _ScriptedTurnLimiter):
+        assert (limiter.checks, limiter.charges) == ((), ())
 
 
 _AVATAR_UPDATE: Final = json.dumps(

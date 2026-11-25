@@ -16,7 +16,7 @@ import { LogDetailContent, GuardrailJumpLink } from "./LogDetailContent";
 import { sessionSpendLogsCall } from "../../networking";
 import { useQuery } from "@tanstack/react-query";
 import { getSpendString } from "@/utils/dataUtils";
-import { normalizeGuardrailEntries, sortSessionLogs, SessionLogSortMode } from "./utils";
+import { normalizeGuardrailEntries, readMetaString, sortSessionLogs, SessionLogSortMode } from "./utils";
 import { DRAWER_WIDTH } from "./constants";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
 import { useUserLookup } from "@/app/(dashboard)/hooks/users/useUsers";
@@ -474,7 +474,7 @@ export function LogDetailsDrawer({
                 logEntry={enrichedLog}
                 isLoadingDetails={isLoadingDetails}
                 accessToken={accessToken ?? null}
-                userEmail={logUser?.user_email || undefined}
+                userEmail={logUser?.user_email || readMetaString(metadata, "user_api_key_user_email")}
               />
             </div>
           </div>

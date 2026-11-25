@@ -1,7 +1,7 @@
 from collections.abc import Coroutine, Mapping
 from typing import TYPE_CHECKING, Final
 
-from openai import AsyncAzureOpenAI, AsyncStream, AzureOpenAI, Stream
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AsyncStream, AzureOpenAI, OpenAI, Stream
 from openai.types.audio import TranscriptionStreamEvent
 from pydantic import BaseModel
 
@@ -31,7 +31,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj",
         model_response: TranscriptionResponse,
         timeout: float,
@@ -39,10 +39,10 @@ class AzureAudioTranscription(AzureChatCompletion):
         api_key: str | None = None,
         api_base: str | None = None,
         api_version: str | None = None,
-        client=None,
+        client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
         azure_ad_token: str | None = None,
         atranscription: bool = False,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         custom_llm_provider: str = "azure",
     ) -> (
         TranscriptionResponse
@@ -131,9 +131,9 @@ class AzureAudioTranscription(AzureChatCompletion):
         api_version: str | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
-        client=None,
-        max_retries=None,
-        litellm_params: dict | None = None,
+        client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
+        max_retries: int | None = None,
+        litellm_params: dict[str, object] | None = None,
         custom_llm_provider: str = "azure",
     ) -> TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]:
         response = None

@@ -67,7 +67,7 @@ def _filter_reserved_headers(
         return None
 
     filtered: Final[dict[str, str]] = {}
-    dropped: Final[list] = []
+    dropped: Final[list[str]] = []
     for k, v in agent_extra_headers.items():
         k_lower = k.lower()
         if k_lower in _RESERVED_EXACT_HEADERS or any(k_lower.startswith(prefix) for prefix in _RESERVED_PREFIX_HEADERS):
@@ -142,7 +142,7 @@ class BedrockAgentCoreA2ATransformation:
         method: str = "message/send",
         stream: bool = False,
         agent_extra_headers: Mapping[str, str] | None = None,
-    ) -> tuple[str, dict, bytes]:
+    ) -> tuple[str, dict[str, object], bytes]:
         """
         Build the AgentCore URL, construct a JSON-RPC envelope, and sign the request.
 
@@ -203,7 +203,7 @@ class BedrockAgentCoreA2ATransformation:
 
         # Set required AgentCore session headers (normally set by transform_request,
         # which we skip because it also builds {"prompt": "..."})
-        headers: Final[dict] = {}
+        headers: Final[dict[str, str]] = {}
         session_id: Final = _validate_runtime_session_id(
             _request_scoped_runtime_session_id(params, litellm_params)
             or agentcore_config.get_runtime_session_id(optional_params),

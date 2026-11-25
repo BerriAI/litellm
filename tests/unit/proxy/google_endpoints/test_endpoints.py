@@ -116,6 +116,7 @@ async def test_proxy_gemini_to_openai_like_model_token_counting():
         ),
         model_name="volcengine/foo",
         fastapi_response=Response(),
+        user_api_key_dict=UserAPIKeyAuth(),
     )
 
     assert response.get("totalTokens") > 0
@@ -238,6 +239,13 @@ def test_google_count_tokens_keeps_counting_system_text_that_sits_beside_media()
     assert _google_count_tokens_request(
         "counted", {**_CONTENTS, "systemInstruction": {"parts": [text_with_media]}}
     ) == _google_count_tokens_request("counted", {**_CONTENTS, **_SYSTEM})
+
+
+@pytest.mark.parametrize(("url_model", "counted_model"), (("", "body-model"), ("url-model", "url-model")))
+def test_google_count_tokens_counts_the_body_model_only_when_the_url_names_none(
+    url_model: str, counted_model: str
+) -> None:
+    assert _google_count_tokens_request(url_model, {**_CONTENTS, "model": "body-model"}).model == counted_model
 
 
 _INTERACTION_ID: Final = "abc123"

@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-cost.workspace = true
 litellm-error.workspace = true
 litellm-host.workspace = true
 litellm-host-python.workspace = true
@@ -17,6 +18,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+litellm-cost = { workspace = true, features = ["test-support"] }
 litellm-secret-value.workspace = true
 proptest.workspace = true
 rstest.workspace = true
