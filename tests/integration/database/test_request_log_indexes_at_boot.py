@@ -77,6 +77,7 @@ SPEND_LOGS_INDEXES: Final = (
     "LiteLLM_SpendLogs_litellm_call_id_idx",
     "LiteLLM_SpendLogs_session_id_idx",
     "LiteLLM_SpendLogs_startTime_request_id_idx",
+    "LiteLLM_SpendLogs_user_startTime_idx",
 )
 JOB_ONLY_INDEXES: Final = tuple(
     index.name
