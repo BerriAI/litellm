@@ -3062,7 +3062,13 @@ class TestLoggingOnlyApplyGuardrail:
     async def test_a_tool_description_block_skips_the_response_scan_beside_an_unappliable_request_rewrite(self):
         class _BlocksDescriptionsRewritesMessages(_ApplyOnlyObserver):
             @log_guardrail_information
-            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[Logging] = None,
+            ) -> GenericGuardrailAPIInputs:
                 from fastapi import HTTPException
 
                 texts = list(inputs.get("texts") or [])
@@ -3089,7 +3095,13 @@ class TestLoggingOnlyApplyGuardrail:
     async def test_the_message_scan_runs_in_the_callers_context(self, scan_descriptions: bool):
         class _RecordsInContext(_ApplyOnlyObserver):
             @log_guardrail_information
-            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict[str, object],
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[Logging] = None,
+            ) -> GenericGuardrailAPIInputs:
                 texts = tuple(inputs.get("texts") or [])
                 _SCANNED_IN_CONTEXT.set((*_SCANNED_IN_CONTEXT.get(), texts))
                 return GenericGuardrailAPIInputs(texts=list(texts))
