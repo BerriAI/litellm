@@ -3461,8 +3461,12 @@ def test_a_reminder_after_the_cached_block_stays_out_of_the_gemini_cache_and_rea
     ]
 
 
+@pytest.mark.parametrize(
+    "system_prompt",
+    [pytest.param("You are terse.", id="short_system_prompt"), pytest.param("house rules " * 3000, id="big_system_prompt")],
+)
 def test_a_cache_mark_on_the_last_reminder_makes_no_gemini_cache_and_keeps_the_reminder_in_place(
-    local_model_cost_map,
+    local_model_cost_map, system_prompt: str
 ) -> None:
     calls: Final[list[httpx.Request]] = []
     reminder: Final = "remaining budget " * 3000
@@ -3470,7 +3474,7 @@ def test_a_cache_mark_on_the_last_reminder_makes_no_gemini_cache_and_keeps_the_r
     litellm.completion(
         model="gemini/gemini-flash-latest",
         messages=[
-            {"role": "system", "content": "You are terse."},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": "question 1"},
             {"role": "system", "content": reminder},
         ],
@@ -3481,7 +3485,7 @@ def test_a_cache_mark_on_the_last_reminder_makes_no_gemini_cache_and_keeps_the_r
 
     generated: Final = next(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
     assert [call for call in calls if call.url.path.endswith("/cachedContents")] == []
-    assert generated["system_instruction"] == {"parts": [{"text": "You are terse."}]}
+    assert generated["system_instruction"] == {"parts": [{"text": system_prompt}]}
     assert generated["contents"] == [
         {"role": "user", "parts": [{"text": "question 1"}, {"text": CONVERTED_SYSTEM_NOTE}, {"text": reminder}]}
     ]
@@ -3498,7 +3502,6 @@ def test_the_leading_system_message_goes_into_the_cache_and_a_later_reminder_com
 
     cached, remaining = separate_cached_messages(
         [leading, cached_doc, {"role": "system", "content": "1 of 8 turns used"}, {"role": "user", "content": "question 2"}],
-        lambda _: True,
         lambda _: True,
     )
 
@@ -3522,7 +3525,7 @@ def test_a_mark_inside_the_leading_system_run_caches_the_whole_run():
     ]
     question: Final = {"role": "user", "content": "question 1"}
 
-    cached, remaining = separate_cached_messages([*run, question], lambda _: True, lambda _: True)
+    cached, remaining = separate_cached_messages([*run, question], lambda _: True)
 
     assert cached == run
     assert remaining == [question]
@@ -3590,6 +3593,59 @@ async def test_a_reminder_ttl_gets_its_own_gemini_cache_beside_one_made_without_
     )
     assert [body.get("ttl") for body in created] == [None, "300s"]
     assert created[0]["displayName"] != created[1]["displayName"]
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_ttl_on_a_later_mark_in_the_system_prompt_sets_how_long_the_gemini_cache_lives(
+    local_model_cost_map, use_async: bool
+) -> None:
+    calls: Final = await _gemini_calls(
+        [
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "house rules " * 3000, "cache_control": {"type": "ephemeral"}}],
+            },
+            {"role": "system", "content": "Answer in English."},
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": "Be brief.", "cache_control": {"type": "ephemeral", "ttl": "600s"}}],
+            },
+            {"role": "user", "content": "question 1"},
+        ],
+        use_async,
+    )
+
+    assert [body.get("ttl") for body in _created_caches(calls)] == ["600s"]
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_mark_on_a_model_turn_caches_the_system_prompt_alone_and_sends_the_turns_uncached(
+    local_model_cost_map, use_async: bool
+) -> None:
+    calls: Final = await _gemini_calls(
+        [
+            {"role": "system", "content": "house rules " * 3000},
+            {"role": "user", "content": "question 1"},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "answer 1", "cache_control": {"type": "ephemeral"}}],
+            },
+            {"role": "user", "content": "question 2"},
+        ],
+        use_async,
+    )
+
+    created: Final = _created_caches(calls)
+    generated: Final = _generate_requests(calls)
+    assert len(created) == 1
+    assert created[0]["system_instruction"] == {"parts": [{"text": "house rules " * 3000}]}
+    assert "answer 1" not in json.dumps(created[0]["contents"])
+    assert [request["cachedContent"] for request in generated] == ["cachedContents/created"]
+    assert generated[0]["contents"] == [
+        {"role": "user", "parts": [{"text": "question 1"}]},
+        {"role": "model", "parts": [{"text": "answer 1"}]},
+        {"role": "user", "parts": [{"text": "question 2"}]},
+    ]
 
 
 def test_a_cached_block_from_a_later_turn_that_ends_on_a_reminder_goes_out_uncached_and_in_order(

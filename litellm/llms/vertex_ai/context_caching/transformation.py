@@ -152,14 +152,16 @@ def _marked_block(messages: Sequence[AllMessageValues]) -> _MarkedBlock | None:
 
 def cached_block_ttl(messages: Sequence[AllMessageValues]) -> str | None:
     """
-    The TTL the caller marked on the first continuous cached block, read before separate_cached_messages trims a
-    later system run off either end of it, so a reminder that carries the only TTL still sets how long the cache
-    lives.
+    The TTL the caller marked on the leading system run or the first continuous cached block, read before
+    separate_cached_messages trims a later system run off either end of that block, so a reminder that carries
+    the only TTL still sets how long the cache lives.
     """
     marked: Final = _marked_block(messages)
     if marked is None:
         return None
-    return extract_ttl_from_cached_messages(messages[marked.block.start : marked.block.stop])
+    return extract_ttl_from_cached_messages(
+        [*messages[: marked.leading_run_end], *(messages[idx] for idx in marked.block)]
+    )
 
 
 def _the_next_turn_reads_only_the_system_run(
