@@ -298,7 +298,10 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     def _with_schemas_model_accepts(
         cls, params: Mapping[str, object], model: str, litellm_params: GenericLiteLLMParams
     ) -> Mapping[str, object]:
-        if mantle_supports_all_json_schema_keywords(model, litellm_params, model_cost_table.published()):
+        region: Final = cls._resolve_region(
+            {"aws_region_name": litellm_params.aws_region_name, "api_base": litellm_params.api_base}
+        )
+        if mantle_supports_all_json_schema_keywords(model, region, litellm_params, model_cost_table.published()):
             return params
         verbose_logger.debug(
             "Bedrock Mantle %s does not support all JSON schema keywords, so the ones it rejects are dropped", model

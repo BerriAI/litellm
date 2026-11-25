@@ -1288,6 +1288,8 @@ _GEMMA_4_REFUSED_KEYWORDS: Final = (
     "if",
     "then",
     "else",
+    "minProperties",
+    "maxProperties",
     "unevaluatedProperties",
     "unevaluatedItems",
     "uniqueItems",
@@ -1324,6 +1326,14 @@ def _schema_paths(body: Mapping[str, object]) -> tuple[object, ...]:
     response_format: Final = body["response_format"]
     assert isinstance(tools, list) and isinstance(functions, list) and isinstance(response_format, dict)
     return (tools[0]["function"]["parameters"], functions[0]["parameters"], response_format["json_schema"]["schema"])
+
+
+_GEMMA: Final = "bedrock_mantle/google.gemma-4-31b"
+_REGIONAL_GEMMA: Final = "bedrock_mantle/eu-central-1/google.gemma-4-31b"
+_EU_CENTRAL_BASE_WITH_US_EAST_REGION: Final = {
+    "api_base": "https://bedrock-mantle.eu-central-1.api.aws/openai/v1",
+    "aws_region_name": "us-east-1",
+}
 
 
 class TestBedrockMantleGemma4SchemaKeywords:
@@ -1400,15 +1410,11 @@ class TestBedrockMantleGemma4SchemaKeywords:
         assert schema == _ask_user_question_parameters()
 
     def test_gemma_4_request_carries_none_of_the_keywords_mantle_refused(self) -> None:
-        """Each keyword answered 400 alone in a gemma-4-31b tool schema on Mantle us-east-1, 2026-11-20, while
-        minProperties and maxProperties answered 200 on gemma-4-31b, 26b-a4b and e2b, 2026-11-24."""
-        sized: Final = {
-            "type": "object",
-            "properties": {"x": {"type": "string"}},
-            "minProperties": 1,
-            "maxProperties": 2,
-        }
-        nested: Final = {**sized, **{kw: {} for kw in _GEMMA_4_REFUSED_KEYWORDS}}
+        """Each keyword answered 400 alone in a gemma-4-31b tool schema on Mantle us-east-1, 2026-11-20.
+        minProperties and maxProperties answered 400 on an object with an optional property on gemma-4-31b,
+        26b-a4b and e2b, 2026-11-24."""
+        kept: Final = {"type": "object", "properties": {"x": {"type": "string"}}}
+        nested: Final = {**kept, **{kw: {} for kw in _GEMMA_4_REFUSED_KEYWORDS}}
         body: Final = BedrockMantleChatConfig().transform_request(
             model="google.gemma-4-31b",
             messages=[{"role": "user", "content": "hello"}],
@@ -1429,8 +1435,8 @@ class TestBedrockMantleGemma4SchemaKeywords:
 
         assert body["tools"][0]["function"]["parameters"] == {
             "type": "object",
-            "properties": {"nested": sized},
-            "$defs": {"d": sized},
+            "properties": {"nested": kept},
+            "$defs": {"d": kept},
         }
 
     def test_gemma_4_request_passes_a_tool_entry_that_is_not_an_object_through_unchanged(self) -> None:
@@ -1545,15 +1551,21 @@ class TestBedrockMantleGemma4SchemaKeywords:
             for name in ("google.gemma-4-31b", "google.gemma-4-e2b", "openai.gpt-oss-120b")
         }
 
-        assert mantle_supports_all_json_schema_keywords(model, {}, rows_without_the_flag) is supports_all
+        assert mantle_supports_all_json_schema_keywords(model, "us-east-1", {}, rows_without_the_flag) is supports_all
 
-    @pytest.mark.parametrize("route", ["chat", "responses"])
     @pytest.mark.parametrize(
-        "model, region_params, keeps_every_keyword",
+        "route, model, region_params, regional_flag, sent_region, keeps_every_keyword",
         [
-            ("bedrock_mantle/eu-central-1/google.gemma-4-31b", {}, True),
-            ("bedrock_mantle/google.gemma-4-31b", {"aws_region_name": "eu-central-1"}, True),
-            ("bedrock_mantle/google.gemma-4-31b", {"aws_region_name": "us-east-1"}, False),
+            ("chat", _REGIONAL_GEMMA, {}, True, "eu-central-1", True),
+            ("responses", _REGIONAL_GEMMA, {}, True, "eu-central-1", True),
+            ("chat", _GEMMA, {"aws_region_name": "eu-central-1"}, True, "eu-central-1", True),
+            ("responses", _GEMMA, {"aws_region_name": "eu-central-1"}, True, "eu-central-1", True),
+            ("chat", _GEMMA, {"aws_region_name": "us-east-1"}, True, "us-east-1", False),
+            ("responses", _GEMMA, {"aws_region_name": "us-east-1"}, True, "us-east-1", False),
+            ("chat", _GEMMA, _EU_CENTRAL_BASE_WITH_US_EAST_REGION, True, "eu-central-1", True),
+            ("responses", _GEMMA, _EU_CENTRAL_BASE_WITH_US_EAST_REGION, True, "us-east-1", False),
+            ("chat", _REGIONAL_GEMMA, {}, None, "eu-central-1", False),
+            ("responses", _REGIONAL_GEMMA, {}, None, "eu-central-1", False),
         ],
     )
     def test_the_cost_map_row_for_the_region_the_request_goes_to_decides(
@@ -1562,16 +1574,24 @@ class TestBedrockMantleGemma4SchemaKeywords:
         route: str,
         model: str,
         region_params: dict[str, str],
+        regional_flag: bool | None,
+        sent_region: str,
         keeps_every_keyword: bool,
     ) -> None:
         _use_mantle_bearer(monkeypatch)
-        for key, flag in (
-            ("bedrock_mantle/eu-central-1/google.gemma-4-31b", True),
-            ("bedrock_mantle/google.gemma-4-31b", False),
-        ):
-            monkeypatch.setitem(
-                litellm.model_cost, key, {**litellm.model_cost[key], "supports_all_json_schema_keywords": flag}
-            )
+        regional_key: Final = "bedrock_mantle/eu-central-1/google.gemma-4-31b"
+        flag_key: Final = "supports_all_json_schema_keywords"
+        regional_row: Final = {key: value for key, value in litellm.model_cost[regional_key].items() if key != flag_key}
+        monkeypatch.setitem(
+            litellm.model_cost,
+            regional_key,
+            regional_row if regional_flag is None else {**regional_row, flag_key: regional_flag},
+        )
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "bedrock_mantle/google.gemma-4-31b",
+            {**litellm.model_cost["bedrock_mantle/google.gemma-4-31b"], "supports_all_json_schema_keywords": False},
+        )
         handler: Final = Mock(side_effect=_reply_by_route)
         schema: Final = _ask_user_question_parameters()
         client: Final = _recording_client(handler)
@@ -1593,9 +1613,10 @@ class TestBedrockMantleGemma4SchemaKeywords:
                 **region_params,
             )
 
-        sent: Final = json.loads(handler.call_args_list[0].args[0].content)
-        sent_tool: Final = sent["tools"][0]
+        request: Final = handler.call_args_list[0].args[0]
+        sent_tool: Final = json.loads(request.content)["tools"][0]
         sent_schema: Final = sent_tool["function"]["parameters"] if route == "chat" else sent_tool["parameters"]
+        assert request.url.host == f"bedrock-mantle.{sent_region}.api.aws"
         assert (sent_schema == schema) is keeps_every_keyword
 
     @pytest.mark.parametrize(

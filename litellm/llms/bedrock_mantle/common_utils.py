@@ -56,6 +56,11 @@ def split_mantle_region_prefix(model: str) -> tuple[str | None, str]:
     return None, model
 
 
+def mantle_url_region(api_base: str, params: Mapping[str, object]) -> str:
+    host_match: Final = MANTLE_HOST_RE.match(api_base.rstrip("/"))
+    return host_match.group(1) if host_match else resolve_mantle_region({**params, "api_base": api_base})
+
+
 def resolve_mantle_region(params: Mapping[str, object]) -> str:
     region: Final = params.get("aws_region_name")
     if isinstance(region, str) and region:
@@ -121,13 +126,7 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
         # Pin the credential-scope region to the region of the actual signing URL
         # so the SigV4 scope and URL host can never disagree, even when a stale
         # api_base and aws_region_name point at different regions.
-        host_match: Final = MANTLE_HOST_RE.match(api_base.rstrip("/"))
-        optional_params = {
-            **optional_params,
-            "aws_region_name": (
-                host_match.group(1) if host_match else self._resolve_region({**optional_params, "api_base": api_base})
-            ),
-        }
+        optional_params = {**optional_params, "aws_region_name": mantle_url_region(api_base, optional_params)}
         headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
         try:
             return sign(headers=headers, optional_params=optional_params)
@@ -154,7 +153,9 @@ _GEMMA_4_REJECTED_SCHEMA_KEYWORDS: Final = frozenset(
         "else",
         "if",
         "maxContains",
+        "maxProperties",
         "minContains",
+        "minProperties",
         "propertyNames",
         "then",
         "unevaluatedItems",
@@ -178,14 +179,14 @@ def _declared_all_json_schema_keywords_support(
 
 def mantle_supports_all_json_schema_keywords(
     model: str,
+    region: str,
     litellm_params: Mapping[str, object] | GenericLiteLLMParams,
     model_cost: Mapping[str, object],
 ) -> bool:
     declared: Final = _declared_all_json_schema_keywords_support(litellm_params)
     if declared is not None:
         return declared
-    prefix_region, bare_model = split_mantle_region_prefix(model)
-    region: Final = _requested_region(prefix_region, litellm_params)
+    bare_model: Final = split_mantle_region_prefix(model)[1]
     listed: Final = next(
         (
             flag
@@ -195,15 +196,6 @@ def mantle_supports_all_json_schema_keywords(
         None,
     )
     return not bare_model.startswith("google.gemma-4") if listed is None else listed
-
-
-def _requested_region(prefix_region: str | None, litellm_params: Mapping[str, object] | GenericLiteLLMParams) -> str:
-    declared_region, api_base = (
-        (litellm_params.aws_region_name, litellm_params.api_base)
-        if isinstance(litellm_params, GenericLiteLLMParams)
-        else (litellm_params.get("aws_region_name"), litellm_params.get("api_base"))
-    )
-    return resolve_mantle_region({"aws_region_name": declared_region or prefix_region, "api_base": api_base})
 
 
 def _listed_all_json_schema_keywords_support(row: object) -> bool | None:
