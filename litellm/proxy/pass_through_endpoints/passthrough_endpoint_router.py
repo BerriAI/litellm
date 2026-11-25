@@ -3,6 +3,7 @@ import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
+from urllib.parse import urlparse
 
 from fastapi import HTTPException
 
@@ -13,6 +14,7 @@ from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook i
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.llms.azure.ptu_capacity import is_str_keyed_mapping
+from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import (
     GOOGLE_OIDC_SECRET_PREFIX,
     UnresolvableSecretReference,
@@ -22,6 +24,7 @@ from litellm.secret_managers.main import (
 from litellm.types.llms.vertex_ai import VERTEX_CREDENTIALS_TYPES
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
+from litellm.types.utils import DEPLOYMENT_SCOPED_PRICING_FIELDS, CustomPricingLiteLLMParams
 
 if TYPE_CHECKING:
     from litellm.router import Router
@@ -42,6 +45,37 @@ def _get_proxy_llm_router() -> "Router | None":
 def _is_team_deployment(deployment: Mapping[str, object]) -> bool:
     model_info: Final = deployment.get("model_info")
     return is_str_keyed_mapping(model_info) and bool(model_info.get("team_id"))
+
+
+_DEPLOYMENT_PRICING_FIELDS: Final = (
+    frozenset(CustomPricingLiteLLMParams.model_fields) | DEPLOYMENT_SCOPED_PRICING_FIELDS
+)
+
+
+def _str_keyed(value: object) -> Mapping[str, object]:
+    return value if is_str_keyed_mapping(value) else {}
+
+
+def _declared_pricing(deployment: Mapping[str, object]) -> frozenset[tuple[str, str]]:
+    declared: Final = {**_str_keyed(deployment.get("model_info")), **_str_keyed(deployment.get("litellm_params"))}
+    return frozenset(
+        (field, json.dumps(declared[field], sort_keys=True, default=str))
+        for field in _DEPLOYMENT_PRICING_FIELDS
+        if declared.get(field) is not None
+    )
+
+
+def _deployment_id(deployment: Mapping[str, object]) -> str | None:
+    model_id: Final = _str_keyed(deployment.get("model_info")).get("id")
+    return model_id if isinstance(model_id, str) else None
+
+
+def _is_under_api_base(called_url: str, api_base: str) -> bool:
+    called: Final = urlparse(called_url)
+    base: Final = urlparse(api_base)
+    return (called.scheme, called.netloc.lower()) == (base.scheme, base.netloc.lower()) and (
+        f"{called.path}/".startswith(f"{base.path.rstrip('/')}/")
+    )
 
 
 def _get_str_value(values: dict[str, object] | None, key: str) -> str | None:
@@ -195,32 +229,82 @@ class PassthroughEndpointRouter:
             return None
         if self._get_deployment_provider(litellm_params) != custom_llm_provider:
             return None
-        credential_name: Final = litellm_params.get("litellm_credential_name")
-        credential_values: Final = (
-            CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else None
-        )
-        api_base: Final = _get_str_value(credential_values, "api_base") or litellm_params.get("api_base")
+        api_key, api_base = self._get_deployment_api_key_and_base(litellm_params)
         deployment_region: Final = self._get_region_name_from_api_base(
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
         )
         if deployment_region != region_name:
             return None
-        api_key: Final = _get_str_value(credential_values, "api_key") or litellm_params.get("api_key")
         return _PassThroughCredentials(api_key=api_key, api_base=api_base) if api_key is not None else None
 
     def _get_deployment_provider(self, litellm_params: LiteLLMParamsTypedDict) -> str | None:
+        provider_model: Final = self._get_deployment_provider_model(litellm_params)
+        return provider_model[0] if provider_model is not None else None
+
+    def _get_deployment_provider_model(self, litellm_params: LiteLLMParamsTypedDict) -> tuple[str, str] | None:
         model: Final = litellm_params.get("model")
         if model is None:
             return None
         try:
-            _, provider, _, _ = litellm.get_llm_provider(
+            provider_model, provider, _, _ = litellm.get_llm_provider(
                 model=model,
                 custom_llm_provider=litellm_params.get("custom_llm_provider"),
             )
         except litellm.exceptions.BadRequestError:
             return None
-        return provider
+        return provider, provider_model
+
+    def get_openai_pricing_deployment_id(self, model: str, called_url: str) -> str | None:
+        """
+        A pass-through call is never routed, so its deployment is inferred from the upstream model, api base
+        and key it used. Deployments that disagree on price leave the call on the cost map
+        """
+        llm_router: Final = self.llm_router_getter()
+        if llm_router is None:
+            return None
+        provider: Final = litellm.LlmProviders.OPENAI.value
+        pass_through_api_key: Final = self._get_configured_api_key(provider)
+        if pass_through_api_key is None:
+            return None
+        default_api_key: Final = get_secret_str(self._get_default_env_variable_name_passthrough_endpoint(provider))
+        default_api_base: Final = OpenAIGPTConfig.get_api_base()
+        if default_api_base is None:
+            return None
+        candidates: Final = tuple(
+            deployment
+            for deployment in (llm_router.registry().deployments() or ())
+            if not _is_team_deployment(deployment)
+            and self._get_deployment_provider_model(deployment["litellm_params"]) == (provider, model)
+            and (credentials := self._get_deployment_api_key_and_base(deployment["litellm_params"]))
+            and (credentials[0] or default_api_key) == pass_through_api_key
+            and _is_under_api_base(called_url, credentials[1] or default_api_base)
+        )
+        prices: Final = frozenset(_declared_pricing(deployment) for deployment in candidates)
+        if len(prices) != 1 or not next(iter(prices)):
+            return None
+        return _deployment_id(candidates[0])
+
+    def _get_configured_api_key(self, custom_llm_provider: str) -> str | None:
+        deployment_credentials: Final = self._get_deployment_credentials(
+            custom_llm_provider=custom_llm_provider,
+            region_name=None,
+            include_team_deployments=True,
+        )
+        if deployment_credentials is not None:
+            return deployment_credentials.api_key
+        return get_secret_str(self._get_default_env_variable_name_passthrough_endpoint(custom_llm_provider))
+
+    @staticmethod
+    def _get_deployment_api_key_and_base(litellm_params: LiteLLMParamsTypedDict) -> tuple[str | None, str | None]:
+        credential_name: Final = litellm_params.get("litellm_credential_name")
+        credential_values: Final = (
+            CredentialAccessor.get_credential_values(credential_name) if credential_name is not None else None
+        )
+        return (
+            _get_str_value(credential_values, "api_key") or litellm_params.get("api_key"),
+            _get_str_value(credential_values, "api_base") or litellm_params.get("api_base"),
+        )
 
     def get_vertex_credentials_from_router_deployments(self, model: str | None) -> VertexPassThroughCredentials | None:
         found: Final = self.get_vertex_deployment_from_router(model)
