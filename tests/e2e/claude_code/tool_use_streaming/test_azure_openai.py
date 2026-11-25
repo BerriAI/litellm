@@ -1,9 +1,9 @@
-"""tool_use_streaming x Azure OpenAI (GPT-5.6).
+"""tool_use_streaming x Azure OpenAI (GPT-6).
 
 Drive the real `claude` CLI in headless `--output-format stream-json`
 mode against a running LiteLLM proxy that routes Anthropic Messages
-requests to Azure OpenAI deployments of the GPT-5.6 family (Sol,
-Terra, Luna), ask the model to invoke a built-in tool (`Bash`), and
+requests to Azure OpenAI deployments of the GPT-6 family (Sol,
+Terra, Luna, Astra), ask the model to invoke a built-in tool (`Bash`), and
 assert that the upstream (a) emitted a `tool_use` content block and
 (b) streamed the tool input incrementally as `input_json_delta`
 events.
@@ -40,9 +40,11 @@ from claude_code.cli_driver import (
 )
 
 AZURE_OPENAI_MODELS = [
-    "gpt-5-6-sol-azure-openai",
+    "gpt-6-1-sol-azure-openai",
+    # Terra stays on 5.6: Azure has no gpt-6.1-terra yet, the probe answers 404 "The API deployment for this resource does not exist".
     "gpt-5-6-terra-azure-openai",
-    "gpt-5-6-luna-azure-openai",
+    "gpt-6-luna-azure-openai",
+    "gpt-6-astra-azure-openai",
 ]
 
 TOOL_USE_PROMPT = (

@@ -13,9 +13,9 @@
 schema_version: "1"
 
 # Provider column order in the rendered matrix. The first five are
-# the v0 Claude columns; the GPT-5.6 (Sol / Terra / Luna) columns
+# the v0 Claude columns; the GPT-6 (Sol / Terra / Luna / Astra) columns
 # added 2026-07 follow them. `vertex_ai_gpt` is a static
-# not_applicable column: GCP does not offer the closed-weight GPT-5.6
+# not_applicable column: GCP does not offer the closed-weight GPT-6
 # family (Model Garden carries only the open-weight gpt-oss MaaS
 # models), and the column documents that gap explicitly. GPT columns
 # currently back the two basic_messaging rows plus tool_use and
