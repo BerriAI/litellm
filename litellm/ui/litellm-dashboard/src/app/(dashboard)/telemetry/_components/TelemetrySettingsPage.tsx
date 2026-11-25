@@ -20,6 +20,7 @@ import {
 } from "@/app/(dashboard)/hooks/telemetry/useTelemetrySettings";
 import { GROUP_COPY, PROXY_GROUPS, UI_GROUPS, relativeDepths, toggleGroup, type Requires } from "./telemetryGroups";
 import { TelemetryEnterpriseDialog } from "./TelemetryEnterpriseDialog";
+import { toTelemetryUpdate } from "./mapper";
 
 const TABS = ["proxy", "ui"] as const;
 
@@ -73,7 +74,7 @@ function DestinationPicker({
         onValueChange={(value: unknown) =>
           settings.destination === null
             ? requestEnable()
-            : update.mutate({ groups: [...enabledGroups(settings)], destination: value as TelemetryDestination })
+            : update.mutate(toTelemetryUpdate(enabledGroups(settings), value))
         }
       >
         {(Object.keys(DESTINATION_LABELS) as TelemetryDestination[]).map((destination) => (
@@ -114,7 +115,7 @@ function GroupList({
       requestEnable();
       return;
     }
-    update.mutate({ groups: [...toggleGroup(group, on, enabled, requires)], destination: savedDestination(settings) });
+    update.mutate(toTelemetryUpdate(toggleGroup(group, on, enabled, requires), savedDestination(settings)));
   };
   return (
     <ul className="divide-y rounded-md border">
@@ -179,7 +180,7 @@ function TelemetrySwitch({
         checked={on}
         disabled={!settings.editable || update.isPending}
         onCheckedChange={(next) =>
-          next ? requestEnable() : update.mutate({ groups: [], destination: savedDestination(settings) })
+          next ? requestEnable() : update.mutate(toTelemetryUpdate([], savedDestination(settings)))
         }
       />
       <span aria-hidden>{on ? t("telemetry.switch.on") : t("telemetry.switch.off")}</span>
