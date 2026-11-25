@@ -119,13 +119,21 @@ def _extract_media_nodes(node: JsonValue, depth: int) -> tuple[JsonValue, tuple[
     return node, ()
 
 
+def _may_hold_media(serialized: str) -> bool:
+    """Whether ``serialized`` carries the markers every payload ``extract_media`` replaces has: a base64 data URI, or
+    a typed block's content type key next to a ``data`` key."""
+    return ("data:" in serialized and ";base64" in serialized) or (
+        '"data"' in serialized and ('"media_type"' in serialized or '"mime_type"' in serialized)
+    )
+
+
 def extract_media(serialized: str) -> tuple[str, tuple[Media, ...]]:
     """``serialized`` with each base64 payload replaced by its Langfuse media reference, and the payloads replaced.
 
     Covers what the v2 SDK replaced before ingestion: a ``data:<type>;base64,`` string anywhere in the JSON
     value, and the Anthropic and Vertex typed blocks.
     """
-    if "base64" not in serialized and "mime_type" not in serialized:
+    if not _may_hold_media(serialized):
         return serialized, ()
     whole: Final = _from_data_uri(serialized)
     if whole is not None:
