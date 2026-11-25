@@ -432,6 +432,7 @@ class AnthropicSystemMessageContent(TypedDict, total=False):
 class AnthropicMessagesSystemMessageParam(TypedDict, total=False):
     role: Required[Literal["system"]]
     content: Required[str | Iterable[AnthropicSystemMessageContent]]
+    clear_at: str
 
 
 AllAnthropicMessageValues = AnthropicMessagesUserMessageParam | AnthopicMessagesAssistantMessageParam

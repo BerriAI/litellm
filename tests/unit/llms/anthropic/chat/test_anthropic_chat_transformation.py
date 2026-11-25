@@ -7604,6 +7604,23 @@ def test_chat_flagged_model_keeps_cache_control_on_mid_conversation_system(local
     ]
 
 
+def test_chat_flagged_model_preserves_clear_at_on_mid_conversation_system(local_model_cost_map):
+    messages = _reminder_conversation()
+    messages[4] = {
+        "role": "system",
+        "content": REMINDER_TEXT,
+        "clear_at": "next_user_message",
+    }
+
+    result = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
+
+    assert result["messages"][3] == {
+        "role": "system",
+        "content": [{"type": "text", "text": REMINDER_TEXT}],
+        "clear_at": "next_user_message",
+    }
+
+
 def test_chat_flagged_model_moves_system_after_the_user_turn_it_precedes(local_model_cost_map):
     """Anthropic only accepts role=system directly after a user turn; an
     OpenAI-shaped client that puts the reminder before its next question gets a
@@ -7783,6 +7800,59 @@ def test_chat_flagged_model_merges_adjacent_system_messages(local_model_cost_map
     result = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
 
     assert [m["role"] for m in result["messages"]] == ["user", "system", "assistant", "user"]
+    assert _texts(result["messages"][1]) == ["Reminder one.", "Reminder two."]
+
+
+def test_chat_flagged_model_merges_adjacent_system_messages_preserving_identical_clear_at(local_model_cost_map):
+    messages = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "First question"},
+        {"role": "system", "content": "Reminder one.", "clear_at": "next_user_message"},
+        {"role": "system", "content": "Reminder two.", "clear_at": "next_user_message"},
+        {"role": "assistant", "content": "First answer"},
+        {"role": "user", "content": "Second question"},
+    ]
+
+    result = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
+
+    assert [m["role"] for m in result["messages"]] == ["user", "system", "assistant", "user"]
+    assert result["messages"][1]["clear_at"] == "next_user_message"
+    assert _texts(result["messages"][1]) == ["Reminder one.", "Reminder two."]
+
+
+@pytest.mark.parametrize(
+    "clear_at_1, clear_at_2",
+    [
+        ("next_user_message", None),
+        (None, "next_user_message"),
+        ("next_user_message", "turn_end"),
+    ],
+    ids=["one-missing", "first-missing", "differing"],
+)
+def test_chat_flagged_model_merges_adjacent_system_messages_omitting_differing_or_missing_clear_at(
+    local_model_cost_map, clear_at_1, clear_at_2
+):
+    messages = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "First question"},
+        {
+            "role": "system",
+            "content": "Reminder one.",
+            **({"clear_at": clear_at_1} if clear_at_1 else {}),
+        },
+        {
+            "role": "system",
+            "content": "Reminder two.",
+            **({"clear_at": clear_at_2} if clear_at_2 else {}),
+        },
+        {"role": "assistant", "content": "First answer"},
+        {"role": "user", "content": "Second question"},
+    ]
+
+    result = _chat_request(AnthropicConfig(), FLAGGED_CLAUDE, messages)
+
+    assert [m["role"] for m in result["messages"]] == ["user", "system", "assistant", "user"]
+    assert "clear_at" not in result["messages"][1]
     assert _texts(result["messages"][1]) == ["Reminder one.", "Reminder two."]
 
 

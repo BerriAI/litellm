@@ -15,6 +15,7 @@ import litellm
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     CONVERTED_SYSTEM_NOTE,
     anthropic_system_blocks,
+    anthropic_system_messages,
     place_mid_conversation_system,
     split_leading_system_run,
 )
@@ -369,6 +370,56 @@ def test_flagged_placement_merges_every_system_run_that_shares_a_user_turn():
     )
 
     assert _roles(placed) == ["user", "user", "system", "assistant"]
+    assert _texts(placed[2]) == ["first", "second"]
+
+
+def test_anthropic_system_messages_preserves_clear_at():
+    wire = anthropic_system_messages({"role": "system", "content": "hello", "clear_at": "next_user_message"})
+    assert len(wire) == 1
+    assert wire[0]["role"] == "system"
+    assert wire[0]["clear_at"] == "next_user_message"
+    assert wire[0]["content"] == [{"type": "text", "text": "hello"}]
+
+
+def test_anthropic_system_messages_omits_clear_at_when_missing():
+    wire = anthropic_system_messages({"role": "system", "content": "hello"})
+    assert len(wire) == 1
+    assert wire[0]["role"] == "system"
+    assert "clear_at" not in wire[0]
+    assert wire[0]["content"] == [{"type": "text", "text": "hello"}]
+
+
+def test_flagged_placement_merges_clear_at_when_identical():
+    placed = place_mid_conversation_system(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "system", "content": "first", "clear_at": "next_user_message"},
+            {"role": "user", "content": "q2"},
+            {"role": "system", "content": "second", "clear_at": "next_user_message"},
+            {"role": "assistant", "content": "a"},
+        ],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "user", "system", "assistant"]
+    assert placed[2].get("clear_at") == "next_user_message"
+    assert _texts(placed[2]) == ["first", "second"]
+
+
+def test_flagged_placement_omits_clear_at_when_differing_or_missing():
+    placed = place_mid_conversation_system(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "system", "content": "first", "clear_at": "next_user_message"},
+            {"role": "user", "content": "q2"},
+            {"role": "system", "content": "second"},
+            {"role": "assistant", "content": "a"},
+        ],
+        supports_mid_conversation_system=True,
+    )
+
+    assert _roles(placed) == ["user", "user", "system", "assistant"]
+    assert "clear_at" not in placed[2]
     assert _texts(placed[2]) == ["first", "second"]
 
 

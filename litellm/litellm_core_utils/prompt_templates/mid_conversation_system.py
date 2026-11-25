@@ -192,10 +192,19 @@ def anthropic_system_messages(message: object) -> tuple[AnthropicMessagesSystemM
     blocks: Final = anthropic_system_blocks((message,))
     if not blocks:
         return ()
-    wire: Final[AnthropicMessagesSystemMessageParam] = {
-        "role": "system",
-        "content": list(blocks),
-    }
+    clear_at: Final = string_field(message, "clear_at")
+    wire: Final[AnthropicMessagesSystemMessageParam] = (
+        {
+            "role": "system",
+            "content": list(blocks),
+            "clear_at": clear_at,
+        }
+        if clear_at
+        else {
+            "role": "system",
+            "content": list(blocks),
+        }
+    )
     return (wire,)
 
 
@@ -217,7 +226,13 @@ def _merged_system_message(run: Sequence[object]) -> tuple[ChatCompletionSystemM
     content: Final[list[ChatCompletionTextObject]] = [  # mutable-ok: anthropic_messages_pt only recognises list content
         _openai_text_block(part) for part in parts
     ]
-    merged: Final[ChatCompletionSystemMessage] = {"role": "system", "content": content}
+    clear_ats: Final = frozenset(string_field(message, "clear_at") for message in run)
+    shared_clear_at: Final = next(iter(clear_ats)) if len(clear_ats) == 1 else None
+    merged: Final[ChatCompletionSystemMessage] = (
+        {"role": "system", "content": content, "clear_at": shared_clear_at}
+        if shared_clear_at
+        else {"role": "system", "content": content}
+    )
     return (merged,)
 
 
