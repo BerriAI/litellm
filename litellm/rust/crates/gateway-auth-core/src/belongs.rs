@@ -3,7 +3,10 @@
 //! instead of declaring the slots again. The end user is named by the request, not by the caller,
 //! so it sits beside a `Belongs`, never in it.
 
-use crate::{Rows, record::Record};
+use crate::{
+    Rows,
+    record::{Label, Record},
+};
 
 /// No `Default`, so each place that builds one names every slot. An `Option` here is a name the
 /// caller does not have, never a row a host did not read.
@@ -115,6 +118,13 @@ impl<R: Rows<Team: Record>> Team<R> {
             Self::KeyCopy(copy) => &copy.team_id,
         }
     }
+
+    pub fn label(&self) -> Label {
+        match self {
+            Self::Row(team) => team.label(),
+            Self::Unstored(_) | Self::KeyCopy(_) => unstored(self.id()),
+        }
+    }
 }
 
 /// Only a key's: the UI team, or a team the host did not report. The key's own copy of the team's
@@ -163,6 +173,20 @@ impl<T: Record> Named<T> {
             Self::Unstored(id) => id,
             Self::Stored(row) => row.id(),
         }
+    }
+
+    pub fn label(&self) -> Label {
+        match self {
+            Self::Stored(row) => row.label(),
+            Self::Unstored(id) => unstored(id),
+        }
+    }
+}
+
+fn unstored(id: &str) -> Label {
+    Label {
+        id: id.to_owned(),
+        alias: None,
     }
 }
 

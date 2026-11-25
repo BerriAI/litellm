@@ -10,7 +10,9 @@ use litellm_callbacks::{
     MetadataKind, ModelInfo, Moment, Outcome, PatchOp, Scalar, SpendLogId, Usage, UsageRecord,
 };
 use litellm_gateway_auth::Authenticated;
-use litellm_gateway_auth_core::{Credential, StoredKey};
+use litellm_gateway_auth_core::{
+    Belongs, Caller, Credential, Named, StoredKey, Team, record::Label,
+};
 use litellm_gateway_inference::{
     CallType,
     record::{CallState, Charged, Ended, unix},
@@ -44,20 +46,38 @@ pub enum Unwritable {
 }
 
 /// Who `identity` is charged as: a key by the hash its row is stored under, its alias and its
-/// owner, and the master key by Python's alias for it and the proxy admin. Native keys name no
-/// team, organization, project or end user.
+/// owner, and the master key by Python's alias for it and the proxy admin, each with the team,
+/// organization, project and end user it names. Only a stored row gives an alias.
 pub(super) fn charged(identity: &Authenticated<NativeRows>) -> Charged {
-    match &identity.credential {
-        Credential::MasterKey => Charged {
-            key_hash: Some(MASTER_KEY_ALIAS.to_owned()),
-            key_alias: None,
-            user_id: Some(PROXY_ADMIN_NAME.to_owned()),
+    let Caller {
+        credential,
+        belongs: Belongs {
+            holder,
+            org,
+            project,
         },
-        Credential::Key { key } => Charged {
-            key_hash: identity.hash().map(ToString::to_string),
-            key_alias: key.alias().map(str::to_owned),
-            user_id: key.record().user_id.clone(),
-        },
+        end_user,
+    } = &**identity;
+    let (key_hash, key_alias, user_id) = match credential {
+        Credential::MasterKey => (
+            Some(MASTER_KEY_ALIAS.to_owned()),
+            None,
+            Some(PROXY_ADMIN_NAME.to_owned()),
+        ),
+        Credential::Key { key } => (
+            identity.hash().map(ToString::to_string),
+            key.alias().map(str::to_owned),
+            key.record().user_id.clone(),
+        ),
+    };
+    Charged {
+        key_hash,
+        key_alias,
+        user_id,
+        team: holder.team().map(Team::label),
+        org: org.as_ref().map(Named::label),
+        project: project.as_ref().map(Named::label),
+        end_user_id: end_user.end_user_id.clone(),
     }
 }
 
@@ -138,12 +158,29 @@ fn provider(entries: &CallState) -> Option<String> {
         })
 }
 
+fn id(label: Option<&Label>) -> Option<Scalar> {
+    label.map(|label| Scalar::from(label.id.as_str()))
+}
+
+fn alias(label: Option<&Label>) -> Option<Scalar> {
+    label
+        .and_then(|label| label.alias.as_deref())
+        .map(Scalar::from)
+}
+
 fn key_identity(charged: &Charged) -> KeyIdentity {
     KeyIdentity {
         key_hash: charged.key_hash.as_deref().map(Scalar::from),
         api_key: charged.key_hash.as_deref().map(Scalar::from),
         key_alias: charged.key_alias.as_deref().map(Scalar::from),
         user_id: charged.user_id.as_deref().map(Scalar::from),
+        team_id: id(charged.team.as_ref()),
+        team_alias: alias(charged.team.as_ref()),
+        org_id: id(charged.org.as_ref()),
+        org_alias: alias(charged.org.as_ref()),
+        project_id: id(charged.project.as_ref()),
+        project_alias: alias(charged.project.as_ref()),
+        end_user_id: charged.end_user_id.as_deref().map(Scalar::from),
         ..KeyIdentity::default()
     }
 }
@@ -155,6 +192,14 @@ fn logged_key_identity(entries: &CallState) -> LoggedKeyIdentity {
         key_hash: charged.key_hash.as_deref().map(Scalar::from),
         key_alias: charged.key_alias.as_deref().map(Scalar::from),
         user_id: charged.user_id.as_deref().map(Scalar::from),
+        team_id: id(charged.team.as_ref()),
+        team_alias: alias(charged.team.as_ref()),
+        org_id: id(charged.org.as_ref()),
+        org_alias: alias(charged.org.as_ref()),
+        project_id: id(charged.project.as_ref()),
+        project_alias: alias(charged.project.as_ref()),
+        end_user_id: charged.end_user_id.as_deref().map(Scalar::from),
+        cost_tracking_end_user_id: charged.end_user_id.as_deref().map(Scalar::from),
         request_route: entries.call_type().map(route).map(Scalar::from),
         ..LoggedKeyIdentity::default()
     }
@@ -370,6 +415,10 @@ pub fn write(entries: &mut CallState, op: PatchOp) -> Result<(), Unwritable> {
 
 #[cfg(test)]
 mod tests {
+    use litellm_gateway_auth_core::{
+        Holder, TeamCopy,
+        record::{EndUserRecord, OrgRecord, ProjectRecord, TeamRecord, UserRecord},
+    };
     use litellm_gateway_inference::{
         ServedCall,
         record::{self, CallRecord},
@@ -571,6 +620,164 @@ mod tests {
                 )
             }),
             Err(Unwritable::Routed(Field::OptionalParams))
+        );
+    }
+
+    fn member() -> Authenticated<NativeRows> {
+        crate::test_support::key(
+            "stored",
+            Some("ci"),
+            Belongs {
+                holder: Holder::Member {
+                    user: Named::Stored(UserRecord {
+                        user_id: "u1".to_owned(),
+                        ..UserRecord::default()
+                    }),
+                    team: Team::Row(TeamRecord {
+                        team_id: "t1".to_owned(),
+                        team_alias: Some("team one".to_owned()),
+                        ..TeamRecord::default()
+                    }),
+                    membership: None,
+                },
+                org: Some(Named::Stored(OrgRecord {
+                    organization_id: "o1".to_owned(),
+                    organization_alias: Some("org one".to_owned()),
+                    ..OrgRecord::default()
+                })),
+                project: Some(Named::Stored(ProjectRecord {
+                    project_id: "p1".to_owned(),
+                    project_alias: Some("project one".to_owned()),
+                    ..ProjectRecord::default()
+                })),
+            },
+            EndUserRecord {
+                end_user_id: Some("e1".to_owned()),
+                ..EndUserRecord::default()
+            },
+        )
+    }
+
+    fn unstored() -> Authenticated<NativeRows> {
+        crate::test_support::key(
+            "stored",
+            None,
+            Belongs {
+                holder: Holder::Team(Team::KeyCopy(TeamCopy {
+                    team_id: "t1".to_owned(),
+                    object_permission: None,
+                })),
+                org: Some(Named::Unstored("o1".to_owned())),
+                project: Some(Named::Unstored("p1".to_owned())),
+            },
+            EndUserRecord::default(),
+        )
+    }
+
+    fn master_for(end_user_id: &str) -> Authenticated<NativeRows> {
+        Authenticated::from(Caller::master_key(EndUserRecord {
+            end_user_id: Some(end_user_id.to_owned()),
+            ..EndUserRecord::default()
+        }))
+    }
+
+    #[rstest]
+    #[case::a_member_of_a_team_in_an_org_and_a_project(
+        member(),
+        Charged {
+            key_hash: Some("stored".to_owned()),
+            key_alias: Some("ci".to_owned()),
+            team: Some(Label {
+                id: "t1".to_owned(),
+                alias: Some("team one".to_owned()),
+            }),
+            org: Some(Label {
+                id: "o1".to_owned(),
+                alias: Some("org one".to_owned()),
+            }),
+            project: Some(Label {
+                id: "p1".to_owned(),
+                alias: Some("project one".to_owned()),
+            }),
+            end_user_id: Some("e1".to_owned()),
+            ..Charged::default()
+        }
+    )]
+    #[case::names_no_row_stands_behind(
+        unstored(),
+        Charged {
+            key_hash: Some("stored".to_owned()),
+            team: Some(Label {
+                id: "t1".to_owned(),
+                alias: None,
+            }),
+            org: Some(Label {
+                id: "o1".to_owned(),
+                alias: None,
+            }),
+            project: Some(Label {
+                id: "p1".to_owned(),
+                alias: None,
+            }),
+            ..Charged::default()
+        }
+    )]
+    #[case::the_master_key_for_an_end_user(
+        master_for("e1"),
+        Charged {
+            key_hash: Some(MASTER_KEY_ALIAS.to_owned()),
+            user_id: Some(PROXY_ADMIN_NAME.to_owned()),
+            end_user_id: Some("e1".to_owned()),
+            ..Charged::default()
+        }
+    )]
+    fn a_call_is_charged_to_everything_its_caller_belongs_to(
+        #[case] identity: Authenticated<NativeRows>,
+        #[case] expected: Charged,
+    ) {
+        assert_eq!(charged(&identity), expected);
+    }
+
+    #[rstest]
+    fn callbacks_read_the_team_org_project_and_end_user_a_call_is_charged_to() {
+        let input = on_a_call(|entries| {
+            entries.charge_to(charged(&member()));
+            input(
+                entries,
+                Hook::AttemptEnded,
+                FieldSet::of(&[Field::KeyIdentity, Field::LoggedKeyIdentity]),
+            )
+        });
+        let read = |field| input.fields.raw(field).unwrap().unwrap().clone();
+        let key: KeyIdentity = serde_json::from_value(read(Field::KeyIdentity)).unwrap();
+        let logged: LoggedKeyIdentity =
+            serde_json::from_value(read(Field::LoggedKeyIdentity)).unwrap();
+        let named = |names: [&Option<Scalar>; 7]| names.map(Clone::clone);
+        let expected = ["t1", "team one", "o1", "org one", "p1", "project one", "e1"]
+            .map(|name| Some(Scalar::from(name)));
+        assert_eq!(
+            (
+                named([
+                    &key.team_id,
+                    &key.team_alias,
+                    &key.org_id,
+                    &key.org_alias,
+                    &key.project_id,
+                    &key.project_alias,
+                    &key.end_user_id,
+                ]),
+                named([
+                    &logged.team_id,
+                    &logged.team_alias,
+                    &logged.org_id,
+                    &logged.org_alias,
+                    &logged.project_id,
+                    &logged.project_alias,
+                    &logged.end_user_id,
+                ]),
+                logged.cost_tracking_end_user_id,
+            ),
+            (expected.clone(), expected, Some(Scalar::from("e1")))
         );
     }
 }
