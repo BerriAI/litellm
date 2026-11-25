@@ -73,6 +73,7 @@ from litellm.llms.bedrock.common_utils import (
     deployment_model_info,
     drops_safeguards_bedrock_rejects,
     requests_output_config_format,
+    without_safeguards,
 )
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
@@ -2354,30 +2355,29 @@ class AmazonConverseConfig(BaseConfig):
             for config_name, config_class in self.get_config_blocks().items()
         )
 
-        sent_betas: Final = anthropic_body_betas(
-            _JSON_OBJECT.validate_python(additional_request_params).get("anthropic_beta")
-        )
-        safeguards_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
-        if SAFEGUARDS in additional_request_params and drops_safeguards_bedrock_rejects(
-            bedrock_capability_model(model, self._deployment_base_model(litellm_params or {})),
-            deployment_model_info(litellm_params),
-            drop_params,
-            "bedrock_converse",
-            sends_beta=safeguards_beta in sent_betas,
-        ):
-            del additional_request_params[SAFEGUARDS]
-            kept_betas: Final = sorted(sent_betas - {safeguards_beta})
-            if kept_betas:
-                additional_request_params["anthropic_beta"] = kept_betas
-            elif "anthropic_beta" in additional_request_params:
-                del additional_request_params["anthropic_beta"]
+        sent_fields: Final = _JSON_OBJECT.validate_python(additional_request_params)
+        request_fields: Final = {
+            **(
+                without_safeguards(sent_fields)
+                if SAFEGUARDS in sent_fields
+                and drops_safeguards_bedrock_rejects(
+                    bedrock_capability_model(model, self._deployment_base_model(litellm_params or {})),
+                    deployment_model_info(litellm_params),
+                    drop_params,
+                    "bedrock_converse",
+                    sends_beta=ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
+                    in anthropic_body_betas(sent_fields.get("anthropic_beta")),
+                )
+                else sent_fields
+            )
+        }
 
         data: Final[CommonRequestObject] = {
             "inferenceConfig": self._transform_inference_params(inference_params=inference_params),
         }
-        if additional_request_params:
-            data["additionalModelRequestFields"] = additional_request_params
-            if "thinking" in additional_request_params:
+        if request_fields:
+            data["additionalModelRequestFields"] = request_fields
+            if "thinking" in request_fields:
                 data["additionalModelResponseFieldPaths"] = ("/usage/output_tokens_details",)
         if system_content_blocks:
             data["system"] = system_content_blocks

@@ -48,8 +48,7 @@ from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
 from ..safeguards import (
     SafeguardsEvaluator,
     native_route_classifies,
-    read_classifier_model_setting,
-    requested_dangerous_tool_use,
+    proxy_serves_safeguards,
     with_safeguard_results,
 )
 from .interceptors import get_messages_interceptors
@@ -176,9 +175,18 @@ def messages_request_bridges(model: str, custom_llm_provider: str | None, model_
 def proxy_classifies_tool_uses(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:
     """Whether this proxy, rather than the upstream, answers ``safeguards`` for a request routed this way."""
     safeguards: Final = kwargs.get("safeguards")
-    if _native_messages_config(model, custom_llm_provider, kwargs.get("model_info")) is not None:
-        return native_route_classifies(model, safeguards)
-    return requested_dangerous_tool_use(safeguards) is not None and read_classifier_model_setting() is not None
+    native_config: Final = _native_messages_config(model, custom_llm_provider, kwargs.get("model_info"))
+    if native_config is None:
+        return proxy_serves_safeguards(safeguards)
+    return _native_config_classifies(model, safeguards, native_config, kwargs)
+
+
+def _native_config_classifies(
+    model: str, safeguards: object, native_config: BaseAnthropicMessagesConfig, kwargs: Mapping[str, object]
+) -> bool:
+    return native_route_classifies(model, safeguards) or (
+        proxy_serves_safeguards(safeguards) and native_config.drops_model_safeguards(model, kwargs)
+    )
 
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -714,7 +722,10 @@ def anthropic_messages_handler(
     )
     safeguards_evaluator: Final = (
         request_safeguards_evaluator(safeguard_kwargs, _SAFEGUARD_MESSAGES.validate_python(messages))
-        if safeguard_kwargs is not None and native_route_classifies(model, safeguard_kwargs.get("safeguards"))
+        if safeguard_kwargs is not None
+        and _native_config_classifies(
+            model, safeguard_kwargs.get("safeguards"), anthropic_messages_provider_config, safeguard_kwargs
+        )
         else None
     )
     native_response: Final = base_llm_http_handler.anthropic_messages_handler(

@@ -928,6 +928,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     ) -> bool:
         return cls._supports_model_capability(model, key, custom_llm_provider)
 
+    @classmethod
+    def resolved_model_capability(cls, model: str, key: str, custom_llm_provider: str) -> bool | None:
+        return cls._get_provider_resolved_capability(model, key, custom_llm_provider)
+
     @staticmethod
     def _is_adaptive_thinking_model(model: str, custom_llm_provider: str) -> bool:
         """Whether ``model`` uses adaptive thinking (``output_config.effort``).

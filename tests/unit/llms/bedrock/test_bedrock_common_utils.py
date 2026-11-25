@@ -7,6 +7,7 @@ from litellm.llms.bedrock.common_utils import(
     AmazonBedrockGlobalConfig,
     BedrockModelInfo,
     bedrock_native_output_is_opt_in,
+    bedrock_supports_safeguards,
     deployment_model_info,
     extract_model_name_from_bedrock_arn,
     get_bedrock_base_model,
@@ -2126,3 +2127,34 @@ def test_without_bedrock_native_output_opt_in_turns_the_opt_in_off_and_keeps_the
     assert turned_off["api_base"] == "https://bedrock.example"
     assert deployment_model_info(turned_off)["id"] == "deployment-1"
     assert litellm_params["model_info"] == {"id": "deployment-1"}
+
+
+@pytest.fixture
+def cost_map_with_a_nova_row_that_rejects_safeguards(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            **litellm.get_model_cost_map(url=""),
+            "amazon.nova-unguarded-v1:0": {"litellm_provider": "bedrock", "mode": "chat", "supports_safeguards": False},
+        },
+    )
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.usefixtures("cost_map_with_a_nova_row_that_rejects_safeguards")
+@pytest.mark.parametrize(
+    ("model", "supported"),
+    [
+        pytest.param("amazon.nova-unguarded-v1:0", False, id="non_claude_row_flagged_off"),
+        pytest.param("amazon.nova-unlisted-v1:0", True, id="unmapped_non_claude"),
+        pytest.param("us.anthropic.claude-opus-4-1-20250805-v1:0", False, id="old_claude"),
+        pytest.param("us.anthropic.claude-mythos-preview", True, id="word_named_claude"),
+        pytest.param("anthropic.claude-instant-v1", False, id="claude_instant"),
+    ],
+)
+def test_bedrock_supports_safeguards_reads_the_cost_map_flag_before_the_model_name(model: str, supported: bool) -> None:
+    assert bedrock_supports_safeguards(model, None) is supported

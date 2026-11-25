@@ -26,6 +26,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_TRACE_FIELD,
     SAFEGUARDS,
+    anthropic_body_betas,
     apply_bedrock_invoke_structured_output,
     bedrock_capability_model,
     bedrock_chat_uses_native_structured_output,
@@ -42,6 +43,7 @@ from litellm.llms.bedrock.common_utils import (
     strip_bedrock_routing_prefix,
     strip_unsupported_bedrock_invoke_output_config_keys,
     tools_without_eager_input_streaming,
+    without_safeguards,
     without_safeguards_beta,
 )
 from litellm.types.llms.anthropic import (
@@ -64,6 +66,16 @@ else:
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _OPTIONAL_PARAMS: Final = TypeAdapter(dict[str, object])
+
+
+def _drops_rejected_safeguards(model: str, litellm_params: Mapping[str, object], *, sends_beta: bool) -> bool:
+    return drops_safeguards_bedrock_rejects(
+        bedrock_capability_model(strip_bedrock_routing_prefix(model), litellm_params.get("base_model")),
+        deployment_model_info(litellm_params),
+        litellm_params.get("drop_params"),
+        "bedrock_invoke",
+        sends_beta=sends_beta,
+    )
 
 
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
@@ -208,12 +220,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         headers: dict,
     ) -> dict:
         params: Final = _OPTIONAL_PARAMS.validate_python(optional_params)
-        typed_litellm_params: Final = _LITELLM_PARAMS.validate_python(litellm_params)
-        drops_safeguards: Final = SAFEGUARDS in params and drops_safeguards_bedrock_rejects(
-            bedrock_capability_model(strip_bedrock_routing_prefix(model), typed_litellm_params.get("base_model")),
-            deployment_model_info(typed_litellm_params),
-            typed_litellm_params.get("drop_params"),
-            "bedrock_invoke",
+        drops_safeguards: Final = SAFEGUARDS in params and _drops_rejected_safeguards(
+            model,
+            _LITELLM_PARAMS.validate_python(litellm_params),
             sends_beta=ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
             in get_anthropic_beta_from_headers(headers),
         )
@@ -244,6 +253,24 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             _anthropic_request["anthropic_beta"] = upstream_betas
 
         return _anthropic_request
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        admitted: Final = super().transform_extra_body(
+            extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
+        )
+        drops_safeguards: Final = SAFEGUARDS in admitted and _drops_rejected_safeguards(
+            model,
+            litellm_params,
+            sends_beta=ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
+            in anthropic_body_betas(admitted.get("anthropic_beta", request.get("anthropic_beta"))),
+        )
+        return without_safeguards(admitted) if drops_safeguards else admitted
 
     @property
     def uses_async_transform_request(self) -> bool:

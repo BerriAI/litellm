@@ -40,6 +40,7 @@ from litellm.llms.bedrock.common_utils import (
     BedrockError,
     apply_bedrock_invoke_structured_output,
     bedrock_capability_model,
+    bedrock_drops_safeguards,
     bedrock_supports_per_turn_control,
     bedrock_supports_tool_search,
     drops_safeguards_bedrock_rejects,
@@ -112,6 +113,14 @@ class AmazonAnthropicClaudeMessagesConfig(
         ):
             return frozenset({ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value})
         return frozenset()
+
+    def drops_model_safeguards(self, model: str, kwargs: Mapping[str, object]) -> bool:
+        return bedrock_drops_safeguards(
+            bedrock_capability_model(model, kwargs.get("base_model")),
+            _MODEL_INFO.validate_python(kwargs.get("model_info")),
+            kwargs.get("drop_params"),
+            sends_beta=True,
+        )
 
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
 

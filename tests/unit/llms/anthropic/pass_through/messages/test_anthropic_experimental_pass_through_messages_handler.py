@@ -1955,6 +1955,72 @@ async def test_native_claude_messages_response_is_left_to_claude_code_when_its_b
         assert "safeguard_results" not in response
 
 
+_OPUS_4_1_ON_BEDROCK: Final = "us.anthropic.claude-opus-4-1-20250805-v1:0"
+_BEDROCK_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/abc123"
+_BEDROCK_SAFEGUARDS_DROPS: Final = (
+    pytest.param(f"bedrock/invoke/{_OPUS_4_1_ON_BEDROCK}", {"drop_params": True}, True, id="opus_4_1_drop_params"),
+    pytest.param(
+        "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        {"drop_params": True},
+        False,
+        id="sonnet_4_5_drop_params",
+    ),
+    pytest.param(f"bedrock/invoke/{_OPUS_4_1_ON_BEDROCK}", {}, False, id="opus_4_1_no_drop_params"),
+    pytest.param(
+        f"bedrock/mantle/{_BEDROCK_PROFILE_ARN}",
+        {"drop_params": True, "base_model": f"bedrock/{_OPUS_4_1_ON_BEDROCK}"},
+        True,
+        id="profile_arn_of_opus_4_1",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("model", "deployment", "classifies"), _BEDROCK_SAFEGUARDS_DROPS)
+async def test_native_bedrock_route_classifies_exactly_the_safeguards_it_drops(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    deployment: dict[str, object],
+    classifies: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    response = await _native_messages(
+        model,
+        _native_upstream(stream=False, model="claude-opus-4-1"),
+        stream=False,
+        aws_access_key_id="test-access-key",
+        aws_secret_access_key="test-secret-key",
+        aws_region_name="us-east-1",
+        **deployment,
+    )
+
+    assert list(response.get("safeguard_results", ())) == (_FLAGGED_CURL if classifies else [])
+
+
+@pytest.mark.parametrize(("model", "deployment", "classifies"), _BEDROCK_SAFEGUARDS_DROPS)
+def test_bedrock_tool_uses_are_classified_here_exactly_when_the_route_drops_safeguards(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    deployment: dict[str, object],
+    classifies: bool,
+) -> None:
+    from litellm.llms.anthropic.pass_through.messages import handler
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    safeguards, _ = _claude_code_auto_mode_request()
+    routed_model, provider, _, _ = litellm.get_llm_provider(model=model)
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"safeguards_classifier_model": "classifier"}):
+        classified_here: Final = handler.proxy_classifies_tool_uses(
+            routed_model, provider, {**deployment, "safeguards": safeguards}
+        )
+
+    assert classified_here is classifies
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_litellm_router_latency_metadata_tracking():
     """
