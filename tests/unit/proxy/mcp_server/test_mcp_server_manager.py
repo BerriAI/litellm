@@ -2600,6 +2600,20 @@ class TestMCPServerManager:
             auth_type=auth_type,
         )
 
+    async def _run_call_as_alice(self, manager: MCPServerManager, server: MCPServer) -> CallToolResult:
+        return await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={},
+            proxy_logging_obj=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="hashed-key", user_id="alice"),
+        )
+
     async def _run_call_regular(self, manager, server):
         return await manager._call_regular_mcp_tool(
             mcp_server=server,
@@ -2736,6 +2750,84 @@ class TestMCPServerManager:
             expected.status_code,
             expected.headers,
             expected.detail,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("upstream_status", "route", "expected_status"),
+        [
+            (401, "scoped", 401),
+            (401, "aggregate", 200),
+            (401, "rest", None),
+            (401, "scoped-delegate", 200),
+            (403, "scoped", 200),
+            (503, "scoped", 200),
+        ],
+    )
+    async def test_managed_tool_call_the_upstream_rejects_asks_a_scoped_client_to_sign_in_again(
+        self, upstream_status: int, route: str, expected_status: int | None
+    ) -> None:
+        from starlette.requests import Request
+
+        from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
+        from litellm.proxy.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
+
+        delegate: Final = route == "scoped-delegate"
+        server: Final = MCPServer(
+            server_id="managed",
+            name="managed",
+            url="https://up.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth_delegate if delegate else MCPAuth.oauth2,
+            oauth2_flow=None if delegate else "authorization_code",
+        )
+        async def upstream_refuses(request: httpx2.Request) -> httpx2.Response:
+            return httpx2.Response(upstream_status, headers={"www-authenticate": 'Bearer error="invalid_token"'})
+
+        class StoredLogin:
+            async def fetch(self, user_id: str, server_id: str) -> OAuthToken | None:
+                return OAuthToken(access_token="stored-token")
+
+            async def invalidate(self, user_id: str, server_id: str) -> None:
+                return None
+
+        manager: Final = MCPServerManager(
+            upstream_transport=httpx2.MockTransport(upstream_refuses), per_user_oauth_token_store=StoredLogin()
+        )
+        sent: Final = AsyncMock()
+        gate: Final = OAuthScopeResponse(
+            sent,
+            "https://gateway.test",
+            "/mcp/managed",
+            reauthorize_as="managed" if route.startswith("scoped") else None,
+        )
+        context: Final = ServerRequestContext(
+            session=MagicMock(),
+            lifespan_context={},
+            protocol_version="2025-11-25",
+            method="tools/call",
+            request=Request({"type": "http", SCOPE_RESPONSE_KEY: gate}),
+        )
+        token: Final = active_mcp_request_ctx_var.set(context if route != "rest" else None)
+        try:
+            if delegate:
+                with pytest.raises(MCPUpstreamAuthError) as relayed:
+                    await self._run_call_as_alice(manager, server)
+                assert relayed.value.www_authenticate == 'Bearer error="invalid_token"'
+            else:
+                assert (await self._run_call_as_alice(manager, server)).is_error
+        finally:
+            active_mcp_request_ctx_var.reset(token)
+
+        gate.allow()
+        await gate({"type": "http.response.start", "status": 200, "headers": []})
+        start: Final = sent.await_args_list[0].args[0] if route != "rest" else {}
+        challenge: Final = dict(start.get("headers", [])).get(b"www-authenticate")
+        assert (start.get("status"), challenge) == (
+            expected_status,
+            b'Bearer resource_metadata="https://gateway.test/.well-known/oauth-protected-resource/mcp/managed"'
+            if expected_status == 401
+            else None,
         )
 
     @pytest.mark.asyncio
