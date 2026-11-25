@@ -30496,7 +30496,7 @@ export interface components {
         /** Body_restore_dashboard_session_lens_session_post */
         Body_restore_dashboard_session_lens_session_post: {
             /** Token */
-            token: string;
+            token?: string | null;
         };
         /** Body_revoke_endpoint_revoke_post */
         Body_revoke_endpoint_revoke_post: {
@@ -35018,6 +35018,11 @@ export interface components {
              * @default 0
              */
             total_tokens: number;
+        };
+        /** DashboardSessionResponse */
+        DashboardSessionResponse: {
+            /** Token */
+            token: string;
         };
         /**
          * DecisionModelCheck
@@ -70932,18 +70937,20 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody: {
+        requestBody?: {
             content: {
                 "application/json": components["schemas"]["Body_restore_dashboard_session_lens_session_post"];
             };
         };
         responses: {
             /** @description Successful Response */
-            204: {
+            200: {
                 headers: {
                     [name: string]: unknown;
                 };
-                content?: never;
+                content: {
+                    "application/json": components["schemas"]["DashboardSessionResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

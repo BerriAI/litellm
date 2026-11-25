@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ThemeProvider, useTheme } from "next-themes";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -6,49 +6,65 @@ import { renderWithProviders } from "../../../tests/test-utils";
 import { EmbeddedLens } from "./EmbeddedLens";
 import { GatewayLensNavigation, GatewayLensNavigationProvider } from "./GatewayLensNavigation";
 import { SidebarProvider } from "@/components/ui/sidebar";
+import { switchToWorkerUrl } from "@/components/networking";
+import { setServerRootPath } from "@/lib/serverRootPath";
+import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 
 const network = vi.fn<typeof fetch>();
+const token = `header.${btoa(JSON.stringify({ key: "sk-dashboard-session" }))}.signature`;
 const connection = (configured = true, connected = true, browserUrl = "https://lens.example.test") =>
   Response.json({ configured, connected, browser_url: browserUrl });
+const ready = () =>
+  network
+    .mockResolvedValueOnce(new Response("<html></html>"))
+    .mockResolvedValueOnce(Response.json({ token }))
+    .mockResolvedValueOnce(connection());
 
 beforeEach(() => {
   network.mockReset();
   vi.stubGlobal("fetch", network);
   window.history.replaceState(null, "", "/ui/lens/?tab=traces");
+  clearTokenCookies();
+  window.sessionStorage.setItem("token", token);
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
+  clearTokenCookies();
+  switchToWorkerUrl(null);
+  setServerRootPath("/");
   vi.unstubAllGlobals();
 });
 
-const render = () => renderWithProviders(<EmbeddedLens />);
+const render = (dashboardToken: string | null = token) =>
+  renderWithProviders(<EmbeddedLens dashboardToken={dashboardToken} />);
 
 it("frames the connected Lens at the tab in the dashboard URL", async () => {
-  network.mockResolvedValueOnce(connection()).mockResolvedValueOnce(new Response("<html></html>"));
+  ready();
   render();
   expect(await screen.findByTitle("Lens")).toHaveAttribute("src", `${window.location.origin}/lens/ui/?tab=traces`);
 });
 
 it("restores the dashboard's storage fallback before opening Lens", async () => {
-  const token = `header.${btoa(JSON.stringify({ key: "sk-dashboard-session" }))}.signature`;
   window.sessionStorage.setItem("token", token);
   const requests: Request[] = [];
   network.mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     requests.push(request);
     if (new URL(request.url).pathname === "/lens/service") return connection();
-    if (new URL(request.url).pathname === "/lens/session") return new Response(null, { status: 204 });
+    if (new URL(request.url).pathname === "/lens/session") return Response.json({ token });
     return new Response("<html></html>");
   });
   try {
     render();
     expect(await screen.findByTitle("Lens")).toHaveAttribute("src", `${window.location.origin}/lens/ui/?tab=traces`);
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
-      "/lens/service",
-      "/lens/session",
       "/lens/ui/",
+      "/lens/session",
+      "/lens/service",
     ]);
-    expect(requests[0].headers.get("Authorization")).toBe("Bearer sk-dashboard-session");
+    expect(requests[0].headers.get("Authorization")).toBeNull();
+    expect(requests[2].headers.get("Authorization")).toBe("Bearer sk-dashboard-session");
     expect(requests[1].method).toBe("POST");
     expect(requests[1].credentials).toBe("include");
     expect(requests[1].redirect).toBe("error");
@@ -59,10 +75,10 @@ it("restores the dashboard's storage fallback before opening Lens", async () => 
   }
 });
 
-it.each([401, 403])("does not open Lens when the dashboard session is refused (%s)", async (status) => {
+it.each([401, 403, 503])("does not open Lens when the dashboard session handoff fails (%s)", async (status) => {
   window.sessionStorage.setItem("token", "dashboard-session-fixture");
   network
-    .mockResolvedValueOnce(connection())
+    .mockResolvedValueOnce(new Response("<html></html>"))
     .mockResolvedValueOnce(Response.json({ detail: "Sign in again" }, { status }));
   try {
     render();
@@ -75,7 +91,7 @@ it.each([401, 403])("does not open Lens when the dashboard session is refused (%
 });
 
 it("renders the connected frame's Lens navigation in the gateway sidebar and keeps the theme in sync", async () => {
-  network.mockResolvedValueOnce(connection()).mockResolvedValueOnce(new Response("<html></html>"));
+  ready();
   const user = userEvent.setup();
   function ToggleTheme() {
     const { setTheme } = useTheme();
@@ -89,7 +105,7 @@ it("renders the connected frame's Lens navigation in the gateway sidebar and kee
           <aside aria-label="Gateway navigation">
             <GatewayLensNavigation collapsed={false} />
           </aside>
-          <EmbeddedLens />
+          <EmbeddedLens dashboardToken={token} />
         </GatewayLensNavigationProvider>
       </SidebarProvider>
     </ThemeProvider>,
@@ -164,7 +180,7 @@ it("renders the connected frame's Lens navigation in the gateway sidebar and kee
 });
 
 it("shows the original introduction and linked sample evidence when Lens is not configured", async () => {
-  network.mockResolvedValueOnce(connection(false, false));
+  network.mockResolvedValueOnce(new Response(null, { status: 404 })).mockResolvedValueOnce(connection(false, false));
   render();
   expect(await screen.findByRole("heading", { name: "The gateway that helps your agents improve" })).toBeVisible();
   expect(screen.getByRole("link", { name: "Set up Lens" })).toHaveAttribute(
@@ -181,9 +197,11 @@ it("shows the original introduction and linked sample evidence when Lens is not 
 
 it("opens the workspace after setup succeeds and the user checks the connection again", async () => {
   network
+    .mockResolvedValueOnce(new Response(null, { status: 404 }))
     .mockResolvedValueOnce(connection(false, false))
-    .mockResolvedValueOnce(connection())
-    .mockResolvedValueOnce(new Response("<html></html>"));
+    .mockResolvedValueOnce(new Response("<html></html>"))
+    .mockResolvedValueOnce(Response.json({ token }))
+    .mockResolvedValueOnce(connection());
   render();
   fireEvent.click(await screen.findByRole("button", { name: "Check connection" }));
   expect(await screen.findByTitle("Lens")).toBeVisible();
@@ -191,7 +209,7 @@ it("opens the workspace after setup succeeds and the user checks the connection 
 });
 
 it("offers the standalone launch only for a connected older Lens with a browser address", async () => {
-  network.mockResolvedValueOnce(connection()).mockResolvedValueOnce(new Response("", { status: 404 }));
+  network.mockResolvedValueOnce(new Response("", { status: 404 })).mockResolvedValueOnce(connection());
   render();
   expect(await screen.findByRole("heading", { name: "Update Lens to use it here" })).toBeVisible();
   expect(screen.getByRole("link", { name: "Open Lens" })).toHaveAttribute(
@@ -199,10 +217,11 @@ it("offers the standalone launch only for a connected older Lens with a browser 
     `${window.location.origin}/lens/login`,
   );
   expect(screen.queryByTitle("Lens")).not.toBeInTheDocument();
+  expect(network).toHaveBeenCalledTimes(2);
 });
 
 it("does not offer the localhost launch when the gateway has no valid browser address", async () => {
-  network.mockResolvedValueOnce(connection(true, true, "")).mockResolvedValueOnce(new Response("", { status: 404 }));
+  network.mockResolvedValueOnce(new Response("", { status: 404 })).mockResolvedValueOnce(connection(true, true, ""));
   render();
   expect(await screen.findByRole("heading", { name: "Update Lens to use it here" })).toBeVisible();
   expect(screen.queryByRole("link", { name: "Open Lens" })).not.toBeInTheDocument();
@@ -210,7 +229,7 @@ it("does not offer the localhost launch when the gateway has no valid browser ad
 });
 
 it("shows a connection problem rather than installation or upgrade for a configured disconnected service", async () => {
-  network.mockResolvedValueOnce(connection(true, false));
+  network.mockResolvedValueOnce(new Response(null, { status: 404 })).mockResolvedValueOnce(connection(true, false));
   render();
   expect(await screen.findByRole("heading", { name: "Could not connect to Lens" })).toBeVisible();
   expect(screen.queryByRole("link", { name: "Set up Lens" })).not.toBeInTheDocument();
@@ -218,19 +237,160 @@ it("shows a connection problem rather than installation or upgrade for a configu
 });
 
 it.each([401, 403, 404, 503])("does not mistake a failed connection check (%s) for missing setup", async (status) => {
-  network.mockResolvedValueOnce(Response.json({ detail: "Unavailable" }, { status }));
+  network
+    .mockResolvedValueOnce(new Response(null, { status: 404 }))
+    .mockResolvedValueOnce(Response.json({ detail: "Unavailable" }, { status }));
   render();
   expect(await screen.findByRole("heading", { name: "Could not connect to Lens" })).toBeVisible();
   expect(screen.queryByRole("link", { name: "Set up Lens" })).not.toBeInTheDocument();
 });
 
-it("can retry a failed request without reloading the dashboard", async () => {
+it.each(["UI probe", "session handoff"])("can retry a failed %s without reloading the dashboard", async (step) => {
+  if (step === "session handoff") network.mockResolvedValueOnce(new Response("<html></html>"));
   network
     .mockRejectedValueOnce(new TypeError("network"))
-    .mockResolvedValueOnce(connection())
-    .mockResolvedValueOnce(new Response("<html></html>"));
+    .mockResolvedValueOnce(new Response("<html></html>"))
+    .mockResolvedValueOnce(Response.json({ token }))
+    .mockResolvedValueOnce(connection());
   render();
   expect(await screen.findByRole("heading", { name: "Could not connect to Lens" })).toBeVisible();
   fireEvent.click(screen.getByRole("button", { name: "Check connection" }));
   expect(await screen.findByTitle("Lens")).toBeVisible();
+});
+
+it.each(["stale", "canonical"])(
+  "reloads once when the root login differs from the mounted dashboard with a %s readable cookie",
+  async (readableCookie) => {
+    const canonical = `header.${btoa(JSON.stringify({ key: "sk-current-session" }))}.signature`;
+    const cookieToken = readableCookie === "stale" ? token : canonical;
+    document.cookie = `token=${canonical}; Path=/`;
+    document.cookie = `token=${cookieToken}; Path=/ui`;
+    expect(getCookie("token")).toBe(cookieToken);
+    const cookieWrites = vi.spyOn(document, "cookie", "set");
+    const reload = vi.fn();
+    vi.stubGlobal("location", { ...window.location, reload });
+    const requests: Request[] = [];
+    network.mockImplementation(async (input, init) => {
+      const request = new Request(input, init);
+      requests.push(request);
+      const path = new URL(request.url).pathname;
+      if (path === "/lens/session") return Response.json({ token: canonical });
+      if (path === "/lens/service") return connection();
+      return new Response("<html></html>");
+    });
+    const firstDocument = render(token);
+
+    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual(["/lens/ui/", "/lens/session"]);
+    expect(await requests[1].json()).toEqual({ token });
+    expect(screen.queryByTitle("Lens")).not.toBeInTheDocument();
+    expect(getCookie("token")).toBe(canonical);
+    expect(sessionStorage.getItem("token")).toBe(canonical);
+    expect(cookieWrites).toHaveBeenCalledTimes(1);
+    expect(cookieWrites).toHaveBeenCalledWith(expect.stringContaining("path=/ui;"));
+
+    firstDocument.unmount();
+    render(canonical);
+
+    expect(await screen.findByTitle("Lens")).toBeVisible();
+    expect(requests.at(-1)?.headers.get("Authorization")).toBe("Bearer sk-current-session");
+    expect(reload).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("repairs stale client credentials without reloading when the mounted dashboard already has the canonical login", async () => {
+  document.cookie = "token=stale-session; Path=/ui";
+  const reload = vi.fn();
+  vi.stubGlobal("location", { ...window.location, reload });
+  ready();
+  render(token);
+
+  expect(await screen.findByTitle("Lens")).toBeVisible();
+  expect(network.mock.calls[1][1]?.body).toBe(JSON.stringify({ token }));
+  const [input, init] = network.mock.calls[2];
+  expect(new Request(input, init).headers.get("Authorization")).toBe("Bearer sk-dashboard-session");
+  expect(getCookie("token")).toBe(token);
+  expect(reload).not.toHaveBeenCalled();
+});
+
+it("hands off a null token when the root session is not readable and persists the returned login", async () => {
+  clearTokenCookies();
+  const reload = vi.fn();
+  vi.stubGlobal("location", { ...window.location, reload });
+  network.mockResolvedValueOnce(new Response("<html></html>")).mockResolvedValueOnce(Response.json({ token }));
+  render(null);
+
+  await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  expect(network.mock.calls[1][1]?.body).toBe(JSON.stringify({ token: null }));
+  expect(network.mock.calls[1][1]?.credentials).toBe("include");
+  expect(getCookie("token")).toBe(token);
+  expect(network).toHaveBeenCalledTimes(2);
+});
+
+it("shows a retryable error without reloading when neither cookie nor storage can retain the selected login", async () => {
+  const reload = vi.fn();
+  vi.stubGlobal("location", { ...window.location, reload });
+  vi.spyOn(document, "cookie", "set").mockImplementation(() => {});
+  vi.stubGlobal("sessionStorage", {
+    getItem: (key: string) => (key === "token" ? token : null),
+    setItem: () => {
+      throw new DOMException("Storage denied", "SecurityError");
+    },
+    removeItem: () => {},
+  });
+  network
+    .mockResolvedValueOnce(new Response("<html></html>"))
+    .mockResolvedValueOnce(Response.json({ token: "canonical-session" }));
+  render();
+
+  expect(await screen.findByRole("heading", { name: "Could not connect to Lens" })).toBeVisible();
+  expect(screen.getByRole("button", { name: "Check connection" })).toBeVisible();
+  expect(reload).not.toHaveBeenCalled();
+  expect(getCookie("token")).toBe(token);
+  expect(network).toHaveBeenCalledTimes(2);
+});
+
+it.each([{}, { token: "" }, { token: 42 }])("refuses malformed canonical session data %j", async (body) => {
+  network.mockResolvedValueOnce(new Response("<html></html>")).mockResolvedValueOnce(Response.json(body));
+  render();
+
+  expect(await screen.findByRole("heading", { name: "Could not connect to Lens" })).toBeVisible();
+  expect(getCookie("token")).toBe(token);
+  expect(screen.queryByTitle("Lens")).not.toBeInTheDocument();
+  expect(network).toHaveBeenCalledTimes(2);
+});
+
+it.each([404, 200])(
+  "preserves the split-origin standalone fallback without handing off credentials (UI %s)",
+  async (status) => {
+    switchToWorkerUrl("https://api.example.test");
+    network.mockResolvedValueOnce(new Response(null, { status })).mockResolvedValueOnce(connection());
+    render();
+
+    expect(await screen.findByRole("link", { name: "Open Lens" })).toHaveAttribute(
+      "href",
+      "https://api.example.test/lens/login",
+    );
+    expect(screen.queryByTitle("Lens")).not.toBeInTheDocument();
+    const requests = network.mock.calls.map(([input, init]) => new Request(input, init));
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual(["/lens/ui/", "/lens/service"]);
+    expect(requests.every((request) => request.method === "GET")).toBe(true);
+    expect(requests[0].headers.get("Authorization")).toBeNull();
+    expect(getCookie("token")).toBe(token);
+  },
+);
+
+it("uses the deployment prefix once for the UI probe, handoff and iframe", async () => {
+  setServerRootPath("/gateway");
+  switchToWorkerUrl(`${window.location.origin}/gateway`);
+  ready();
+  render();
+
+  expect(await screen.findByTitle("Lens")).toHaveAttribute(
+    "src",
+    `${window.location.origin}/gateway/lens/ui/?tab=traces`,
+  );
+  expect(
+    network.mock.calls.map(([input]) => new URL(input instanceof Request ? input.url : String(input)).pathname),
+  ).toEqual(["/gateway/lens/ui/", "/gateway/lens/session", "/gateway/lens/service"]);
 });

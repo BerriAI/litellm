@@ -7,13 +7,14 @@ import { getProxyBaseUrl } from "@/components/networking";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { lensWorkspaceAvailability, type LensWorkspaceAvailability } from "@/lib/http/lensWorkspace";
 import { serverRootPath } from "@/lib/serverRootPath";
+import { resolveApiBase } from "@/lib/http/resolveApiBase";
 import { LensIntroduction } from "./LensIntroduction";
 import { LENS_FRAME_CHANNEL, lensFrameMessage, useSetLensNavigation } from "./GatewayLensNavigation";
 
 type Workspace = { state: "checking" } | LensWorkspaceAvailability;
 
 const gatewayUrl = (path: string): string =>
-  `${getProxyBaseUrl().replace(/\/$/, "")}${serverRootPath.replace(/\/$/, "")}${path}`;
+  `${resolveApiBase({ explicitBase: getProxyBaseUrl(), serverRootPath })}${path}`;
 
 function LensFrame({ source }: { source: string }) {
   const { t } = useTranslation();
@@ -60,11 +61,12 @@ function LensFrame({ source }: { source: string }) {
   );
 }
 
-export function EmbeddedLens() {
+export function EmbeddedLens({ dashboardToken }: { dashboardToken: string | null }) {
   const { t } = useTranslation();
   const [workspace, setWorkspace] = useState<Workspace>({ state: "checking" });
   const [attempt, setAttempt] = useState(0);
   const [source] = useState(() => gatewayUrl("/lens/ui/") + window.location.search);
+  const reloading = useRef(false);
   const retry = () => {
     setWorkspace({ state: "checking" });
     setAttempt((current) => current + 1);
@@ -72,13 +74,18 @@ export function EmbeddedLens() {
 
   useEffect(() => {
     const controller = new AbortController();
-    void lensWorkspaceAvailability(gatewayUrl("/lens/ui/"), controller.signal).then((availability) => {
-      if (!controller.signal.aborted) setWorkspace(availability);
+    void lensWorkspaceAvailability(gatewayUrl("/lens/ui/"), dashboardToken, controller.signal).then((availability) => {
+      if (controller.signal.aborted) return;
+      setWorkspace(availability);
+      if (availability.state === "session-changed" && !reloading.current) {
+        reloading.current = true;
+        window.location.reload();
+      }
     });
     return () => controller.abort();
-  }, [attempt]);
+  }, [attempt, dashboardToken]);
 
-  if (workspace.state === "checking")
+  if (workspace.state === "checking" || workspace.state === "session-changed")
     return (
       <p role="status" className="p-8 text-sm text-muted-foreground">
         {t("lensWorkspace.opening")}
