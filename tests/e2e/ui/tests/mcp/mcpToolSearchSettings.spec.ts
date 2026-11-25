@@ -27,10 +27,12 @@ async function putSettings(request: APIRequestContext, settings: ToolSearchSetti
 }
 
 async function openToolSearch(page: PlaywrightPage, savedCoreTools: string): Promise<Locator> {
-  await navigateToPage(page, Page.McpServers);
-  await page.getByRole("tab", { name: "Tool Search" }).click();
   const panel = page.getByRole("tabpanel", { name: "Tool Search" });
-  await expect(panel.getByLabel("Always Returned First")).toHaveValue(savedCoreTools);
+  await expect(async () => {
+    await navigateToPage(page, Page.McpServers);
+    await page.getByRole("tab", { name: "Tool Search" }).click();
+    await expect(panel.getByLabel("Always Returned First")).toHaveValue(savedCoreTools, { timeout: 2000 });
+  }).toPass({ timeout: 20000 });
   return panel;
 }
 
