@@ -93,7 +93,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """
         Check session iteration count before making the API call.
 

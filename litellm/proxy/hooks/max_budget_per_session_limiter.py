@@ -16,6 +16,7 @@ Follows the same pattern as max_iterations_limiter.py.
 
 import logging
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import ConfigDict, TypeAdapter
@@ -37,6 +38,7 @@ from litellm.litellm_core_utils.core_helpers import finite_cost
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
+from litellm.router_strategy.budget_limiter import cost_left_after_failed_attempts
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
@@ -137,7 +139,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         cache: DualCache,
         data: dict,
         call_type: str,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """
         Before each LLM call, check if max_budget_per_session is set and
         whether accumulated spend exceeds the budget (429 if so).
@@ -176,7 +178,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         return None
 
     @with_service_target("session_budgets")
-    async def async_log_success_event(self, kwargs, response_obj: object, start_time, end_time) -> None:
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: object, end_time: object) -> None:
         """
         After a successful LLM call, increment the session spend by the response cost.
         """
@@ -205,7 +207,9 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 return
 
             callback_fields: Final = _CALLBACK_FIELDS.validate_python(kwargs)
-            response_cost: Final = finite_cost(charged_poll_cost(callback_fields)) or 0.0
+            response_cost: Final = cost_left_after_failed_attempts(
+                callback_fields, finite_cost(charged_poll_cost(callback_fields)) or 0.0
+            )
             if response_cost <= 0:
                 return
 
@@ -229,6 +233,11 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 "MaxBudgetPerSessionHandler: error in async_log_success_event: %s",
                 str(e),
             )
+
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        await self.async_log_success_event(kwargs, response_obj, start_time, end_time)  # pyright: ignore[reportUnknownMemberType]  # the success hook keeps CustomLogger's unannotated signature
 
     def _get_session_id(self, data: dict) -> str | None:
         """Extract session_id from request metadata."""

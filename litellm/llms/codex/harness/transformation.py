@@ -196,7 +196,7 @@ def _flag_pairs(flag: str, values: Sequence[str]) -> tuple[str, ...]:
     return tuple(itertools.chain.from_iterable((flag, value) for value in values))
 
 
-class CodexHarnessConfig(BaseCLIHarnessConfig):
+class CodexHarnessConfig(BaseCLIHarnessConfig[CodexOptions, CodexStreamState]):
     harness = Harness.CODEX
     options_type = CodexOptions
     capabilities = Capabilities(
@@ -224,7 +224,7 @@ class CodexHarnessConfig(BaseCLIHarnessConfig):
         if ctx.endpoint is None:
             raise HarnessError("Codex needs the session model endpoint")
         options: CodexOptions = self.get_options(ctx)
-        files: Final = (
+        files: Final[Mapping[str, bytes]] = (
             MappingProxyType(
                 {CODEX_SCHEMA_FILENAME: json.dumps(strict_json_schema(ctx.output.model_json_schema())).encode("utf-8")}
             )

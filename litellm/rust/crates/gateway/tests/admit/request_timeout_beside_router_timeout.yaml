@@ -1,0 +1,20 @@
+# Python reads request_timeout in place of the router's timeout when both are set, and so does the
+# native call.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  router_settings:
+    timeout: 10
+  litellm_settings:
+    request_timeout: 30
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust

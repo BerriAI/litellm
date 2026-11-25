@@ -172,6 +172,7 @@ export enum Providers {
   Oracle = "Oracle Cloud Infrastructure (OCI)",
   OVHCLOUD = "Ovhcloud",
   Perplexity = "Perplexity",
+  PERPLEXITY_ORCHESTRATOR = "Perplexity Orchestrator",
   PETALS = "Petals",
   PG_VECTOR = "Pg Vector",
   PREDIBASE = "Predibase",
@@ -309,6 +310,7 @@ export const provider_map: Record<string, string> = {
   Oracle: "oci",
   OVHCLOUD: "ovhcloud",
   Perplexity: "perplexity",
+  PERPLEXITY_ORCHESTRATOR: "perplexity_orchestrator",
   PETALS: "petals",
   PG_VECTOR: "pg_vector",
   PREDIBASE: "predibase",
@@ -353,7 +355,7 @@ export const provider_map: Record<string, string> = {
   ZeroGPU: "zerogpu",
 };
 
-const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle", "meta_llama"]);
+const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle", "meta_llama", "perplexity_orchestrator"]);
 
 export const resolveLitellmProviderSlug = (provider: string): string =>
   provider_map[provider] ?? provider.toLowerCase();
@@ -433,6 +435,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.Oracle]: oracleLogo.src,
   [Providers.PARALLEL_AI]: parallelAiLogo.src,
   [Providers.Perplexity]: perplexityAiLogo.src,
+  [Providers.PERPLEXITY_ORCHESTRATOR]: perplexityAiLogo.src,
   [Providers.Qwen_AI_Platform]: qwenLogo.src,
   [Providers.QwenCloud]: qwenLogo.src,
   [Providers.RECRAFT]: recraftLogo.src,
@@ -531,6 +534,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.TypeSafe]: "typesafe/jev-latest",
   [Providers.Nace]: "nace/drex-latest",
   [Providers.PARALLEL_AI]: "parallel_ai/decision",
+  [Providers.PERPLEXITY_ORCHESTRATOR]: "perplexity_orchestrator/anthropic/claude-sonnet-5-5",
   [Providers.StreamLake]: "streamlake/<model-or-endpoint>",
   [Providers.Vertex_AI]: "gemini-pro",
   [Providers.VolcEngine]: "volcengine/<any-model-on-volcengine>",

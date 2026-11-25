@@ -184,7 +184,7 @@ _async_success_callback: List[Union[str, Callable[..., object], "CustomLogger"]]
 _async_failure_callback: List[Union[str, Callable[..., object], "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
-pre_call_rules: List[Callable] = []
+pre_call_rules: List[Callable[..., object]] = []
 post_call_rules: List[Callable[..., object]] = []
 turn_off_message_logging: Optional[bool] = False
 standard_logging_payload_excluded_fields: Optional[List[str]] = (
@@ -303,7 +303,7 @@ lemonade_key: Optional[str] = None
 sap_service_key: Optional[str] = None
 amazon_nova_api_key: Optional[str] = None
 inception_key: Optional[str] = None
-common_cloud_provider_auth_params: dict = {
+common_cloud_provider_auth_params: dict[str, list[str]] = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
 }
@@ -614,138 +614,142 @@ vertex_ai_safety_settings: Optional[dict] = None
 from typing import Set
 
 open_ai_chat_completion_models: Set[str] = set()
-open_ai_text_completion_models: Set = set()
-cohere_models: Set = set()
-cohere_chat_models: Set = set()
-mistral_chat_models: Set = set()
-text_completion_codestral_models: Set = set()
-text_completion_inception_models: Set = set()
-anthropic_models: Set = set()
-openrouter_models: Set = set()
-datarobot_models: Set = set()
-vertex_language_models: Set = set()
-vertex_vision_models: Set = set()
-vertex_chat_models: Set = set()
-vertex_code_chat_models: Set = set()
-vertex_ai_image_models: Set = set()
-vertex_ai_video_models: Set = set()
-vertex_text_models: Set = set()
-vertex_code_text_models: Set = set()
-vertex_embedding_models: Set = set()
-vertex_anthropic_models: Set = set()
-vertex_llama3_models: Set = set()
-vertex_deepseek_models: Set = set()
-vertex_ai_ai21_models: Set = set()
-vertex_mistral_models: Set = set()
-vertex_openai_models: Set = set()
-vertex_minimax_models: Set = set()
-vertex_moonshot_models: Set = set()
-vertex_zai_models: Set = set()
+open_ai_text_completion_models: Set[str] = set()
+cohere_models: Set[str] = set()
+cohere_chat_models: Set[str] = set()
+mistral_chat_models: Set[str] = set()
+text_completion_codestral_models: Set[str] = set()
+text_completion_inception_models: Set[str] = set()
+anthropic_models: Set[str] = set()
+openrouter_models: Set[str] = set()
+datarobot_models: Set[str] = set()
+vertex_language_models: Set[str] = set()
+vertex_vision_models: Set[str] = set()
+vertex_chat_models: Set[str] = set()
+vertex_code_chat_models: Set[str] = set()
+vertex_ai_image_models: Set[str] = set()
+vertex_ai_video_models: Set[str] = set()
+vertex_text_models: Set[str] = set()
+vertex_code_text_models: Set[str] = set()
+vertex_embedding_models: Set[str] = set()
+vertex_anthropic_models: Set[str] = set()
+vertex_llama3_models: Set[str] = set()
+vertex_deepseek_models: Set[str] = set()
+vertex_ai_ai21_models: Set[str] = set()
+vertex_mistral_models: Set[str] = set()
+vertex_openai_models: Set[str] = set()
+vertex_minimax_models: Set[str] = set()
+vertex_moonshot_models: Set[str] = set()
+vertex_zai_models: Set[str] = set()
 vertex_qwen_models: Final[Set[str]] = set()
 vertex_ai_models: Final[Set[str]] = set()
-ai21_models: Set = set()
-ai21_chat_models: Set = set()
-nlp_cloud_models: Set = set()
-aleph_alpha_models: Set = set()
-bedrock_models: Set = set()
-bedrock_converse_models: Set = set(BEDROCK_CONVERSE_MODELS)
-fal_ai_models: Set = set()
-fireworks_ai_models: Set = set()
+ai21_models: Set[str] = set()
+ai21_chat_models: Set[str] = set()
+nlp_cloud_models: Set[str] = set()
+aleph_alpha_models: Set[str] = set()
+bedrock_models: Set[str] = set()
+bedrock_converse_models: Set[str] = set(BEDROCK_CONVERSE_MODELS)
+fal_ai_models: Set[str] = set()
+fireworks_ai_models: Set[str] = set()
 baseten_models: Set[str] = set()
-fireworks_ai_embedding_models: Set = set()
-deepinfra_models: Set = set()
+fireworks_ai_embedding_models: Set[str] = set()
+deepinfra_models: Set[str] = set()
 clf_ai_gateway_models: set[str] = set()  # mutable-ok: filled at import like sibling sets
-perplexity_models: Set = set()
-watsonx_models: Set = set()
-gemini_models: Set = set()
-xai_models: Set = set()
-zai_models: Set = set()
+perplexity_models: Set[str] = set()
+watsonx_models: Set[str] = set()
+gemini_models: Set[str] = set()
+xai_models: Set[str] = set()
+zai_models: Set[str] = set()
 bigmodel_models: Final[set[str]] = set()  # mutable-ok: provider registry is populated and extended at runtime
-deepseek_models: Set = set()
-tencent_models: Set = set()
-runwayml_models: Set = set()
-azure_ai_models: Set = set()
-jina_ai_models: Set = set()
-voyage_models: Set = set()
-infinity_models: Set = set()
-heroku_models: Set = set()
-databricks_models: Set = set()
-cloudflare_models: Set = set()
-codestral_models: Set = set()
-friendliai_models: Set = set()
-featherless_ai_models: Set = set()
-palm_models: Set = set()
-groq_models: Set = set()
-azure_models: Set = set()
-azure_anthropic_models: Set = set()
-azure_text_models: Set = set()
-anyscale_models: Set = set()
-cerebras_models: Set = set()
-nadir_models: Set = set()
-galadriel_models: Set = set()
-nvidia_nim_models: Set = set()
-nvidia_riva_models: Set = set()
-soniox_models: Set = set()
-sambanova_models: Set = set()
+deepseek_models: Set[str] = set()
+tencent_models: Set[str] = set()
+runwayml_models: Set[str] = set()
+azure_ai_models: Set[str] = set()
+jina_ai_models: Set[str] = set()
+voyage_models: Set[str] = set()
+infinity_models: Set[str] = set()
+heroku_models: Set[str] = set()
+databricks_models: Set[str] = set()
+cloudflare_models: Set[str] = set()
+codestral_models: Set[str] = set()
+friendliai_models: Set[str] = set()
+featherless_ai_models: Set[str] = set()
+palm_models: Set[str] = set()
+groq_models: Set[str] = set()
+azure_models: Set[str] = set()
+azure_anthropic_models: Set[str] = set()
+azure_text_models: Set[str] = set()
+anyscale_models: Set[str] = set()
+cerebras_models: Set[str] = set()
+nadir_models: Set[str] = set()
+galadriel_models: Set[str] = set()
+nvidia_nim_models: Set[str] = set()
+nvidia_riva_models: Set[str] = set()
+gnani_models: Final[set[str]] = set()  # mutable-ok: price reloads add keys to this registry in place
+soniox_models: Set[str] = set()
+sambanova_models: Set[str] = set()
 scaledown_models: Final[Set[str]] = set()  # Price reloads update this registry through existing references.
-sambanova_embedding_models: Set = set()
-novita_models: Set = set()
-assemblyai_models: Set = set()
-snowflake_models: Set = set()
-gradient_ai_models: Set = set()
-llama_models: Set = set()
-nscale_models: Set = set()
-nebius_models: Set = set()
-nebius_embedding_models: Set = set()
-aiml_models: Set = set()
-deepgram_models: Set = set()
-elevenlabs_models: Set = set()
+sambanova_embedding_models: Set[str] = set()
+novita_models: Set[str] = set()
+assemblyai_models: Set[str] = set()
+snowflake_models: Set[str] = set()
+gradient_ai_models: Set[str] = set()
+llama_models: Set[str] = set()
+nscale_models: Set[str] = set()
+nebius_models: Set[str] = set()
+nebius_embedding_models: Set[str] = set()
+aiml_models: Set[str] = set()
+deepgram_models: Set[str] = set()
+elevenlabs_models: Set[str] = set()
 gradium_models: Final[set[str]] = set()  # mutable-ok: filled from the cost map at import time
-dashscope_models: Set = set()
-qwencloud_models: Set = set()
-qwen_ai_platform_models: Set = set()
-moonshot_models: Set = set()
-publicai_models: Set = set()
-darkbloom_models: Set = set()
+dashscope_models: Set[str] = set()
+qwencloud_models: Set[str] = set()
+qwen_ai_platform_models: Set[str] = set()
+moonshot_models: Set[str] = set()
+publicai_models: Set[str] = set()
+darkbloom_models: Set[str] = set()
 openinfer_models: Final[Set[str]] = set()
 kyma_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 streamlake_models: Final[Set[str]] = set()
 resetdata_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 wally_models: Final[Set[str]] = set()
+huawei_maas_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
-v0_models: Set = set()
+v0_models: Set[str] = set()
 vispark_models: Final[Set[str]] = set()
-morph_models: Set = set()
+morph_models: Set[str] = set()
 opencode_go_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
-lambda_ai_models: Set = set()
-inception_models: Set = set()
-hyperbolic_models: Set = set()
-black_forest_labs_models: Set = set()
-recraft_models: Set = set()
-cometapi_models: Set = set()
-oci_models: Set = set()
-vercel_ai_gateway_models: Set = set()
-edenai_models: Set = set()
-volcengine_models: Set = set()
-wandb_models: Set = set(WANDB_MODELS)
-ovhcloud_models: Set = set()
-ovhcloud_embedding_models: Set = set()
-lemonade_models: Set = set()
-docker_model_runner_models: Set = set()
-amazon_nova_models: Set = set()
-stability_models: Set = set()
-github_copilot_models: Set = set()
+lambda_ai_models: Set[str] = set()
+inception_models: Set[str] = set()
+hyperbolic_models: Set[str] = set()
+black_forest_labs_models: Set[str] = set()
+recraft_models: Set[str] = set()
+cometapi_models: Set[str] = set()
+oci_models: Set[str] = set()
+vercel_ai_gateway_models: Set[str] = set()
+edenai_models: Set[str] = set()
+volcengine_models: Set[str] = set()
+wandb_models: Set[str] = set(WANDB_MODELS)
+ovhcloud_models: Set[str] = set()
+ovhcloud_embedding_models: Set[str] = set()
+lemonade_models: Set[str] = set()
+docker_model_runner_models: Set[str] = set()
+amazon_nova_models: Set[str] = set()
+stability_models: Set[str] = set()
+github_copilot_models: Set[str] = set()
 microsoft_365_copilot_models: Set[str] = set()
-chatgpt_models: Set = set()
-minimax_models: Set = set()
-aws_polly_models: Set = set()
-transcribe_models: Set = set()
-gigachat_models: Set = set()
-llamagate_models: Set = set()
+chatgpt_models: Set[str] = set()
+minimax_models: Set[str] = set()
+aws_polly_models: Set[str] = set()
+transcribe_models: Set[str] = set()
+gigachat_models: Set[str] = set()
+llamagate_models: Set[str] = set()
 coralbricks_models: Set[str] = set()
+perplexity_orchestrator_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 aiand_models: Set[str] = set()
-reducto_models: Set = set()
-bedrock_mantle_models: Set = set()
+reducto_models: Set[str] = set()
+nace_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
+bedrock_mantle_models: Set[str] = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -957,6 +961,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             nvidia_nim_models.add(key)
         elif value.get("litellm_provider") == "nvidia_riva":
             nvidia_riva_models.add(key)
+        elif value.get("litellm_provider") == "gnani":
+            gnani_models.add(key)
         elif value.get("litellm_provider") == "soniox":
             soniox_models.add(key)
         elif value.get("litellm_provider") == "sambanova":
@@ -1015,6 +1021,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             resetdata_models.add(key)
         elif value.get("litellm_provider") == "wally":
             wally_models.add(key)
+        elif value.get("litellm_provider") == "huawei_maas":
+            huawei_maas_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
             zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
@@ -1073,6 +1081,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             llamagate_models.add(key)
         elif value.get("litellm_provider") == "coralbricks":
             coralbricks_models.add(key)
+        elif value.get("litellm_provider") == "perplexity_orchestrator":
+            perplexity_orchestrator_models.add(key)
         elif value.get("litellm_provider") == "aiand":
             if is_hidden_as_retired(value):
                 aiand_models.discard(key)
@@ -1080,11 +1090,13 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
                 aiand_models.add(key)
         elif value.get("litellm_provider") == "reducto":
             reducto_models.add(key)
+        elif value.get("litellm_provider") == "nace" and value.get("mode") == "ocr":
+            nace_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
             bedrock_mantle_models.add(key)
 
 
-def add_known_models(model_cost_map: Optional[Dict] = None):
+def add_known_models(model_cost_map: Optional[Mapping[str, Mapping[str, object]]] = None):
     """Fold `model_cost_map` (defaults to `litellm.model_cost`) into the per-provider model sets,
     then refresh `models_by_provider` from those sets so the additions reach wildcard expansion.
     The refresh updates the dict in place, so references captured before a reload stay live.
@@ -1175,6 +1187,7 @@ model_list = list(
     | galadriel_models
     | nvidia_nim_models
     | nvidia_riva_models
+    | gnani_models
     | soniox_models
     | sambanova_models
     | scaledown_models
@@ -1201,6 +1214,7 @@ model_list = list(
     | streamlake_models
     | resetdata_models
     | wally_models
+    | huawei_maas_models
     | zerogpu_models
     | v0_models
     | vispark_models
@@ -1221,8 +1235,10 @@ model_list = list(
     | lemonade_models
     | docker_model_runner_models
     | reducto_models
+    | nace_models
     | bedrock_mantle_models
     | coralbricks_models
+    | perplexity_orchestrator_models
     | aiand_models
     | set(clarifai_models)
 )
@@ -1307,6 +1323,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "galadriel": galadriel_models,
         "nvidia_nim": nvidia_nim_models,
         "nvidia_riva": nvidia_riva_models,
+        "gnani": gnani_models,
         "soniox": soniox_models,
         "sambanova": sambanova_models | sambanova_embedding_models,
         "scaledown": scaledown_models,
@@ -1336,6 +1353,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "streamlake": streamlake_models,
         "resetdata": resetdata_models,
         "wally": wally_models,
+        "huawei_maas": huawei_maas_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
         "vispark": vispark_models,
@@ -1364,8 +1382,10 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "gigachat": gigachat_models,
         "llamagate": llamagate_models,
         "coralbricks": coralbricks_models,
+        "perplexity_orchestrator": perplexity_orchestrator_models,
         "aiand": aiand_models,
         "reducto": reducto_models,
+        "nace": nace_models,
         "bedrock_mantle": bedrock_mantle_models,
     }
 
@@ -1373,7 +1393,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
 models_by_provider: dict[str, Collection[str]] = _build_models_by_provider()
 
 # mapping for those models which have larger equivalents
-longer_context_model_fallback_dict: dict = {
+longer_context_model_fallback_dict: dict[str, str] = {
     # openai chat completion models
     "gpt-3.5-turbo": "gpt-3.5-turbo-16k",
     "gpt-3.5-turbo-0301": "gpt-3.5-turbo-16k-0301",

@@ -123,7 +123,7 @@ async def test_pre_api_call_sees_the_wire_body(server: RecordingServer) -> None:
 
 
 @pytest.mark.asyncio
-async def test_pre_api_call_of_a_retried_call_keeps_the_provider_out_of_the_litellm_params(
+async def test_pre_api_call_of_a_retried_call_logs_the_provider_in_the_litellm_params(
     server: RecordingServer,
 ) -> None:
     recorder: Final = RecordingLogger()
@@ -146,7 +146,7 @@ async def test_pre_api_call_of_a_retried_call_keeps_the_provider_out_of_the_lite
     assert_served_natively(server, count=2)
     for pre_call in pre_calls:
         assert isinstance(pre_call.kwargs, dict)
-        assert "custom_llm_provider" not in _OBJECT.validate_python(pre_call.kwargs["litellm_params"])
+        assert _OBJECT.validate_python(pre_call.kwargs["litellm_params"])["custom_llm_provider"] == "anthropic"
 
 
 @pytest.mark.asyncio

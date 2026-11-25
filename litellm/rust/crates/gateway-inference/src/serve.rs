@@ -11,7 +11,7 @@ use axum::{
     http::{HeaderMap, request::Parts},
     response::Response,
 };
-use litellm_gateway_auth::AuthenticatedRequest;
+use litellm_gateway_auth::Authenticated;
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use litellm_router_core::Op;
 use serde_json::{Map, Value};
@@ -20,19 +20,22 @@ use crate::{
     Ended, Error, Gateway, RequestId,
     error::ErrorFormat,
     headers::Routing,
-    hooks::{self, CallType},
+    hooks::{self, CallType, ServedBy},
     model_restamp::ReportedModel,
-    request,
+    record, request,
     routing::{self, Host, RouteAttempt},
     stream_event::Counts,
 };
 
 /// One request to an inference route, apart from its body.
-pub struct Call<H> {
+pub struct Call<H: Host> {
     pub(crate) gateway: Arc<Gateway<H>>,
-    pub(crate) identity: AuthenticatedRequest,
+    pub(crate) identity: Authenticated<H::Rows>,
     pub(crate) headers: HeaderMap,
     pub(crate) request_id: Option<String>,
+    /// The `x-litellm-call-id` the gateway's call id layer resolved, `None` on a router that does
+    /// not wear it.
+    pub(crate) call_id: Option<String>,
 }
 
 impl<H: Host> FromRequestParts<Arc<Gateway<H>>> for Call<H> {
@@ -42,13 +45,19 @@ impl<H: Host> FromRequestParts<Arc<Gateway<H>>> for Call<H> {
         parts: &mut Parts,
         gateway: &Arc<Gateway<H>>,
     ) -> Result<Self, Self::Rejection> {
-        let identity = AuthenticatedRequest::from_request_parts(parts, gateway).await?;
+        let identity = Authenticated::from_request_parts(parts, gateway).await?;
         let Ok(RequestId(request_id)) = RequestId::from_request_parts(parts, gateway).await;
+        let call_id = parts
+            .extensions
+            .get::<tower_http::request_id::RequestId>()
+            .and_then(|id| id.header_value().to_str().ok())
+            .map(str::to_owned);
         Ok(Self {
             gateway: gateway.clone(),
             identity,
             headers: parts.headers.clone(),
             request_id,
+            call_id,
         })
     }
 }
@@ -61,17 +70,14 @@ pub(crate) trait Endpoint: RouteAttempt {
     const PATH: &'static str;
     const ERRORS: ErrorFormat;
 
-    /// What a complete outcome counted. A stream's counts are read from its events.
-    fn counts(outcome: &Self::Outcome) -> Option<Counts> {
-        let _ = outcome;
-        None
-    }
-
     /// Those counts as Python's litellm `Usage`, `None` for a route that counts no tokens.
-    fn usage(counts: Counts) -> Option<ChatCompletionsUsage> {
-        let _ = counts;
-        None
-    }
+    fn usage(counts: Counts) -> Option<ChatCompletionsUsage>;
+
+    /// The provider's id for a complete outcome's answer.
+    fn response_id(outcome: &Self::Outcome) -> Option<String>;
+
+    /// The provider's id for a stream's answer, when the event whose `data` this is names it.
+    fn stream_response_id(data: &str) -> Option<String>;
 
     /// The outcome that served the call as the response the client reads.
     fn render(outcome: Self::Outcome, reported: ReportedModel<'_>) -> Result<Response, Error>;
@@ -96,13 +102,22 @@ where
         let routed = routing::call(gateway, identity, E::OP, E::PATH, &model, &endpoint).await?;
         let routing = Routing::served(&routed);
         let reported = ReportedModel::of(&model, &routed);
-        let model_group = routed.model_group;
+        let served = ServedBy {
+            deployment: gateway.router.registry().deployment(&routed.deployment_id),
+            model_group: routed.model_group,
+        };
         let mut outcome = routed.output.response;
-        let told = hooks::answered::<E, _>(&hooks, &mut outcome, model_group).await?;
-        Ok(told.answer((Extension(routing), E::render(outcome, reported)?)))
+        let post_call = hooks::post_call::<E, _>(&hooks, &mut outcome, served).await?;
+        Ok(post_call.answer((Extension(routing), E::render(outcome, reported)?)))
     };
+    record::write(|entries| {
+        entries.serve_as(E::CALL_TYPE);
+        if let Some(call_id) = &call.call_id {
+            entries.name_call(call_id.clone());
+        }
+    });
     let served = match body {
-        Ok(body) => hooks::around(gateway, identity, E::CALL_TYPE, body, serve).await,
+        Ok(body) => hooks::around(gateway, identity, body, serve).await,
         Err(error) => Err(Ended::from(error)),
     };
     served.unwrap_or_else(|ended| ended.response(E::ERRORS, call.request_id.as_deref()))

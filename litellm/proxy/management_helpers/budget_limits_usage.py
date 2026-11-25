@@ -1,14 +1,15 @@
 import asyncio
 import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from typing import Final, Literal, TypeAlias
 
+from litellm.litellm_core_utils.core_helpers import iter_items
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 
 BudgetWindowEntityType: TypeAlias = Literal["Key", "Team", "User"]
 
 
-def budget_limit_windows(budget_limits: Sequence[object] | str | None) -> tuple[Mapping[str, object], ...]:
+def budget_limit_windows(budget_limits: object) -> tuple[Mapping[str, object], ...]:
     """Coerce stored `budget_limits` into plain window dicts.
 
     The DB Json column comes back as a parsed list off `find_unique`, as text off `json.dumps`'d
@@ -17,7 +18,10 @@ def budget_limit_windows(budget_limits: Sequence[object] | str | None) -> tuple[
     if not budget_limits:
         return ()
     raw_windows: Final = json.loads(budget_limits) if isinstance(budget_limits, str) else budget_limits
-    return tuple(raw_window if isinstance(raw_window, dict) else raw_window.model_dump() for raw_window in raw_windows)
+    return tuple(
+        raw_window if isinstance(raw_window, dict) else raw_window.model_dump()
+        for raw_window in iter_items(raw_windows)
+    )
 
 
 def _window_max_budget(window: Mapping[str, object]) -> float | None:
@@ -56,7 +60,7 @@ async def _budget_window_usage(
 
 
 async def build_budget_limits_usage(
-    budget_limits: Sequence[object] | str | None,
+    budget_limits: object,
     counter_key: Callable[[str], str],
     entity_type: BudgetWindowEntityType,
     entity_id: str,
