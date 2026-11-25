@@ -9641,6 +9641,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/lens/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restore Dashboard Session */
+        post: operations["restore_dashboard_session_lens_session_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/lens/ui": {
         parameters: {
             query?: never;
@@ -30475,6 +30492,11 @@ export interface components {
             file: string;
             /** Version */
             version?: string | null;
+        };
+        /** Body_restore_dashboard_session_lens_session_post */
+        Body_restore_dashboard_session_lens_session_post: {
+            /** Token */
+            token: string;
         };
         /** Body_revoke_endpoint_revoke_post */
         Body_revoke_endpoint_revoke_post: {
@@ -70899,6 +70921,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ServiceConnection"];
+                };
+            };
+        };
+    };
+    restore_dashboard_session_lens_session_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Body_restore_dashboard_session_lens_session_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

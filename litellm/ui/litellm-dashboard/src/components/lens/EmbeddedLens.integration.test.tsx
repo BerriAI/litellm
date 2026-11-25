@@ -29,6 +29,51 @@ it("frames the connected Lens at the tab in the dashboard URL", async () => {
   expect(await screen.findByTitle("Lens")).toHaveAttribute("src", `${window.location.origin}/lens/ui/?tab=traces`);
 });
 
+it("restores the dashboard's storage fallback before opening Lens", async () => {
+  const token = `header.${btoa(JSON.stringify({ key: "sk-dashboard-session" }))}.signature`;
+  window.sessionStorage.setItem("token", token);
+  const requests: Request[] = [];
+  network.mockImplementation(async (input, init) => {
+    const request = new Request(input, init);
+    requests.push(request);
+    if (new URL(request.url).pathname === "/lens/service") return connection();
+    if (new URL(request.url).pathname === "/lens/session") return new Response(null, { status: 204 });
+    return new Response("<html></html>");
+  });
+  try {
+    render();
+    expect(await screen.findByTitle("Lens")).toHaveAttribute("src", `${window.location.origin}/lens/ui/?tab=traces`);
+    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
+      "/lens/service",
+      "/lens/session",
+      "/lens/ui/",
+    ]);
+    expect(requests[0].headers.get("Authorization")).toBe("Bearer sk-dashboard-session");
+    expect(requests[1].method).toBe("POST");
+    expect(requests[1].credentials).toBe("include");
+    expect(requests[1].redirect).toBe("error");
+    expect(requests[1].headers.get("Authorization")).toBeNull();
+    expect(await requests[1].json()).toEqual({ token });
+  } finally {
+    window.sessionStorage.removeItem("token");
+  }
+});
+
+it.each([401, 403, 409])("does not open Lens when the dashboard session is refused (%s)", async (status) => {
+  window.sessionStorage.setItem("token", "dashboard-session-fixture");
+  network
+    .mockResolvedValueOnce(connection())
+    .mockResolvedValueOnce(Response.json({ detail: "Sign in again" }, { status }));
+  try {
+    render();
+    expect(await screen.findByRole("heading", { name: "Could not connect to Lens" })).toBeVisible();
+    expect(screen.queryByTitle("Lens")).not.toBeInTheDocument();
+    expect(network).toHaveBeenCalledTimes(2);
+  } finally {
+    window.sessionStorage.removeItem("token");
+  }
+});
+
 it("renders the connected frame's Lens navigation in the gateway sidebar and keeps the theme in sync", async () => {
   network.mockResolvedValueOnce(connection()).mockResolvedValueOnce(new Response("<html></html>"));
   const user = userEvent.setup();

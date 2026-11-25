@@ -8,13 +8,14 @@ and lives in `litellm.integrations.lens.exporter` and `tracing_endpoints`; none 
 import time
 from collections.abc import Awaitable, Callable
 from types import MappingProxyType
-from typing import Final
+from typing import Annotated, Final
 from urllib.parse import quote
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Body, HTTPException, Request, Response
 from pydantic import AnyHttpUrl
 from starlette.responses import JSONResponse, RedirectResponse
+from starlette.types import Message
 
 from litellm.integrations.lens.proxy.adapter import (
     PUBLIC_CONTRACT,
@@ -39,6 +40,7 @@ from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAut
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"], route_class=LensRoute)
 
@@ -200,6 +202,38 @@ async def dashboard_session(
     except Exception:  # noqa: BLE001  # any rejected dashboard session means the browser signs in again
         return None
     return auth if auth.user_id == user_id else None
+
+
+@router.post("/session", status_code=204, response_class=Response, include_in_schema=False)
+async def restore_dashboard_session(request: Request, token: Annotated[str, Body(embed=True)]) -> Response:
+    from litellm.proxy.management_endpoints.ui_sso import (  # noqa: PLC0415  # proxy startup cycle
+        set_session_token_cookie,
+    )
+    from litellm.proxy.mcp_server.byok_oauth_endpoints import (  # noqa: PLC0415  # proxy startup cycle
+        session_identity_from_token,
+    )
+
+    if not same_origin(request):
+        raise HTTPException(403, "Lens changes must come from the LiteLLM dashboard")
+    if any(request.headers.get(name) for name in (*_KEY_HEADERS, *_configured_key_header())):
+        raise HTTPException(400, "Send only the dashboard session token")
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": b"{}", "more_body": False}
+
+    validation_request: Final = Request(dict(request.scope), receive)
+    safe_set_request_parsed_body(validation_request, {})
+    auth: Final = await dashboard_session(validation_request, cookie=lambda _: session_identity_from_token(token))
+    current: Final = await dashboard_session(validation_request)
+    if auth is None:
+        if current is not None:
+            return Response(status_code=204, headers=_PRIVATE)
+        raise HTTPException(401, "Sign in to LiteLLM to use Lens")
+    if current is not None and current.user_id != auth.user_id:
+        raise HTTPException(409, "The dashboard account changed. Reload the page")
+    response: Final = Response(status_code=204, headers=_PRIVATE)
+    set_session_token_cookie(response, request, token)
+    return response
 
 
 async def page_auth(

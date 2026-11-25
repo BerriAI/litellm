@@ -1,11 +1,18 @@
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from datetime import datetime, timedelta, timezone
+from http.cookies import SimpleCookie
 from typing import Final
+from unittest.mock import AsyncMock
 
 import httpx
+import jwt
 import pytest
-from fastapi import HTTPException
+import time_machine
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 from starlette.requests import Request
 
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
 from litellm.integrations.lens.proxy.buffering import BufferBudget
 from litellm.integrations.lens.proxy.model_gateway import GatewaySetupRequest
 from litellm.integrations.lens.proxy.pages import (
@@ -14,17 +21,222 @@ from litellm.integrations.lens.proxy.pages import (
     dashboard_session,
     lens_ui_asset,
     page_auth,
+    router,
     same_origin,
     ui_mount,
 )
 from litellm.integrations.lens.remote import LensConnection
 from litellm.proxy import proxy_server
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth, hash_token
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+from litellm.redis.stores.auth_cache import AuthObject
+from tests.unit.proxy._prisma import prisma_with_empty_config
+from tests.unit.proxy.rust_auth_stores import FakeKeyStore, install_rust_auth_stores
 
 SECRET: Final = "gateway-delegated-identity-fixture-32"
 UNSUPPORTED: Final = "The connected Lens does not serve a UI this gateway can show. Update Lens to use it here"
 
 LENS: Final = LensConnection("http://lens.test", SECRET)
+SESSION_NOW: Final = datetime(2026, 11, 25, 12, tzinfo=timezone.utc)
+SESSION_EXPIRY: Final = SESSION_NOW + timedelta(hours=1)
+SESSION_KEY: Final = "sk-dashboard-session-fixture"
+
+
+def _dashboard_token(**claims: object) -> str:
+    payload: Final = {
+        "user_id": "alice",
+        "key": SESSION_KEY,
+        "login_method": "sso",
+        "exp": int(SESSION_EXPIRY.timestamp()),
+        **claims,
+    }
+    return jwt.encode(
+        {name: value for name, value in payload.items() if value is not None},
+        SECRET,
+        algorithm="HS256",
+    )
+
+
+@pytest.fixture
+def session_client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    stores: Final = install_rust_auth_stores(monkeypatch)
+    monkeypatch.setattr(
+        stores,
+        "key",
+        FakeKeyStore(
+            rows={
+                hash_token(key): {
+                    "token": hash_token(key),
+                    "user_id": user_id,
+                    "team_id": UI_SESSION_TOKEN_TEAM_ID,
+                    "expires": expiry,
+                }
+                for key, user_id, expiry in (
+                    (SESSION_KEY, "alice", SESSION_EXPIRY),
+                    ("sk-other-account", "bob", SESSION_EXPIRY),
+                    ("sk-expired-session", "alice", SESSION_NOW - timedelta(seconds=1)),
+                )
+            }
+        ),
+    )
+    cache: Final = UserApiKeyCache()
+    for user_id in ("alice", "bob"):
+        cache.set_cache(
+            AuthObject.user(user_id),
+            LiteLLM_UserTable(user_id=user_id, user_role="internal_user"),
+            model_type=LiteLLM_UserTable,
+        )
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_with_empty_config())
+    monkeypatch.setattr(proxy_server, "master_key", SECRET)
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    monkeypatch.setattr(proxy_server, "user_custom_auth", None)
+    monkeypatch.setattr(proxy_server, "llm_router", None)
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    app: Final = FastAPI()
+    app.include_router(router)
+    with time_machine.travel(SESSION_NOW, tick=False), TestClient(app, base_url="https://gateway.test") as client:
+        yield client
+
+
+@pytest.mark.asyncio
+async def test_dashboard_token_restores_the_same_login_for_lens_without_extending_expiry(
+    session_client: TestClient,
+) -> None:
+    token: Final = _dashboard_token()
+    response: Final = session_client.post(
+        "/lens/session", json={"token": token}, headers={"sec-fetch-site": "same-origin"}
+    )
+    assert response.status_code == 204, response.text
+    assert response.content == b""
+    assert response.headers["cache-control"] == "private, no-store"
+    cookie: Final = SimpleCookie(response.headers["set-cookie"])["token"]
+    assert (cookie.value, cookie["path"], cookie["samesite"], cookie["secure"]) == (token, "/", "lax", True)
+    request: Final = _request("GET", {"cookie": f"token={cookie.value}"}, scheme="https")
+    auth: Final = await page_auth(request)
+    assert auth.user_id == "alice"
+    with time_machine.travel(SESSION_EXPIRY, tick=False), pytest.raises(HTTPException) as error:
+        await page_auth(request)
+    assert error.value.status_code == 401
+
+
+@pytest.mark.parametrize(
+    "claims",
+    (
+        {"exp": int(SESSION_NOW.timestamp())},
+        {"exp": None},
+        {"type": "byok_session"},
+        {"login_method": "api_key"},
+        {"key": "sk-revoked-session"},
+        {"key": "sk-expired-session"},
+        {"user_id": "bob"},
+    ),
+    ids=("expired-jwt", "missing-expiry", "byok-token", "non-login", "revoked-key", "expired-key", "wrong-user"),
+)
+def test_invalid_dashboard_sessions_cannot_restore_a_cookie(
+    session_client: TestClient, claims: dict[str, object]
+) -> None:
+    response: Final = session_client.post(
+        "/lens/session", json={"token": _dashboard_token(**claims)}, headers={"sec-fetch-site": "same-origin"}
+    )
+    assert response.status_code == 401, response.text
+    assert "set-cookie" not in response.headers
+
+
+def test_tampered_dashboard_token_cannot_restore_a_cookie(session_client: TestClient) -> None:
+    response: Final = session_client.post(
+        "/lens/session", json={"token": _dashboard_token() + "invalid"}, headers={"sec-fetch-site": "same-origin"}
+    )
+    assert response.status_code == 401
+    assert "set-cookie" not in response.headers
+
+
+def test_session_rejection_does_not_log_the_dashboard_token(
+    session_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    failure: Final = AsyncMock(return_value=None)
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "post_call_failure_hook", failure)
+    token: Final = _dashboard_token(key="sk-revoked-session")
+    response: Final = session_client.post(
+        "/lens/session", json={"token": token}, headers={"sec-fetch-site": "same-origin"}
+    )
+    assert response.status_code == 401
+    failure.assert_awaited()
+    assert token not in repr(failure.call_args)
+
+
+def test_custom_auth_can_read_the_sanitized_session_request(
+    session_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def custom_auth(request: Request, api_key: str) -> UserAPIKeyAuth:
+        assert await request.json() == {}
+        assert api_key == SESSION_KEY
+        return UserAPIKeyAuth(user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    monkeypatch.setattr(proxy_server, "user_custom_auth", custom_auth)
+    response: Final = session_client.post(
+        "/lens/session", json={"token": _dashboard_token()}, headers={"sec-fetch-site": "same-origin"}
+    )
+    assert response.status_code == 204, response.text
+    assert session_client.cookies.get("token") == _dashboard_token()
+
+
+@pytest.mark.parametrize("site", ("cross-site", "same-site", "none", ""))
+def test_other_origins_cannot_restore_a_dashboard_session(session_client: TestClient, site: str) -> None:
+    response: Final = session_client.post(
+        "/lens/session", json={"token": _dashboard_token()}, headers={"sec-fetch-site": site}
+    )
+    assert response.status_code == 403
+    assert "set-cookie" not in response.headers
+
+
+def test_a_stale_dashboard_tab_cannot_replace_another_live_account(session_client: TestClient) -> None:
+    current: Final = _dashboard_token(user_id="bob", key="sk-other-account")
+    session_client.cookies.set("token", current)
+    response: Final = session_client.post(
+        "/lens/session", json={"token": _dashboard_token()}, headers={"sec-fetch-site": "same-origin"}
+    )
+    assert response.status_code == 409
+    assert "set-cookie" not in response.headers
+    assert session_client.cookies.get("token") == current
+
+
+@pytest.mark.parametrize(
+    ("current_claims", "status"),
+    (({}, 204), ({"exp": int(SESSION_NOW.timestamp())}, 401), ({"key": "sk-revoked-session"}, 401)),
+)
+@pytest.mark.parametrize(
+    "stored_claims",
+    ({"exp": int(SESSION_NOW.timestamp())}, {"key": "sk-revoked-session"}),
+)
+def test_stale_storage_uses_only_a_live_browser_cookie(
+    session_client: TestClient,
+    current_claims: dict[str, object],
+    stored_claims: dict[str, object],
+    status: int,
+) -> None:
+    current: Final = _dashboard_token(**current_claims)
+    session_client.cookies.set("token", current)
+    response: Final = session_client.post(
+        "/lens/session", json={"token": _dashboard_token(**stored_claims)}, headers={"sec-fetch-site": "same-origin"}
+    )
+    assert response.status_code == status
+    assert "set-cookie" not in response.headers
+    assert session_client.cookies.get("token") == current
+
+
+@pytest.mark.parametrize("header", ("authorization", "x-litellm-api-key", "x-dashboard-key"))
+def test_another_bearer_cannot_substitute_for_the_dashboard_session_key(
+    session_client: TestClient, monkeypatch: pytest.MonkeyPatch, header: str
+) -> None:
+    monkeypatch.setattr(proxy_server, "general_settings", {"litellm_key_header_name": "x-dashboard-key"})
+    response: Final = session_client.post(
+        "/lens/session",
+        json={"token": _dashboard_token(key="sk-revoked-session")},
+        headers={"sec-fetch-site": "same-origin", header: f"Bearer {SESSION_KEY}"},
+    )
+    assert response.status_code == 400
+    assert "set-cookie" not in response.headers
 
 
 @pytest.mark.asyncio
