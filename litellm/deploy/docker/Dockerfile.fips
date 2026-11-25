@@ -102,8 +102,7 @@ COPY --from=ui-builder /ui/out/. litellm/proxy/_experimental/out/
 
 RUN sed -i 's/\r$//' litellm/deploy/docker/build_admin_ui.sh && chmod +x litellm/deploy/docker/build_admin_ui.sh && ./litellm/deploy/docker/build_admin_ui.sh
 
-ENV AWS_LC_FIPS_SYS_CC=clang \
-    AWS_LC_FIPS_SYS_CXX=clang++
+ENV AWS_LC_FIPS_SYS_CC=clang
 ARG MATURIN_PEP517_ARGS="--features fips"
 RUN uv sync --frozen --no-install-package litellm-proxy --no-default-groups --no-editable \
     --no-install-package cryptography --no-install-package grpcio --no-install-package psycopg-binary \
