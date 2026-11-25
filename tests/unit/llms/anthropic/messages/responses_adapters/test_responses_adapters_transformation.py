@@ -242,10 +242,39 @@ class TestOutputConfigStructuredOutput:
     }
 
     _NOT_JSON: Final = {"type": "object", "properties": {"size": {"enum": ("s", "m")}}}
+    _WITH_MAP: Final = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "tags": {"type": "object", "additionalProperties": {"type": "string"}}},
+    }
+    _WITH_FREE_FORM: Final = {"type": "object", "properties": {"name": {"type": "string"}, "metadata": {"type": "object"}}}
+    _OPEN_UNDER_ITEMS: Final = {"type": "object", "properties": {"rows": {"type": "array", "items": {"type": "object"}}}}
+    _OPEN_UNDER_DEFS: Final = {
+        "type": "object",
+        "properties": {"row": {"$ref": "#/$defs/Row"}},
+        "$defs": {"Row": {"type": "object"}},
+    }
+    _OPEN_UNDER_ANY_OF: Final = {
+        "type": "object",
+        "properties": {"value": {"anyOf": [{"type": "string"}, {"type": ["object", "null"]}]}},
+    }
 
     @pytest.mark.parametrize(
         ("fields", "expected_format"),
         [
+            *(
+                pytest.param(
+                    {"output_format": {"type": "json_schema", "schema": schema}},
+                    {"type": "json_schema", "name": "structured_output", "schema": schema, "strict": False},
+                    id=case_id,
+                )
+                for schema, case_id in (
+                    (_WITH_MAP, "schema-with-a-map-goes-up-as-is"),
+                    (_WITH_FREE_FORM, "schema-with-a-free-form-object-goes-up-as-is"),
+                    (_OPEN_UNDER_ITEMS, "open-object-under-items-goes-up-as-is"),
+                    (_OPEN_UNDER_DEFS, "open-object-under-defs-goes-up-as-is"),
+                    (_OPEN_UNDER_ANY_OF, "open-object-under-any-of-goes-up-as-is"),
+                )
+            ),
             pytest.param(
                 {"output_config": {"format": {"type": "json_schema", "schema": _OPTIONAL_NICKNAME}}},
                 {
@@ -304,16 +333,6 @@ class TestOutputConfigStructuredOutput:
                 {"$ref": "#/$defs/Answer", "$defs": {"Answer": _CLOSED_ANSWER}, "description": "The answer"},
                 id="root-ref-keeps-defs-and-siblings",
             ),
-            pytest.param(
-                {"type": "object", "properties": {"labels": _LABELS, "extra": {"type": "object"}}},
-                {
-                    "type": "object",
-                    "properties": {"labels": _LABELS, "extra": {"type": "object"}},
-                    "required": ["labels", "extra"],
-                    "additionalProperties": False,
-                },
-                id="maps-and-free-form-objects-stay-open",
-            ),
         ],
     )
     def test_strict_schema_closes_only_objects_with_properties_on_both_adapters(
@@ -324,6 +343,18 @@ class TestOutputConfigStructuredOutput:
 
         assert _ADAPTER.translate_request(request)["text"]["format"]["schema"] == expected_schema
         assert chat["response_format"]["json_schema"]["schema"] == expected_schema
+
+    def test_chat_strict_schema_leaves_maps_and_free_form_objects_open(self):
+        schema: Final = {"type": "object", "properties": {"labels": self._LABELS, "extra": {"type": "object"}}}
+        request: Final = _make_request(output_format={"type": "json_schema", "schema": schema})
+        chat, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+
+        assert chat["response_format"]["json_schema"]["schema"] == {
+            "type": "object",
+            "properties": {"labels": self._LABELS, "extra": {"type": "object"}},
+            "required": ["labels", "extra"],
+            "additionalProperties": False,
+        }
 
     def test_strict_schema_keeps_properties_named_like_schema_keywords(self):
         schema: Final = {
@@ -2850,7 +2881,7 @@ DOCS_MCP_TOOL: Final = {
 SF_LOCATION: Final = {"type": "approximate", "city": "San Francisco", "country": "US"}
 
 
-def _translate(drop_params: bool, **fields: object) -> Dict[str, Any]:
+def _translate(drop_params: bool, **fields: object) -> dict[str, object]:
     return _ADAPTER.translate_request(_make_request(**fields), drop_params=drop_params)
 
 
@@ -3128,7 +3159,9 @@ def test_one_400_names_every_unsupported_field_and_how_to_drop_them():
 def test_a_function_tool_keeps_its_prompt_cache_breakpoint():
     breakpoint: Final = {"mode": "explicit", "ttl": "12h"}
     kwargs: Final = _translate(False, tools=[{**LOOKUP_TOOL, "prompt_cache_breakpoint": breakpoint}])
-    assert kwargs["tools"][0]["prompt_cache_breakpoint"] == breakpoint
+    assert kwargs["tools"] == [
+        {**_ADAPTER.translate_tools_to_responses_api([LOOKUP_TOOL])[0], "prompt_cache_breakpoint": breakpoint}
+    ]
 
 
 class TestTranslateChatBridgedResponse:
