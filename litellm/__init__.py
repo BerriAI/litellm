@@ -1604,14 +1604,6 @@ from .systemone.main import *
 from .extraction.main import *
 from .tool_loop import ToolLoopMaxRoundsExceeded, arun_tool_loop, run_tool_loop
 from .search.main import *
-from .realtime_api.main import (
-    _arealtime,
-    acreate_realtime_client_secret,
-    acreate_realtime_transcription_session,
-    acreate_realtime_translation_client_secret as acreate_realtime_translation_client_secret,
-    arealtime_calls,
-    arealtime_translation_calls as arealtime_translation_calls,
-)
 from .responses.main import _aresponses_websocket
 
 from .fine_tuning.main import *
@@ -1695,6 +1687,14 @@ def set_global_gitlab_config(config: Mapping[str, object]) -> None:
 
 if TYPE_CHECKING:
     from . import guardrails as guardrails
+    from .realtime_api.main import (
+        _arealtime as _arealtime,
+        acreate_realtime_client_secret as acreate_realtime_client_secret,
+        acreate_realtime_transcription_session as acreate_realtime_transcription_session,
+        acreate_realtime_translation_client_secret as acreate_realtime_translation_client_secret,
+        arealtime_calls as arealtime_calls,
+        arealtime_translation_calls as arealtime_translation_calls,
+    )
     from litellm.types.utils import ModelInfo as _ModelInfoType
     from litellm.types.utils import PriorityReservationSettings
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
@@ -2520,7 +2520,8 @@ def __getattr__(name: str) -> Any:
 
 # LITELLM_DISABLE_LAZY_LOADING resolves every lazy attribute of `litellm` and `litellm.utils` at `import litellm`, so
 # HTTP recorders such as VCR start after the tokenizer and clients are ready (#18659), and a process that forks workers
-# after import shares those modules with them
+# after import shares those modules with them. Provider cost modules still load on the first cost calculation that
+# needs them
 if os.getenv("LITELLM_DISABLE_LAZY_LOADING", "").lower() in ("1", "true", "yes", "on"):
     _register_async_client_cleanup_once()
 
