@@ -67,7 +67,6 @@ Streaming = Literal["stream", "nonstream"]
 Assertion = Literal["works", "cost_logged"]
 ToolMode = Literal["none", "forced", "offered"]
 
-GPT_4O_MINI_BACKEND: Final = "openai/gpt-4o-mini"
 GPT_5_4_MINI_BACKEND: Final = "openai/gpt-5.4-mini"
 CLAUDE_HAIKU_BACKEND: Final = "anthropic/claude-haiku-4-5"
 
@@ -119,14 +118,6 @@ class Deployment:
 
 
 DEPLOYMENTS: Final[tuple[Deployment, ...]] = (
-    Deployment(
-        route="openai",
-        label="gpt-4o-mini",
-        backend=GPT_4O_MINI_BACKEND,
-        api_key_env="OPENAI_API_KEY",
-        edge_mount="openai",
-        edge_suffix="/v1",
-    ),
     Deployment(
         route="openai",
         label="gpt-5.4-mini",

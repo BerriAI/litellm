@@ -7,11 +7,12 @@ import json
 import os
 import random
 import types
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Mapping, Sequence
+from typing import Final, Protocol
 
 import httpx
 from pydantic import BaseModel
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -29,7 +30,27 @@ from litellm.types.integrations.argilla import (
 from litellm.types.utils import StandardLoggingPayload
 
 
-def is_serializable(value):
+class _ArgillaDataset(TypedDict):
+    id: ReadOnly[str]
+
+
+class _ArgillaDatasetsBody(TypedDict, total=False):
+    items: ReadOnly[Sequence[_ArgillaDataset]]
+
+
+class _ArgillaDatasetsResponse(Protocol):
+    def json(self) -> _ArgillaDatasetsBody: ...
+
+
+class _ArgillaLoggingKwargs(TypedDict, total=False, extra_items=object):
+    standard_logging_object: ReadOnly[StandardLoggingPayload | None]
+
+
+def _datasets_body(response: _ArgillaDatasetsResponse) -> _ArgillaDatasetsBody:
+    return response.json()
+
+
+def is_serializable(value: object):
     non_serializable_types: Final = (
         types.CoroutineType,
         types.FunctionType,
@@ -102,7 +123,7 @@ class ArgillaLogger(CustomBatchLogger):
                 url=f"{_credentials_base_url}/api/v1/me/datasets?name={_credentials_dataset_name}",
                 headers={"X-Argilla-Api-Key": _credentials_api_key},
             )
-            json_response: Final = dataset_response.json()
+            json_response: Final = _datasets_body(dataset_response)
             if (
                 "items" in json_response
                 and isinstance(json_response["items"], list)
@@ -142,7 +163,9 @@ class ArgillaLogger(CustomBatchLogger):
         else:
             raise Exception(f"Invalid response format: {response}")
 
-    def _prepare_log_data(self, kwargs, response_obj, start_time, end_time) -> ArgillaItem | None:
+    def _prepare_log_data(
+        self, kwargs: _ArgillaLoggingKwargs, response_obj: object, start_time: object, end_time: object
+    ) -> ArgillaItem | None:
         try:
             # Ensure everything in the payload is converted to str
             payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
@@ -194,7 +217,9 @@ class ArgillaLogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Argilla Layer Error - Error sending batch.")
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self, kwargs: _ArgillaLoggingKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         try:
             sampling_rate: Final = (
                 float(os.getenv("LANGSMITH_SAMPLING_RATE"))
@@ -226,7 +251,9 @@ class ArgillaLogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Langsmith Layer Error - log_success_event error")
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: _ArgillaLoggingKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         try:
             sampling_rate: Final = self.sampling_rate
             random_sample: Final = random.random()
@@ -268,7 +295,9 @@ class ArgillaLogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Argilla Layer Error - error logging async success event.")
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: _ArgillaLoggingKwargs, response_obj: object, start_time: object, end_time: object
+    ):
         sampling_rate: Final = self.sampling_rate
         random_sample: Final = random.random()
         if random_sample > sampling_rate:

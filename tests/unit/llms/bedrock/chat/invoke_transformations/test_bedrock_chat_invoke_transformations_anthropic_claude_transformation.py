@@ -2,7 +2,7 @@ import asyncio, base64, importlib
 import copy
 import json
 import uuid
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
@@ -18,6 +18,7 @@ from litellm.constants import DEFAULT_ANTHROPIC_CHAT_MAX_TOKENS
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
     AmazonAnthropicClaudeConfig,
 )
+from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.unit.conftest import NativeStructuredOutputKey
@@ -570,6 +571,7 @@ def _invoke_params_for_schema(
         ("us.anthropic.claude-opus-4-8", "bedrock", {"thinking": {"type": "adaptive"}}, True),
         ("us.anthropic.claude-opus-4-8", "bedrock", {"reasoning_effort": "low"}, True),
         ("us.anthropic.claude-haiku-5-5", "bedrock", {"thinking": {"type": "disabled"}}, False),
+        ("us.anthropic.claude-haiku-5-5", "default", {"thinking": {"type": "disabled"}}, True),
     ],
     ids=[
         "legacy-key",
@@ -578,6 +580,7 @@ def _invoke_params_for_schema(
         "bedrock-key-adaptive",
         "bedrock-key-effort",
         "bedrock-key-thinking-disabled",
+        "default-key-thinking-disabled",
     ],
 )
 def test_bedrock_native_output_key_applies_only_when_the_model_will_think(
@@ -1155,6 +1158,159 @@ def test_bedrock_chat_invoke_tool_search_beta_follows_model_map(
                 },
             ],
         },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("anthropic_beta") == expected_betas
+
+
+@pytest.mark.parametrize(
+    ("search_tool", "expected_bedrock_tool"),
+    [
+        pytest.param(
+            {"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"},
+            {"type": "tool_search_tool_bm25", "name": "tool_search_tool_bm25"},
+            id="bm25",
+        ),
+        pytest.param(
+            {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"},
+            {"type": "tool_search_tool_regex", "name": "tool_search_tool_regex"},
+            id="regex",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("config", "model"),
+    [
+        pytest.param(AmazonAnthropicClaudeConfig(), "us.anthropic.claude-opus-5", id="invoke"),
+        pytest.param(AmazonMantleConfig(), "anthropic.claude-opus-5-5", id="mantle"),
+    ],
+)
+def test_bedrock_chat_invoke_sends_the_tool_search_tool_with_deferred_tools(
+    local_model_cost_map,
+    local_beta_headers_config,
+    search_tool,
+    expected_bedrock_tool,
+    config: AmazonAnthropicClaudeConfig,
+    model: str,
+):
+    result: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Where is parcel 1Z999AA10123456784?"}],
+        optional_params=config.map_openai_params(
+            non_default_params={
+                "max_tokens": 64,
+                "tools": [
+                    search_tool,
+                    {
+                        "type": "function",
+                        "function": {"name": "get_time", "parameters": {"type": "object", "properties": {}}},
+                    },
+                    {
+                        "type": "function",
+                        "defer_loading": True,
+                        "function": {
+                            "name": "lookup_package_tracking",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"tracking_number": {"type": "string"}},
+                            },
+                        },
+                    },
+                ],
+            },
+            optional_params={},
+            model=model,
+            drop_params=False,
+        ),
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["tools"][0] == expected_bedrock_tool
+    assert [tool.get("name") for tool in result["tools"][1:]] == ["get_time", "lookup_package_tracking"]
+
+
+_REPLAYED_WEATHER_SEARCH: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [
+        {
+            "id": "toolu_01Weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+        }
+    ],
+    "provider_specific_fields": {
+        "server_tool_calls": [
+            {
+                "id": "srvtoolu_01Search",
+                "type": "function",
+                "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+            }
+        ],
+        "tool_results": [
+            {
+                "type": "tool_search_tool_result",
+                "tool_use_id": "srvtoolu_01Search",
+                "content": {
+                    "type": "tool_search_tool_search_result",
+                    "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+                },
+            }
+        ],
+    },
+}
+_PLAIN_WEATHER_CALL: Final = {
+    key: value for key, value in _REPLAYED_WEATHER_SEARCH.items() if key != "provider_specific_fields"
+}
+
+
+@pytest.mark.parametrize(
+    ("model", "assistant_turn", "expected_betas"),
+    [
+        pytest.param(
+            "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            _REPLAYED_WEATHER_SEARCH,
+            ["tool-search-tool-2025-10-19"],
+            id="replayed_search",
+        ),
+        pytest.param("us.anthropic.claude-sonnet-4-5-20250929-v1:0", _PLAIN_WEATHER_CALL, None, id="no_search"),
+        pytest.param(
+            "us.anthropic.claude-opus-4-1-20250805-v1:0", _REPLAYED_WEATHER_SEARCH, None, id="opus_4_1_unsupported"
+        ),
+    ],
+)
+def test_bedrock_chat_invoke_sends_the_tool_search_beta_for_a_search_replayed_without_the_search_tool(
+    local_model_cost_map, local_beta_headers_config, model, assistant_turn, expected_betas
+):
+    config: Final = AmazonAnthropicClaudeConfig()
+    result: Final = config.transform_request(
+        model=model,
+        messages=[
+            {"role": "user", "content": "What is the weather in Paris?"},
+            assistant_turn,
+            {"role": "tool", "tool_call_id": "toolu_01Weather", "content": "18C"},
+            {"role": "user", "content": "And in Osaka?"},
+        ],
+        optional_params=config.map_openai_params(
+            non_default_params={
+                "max_tokens": 64,
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+                        },
+                    }
+                ],
+            },
+            optional_params={},
+            model=model,
+            drop_params=False,
+        ),
         litellm_params={},
         headers={},
     )
@@ -2047,9 +2203,9 @@ def _invoke_chat_params(
 )
 @pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
 def test_invoke_uses_opt_in_native_output_when_the_opt_in_drove_native_output(
-    local_model_cost_map, model, thinking_params, monkeypatch
+    set_native_structured_output, model, thinking_params
 ):
-    monkeypatch.setitem(litellm.model_cost[model], "supports_native_structured_output", False)
+    set_native_structured_output(model, "bedrock")
     optional_params: Final = _invoke_chat_params(
         model, None, {"response_format": _CITY_RESPONSE_FORMAT, **thinking_params}
     )
@@ -2084,8 +2240,12 @@ def test_invoke_uses_opt_in_native_output_is_false_when_native_output_did_not_co
     )
 
 
-def test_invoke_uses_default_native_output_for_schema_retry(local_model_cost_map: None) -> None:
-    model: Final = "us.anthropic.claude-opus-5"
+@pytest.mark.parametrize(
+    "model",
+    ["us.anthropic.claude-opus-5", "us.anthropic.claude-sonnet-5"],
+    ids=["opus-5", "sonnet-5"],
+)
+def test_invoke_uses_default_native_output_for_schema_retry(local_model_cost_map: None, model: str) -> None:
     optional_params: Final = _invoke_chat_params(
         model, None, {"response_format": _CITY_RESPONSE_FORMAT, "thinking": {"type": "disabled"}}
     )
@@ -2332,3 +2492,108 @@ def test_bedrock_chat_invoke_adds_the_binding_beta_so_block_binding_is_kept(
 
     assert result["thinking"] == {"type": "enabled", "budget_tokens": 1024, "block_binding": block_binding}
     assert "thinking-binding-controls-2026-08-01" in result["anthropic_beta"]
+
+
+def _bedrock_invoke_claude_with_extra_body(
+    extra_body: Mapping[str, object] | str, drop_params: bool
+) -> tuple[httpx.Request, ...]:
+    captured_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "us.anthropic.claude-sonnet-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="bedrock/invoke/us.anthropic.claude-sonnet-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            aws_access_key_id="AKIAEXAMPLE",
+            aws_secret_access_key="fake-secret",
+            aws_region_name="us-east-1",
+            client=client,
+            max_tokens=16,
+            drop_params=drop_params,
+            extra_body=dict(extra_body) if isinstance(extra_body, Mapping) else extra_body,
+        )
+    finally:
+        client.close()
+    return tuple(captured_requests)
+
+
+_GUARDED_EXTRA_BODY: Final = MappingProxyType(
+    {
+        "model": "claude-opus-5-5",
+        "messages": [{"role": "user", "content": "unchecked"}],
+        "system": "unchecked",
+        "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
+        "stop_sequences": ["5"],
+    }
+)
+
+
+@pytest.mark.parametrize(("drop_params", "fallbacks_kept"), [(False, True), (True, False)])
+def test_bedrock_invoke_claude_extra_body_sends_fields_top_level_and_gates_fallbacks_on_drop_params(
+    drop_params: bool, fallbacks_kept: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    requests: Final = _bedrock_invoke_claude_with_extra_body(
+        {"fallbacks": [{"model": "claude-opus-5-5"}], "stop_sequences": ["5"]}, drop_params
+    )
+
+    request_body: Final = json.loads(requests[0].content)
+    assert request_body["stop_sequences"] == ["5"]
+    assert request_body.get("fallbacks") == ([{"model": "claude-opus-5-5"}] if fallbacks_kept else None)
+
+
+def test_bedrock_invoke_claude_extra_body_caps_a_raised_max_tokens_only_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.BadRequestError, match="extra_body can't raise max_tokens"):
+        _bedrock_invoke_claude_with_extra_body({"max_tokens": 4096}, drop_params=False)
+    requests: Final = _bedrock_invoke_claude_with_extra_body({"max_tokens": 4096}, drop_params=True)
+
+    assert json.loads(requests[0].content)["max_tokens"] == 16
+
+
+def test_bedrock_invoke_claude_rejects_a_non_object_extra_body_before_calling_bedrock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.BadRequestError, match="Invalid type for 'extra_body': expected an object, got str"):
+        _bedrock_invoke_claude_with_extra_body('{"top_k": 5}', drop_params=False)
+
+
+def test_bedrock_invoke_claude_extra_body_drops_guarded_keys_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    requests: Final = _bedrock_invoke_claude_with_extra_body(_GUARDED_EXTRA_BODY, drop_params=True)
+
+    request_body: Final = json.loads(requests[0].content)
+    assert request_body["messages"] == [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}]
+    assert {"model", "system", "tools"}.isdisjoint(request_body)
+    assert request_body["stop_sequences"] == ["5"]
+
+
+def test_bedrock_invoke_claude_extra_body_answers_400_for_guarded_keys_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    with pytest.raises(litellm.BadRequestError, match="extra_body can't set messages, model, system, tools"):
+        _bedrock_invoke_claude_with_extra_body(_GUARDED_EXTRA_BODY, drop_params=False)

@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Literal
 
 from typing_extensions import ReadOnly, TypedDict
@@ -115,6 +116,7 @@ class BedrockGuardrailContextualGroundingPolicy(TypedDict, total=False):
 
 class BedrockGuardrailCoverage(TypedDict, total=False):
     textCharacters: dict[str, int]
+    images: ReadOnly[Mapping[str, int]]
 
 
 class BedrockGuardrailInvocationMetrics(TypedDict, total=False):
@@ -139,6 +141,7 @@ class BedrockGuardrailResponse(TypedDict, total=False):
     output: list[BedrockGuardrailOutput] | None
     outputs: list[BedrockGuardrailOutput] | None
     assessments: list[BedrockGuardrailAssessment] | None
+    guardrailCoverage: ReadOnly[BedrockGuardrailCoverage | None]
 
 
 # ---------------------------------------------------------------------------

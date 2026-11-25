@@ -83,7 +83,7 @@ def _tpm_media_leaf(value: object) -> _TPMMediaProjection:
         image: Final = as_str_mapping(part.get("image_url"))
         source: Final = as_str_mapping(part.get("source"))
         canonical: Final = _tpm_image_part(
-            _image_part_url({**part, "type": "input_image"} if kind == "computer_screenshot" else part) or "",
+            image_part_url({**part, "type": "input_image"} if kind == "computer_screenshot" else part) or "",
             (image or part).get("detail", part.get("detail", "auto")),
         )
         projected: Final = (
@@ -202,12 +202,30 @@ def _tpm_embedding_leaf(value: object) -> _TPMMediaProjection:
     part: Final = as_str_mapping(value)
     if part is not None and part.get("type") == "file":
         return _tpm_embedding_file_block(part)
-    if not isinstance(value, str) or not value.startswith("data:"):
+    if not isinstance(value, str) or is_plain_embedding_text(value):
         return _tpm_media_leaf(value)
     if not _is_base64_data_uri(value):
         return _TPMMediaProjection(value)
     media: Final = _tpm_file_media({"file_data": value}).media or _tpm_embedding_file(value)
     return _TPMMediaProjection("" if media else value, media)
+
+
+def is_plain_embedding_text(value: object) -> bool:
+    return isinstance(value, str) and not value.startswith("data:")
+
+
+_EMBEDDING_MEDIA_KINDS: Final = frozenset(("image", "video", "audio"))
+
+
+def _is_media_instance(value: object) -> bool:
+    part: Final = as_str_mapping(value)
+    return part is not None and "type" not in part and not _EMBEDDING_MEDIA_KINDS.isdisjoint(part)
+
+
+def embedding_input_holds_media_read_as_text(value: object, input_type: str | None) -> bool:
+    items: Final = cast(Sequence[object], value) if _is_json_array(value) else (value,)  # cast-ok: JSON arrays
+    reads_strings_as_media: Final = input_type in _EMBEDDING_MEDIA_KINDS
+    return any(_is_media_instance(item) or (reads_strings_as_media and is_plain_embedding_text(item)) for item in items)
 
 
 def _is_json_array(value: object) -> bool:
@@ -243,7 +261,7 @@ def anthropic_image_source_to_openai_url(image_source: Mapping[str, object]) -> 
     return None
 
 
-def _image_part_url(part: Mapping[str, object]) -> str | None:
+def image_part_url(part: Mapping[str, object]) -> str | None:
     """The image URL carried by one content part, whichever of the three dialects wrote it."""
     part_type: Final = part.get("type")
     if part_type in ("image_url", "input_image"):
@@ -254,6 +272,6 @@ def _image_part_url(part: Mapping[str, object]) -> str | None:
         url: Final = image_fields.get("url") if image_fields is not None else None
         return url if isinstance(url, str) else None
     if part_type == "image":
-        source: Final = part.get("source")
-        return anthropic_image_source_to_openai_url(source) if isinstance(source, Mapping) else None
+        source: Final = as_str_mapping(part.get("source"))
+        return anthropic_image_source_to_openai_url(source) if source is not None else None
     return None

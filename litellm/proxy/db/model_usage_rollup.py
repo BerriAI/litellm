@@ -4,8 +4,9 @@ import asyncio
 import random
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from itertools import groupby
+from types import TracebackType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter, ValidationError
@@ -42,7 +43,13 @@ class ModelUsageBatch(Protocol):
 class ModelUsageBatchManager(Protocol):
     async def __aenter__(self) -> ModelUsageBatch: ...
 
-    async def __aexit__(self, exc_type: object, exc_value: object, traceback: object) -> bool | None: ...
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+        /,
+    ) -> bool | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,6 +69,7 @@ class ModelUsageTransaction:
     completion_tokens: int
     successful: bool
     counts_as_request: bool = True
+    duration_ms: int | None = None
 
 
 def model_usage_task_type(request_tags: str) -> str:
@@ -89,6 +97,17 @@ def _internal_call_origin(metadata: str) -> object:
     return decoded.get(INTERNAL_CALL_ORIGIN_METADATA_KEY)
 
 
+def utc_date_from_start_time(start_time: datetime | str) -> str | None:
+    try:
+        parsed: Final = (
+            datetime.fromisoformat(start_time.replace("Z", "+00:00")) if isinstance(start_time, str) else start_time
+        )
+    except ValueError:
+        return None
+    aware: Final = parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed
+    return aware.astimezone(timezone.utc).date().isoformat()
+
+
 def date_from_start_time(start_time: datetime | str) -> str | None:
     if isinstance(start_time, datetime):
         return start_time.date().isoformat()
@@ -101,6 +120,8 @@ def build_model_usage_transaction(payload: SpendLogsPayload) -> ModelUsageTransa
     if date is None or (origin and origin != BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN):
         return None
     model: Final = payload["model"] or "unknown"
+    successful: Final = payload["status"] == "success"
+    duration: Final = payload["request_duration_ms"]
     return ModelUsageTransaction(
         key=ModelUsageKey(
             date=date,
@@ -112,8 +133,9 @@ def build_model_usage_transaction(payload: SpendLogsPayload) -> ModelUsageTransa
         spend=payload["spend"],
         prompt_tokens=payload["prompt_tokens"],
         completion_tokens=payload["completion_tokens"],
-        successful=payload["status"] == "success",
+        successful=successful,
         counts_as_request=not origin,
+        duration_ms=duration if not origin and successful and isinstance(duration, int) and duration >= 0 else None,
     )
 
 
@@ -150,6 +172,7 @@ async def flush_model_usage_transactions(
                     requests = tuple(entry for entry in entries if entry.counts_as_request)
                     successful = sum(1 for entry in requests if entry.successful)
                     failed = len(requests) - successful
+                    durations = tuple(entry.duration_ms for entry in requests if entry.duration_ms is not None)
                     key_fields = {
                         "date": key.date,
                         "model_group": key.model_group,
@@ -167,6 +190,8 @@ async def flush_model_usage_transactions(
                             "request_count": len(requests),
                             "successful_requests": successful,
                             "failed_requests": failed,
+                            "total_response_time_ms": sum(durations),
+                            "timed_requests": len(durations),
                         },
                     )
             return

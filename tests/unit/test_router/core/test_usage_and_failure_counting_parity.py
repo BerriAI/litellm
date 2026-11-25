@@ -6,8 +6,8 @@ wildcard stream counts under.
 """
 
 import asyncio
-from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timedelta, timezone
 from typing import Final
 
 import pytest
@@ -81,49 +81,15 @@ class SharedLoggingHost(EndpointHost):
         details["async_failure_logged_attempt"] = details.get("current_attempt_api_call_start_time")
         await super().log_async(call, error, response)
 
-
-class RedisDouble:
-    """The shared tier the routing caches talk to, holding the totals every pod counted."""
-
-    def __init__(self) -> None:
-        self.totals: Final[dict[str, float]] = {}  # mutable-ok: the double's own store
-        self.gets: Final[list[str]] = []  # mutable-ok: what was read
-        self.batches: Final[list[list[str]]] = []  # mutable-ok: what was read
-
-    async def async_get_cache(self, key: str, **_: object) -> object:
-        self.gets.append(key)
-        return self.totals.get(key)
-
-    def get_cache(self, key: str, **_: object) -> object:
-        self.gets.append(key)
-        return self.totals.get(key)
-
-    async def async_batch_get_cache(
-        self, key_list: list[str], **_: object
-    ) -> dict[str, object]:  # mutable-ok: as RedisCache
-        self.batches.append(list(key_list))
-        return {key: self.totals.get(key) for key in key_list}
-
-    def batch_get_cache(self, key_list: list[str], **_: object) -> dict[str, object]:  # mutable-ok: as RedisCache
-        self.batches.append(list(key_list))
-        return {key: self.totals.get(key) for key in key_list}
-
-    async def async_increment(self, key: str, value: float, **_: object) -> float:
-        self.totals[key] = self.totals.get(key, 0) + value
-        return self.totals[key]
-
-    async def async_increment_pipeline(
-        self, increment_list: list[Mapping[str, object]], **_: object
-    ) -> list[float]:  # mutable-ok: as RedisCache
-        return [
-            await self.async_increment(str(row["key"]), float(str(row["increment_value"]))) for row in increment_list
-        ]
-
-    async def async_set_cache(self, key: str, value: object, **_: object) -> None:
-        return None
-
-    def set_cache(self, key: str, value: object, **_: object) -> None:
-        return None
+    def log_sync(self, call: Call, error: BaseException | None, response: object) -> None:
+        logging_obj: Final = call.kwargs.get("litellm_logging_obj")
+        if error is None or not isinstance(logging_obj, LiteLLMLogging):
+            super().log_sync(call, error, response)
+            return
+        if logging_obj.model_call_details.get("has_logged_sync_failure") is True:
+            return
+        logging_obj.model_call_details["has_logged_sync_failure"] = True
+        super().log_sync(call, error, response)
 
 
 @pytest.fixture
@@ -135,6 +101,26 @@ def minute() -> str:
     return datetime.now(timezone.utc).strftime("%H-%M")
 
 
+def _total(values: Sequence[int | None]) -> int | None:
+    counted: Final = [value for value in values if value is not None]
+    return sum(counted) if counted else None
+
+
+async def usage_since(
+    core: RouterCore, monkeypatch: pytest.MonkeyPatch, group: str, started: datetime
+) -> tuple[int | None, int | None]:
+    """The group's (tpm, rpm) summed over every minute from ``started`` to now. Usage is counted under
+    the minute a call ran in, so a read after the minute changed has to look back at that minute."""
+    first: Final = started.replace(second=0, microsecond=0)
+    minutes: Final = int((datetime.now(timezone.utc) - first).total_seconds() // 60) + 1
+    readings: Final[list[tuple[int | None, int | None]]] = []  # mutable-ok: collected in the loop below
+    for offset in range(minutes):
+        at = first + timedelta(minutes=offset)
+        monkeypatch.setattr("litellm.router_rust.surface.model_info.get_utc_datetime", lambda at=at: at)
+        readings.append(await core.health().usage(group))
+    return _total([tpm for tpm, _ in readings]), _total([rpm for _, rpm in readings])
+
+
 def chain(make_core: MakeCore, **arguments: object) -> RouterCore:  # kwargs-ok: router arguments
     return make_core(
         model_list=[deployment("a", "a"), deployment("b", "b"), deployment("c", "c")],
@@ -142,12 +128,6 @@ def chain(make_core: MakeCore, **arguments: object) -> RouterCore:  # kwargs-ok:
         num_retries=0,
         **arguments,
     )
-
-
-def with_redis(core: RouterCore) -> RedisDouble:
-    redis: Final = RedisDouble()
-    core.health().store.redis_cache = redis  # pyright: ignore[reportAttributeAccessIssue]  # a double
-    return redis
 
 
 # --- PV4: which deployments track usage ----------------------------------------------------------
@@ -215,39 +195,83 @@ async def test_a_realtime_session_counts_no_request_against_a_limited_deployment
 # --- P3: what a shared logging object lets through -------------------------------------------------
 
 
-async def test_only_the_first_failure_on_a_shared_logging_object_counts_a_request(
-    make_core: MakeCore, host: SharedLoggingHost
+async def test_every_failure_on_a_shared_logging_object_counts_a_request(
+    make_core: MakeCore, host: SharedLoggingHost, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     core: Final = chain(make_core)
     host.answer("*", fresh(server_error))
+    started: Final = datetime.now(timezone.utc)
 
     _ = await attempt(core, "a", litellm_logging_obj=request_logging())
 
-    assert await core.health().usage("a") == (None, 1)
-    assert await core.health().usage("b") == (None, None)
-    assert await core.health().usage("c") == (None, None)
+    assert await usage_since(core, monkeypatch, "a", started) == (None, 1)
+    assert await usage_since(core, monkeypatch, "b", started) == (None, 1)
+    assert await usage_since(core, monkeypatch, "c", started) == (None, 1)
 
 
 async def test_every_failure_counts_a_request_when_each_call_logs_on_its_own(
-    make_core: MakeCore, host: SharedLoggingHost
+    make_core: MakeCore, host: SharedLoggingHost, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     core: Final = chain(make_core)
     host.answer("*", fresh(server_error))
+    started: Final = datetime.now(timezone.utc)
 
     _ = await attempt(core, "a")
 
-    assert await core.health().usage("a") == (None, 1)
-    assert await core.health().usage("b") == (None, 1)
-    assert await core.health().usage("c") == (None, 1)
+    assert await usage_since(core, monkeypatch, "a", started) == (None, 1)
+    assert await usage_since(core, monkeypatch, "b", started) == (None, 1)
+    assert await usage_since(core, monkeypatch, "c", started) == (None, 1)
 
 
-async def test_a_blocked_retry_in_the_same_group_records_nothing(make_core: MakeCore, host: SharedLoggingHost) -> None:
+async def test_a_retry_past_the_first_logged_failure_is_recorded(make_core: MakeCore, host: SharedLoggingHost) -> None:
     core: Final = make_core(model_list=[deployment("g", "a"), deployment("g", "b")], num_retries=1, allowed_fails=5)
     host.answer("*", fresh(server_error))
 
     _ = await attempt(core, "g", litellm_logging_obj=request_logging())
 
-    assert core.health().failures_this_minute("a") + core.health().failures_this_minute("b") == 1
+    assert core.health().failures_this_minute("a") + core.health().failures_this_minute("b") == 2
+
+
+def test_a_sync_retry_past_the_first_logged_failure_is_recorded(make_core: MakeCore, host: SharedLoggingHost) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a"), deployment("g", "b")], num_retries=1, allowed_fails=5)
+    host.answer("*", fresh(server_error))
+
+    _ = attempt_sync(core, "g", litellm_logging_obj=request_logging())
+
+    assert core.health().failures_this_minute("a") + core.health().failures_this_minute("b") == 2
+
+
+async def test_a_retried_deployment_is_cooled_down_past_the_first_logged_failure(
+    make_core: MakeCore, host: SharedLoggingHost
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("g", "a"), deployment("g", "b")], num_retries=1, allowed_fails=0, cooldown_time=60
+    )
+    host.answer("*", fresh(rate_limited))
+
+    _ = await attempt(core, "g", litellm_logging_obj=request_logging())
+
+    assert sorted(cooled_down(core, ["a", "b"])) == ["a", "b"]
+
+
+async def test_a_hop_whose_group_is_cooled_records_its_first_failure(
+    make_core: MakeCore, host: SharedLoggingHost
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("a", "a"), deployment("b", "b"), deployment("c", "c")],
+        fallbacks=[{"a": ["b"]}, {"b": ["c"]}],
+        num_retries=0,
+        allowed_fails=0,
+        cooldown_time=60,
+    )
+    host.answer("openai/a", fresh(server_error))
+    host.answer("openai/b", fresh(rate_limited))
+    _ = await attempt(core, "a", litellm_logging_obj=request_logging())
+    assert sorted(cooled_down(core, ["a", "b"])) == ["a", "b"]
+
+    _ = await attempt(core, "a", litellm_logging_obj=request_logging())
+
+    assert core.health().failures_this_minute("b") == 1
 
 
 def test_a_sync_failure_counts_no_request(make_core: MakeCore, host: SharedLoggingHost) -> None:
@@ -258,7 +282,7 @@ def test_a_sync_failure_counts_no_request(make_core: MakeCore, host: SharedLoggi
         core.completion(model="g", messages=MESSAGES)  # pyright: ignore[reportAttributeAccessIssue]  # see above
 
     assert core.health().failures_this_minute("d1") == 1
-    assert core.health().store.get_cache(f"global_router:d1:openai/d1:rpm:{minute()}", local_only=True) is None
+    assert asyncio.run(core.health().usage("g")) == (None, None)
 
 
 # --- failure counting ------------------------------------------------------------------------------
@@ -303,12 +327,22 @@ def selection_failure() -> Exception:
 
 
 @pytest.mark.parametrize(
-    ("builder", "stalled", "counted"),
-    [(server_error, False, 1), (selection_failure, False, 1), (timeout, True, 0), (timeout, False, 1)],
+    ("builder", "stalled", "counted", "requests"),
+    [
+        (server_error, False, 1, 1),
+        (selection_failure, False, 1, None),
+        (timeout, True, 0, None),
+        (timeout, False, 1, 1),
+    ],
     ids=["server-error", "selection-tag-not-exempt", "stream-stall-exempt", "plain-timeout"],
 )
 async def test_a_failed_hop_past_the_first_logged_failure_takes_the_fallback_paths_exits(
-    make_core: MakeCore, host: SharedLoggingHost, builder: ErrorBuilder, stalled: bool, counted: int
+    make_core: MakeCore,
+    host: SharedLoggingHost,
+    builder: ErrorBuilder,
+    stalled: bool,
+    counted: int,
+    requests: int | None,
 ) -> None:
     core: Final = make_core(
         model_list=[deployment("a", "a"), deployment("b", "b")], fallbacks=[{"a": ["b"]}], num_retries=0
@@ -321,7 +355,7 @@ async def test_a_failed_hop_past_the_first_logged_failure_takes_the_fallback_pat
     _ = await attempt(core, "a", litellm_logging_obj=request_logging())
 
     assert core.health().failures_this_minute("b") == counted
-    assert await core.health().usage("b") == (None, None)
+    assert await core.health().usage("b") == (None, requests)
 
 
 @pytest.mark.parametrize(("logged", "counted"), [(True, 0), (False, 1)], ids=["generic", "chat"])
@@ -387,56 +421,6 @@ async def test_a_failed_hop_fires_the_number_python_chose_as_it_was_written(
     assert [repr(seconds) for name, seconds in fired if name != "a"] == [repr(expected)]
 
 
-# --- P6, PV7: what reaches Redis ---------------------------------------------------------------------
-
-
-async def test_cooldowns_are_read_as_one_batch_of_every_deployment_with_no_key_of_their_own(
-    make_core: MakeCore,
-) -> None:
-    core: Final = make_core(
-        model_list=[deployment("g", "a"), deployment("g", "b"), deployment("other", "c")],
-        num_retries=0,
-        disable_cooldowns=True,
-    )
-    redis: Final = with_redis(core)
-
-    _ = await attempt(core, "g")
-
-    assert [key for key in redis.gets if key.endswith(":cooldown")] == []
-    assert redis.batches[0] == ["deployment:a:cooldown", "deployment:b:cooldown", "deployment:c:cooldown"]
-
-
-async def test_a_second_request_within_the_read_interval_reads_no_cooldown_from_redis(make_core: MakeCore) -> None:
-    core: Final = make_core(model_list=[deployment("g", "a")], num_retries=0)
-    redis: Final = with_redis(core)
-
-    _ = await attempt(core, "g")
-    _ = await attempt(core, "g")
-
-    assert len([batch for batch in redis.batches if batch[0].endswith(":cooldown")]) == 1
-
-
-async def test_a_usage_write_leaves_the_shared_total_in_memory(make_core: MakeCore) -> None:
-    core: Final = make_core(model_list=[deployment("g", "d1", rpm=1000000)], num_retries=0)
-    redis: Final = with_redis(core)
-    rpm_key: Final = f"global_router:d1:openai/d1:rpm:{minute()}"
-    redis.totals[rpm_key] = 100000
-
-    _ = attempt_sync(core, "g")
-
-    assert core.health().store.get_cache(rpm_key, local_only=True) == 100001
-
-
-async def test_a_usage_read_on_a_pod_sees_what_the_other_pods_counted(make_core: MakeCore) -> None:
-    core: Final = make_core(model_list=[deployment("g", "d1", rpm=1000000)], num_retries=0)
-    redis: Final = with_redis(core)
-    redis.totals[f"global_router:d1:openai/d1:rpm:{minute()}"] = 41
-
-    _ = attempt_sync(core, "g")
-
-    assert (await core.health().usage("g"))[1] == 42
-
-
 # --- wildcard streams --------------------------------------------------------------------------------
 
 
@@ -450,6 +434,7 @@ async def test_a_wildcard_stream_counts_its_tokens_under_the_filled_model(
     _ = await collect_texts(stream)
     await settle()
 
-    store: Final = core.health().store
-    assert store.get_cache(f"global_router:w:openai/gpt-4o:tpm:{minute()}", local_only=True) == 12
-    assert store.get_cache(f"global_router:w:openai/*:tpm:{minute()}", local_only=True) is None
+    filled_tpm, _ = await core.health().usage("openai/gpt-4o")
+    wildcard_tpm, _ = await core.health().usage("openai/*")
+    assert filled_tpm == 12
+    assert wildcard_tpm is None

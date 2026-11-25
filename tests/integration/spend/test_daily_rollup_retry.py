@@ -141,6 +141,9 @@ def test_failed_daily_user_rollup_commit_is_retried_so_spend_report_and_daily_ac
         metrics: Final = activity.json()["results"][0]["breakdown"]["api_keys"][digest]["metrics"]
         assert metrics == {
             "spend": pytest.approx(0.06),
+            "customer_margin_spend": 0.0,
+            "cache_cost": 0.0,
+            "priced_cache_tokens": 0,
             "flat_cost": pytest.approx(0.0),
             "ptu_hours": pytest.approx(0.0),
             "prompt_tokens": 20,
@@ -152,6 +155,7 @@ def test_failed_daily_user_rollup_commit_is_retried_so_spend_report_and_daily_ac
             "prompt_caching_savings_spend": pytest.approx(0.0),
             "gateway_injected_caching_savings_spend": pytest.approx(0.0),
             "autorouter_savings_spend": pytest.approx(0.0),
+            "guardrail_spend": pytest.approx(0.0),
             "total_tokens": 40,
             "successful_requests": 1,
             "failed_requests": 0,

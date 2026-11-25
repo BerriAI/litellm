@@ -2,12 +2,14 @@
 Legacy /v1/embedding transformation logic for Bedrock Cohere.
 """
 
-from collections.abc import Sized
+from collections.abc import Mapping, Sized
 from typing import Final, Protocol
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm import COHERE_DEFAULT_EMBEDDING_INPUT_TYPE
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, subscript
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.http_handler import header_value
 from litellm.types.llms.bedrock import (
@@ -22,6 +24,17 @@ class _SupportsEncode(Protocol):
     """Tokenizer handle: the embedding usage path only encodes text to measure its token length."""
 
     def encode(self, text: str, /) -> Sized: ...
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _embed_response_body(response_json: object) -> Mapping[str, object]:
+    body: Final = as_str_mapping(response_json)
+    if body is None:
+        subscript(response_json, "embeddings")
+        raise TypeError(f"'{type(response_json).__name__}' object is not subscriptable")
+    return body
 
 
 def _bedrock_billed_input_tokens(response: httpx.Response) -> int | None:
@@ -40,7 +53,9 @@ class CohereEmbeddingConfig:
     def get_supported_openai_params(self) -> list[str]:
         return ["encoding_format"]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
+    def map_openai_params(
+        self, non_default_params: Mapping[str, object], optional_params: dict[str, object]
+    ) -> dict[str, object]:
         for k, v in non_default_params.items():
             if k == "encoding_format":
                 optional_params["embedding_types"] = v
@@ -50,7 +65,7 @@ class CohereEmbeddingConfig:
         return "3" in model
 
     def _transform_request(
-        self, model: str, input: list[str], inference_params: dict
+        self, model: str, input: list[str], inference_params: Mapping[str, object]
     ) -> CohereEmbeddingRequestWithModel:
         is_encoded = False
         for input_str in input:
@@ -113,13 +128,13 @@ class CohereEmbeddingConfig:
         response: httpx.Response,
         api_key: str | None,
         logging_obj: LiteLLMLoggingObj,
-        data: dict | CohereEmbeddingRequest,
+        data: dict[str, object] | CohereEmbeddingRequest,
         model_response: EmbeddingResponse,
         model: str,
         encoding: _SupportsEncode,
-        input: list,
+        input: list[str],
     ) -> EmbeddingResponse:
-        response_json: Final = response.json()
+        response_json: Final = _DECODED_JSON.validate_python(response.json())
         ## LOGGING
         logging_obj.post_call(
             input=input,
@@ -127,13 +142,14 @@ class CohereEmbeddingConfig:
             additional_args={"complete_input_dict": data},
             original_response=response_json,
         )
+        billed_input_tokens: Final = _bedrock_billed_input_tokens(response) if "images" in data else None
         return self._populate_embedding_response(
-            response_json=response_json,
+            response_json=dict(_embed_response_body(response_json)),
             model_response=model_response,
             model=model,
             encoding=encoding,
             input=input,
-            billed_input_tokens=_bedrock_billed_input_tokens(response) if "images" in data else None,
+            billed_input_tokens=billed_input_tokens,
         )
 
     def transform_response(
@@ -155,7 +171,7 @@ class CohereEmbeddingConfig:
         model_response: EmbeddingResponse,
         model: str,
         encoding: _SupportsEncode,
-        input: list,
+        input: list[str],
         billed_input_tokens: int | None = None,
     ) -> EmbeddingResponse:
         """
@@ -174,7 +190,7 @@ class CohereEmbeddingConfig:
             }
         """
         embeddings: Final = response_json["embeddings"]
-        output_data: Final = []
+        output_data: Final[list[dict[str, object]]] = []
         is_embeddings_by_type = response_json.get("response_type") == "embeddings_by_type"
 
         if isinstance(embeddings, dict):

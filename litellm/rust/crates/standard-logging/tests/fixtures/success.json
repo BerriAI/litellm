@@ -1,0 +1,187 @@
+{
+  "api_base": "https://api.anthropic.com",
+  "autorouter_baseline_observation": null,
+  "autorouter_savings": null,
+  "autorouter_savings_estimate": null,
+  "cache_hit": false,
+  "cache_key": "cache-key-1",
+  "call_type": "anthropic_messages",
+  "completionStartTime": 1767268801.0,
+  "completion_tokens": 5,
+  "cost_breakdown": null,
+  "cost_finalized": false,
+  "custom_llm_provider": "anthropic",
+  "endTime": 1767268802.5,
+  "end_user": "customer-1",
+  "error_information": {
+    "error_budget_entity_id": null,
+    "error_budget_entity_type": null,
+    "error_budget_limit": null,
+    "error_budget_spend": null,
+    "error_class": "",
+    "error_code": "",
+    "error_cooldown_deployments": null,
+    "error_message": "",
+    "error_provider_request_id": null,
+    "error_rate_limit_category": null,
+    "error_rate_limit_type": null,
+    "llm_provider": "",
+    "normalized_error": null,
+    "traceback": ""
+  },
+  "error_str": null,
+  "guardrail_information": null,
+  "hidden_params": {
+    "additional_headers": {
+      "llm_provider-request-id": "req_1",
+      "x_ratelimit_remaining_requests": 99
+    },
+    "api_base": "https://api.anthropic.com/",
+    "batch_failed_requests": null,
+    "batch_models": null,
+    "batch_successful_requests": null,
+    "cache_key": "cache-key-1",
+    "litellm_model_name": "claude-unlisted",
+    "litellm_overhead_time_ms": 3.5,
+    "model_id": "deployment-1",
+    "response_cost": 0.000125,
+    "usage_object": null
+  },
+  "id": "msg_1",
+  "litellm_call_id": "call-1",
+  "messages": [
+    {
+      "content": "Hey",
+      "role": "user"
+    }
+  ],
+  "metadata": {
+    "applied_guardrails": null,
+    "claude_subscription_usage": null,
+    "cold_storage_object_key": null,
+    "kubernetes_pod_routing": null,
+    "mcp_tool_call_metadata": null,
+    "prompt_management_metadata": null,
+    "requester_custom_headers": {
+      "x-team": "platform"
+    },
+    "requester_ip_address": "10.0.0.1",
+    "requester_metadata": null,
+    "routing_decision": null,
+    "spend_logs_metadata": {
+      "project": "alpha"
+    },
+    "team_alias": null,
+    "team_id": null,
+    "usage_object": {
+      "completion_tokens": 5,
+      "completion_tokens_details": null,
+      "prompt_tokens": 10,
+      "prompt_tokens_details": null,
+      "total_tokens": 15
+    },
+    "used_client_oauth_token": null,
+    "user_agent": "curl/8.7.1",
+    "user_api_key_alias": "ci-key",
+    "user_api_key_auth_metadata": {
+      "cost_center": "research"
+    },
+    "user_api_key_budget_reset_at": "2026-02-01T00:00:00+00:00",
+    "user_api_key_customer_budget_scopes": "[]",
+    "user_api_key_customer_hierarchy": {
+      "customer_member_alias": "customer-member",
+      "customer_member_id": "customer-member-1",
+      "customer_org_alias": "customer-org",
+      "customer_org_id": "customer-org-1",
+      "customer_team_alias": "customer-team",
+      "customer_team_id": "customer-team-1",
+      "scopes": [],
+      "team_scopes": []
+    },
+    "user_api_key_customer_member_alias": "customer-member",
+    "user_api_key_customer_member_id": "customer-member-1",
+    "user_api_key_customer_org_alias": "customer-org",
+    "user_api_key_customer_org_id": "customer-org-1",
+    "user_api_key_customer_team_alias": "customer-team",
+    "user_api_key_customer_team_id": "customer-team-1",
+    "user_api_key_end_user_id": "customer-1",
+    "user_api_key_hash": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+    "user_api_key_max_budget": 10.0,
+    "user_api_key_org_alias": "acme",
+    "user_api_key_org_id": "org-1",
+    "user_api_key_project_alias": "search",
+    "user_api_key_project_id": "project-1",
+    "user_api_key_request_route": "/v1/messages",
+    "user_api_key_spend": 1.5,
+    "user_api_key_team_alias": "platform",
+    "user_api_key_team_id": "team-1",
+    "user_api_key_team_max_budget": 30.0,
+    "user_api_key_team_spend": 3.5,
+    "user_api_key_user_email": "user@example.com",
+    "user_api_key_user_id": "user-1",
+    "user_api_key_user_max_budget": 20.0,
+    "user_api_key_user_spend": 2.5,
+    "vector_store_request_metadata": null
+  },
+  "model": "claude-unlisted",
+  "model_group": "claude",
+  "model_id": "deployment-1",
+  "model_map_information": {
+    "model_map_key": "claude-unlisted",
+    "model_map_value": null
+  },
+  "model_parameters": {
+    "max_tokens": 64,
+    "temperature": 0.5
+  },
+  "prompt_tokens": 10,
+  "request_model_access_groups": [],
+  "request_tags": [
+    "batch-job",
+    "User-Agent: curl",
+    "User-Agent: curl/8.7.1"
+  ],
+  "requester_ip_address": "10.0.0.1",
+  "response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "Hi",
+          "function_call": null,
+          "role": "assistant",
+          "tool_calls": null
+        }
+      }
+    ],
+    "created": 1767268800,
+    "id": "msg_1",
+    "model": "claude-unlisted",
+    "object": "chat.completion",
+    "usage": {
+      "completion_tokens": 5,
+      "completion_tokens_details": null,
+      "prompt_tokens": 10,
+      "prompt_tokens_details": null,
+      "total_tokens": 15
+    }
+  },
+  "response_cost": 0.000125,
+  "response_cost_failure_debug_info": null,
+  "response_time": 2.5,
+  "saved_cache_cost": 0.0,
+  "session_id": "",
+  "standard_built_in_tools_params": null,
+  "startTime": 1767268800.0,
+  "status": "success",
+  "status_fields": {
+    "guardrail_status": "not_run",
+    "llm_api_status": "success"
+  },
+  "stream": null,
+  "total_tokens": 15,
+  "trace_id": "trace-1",
+  "user_agent": "curl/8.7.1",
+  "zero_cost_diagnostic": null
+}

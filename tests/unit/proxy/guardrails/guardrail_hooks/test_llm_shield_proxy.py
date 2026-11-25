@@ -63,6 +63,17 @@ def _mock_post(guardrail: LLMShieldProxyGuardrail, *payloads: dict) -> AsyncMock
     return mock
 
 
+def _redacting_shield(guardrail: LLMShieldProxyGuardrail, pii: dict[str, str]) -> list[list[str]]:
+    sent: list[list[str]] = []
+
+    async def post(url: str, headers: dict, json: dict, timeout: float) -> Response:
+        sent.append(json["texts"])
+        return _response({"texts": [pii.get(text, text) for text in json["texts"]]})
+
+    guardrail.async_handler.post = post
+    return sent
+
+
 def _chunk(content: str | None, finish_reason: str | None = None) -> ModelResponseStream:
     return ModelResponseStream(
         choices=[StreamingChoices(index=0, delta=Delta(content=content), finish_reason=finish_reason)]
@@ -761,6 +772,83 @@ class TestRequestCoverage:
         assert block["name"] == "send", "the tool name has to arrive unchanged for the call to route"
 
     @pytest.mark.asyncio
+    async def test_decisions_input_json_data_is_redacted(self):
+        guardrail = _guardrail()
+        sent = _redacting_shield(
+            guardrail, {"jane.doe@example.com": "[EMAIL_1]", "555-0100": "[PHONE_1]", "Jane Doe": "[NAME_1]"}
+        )
+
+        data = {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_json",
+                            "data": {"to": "jane.doe@example.com", "meta": [{"phone": "555-0100"}]},
+                        },
+                        {"type": "input_json", "data": "Jane Doe"},
+                    ],
+                }
+            ]
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="adecisions")
+
+        assert {"555-0100", "Jane Doe", "jane.doe@example.com"} <= set(sent[0])
+        assert data["input"][0]["content"] == [
+            {"type": "input_json", "data": {"to": "[EMAIL_1]", "meta": [{"phone": "[PHONE_1]"}]}},
+            {"type": "input_json", "data": "[NAME_1]"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_decisions_input_json_keys_and_numbers_are_redacted(self):
+        guardrail = _guardrail()
+        _redacting_shield(guardrail, {"jane.doe@example.com": "[EMAIL_1]", "5550100": "[PHONE_1]"})
+
+        data = {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_json",
+                            "data": {
+                                "jane.doe@example.com": {"phone": 5550100, "visits": 3, "score": 0.5, "vip": True},
+                                "ids": [5550100, 7],
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="adecisions")
+
+        assert data["input"][0]["content"][0]["data"] == {
+            "[EMAIL_1]": {"phone": "[PHONE_1]", "visits": 3, "score": 0.5, "vip": True},
+            "ids": ["[PHONE_1]", 7],
+        }
+        assert list(data["input"][0]["content"][0]["data"]) == ["[EMAIL_1]", "ids"], "keys keep their order"
+
+    @pytest.mark.asyncio
+    async def test_decisions_input_json_keys_that_redact_alike_keep_both_values(self):
+        guardrail = _guardrail()
+        _redacting_shield(guardrail, {"jane@example.com": "[EMAIL]", "john@example.com": "[EMAIL]"})
+
+        data = {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_json", "data": {"jane@example.com": "renew", "john@example.com": "cancel"}}
+                    ],
+                }
+            ]
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="adecisions")
+
+        assert data["input"][0]["content"][0]["data"] == {"[EMAIL]": "renew", "[EMAIL] (2)": "cancel"}
+
+    @pytest.mark.asyncio
     async def test_responses_reasoning_summary_is_redacted(self):
         """A replayed reasoning item quotes the conversation in its summary parts."""
         guardrail = _guardrail()
@@ -892,6 +980,55 @@ class TestRestoration:
         )
 
         assert result.choices[0].message.content == "a@b.com"
+
+    @pytest.mark.asyncio
+    async def test_server_tool_call_arguments_are_restored(self):
+        guardrail, _ = _shielded({"[EMAIL_1]": "a@b.com", "[URL_1]": "https://b.com/a"})
+        response: Final = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="tool_calls",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        provider_specific_fields={
+                            "server_tool_calls": [
+                                {
+                                    "id": "srvtoolu_01",
+                                    "type": "function",
+                                    "function": {"name": "web_search", "arguments": '{"query": "[EMAIL_1] persimmon"}'},
+                                },
+                                {
+                                    "id": "srvtoolu_02",
+                                    "type": "function",
+                                    "function": {"name": "web_fetch", "arguments": '{"url": "[URL_1]"}'},
+                                },
+                            ]
+                        },
+                    ),
+                )
+            ]
+        )
+
+        result: Final = await guardrail.async_post_call_success_hook(
+            data={"messages": []}, user_api_key_dict=None, response=response
+        )
+
+        assert result.choices[0].message.provider_specific_fields == {
+            "server_tool_calls": [
+                {
+                    "id": "srvtoolu_01",
+                    "type": "function",
+                    "function": {"name": "web_search", "arguments": '{"query": "a@b.com persimmon"}'},
+                },
+                {
+                    "id": "srvtoolu_02",
+                    "type": "function",
+                    "function": {"name": "web_fetch", "arguments": '{"url": "https://b.com/a"}'},
+                },
+            ]
+        }
 
     @pytest.mark.asyncio
     async def test_responses_api_shape_is_restored(self):
@@ -1557,6 +1694,21 @@ class TestAnthropicStreamRestoration:
         out = await _restore_stream(guardrail, [raw[i : i + 7] for i in range(0, len(raw), 7)])
 
         deltas = [e["delta"]["text"] for e in _sse_events(out) if e["type"] == "content_block_delta"]
+        assert "".join(deltas) == "Mail a@example.com now"
+
+    @pytest.mark.asyncio
+    async def test_a_frame_nested_too_deep_to_decode_passes_through_and_restoring_goes_on(self):
+        guardrail, _ = _shielded(self.VAULT)
+        deep_frame = b"event: ping\ndata: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n"
+        stream = _text_block_stream("Mail [EMA", "IL_1] now")
+
+        out: Final[list[bytes]] = await _restore_stream(guardrail, [*stream[:3], deep_frame, *stream[3:]])
+
+        raw = b"".join(out)
+        assert deep_frame in raw
+        deltas: Final[list[str]] = [
+            e["delta"]["text"] for e in _sse_events([raw.replace(deep_frame, b"")]) if e["type"] == "content_block_delta"
+        ]
         assert "".join(deltas) == "Mail a@example.com now"
 
     @pytest.mark.asyncio

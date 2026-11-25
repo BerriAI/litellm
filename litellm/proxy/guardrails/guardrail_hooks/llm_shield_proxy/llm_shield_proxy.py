@@ -5,7 +5,6 @@ import uuid
 from collections.abc import AsyncGenerator, AsyncIterable, Iterator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
-    Any,  # noqa: TID251  # the streaming hook passes provider chunks through untyped
     ClassVar,
     Final,
     Literal,
@@ -24,13 +23,17 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.litellm_core_utils.core_helpers import attribute_items, attribute_or_none, iter_items, require_attributes
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    write_anthropic_server_tool_call_arguments,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import GenericGuardrailAPIInputs, TextChoices
+from litellm.types.utils import GenericGuardrailAPIInputs, Message, TextChoices
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
@@ -85,6 +88,19 @@ _VAULT_PREFIX: Final = f"litellm-{uuid.uuid4().hex}"
 _DEFAULT_TIMEOUT_SECONDS: Final = 10.0
 
 _SHIELD_BODY: Final = TypeAdapter(dict[str, object])
+
+
+def _server_tool_call_slots(message: object) -> tuple[Slot, ...]:
+    if not isinstance(message, Message):
+        return ()
+    return tuple(
+        (arguments, functools.partial(write_anthropic_server_tool_call_arguments, message, index))
+        for index, arguments in enumerate(
+            server_tool_call["function"].get("arguments")
+            for server_tool_call in anthropic_server_tool_call_params(message)
+        )
+        if isinstance(arguments, str) and arguments
+    )
 
 
 def _string_tool_arguments(calls: Sequence[object]) -> Iterator[tuple[object, str]]:
@@ -189,7 +205,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         request_data: MutableRequest,
         response: "LLMResponseTypes",
         call_type: "CallTypes | None",
-    ) -> "LLMResponseTypes | None":
+    ) -> object:
         """Restores the reply here only when the deployment pre-call hook redacted it.
 
         LiteLLM caches what this hook returns. Inside the proxy the request was redacted by
@@ -382,6 +398,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             content = getattr(message, "content", None)
             if isinstance(content, str) and content:
                 pending.append((content, functools.partial(setattr, message, "content")))
+            pending.extend(_server_tool_call_slots(message))
             for tool_call in attribute_items(message, "tool_calls"):
                 function: object = getattr(tool_call, "function", None)
                 arguments = getattr(function, "arguments", None) if function is not None else None
@@ -465,7 +482,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncIterable[object],
         request_data: MutableRequest,
-    ) -> AsyncGenerator[Any, None]:
+    ) -> AsyncGenerator[object, None]:
         """Restores original values incrementally, without buffering the stream.
 
         Each choice -- and each tool call within a choice -- is its own token stream, so

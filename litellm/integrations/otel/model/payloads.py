@@ -10,6 +10,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Protocol, cast
 from urllib.parse import urlsplit
 
+from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.integrations.otel.model.metadata import (
@@ -36,6 +38,8 @@ from litellm.integrations.otel.model.utils import (
     as_str_tuple,
 )
 from litellm.integrations.otel.routing import RoutingAttributeValue, routing_decision_attributes
+from litellm.litellm_core_utils.core_helpers import SupportsGet, as_object_list, iter_items, json_contains, require_get
+from litellm.types.llms.anthropic import claude_hosted_web_tool_call
 
 # ``RequestIdentity`` and the request-metadata translation now live in
 # :mod:`metadata`; re-exported here so existing ``model.payloads`` imports keep
@@ -151,16 +155,9 @@ class LLMUsage:
     def from_standard_logging_payload(cls, payload: StandardLoggingPayload) -> LLMUsage:
         # Cache token counts only exist on the raw provider usage object under metadata
         metadata: Final[Mapping[str, object]] = payload.get("metadata") or {}
-        raw_usage: Final = metadata.get("usage_object")
-        usage_object: Final[Mapping[str, object]] = raw_usage if isinstance(raw_usage, Mapping) else {}
-        raw_details: Final = usage_object.get("prompt_tokens_details")
-        prompt_details: Final[Mapping[str, object]] = (
-            raw_details if isinstance(raw_details, Mapping) else MappingProxyType({})
-        )
-        raw_completion_details: Final = usage_object.get("completion_tokens_details")
-        completion_details: Final[Mapping[str, object]] = (
-            raw_completion_details if isinstance(raw_completion_details, Mapping) else MappingProxyType({})
-        )
+        usage_object: Final = _getter_or_empty(metadata.get("usage_object"), Mapping)
+        prompt_details: Final = _getter_or_empty(usage_object.get("prompt_tokens_details"), Mapping)
+        completion_details: Final = _getter_or_empty(usage_object.get("completion_tokens_details"), Mapping)
         return cls(
             input_tokens=as_int(payload.get("prompt_tokens")),
             output_tokens=as_int(payload.get("completion_tokens")),
@@ -346,7 +343,7 @@ class ServiceSpanData:
     # from ``async_service_*_hook(event_metadata=...)``. The mapper owns how
     # these are namespaced: the canonical vocabulary uses ``litellm.metadata.*``
     # keys, the semconv-ai / Traceloop vocabulary uses the bare key names.
-    event_metadata: Mapping[str, MetadataScalar] = field(default_factory=dict)
+    event_metadata: Mapping[str, MetadataScalar] = field(default_factory=dict[str, MetadataScalar])
 
     @classmethod
     def from_payload(
@@ -516,7 +513,7 @@ class LLMCallSpanData:
             promoted_metadata=promoted_metadata,
             is_streaming=as_bool(payload.get("stream")),
             tools=_extract_tools(params),
-            messages_in=_dicts(payload.get("messages")) if capture_content else (),
+            messages_in=_message_dicts(payload.get("messages")) if capture_content else (),
             choices_out=choices_out if capture_content else (),
             system_fingerprint=as_str(response.get("system_fingerprint")),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds,
@@ -614,12 +611,26 @@ class MCPToolCallSpanData:
         )
 
 
+_NO_FIELDS: Final[Mapping[str, object]] = MappingProxyType({})
+
+
+def _getter_of(value: object, kind: type[object]) -> SupportsGet | None:
+    """The value's key reader when it is an instance of kind, else None."""
+    return require_get(value) if isinstance(value, kind) else None
+
+
+def _getter_or_empty(value: object, kind: type[object]) -> SupportsGet:
+    """The value's key reader when it is an instance of kind, else an empty one."""
+    reader: Final = _getter_of(value, kind)
+    return reader if reader is not None else _NO_FIELDS
+
+
 def _mcp_tool_call_metadata(payload: Mapping[str, object]) -> Mapping[str, object]:
     """The MCP gateway's tool-call metadata, which lives under
     ``StandardLoggingPayload.metadata`` (a ``StandardLoggingMetadata`` key), not
     at the payload's top level."""
-    metadata: Final = payload.get("metadata")
-    if not isinstance(metadata, Mapping):
+    metadata: Final = _getter_of(payload.get("metadata"), Mapping)
+    if metadata is None:
         return {}
     meta: Final = metadata.get("mcp_tool_call_metadata")
     return meta if isinstance(meta, Mapping) else {}
@@ -685,7 +696,7 @@ _SENSITIVE_METADATA_SUBSTRINGS: Final[tuple[str, ...]] = (
 # Keys that carry raw call-site internals — live objects, full kwargs/args. The
 # operation name is already the span's ``call_type``, so ``function_name`` is
 # redundant.
-_DROP_METADATA_KEYS: Final[frozenset] = frozenset({"function_kwargs", "function_args", "function_name"})
+_DROP_METADATA_KEYS: Final[frozenset[str]] = frozenset({"function_kwargs", "function_args", "function_name"})
 _MAX_METADATA_VALUE_LEN: Final = 1024
 _MAX_METADATA_ITEMS: Final = 32
 
@@ -753,7 +764,7 @@ def _guardrail_mode_str(value: object) -> str | None:
         return None
     if isinstance(value, (list, tuple)):
         parts: Final[list[str]] = []
-        for item in value:
+        for item in iter_items(value):
             if item is None:
                 continue
             part = as_str(_enum_value(item)) if isinstance(item, Enum) else as_str(item)
@@ -775,9 +786,31 @@ def _total_masked_entities(value: object) -> int | None:
 
 def _dicts(value: object) -> tuple[Mapping[str, object], ...]:
     """The dict items of ``value`` (when it's a list), as a tuple. Else empty."""
+    items: Final = as_object_list(value)
+    if items is None:
+        return ()
+    return tuple(item for item in items if isinstance(item, dict))
+
+
+_OBJECTS: Final = TypeAdapter(tuple[object, ...])
+_ANY_KEY_MAPPING: Final = TypeAdapter(Mapping[object, object])
+
+
+def _message_dict(message: object) -> Mapping[str, object] | None:
+    if isinstance(message, dict):
+        return {str(key): value for key, value in _ANY_KEY_MAPPING.validate_python(message).items()}
+    if not isinstance(message, BaseModel):
+        return None
+    try:
+        return message.model_dump(mode="json", fallback=str)
+    except ValueError:
+        return None
+
+
+def _message_dicts(value: object) -> tuple[Mapping[str, object], ...]:
     if not isinstance(value, list):
         return ()
-    return tuple(item for item in value if isinstance(item, dict))
+    return tuple(message for item in _OBJECTS.validate_python(value) if (message := _message_dict(item)) is not None)
 
 
 def _finish_reasons(choices: tuple[Mapping[str, object], ...]) -> tuple[str, ...]:
@@ -809,6 +842,7 @@ class _Choice(TypedDict):
 
 
 _RESPONSES_TOOL_CALL_TYPES: Final = frozenset({"function_call", "custom_tool_call"})
+_WEB_SEARCH_CALL: Final = TypeAdapter(ResponseFunctionWebSearch)
 
 
 def _responses_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
@@ -816,8 +850,12 @@ def _responses_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
     items: Final = _dicts(response.get("output"))
     messages: Final = tuple(item for item in items if item.get("type") == "message")
     parts: Final = tuple(part for item in messages for part in _dicts(item.get("content")))
-    tool_calls: Final = tuple(
+    client_tool_calls: Final = tuple(
         _responses_tool_call(item) for item in items if item.get("type") in _RESPONSES_TOOL_CALL_TYPES
+    )
+    tool_calls: Final = (
+        *(call for item in items if (call := _claude_web_search_tool_call(item)) is not None),
+        *client_tool_calls,
     )
     if not messages and not tool_calls:
         return ()
@@ -827,7 +865,10 @@ def _responses_choices(response: Mapping[str, object]) -> tuple[_Choice, ...]:
         "refusal": _responses_parts_text(parts, "refusal", "refusal"),
         "tool_calls": tool_calls or None,
     }
-    choice: Final[_Choice] = {"message": message, "finish_reason": _responses_finish_reason(response, bool(tool_calls))}
+    choice: Final[_Choice] = {
+        "message": message,
+        "finish_reason": _responses_finish_reason(response, bool(client_tool_calls)),
+    }
     return (choice,)
 
 
@@ -981,6 +1022,20 @@ def _responses_tool_call(item: Mapping[str, object]) -> _ToolCall:
     return tool_call
 
 
+def _claude_web_search_tool_call(item: Mapping[str, object]) -> _ToolCall | None:
+    if item.get("type") != "web_search_call":
+        return None
+    try:
+        search: Final = _WEB_SEARCH_CALL.validate_python(item)
+    except ValidationError:
+        return None
+    claude_call: Final = claude_hosted_web_tool_call(search)
+    if claude_call is None:
+        return None
+    tool_id, name, arguments = claude_call
+    return {"id": tool_id, "type": "function", "function": {"name": name, "arguments": arguments}}
+
+
 def _responses_finish_reason(response: Mapping[str, object], has_tool_calls: bool) -> str | None:
     status: Final = as_str(response.get("status"))
     if status == "completed":
@@ -1008,10 +1063,11 @@ def _parse_error(payload: StandardLoggingPayload) -> SpanError | None:
 
 def _tool_from_entry(entry: object) -> ToolDefinition | None:
     """One ``tools``/``functions`` entry → ``ToolDefinition``, or ``None`` if unusable."""
-    if not isinstance(entry, dict):
+    entry_fields: Final = _getter_of(entry, dict)
+    if entry_fields is None:
         return None
-    fn: Final = entry.get("function") if "function" in entry else entry
-    if not isinstance(fn, dict):
+    fn: Final = _getter_of(entry_fields.get("function") if json_contains(entry, "function") else entry, dict)
+    if fn is None:
         return None
     name: Final = as_str(fn.get("name"))
     if not name:
@@ -1039,9 +1095,9 @@ def _extract_tools(
     {...}}, ...]`` shape, and falls back to the ``functions=[...]`` shape.
     Returns an empty tuple when neither is present.
     """
-    raw_tools = model_parameters.get("tools")
-    if not isinstance(raw_tools, list):
-        raw_tools = model_parameters.get("functions")  # ``functions`` shape
-    if not isinstance(raw_tools, list):
+    raw_tools = as_object_list(model_parameters.get("tools"))
+    if raw_tools is None:
+        raw_tools = as_object_list(model_parameters.get("functions"))  # ``functions`` shape
+    if raw_tools is None:
         return ()
     return tuple(t for entry in raw_tools if (t := _tool_from_entry(entry)) is not None)

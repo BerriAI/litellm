@@ -68,9 +68,10 @@ async def open_messages(core: RouterCore) -> object:
 
 
 async def settle() -> None:
-    """Let the logging and recording tasks a finished stream scheduled run."""
-    for _ in range(20):
-        await asyncio.sleep(0)
+    """Wait for the logging and recording tasks a finished stream scheduled, and any tasks they schedule."""
+    while pending := asyncio.all_tasks() - {asyncio.current_task()}:
+        _, still_running = await asyncio.wait(pending, timeout=5)
+        assert not still_running, still_running
 
 
 def eventually(check: Callable[[], bool]) -> None:
@@ -349,7 +350,9 @@ async def test_a_consumed_messages_stream_counts_its_final_tokens_and_one_reques
     core: Final = make_core(model_list=group("a", rpm=100))
 
     stream: Final = await open_messages(core)
-    assert len(await collect_bytes(stream)) == 5
+    assert b"".join(await collect_bytes(stream)) == (
+        MESSAGE_START_WITH_USAGE + text_delta("hello") + MESSAGE_DELTA_WITH_USAGE + MESSAGE_STOP
+    )
     await settle()
 
     assert await core.health().usage("g") == (12, 1)

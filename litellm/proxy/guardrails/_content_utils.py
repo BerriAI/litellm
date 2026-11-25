@@ -13,11 +13,18 @@ import math
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import count
 from typing import Final
 
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    changed_server_tool_call_arguments,
+    write_request_hosted_web_call_arguments,
+)
 from litellm.responses.litellm_completion_transformation.compaction_items import (
     compaction_summary,
     input_items,
@@ -82,6 +89,7 @@ TEXT_PART_TYPES: Final[frozenset[str]] = frozenset(
 
 _OBJECT_LIST: Final[TypeAdapter[Sequence[object]]] = TypeAdapter(Sequence[object])
 _TEXT_OBJECT: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 def _object_list(value: object) -> Sequence[object] | None:
@@ -113,11 +121,13 @@ def _finite_number(literal: str) -> float:
 
 def _tool_arguments(arguments: str) -> JsonValue:
     parsed: Final = _tool_json(
-        json.loads(
-            arguments,
-            object_pairs_hook=_tool_json_object,
-            parse_float=_finite_number,
-            parse_constant=_finite_number,
+        _DECODED_JSON.validate_python(
+            json.loads(
+                arguments,
+                object_pairs_hook=_tool_json_object,
+                parse_float=_finite_number,
+                parse_constant=_finite_number,
+            )
         )
     )
     json.dumps(parsed, ensure_ascii=False).encode("utf-8")  # raises for lone surrogates, which stay raw text
@@ -176,6 +186,44 @@ def iter_tool_json_text(value: object) -> Iterator[str]:
         yield text
 
 
+def iter_json_keys(value: object) -> Iterator[str]:
+    pending: Final[list[object]] = [value]  # mutable-ok: owned DFS stack avoids recursion
+    while pending:
+        current = pending.pop()
+        fields = _text_object(current)
+        if fields is not None:
+            yield from (key for key in fields if key)
+            pending.extend(reversed(tuple(fields.values())))
+            continue
+        pending.extend(reversed(_object_list(current) or ()))
+
+
+def distinct_keys(renames: Sequence[tuple[str, str]]) -> tuple[str, ...]:
+    return tuple(_claim_names(renames))
+
+
+def _claim_names(renames: Sequence[tuple[str, str]]) -> Iterator[str]:
+    taken: Final[set[str]] = {new for old, new in renames if new == old}  # mutable-ok: names already used in one object
+    candidates: Final[dict[str, Iterator[str]]] = {}  # mutable-ok: resumes each name's suffix search where it stopped
+    for old, new in renames:
+        if new == old:
+            yield old
+            continue
+        name = next(candidate for candidate in candidates.setdefault(new, _numbered(new)) if candidate not in taken)
+        taken.add(name)
+        yield name
+
+
+def _numbered(name: str) -> Iterator[str]:
+    yield name
+    yield from (f"{name} ({number})" for number in count(2))
+
+
+def _renamed_fields(fields: Mapping[str, object], visit: Callable[[str], str]) -> tuple[tuple[str, object], ...]:
+    names: Final = distinct_keys(tuple((key, visit(key) if key else key) for key in fields))
+    return tuple(zip(names, fields.values()))
+
+
 @dataclass(frozen=True, slots=True)
 class _ToolFrame:
     source: object
@@ -192,7 +240,7 @@ class _ToolFrame:
         raise ValueError("Invalid tool JSON payload")
 
 
-def map_tool_json_text(value: object, visit: Callable[[str], str]) -> JsonValue:
+def map_tool_json_text(value: object, visit: Callable[[str], str], *, rewrite_keys: bool = False) -> JsonValue:
     root: Final[list[JsonValue]] = [None]  # mutable-ok: one owned root slot receives the iterative result
     pending: Final[list[_ToolFrame]] = [_ToolFrame(value, root, 0)]  # mutable-ok: owned traversal stack
     while pending:
@@ -206,9 +254,10 @@ def map_tool_json_text(value: object, visit: Callable[[str], str]) -> JsonValue:
             continue
         fields = _text_object(current)
         if fields is not None:
-            mapped: dict[str, JsonValue] = {key: None for key in fields}  # mutable-ok: owned output slots
+            renamed = _renamed_fields(fields, visit) if rewrite_keys else tuple(fields.items())
+            mapped: dict[str, JsonValue] = {key: None for key, _ in renamed}  # mutable-ok: owned output slots
             frame.write(mapped)
-            pending.extend(_ToolFrame(child, mapped, key) for key, child in reversed(tuple(fields.items())))
+            pending.extend(_ToolFrame(child, mapped, key) for key, child in reversed(renamed))
             continue
         children = _object_list(current)
         if children is None:
@@ -243,6 +292,10 @@ def _part_text(part: Mapping[str, object]) -> str | None:
     return None
 
 
+def _is_json_part(part: Mapping[str, object]) -> bool:
+    return part.get("type") == "input_json" and "data" in part
+
+
 def _iter_text_parts_in_content(content: object) -> Iterator[str]:
     """Yield text fragments from a ``message.content`` value (string or
     multimodal list). Non-text parts (images, audio, …) are skipped."""
@@ -250,16 +303,20 @@ def _iter_text_parts_in_content(content: object) -> Iterator[str]:
         if content:
             yield content
     elif isinstance(content, list):
-        for part in content:
+        for part in _object_list(content) or ():
             if isinstance(part, str):
                 # A bare string in a content/input list is itself a text
                 # fragment (Responses-API mixed-list shape).
                 if part:
                     yield part
                 continue
-            if not isinstance(part, dict):
+            fields = _text_object(part)
+            if fields is None:
                 continue
-            text = _part_text(part)
+            if _is_json_part(fields):
+                yield json.dumps(fields["data"], ensure_ascii=False)
+                continue
+            text = _part_text(fields)
             if text is not None:
                 yield text
 
@@ -274,7 +331,7 @@ def _coerce_input_to_messages(input_value: object) -> list[dict[str, object]]:
             messages.append({"role": "user", "content": item})
         elif (summary := compaction_summary(item)) is not None:
             messages.append({"role": "user", "content": summary})
-        elif isinstance(item, dict):
+        elif is_str_keyed_dict(item):
             if _part_text(item) is not None:
                 messages.append({"role": item.get("role") or "user", "content": [item]})
             elif item.get("type") == "reasoning":
@@ -314,7 +371,7 @@ def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
     the entire conversation, not just user turns.
     """
     for message in _iter_inspection_messages(data):
-        if not isinstance(message, dict):
+        if not is_str_keyed_dict(message):
             continue
         yield from _iter_text_parts_in_content(message.get("content"))
 
@@ -337,6 +394,7 @@ def walk_user_text(
     visit_tool: Callable[[JsonValue], JsonValue] | None = None,
     *,
     skip_tool_message: bool = False,
+    visit_json: Callable[[JsonValue], JsonValue] | None = None,
 ) -> int:
     """Rewrite every text fragment in place via ``visit``.
 
@@ -356,9 +414,19 @@ def walk_user_text(
         visited += 1  # rebind-ok: tally the structured payload inspected by this callback
         return visit_tool(payload) if visit_tool is not None else map_tool_json_text(payload, visit)
 
+    def _rewrite_json(value: object) -> JsonValue:
+        nonlocal visited
+        if visit_json is None:
+            return _rewrite_tool(value)
+        payload: Final = _tool_json(value)
+        if next(iter_tool_json_text(payload), None) is None and next(iter_json_keys(payload), None) is None:
+            return payload
+        visited += 1  # rebind-ok: tally the JSON input payload inspected by this callback
+        return visit_json(payload)
+
     def _rewrite_arguments(arguments: object) -> object:
         nonlocal visited
-        if isinstance(arguments, dict):
+        if is_str_keyed_dict(arguments):
             return _rewrite_tool(arguments)
         if not isinstance(arguments, str) or not arguments:
             return arguments
@@ -385,6 +453,8 @@ def walk_user_text(
             return {**rewritten, "content": _rewrite_content(part["content"], native=False)}
         if native and part.get("type") == "tool_use" and "input" in part:
             return {**rewritten, "input": _rewrite_tool(part["input"])}
+        if native and _is_json_part(part):
+            return {**rewritten, "data": _rewrite_json(part["data"])}
         return rewritten
 
     def _rewrite_content(content: object, native: bool = True) -> object:
@@ -400,25 +470,34 @@ def walk_user_text(
                 if isinstance(part, str) and part:
                     visited += 1
                     new_parts.append(visit(part))
-                elif isinstance(part, dict):
+                elif is_str_keyed_dict(part):
                     new_parts.append(_rewrite_part(part, native))
                 else:
                     new_parts.append(part)
             return new_parts
         return content
 
-    messages: Final = data.get("messages")
-    for message in _object_list(messages) or ():
-        if (skip_tool_message and _is_tool_message(message)) or not isinstance(message, dict):
+    def _rewrite_call_arguments(calls: object) -> None:
+        for call in _object_list(calls) or ():
+            function = call.get("function") if is_str_keyed_dict(call) else None
+            if is_str_keyed_dict(function) and "arguments" in function:
+                function["arguments"] = _rewrite_arguments(function["arguments"])
+
+    messages: Final = _object_list(data.get("messages")) or ()
+    server_tool_calls_before: Final = tuple(anthropic_server_tool_call_params(message) for message in messages)
+    for message in messages:
+        if (skip_tool_message and _is_tool_message(message)) or not is_str_keyed_dict(message):
             continue
         if "content" in message:
             message["content"] = _rewrite_content(message["content"])
-        calls = message.get("tool_calls")
-        if isinstance(calls, list):
-            for call in calls:
-                function = call.get("function") if isinstance(call, dict) else None
-                if isinstance(function, dict) and "arguments" in function:
-                    function["arguments"] = _rewrite_arguments(function["arguments"])
+        _rewrite_call_arguments(message.get("tool_calls"))
+        provider_fields = message.get("provider_specific_fields")
+        if is_str_keyed_dict(provider_fields):
+            _rewrite_call_arguments(provider_fields.get("server_tool_calls"))
+    for message, original in zip(messages, server_tool_calls_before, strict=True):
+        write_request_hosted_web_call_arguments(
+            message, changed_server_tool_call_arguments(original, anthropic_server_tool_call_params(message))
+        )
 
     if "system" in data:
         data["system"] = _rewrite_content(data["system"])  # rebind-ok: preserve the native hook's in-place contract
@@ -440,10 +519,10 @@ def walk_user_text(
             elif (compaction := with_visited_compaction_summary(item, visit)) is not None:
                 visited += 1
                 input_value[idx] = compaction
-            elif isinstance(item, dict):
-                if _part_text(item) is not None:
+            elif is_str_keyed_dict(item):
+                if (item_text := _part_text(item)) is not None:
                     visited += 1
-                    input_value[idx] = {**item, "text": visit(item["text"])}
+                    input_value[idx] = {**item, "text": visit(item_text)}
                 elif item.get("type") == "reasoning":
                     if "content" in item:
                         item["content"] = _rewrite_content(item["content"])
@@ -507,7 +586,7 @@ def apply_redacted_messages_back(data: dict[str, object], redacted_messages: Seq
     if isinstance(input_value, str):
         text_parts: Final[list[str]] = []
         for msg in redacted_messages:
-            if not isinstance(msg, dict):
+            if not is_str_keyed_dict(msg):
                 continue
             text_parts.extend(_iter_text_parts_in_content(msg.get("content")))
         data["input"] = "\n".join(text_parts)
@@ -525,7 +604,7 @@ def has_non_string_content(data: Mapping[str, object]) -> bool:
     messages: Final = data.get("messages")
     if isinstance(messages, list):
         for message in messages:
-            if isinstance(message, dict) and not isinstance(message.get("content"), str):
+            if is_str_keyed_dict(message) and not isinstance(message.get("content"), str):
                 if message.get("content") is not None:
                     return True
     input_value: Final = data.get("input")

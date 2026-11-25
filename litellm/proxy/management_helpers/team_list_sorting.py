@@ -6,7 +6,7 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
-from litellm.proxy.utils import PrismaClient
+from litellm.proxy.utils import PrismaClient, query_raw_rows
 
 COMPUTED_TEAM_SORTS: Final = MappingProxyType(
     {
@@ -105,5 +105,5 @@ async def sorted_team_ids(
         f"ORDER BY {expression} {direction} NULLS LAST, t.team_id ASC "
         f"LIMIT ${len(params) + 1} OFFSET ${len(params) + 2}"
     )
-    rows: Final = _TEAM_IDS.validate_python(await prisma_client.db.query_raw(sql, *params, take, skip))
+    rows: Final = _TEAM_IDS.validate_python(await query_raw_rows(prisma_client.db, sql, *params, take, skip))
     return tuple(row.team_id for row in rows)

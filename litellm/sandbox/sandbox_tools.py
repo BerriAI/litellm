@@ -5,11 +5,11 @@ A sandbox tool maps a name to a sandbox provider plus its credentials, so the
 code interpreter interceptor can resolve a tool by name to provider/key/base.
 """
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 
 from litellm._logging import verbose_logger
 
-_SANDBOX_TOOL_REGISTRY: dict[str, dict] = {}
+_SANDBOX_TOOL_REGISTRY: dict[str, dict[str, object]] = {}
 
 
 def _resolve_secret_value(value: str | None) -> str | None:
@@ -22,7 +22,7 @@ def _resolve_secret_value(value: str | None) -> str | None:
     return value
 
 
-def _iter_valid_tools(tools: list[dict]) -> Iterator[tuple[str, dict]]:
+def _iter_valid_tools(tools: Iterable[object]) -> Iterator[tuple[str, dict[str, object]]]:
     for tool in tools:
         if not isinstance(tool, dict):
             verbose_logger.warning("sandbox_tools: skipping non-dict entry %r", tool)
@@ -46,12 +46,12 @@ def _iter_valid_tools(tools: list[dict]) -> Iterator[tuple[str, dict]]:
         )
 
 
-def register_sandbox_tools(tools: list[dict]) -> None:
+def register_sandbox_tools(tools: Iterable[object]) -> None:
     global _SANDBOX_TOOL_REGISTRY
     _SANDBOX_TOOL_REGISTRY = dict(_iter_valid_tools(tools))
 
 
-def resolve_sandbox_tool(name: str) -> dict | None:
+def resolve_sandbox_tool(name: str) -> dict[str, object] | None:
     return _SANDBOX_TOOL_REGISTRY.get(name)
 
 

@@ -13,6 +13,7 @@ import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.llms.openai.common_utils import (
     BaseOpenAILLM,
+    create_may_already_exist,
     drop_params_from_unprocessable_entity_error,
     is_openai_backed_api_base,
 )
@@ -713,3 +714,39 @@ def test_reasoning_drop_warning_caps_a_large_caller_value(caplog: pytest.LogCapt
     assert len(drop_warnings) == 1
     assert len(drop_warnings[0]) < 300
     assert all(fragment in drop_warnings[0] for fragment in ("reasoning_effort='xxx", "'gpt-6.1-sol'", "422"))
+
+
+@pytest.mark.parametrize("upstream_body", ["upstream is down", "<html>bad gateway</html>", "[1, 2]", "12345"])
+@respx.mock
+def test_an_error_body_that_is_not_a_json_object_keeps_the_upstream_status(upstream_body: str) -> None:
+    respx.post("https://errors.example.invalid/v1/chat/completions").mock(
+        return_value=httpx.Response(400, text=upstream_body)
+    )
+
+    with pytest.raises(litellm.BadRequestError) as raised:
+        litellm.completion(
+            model="openai/test-model",
+            api_base="https://errors.example.invalid/v1",
+            api_key="test-key",
+            messages=[{"role": "user", "content": "hi"}],
+            max_retries=0,
+        )
+
+    assert raised.value.status_code == 400
+    assert upstream_body in raised.value.message
+
+
+@pytest.mark.parametrize(("method", "may_exist"), [("GET", False), ("POST", True)])
+def test_a_gateway_timeout_says_a_create_may_exist_only_when_it_answered_a_write(method: str, may_exist: bool) -> None:
+    response: Final = httpx.Response(504, request=httpx.Request(method, "https://files.example.invalid/v1/files"))
+
+    assert create_may_already_exist(openai.APIStatusError("Gateway Timeout", response=response, body=None)) is may_exist
+
+
+def test_a_gateway_timeout_on_a_followed_redirect_says_the_create_may_exist() -> None:
+    upload: Final = httpx.Response(303, request=httpx.Request("POST", "https://files.example.invalid/v1/files"))
+    followed: Final = httpx.Response(
+        504, request=httpx.Request("GET", "https://files.example.invalid/v1/files"), history=[upload]
+    )
+
+    assert create_may_already_exist(openai.APIStatusError("Gateway Timeout", response=followed, body=None))

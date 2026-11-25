@@ -8,8 +8,10 @@ check's cooldown and a failed fallback hop's cooldown.
 
 import asyncio
 from collections.abc import Callable, Iterable, Mapping
+from datetime import datetime
 from typing import Final
 
+import httpx
 import pytest
 
 import litellm
@@ -17,6 +19,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.router import Router
 from litellm.router_core import RouterCore
+from litellm.router_rust.core import RustCore
 from tests.unit.test_router.core.endpoints_helpers import EndpointHost
 from tests.unit.test_router.core.retries_health_helpers import (
     MESSAGES,
@@ -128,9 +131,10 @@ def successes(core: RouterCore, deployment_id: str) -> object:
 
 
 async def settle() -> None:
-    """Let the recording tasks a stream's end scheduled run."""
-    for _ in range(20):
-        await asyncio.sleep(0)
+    """Wait for the logging and recording tasks a finished stream scheduled, and any tasks they schedule."""
+    while pending := asyncio.all_tasks() - {asyncio.current_task()}:
+        _, still_running = await asyncio.wait(pending, timeout=5)
+        assert not still_running, still_running
 
 
 # --- a router still on the process lists ------------------------------------------------------
@@ -345,6 +349,85 @@ async def test_failed_fallback_hops_with_no_logging_object_are_not_counted(
 
     assert core.health().failures_this_minute("a") == 0
     assert core.health().failures_this_minute("b") == 0
+
+
+@pytest.mark.parametrize(
+    ("params", "error", "counted", "cooled"),
+    [
+        pytest.param(
+            {"token_exchange_endpoint": "https://identity.example.com/token"},
+            litellm.AuthenticationError("rejected", "microsoft_365_copilot", "copilot"),
+            0,
+            False,
+            id="oauth-401",
+        ),
+        pytest.param(
+            {"token_exchange_endpoint": "https://identity.example.com/token"},
+            litellm.PermissionDeniedError(
+                "rejected",
+                "microsoft_365_copilot",
+                "copilot",
+                response=httpx.Response(403, request=httpx.Request("POST", "https://provider.example.com")),
+            ),
+            0,
+            False,
+            id="oauth-403",
+        ),
+        pytest.param(
+            {"api_key": "sk-shared"},
+            litellm.AuthenticationError("rejected", "openai", "b"),
+            1,
+            True,
+            id="api-key-auth",
+        ),
+        pytest.param(
+            {"model": "github_copilot/gpt-4o", "api_key": "sk-shared"},
+            litellm.AuthenticationError("rejected", "github_copilot", "gpt-4o"),
+            1,
+            True,
+            id="shared-auth",
+        ),
+        pytest.param(
+            {"model": "github_copilot/gpt-4o", "github_copilot_auth_type": "per_user_oauth"},
+            litellm.RateLimitError("limited", "github_copilot", "gpt-4o"),
+            1,
+            False,
+            id="per-user-rate-limit",
+        ),
+        pytest.param(
+            {"model": "github_copilot/gpt-4o", "api_key": "sk-shared"},
+            litellm.RateLimitError("limited", "github_copilot", "gpt-4o"),
+            1,
+            True,
+            id="shared-rate-limit",
+        ),
+    ],
+)
+async def test_a_blocked_fallback_failure_respects_the_deployments_auth_scope(
+    make_core: MakeCore,
+    host: RequestLoggingHost,
+    params: Mapping[str, object],
+    error: Exception,
+    counted: int,
+    cooled: bool,
+) -> None:
+    core: Final = make_core(
+        model_list=[deployment("a", "a"), deployment("b", "b", **params), deployment("c", "c")],
+        fallbacks=[{"a": ["b"]}, {"b": ["c"]}],
+        num_retries=0,
+        allowed_fails=0,
+    )
+    assert isinstance(core, RustCore)
+    logging_obj: Final = request_logging()
+    logging_obj.model_call_details["current_attempt_api_call_start_time"] = datetime(2026, 1, 1)
+    logging_obj.mark_logging_complete("async_failure")
+    logging_obj.model_call_details["current_attempt_api_call_start_time"] = datetime(2026, 1, 2)
+    setattr(error, "failed_deployment_id", "b")
+
+    core.trigger_fallback_cooldown({"litellm_logging_obj": logging_obj}, error, generic=False)
+
+    assert core.health().failures_this_minute("b") == counted
+    assert ("b" in cooled_down(core, ["b"])) is cooled
 
 
 # --- a binding, for its request alone -----------------------------------------------------------
