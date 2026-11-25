@@ -4,6 +4,7 @@ from typing import Final
 import pytest
 import requests
 import requests_mock
+from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import ExportMetricsServiceRequest
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, Sum
 from pydantic import BaseModel, ConfigDict, TypeAdapter
@@ -37,6 +38,7 @@ _ENV_VARS: Final = (
     bm.CLIENT_SECRET_ENV,
     bm.TOKEN_URL_ENV,
     bm.EXPORT_INTERVAL_ENV,
+    bm.DEPLOYMENT_ID_ENV,
 )
 
 
@@ -287,6 +289,43 @@ def test_bearer_export_sets_authorization_header() -> None:
     export_requests: Final = tuple(request for request in _request_history(http_mock) if request.url == export_url)
     assert export_requests
     assert all(request.headers["Authorization"] == "Bearer export-token" for request in export_requests)
+
+
+def test_idle_heartbeat_exports_only_approved_deployment_attributes(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_full_env(monkeypatch)
+    monkeypatch.setenv(bm.DEPLOYMENT_ID_ENV, "t-example-litellm-prod")
+    markers: Final = ("private-prompt", "private@example.invalid", "private-user-id", "sk-private-key")
+    monkeypatch.setenv(
+        "OTEL_RESOURCE_ATTRIBUTES",
+        ",".join(("litellm.deployment.id=wrong-id", *(f"private.attr{i}={v}" for i, v in enumerate(markers)))),
+    )
+    export_url: Final = "https://collector.example:4318/v1/metrics"
+    http: Final = requests_mock.Mocker()
+    with http:
+        http.post("https://auth.example/oauth2/token", json={"access_token": "test-token", "expires_in": 3600})
+        http.post(export_url, status_code=200)
+        recorder: Final = bm.build_billing_metrics_recorder(
+            premium=True, license_data={"user_id": markers[2]}, litellm_version="1.2.3"
+        )
+        assert recorder is not None
+        bm.shutdown_billing_metrics_recorder()
+        raw: Final = next(request.body for request in _request_history(http) if request.url == export_url)
+
+    assert isinstance(raw, bytes)
+    assert not any(marker.encode() in raw for marker in markers)
+    export: Final = ExportMetricsServiceRequest.FromString(raw)
+    (resource,) = export.resource_metrics
+    assert {attr.key: attr.value.string_value for attr in resource.resource.attributes} == {
+        "service.name": "litellm-proxy",
+        "litellm.version": "1.2.3",
+        "litellm.deployment.id": "t-example-litellm-prod",
+    }
+    (scope,) = resource.scope_metrics
+    (metric,) = scope.metrics
+    assert metric.name == "litellm.enterprise.heartbeat"
+    (point,) = metric.gauge.data_points
+    assert point.as_int == 1
+    assert not point.attributes
 
 
 def test_unauthorized_export_refetches_token_before_next_export() -> None:

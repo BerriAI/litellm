@@ -70,7 +70,7 @@ def test_auto_router_capability_limit() -> None:
 
 
 def _signed_license(
-    expiration_date: str, allowed_features: tuple[str, ...] = ("auto_router",)
+    expiration_date: str, allowed_features: tuple[str, ...] = ("auto_router",), *, kms_signature: bool = False
 ) -> tuple[RSAPublicKey, str]:
     import base64
 
@@ -83,10 +83,19 @@ def _signed_license(
     ).encode()
     signature = private_key.sign(
         message,
-        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=hashes.SHA256().digest_size if kms_signature else padding.PSS.MAX_LENGTH,
+        ),
         hashes.SHA256(),
     )
     return private_key.public_key(), base64.b64encode(message + b"." + signature).decode()
+
+
+def test_verifies_erp_style_kms_license_offline() -> None:
+    license_check = LicenseCheck()
+    public_key, signed_license = _signed_license("2999-01-01", kms_signature=True)
+    assert license_check.verify_license_without_api_request(public_key, signed_license) is True
 
 
 def test_expired_or_unreadable_license_grants_no_features() -> None:
