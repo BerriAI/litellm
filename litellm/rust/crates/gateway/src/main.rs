@@ -1,6 +1,7 @@
 use std::{
     convert::Infallible,
     error::Error,
+    net::SocketAddr,
     path::Path,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -123,9 +124,12 @@ async fn standalone(
 
     tracing::info!(address = %listener.local_addr()?, models = config.model_list.len(), log_level = %log_level, "gateway listening");
 
-    let served = axum::serve(listener, ServiceExt::<Request>::into_make_service(app))
-        .with_graceful_shutdown(shutdown_signal())
-        .await;
+    let served = axum::serve(
+        listener,
+        ServiceExt::<Request>::into_make_service_with_connect_info::<SocketAddr>(app),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await;
     closed(poller, &live).await;
     Ok(served?)
 }
@@ -769,10 +773,18 @@ mod tests {
         status
     }
 
-    fn sent() -> Request {
-        Request::post("/v1/messages")
+    fn sent_from(peer: &str, forwarded_for: Option<&str>) -> Request {
+        forwarded_for
+            .into_iter()
+            .fold(Request::post("/v1/messages"), |request, value| {
+                request.header("x-forwarded-for", value)
+            })
             .header("authorization", "Bearer gateway-key")
             .header("content-type", "application/json")
+            .extension(axum::extract::ConnectInfo(SocketAddr::new(
+                peer.parse().unwrap(),
+                50000,
+            )))
             .body(axum::body::Body::from(
                 r#"{"model":"claude","max_tokens":8,"messages":[]}"#,
             ))
@@ -780,13 +792,55 @@ mod tests {
     }
 
     #[rstest]
+    #[case::an_unlisted_route("  allowed_routes: [/health]\n", "10.0.0.1", None)]
+    #[case::an_unlisted_peer("  allowed_ips: [10.0.0.1]\n", "10.0.0.9", None)]
+    #[case::an_unlisted_forwarded_address(
+        "  allowed_ips: [10.0.0.1]\n  use_x_forwarded_for: true\n",
+        "10.0.0.1",
+        Some("10.0.0.9")
+    )]
     #[tokio::test]
-    async fn the_native_app_answers_the_proxys_403_for_a_route_the_allowlist_leaves_out(
+    async fn the_native_app_answers_the_proxys_403_for_what_the_allowlists_leave_out(
+        #[values(Front::Nothing, Front::Python)] front: Front,
+        #[case] general: &str,
+        #[case] peer: &str,
+        #[case] forwarded_for: Option<&str>,
+    ) {
+        assert_eq!(
+            answered(front, general, sent_from(peer, forwarded_for)).await,
+            Some(StatusCode::FORBIDDEN)
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_listed_address_is_served_natively(
         #[values(Front::Nothing, Front::Python)] front: Front,
     ) {
         assert_eq!(
-            answered(front, "  allowed_routes: [/health]\n", sent()).await,
-            Some(StatusCode::FORBIDDEN)
+            answered(
+                front,
+                "  allowed_ips: [10.0.0.1]\n",
+                sent_from("10.0.0.1", None)
+            )
+            .await,
+            Some(StatusCode::INTERNAL_SERVER_ERROR)
+        );
+    }
+
+    /// With `use_x_forwarded_for` off, the address Python checks is one its server resolved from
+    /// the header the gateway does not read.
+    #[rstest]
+    #[tokio::test]
+    async fn a_forwarded_address_python_resolves_itself_is_left_to_python() {
+        assert_eq!(
+            answered(
+                Front::Python,
+                "  allowed_ips: [10.0.0.1]\n",
+                sent_from("10.0.0.9", Some("10.0.0.1"))
+            )
+            .await,
+            None
         );
     }
 
