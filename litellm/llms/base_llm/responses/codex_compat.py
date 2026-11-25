@@ -69,6 +69,10 @@ class _RewrittenFunctionCallItem(TypedDict):
     arguments: ReadOnly[str]
 
 
+def _json_object(value: object) -> "Mapping[str, object] | None":
+    return value if isinstance(value, dict) else None
+
+
 _AgentMessagePiece = tuple[Literal["text", "encrypted"], str]
 
 
@@ -216,13 +220,17 @@ def drop_unsupported_tools(
 
     Returns the kept tools and the sorted set of dropped types.
     """
-    kept: Final = tuple(tool for tool in tools if not isinstance(tool, dict) or tool.get("type") in supported_types)
+    kept: Final = tuple(
+        tool
+        for tool in tools
+        if (tool_object := _json_object(tool)) is None or tool_object.get("type") in supported_types
+    )
     dropped_types: Final = tuple(
         sorted(
             frozenset(
-                str(tool.get("type"))
-                for tool in tools
-                if isinstance(tool, dict) and tool.get("type") not in supported_types
+                str(tool_object.get("type"))
+                for tool_object in map(_json_object, tools)
+                if tool_object is not None and tool_object.get("type") not in supported_types
             )
         )
     )
