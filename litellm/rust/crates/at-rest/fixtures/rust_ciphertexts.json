@@ -1,0 +1,35 @@
+{
+  "cases": [
+    {
+      "name": "legacy_api_key",
+      "plaintext": "sk-proj-credential-value",
+      "stored": "4gqr2KSjYkGroXY4G1SnHPCgAJL0rP4kvwe2db1doOV9V_bHAVy07Ivh0JfwklawhV5JliSWqzjgKQv4_c5W8Q=="
+    },
+    {
+      "name": "legacy_empty",
+      "plaintext": "",
+      "stored": "VgKRy1sY1gRFvxb5a9Q7GtdJMSf8M3EqKoIn9DNHa0JP6z_KrCZB-w=="
+    },
+    {
+      "name": "legacy_unicode",
+      "plaintext": "clé secrète ✓ 鍵",
+      "stored": "zrgv0b9YeVIdUdtDZxtWf27CXmLzftnxMQiLyznpAnTtSWpUFErF3C-oF-Q2Hx0sUGztin_E5VUpCNlPLw=="
+    },
+    {
+      "name": "gcm_api_key",
+      "plaintext": "sk-proj-credential-value",
+      "stored": "v2:gcm:294V88xKEB84adaCU3rDFSMgYBAo8PytYSKGybD0sPIVMN6r8YBkrGLBdg8HdfzuVijOVg=="
+    },
+    {
+      "name": "gcm_empty",
+      "plaintext": "",
+      "stored": "v2:gcm:CHbh0tQNWT7EoUhiM0iJwbtTRmkuY8mMfTeutQ=="
+    },
+    {
+      "name": "gcm_unicode",
+      "plaintext": "clé secrète ✓ 鍵",
+      "stored": "v2:gcm:-PgCjiNhCQ-qGYGyq2qJ8xNPcSFFPirdMa9ySuAetU_gLygO0G4uF9qH5vdxHQljjg=="
+    }
+  ],
+  "salt_key": "sk-at-rest-fixture-salt-key"
+}

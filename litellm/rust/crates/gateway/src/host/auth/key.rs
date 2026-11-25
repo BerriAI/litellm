@@ -105,6 +105,8 @@ pub struct Key {
     /// The priority class the key's `metadata.priority` names, which reserves it a share of a
     /// model group's capacity.
     priority: Option<Arc<str>>,
+    /// The key's `key_alias`, which its calls are logged under.
+    alias: Option<Arc<str>>,
     /// The first budget column the row holds, which `key_budgets` declines.
     pub(super) budget: Option<&'static str>,
     /// The row maps model names, which `normalize_model` declines.
@@ -128,6 +130,10 @@ impl Key {
 
     pub(crate) fn priority(&self) -> Option<&Arc<str>> {
         self.priority.as_ref()
+    }
+
+    pub(crate) fn alias(&self) -> Option<&str> {
+        self.alias.as_deref()
     }
 }
 
@@ -395,6 +401,7 @@ pub(super) fn read(key: &CachedKey) -> Result<Keyed<Key>, &'static str> {
                 model_tpm: ModelLimits::new(metadata.model_tpm_limit),
             },
             priority: metadata.priority.map(Arc::from),
+            alias: key.key_alias.as_deref().map(Arc::from),
             budget,
             aliased,
         },

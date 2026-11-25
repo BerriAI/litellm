@@ -301,7 +301,11 @@ def _flex_outage(identity: str, kind: str) -> tuple[bytes, ...]:
 @pytest.mark.parametrize("kind", ["error", "response.failed"])
 def test_native_responses_stream_flex_outage_fails_as_a_rate_limit(gateway: Gateway, kind: str) -> None:
     response, error = _responses_frames(gateway, _flex_outage(_identity(), kind))
-    assert error["code"] == "rate_limit_exceeded" and _FLEX_MESSAGE in string_value(error["message"]), error
+    assert error == {
+        "code": "flex_unavailable",
+        "message": _FLEX_MESSAGE,
+        "provider_specific_fields": {"code": "flex_unavailable"},
+    }, error
     _assert_failure_logged(response.headers["x-litellm-call-id"], "429", _FLEX_MESSAGE)
 
 

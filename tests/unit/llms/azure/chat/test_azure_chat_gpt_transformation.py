@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import importlib
 import json
 import os
@@ -26,6 +27,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT
 from litellm.llms.azure.chat.gpt_reasoning_transformation import AzureOpenAIGPT5Config
 from litellm.llms.azure.chat.gpt_transformation import AzureOpenAIConfig
 from litellm.router import Router
+from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_optional_params
 from litellm.litellm_core_utils.model_cost_table import publish
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
@@ -194,6 +196,53 @@ def test_transform_request_drops_tool_reference_parts():
     assert request["messages"][2]["content"] == ""
 
 
+def test_transform_request_leaves_the_caller_messages_untouched() -> None:
+    city_arguments: Final = json.dumps({"city": "Copenhagen"})
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "user", "content": "What is the weather where I am?"},
+        {"role": "assistant", "content": None, "function_call": {"name": "get_current_city", "arguments": None}},
+        {"role": "function", "name": "get_current_city", "content": "Copenhagen"},
+        {"role": "assistant", "content": None, "function_call": {"name": "get_weather", "arguments": city_arguments}},
+        {"role": "function", "name": "get_weather", "content": "Sunny"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Compare these with the attached report"},
+                {"type": "image_url", "image_url": "https://example.com/forecast.png"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/radar.png", "format": "image/png"}},
+                {"type": "file", "file": {"file_id": "assistant-report", "format": "application/pdf"}},
+            ],
+        },
+    ]
+    snapshot: Final = copy.deepcopy(messages)
+
+    request: Final = AzureOpenAIConfig().transform_request(
+        model="gpt-4o",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == [
+        {"role": "user", "content": "What is the weather where I am?"},
+        {"role": "assistant", "content": None, "function_call": {"name": "get_current_city", "arguments": ""}},
+        {"role": "function", "name": "get_current_city", "content": "Copenhagen"},
+        {"role": "assistant", "content": None, "function_call": {"name": "get_weather", "arguments": city_arguments}},
+        {"role": "function", "name": "get_weather", "content": "Sunny"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Compare these with the attached report"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/forecast.png"}},
+                {"type": "image_url", "image_url": {"url": "https://example.com/radar.png"}},
+                {"type": "file", "file": {"file_id": "assistant-report"}},
+            ],
+        },
+    ]
+    assert messages == snapshot
+
+
 @pytest.mark.parametrize(
     "enabled, expected", [(False, ("hi", "sys", "reply", "more")), (True, ("sys", "hi", "reply", "more"))]
 )
@@ -238,6 +287,16 @@ def test_azure_max_tokens_rename_covers_gpt_5_chat_family(model: str, emitted_ke
     )
     assert mapped[emitted_key] == 5
     assert absent_key not in mapped
+
+
+@pytest.mark.parametrize("model", ["chat-latest", "gpt-chat-latest", "us/gpt-chat-latest", "gpt-chat-latest-gs"])
+def test_azure_base_config_renames_max_tokens_for_chat_latest_deployments(model: str) -> None:
+    mapped: Final = _MAPPED_PARAMS.validate_python(
+        AzureOpenAIConfig().map_openai_params(
+            non_default_params={"max_tokens": 5}, optional_params={}, model=model, drop_params=False
+        )
+    )
+    assert mapped == {"max_completion_tokens": 5}
 
 
 @pytest.mark.parametrize("model", ["gpt-5-chat", "gpt-5-chat-latest"])

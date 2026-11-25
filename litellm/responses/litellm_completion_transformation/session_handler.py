@@ -8,18 +8,28 @@ from itertools import chain, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
+from pydantic import TypeAdapter, ValidationError
+
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    PREVIOUS_RESPONSE_IDS_METADATA_KEY,
     REDACTED_BY_LITELLM,
     REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
 )
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    attribute_or_none,
+    require_attributes,
+)
 from litellm.litellm_core_utils.tool_fields import (
     SentToolNames,
+    chat_member_name,
     declared_function_names,
+    truncate_tool_name,
     with_renamed_tool_calls,
     with_tool_calls_named_as_declared,
 )
@@ -271,6 +281,40 @@ def _referenced_request_ids(previous_response_id: str, client_response_ids: tupl
     return tuple(dict.fromkeys((response_id, previous_response_id, *client_response_ids)))
 
 
+def _stored_previous_response_ids(spend_log: Mapping[str, object]) -> tuple[str, ...] | None:
+    """The path to the root a turn stored on its row, None for a row written before paths were stored."""
+    metadata: Final = spend_log.get("metadata")
+    try:
+        parsed: Final = (
+            _STORED_METADATA_ADAPTER.validate_json(metadata)
+            if isinstance(metadata, str)
+            else _STORED_METADATA_ADAPTER.validate_python(metadata)
+        )
+    except ValidationError:
+        return None
+    try:
+        return tuple(_REQUEST_IDS_ADAPTER.validate_python(parsed.get(PREVIOUS_RESPONSE_IDS_METADATA_KEY)))
+    except ValidationError:
+        return None
+
+
+def _path_through_referenced_rows(
+    referenced_rows: Sequence[Mapping[str, object]], request_ids: Sequence[str]
+) -> tuple[str, ...] | None:
+    """The request ids to replay, root first, ending at the referenced response, or None without a stored path."""
+    stored_path: Final = next(
+        (path for path in map(_stored_previous_response_ids, referenced_rows) if path is not None), None
+    )
+    if stored_path is None:
+        return None
+    return tuple(dict.fromkeys((*stored_path, *request_ids)))
+
+
+def _in_path_order(spend_logs: Sequence[Mapping[str, object]], path: Sequence[str]) -> Sequence[Mapping[str, object]]:
+    position: Final[Mapping[object, int]] = {request_id: index for index, request_id in enumerate(path)}
+    return sorted(spend_logs, key=lambda spend_log: position.get(spend_log.get("request_id"), len(path)))
+
+
 def _turns_through_referenced_response(
     spend_logs: Sequence[Mapping[str, object]], referenced_request_ids: tuple[str, ...]
 ) -> int:
@@ -316,7 +360,9 @@ def _instruction_items_before(
     )
 
 
-_NO_TOOL_NAMES: Final = SentToolNames(member_chat_names=MappingProxyType({}), self_named_namespace_members=frozenset())
+_NO_TOOL_NAMES: Final = SentToolNames(
+    member_chat_names=MappingProxyType({}), self_named_namespace_members=frozenset[str]()
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -443,8 +489,9 @@ def _tool_names_by_turn(proxy_server_requests: Sequence[Mapping[str, object] | N
 
 
 def _rebuilt_from_cold_storage(spend_log: Mapping[str, object], proxy_server_request: Mapping[str, object]) -> bool:
-    return "input" not in proxy_server_request and LITELLM_TRUNCATED_PAYLOAD_FIELD in str(
-        spend_log.get("proxy_server_request")
+    stored_request: Final = str(spend_log.get("proxy_server_request") or "{}")
+    return "input" not in proxy_server_request and (
+        stored_request == "{}" or LITELLM_TRUNCATED_PAYLOAD_FIELD in stored_request
     )
 
 
@@ -455,6 +502,32 @@ def _declared_tool_names(
         return frozenset()
     model_parameters: Final = as_str_mapping(proxy_server_request.get("model_parameters"))
     return frozenset() if model_parameters is None else declared_function_names(model_parameters.get("tools"))
+
+
+def _sent_name(name: str, namespace: object) -> str | None:
+    if not namespace:
+        return truncate_tool_name(name)
+    return chat_member_name(name, name) if namespace == name else None
+
+
+def _input_item_named_as_declared(item: object, declared_names: frozenset[str]) -> object:
+    fields: Final = as_str_mapping(item)
+    if fields is None or fields.get("type") != "function_call":
+        return item
+    name: Final = fields.get("name")
+    if not isinstance(name, str) or name in declared_names:
+        return item
+    sent_name: Final = _sent_name(name, fields.get("namespace"))
+    if sent_name is None or sent_name not in declared_names:
+        return item
+    return {**{key: value for key, value in fields.items() if key != "namespace"}, "name": sent_name}
+
+
+def _input_named_as_declared(stored_input: object, declared_names: frozenset[str]) -> object:
+    items: Final = as_object_list(stored_input)
+    if not declared_names or items is None:
+        return stored_input
+    return [_input_item_named_as_declared(item, declared_names) for item in items]
 
 
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
@@ -468,6 +541,60 @@ def _latest_replayable_instructions(proxy_server_requests: Sequence[Mapping[str,
         None,
     )
     return None if latest == REDACTED_BY_LITELLM else latest
+
+
+_STORED_METADATA_ADAPTER: Final = TypeAdapter(dict[str, object])
+_REQUEST_IDS_ADAPTER: Final = TypeAdapter(list[str])
+
+_REFERENCED_ROWS_QUERY: Final = """
+    SELECT *
+    FROM "LiteLLM_SpendLogs"
+    WHERE request_id = ANY($1::text[]);
+"""
+
+_SAME_OWNER_AS_REFERENCED: Final = """
+    EXISTS (
+        SELECT 1
+        FROM matching_session
+        WHERE {same_conversation}
+          AND (
+              matching_session."user" = logs."user"
+              OR (matching_session."user" IS NULL AND logs."user" IS NULL)
+          )
+          AND (
+              matching_session.team_id = logs.team_id
+              OR (matching_session.team_id IS NULL AND logs.team_id IS NULL)
+          )
+          AND (
+              COALESCE(matching_session."user", '') <> ''
+              OR COALESCE(matching_session.team_id, '') <> ''
+              OR (
+                  COALESCE(matching_session.api_key, '') <> ''
+                  AND matching_session.api_key = logs.api_key
+              )
+          )
+    )
+"""
+
+_OWNER_SCOPED_QUERY: Final = """
+    WITH matching_session AS (
+        SELECT session_id, api_key, "user", team_id
+        FROM "LiteLLM_SpendLogs"
+        WHERE request_id = ANY($1::text[])
+    )
+    SELECT *
+    FROM "LiteLLM_SpendLogs" AS logs
+    WHERE {same_owner}
+    ORDER BY "endTime" ASC;
+"""
+
+_SESSION_QUERY: Final = _OWNER_SCOPED_QUERY.format(
+    same_owner=_SAME_OWNER_AS_REFERENCED.format(same_conversation="matching_session.session_id = logs.session_id")
+)
+
+_PATH_QUERY: Final = _OWNER_SCOPED_QUERY.format(
+    same_owner=_SAME_OWNER_AS_REFERENCED.format(same_conversation="logs.request_id = ANY($2::text[])")
+)
 
 
 class ResponsesSessionHandler:
@@ -549,6 +676,11 @@ class ResponsesSessionHandler:
             messages=chat_completion_message_history,
             litellm_session_id=litellm_session_id,
             instructions=_latest_replayable_instructions(proxy_server_requests),
+            previous_response_ids=tuple(
+                _REQUEST_IDS_ADAPTER.validate_python(
+                    [spend_log["request_id"] for spend_log in all_spend_logs[:replayed_turns]]
+                )
+            ),
         )
 
     @staticmethod
@@ -641,14 +773,16 @@ class ResponsesSessionHandler:
         )
 
         response_input_param: str | ResponseInputParam | None = None
+        declared_tool_names: Final = _declared_tool_names(spend_log, proxy_server_request_dict)
 
         ############################################################
         # Add Input messages for this Spend Log
         ############################################################
         if proxy_server_request_dict:
             stored_request_input: Final = proxy_server_request_dict.get("input")
-            _response_input_param: Final = (
-                proxy_server_request_dict.get("messages") if stored_request_input is None else stored_request_input
+            _response_input_param: Final = _input_named_as_declared(
+                proxy_server_request_dict.get("messages") if stored_request_input is None else stored_request_input,
+                declared_tool_names,
             )
             if isinstance(_response_input_param, (str, list)):
                 response_input_param = _response_input_param
@@ -661,7 +795,7 @@ class ResponsesSessionHandler:
         output_messages: Final = ResponsesSessionHandler._stored_output_messages(
             _stored_response(spend_log),
             tool_names,
-            _declared_tool_names(spend_log, proxy_server_request_dict),
+            declared_tool_names,
             item_cache_control,
             tool_call_provider_fields,
         )
@@ -762,7 +896,7 @@ class ResponsesSessionHandler:
         ############################################################
         if ResponsesSessionHandler._should_check_cold_storage_for_full_payload(proxy_server_request_dict):
             # Try to get cold storage object key from spend log metadata
-            _proxy_server_request_dict: dict | None = None
+            _proxy_server_request_dict: dict[str, object] | None = None
             cold_storage_object_key = ResponsesSessionHandler._get_cold_storage_object_key_from_spend_log(spend_log)
             if cold_storage_object_key:
                 # Use the object key directly from metadata
@@ -852,8 +986,11 @@ class ResponsesSessionHandler:
         """
         Get all spend logs for a previous response id
 
-
-        SQL query
+        The referenced response's row is read first. A row written with a path to the root
+        (``litellm_previous_response_ids`` in its metadata) names every earlier turn it continues, so
+        only those rows plus the referenced one are read, which keeps a fork from replaying its
+        siblings and the turns sent after the referenced response. A row written before paths were
+        stored falls back to its whole session:
 
         SELECT session_id, api_key, "user", team_id FROM spend_logs WHERE request_id = previous_response_id, then
         SELECT * FROM spend_logs with that session_id and the same owner
@@ -882,49 +1019,26 @@ class ResponsesSessionHandler:
         if prisma_client is None:
             return []
 
-        query: Final = """
-            WITH matching_session AS (
-                SELECT session_id, api_key, "user", team_id
-                FROM "LiteLLM_SpendLogs"
-                WHERE request_id = ANY($1::text[])
-            )
-            SELECT *
-            FROM "LiteLLM_SpendLogs" AS logs
-            WHERE EXISTS (
-                SELECT 1
-                FROM matching_session
-                WHERE matching_session.session_id = logs.session_id
-                  AND (
-                      matching_session."user" = logs."user"
-                      OR (matching_session."user" IS NULL AND logs."user" IS NULL)
-                  )
-                  AND (
-                      matching_session.team_id = logs.team_id
-                      OR (matching_session.team_id IS NULL AND logs.team_id IS NULL)
-                  )
-                  AND (
-                      COALESCE(matching_session."user", '') <> ''
-                      OR COALESCE(matching_session.team_id, '') <> ''
-                      OR (
-                          COALESCE(matching_session.api_key, '') <> ''
-                          AND matching_session.api_key = logs.api_key
-                      )
-                  )
-            )
-            ORDER BY "endTime" ASC;
-        """
-
         max_attempts: Final = 1 if disable_spend_logs else RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS
         for attempt in range(max_attempts):
             if attempt:
                 await asyncio.sleep(RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL)
-            if spend_logs := await query_raw_rows(prisma_client.db, query, request_ids):
-                verbose_proxy_logger.debug(
-                    "Found the following spend logs for previous response id %s: %s",
-                    response_id,
-                    json.dumps(spend_logs, indent=4, default=str),
-                )
-                return spend_logs
+            read_spend_logs = partial(query_raw_rows, prisma_client.db)
+            referenced_rows = await read_spend_logs(_REFERENCED_ROWS_QUERY, request_ids)
+            if not referenced_rows:
+                continue
+            path = _path_through_referenced_rows(referenced_rows, request_ids)
+            spend_logs = (
+                _in_path_order(await read_spend_logs(_PATH_QUERY, request_ids, list(path)), path)
+                if path is not None
+                else await read_spend_logs(_SESSION_QUERY, request_ids)
+            )
+            verbose_proxy_logger.debug(
+                "Found the following spend logs for previous response id %s: %s",
+                response_id,
+                json.dumps(spend_logs, indent=4, default=str),
+            )
+            return spend_logs
 
         verbose_proxy_logger.debug("Found no spend logs for previous response id %s", response_id)
         return []

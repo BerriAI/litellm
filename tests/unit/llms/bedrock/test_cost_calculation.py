@@ -41,3 +41,23 @@ def test_claude_platform_cost_matches_claude_api_cost(
 
     assert claude_platform_cost == pytest.approx(claude_api_cost)
     assert sum(claude_platform_cost) > 0
+
+
+def test_an_unreadable_geo_multiplier_raises_as_on_main(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nothing catches the geo ``float()`` on Bedrock, so ``completion_cost`` moves on to its next candidate."""
+    from litellm.llms.bedrock.cost_calculation import cost_per_token
+
+    row: Final = {
+        "litellm_provider": "bedrock",
+        "mode": "chat",
+        "input_cost_per_token": 5e-06,
+        "output_cost_per_token": 2.5e-05,
+        "provider_specific_entry": {"us": "high"},
+    }
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, "anthropic.claude-probe-geo": row})
+
+    with pytest.raises(ValueError, match="high"):
+        cost_per_token(
+            model="anthropic.claude-probe-geo",
+            usage=Usage(prompt_tokens=1000, completion_tokens=1000, inference_geo="us"),
+        )
