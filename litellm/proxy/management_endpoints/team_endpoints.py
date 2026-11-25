@@ -140,10 +140,10 @@ from litellm.proxy.common_utils.cache_invalidation_pubsub import (
 )
 from litellm.proxy.common_utils.callback_config_validation import (
     InvalidLoggingMetadata,
+    mixpanel_logging_metadata_error,
     normalize_logging_entries,
     string_keyed,
 )
-from litellm.proxy.common_utils.callback_config_validation import mixpanel_logging_metadata_error
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.openai_error_payload import proxy_exception_for
