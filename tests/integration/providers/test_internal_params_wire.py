@@ -544,7 +544,7 @@ API_BASE_CHAT_PROVIDERS: Final = (
     "pinstripes", "poe", "prism", "publicai", "qwen_ai_platform", "qwencloud", "refuseless", "reka", "resetdata", "sail",
     "sambanova", "sarvam", "scaleway", "scx-ai", "snowflake", "streamlake", "synthetic", "tencent", "tensormesh",
     "text-completion-codestral", "text-completion-inception", "text-completion-openai", "together_ai", "v0",
-    "vercel_ai_gateway", "vispark", "volcengine", "wally", "wandb", "xai", "xiaomi_mimo", "xinference", "zai",
+    "vercel_ai_gateway", "vispark", "volcengine", "wally", "wandb", "weflayr", "xai", "xiaomi_mimo", "xinference", "zai",
     "zerogpu",
 )  # fmt: skip
 CHAT_ROUTES: Final = MappingProxyType(
@@ -609,7 +609,7 @@ EMBEDDING_ROUTES: Final = MappingProxyType(
                 "llamafile", "lm_studio", "mistral", "nebius", "nvidia_nim", "ollama", "oobabooga", "openai",
                 "openai_like", "openrouter", "ovhcloud", "perplexity", "qwen_ai_platform", "qwencloud", "sambanova",
                 "snowflake", "together_ai", "triton", "vercel_ai_gateway", "volcengine", "voyage", "wandb",
-                "xinference",
+                "weflayr", "xinference",
             )
         },
         "azure": Route("azure/wire-model", AZURE_CONNECTION),
