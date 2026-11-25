@@ -154,9 +154,7 @@ _GEMMA_4_REJECTED_SCHEMA_KEYWORDS: Final = frozenset(
         "else",
         "if",
         "maxContains",
-        "maxProperties",
         "minContains",
-        "minProperties",
         "propertyNames",
         "then",
         "unevaluatedItems",
@@ -186,12 +184,34 @@ def mantle_supports_all_json_schema_keywords(
     declared: Final = _declared_all_json_schema_keywords_support(litellm_params)
     if declared is not None:
         return declared
-    bare_model: Final = split_mantle_region_prefix(model)[1]
-    match as_str_mapping(model_cost.get(f"bedrock_mantle/{bare_model}")):
+    prefix_region, bare_model = split_mantle_region_prefix(model)
+    region: Final = _requested_region(prefix_region, litellm_params)
+    listed: Final = next(
+        (
+            flag
+            for key in (f"bedrock_mantle/{region}/{bare_model}", f"bedrock_mantle/{bare_model}")
+            if (flag := _listed_all_json_schema_keywords_support(model_cost.get(key))) is not None
+        ),
+        None,
+    )
+    return not bare_model.startswith("google.gemma-4") if listed is None else listed
+
+
+def _requested_region(prefix_region: str | None, litellm_params: Mapping[str, object] | GenericLiteLLMParams) -> str:
+    declared_region, api_base = (
+        (litellm_params.aws_region_name, litellm_params.api_base)
+        if isinstance(litellm_params, GenericLiteLLMParams)
+        else (litellm_params.get("aws_region_name"), litellm_params.get("api_base"))
+    )
+    return resolve_mantle_region({"aws_region_name": declared_region or prefix_region, "api_base": api_base})
+
+
+def _listed_all_json_schema_keywords_support(row: object) -> bool | None:
+    match as_str_mapping(row):
         case {"supports_all_json_schema_keywords": bool(listed)}:
             return listed
         case _:
-            return not bare_model.startswith("google.gemma-4")
+            return None
 
 
 def drop_schema_keywords_gemma_4_rejects(schema: Mapping[str, object]) -> Mapping[str, object]:

@@ -410,10 +410,14 @@ class TestBedrockMantleResponsesGemma4SchemaKeywords:
                 {
                     "type": "namespace",
                     "name": "collaboration",
-                    "tools": [{"type": "function", "name": "spawn", "parameters": _schema_with_gemma_4_refused_keywords()}],
+                    "tools": [
+                        {"type": "function", "name": "spawn", "parameters": _schema_with_gemma_4_refused_keywords()}
+                    ],
                 },
             ],
-            "text": {"format": {"type": "json_schema", "name": "reply", "schema": _schema_with_gemma_4_refused_keywords()}},
+            "text": {
+                "format": {"type": "json_schema", "name": "reply", "schema": _schema_with_gemma_4_refused_keywords()}
+            },
         }
 
     @pytest.mark.parametrize("model", ["google.gemma-4-31b", "us-west-2/google.gemma-4-26b-a4b"])
@@ -433,7 +437,9 @@ class TestBedrockMantleResponsesGemma4SchemaKeywords:
                 {
                     "type": "additional_tools",
                     "role": "developer",
-                    "tools": [{"type": "function", "name": "ask", "parameters": _schema_with_gemma_4_refused_keywords()}],
+                    "tools": [
+                        {"type": "function", "name": "ask", "parameters": _schema_with_gemma_4_refused_keywords()}
+                    ],
                 },
                 {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
             ],

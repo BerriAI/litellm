@@ -1288,8 +1288,6 @@ _GEMMA_4_REFUSED_KEYWORDS: Final = (
     "if",
     "then",
     "else",
-    "minProperties",
-    "maxProperties",
     "unevaluatedProperties",
     "unevaluatedItems",
     "uniqueItems",
@@ -1309,7 +1307,11 @@ def _ask_user_question_parameters() -> dict[str, object]:
                 "minItems": 1,
                 "items": {"type": "object", "properties": {"question": {"type": "string"}}},
             },
-            "answers": {"type": "object", "propertyNames": {"type": "string"}, "additionalProperties": {"type": "string"}},
+            "answers": {
+                "type": "object",
+                "propertyNames": {"type": "string"},
+                "additionalProperties": {"type": "string"},
+            },
             "contains": {"type": "array", "uniqueItems": True, "items": {"type": "string"}},
         },
         "required": ["questions"],
@@ -1338,7 +1340,12 @@ class TestBedrockMantleGemma4SchemaKeywords:
             model="bedrock_mantle/google.gemma-4-31b",
             messages=[{"role": "user", "content": "hello"}],
             aws_region_name="us-east-1",
-            tools=[{"type": "function", "function": {"name": "AskUserQuestion", "parameters": _ask_user_question_parameters()}}],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {"name": "AskUserQuestion", "parameters": _ask_user_question_parameters()},
+                }
+            ],
             client=_recording_client(handler),
         )
 
@@ -1393,8 +1400,15 @@ class TestBedrockMantleGemma4SchemaKeywords:
         assert schema == _ask_user_question_parameters()
 
     def test_gemma_4_request_carries_none_of_the_keywords_mantle_refused(self) -> None:
-        """Each keyword answered 400 alone in a gemma-4-31b tool schema on Mantle us-east-1, 2026-11-20."""
-        nested: Final = {"type": "object", "properties": {"x": {"type": "string"}}, **{kw: {} for kw in _GEMMA_4_REFUSED_KEYWORDS}}
+        """Each keyword answered 400 alone in a gemma-4-31b tool schema on Mantle us-east-1, 2026-11-20, while
+        minProperties and maxProperties answered 200 on gemma-4-31b, 26b-a4b and e2b, 2026-11-24."""
+        sized: Final = {
+            "type": "object",
+            "properties": {"x": {"type": "string"}},
+            "minProperties": 1,
+            "maxProperties": 2,
+        }
+        nested: Final = {**sized, **{kw: {} for kw in _GEMMA_4_REFUSED_KEYWORDS}}
         body: Final = BedrockMantleChatConfig().transform_request(
             model="google.gemma-4-31b",
             messages=[{"role": "user", "content": "hello"}],
@@ -1415,8 +1429,8 @@ class TestBedrockMantleGemma4SchemaKeywords:
 
         assert body["tools"][0]["function"]["parameters"] == {
             "type": "object",
-            "properties": {"nested": {"type": "object", "properties": {"x": {"type": "string"}}}},
-            "$defs": {"d": {"type": "object", "properties": {"x": {"type": "string"}}}},
+            "properties": {"nested": sized},
+            "$defs": {"d": sized},
         }
 
     def test_gemma_4_request_passes_a_tool_entry_that_is_not_an_object_through_unchanged(self) -> None:
@@ -1466,7 +1480,9 @@ class TestBedrockMantleGemma4SchemaKeywords:
             model="google.gemma-4-31b",
             messages=[{"role": "user", "content": "hello"}],
             optional_params={
-                "tools": [{"type": "function", "function": {"name": "ask", "parameters": _ask_user_question_parameters()}}]
+                "tools": [
+                    {"type": "function", "function": {"name": "ask", "parameters": _ask_user_question_parameters()}}
+                ]
             },
             litellm_params={},
             headers={},
@@ -1485,7 +1501,9 @@ class TestBedrockMantleGemma4SchemaKeywords:
             model=model,
             messages=[{"role": "user", "content": "hello"}],
             optional_params={
-                "tools": [{"type": "function", "function": {"name": "ask", "parameters": _ask_user_question_parameters()}}]
+                "tools": [
+                    {"type": "function", "function": {"name": "ask", "parameters": _ask_user_question_parameters()}}
+                ]
             },
             litellm_params={"model_info": {"supports_all_json_schema_keywords": declared}},
             headers={},
@@ -1505,7 +1523,9 @@ class TestBedrockMantleGemma4SchemaKeywords:
             model=model,
             messages=[{"role": "user", "content": "hello"}],
             optional_params={
-                "tools": [{"type": "function", "function": {"name": "ask", "parameters": _ask_user_question_parameters()}}]
+                "tools": [
+                    {"type": "function", "function": {"name": "ask", "parameters": _ask_user_question_parameters()}}
+                ]
             },
             litellm_params={},
             headers={},
@@ -1527,8 +1547,68 @@ class TestBedrockMantleGemma4SchemaKeywords:
 
         assert mantle_supports_all_json_schema_keywords(model, {}, rows_without_the_flag) is supports_all
 
-    @pytest.mark.parametrize("model, drops", [("google.gemma-4-31b", True), ("openai.gpt-oss-120b", False)])
-    def test_schemas_sent_through_extra_body_follow_the_same_rule(self, monkeypatch, model: str, drops: bool) -> None:
+    @pytest.mark.parametrize("route", ["chat", "responses"])
+    @pytest.mark.parametrize(
+        "model, region_params, keeps_every_keyword",
+        [
+            ("bedrock_mantle/eu-central-1/google.gemma-4-31b", {}, True),
+            ("bedrock_mantle/google.gemma-4-31b", {"aws_region_name": "eu-central-1"}, True),
+            ("bedrock_mantle/google.gemma-4-31b", {"aws_region_name": "us-east-1"}, False),
+        ],
+    )
+    def test_the_cost_map_row_for_the_region_the_request_goes_to_decides(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        route: str,
+        model: str,
+        region_params: dict[str, str],
+        keeps_every_keyword: bool,
+    ) -> None:
+        _use_mantle_bearer(monkeypatch)
+        for key, flag in (
+            ("bedrock_mantle/eu-central-1/google.gemma-4-31b", True),
+            ("bedrock_mantle/google.gemma-4-31b", False),
+        ):
+            monkeypatch.setitem(
+                litellm.model_cost, key, {**litellm.model_cost[key], "supports_all_json_schema_keywords": flag}
+            )
+        handler: Final = Mock(side_effect=_reply_by_route)
+        schema: Final = _ask_user_question_parameters()
+        client: Final = _recording_client(handler)
+
+        if route == "chat":
+            litellm.completion(
+                model=model,
+                messages=[{"role": "user", "content": "hello"}],
+                tools=[{"type": "function", "function": {"name": "AskUserQuestion", "parameters": schema}}],
+                client=client,
+                **region_params,
+            )
+        else:
+            litellm.responses(
+                model=model,
+                input="hello",
+                tools=[{"type": "function", "name": "AskUserQuestion", "parameters": schema}],
+                client=client,
+                **region_params,
+            )
+
+        sent: Final = json.loads(handler.call_args_list[0].args[0].content)
+        sent_tool: Final = sent["tools"][0]
+        sent_schema: Final = sent_tool["function"]["parameters"] if route == "chat" else sent_tool["parameters"]
+        assert (sent_schema == schema) is keeps_every_keyword
+
+    @pytest.mark.parametrize(
+        "model, model_info, drops",
+        [
+            ("google.gemma-4-31b", {}, True),
+            ("openai.gpt-oss-120b", {}, False),
+            ("google.gemma-4-31b", {"model_info": {"supports_all_json_schema_keywords": True}}, False),
+        ],
+    )
+    def test_schemas_sent_through_extra_body_follow_the_same_rule(
+        self, monkeypatch: pytest.MonkeyPatch, model: str, model_info: dict[str, object], drops: bool
+    ) -> None:
         _use_mantle_bearer(monkeypatch)
         handler: Final = Mock(side_effect=_reply_by_route)
         schema: Final = _ask_user_question_parameters()
@@ -1537,6 +1617,7 @@ class TestBedrockMantleGemma4SchemaKeywords:
             model=f"bedrock_mantle/{model}",
             messages=[{"role": "user", "content": "hello"}],
             aws_region_name="us-east-1",
+            **model_info,
             extra_body={
                 "tools": [{"type": "function", "function": {"name": "AskUserQuestion", "parameters": schema}}],
                 "response_format": {"type": "json_schema", "json_schema": {"name": "reply", "schema": schema}},
@@ -1545,7 +1626,10 @@ class TestBedrockMantleGemma4SchemaKeywords:
         )
 
         sent: Final = json.loads(handler.call_args_list[0].args[0].content)
-        sent_schemas: Final = (sent["tools"][0]["function"]["parameters"], sent["response_format"]["json_schema"]["schema"])
+        sent_schemas: Final = (
+            sent["tools"][0]["function"]["parameters"],
+            sent["response_format"]["json_schema"]["schema"],
+        )
         assert all(("propertyNames" in json.dumps(each)) is not drops for each in sent_schemas)
         assert all(each["properties"].keys() == schema["properties"].keys() for each in sent_schemas)
 
