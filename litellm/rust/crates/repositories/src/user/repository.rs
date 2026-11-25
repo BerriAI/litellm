@@ -1,5 +1,6 @@
 //! The user repository: resolves a sign-in to its `LiteLLM_UserTable` row by id, then by SSO id, then by email,
-//! linking the SSO id the way the Python `get_user_object` did, and backfills a missing email.
+//! linking the SSO id the way the Python `get_user_object` did, backfills a missing email, and reads one row by id
+//! alone.
 
 use jiff::Timestamp;
 use litellm_db::Call;
@@ -12,6 +13,12 @@ const GET_USER_OBJECT: Call = Call {
     call_type: "get_user_object",
     table: None,
     operation: None,
+};
+
+const FIND_USER: Call = Call {
+    call_type: "find_unique",
+    table: Some("LiteLLM_UserTable"),
+    operation: Some("select"),
 };
 
 const FIND_FIRST_USER: Call = Call {
@@ -100,6 +107,17 @@ impl UserRepository {
             self.set_sso_user_id_later(user_id, sso_user_id);
         }
         Ok(resolved.user)
+    }
+
+    /// The user `user_id` alone, with no SSO id or email match and nothing linked, or `None` when no
+    /// row has that id.
+    pub async fn find(&self, user_id: &str, side: Side) -> Result<Option<User>, litellm_db::Error> {
+        self.database
+            .run(FIND_USER, || async {
+                let mut session = self.database.session(side).await?;
+                queries::find_user(session.executor(), Some(user_id), None).await
+            })
+            .await
     }
 
     /// Whether a user other than `user_id` holds `user_email`, ignoring case.

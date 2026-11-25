@@ -1031,7 +1031,7 @@ async fn charge_from_cached_spend(
 /// dropped everywhere, as a failed increment drops it. The seed still ends with the charge's own
 /// `INCRBYFLOAT`, of nothing: a counter that command cannot reach (a Redis Cluster slot
 /// mid-migration) fails here and is dropped on its own, as it was when the seed was that increment.
-async fn raise_to_cached_spend(
+pub(crate) async fn raise_to_cached_spend(
     store: &SpendCounters,
     counter: &SpendCounter,
     spend: f64,
@@ -1201,7 +1201,7 @@ pub(crate) fn held_counters(reservation: &BudgetReservation) -> Held {
         .collect()
 }
 
-fn store_failure(error: litellm_redis_store::Error) -> Failure {
+pub(crate) fn store_failure(error: litellm_redis_store::Error) -> Failure {
     Arc::new(error.into())
 }
 

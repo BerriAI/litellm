@@ -3,25 +3,31 @@
 //!
 //! A caller the gateway serves is the master key or a key that names no team, owner, project,
 //! organization, budget or access group, since `host/auth` declines any other. So the key's
-//! identity is already whole, its charge debits no budget window, customer, access group or
-//! committed counter, and the only spend the database holds for it is the key row's own. The
-//! work Python does after a row is written or charged, its alerts and the logging payload's cost
-//! have no counterpart here yet and are answered with nothing.
+//! identity is already whole and its charge debits no budget window, customer, access group or
+//! committed counter. A lifetime counter's stored spend is read from its row (`Rows`), which a
+//! budget reservation's cold counters start from too. The work Python does after a row is
+//! written or charged, its alerts and the logging payload's cost have no counterpart here yet and
+//! are answered with nothing.
 
 use std::sync::Arc;
 
 use futures_util::future::{BoxFuture, join_all};
 use litellm_callbacks::{HostCall, HostFault, HostReply};
+use litellm_callbacks_budgets::RowSpend;
 use litellm_callbacks_spend_logger::host::{
     AccountingContext, AfterCharge, AfterWrite, BatchAccounting, EnrichKeyIdentity,
     FailedTrackingAlert, IncrementSearchFreeTier, LoggedCost,
 };
 use litellm_redis_store::spend_counters::SpendCounter;
-use litellm_repositories::{KeyRepository, Side};
+use litellm_repositories::{
+    Database, EndUserRecord, EndUserRepository, KeyRepository, Organization,
+    OrganizationRepository, Project, ProjectRepository, Side, Team, TeamMembership,
+    TeamMembershipRepository, TeamRepository, User, UserRepository,
+};
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
-use crate::callbacks::{budget_reservation::RowSpend, hosted::Answers};
+use crate::callbacks::hosted::Answers;
 
 /// The counter step's host calls, which `litellm-callbacks-budgets` names but does not export.
 const BUDGET_WINDOWS: &str = "budget_windows";
@@ -70,43 +76,104 @@ fn parsed<T: DeserializeOwned>(request: Value) -> Result<T, HostFault> {
     serde_json::from_value(request).map_err(|error| HostFault::Malformed(error.to_string()))
 }
 
-/// Answers the spend log callback's host calls from the gateway's key database, `None` when no
+/// The rows a lifetime counter's spend is stored in, read as `SpendCounterReseed.from_db` and
+/// `end_user_from_db` read them: the key, team, user, team member, organization, project and end
+/// user rows. A budget window, a committed twin and every other counter have no row here.
+pub struct Rows {
+    keys: KeyRepository,
+    teams: TeamRepository,
+    users: UserRepository,
+    members: TeamMembershipRepository,
+    orgs: OrganizationRepository,
+    projects: ProjectRepository,
+    end_users: EndUserRepository,
+}
+
+impl Rows {
+    pub fn new(database: Database) -> Self {
+        Self {
+            keys: KeyRepository::new(database.clone()),
+            teams: TeamRepository::new(database.clone()),
+            users: UserRepository::new(database.clone()),
+            members: TeamMembershipRepository::new(database.clone()),
+            orgs: OrganizationRepository::new(database.clone()),
+            projects: ProjectRepository::new(database.clone()),
+            end_users: EndUserRepository::new(database),
+        }
+    }
+
+    /// The spend `counter`'s row holds, `None` without a row or when the read failed.
+    async fn spend(&self, counter: &SpendCounter) -> Option<f64> {
+        let read = match counter {
+            SpendCounter::Key {
+                token,
+                window: None,
+            } => self
+                .keys
+                .find(token, Side::Read)
+                .await
+                .map(|key| key.map(|key| key.view().spend)),
+            SpendCounter::Team {
+                team_id,
+                window: None,
+            } => self
+                .teams
+                .find_with_model_aliases(team_id, Side::Read)
+                .await
+                .map(|team| team.as_ref().map(Team::spend)),
+            SpendCounter::User(user_id) => self
+                .users
+                .find(user_id, Side::Read)
+                .await
+                .map(|user| user.as_ref().map(User::spend)),
+            SpendCounter::TeamMember { user_id, team_id } => self
+                .members
+                .find_with_budget(user_id, team_id, Side::Read)
+                .await
+                .map(|member| member.as_ref().map(TeamMembership::spend)),
+            SpendCounter::Org(organization_id) => self
+                .orgs
+                .find_with_optional_budget(organization_id, false)
+                .await
+                .map(|org| org.as_ref().map(Organization::spend)),
+            SpendCounter::Project(project_id) => self
+                .projects
+                .find_with_budget(project_id)
+                .await
+                .map(|project| project.as_ref().map(Project::spend)),
+            SpendCounter::EndUser(end_user_id) => self
+                .end_users
+                .find_with_budget_and_object_permission(end_user_id)
+                .await
+                .map(|end_user| end_user.as_ref().map(EndUserRecord::spend)),
+            _ => return None,
+        };
+        read.unwrap_or_else(|error| {
+            tracing::warn!(error = %litellm_error::Report::new(&error), "a spend counter's stored spend could not be read");
+            None
+        })
+    }
+}
+
+/// Answers the spend log callback's host calls from the gateway's database, `None` when no
 /// database is configured.
 pub struct RustSpendLogHost {
-    keys: Option<Arc<KeyRepository>>,
+    rows: Option<Arc<Rows>>,
 }
 
 impl RustSpendLogHost {
-    pub fn new(keys: Option<Arc<KeyRepository>>) -> Self {
-        Self { keys }
+    pub fn new(rows: Option<Arc<Rows>>) -> Self {
+        Self { rows }
     }
 
-    /// The spend the database holds for a key's lifetime counter. Every other counter a caller of
-    /// the Rust gateway is charged on has no row, as the master key and its `default_user_id` have none the
-    /// gateway reads, and a read that fails is `None`, as `SpendCounterReseed.from_db` gives it.
     async fn stored(&self, counter: StoredCounter) -> Option<f64> {
         let StoredCounter::Entity { counter_key } = counter else {
             return None;
         };
-        self.stored_spend(&SpendCounter::parse(&counter_key).ok()?)
+        self.rows
+            .as_ref()?
+            .spend(&SpendCounter::parse(&counter_key).ok()?)
             .await
-    }
-
-    async fn stored_spend(&self, counter: &SpendCounter) -> Option<f64> {
-        let SpendCounter::Key {
-            token,
-            window: None,
-        } = counter
-        else {
-            return None;
-        };
-        match self.keys.as_ref()?.find(token, Side::Read).await {
-            Ok(key) => Some(key?.view().spend),
-            Err(error) => {
-                tracing::warn!(error = %litellm_error::Report::new(&error), "the key's stored spend could not be read");
-                None
-            }
-        }
     }
 
     async fn reply(&self, call: &'static str, request: Value) -> HostReply {
@@ -167,9 +234,9 @@ impl Answers for RustSpendLogHost {
     }
 }
 
-impl RowSpend for RustSpendLogHost {
+impl RowSpend for Rows {
     fn stored<'a>(&'a self, counter: &'a SpendCounter) -> BoxFuture<'a, Option<f64>> {
-        Box::pin(self.stored_spend(counter))
+        Box::pin(self.spend(counter))
     }
 }
 
@@ -335,24 +402,56 @@ mod tests {
         assert_eq!((charged.rows.len(), charged.key_spend), (0, None));
     }
 
-    /// A key's lifetime counter starts from the spend its row holds, and a budget window, which
-    /// has no row, starts from nothing.
+    const ROWS: &str = r#"
+        INSERT INTO "LiteLLM_TeamTable" (team_id, spend) VALUES ('team', 2.5);
+        INSERT INTO "LiteLLM_UserTable" (user_id, spend) VALUES ('user', 3.5);
+        INSERT INTO "LiteLLM_TeamMembership" (user_id, team_id, spend) VALUES ('user', 'team', 4.5);
+        INSERT INTO "LiteLLM_BudgetTable" (budget_id, created_by, updated_by) VALUES ('budget', 'test', 'test');
+        INSERT INTO "LiteLLM_OrganizationTable" (organization_id, organization_alias, budget_id, created_by, updated_by, spend)
+            VALUES ('org', 'org', 'budget', 'test', 'test', 5.5);
+        INSERT INTO "LiteLLM_ProjectTable" (project_id, created_by, updated_by, spend) VALUES ('project', 'test', 'test', 6.5);
+        INSERT INTO "LiteLLM_EndUserTable" (user_id, spend) VALUES ('customer', 7.5);
+    "#;
+
+    /// Every lifetime counter starts from the spend its row holds, through the spend log's host
+    /// call and a reservation's row read alike. A budget window, a counter whose row is gone and
+    /// one with no row at all start from nothing.
     #[rstest]
     #[tokio::test]
-    async fn a_keys_counter_starts_from_the_spend_its_row_holds() {
+    async fn a_lifetime_counter_starts_from_the_spend_its_row_holds() {
         let held = Held::holding(TOKEN, json!({"spend": 1.5})).await;
-        let host = RustSpendLogHost::new(Some(Arc::new(KeyRepository::new(held.repositories()))));
-        let counter = SpendCounter::Key {
-            token: Token::new(TOKEN).hash().as_str().to_owned(),
-            window: None,
-        };
-        let request = json!({"counters": [
-            {"source": "entity", "counter_key": counter.key()},
-            {"source": "window"},
-        ]});
+        held.execute(ROWS).await;
+        let rows = Arc::new(Rows::new(held.repositories()));
+        let host = RustSpendLogHost::new(Some(rows.clone()));
+        let key = Token::new(TOKEN).hash().as_str().to_owned();
+        let counters = [
+            format!("spend:key:{key}"),
+            "spend:team:team".to_owned(),
+            "spend:user:user".to_owned(),
+            "spend:team_member:user:team".to_owned(),
+            "spend:org:org".to_owned(),
+            "spend:project:project".to_owned(),
+            "spend:end_user:customer".to_owned(),
+            format!("spend:key:{key}:window:1d"),
+            "spend:team:gone".to_owned(),
+            "spend:tag:prod".to_owned(),
+        ];
+        let request = json!({"counters": counters
+            .iter()
+            .map(|counter_key| json!({"source": "entity", "counter_key": counter_key}))
+            .chain([json!({"source": "window"})])
+            .collect::<Vec<_>>()});
+        let member = SpendCounter::parse("spend:team_member:user:team").unwrap();
+
         assert_eq!(
-            host.reply(STORED_SPEND, request).await.unwrap(),
-            json!([1.5, null])
+            (
+                host.reply(STORED_SPEND, request).await.unwrap(),
+                rows.stored(&member).await,
+            ),
+            (
+                json!([1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, null, null, null, null]),
+                Some(4.5),
+            )
         );
     }
 

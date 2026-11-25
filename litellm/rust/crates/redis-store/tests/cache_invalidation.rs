@@ -259,7 +259,7 @@ async fn a_redis_that_never_answers_drops_publishes_past_the_waiting_cap_and_bou
 
 #[rstest]
 #[case::an_auth_object("team_id:t1")]
-#[case::a_spend_floor("spend_db_floor:spend:key:abc")]
+#[case::a_floor_of_no_spend_counter("spend_db_floor:spend:unknown:x")]
 #[case::an_unknown_spend_entity("spend:unknown:x")]
 #[tokio::test]
 async fn a_set_for_a_key_that_is_no_spend_counter_writes_nothing(#[case] outside: &str) {
@@ -280,6 +280,42 @@ async fn a_set_for_a_key_that_is_no_spend_counter_writes_nothing(#[case] outside
     assert_eq!(
         auth_cache.get_local(&team).unwrap(),
         Some(Value::from("cached"))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_spend_reset_sets_the_floor_a_counter_is_repaired_to_and_an_eviction_drops_it() {
+    let auth_cache = AuthCache::new(None, Settings::default());
+    let spend_counters = SpendCounters::new(None);
+    let counter = SpendCounter::Team {
+        team_id: "t".to_owned(),
+        window: None,
+    };
+
+    cache_invalidation::apply(
+        &set(
+            "spend_db_floor:spend:team:t",
+            Number::Float(0.5),
+            Some(Number::Int(5)),
+        ),
+        &auth_cache,
+        &spend_counters,
+    );
+    let set = spend_counters.floor(&counter).unwrap();
+    cache_invalidation::apply(
+        &evict("spend_db_floor:spend:team:t"),
+        &auth_cache,
+        &spend_counters,
+    );
+
+    assert_eq!(
+        (
+            set,
+            spend_counters.floor(&counter).unwrap(),
+            spend_counters.get_local(&counter).unwrap()
+        ),
+        (Some(Number::Float(0.5)), None, None)
     );
 }
 

@@ -26,6 +26,13 @@ pub struct Organization {
     litellm_budget_table: Option<Json<Budget>>,
 }
 
+impl Organization {
+    /// The `spend` column, what a budget counter for this row is seeded and floored from.
+    pub fn spend(&self) -> f64 {
+        self.spend
+    }
+}
+
 /// The organization `organization_id`, joined to its budget when `include_budget_table` is set, or `None` when no row has
 /// that id.
 pub(super) async fn find_organization(

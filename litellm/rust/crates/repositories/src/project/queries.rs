@@ -33,6 +33,13 @@ pub struct Project {
     litellm_budget_table: Option<Json<Budget>>,
 }
 
+impl Project {
+    /// The `spend` column, what a budget counter for this row is seeded and floored from.
+    pub fn spend(&self) -> f64 {
+        self.spend
+    }
+}
+
 pub(super) async fn find_project(
     executor: impl PgExecutor<'_>,
     project_id: &str,

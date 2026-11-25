@@ -25,6 +25,13 @@ pub struct TeamMembership {
     litellm_budget_table: Option<Json<Budget>>,
 }
 
+impl TeamMembership {
+    /// The `spend` column, what a budget counter for this row is seeded and floored from.
+    pub fn spend(&self) -> f64 {
+        self.spend
+    }
+}
+
 /// `user_id`'s membership of `team_id`, or `None` when the user is not a member.
 pub(super) async fn find_team_membership(
     executor: impl PgExecutor<'_>,

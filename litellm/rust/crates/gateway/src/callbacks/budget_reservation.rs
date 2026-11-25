@@ -10,10 +10,15 @@
 //! did, as Python's failure hook and `release_budget_reservation_on_cancel` do. Accepted
 //! difference: the provider counts as reached once the pre-call hook ends, before routing.
 //!
-//! A cold counter starts from the spend its row holds, as `ensure_spend_counter_initialized`
-//! reseeds it. What the call holds is what `admit` priced from the body the client sent, as
-//! Python prices it when it authenticates, and `admit` hands any call it cannot price to Python,
-//! so one reaching here unpriced is refused, never let through unbudgeted.
+//! Each counter is first warmed through `SpendReader`, as `_initialize_reservation_counters` runs
+//! `ensure_spend_counter_initialized`: a cold one is seeded from the spend its row holds, or raised
+//! to the spend its caller was authenticated with when it has no row, so concurrent calls charge it
+//! from the spend already made. A counter that cannot be warmed is dropped everywhere and not held.
+//! It is then read as `get_current_spend` reads it, raised to its row when it reads below.
+//!
+//! What the call holds is what `admit` priced from the body the client sent, as Python prices it
+//! when it authenticates, and `admit` hands any call it cannot price to Python, so one reaching
+//! here unpriced is refused, never let through unbudgeted.
 
 use std::sync::Arc;
 
@@ -25,17 +30,14 @@ use litellm_callbacks::{
     Verdict,
 };
 use litellm_callbacks_budgets::{
-    Admission, BudgetCounterSpend, Budgets, PlannedCounter, post_call,
+    Admission, BudgetCounterSpend, Budgets, PlannedCounter, RowSpend, SpendReader, post_call,
 };
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_inference::{
     Refusal,
     record::{self, CallState, Ended},
 };
-use litellm_redis_store::{
-    Number,
-    spend_counters::{LostSeed, SpendCounter, SpendCounters},
-};
+use litellm_redis_store::spend_counters::SpendCounter;
 use parking_lot::Mutex;
 use serde_json::{Map, Value};
 
@@ -54,17 +56,12 @@ const AUTH_ERROR: &str = "auth_error";
 const BUDGET_EXCEEDED_STATUS: u16 = 422;
 const UNHELD: &str = "the gateway cannot hold this call against its budget";
 
-/// The spend a counter's row holds, which a cold counter starts from.
-pub trait RowSpend: Send + Sync {
-    fn stored<'a>(&'a self, counter: &'a SpendCounter) -> BoxFuture<'a, Option<f64>>;
-}
-
 /// Holds what a native `/v1/messages` call may cost against every budget its caller holds,
 /// before the call runs.
 pub struct Reserver {
     manifest: Manifest,
     budgets: Arc<Budgets>,
-    stored: Arc<dyn RowSpend>,
+    spend: SpendReader,
 }
 
 /// The counters one request's caller reserves against, and what it holds on them, which it gives
@@ -201,8 +198,8 @@ impl Reserver {
     pub fn new(budgets: Arc<Budgets>, stored: Arc<dyn RowSpend>) -> Arc<Self> {
         Arc::new(Self {
             manifest: manifest(),
+            spend: SpendReader::new(budgets.store().clone(), stored),
             budgets,
-            stored,
         })
     }
 
@@ -226,8 +223,44 @@ impl Reserver {
         }
     }
 
-    /// What each counter holds, a cold one first seeded from its row's spend, else from the
-    /// spend the plan read.
+    /// The counters that warmed, in order. One that did not is dropped everywhere and skipped, as
+    /// `_reservation_counter_loaded` skips it when budget enforcement is not fail closed.
+    async fn warmed(&self, counters: &[PlannedCounter]) -> Vec<PlannedCounter> {
+        let warmed = join_all(
+            counters
+                .iter()
+                .map(async |planned| self.warm(planned).await),
+        )
+        .await;
+        counters
+            .iter()
+            .zip(warmed)
+            .filter(|(_, warmed)| *warmed)
+            .map(|(planned, _)| planned.clone())
+            .collect()
+    }
+
+    async fn warm(&self, planned: &PlannedCounter) -> bool {
+        let Ok(counter) = SpendCounter::parse(&planned.counter_key) else {
+            return true;
+        };
+        let Err(error) = self.spend.warm(&counter, planned.fallback_spend).await else {
+            return true;
+        };
+        tracing::warn!(
+            counter = planned.counter_key,
+            %error,
+            "Skipping budget reservation because spend counter reservation failed"
+        );
+        self.budgets
+            .store()
+            .invalidate(std::slice::from_ref(&counter))
+            .await;
+        false
+    }
+
+    /// What each counter holds, checked against its budget as the proxy's authentication checks
+    /// it before the reservation.
     async fn observed(&self, counters: &[PlannedCounter]) -> Vec<BudgetCounterSpend> {
         join_all(counters.iter().map(async |planned| BudgetCounterSpend {
             counter_key: Some(planned.counter_key.clone()),
@@ -238,25 +271,11 @@ impl Reserver {
 
     async fn current(&self, planned: &PlannedCounter) -> Option<f64> {
         let counter = SpendCounter::parse(&planned.counter_key).ok()?;
-        let store: &SpendCounters = self.budgets.store();
-        if let Some(held) = store
-            .read(&counter)
-            .await
-            .ok()
-            .and_then(|read| read.value())
-        {
-            return Some(held.as_f64());
-        }
-        let spend = self
-            .stored
-            .stored(&counter)
-            .await
-            .unwrap_or(planned.fallback_spend);
-        store
-            .seed(&counter, Number::Float(spend), LostSeed::Answer)
-            .await
-            .ok()
-            .map(|seeded| seeded.as_f64())
+        Some(
+            self.spend
+                .current(&counter, planned.fallback_spend, Some(planned.max_budget))
+                .await,
+        )
     }
 
     async fn pre_call(&self, holding: &Holding) -> HookOutput {
@@ -268,8 +287,12 @@ impl Reserver {
             Ok(None) => return Ok(None),
             Err(Unheld) => return Ok(Some(Verdict::Abort(Abort::new(500, UNHELD)))),
         };
+        let counters = self.warmed(&holding.counters).await;
+        if counters.is_empty() {
+            return Ok(None);
+        }
         let plan = BudgetPlan {
-            counters: Some(holding.counters.iter().map(plan_counter).collect()),
+            counters: Some(counters.iter().map(plan_counter).collect()),
             reservation_cost: Some(hold.reservation_cost),
             input_cost: Some(hold.input_cost),
             input_tokens: Some(hold.input_tokens),
@@ -277,7 +300,7 @@ impl Reserver {
             status_code: Some(BUDGET_EXCEEDED_STATUS),
             ..BudgetPlan::default()
         };
-        let observed = self.observed(&holding.counters).await;
+        let observed = self.observed(&counters).await;
         match self.budgets.admit(plan, &observed).await {
             Ok(Admission::Skipped) => Ok(None),
             Ok(Admission::Held { reservation }) => {
@@ -334,6 +357,7 @@ mod tests {
         record::{Budget, EndUserRecord},
     };
     use litellm_gateway_inference::{CallHooks, record::CallRecord};
+    use litellm_redis_store::{Number, spend_counters::SpendCounters};
     use rstest::rstest;
     use serde_json::json;
     use tower::ServiceExt;
@@ -362,11 +386,16 @@ mod tests {
     }
 
     fn key(max_budget: f64) -> Authenticated<NativeRows> {
+        spent_key(max_budget, 0.0)
+    }
+
+    /// A key authenticated with `spend` already made against `max_budget`.
+    fn spent_key(max_budget: f64, spend: f64) -> Authenticated<NativeRows> {
         Authenticated::from(Caller {
             credential: Credential::Key {
                 key: Key::stored("hash", None).with_budget(Budget {
                     max: Some(max_budget),
-                    spend: 0.0,
+                    spend,
                 }),
             },
             belongs: Belongs::nobody(),
@@ -535,6 +564,49 @@ mod tests {
                 reserved.counter
             ),
             (Some(HELD), Some(2.0 + HELD))
+        );
+    }
+
+    /// `ensure_spend_counter_initialized` raises a cold counter whose key has no row to the spend
+    /// the key was authenticated with before any call is held on it, so two calls racing on it
+    /// cannot both fit a budget only one of them fits.
+    #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn concurrent_calls_on_a_cold_counter_without_a_row_start_from_the_keys_spend() {
+        let identity = spent_key(1.0 + HELD, 1.0);
+        let (store, reserver) = reserver(None, None).await;
+        let admitted = admitted("held-model").await;
+        let both_reserved = tokio::sync::Barrier::new(2);
+        let call = || {
+            record::scope(CallRecord::new(), async {
+                let holding = reserver.holding(&identity, admitted.as_ref());
+                let verdict = reserver.pre_call(&holding).await.unwrap();
+                both_reserved.wait().await;
+                let held = counted(&store);
+                let outcome = match verdict {
+                    Some(Verdict::Patch(_)) => "held",
+                    Some(Verdict::Abort(abort)) => match refusal(&abort) {
+                        Some(refused) if refused.kind.as_deref() == Some(BUDGET_EXCEEDED) => {
+                            "refused"
+                        }
+                        _ => "aborted",
+                    },
+                    None => "skipped",
+                };
+                (outcome, held)
+            })
+        };
+
+        let ((first, held), (second, _)) = tokio::join!(call(), call());
+
+        let mut outcomes = [first, second];
+        outcomes.sort_unstable();
+        assert_eq!(
+            (
+                outcomes,
+                held.is_some_and(|spend| (spend - (1.0 + HELD)).abs() < 1e-12),
+            ),
+            (["held", "refused"], true)
         );
     }
 
