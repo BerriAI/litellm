@@ -9,6 +9,7 @@ from pydantic import BaseModel, TypeAdapter
 from typing_extensions import TypedDict
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.core_helpers import (
@@ -32,6 +33,7 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
 )
 from litellm.litellm_core_utils.prompt_templates.tool_call_json_repair import (
     parse_tool_call_arguments,
+    salvage_concatenated_tool_arguments,
 )
 from litellm.litellm_core_utils.reasoning_effort_utils import OPAQUE_VALUE
 from litellm.litellm_core_utils.tool_fields import tool_params_without_hosted_mcp
@@ -93,7 +95,20 @@ def _split_json_reasoning_content(content: object) -> tuple[str | None, str | No
     return parse_content_for_reasoning(content)  # pyright: ignore[reportArgumentType]  # re raises its own TypeError
 
 
-def _to_ollama_tool_call_function(model: str, tool_call: ChatCompletionAssistantToolCall) -> OllamaToolCallFunction:
+def _salvaged_tool_call_functions(name: str, raw_arguments: object) -> tuple[OllamaToolCallFunction, ...]:
+    salvaged: Final = salvage_concatenated_tool_arguments(raw_arguments) if isinstance(raw_arguments, str) else ()
+    if salvaged:
+        verbose_logger.warning(
+            "Recovered %d tool call(s) from concatenated JSON arguments for tool '%s' (Ollama chat request)",
+            len(salvaged),
+            name or "<unknown>",
+        )
+    return tuple(OllamaToolCallFunction(name=name, arguments=arguments) for arguments in salvaged)
+
+
+def _to_ollama_tool_call_functions(
+    model: str, tool_call: ChatCompletionAssistantToolCall
+) -> tuple[OllamaToolCallFunction, ...]:
     function: Final = tool_call["function"]
     name: Final = function.get("name") or ""
     raw_arguments: Final[object] = function.get("arguments")
@@ -106,13 +121,16 @@ def _to_ollama_tool_call_function(model: str, tool_call: ChatCompletionAssistant
             else raw_arguments
         )
         arguments: Final = _TOOL_CALL_ARGUMENTS.validate_python({} if parsed is None else parsed)
+        return (OllamaToolCallFunction(name=name, arguments=arguments),)
     except ValueError:
+        salvaged: Final = _salvaged_tool_call_functions(name, raw_arguments)
+        if salvaged:
+            return salvaged
         raise litellm.BadRequestError(
             message=f"OllamaException - arguments of assistant tool call {tool_call.get('id')!r} are not a JSON object",
             model=model,
             llm_provider="ollama_chat",
         ) from None
-    return OllamaToolCallFunction(name=name, arguments=arguments)
 
 
 class OllamaChatConfig(BaseConfig):
@@ -319,13 +337,14 @@ class OllamaChatConfig(BaseConfig):
         litellm_params["function_name"] = function_name
         tools: Final = optional_params.pop("tools", None)
 
-        def transform_tool_call(typed_tool: ChatCompletionAssistantToolCall) -> OllamaToolCall:
-            function: Final = _to_ollama_tool_call_function(model, typed_tool)
+        def transform_tool_call(typed_tool: ChatCompletionAssistantToolCall) -> tuple[OllamaToolCall, ...]:
             tool_id: Final = typed_tool.get("id")
-            ollama_tool_call: Final = (
-                OllamaToolCall(function=function) if tool_id is None else OllamaToolCall(id=tool_id, function=function)
+            return tuple(
+                OllamaToolCall(function=function)
+                if tool_id is None or position > 0
+                else OllamaToolCall(id=tool_id, function=function)
+                for position, function in enumerate(_to_ollama_tool_call_functions(model, typed_tool))
             )
-            return ollama_tool_call
 
         new_messages: Final[list[OllamaChatCompletionMessage]] = []
         for m in messages:
@@ -340,7 +359,7 @@ class OllamaChatConfig(BaseConfig):
                 for tool in tool_calls:
                     typed_tool = ChatCompletionAssistantToolCall(**tool)
                     if typed_tool["type"] == "function":
-                        new_tools.append(transform_tool_call(typed_tool))
+                        new_tools.extend(transform_tool_call(typed_tool))
             reasoning_content, parsed_content = extract_reasoning_content(cast(dict, m))
             content_str = convert_content_list_to_str(cast(AllMessageValues, m))
             images = extract_images_from_message(cast(AllMessageValues, m))
