@@ -53,7 +53,6 @@ from litellm.constants import (
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
     PASS_THROUGH_HEADER_PREFIX,
-    TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
 )
 from litellm.exceptions import (
     AuthenticationError,
@@ -70,7 +69,6 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     require_get,
 )
-from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
 from litellm.litellm_core_utils.get_llm_provider_logic import (
     declared_provider,
     inferred_provider,
@@ -910,62 +908,6 @@ async def mistral_proxy_route(
     )
 
     return received_value
-
-
-@router.api_route(
-    "/typesafe/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    tags=["TypeSafe AI Pass-through", "pass-through"],
-)
-async def typesafe_proxy_route(
-    endpoint: str,
-    request: Request,
-    fastapi_response: Response,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-):
-    """[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)"""
-    base_target_url: Final = get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
-    encoded_endpoint: Final = httpx.URL(endpoint).path
-    normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
-    base_url: Final = httpx.URL(base_target_url)
-    updated_url: Final = base_url.copy_with(
-        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, normalized_endpoint),
-    )
-    typesafe_api_key: Final = passthrough_endpoint_router.get_credentials(
-        custom_llm_provider="typesafe",
-        region_name=None,
-    )
-    danger_zone_headers: Final = {
-        name: value
-        for name, value in request.headers.items()
-        if name.lower().startswith(TYPESAFE_DANGER_ZONE_HEADER_PREFIX)
-    }
-    endpoint_func: Final = create_pass_through_route(
-        endpoint=endpoint,
-        target=str(updated_url),
-        custom_headers={
-            **danger_zone_headers,
-            "Authorization": f"Bearer {typesafe_api_key}",
-            "Content-Type": "application/json",
-        },
-        custom_llm_provider="typesafe",
-        is_streaming_request=False,
-    )
-    return await endpoint_func(request, fastapi_response, user_api_key_dict)
-
-
-_COST_MAP_ENTRIES: Final = TypeAdapter(Mapping[str, object])
-
-
-def typesafe_allowlist_model_names() -> tuple[str, ...]:
-    if not passthrough_endpoint_router.has_credentials(custom_llm_provider="typesafe"):
-        return ()
-    cost_map: Final = _COST_MAP_ENTRIES.validate_python(litellm.model_cost)  # pyright: ignore[reportUnknownMemberType]  # legacy registry is validated at this boundary
-    priced_names: Final = (name.removeprefix("typesafe/") for name in cost_map if name.startswith("typesafe/"))
-    jev_models_typesafe_serves: Final = sorted(
-        name for name in priced_names if match_routing_generalization(name) == "typesafe"
-    )
-    return ("typesafe/*", *jev_models_typesafe_serves)
 
 
 _EU_JEV_DECISION_REQUEST_BODY: Final = inline_request_body(

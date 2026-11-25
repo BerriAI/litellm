@@ -543,9 +543,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         parsed_url: Final = urlparse(url)
         if custom_llm_provider == "chatgpt":
             return EndpointType.OPENAI
-        if custom_llm_provider in ("typesafe", "eu_jev", "laya", "bespoke") and parsed_url.path.removesuffix(
-            "/"
-        ).endswith("/v1/systemone"):
+        if custom_llm_provider in ("eu_jev", "laya", "bespoke") and parsed_url.path.removesuffix("/").endswith(
+            "/v1/systemone"
+        ):
             return EndpointType.DECISIONS
         if (
             ("generateContent") in url
@@ -771,7 +771,7 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         user_api_key_dict: UserAPIKeyAuth,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
         logging_obj: LiteLLMLoggingObj,
-        _parsed_body: dict | None = None,
+        _parsed_body: dict[str, object] | None = None,
         litellm_call_id: str | None = None,
         customer_usage: ResolvedCustomerUsage | None = None,
     ) -> dict:
@@ -1629,7 +1629,7 @@ async def pass_through_request(
     custom_body: Mapping[str, object] | None = None,
     forward_headers: bool | None = False,
     merge_query_params: bool | None = False,
-    query_params: dict | None = None,
+    query_params: dict[str, object] | None = None,
     default_query_params: dict | None = None,
     stream: bool | None = None,
     cost_per_request: float | None = None,
@@ -2729,7 +2729,7 @@ def create_pass_through_route(
     custom_llm_provider: str | None = None,
     is_streaming_request: bool | None = False,
     query_params: dict | None = None,
-    default_query_params: dict | None = None,
+    default_query_params: dict[str, object] | None = None,
     guardrails: dict[str, object] | None = None,
     config_file_path: str | None = None,
     timeout: float | None = None,
@@ -2910,7 +2910,7 @@ def create_pass_through_route(
 def create_websocket_passthrough_route(
     endpoint: str,
     target: str,
-    custom_headers: dict | None = None,
+    custom_headers: dict[str, object] | None = None,
     _forward_headers: bool | None = False,
     dependencies: Sequence[params.Depends] | None = None,
     cost_per_request: float | None = None,
@@ -4410,9 +4410,9 @@ class InitPassThroughEndpointHelpers:
         dependencies: Sequence[params.Depends] | None,
         cost_per_request: float | None,
         endpoint_id: str,
-        guardrails: dict | None = None,
+        guardrails: dict[str, object] | None = None,
         methods: list[str] | None = None,
-        default_query_params: dict | None = None,
+        default_query_params: dict[str, object] | None = None,
         config_file_path: str | None = None,
         auth: bool = False,
         timeout: float | None = None,
@@ -4494,9 +4494,9 @@ class InitPassThroughEndpointHelpers:
         dependencies: Sequence[params.Depends] | None,
         cost_per_request: float | None,
         endpoint_id: str,
-        guardrails: dict | None = None,
+        guardrails: dict[str, object] | None = None,
         methods: list[str] | None = None,
-        default_query_params: dict | None = None,
+        default_query_params: dict[str, object] | None = None,
         config_file_path: str | None = None,
         auth: bool = False,
         timeout: float | None = None,

@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     is_allowed_tools_tool_choice,
 )
 from litellm.litellm_core_utils.core_helpers import qualify_provider_stripped_model
+from litellm.llms.anthropic.messages.convertible_blocks import non_string_user_text_error
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.types.integrations.custom_logger import (
     CHAT_COMPLETION_AGENTIC_SURFACE,
@@ -574,7 +575,10 @@ class WebSearchInterceptionLogger(CustomLogger):
             get_last_user_message,
         )
 
-        last_user_message: Final = get_last_user_message(cast(list[AllMessageValues], messages)) or ""
+        chat_messages: Final = cast(list[AllMessageValues], messages)
+        if non_string_user_text_error(chat_messages) is not None:
+            return None
+        last_user_message: Final = get_last_user_message(chat_messages) or ""
         query: Final = last_user_message.removeprefix(_CLAUDE_CODE_WEB_SEARCH_PROMPT_PREFIX).strip()
         if not query:
             return None
@@ -1160,7 +1164,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         messages: list[dict],
         response: object,
         anthropic_messages_provider_config: "BaseAnthropicMessagesConfig | None",
-        anthropic_messages_optional_request_params: dict,
+        anthropic_messages_optional_request_params: dict[str, object],
         logging_obj: "LiteLLMLoggingObj | None",
         stream: bool,
         kwargs: dict[str, object],
@@ -1252,7 +1256,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
     @staticmethod
     def _build_native_result_blocks(
-        tool_calls: list[dict],
+        tool_calls: list[dict[str, object]],
         search_outcomes: Sequence[SearchOutcome],
     ) -> tuple[Mapping[str, object], ...]:
         """
@@ -1405,7 +1409,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         self,
         model: str,
         messages: str | list[dict],
-        tool_calls: list[dict],
+        tool_calls: list[dict[str, object]],
         optional_params: Mapping[str, object],
         kwargs: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj | None",
@@ -1550,8 +1554,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         self,
         model: str,
         messages: list[dict[str, object]],
-        tool_calls: list[dict],
-        thinking_blocks: list[dict],
+        tool_calls: list[dict[str, object]],
+        thinking_blocks: list[dict[str, object]],
         anthropic_messages_optional_request_params: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj | None",
         stream: bool,
@@ -1606,9 +1610,9 @@ class WebSearchInterceptionLogger(CustomLogger):
         self,
         model: str,
         messages: list[dict[str, object]],
-        tool_calls: list[dict],
-        thinking_blocks: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        tool_calls: list[dict[str, object]],
+        thinking_blocks: list[dict[str, object]],
+        anthropic_messages_optional_request_params: dict[str, object],
         logging_obj: "LiteLLMLoggingObj | None",
         kwargs: dict[str, object],
     ) -> tuple[AgenticLoopRequestPatch, tuple[SearchOutcome, ...]]:
@@ -2029,7 +2033,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         self,
         model: str,
         messages: list[dict[str, object]],
-        tool_calls: list[dict],
+        tool_calls: list[dict[str, object]],
         optional_params: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj | None",
         stream: bool,
@@ -2066,7 +2070,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         self,
         model: str,
         messages: list[dict[str, object]],
-        tool_calls: list[dict],
+        tool_calls: list[dict[str, object]],
         optional_params: Mapping[str, object],
         kwargs: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj | None",

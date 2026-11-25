@@ -15,7 +15,7 @@ Anthropic Files API endpoints:
 import calendar
 import time
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import httpx
 from openai.types.file_deleted import FileDeleted
@@ -45,6 +45,10 @@ from ..common_utils import (
     merge_anthropic_beta_headers,
     without_caller_credential_headers,
 )
+
+if TYPE_CHECKING:
+    from litellm.types.llms.openai import AllMessageValues
+
 
 ANTHROPIC_FILES_API_BASE: Final = "https://api.anthropic.com"
 ANTHROPIC_FILES_BETA_HEADER: Final = "files-api-2025-04-14"
@@ -116,7 +120,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         self,
         headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
         model: str,
-        messages: list,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        messages: "list[AllMessageValues]",  # mutable-ok: mirrors the sync validate_environment contract this overrides
         optional_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         litellm_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         api_key: str | None = None,

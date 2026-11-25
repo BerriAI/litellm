@@ -30,7 +30,7 @@ from litellm.llms.anthropic.messages.api_versions import (
     sampling_params_to_drop,
     serves_anthropic_api_versions,
 )
-from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_tool_result_texts
+from litellm.llms.anthropic.messages.convertible_blocks import drop_non_string_texts
 from litellm.llms.anthropic.messages.safeguards import proxy_serves_safeguards
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
@@ -260,7 +260,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     text = content_block.get("text", "")
                     content_type = content_block.get("type", "")
                     # Skip text blocks that start with billing header
-                    if content_type == "text" and text.startswith(ANTHROPIC_BILLING_METADATA_PREFIX):
+                    if (
+                        content_type == "text"
+                        and isinstance(text, str)
+                        and text.startswith(ANTHROPIC_BILLING_METADATA_PREFIX)
+                    ):
                         continue
                     filtered_list.append(content_block)
                 else:
@@ -840,7 +844,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         anthropic_messages_request: Final[AnthropicMessagesRequest] = AnthropicMessagesRequest(
             messages=strip_unsignable_thinking_blocks_for_claude(
                 strip_encrypted_reasoning_blocks_from_anthropic_messages(
-                    drop_non_string_tool_result_texts(
+                    drop_non_string_texts(
                         _MESSAGES_ADAPTER.validate_python(gated.messages) if gated.messages_stripped else messages,
                         getattr(litellm_params, "drop_params", None),
                     )
