@@ -1500,13 +1500,13 @@ def bedrock_supports_safeguards(model: str, model_info: Mapping[str, object] | N
 
 def log_dropped_safeguards(model: str, provider: str) -> None:
     verbose_logger.warning(
-        "Dropped safeguards and the %s beta for model=%s provider=%s because drop_params is on or the proxy's "
-        "safeguards classifier answers them, and Bedrock would reject safeguards on this request, since the model "
-        "map does not flag supports_safeguards for the model or this route does not send that beta. On Bedrock "
-        "Invoke a deployment forwards it with model_info supports_safeguards true.",
-        ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value,
+        "Dropped safeguards for model=%s provider=%s because drop_params is on or the proxy's safeguards classifier "
+        "answers them, and Bedrock would reject safeguards on this request, since the model map does not flag "
+        "supports_safeguards for the model or the request does not send the %s beta. A request that sends the beta "
+        "keeps safeguards on a deployment with model_info supports_safeguards true.",
         model,
         provider,
+        ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value,
     )
 
 
@@ -1532,6 +1532,10 @@ def anthropic_body_betas(value: object) -> frozenset[str]:
         return frozenset()
 
 
+def sent_anthropic_betas(headers: Mapping[str, object], body_betas: object) -> frozenset[str]:
+    return frozenset(get_anthropic_beta_from_headers(dict(headers))) | anthropic_body_betas(body_betas)
+
+
 def without_safeguards_beta(betas: Iterable[str]) -> tuple[str, ...]:
     return tuple(beta for beta in betas if beta != ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
 
@@ -1551,6 +1555,25 @@ def without_safeguards(fields: Mapping[str, object]) -> Mapping[str, object]:
     return {key: value for key, value in fields.items() if key not in (SAFEGUARDS, "anthropic_beta")} | (
         {"anthropic_beta": kept_betas} if kept_betas else {}
     )
+
+
+def without_safeguards_bedrock_rejects(
+    fields: Mapping[str, object],
+    model: str,
+    litellm_params: Mapping[str, object],
+    provider: str,
+    *,
+    sent_betas: frozenset[str],
+) -> Mapping[str, object]:
+    if SAFEGUARDS not in fields or not drops_safeguards_bedrock_rejects(
+        bedrock_capability_model(strip_bedrock_routing_prefix(model), litellm_params.get("base_model")),
+        deployment_model_info(litellm_params),
+        litellm_params.get("drop_params"),
+        provider,
+        sends_beta=ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value in sent_betas,
+    ):
+        return fields
+    return without_safeguards(fields)
 
 
 def supports_bedrock_prompt_cache_ttl(model: str) -> bool:

@@ -28,26 +28,22 @@ from litellm.llms.bedrock.common_utils import (
     SAFEGUARDS,
     anthropic_body_betas,
     apply_bedrock_invoke_structured_output,
-    bedrock_capability_model,
     bedrock_chat_uses_native_structured_output,
     bedrock_cleaned_output_schema,
     bedrock_native_output_is_opt_in,
     bedrock_supports_tool_search,
     deployment_model_info,
-    drops_safeguards_bedrock_rejects,
     get_anthropic_beta_from_headers,
     normalize_bedrock_opus_output_config_effort,
     normalize_custom_field_on_tools,
     normalize_tool_input_schema_types_for_bedrock_invoke,
     requests_opt_in_native_output,
-    strip_bedrock_routing_prefix,
     strip_unsupported_bedrock_invoke_output_config_keys,
     tools_without_eager_input_streaming,
-    without_safeguards,
+    without_safeguards_bedrock_rejects,
     without_safeguards_beta,
 )
 from litellm.types.llms.anthropic import (
-    ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
     AnthropicThinkingParam,
@@ -66,16 +62,6 @@ else:
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _OPTIONAL_PARAMS: Final = TypeAdapter(dict[str, object])
-
-
-def _drops_rejected_safeguards(model: str, litellm_params: Mapping[str, object], *, sends_beta: bool) -> bool:
-    return drops_safeguards_bedrock_rejects(
-        bedrock_capability_model(strip_bedrock_routing_prefix(model), litellm_params.get("base_model")),
-        deployment_model_info(litellm_params),
-        litellm_params.get("drop_params"),
-        "bedrock_invoke",
-        sends_beta=sends_beta,
-    )
 
 
 class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
@@ -220,13 +206,17 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         headers: dict,
     ) -> dict:
         params: Final = _OPTIONAL_PARAMS.validate_python(optional_params)
-        drops_safeguards: Final = SAFEGUARDS in params and _drops_rejected_safeguards(
-            model,
-            _LITELLM_PARAMS.validate_python(litellm_params),
-            sends_beta=ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
-            in frozenset(get_anthropic_beta_from_headers(headers)) | anthropic_body_betas(params.get("anthropic_beta")),
+        upstream_params: Final = dict(
+            without_safeguards_bedrock_rejects(
+                params,
+                model,
+                _LITELLM_PARAMS.validate_python(litellm_params),
+                "bedrock_invoke",
+                sent_betas=frozenset(get_anthropic_beta_from_headers(headers))
+                | anthropic_body_betas(params.get("anthropic_beta")),
+            )
         )
-        upstream_params: Final = dict(without_safeguards(params)) if drops_safeguards else params
+        drops_safeguards: Final = SAFEGUARDS in params and SAFEGUARDS not in upstream_params
         _anthropic_request: Final = self._build_bedrock_anthropic_request_base(
             model=model,
             messages=messages,
@@ -263,13 +253,13 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         admitted: Final = super().transform_extra_body(
             extra_body=extra_body, request=request, model=model, litellm_params=litellm_params
         )
-        drops_safeguards: Final = SAFEGUARDS in admitted and _drops_rejected_safeguards(
+        return without_safeguards_bedrock_rejects(
+            admitted,
             model,
             litellm_params,
-            sends_beta=ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
-            in anthropic_body_betas(admitted.get("anthropic_beta", request.get("anthropic_beta"))),
+            "bedrock_invoke",
+            sent_betas=anthropic_body_betas(admitted.get("anthropic_beta", request.get("anthropic_beta"))),
         )
-        return without_safeguards(admitted) if drops_safeguards else admitted
 
     @property
     def uses_async_transform_request(self) -> bool:

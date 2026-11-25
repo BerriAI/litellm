@@ -301,3 +301,63 @@ def test_mantle_claude_drop_params_drops_extra_body_messages_and_keeps_its_think
     sent: Final = json.loads(respond.call_args.args[0].content)
     assert sent["thinking"] == thinking
     assert "from extra_body" not in json.dumps(sent["messages"])
+
+
+_DANGEROUS_TOOL_USE_BETA: Final = "dangerous-tool-use-2026-09-03"
+_SAFEGUARDS: Final = [{"type": "dangerous_tool_use"}]
+
+
+def _mantle_safeguards_request(model: str, drop_params: bool, **kwargs: object) -> httpx.Request:
+    respond: Final = MagicMock(wraps=_text_message)
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=64,
+        aws_access_key_id="AKIAEXAMPLE",
+        aws_secret_access_key="fake-secret",
+        aws_region_name="us-east-1",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        drop_params=drop_params,
+        **kwargs,
+    )
+    return respond.call_args.args[0]
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("route", ("bedrock_mantle/", "bedrock/mantle/"))
+@pytest.mark.parametrize(
+    ("model", "drop_params", "sends_beta", "forwarded"),
+    [
+        pytest.param("anthropic.claude-scripted-9", True, False, False, id="flagged_model_without_the_beta"),
+        pytest.param("anthropic.claude-scripted-9", True, True, True, id="flagged_model_with_the_beta"),
+        pytest.param("anthropic.claude-opus-4-1-20250805-v1:0", True, True, False, id="old_model_with_the_beta"),
+        pytest.param("anthropic.claude-scripted-9", False, False, True, id="without_drop_params"),
+    ],
+)
+def test_mantle_claude_drops_safeguards_under_drop_params_when_bedrock_would_reject_them(
+    monkeypatch: pytest.MonkeyPatch, route: str, model: str, drop_params: bool, sends_beta: bool, forwarded: bool
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    sent: Final = _mantle_safeguards_request(
+        f"{route}{model}",
+        drop_params,
+        safeguards=_SAFEGUARDS,
+        extra_headers={"anthropic-beta": _DANGEROUS_TOOL_USE_BETA} if sends_beta else {},
+    )
+
+    assert json.loads(sent.content).get("safeguards") == (_SAFEGUARDS if forwarded else None)
+    assert (_DANGEROUS_TOOL_USE_BETA in sent.headers.get("anthropic-beta", "")) is sends_beta
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize("model", MANTLE_CLAUDE_ROUTES)
+@pytest.mark.parametrize(("drop_params", "forwarded"), [(True, False), (False, True)])
+def test_mantle_claude_extra_body_safeguards_follow_the_same_drop_as_the_safeguards_param(
+    monkeypatch: pytest.MonkeyPatch, model: str, drop_params: bool, forwarded: bool
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    sent: Final = _mantle_safeguards_request(model, drop_params, extra_body={"safeguards": _SAFEGUARDS})
+
+    assert json.loads(sent.content).get("safeguards") == (_SAFEGUARDS if forwarded else None)
