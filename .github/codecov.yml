@@ -1,0 +1,72 @@
+codecov:
+  require_ci_to_pass: false # post coverage status even if CI has unrelated failures
+  notify:
+    wait_for_ci: false # post as soon as expected uploads arrive, don't wait on CI
+
+ignore:
+  - "litellm/rust/**"
+
+# Flagged uploads avoid overlapping sessions on reruns.
+# Only the flags below reuse parent coverage, avoiding stale line maps elsewhere.
+flag_management:
+  default_rules:
+    carryforward: false
+  individual_flags:
+    - name: unit
+      carryforward: true
+    - name: core-packaging
+      carryforward: true
+    - name: mcp-integration
+      carryforward: true
+
+component_management:
+  individual_components:
+    - component_id: "Router"
+      paths:
+        - "router"
+    - component_id: "LLMs"
+      paths:
+        - "*/llms/*"
+    - component_id: "Caching"
+      paths:
+        - "*/caching/*"
+        - ".*redis.*"
+    - component_id: "litellm_logging"
+      paths:
+        - "*/integrations/*"
+        - ".*litellm_logging.*"
+    - component_id: "Proxy_Authentication"
+      paths:
+        - "*/proxy/auth/**"
+    - component_id: "Enterprise"
+      paths:
+        - "litellm/enterprise/**"
+    - component_id: "Batches"
+      paths:
+        - "*/proxy/batches_endpoints/**"
+        - "litellm/batches/**"
+        - "*/llms/*/batches/**"
+    - component_id: "Videos"
+      paths:
+        - "litellm/videos/**"
+        - "*/proxy/video_endpoints/**"
+        - "*/llms/*/videos/**"
+    - component_id: "Realtime"
+      paths:
+        - "litellm/realtime_api/**"
+        - "*/proxy/realtime_endpoints/**"
+        - "*/llms/*/realtime/**"
+        - "litellm/litellm_core_utils/realtime_streaming.py"
+comment:
+  layout: "header, diff, flags, components"  # show component info in the PR comment
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 0% # do not allow project coverage to drop
+    patch:
+      default:
+        target: auto
+        threshold: 0% # patch coverage should be 100%

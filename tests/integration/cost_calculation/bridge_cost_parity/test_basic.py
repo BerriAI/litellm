@@ -12,12 +12,24 @@ import pytest
 from integration._support.client import Gateway
 from integration.cost_calculation.bridge_cost_parity.case import BridgeCostParityTestCase
 from integration.cost_calculation.bridge_cost_parity.runner import assert_bridge_cost_parity
-from integration.cost_calculation.catalog import BRIDGE_COST_PARITY_CASES
+from integration.cost_calculation.catalog import (
+    BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION,
+    BRIDGE_COST_PARITY_CASES,
+)
 
 
 def _marks(case: BridgeCostParityTestCase) -> tuple[pytest.MarkDecorator, ...]:
     """A known bridge bug is intermittent (it billed the native row in 1 of 4 local runs), so the xfail is not strict."""
-    return (pytest.mark.xfail(strict=False, reason=f"BUG: {case.known_bug}"),) if case.known_bug is not None else ()
+    bug: Final = (
+        (pytest.mark.xfail(strict=False, reason=f"BUG: {case.known_bug}"),) if case.known_bug is not None else ()
+    )
+    legs: Final = frozenset((case.native.name, case.bridged.name))
+    billed: Final = (
+        (pytest.mark.billed_against_real_provider_by_cost_tracking_reconciliation_automation,)
+        if legs & BILLED_AGAINST_REAL_PROVIDER_BY_COST_TRACKING_RECONCILIATION_AUTOMATION
+        else ()
+    )
+    return (*bug, *billed)
 
 
 _CASES: Final = tuple(pytest.param(case, marks=_marks(case), id=case.id) for case in BRIDGE_COST_PARITY_CASES)

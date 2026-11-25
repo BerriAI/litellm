@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import gzip
 import json
 import threading
 import time
@@ -29,13 +30,31 @@ class ResponseSpec:
     events: tuple[tuple[str, object], ...] = ()
     # Splits a non-stream body into this many writes, `chunk_delay` apart, so it trickles in.
     body_chunks: int = 1
+    cut_after: int | None = None
+    cut_delay: float = 0
+    gzip: bool = False
+    # Writes every stream event in one write, so they reach the client in one read.
+    burst: bool = False
+    # Sends each stream event as its own HTTP/1.1 chunk instead of under a Content-Length.
+    chunked: bool = False
 
     def payloads(self) -> tuple[bytes, ...]:
         if not self.events:
-            body: Final = self.body if isinstance(self.body, bytes) else json.dumps(self.body).encode()
+            raw: Final = self.body if isinstance(self.body, bytes) else json.dumps(self.body).encode()
+            body: Final = gzip.compress(raw, mtime=0) if self.gzip else raw
             size: Final = max(-(-len(body) // max(self.body_chunks, 1)), 1)
             return tuple(body[start : start + size] for start in range(0, len(body), size)) or (body,)
-        return tuple(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in self.events)
+        frames: Final = tuple(f"event: {event}\ndata: {json.dumps(data)}\n\n".encode() for event, data in self.events)
+        if self.gzip:
+            return (gzip.compress(b"".join(frames), mtime=0),)
+        return (b"".join(frames),) if self.burst and not self.chunked else frames
+
+    def writes(self) -> tuple[bytes, ...]:
+        payloads: Final = self.payloads()
+        if not self.chunked:
+            return payloads
+        chunks: Final = (*(b"%x\r\n%s\r\n" % (len(payload), payload) for payload in payloads), b"0\r\n\r\n")
+        return (b"".join(chunks),) if self.burst else chunks
 
 
 @dataclass
@@ -84,15 +103,28 @@ def recording_service() -> Iterator[RecordingServer]:
             response: Final = responses.pop(0) if responses else copy.deepcopy(recording_server.default_response)
             if response.delay:
                 time.sleep(response.delay)
-            payloads: Final = response.payloads()
+            payloads: Final = response.writes()
+            if response.chunked:
+                self.protocol_version = "HTTP/1.1"
+                self.close_connection = True
             self.send_response(response.status)
             self.send_header("Content-Type", "text/event-stream" if response.events else "application/json")
-            self.send_header("Content-Length", str(sum(len(payload) for payload in payloads)))
+            if response.chunked:
+                self.send_header("Transfer-Encoding", "chunked")
+                self.send_header("Connection", "close")
+            else:
+                self.send_header("Content-Length", str(sum(len(payload) for payload in payloads)))
+            if response.gzip:
+                self.send_header("Content-Encoding", "gzip")
             for name, value in response.headers.items():
                 self.send_header(name, value)
             self.end_headers()
             try:
                 for index, payload in enumerate(payloads):
+                    if index == response.cut_after:
+                        time.sleep(response.cut_delay)
+                        self.close_connection = True
+                        break
                     if index and response.chunk_delay:
                         time.sleep(response.chunk_delay)
                     self.wfile.write(payload)

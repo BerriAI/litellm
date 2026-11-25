@@ -110,7 +110,7 @@ class FalAIGPTImage2Config(FalAIBaseConfig):
         optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         unsupported_params: Final = tuple(
             key for key in non_default_params if key not in SUPPORTED_OPENAI_PARAMS and key not in optional_params
         )
@@ -143,5 +143,5 @@ class FalAIGPTImage2Config(FalAIBaseConfig):
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         headers: Mapping[str, str],
-    ) -> dict:
+    ) -> dict[str, object]:
         return {"prompt": prompt, **optional_params}

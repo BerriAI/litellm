@@ -38,7 +38,7 @@ from litellm.utils import cached_get_model_info_helper
 from ..authenticator import Authenticator
 from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
-    GetAPIKeyError,
+    GetAccessTokenError,
     get_copilot_default_headers,
     pin_session_authorization,
 )
@@ -118,7 +118,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """Return the GitHub Copilot provider identifier."""
         return LlmProviders.GITHUB_COPILOT
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get supported parameters for GitHub Copilot Responses API.
 
@@ -131,7 +131,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response_api_optional_params: ResponsesAPIOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map parameters for GitHub Copilot Responses API.
 
@@ -153,7 +153,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
             logging_obj=logging_obj,
         )
 
-    def _normalize_stream_item_id(self, parsed_chunk: dict) -> dict:
+    def _normalize_stream_item_id(self, parsed_chunk: dict[str, object]) -> dict[str, object]:
         """Rewrite streamed item ids to one stable id per output_index.
 
         GitHub Copilot tags each event of a single output item with a different
@@ -197,10 +197,10 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate environment and set up headers for GitHub Copilot API.
 
@@ -236,7 +236,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 "dict[str, str]", {**copilot_headers, **headers}
             )
             if user_session is not None:
-                pin_session_authorization(merged_headers, user_session.token)
+                pin_session_authorization(merged_headers, user_session.token, user_session.integration_id)
 
             # Analyze input to determine additional headers
             input_param: Final = self._get_input_from_params(litellm_params)
@@ -256,7 +256,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
             return merged_headers
 
-        except GetAPIKeyError as e:
+        except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
                 llm_provider="github_copilot",
@@ -266,7 +266,7 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the complete URL for GitHub Copilot Responses API endpoint.

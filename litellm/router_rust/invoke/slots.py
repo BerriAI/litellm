@@ -1,19 +1,22 @@
 """
 A deployment's ``max_parallel_requests`` slot on the Rust router core (``_deployment_slot`` and
 ``_get_client(client_type="max_parallel_requests")``): the attempt holds one of the deployment's
-slots around its provider call, and an open chat stream keeps it until the stream is exhausted,
-closed, or falls back. A caller arriving while every slot is taken gets a 429, which the core
-records as that attempt's failure.
+slots around its provider call, an open chat stream keeps it until the stream is exhausted, closed,
+or falls back, and a streamed speech response keeps it until its audio ends. A caller arriving while
+every slot is taken gets a 429, which the core records as that attempt's failure.
 
 The limit object is the one the Python router caches (``MaxParallelRequestsLimit``), kept in the
 core's routing cache under the same key, so its in-flight count is shared by every attempt.
 """
 
 import contextlib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Final
 
+import httpx
+
 from litellm._internal_context import with_service_target
+from litellm.litellm_core_utils.on_end_byte_stream import OnEndAsyncByteStream, StreamEnd
 from litellm.router_rust.invoke.shaping import ROUTER_CLIENTS_TARGET, as_dict
 
 if TYPE_CHECKING:
@@ -104,4 +107,28 @@ def deployment_slot(
     return slot
 
 
-__all__ = ["deployment_slot", "enter_deployment_slot", "max_parallel_requests_limit"]
+def hold_slot_until_closed(
+    response: object, attempt_slot: contextlib.ExitStack, on_end: Callable[[StreamEnd], None]
+) -> bool:
+    """Whether ``response`` took the attempt's slot. A body already in hand leaves the slot with the
+    attempt. A body still arriving from the provider takes it, or the deployment's
+    max_parallel_requests would only bound how many responses can start: it is held until the body
+    is read to the end, the read fails, or the response is closed, and ``on_end`` runs then."""
+    raw: Final = getattr(response, "response", None)
+    if (
+        not isinstance(raw, httpx.Response)
+        or raw.is_stream_consumed
+        or not isinstance(raw.stream, httpx.AsyncByteStream)
+    ):
+        return False
+    held: Final = attempt_slot.pop_all()
+
+    async def release(end: StreamEnd) -> None:
+        held.close()
+        on_end(end)
+
+    raw.stream = OnEndAsyncByteStream(raw.stream, map_error=lambda error: error, on_end=release)
+    return True
+
+
+__all__ = ["deployment_slot", "enter_deployment_slot", "hold_slot_until_closed", "max_parallel_requests_limit"]

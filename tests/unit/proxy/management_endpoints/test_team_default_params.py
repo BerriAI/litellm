@@ -3,6 +3,7 @@ Tests for applying default team params during team creation
 and loading default_team_params from DB on startup.
 """
 
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -11,6 +12,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.proxy._types import (
+    LiteLLM_TeamTable,
     LiteLLM_BudgetTable,
     LiteLLM_OrganizationTable,
     NewTeamRequest,
@@ -213,6 +215,59 @@ class TestNewTeamDefaultParamsApplied:
         assert data.tpm_limit == 200
         assert data.rpm_limit == 500
         assert data.team_member_permissions == ["/key/generate", "/key/update"]
+
+    async def _create_team(
+        self, monkeypatch: pytest.MonkeyPatch, data: NewTeamRequest
+    ) -> tuple[dict[str, object], AsyncMock, AsyncMock]:
+        from litellm.proxy import proxy_server
+        from litellm.proxy.management_endpoints import team_endpoints
+        from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+        prisma_client: Final = proxy_server.prisma_client
+        prisma_client.jsonify_team_object = MagicMock(side_effect=lambda db_data: db_data)
+
+        async def _create(data: dict[str, object], include: object) -> LiteLLM_TeamTable:
+            return LiteLLM_TeamTable(**data)
+
+        create: Final = AsyncMock(side_effect=_create)
+        tx: Final = MagicMock()
+        tx.litellm_teamtable.create = create
+        prisma_client.db.tx.return_value.__aenter__.return_value = tx
+        reconcile: Final = AsyncMock(return_value=())
+        monkeypatch.setattr(team_endpoints, "reconcile_team_access_group_membership", reconcile)
+        monkeypatch.setattr(team_endpoints, "invalidate_access_group_caches", AsyncMock())
+        monkeypatch.setattr(team_endpoints, "_add_team_members_to_team", AsyncMock())
+
+        response: Final = await new_team(data=data, user_api_key_dict=self._make_admin_auth(), http_request=MagicMock())
+        return response, create, reconcile
+
+    @pytest.mark.asyncio
+    async def test_default_access_group_ids_attach_to_a_team_created_without_any(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(litellm, "default_team_params", {"access_group_ids": ["central-models"]})
+
+        response, create, reconcile = await self._create_team(monkeypatch, NewTeamRequest(team_alias="my-team"))
+
+        assert create.await_args is not None
+        assert create.await_args.kwargs["data"]["access_group_ids"] == ["central-models"]
+        assert response["access_group_ids"] == ["central-models"]
+        reconcile.assert_awaited_once()
+        assert reconcile.await_args is not None
+        assert reconcile.await_args.args[1] == response["team_id"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("explicit_access_group_ids", [["research"], []])
+    async def test_explicit_access_group_ids_win_over_the_default(
+        self, monkeypatch: pytest.MonkeyPatch, explicit_access_group_ids: list[str]
+    ):
+        monkeypatch.setattr(litellm, "default_team_params", {"access_group_ids": ["central-models"]})
+
+        response, create, _ = await self._create_team(
+            monkeypatch, NewTeamRequest(team_alias="my-team", access_group_ids=explicit_access_group_ids)
+        )
+
+        assert create.await_args is not None
+        assert create.await_args.kwargs["data"]["access_group_ids"] == explicit_access_group_ids
+        assert response["access_group_ids"] == explicit_access_group_ids
 
     @pytest.mark.asyncio
     async def test_explicit_values_not_overridden(self, monkeypatch):

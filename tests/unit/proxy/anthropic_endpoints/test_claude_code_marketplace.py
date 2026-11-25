@@ -16,12 +16,12 @@ from unittest.mock import AsyncMock, MagicMock, call
 import httpx
 import pytest
 from fastapi import HTTPException
-from prisma import Base64, models as prisma_models
+from prisma import Base64
+from prisma import models as prisma_models
 from prisma.errors import UniqueViolationError
 from pydantic import ValidationError
 
 import litellm
-from litellm.caching.caching import DualCache
 from litellm.proxy._types import CommonProxyErrors, LiteLLM_ObjectPermissionTable, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints import claude_code_marketplace
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
@@ -34,8 +34,10 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketp
     register_plugin,
     update_plugin,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.deps.repositories import get_plugin_upload_repository
 from litellm.proxy.proxy_server import LitellmUserRoles, hash_token
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.repositories.plugin_upload_repository import PluginUploadRepository
 from litellm.types.proxy.claude_code_endpoints import (
     MarketplaceResponse,
@@ -43,13 +45,15 @@ from litellm.types.proxy.claude_code_endpoints import (
     UpdatePluginRequest,
 )
 from tests._master_key import MASTER_KEY
+from tests.unit.proxy._prisma import prisma_with_empty_config
+from tests.unit.proxy.rust_auth_stores import install_rust_auth_stores
 
 
 def _make_mock_prisma():
     """Stateful prisma mock that supports find_unique, find_many, create, and update."""
     store: dict = {}
 
-    mock_client = MagicMock()
+    mock_client = prisma_with_empty_config()
     mock_client.proxy_logging_obj = MagicMock()
     mock_table = MagicMock()
 
@@ -74,6 +78,7 @@ def _make_mock_prisma():
         record.description = data.get("description")
         record.manifest_json = data.get("manifest_json", "{}")
         record.enabled = data.get("enabled", True)
+        record.created_by = data.get("created_by")
         record.created_at = data.get("created_at")
         record.updated_at = data.get("updated_at")
         store[data["name"]] = record
@@ -221,7 +226,7 @@ async def test_metadata_edits_preserve_uploaded_source_and_reject_a_changed_http
     await table.create(data={"name": _UPLOAD_NAME, "manifest_json": json.dumps({"source": _UPLOAD_SOURCE})})
     request: Final = UpdatePluginRequest(source=_UPLOAD_SOURCE, description="Updated description", version="1.0.0")
     response: Final = await update_plugin(uploads=_uploads(), plugin_name=_UPLOAD_NAME, request=request, user_api_key_dict=_USER)
-    expected: Final = {"name": _UPLOAD_NAME, "source": _UPLOAD_SOURCE, "description": "Updated description", "version": "1.0.0"}
+    expected: Final = {"name": _UPLOAD_NAME, "source": _UPLOAD_SOURCE, "description": "Updated description", "version": "1.0.0", "_litellm_published_by": _USER.user_id}
     assert response.plugin.description == "Updated description"
     assert await _read_stored_manifest(_UPLOAD_NAME) == expected
     with pytest.raises(HTTPException) as error:
@@ -354,7 +359,7 @@ async def _register_public_and_private_plugins() -> None:
 
 
 async def _listed_names(user: UserAPIKeyAuth) -> set[str]:
-    response = await list_plugins(user_api_key_dict=user)
+    response = await list_plugins(uploads=_uploads(), user_api_key_dict=user)
     return {plugin.name for plugin in response.plugins}
 
 
@@ -474,7 +479,7 @@ async def test_update_plugin_propagates_installation_preference_to_get_and_list(
     )
 
     plugin = await get_plugin(plugin_name=name, user_api_key_dict=_USER)
-    listed_plugin = (await list_plugins(user_api_key_dict=_USER)).plugins[0]
+    listed_plugin = (await list_plugins(uploads=_uploads(), user_api_key_dict=_USER)).plugins[0]
 
     assert response.plugin.installation_preference == "auto_install"
     assert plugin["installation_preference"] == "auto_install"
@@ -514,7 +519,7 @@ async def test_stored_unknown_installation_preference_is_not_served(stored_value
     )
 
     marketplace = json.loads((await get_marketplace(request=MagicMock())).body)
-    listed_plugin = (await list_plugins(user_api_key_dict=_USER)).plugins[0]
+    listed_plugin = (await list_plugins(uploads=_uploads(), user_api_key_dict=_USER)).plugins[0]
     plugin = await get_plugin(plugin_name=name, user_api_key_dict=_USER)
 
     assert marketplace["plugins"] == [{"name": name, "source": _ARCHIVE_SOURCE}]
@@ -1014,7 +1019,7 @@ def _require_marketplace_auth(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         litellm.proxy.proxy_server, "general_settings", {"claude_code_marketplace_auth_required": True}
     )
-    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", UserApiKeyCache())
 
 
 async def _get_marketplace_over_http(
@@ -1111,7 +1116,9 @@ async def test_marketplace_auth_required_keeps_a_valid_key_refusal_status(
     monkeypatch: pytest.MonkeyPatch, limited_key_auth: UserAPIKeyAuth, status_code: int
 ) -> None:
     _require_marketplace_auth(monkeypatch)
-    litellm.proxy.proxy_server.user_api_key_cache.set_cache(key=hash_token(_LIMITED_KEY), value=limited_key_auth)
+    litellm.proxy.proxy_server.user_api_key_cache.set_cache(
+        AuthObject.virtual_key(hash_token(_LIMITED_KEY)), limited_key_auth
+    )
     await _register_public_and_private_plugins()
 
     response: Final = await _get_marketplace_over_http({"Authorization": f"Bearer {_LIMITED_KEY}"})
@@ -1153,7 +1160,7 @@ async def test_marketplace_auth_required_treats_a_quoted_or_unreadable_setting_a
     monkeypatch.setattr(
         litellm.proxy.proxy_server, "general_settings", {"claude_code_marketplace_auth_required": setting}
     )
-    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", UserApiKeyCache())
     await _register_public_and_private_plugins()
 
     response: Final = await _get_marketplace_over_http()
@@ -1187,13 +1194,14 @@ async def test_marketplace_auth_required_refuses_the_database_outage_fallback_id
         "general_settings",
         {"claude_code_marketplace_auth_required": True, "allow_requests_on_db_unavailable": True},
     )
-    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", UserApiKeyCache())
     await _register_public_and_private_plugins()
-    litellm.proxy.proxy_server.prisma_client.get_data = AsyncMock(side_effect=httpx.ConnectError("connection refused"))
-    litellm.proxy.proxy_server.prisma_client.attempt_db_reconnect = AsyncMock(return_value=False)
+    keys: Final = install_rust_auth_stores(monkeypatch).key
+    keys.rows[hash_token("sk-not-a-litellm-key")] = httpx.ConnectError("connection refused")
 
     response: Final = await _get_marketplace_over_http({"Authorization": "Bearer sk-not-a-litellm-key"})
 
+    assert keys.lookups == [(hash_token("sk-not-a-litellm-key"), False)]
     assert response.status_code == 503
     assert "www-authenticate" not in response.headers
     assert "public-skill" not in response.text
@@ -1205,7 +1213,7 @@ async def test_marketplace_without_a_database_answers_db_not_connected_for_a_que
 ) -> None:
     monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
     monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", None)
-    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", UserApiKeyCache())
 
     response: Final = await _get_marketplace_over_http(params={"key": "sk-not-the-master-key"})
 
@@ -1245,12 +1253,13 @@ async def upload_storage(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Uplo
         get_plugin_upload_repository: lambda: PluginUploadRepository(prisma),
     })
     monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
-    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", DualCache())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", UserApiKeyCache())
     monkeypatch.setenv("PROXY_BASE_URL", "http://test")
     monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
     for key, skills in ((_LIMITED_KEY, [_UPLOAD_NAME]), ("sk-plain", [])):
         litellm.proxy.proxy_server.user_api_key_cache.set_cache(
-            key=hash_token(key), value=_granted_user(skills).model_copy(update={"token": hash_token(key)}),
+            AuthObject.virtual_key(hash_token(key)),
+            _granted_user(skills).model_copy(update={"token": hash_token(key)}),
         )
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=litellm.proxy.proxy_server.app), base_url="http://test",
@@ -1288,7 +1297,7 @@ async def test_skill_upload_creates_metadata_and_bytes_atomically_and_rejects_du
         "url": f"http://test/claude-code/plugins/{_UPLOAD_NAME}/archive/{digest}.zip",
         "sha256": digest,
     }
-    assert json.loads(stored["manifest_json"]) == {**metadata, "source": source}
+    assert json.loads(stored["manifest_json"]) == {**metadata, "source": source, "_litellm_published_by": stored["created_by"]}
     assert stored == {
         "name": _UPLOAD_NAME, "description": "My notes", "version": "2.0.0",
         "manifest_json": stored["manifest_json"], "created_by": litellm.proxy.proxy_server.litellm_proxy_admin_name,

@@ -38,6 +38,23 @@ def test_observation_preserves_v2_content_usage_and_cost(encoded: bool, cost: fl
     assert not is_otel_v2_generation(observation, key_alias="another-key")
 
 
+def test_otel_v2_generation_matches_metadata_flattened_by_the_v2_observations_api() -> None:
+    observation: Final = LangfuseObservation.model_validate(
+        {
+            "id": "observation",
+            "metadata": {
+                "scope.name": "litellm",
+                "attributes.langfuse.observation.type": "generation",
+                "attributes.litellm.metadata.user_api_key_alias": "test-key-alias",
+                "attributes.gen_ai.usage.input_tokens": 17,
+            },
+        }
+    )
+
+    assert is_otel_v2_generation(observation, key_alias="test-key-alias")
+    assert not is_otel_v2_generation(observation, key_alias="another-key")
+
+
 def test_observation_preserves_plain_text_and_legacy_cost() -> None:
     cost: Final = 0.000031
     observation: Final = LangfuseObservation.model_validate(

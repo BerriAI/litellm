@@ -11,11 +11,11 @@ __all__ = ["aingest", "aquery", "ingest", "query"]
 
 
 # Expose at litellm.rag level for convenience
-async def arag_ingest(*args, **kwargs):
+async def arag_ingest(*args, **kwargs: object):
     """Alias for aingest."""
     return await aingest(*args, **kwargs)
 
 
-def rag_ingest(*args, **kwargs):
+def rag_ingest(*args, **kwargs: object):
     """Alias for ingest."""
     return ingest(*args, **kwargs)

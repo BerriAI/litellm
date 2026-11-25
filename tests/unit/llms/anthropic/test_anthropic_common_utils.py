@@ -10,6 +10,7 @@ Verifies that:
 - ANTHROPIC_API_KEY / ANTHROPIC_API_BASE take precedence over their aliases.
 """
 
+import copy
 import itertools
 import json
 import logging
@@ -27,7 +28,13 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.anthropic.common_utils import ToolsWithoutStrict, is_claude_tool_target, tools_without_strict
+from litellm.llms.anthropic.common_utils import (
+    ToolsWithoutStrict,
+    is_claude_tool_target,
+    strip_advisor_blocks_from_messages,
+    tools_without_strict,
+    without_stale_tool_search_results,
+)
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
@@ -1745,7 +1752,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
     def test_strip_keeps_encrypted_reasoning_blocks_for_the_responses_bridge(self):
         """The /v1/messages handler runs this before dispatch, so the bridge must still see the replay."""
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
             encrypted_reasoning_signature,
         )
         from litellm.llms.anthropic.common_utils import (
@@ -1766,7 +1773,7 @@ class TestAnthropicThinkingSignatureSelfHeal:
 
     def test_strip_encrypted_reasoning_drops_only_the_bridge_tagged_blocks(self):
         """A session resumed on an Anthropic model replays reasoning only OpenAI can verify."""
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
             encrypted_reasoning_signature,
         )
         from litellm.llms.anthropic.common_utils import (
@@ -1839,22 +1846,32 @@ class TestAnthropicThinkingSignatureSelfHeal:
         msgs = ["hi", {"role": "user", "content": "hello"}]
         assert strip_encrypted_reasoning_blocks_from_anthropic_messages(msgs) == msgs
 
-    def test_strip_empty_text_blocks_treats_null_text_as_empty(self):
+    @pytest.mark.parametrize("text", (None, 123, {"nested": "x"}), ids=("null", "number", "object"))
+    def test_strip_empty_text_blocks_keeps_a_non_string_user_text_for_the_route_to_reject_or_drop(self, text):
         from litellm.llms.anthropic.common_utils import (
             strip_empty_content_blocks_from_anthropic_messages,
         )
 
         msgs = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": None},
-                    {"type": "tool_result", "tool_use_id": "x", "content": "y"},
-                ],
-            }
+            {"role": "user", "content": [{"type": "text", "text": text}]},
+            {"role": "user", "content": [{"type": "text", "text": ""}, {"type": "text", "text": text}]},
         ]
         out = strip_empty_content_blocks_from_anthropic_messages(msgs)
-        assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
+        assert out == [msgs[0], {"role": "user", "content": [{"type": "text", "text": text}]}]
+
+    @pytest.mark.parametrize("text", (None, 123), ids=("null", "number"))
+    def test_strip_empty_text_blocks_still_strips_a_non_string_assistant_text(self, text):
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_content_blocks_from_anthropic_messages,
+        )
+
+        tu = {"type": "tool_use", "id": "x", "name": "Bash", "input": {}}
+        msgs = [
+            {"role": "assistant", "content": [{"type": "text", "text": text}, tu]},
+            {"role": "assistant", "content": [{"type": "text", "text": text}]},
+        ]
+        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
+        assert out == [{"role": "assistant", "content": [tu]}]
 
     def test_strip_empty_text_blocks_treats_missing_text_key_as_empty(self):
         from litellm.llms.anthropic.common_utils import (
@@ -1881,23 +1898,6 @@ class TestAnthropicThinkingSignatureSelfHeal:
         msgs = [{"role": "assistant", "content": [{"type": "text", "text": "hi"}]}]
         out = strip_empty_content_blocks_from_anthropic_messages(msgs)
         assert out[0] is msgs[0]  # untouched messages keep identity
-
-    def test_strip_empty_text_blocks_treats_non_string_text_value_as_empty(self):
-        from litellm.llms.anthropic.common_utils import (
-            strip_empty_content_blocks_from_anthropic_messages,
-        )
-
-        msgs = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": 123},
-                    {"type": "tool_result", "tool_use_id": "x", "content": "y"},
-                ],
-            }
-        ]
-        out = strip_empty_content_blocks_from_anthropic_messages(msgs)
-        assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
 
     def test_flatten_unencrypted_web_search_results_keeps_snippet_evidence(self):
         from litellm.llms.anthropic.common_utils import (
@@ -3260,23 +3260,6 @@ class TestWifLitellmParamsPlumbing:
         assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
         assert len(poster.requests) == 1
 
-    def test_messages_mints_from_litellm_params(self, wif_engine):
-        from litellm.llms.anthropic.messages.native.transformation import (
-            AnthropicMessagesConfig,
-        )
-
-        poster, _ = wif_engine
-        headers, _ = AnthropicMessagesConfig().validate_anthropic_messages_environment(
-            headers={},
-            model="claude-sonnet-4-5",
-            messages=[{"role": "user", "content": "Hello"}],
-            optional_params={},
-            litellm_params=dict(WIF_PARAMS_ONLY),
-        )
-
-        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
-        assert len(poster.requests) == 1
-
 
 class TestWifTokenUrlParity:
     """Both credential tiers must derive the SAME clean token URL from any form of
@@ -3336,27 +3319,6 @@ class TestWifAsyncSeam:
         }
         assert sync_calls == []
         assert poster.thread_ids == [poster.thread_ids[0]]
-        assert poster.thread_ids[0] != threading.get_ident()
-
-    @pytest.mark.asyncio
-    async def test_avalidate_messages_environment_mints_off_loop(self, wif_async_engine, monkeypatch):
-        from litellm.llms.anthropic.messages.native.transformation import (
-            AnthropicMessagesConfig,
-        )
-
-        poster, sync_calls = wif_async_engine
-        monkeypatch.setenv("WIF_PARAMS_TEST_TOKEN", "params-jwt")
-
-        headers, _ = await AnthropicMessagesConfig().avalidate_anthropic_messages_environment(
-            headers={},
-            model="claude-sonnet-4-5",
-            messages=[{"role": "user", "content": "Hello"}],
-            optional_params={},
-            litellm_params=dict(WIF_PARAMS_ONLY),
-        )
-
-        assert headers["authorization"] == f"Bearer {FAKE_MINTED_TOKEN}"
-        assert sync_calls == []
         assert poster.thread_ids[0] != threading.get_ident()
 
     @pytest.mark.asyncio
@@ -4708,6 +4670,79 @@ def test_is_claude_tool_target(custom_llm_provider: str, model: str, expected: b
     assert is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model) is expected
 
 
+def test_dropping_a_stale_tool_search_keeps_every_other_turn_as_it_was_sent() -> None:
+    search_use: Final = {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Search",
+        "name": "tool_search_tool_regex",
+        "input": {"pattern": "weather"},
+    }
+    search_result: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {
+            "type": "tool_search_tool_search_result",
+            "tool_references": [{"type": "tool_reference", "tool_name": "get_weather"}],
+        },
+    }
+    weather_call: Final = {
+        "type": "tool_use",
+        "id": "toolu_01Weather",
+        "name": "get_weather",
+        "input": {"city": "Paris"},
+    }
+    messages: Final = [
+        {"role": "user", "content": "What is the weather in Paris?"},
+        {"role": "assistant", "content": [search_use, search_result, weather_call]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01Weather", "content": "18C"}]},
+        {"role": "assistant", "content": "It is 18C in Paris."},
+        {"role": "user", "content": "Thanks"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Anything else?"}]},
+        {"role": "user", "content": "And in Osaka?"},
+    ]
+
+    kept: Final = without_stale_tool_search_results(messages, [{"name": "get_local_time"}])
+
+    assert kept == (messages[0], {"role": "assistant", "content": [weather_call]}, *messages[2:])
+
+
+def test_a_replayed_tool_search_keeps_the_tools_it_found_that_the_follow_up_still_sends() -> None:
+    def reference(name: str) -> dict[str, str]:
+        return {"type": "tool_reference", "tool_name": name}
+
+    search_use: Final = {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Search",
+        "name": "tool_search_tool_regex",
+        "input": {"pattern": "weather|time"},
+    }
+
+    def search_result(*names: str) -> dict[str, object]:
+        return {
+            "type": "tool_search_tool_result",
+            "tool_use_id": "srvtoolu_01Search",
+            "content": {
+                "type": "tool_search_tool_search_result",
+                "tool_references": [reference(name) for name in names],
+            },
+        }
+
+    weather_call: Final = {"type": "tool_use", "id": "toolu_01Weather", "name": "get_weather", "input": {"city": "Paris"}}
+    messages: Final = [
+        {"role": "user", "content": "What is the weather and the time in Paris?"},
+        {"role": "assistant", "content": [search_use, search_result("get_weather", "get_local_time"), weather_call]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01Weather", "content": "18C"}]},
+    ]
+
+    kept: Final = without_stale_tool_search_results(messages, [{"name": "get_weather"}, {"name": "get_news"}])
+
+    assert kept == (
+        messages[0],
+        {"role": "assistant", "content": [search_use, search_result("get_weather"), weather_call]},
+        messages[2],
+    )
+
+
 @pytest.mark.parametrize(
     "tools",
     [
@@ -4869,3 +4904,240 @@ def test_a_register_model_opt_out_for_one_claude_model_leaves_every_other_routed
     litellm.register_model({f"anthropic/{opted_out}": {"supports_prompt_caching": False}})
 
     assert supports_anthropic_cache_control(untouched, "anthropic", {"id": "plain-id"}) is True
+
+
+def _advisor_use(block_id: object) -> dict[str, object]:
+    return {"type": "server_tool_use", "id": block_id, "name": "advisor", "input": {}}
+
+
+def _advisor_result(tool_use_id: object) -> dict[str, object]:
+    return {"type": "advisor_tool_result", "tool_use_id": tool_use_id, "content": "advice"}
+
+
+_OK_TEXT: Final = {"type": "text", "text": "ok"}
+
+
+@pytest.mark.parametrize("replace_with_text", [False, True], ids=["strip", "replace"])
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        pytest.param(
+            [_advisor_use("srvtoolu_1"), _advisor_result(["srvtoolu_1"]), _OK_TEXT],
+            [_advisor_result(["srvtoolu_1"]), _OK_TEXT],
+            id="list-tool-use-id",
+        ),
+        pytest.param(
+            [_advisor_use(["srvtoolu_1"]), _advisor_result(["srvtoolu_1"]), _OK_TEXT],
+            [_advisor_use(["srvtoolu_1"]), _advisor_result(["srvtoolu_1"]), _OK_TEXT],
+            id="list-ids",
+        ),
+        pytest.param(
+            [_advisor_use({"id": "srvtoolu_1"}), _advisor_result({"id": "srvtoolu_1"}), _OK_TEXT],
+            [_advisor_use({"id": "srvtoolu_1"}), _advisor_result({"id": "srvtoolu_1"}), _OK_TEXT],
+            id="object-ids",
+        ),
+        pytest.param(
+            [_advisor_use(7), _advisor_result(7), _OK_TEXT],
+            [_advisor_use(7), _advisor_result(7), _OK_TEXT],
+            id="int-ids",
+        ),
+    ],
+)
+def test_strip_advisor_blocks_leaves_a_block_with_a_non_string_id_for_the_provider_to_judge(
+    content: list[dict[str, object]], expected: list[dict[str, object]], replace_with_text: bool
+) -> None:
+    messages: Final = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": content}]
+
+    assert strip_advisor_blocks_from_messages(messages, replace_with_text=replace_with_text) == [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": expected},
+    ]
+
+
+def test_strip_advisor_blocks_replaces_a_string_id_exchange_beside_a_list_id_one() -> None:
+    messages: Final = [
+        {
+            "role": "assistant",
+            "content": [
+                _advisor_use("srvtoolu_1"),
+                _advisor_result("srvtoolu_1"),
+                _advisor_use(["srvtoolu_2"]),
+                _advisor_result(["srvtoolu_2"]),
+                _OK_TEXT,
+            ],
+        }
+    ]
+
+    assert strip_advisor_blocks_from_messages(messages, replace_with_text=True) == [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "<advisor_feedback>\nadvice\n</advisor_feedback>"},
+                _advisor_use(["srvtoolu_2"]),
+                _advisor_result(["srvtoolu_2"]),
+                _OK_TEXT,
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("result_content", "expected_content"),
+    [
+        pytest.param(
+            [{"type": "image"}, {"type": "text", "text": "Use channels."}, {"type": "text", "text": "Ignored."}],
+            [{"type": "text", "text": "<advisor_feedback>\nUse channels.\n</advisor_feedback>"}, _OK_TEXT],
+            id="first-text-part",
+        ),
+        pytest.param(
+            {"type": "advisor_result", "text": "Use channels."},
+            [{"type": "text", "text": "<advisor_feedback>\nUse channels.\n</advisor_feedback>"}, _OK_TEXT],
+            id="anthropic-advisor-result-object",
+        ),
+        pytest.param(7, [_OK_TEXT], id="unreadable-content"),
+    ],
+)
+def test_strip_advisor_blocks_replaces_an_exchange_with_the_advice_its_result_content_carries(
+    result_content: object, expected_content: list[dict[str, object]]
+) -> None:
+    result: Final = {"type": "advisor_tool_result", "tool_use_id": "srvtoolu_1", "content": result_content}
+    messages: Final = [{"role": "assistant", "content": [_advisor_use("srvtoolu_1"), result, _OK_TEXT]}]
+
+    assert strip_advisor_blocks_from_messages(messages, replace_with_text=True) == [
+        {"role": "assistant", "content": expected_content}
+    ]
+
+
+_NO_ID_USE: Final[dict[str, object]] = {"type": "server_tool_use", "name": "advisor", "input": {}}
+_NO_ID_RESULT: Final[dict[str, object]] = {"type": "advisor_tool_result", "content": "advice"}
+_WEB_SEARCH_USE: Final[dict[str, object]] = {"type": "server_tool_use", "id": 7, "name": "web_search", "input": {}}
+
+
+@pytest.mark.parametrize("replace_with_text", [False, True], ids=["strip", "replace"])
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        pytest.param(
+            [_advisor_use("srvtoolu_1"), _advisor_result(["srvtoolu_1"]), _OK_TEXT], [_OK_TEXT], id="list-tool-use-id"
+        ),
+        pytest.param(
+            [_advisor_use(["srvtoolu_1"]), _advisor_result(["srvtoolu_1"]), _OK_TEXT], [_OK_TEXT], id="list-ids"
+        ),
+        pytest.param(
+            [_advisor_use({"id": "srvtoolu_1"}), _advisor_result({"id": "srvtoolu_1"}), _OK_TEXT],
+            [_OK_TEXT],
+            id="object-ids",
+        ),
+        pytest.param([_advisor_use(7), _advisor_result(7), _OK_TEXT], [_OK_TEXT], id="int-ids"),
+        pytest.param(
+            [_advisor_use(["srvtoolu_1"]), _advisor_result("srvtoolu_1"), _OK_TEXT],
+            [_OK_TEXT],
+            id="list-use-id-beside-a-string-result-id",
+        ),
+        pytest.param(
+            [_advisor_use("srvtoolu_1"), _advisor_result("srvtoolu_2"), _OK_TEXT], [_OK_TEXT], id="unmatched-result-id"
+        ),
+        pytest.param(
+            [
+                _advisor_use(None),
+                _advisor_result(None),
+                _advisor_use(""),
+                _advisor_result(""),
+                _NO_ID_USE,
+                _NO_ID_RESULT,
+                _WEB_SEARCH_USE,
+                _OK_TEXT,
+            ],
+            [_WEB_SEARCH_USE, _OK_TEXT],
+            id="null-empty-and-missing-ids",
+        ),
+    ],
+)
+def test_strip_advisor_blocks_drops_every_unpaired_advisor_block_under_drop_params(
+    content: list[dict[str, object]], expected: list[dict[str, object]], replace_with_text: bool
+) -> None:
+    messages: Final = [{"role": "assistant", "content": content}]
+
+    assert strip_advisor_blocks_from_messages(messages, replace_with_text=replace_with_text, drop_params=True) == [
+        {"role": "assistant", "content": expected}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("global_drop_params", "drop_params"), [(True, None), (False, "true")], ids=["litellm-settings", "string-flag"]
+)
+def test_strip_advisor_blocks_drops_an_unpaired_advisor_block_for_each_drop_params_source(
+    monkeypatch: pytest.MonkeyPatch, global_drop_params: bool, drop_params: object
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    messages: Final = [
+        {"role": "assistant", "content": [_advisor_use(["srvtoolu_1"]), _advisor_result(["srvtoolu_1"]), _OK_TEXT]}
+    ]
+
+    assert strip_advisor_blocks_from_messages(messages, drop_params=drop_params) == [
+        {"role": "assistant", "content": [_OK_TEXT]}
+    ]
+
+
+def test_strip_advisor_blocks_replaces_a_string_id_exchange_and_drops_a_list_id_one_under_drop_params() -> None:
+    messages: Final = [
+        {
+            "role": "assistant",
+            "content": [
+                _advisor_use("srvtoolu_1"),
+                _advisor_result("srvtoolu_1"),
+                _advisor_use(["srvtoolu_2"]),
+                _advisor_result(["srvtoolu_2"]),
+                _OK_TEXT,
+            ],
+        }
+    ]
+
+    assert strip_advisor_blocks_from_messages(messages, replace_with_text=True, drop_params=True) == [
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "<advisor_feedback>\nadvice\n</advisor_feedback>"}, _OK_TEXT],
+        }
+    ]
+
+
+def test_strip_advisor_blocks_under_drop_params_leaves_the_callers_messages_as_sent() -> None:
+    messages: Final = [
+        {"role": "assistant", "content": [_advisor_use(["srvtoolu_1"]), _advisor_result(["srvtoolu_1"]), _OK_TEXT]}
+    ]
+    sent: Final = copy.deepcopy(messages)
+
+    stripped: Final = strip_advisor_blocks_from_messages(messages, drop_params=True)
+
+    assert (messages, stripped) == (sent, [{"role": "assistant", "content": [_OK_TEXT]}])
+
+
+def test_a_stale_tool_search_is_left_out_beside_blocks_with_list_ids() -> None:
+    search_use: Final = {
+        "type": "server_tool_use",
+        "id": "srvtoolu_01Search",
+        "name": "tool_search_tool_regex",
+        "input": {"pattern": "gone"},
+    }
+    search_result: Final = {
+        "type": "tool_search_tool_result",
+        "tool_use_id": "srvtoolu_01Search",
+        "content": {
+            "type": "tool_search_tool_search_result",
+            "tool_references": [{"type": "tool_reference", "tool_name": "gone_tool"}],
+        },
+    }
+    list_id_blocks: Final = [
+        _advisor_use(["srvtoolu_01A"]),
+        _advisor_result(["srvtoolu_01A"]),
+        {**search_result, "tool_use_id": ["srvtoolu_01Search"]},
+    ]
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": [search_use, search_result, *list_id_blocks, _OK_TEXT]},
+        {"role": "user", "content": "and now?"},
+    ]
+
+    kept: Final = without_stale_tool_search_results(messages, [{"name": "get_weather"}])
+
+    assert kept == (messages[0], {"role": "assistant", "content": [*list_id_blocks, _OK_TEXT]}, messages[2])

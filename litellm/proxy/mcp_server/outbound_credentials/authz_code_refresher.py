@@ -48,7 +48,8 @@ class CredentialPersist(Protocol):
         scopes: tuple[str, ...] | None,
         identity_binding_proof: str | None = None,
         cimd_client_id: str | None = None,
-    ) -> None: ...
+        refreshed_from: str | None = None,
+    ) -> bool | None: ...
 
 
 def _parse_expires_in(raw: object) -> int | None:
@@ -159,7 +160,7 @@ class AuthorizationCodeRefresher:
         granted_scopes: Final = _parse_scopes(body.get("scope"))
         scopes: Final = granted_scopes if granted_scopes is not None else token.scopes
 
-        await self._persist(
+        stored: Final = await self._persist(
             user_id,
             server_id,
             access_token,
@@ -168,7 +169,10 @@ class AuthorizationCodeRefresher:
             scopes,
             **({"identity_binding_proof": binding_proof} if binding_proof is not None else {}),
             **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
+            refreshed_from=token.refresh_token,
         )
+        if stored is False:
+            return None
         return OAuthToken(
             access_token=access_token,
             expires_at=self._clock() + expires_in if expires_in is not None else None,

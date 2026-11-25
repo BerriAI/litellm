@@ -4,15 +4,17 @@
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Protocol
 
 import httpx
 from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import keyword_arguments
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -40,6 +42,23 @@ _TRANSPORT_HEADER_NAMES: Final = frozenset(
 )
 _HEADER_NAME: Final = re.compile(r"[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 _HEADER_VALUE: Final = re.compile(r"[\t\x20-\x7e]*")
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _CallLogger(Protocol):
+    def pre_call(self, input: object, api_key: object, *, additional_args: Mapping[str, object]) -> object: ...
+
+    def post_call(
+        self,
+        original_response: object,
+        input: object = ...,
+        api_key: object = ...,
+        additional_args: Mapping[str, object] = ...,
+    ) -> object: ...
+
+
+class _EmbeddingResponseFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 def _header_text(name: str, value: object) -> str | None:
@@ -75,20 +94,20 @@ def _extra_headers_as_text(extra_headers: Mapping[str, object], model: str, drop
 
 
 class OpenAILikeEmbeddingHandler(OpenAILikeBase):
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         pass
 
     async def aembedding(
         self,
-        input: list,
-        data: dict,
+        input: Sequence[object],
+        data: Mapping[str, object],
         model_response: EmbeddingResponse,
         timeout: float,
         api_key: str,
         api_base: str,
-        logging_obj,
+        logging_obj: _CallLogger,
         headers: dict,
-        client=None,
+        client: AsyncHTTPHandler | HTTPHandler | None = None,
     ) -> EmbeddingResponse:
         response = None
         try:
@@ -108,7 +127,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
 
                 response.raise_for_status()
 
-                response_json: Final = response.json()
+                response_json: Final = _DECODED_JSON.validate_python(response.json())
             except httpx.HTTPStatusError as e:
                 raise OpenAILikeError(
                     status_code=e.response.status_code,
@@ -126,7 +145,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
                 additional_args={"complete_input_dict": data},
                 original_response=response_json,
             )
-            return EmbeddingResponse(**response_json)
+            return EmbeddingResponse(**_EmbeddingResponseFields(**keyword_arguments(response_json, EmbeddingResponse)))
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
@@ -141,13 +160,13 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
         model: str,
         input: list,
         timeout: float,
-        logging_obj,
+        logging_obj: _CallLogger,
         api_key: str | None,
         api_base: str | None,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model_response: EmbeddingResponse | None = None,
-        client=None,
-        aembedding=None,
+        client: AsyncHTTPHandler | HTTPHandler | None = None,
+        aembedding: bool | None = None,
         custom_endpoint: bool | None = None,
         headers: dict | None = None,
         drop_params: bool = False,
@@ -209,7 +228,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
 
             response.raise_for_status()
 
-            response_json: Final = response.json()
+            response_json: Final = _DECODED_JSON.validate_python(response.json())
         except httpx.HTTPStatusError as e:
             raise OpenAILikeError(
                 status_code=e.response.status_code,
@@ -228,4 +247,4 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
             original_response=response_json,
         )
 
-        return litellm.EmbeddingResponse(**response_json)
+        return EmbeddingResponse(**_EmbeddingResponseFields(**keyword_arguments(response_json, EmbeddingResponse)))

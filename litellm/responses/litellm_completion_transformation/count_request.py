@@ -1,18 +1,19 @@
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # input items are forwarded as sent, as inference does
 
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
+from litellm.litellm_core_utils.prompt_templates.file_id_utils import (
     update_responses_input_with_model_file_ids,
     update_responses_tools_with_model_file_ids,
 )
 from litellm.litellm_core_utils.tool_fields import DropPolicy
-from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
-from litellm.responses.additional_tools import hoist_additional_tools
+from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body, responses_request_keys
+from litellm.responses.additional_tools import with_additional_tools_hoisted
 from litellm.responses.file_search.emulated_handler import replace_file_search_tools
 from litellm.responses.litellm_completion_transformation.compaction_items import holds_compaction_summary
 from litellm.responses.litellm_completion_transformation.transformation import (
@@ -20,10 +21,11 @@ from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
 from litellm.responses.main import previous_response_client_ids
-from litellm.types.llms.openai import ALL_RESPONSES_API_TOOL_PARAMS, ResponseInputParam
+from litellm.types.llms.openai import ResponseInputParam
 from litellm.utils import ProviderConfigManager
 
-_COUNTED_CHAT_PARAMS: Final = (
+COUNTED_CHAT_PARAMS: Final = (
+    "thinking",
     "tool_choice",
     "parallel_tool_calls",
     "response_format",
@@ -51,6 +53,7 @@ class ChatCountRequest:
 @dataclass(frozen=True, slots=True)
 class ChatCountBridgeError:
     message: str
+    param: str | None = None
 
 
 def _plain(item: object) -> object:
@@ -114,20 +117,6 @@ def with_provider_file_ids(
     }
 
 
-def _with_hoisted_additional_tools(responses_request: Mapping[str, object], drop_params: bool) -> Mapping[str, object]:
-    responses_input: Final = responses_request.get("input")
-    if not isinstance(responses_input, list):
-        return responses_request
-    input_items: Final = cast(ResponseInputParam, responses_input)  # cast-ok: forwarded as sent, as inference does
-    top_level_tools: Final = cast(  # cast-ok: tools are forwarded as sent, as inference does
-        "tuple[ALL_RESPONSES_API_TOOL_PARAMS, ...]", _ITEMS.validate_python(responses_request.get("tools") or ())
-    )
-    hoisted: Final = hoist_additional_tools(input_items, top_level_tools, drop_params=drop_params)
-    if not hoisted.hoisted:
-        return responses_request
-    return {**responses_request, "input": hoisted.input, "tools": list(hoisted.tools)}
-
-
 def _caller_input(responses_request: Mapping[str, object]) -> ResponseInputParam | None:
     responses_input: Final = responses_request.get("input")
     return (
@@ -135,6 +124,11 @@ def _caller_input(responses_request: Mapping[str, object]) -> ResponseInputParam
         if isinstance(responses_input, list)
         else None
     )
+
+
+def _request_input(responses_request: Mapping[str, object]) -> str | ResponseInputParam | None:
+    responses_input: Final = responses_request.get("input")
+    return responses_input if isinstance(responses_input, str) else _caller_input(responses_request)
 
 
 def _with_emulated_file_search(responses_request: Mapping[str, object]) -> Mapping[str, object]:
@@ -155,6 +149,8 @@ async def _with_previous_turns(
     responses_request: Mapping[str, object],
     policy: DropPolicy,
     session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None,
+    base_model: str | None,
+    user_continue_message: object,
 ) -> Mapping[str, object]:
     previous_response_id: Final = responses_request.get("previous_response_id")
     if not isinstance(previous_response_id, str) or not previous_response_id:
@@ -165,23 +161,36 @@ async def _with_previous_turns(
         litellm_completion_request={**chat_body, "model": model, "custom_llm_provider": custom_llm_provider},
         instructions=instructions if isinstance(instructions, str) else None,
         session_lookup=session_lookup,
-        request_kwargs={"drop_params": policy.drop_params},
+        request_kwargs={
+            "drop_params": policy.drop_params,
+            "base_model": base_model,
+            "user_continue_message": user_continue_message,
+        },
         previous_response_client_ids=previous_response_client_ids(previous_response_id, responses_request),
         input_replaces_history=holds_compaction_summary(responses_request.get("input")),
+        request_input=_request_input(responses_request),
     )
 
 
-def _counted_params(
-    chat_body: Mapping[str, object], tools: tuple[Mapping[str, object], ...], policy: DropPolicy
+def counted_chat_params(
+    chat_body: Mapping[str, object],
+    deployment_params: Mapping[str, object],
+    tools: tuple[Mapping[str, object], ...],
+    policy: DropPolicy,
 ) -> Mapping[str, JsonValue]:
+    inference_params: Final = {**deployment_params, **chat_body}
     sent: Final = {
-        name: chat_body[name]
-        for name in _COUNTED_CHAT_PARAMS
-        if chat_body.get(name) is not None and name not in policy.additional_drop_params
+        name: inference_params[name]
+        for name in COUNTED_CHAT_PARAMS
+        if inference_params.get(name) is not None and name not in policy.additional_drop_params
     }
     return _JSON_PARAMS.validate_python(
         {**sent, **({"drop_params": True} if policy.drop_params and (sent or tools) else {})}
     )
+
+
+def _fields_outside_responses_api(responses_request: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in responses_request.items() if key not in responses_request_keys()}
 
 
 async def chat_count_request(
@@ -191,6 +200,9 @@ async def chat_count_request(
     responses_request: Mapping[str, object],
     policy: DropPolicy,
     session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None = None,
+    base_model: str | None = None,
+    user_continue_message: object = None,
+    deployment_params: Mapping[str, object] = MappingProxyType({}),
 ) -> ChatCountRequest | ChatCountBridgeError | None:
     """The chat request Responses inference sends a provider with no native Responses API, or None
     when inference sends this provider the Responses body itself."""
@@ -202,20 +214,24 @@ async def chat_count_request(
     ):
         return None
     try:
+        hoisted_request: Final = with_additional_tools_hoisted(
+            {**responses_request, "model": model}, drop_params=policy.drop_params
+        )
         chat_body: Final = await _with_previous_turns(
             responses_batch_body_to_chat_body(
-                _with_compaction_as_summary_text(
-                    _with_emulated_file_search(_with_hoisted_additional_tools(responses_request, policy.drop_params))
-                ),
+                _with_compaction_as_summary_text(_with_emulated_file_search(hoisted_request)),
                 custom_llm_provider,
                 policy.drop_params,
                 caller_input=_caller_input(responses_request),
+                base_model=base_model,
             ),
             model,
             custom_llm_provider,
-            responses_request,
+            hoisted_request,
             policy,
             session_lookup,
+            base_model,
+            user_continue_message,
         )
         tools: Final = (
             () if "tools" in policy.additional_drop_params else tuple(map(_unmarked, _mappings(chat_body.get("tools"))))
@@ -223,9 +239,11 @@ async def chat_count_request(
         return ChatCountRequest(
             messages=tuple(map(_unmarked, _mappings(chat_body.get("messages")))),
             tools=tools or None,
-            params=_counted_params(chat_body, tools, policy),
+            params=counted_chat_params(
+                {**_fields_outside_responses_api(responses_request), **chat_body}, deployment_params, tools, policy
+            ),
         )
     except BadRequestError as e:
-        return ChatCountBridgeError(message=str(e.message))
+        return ChatCountBridgeError(message=str(e.message), param=e.param)
     except (ValidationError, ValueError, KeyError) as e:
         return ChatCountBridgeError(message=f"Invalid request for token counting: {e}")

@@ -150,3 +150,42 @@ async def test_max_iterations_no_agent_id_passes():
         call_type="",
     )
     assert result is None
+
+
+class _SharedCounterRedis:
+    def __init__(self) -> None:
+        self.counts: dict[str, int] = {}
+        self.script_args: list[list[int]] = []
+
+    def async_register_script(self, script: str):
+        async def increment(keys: list[str], args: list[int]) -> int:
+            self.script_args.append(args)
+            self.counts[keys[0]] = self.counts.get(keys[0], 0) + 1
+            return self.counts[keys[0]]
+
+        return increment
+
+
+@pytest.mark.asyncio
+async def test_max_iterations_counts_one_session_across_proxy_instances_through_redis():
+    shared_redis = _SharedCounterRedis()
+    first, second = (
+        PROXY_MaxIterationsHandler(internal_usage_cache=InternalUsageCache(DualCache(redis_cache=shared_redis)))
+        for _ in range(2)
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test-key-1234", metadata={"max_iterations": 3})
+    data = {"metadata": {"session_id": "session-shared"}}
+
+    for handler in (first, second, first):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=""
+        )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await second.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict, cache=DualCache(), data=data, call_type=""
+        )
+
+    assert exc_info.value.status_code == 429
+    assert "Current count: 4" in str(exc_info.value.detail)
+    assert shared_redis.script_args == [[first.ttl]] * 4

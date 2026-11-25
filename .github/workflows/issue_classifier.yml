@@ -16,12 +16,12 @@ on:
       - .github/issue-labels.json
       - .github/ISSUE_TEMPLATE/bug_report.yml
       - .github/ISSUE_TEMPLATE/feature_request.yml
-      - scripts/classify-issue.ts
-      - scripts/classify-issue.test.ts
-      - scripts/label-issue.ts
-      - scripts/label-issue.test.ts
-      - scripts/issue-labels.ts
-      - scripts/auto-close-duplicates.ts
+      - litellm/scripts/classify-issue.ts
+      - litellm/scripts/classify-issue.test.ts
+      - litellm/scripts/label-issue.ts
+      - litellm/scripts/label-issue.test.ts
+      - litellm/scripts/issue-labels.ts
+      - litellm/scripts/auto-close-duplicates.ts
 
 permissions: {}
 
@@ -49,7 +49,7 @@ jobs:
           bun-version: "1.4.0"
 
       - name: Test the gate, the validation and the label step
-        run: bun test scripts/classify-issue.test.ts scripts/label-issue.test.ts
+        run: bun test litellm/scripts/classify-issue.test.ts litellm/scripts/label-issue.test.ts
 
   classify-issue:
     # An edit to a labelled issue is dropped here; the script decides the rest against the live labels
@@ -73,7 +73,7 @@ jobs:
         with:
           sparse-checkout: |
             .github
-            scripts
+            litellm/scripts
           persist-credentials: false
 
       - name: Setup Bun
@@ -108,7 +108,7 @@ jobs:
           ISSUE_CLASSIFIER_MODEL: ${{ vars.ISSUE_CLASSIFIER_MODEL }}
         run: |
           set -euo pipefail
-          bun run scripts/classify-issue.ts > classification.json
+          bun run litellm/scripts/classify-issue.ts > classification.json
           {
             echo 'verdict<<CLASSIFICATION'
             cat classification.json
@@ -143,7 +143,7 @@ jobs:
         with:
           sparse-checkout: |
             .github
-            scripts
+            litellm/scripts
           persist-credentials: false
 
       - name: Setup Bun
@@ -153,7 +153,7 @@ jobs:
           bun-version: "1.4.0"
 
       - name: Replace the labels in each namespace
-        run: bun run scripts/label-issue.ts
+        run: bun run litellm/scripts/label-issue.ts
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERDICT: ${{ needs.classify-issue.outputs.verdict }}

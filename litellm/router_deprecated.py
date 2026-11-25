@@ -32,6 +32,8 @@ from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping, S
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Generic, ParamSpec, TypeVar, overload
 
+from pydantic import TypeAdapter
+
 from litellm.router_api import ASSIGNABLE_ALIASES, SETTING_FIELDS, ChangeSet, RoutingContext
 from litellm.router_strategy.least_busy import picks_reserve
 
@@ -60,12 +62,14 @@ if TYPE_CHECKING:
     )
     from litellm.types.utils import ModelInfo as ModelMapInfo
 
-_T: Final = TypeVar("_T")
-_P: Final = ParamSpec("_P")
+_T = TypeVar("_T")
+_P = ParamSpec("_P")
 
 DEPRECATED_ROUTER_MEMBER_USES: Final[Counter[str]] = Counter()  # mutable-ok: the live tally _note increments
 
 _INTERNAL_PREFIX: Final = "litellm.router"
+
+_MEMBER_VALUE: Final = TypeAdapter(object)
 
 
 # Router's own attribute hooks: a write or delete through an old name passes through them first.
@@ -92,10 +96,9 @@ def _note(name: str, replacement: str) -> None:
 def _as_router(obj: "DeprecatedRouterMembers") -> "Router":
     """The Router this mixin is part of (it is mixed into ``litellm.Router`` only)."""
     from litellm.router import Router
-    from litellm.router_python_core import PythonCore
 
-    if isinstance(obj, (Router, PythonCore)):
-        return obj  # pyright: ignore[reportReturnType]  # a PythonCore carries every member the mixin reads
+    if isinstance(obj, Router):
+        return obj
     raise TypeError(f"{type(obj).__name__} is not a litellm.Router; DeprecatedRouterMembers is mixed into Router only")
 
 
@@ -112,9 +115,12 @@ def _public_attribute_error(obj: object, core_name: str, public_name: str, error
 class _DeprecatedAttribute(Generic[_T]):
     """A former Router attribute, read through an entry point. Assignment still replaces it."""
 
-    def __init__(self, replacement: str, read: Callable[["Router"], _T]) -> None:
+    def __init__(self, replacement: str, read: Callable[["Router"], _T], unbound: object = None) -> None:
         self.replacement = replacement
         self.read = read
+        # What a class-level read returns when the core keeps no member of this name: a former
+        # method reads back as a function taking the router, as it did on the Router class.
+        self.unbound = unbound
         self.name = ""
 
     def __set_name__(self, owner: type, name: str) -> None:
@@ -129,7 +135,7 @@ class _DeprecatedAttribute(Generic[_T]):
 
     def __get__(self, obj: "DeprecatedRouterMembers | None", owner: type) -> object:
         if obj is None:
-            return getattr(owner, "_core_" + self.name, self)
+            return getattr(owner, "_core_" + self.name, self if self.unbound is None else self.unbound)
         _note(self.name, self.replacement)
         router: Final = _as_router(obj)
         try:
@@ -195,7 +201,7 @@ def _async_picker(router: "Router") -> Callable[..., Awaitable[object]]:
 
     async def async_get_available_deployment(
         model: str,
-        request_kwargs: dict,  # mutable-ok: the old parameter type, unchanged
+        request_kwargs: dict[str, object],  # mutable-ok: the old parameter type, unchanged
         messages: list[dict[str, str]] | None = None,  # mutable-ok: the old parameter type, unchanged
         input: str | list | None = None,  # mutable-ok: the old parameter type, unchanged
         specific_deployment: bool | None = False,
@@ -214,6 +220,23 @@ def _unreserved_picker(router: "Router") -> Callable[..., Awaitable[object]]:
     if inspect.ismethod(picker) or picker.__name__ == "async_get_available_deployment":
         return _without_reserving(picker)
     return picker
+
+
+async def _async_get_available_deployment(
+    router: "Router",
+    model: str,
+    request_kwargs: dict[str, object],  # mutable-ok: the old parameter type, unchanged
+    messages: list[dict[str, str]] | None = None,  # mutable-ok: the old parameter type, unchanged
+    input: str | list | None = None,  # mutable-ok: the old parameter type, unchanged
+    specific_deployment: bool | None = False,
+) -> object:
+    """``Router.async_get_available_deployment`` read on the class: the router's pick, unbound."""
+    return await _unreserved_picker(router)(model, request_kwargs, messages, input, specific_deployment)
+
+
+_async_get_available_deployment.__name__ = _async_get_available_deployment.__qualname__ = (
+    "async_get_available_deployment"
+)
 
 
 def _slack_alerting_logger(router: "Router") -> "SlackAlerting":
@@ -282,7 +305,9 @@ class DeprecatedRouterMembers:
     cooldown_cache = _attr("health().cooldowns", lambda r: r.health().cooldowns)
     health_state_cache = _attr("health().health_checks", lambda r: r.health().health_checks)
     deployment_latency_map = _attr("health().latency", lambda r: r.health().latency)
-    async_get_available_deployment = _attr("select(model, request_kwargs)", lambda r: _unreserved_picker(r))
+    async_get_available_deployment = _DeprecatedAttribute(
+        "select(model, request_kwargs)", lambda r: _unreserved_picker(r), unbound=_async_get_available_deployment
+    )
 
     # -- observers ------------------------------------------------------------------------------
     slack_alerting_logger = _attr("observe().slack_alerting_logger", _slack_alerting_logger)
@@ -320,6 +345,7 @@ class DeprecatedRouterMembers:
     )
     fallback_access_check = _setting("fallback_access_check", lambda r: r.settings().fallback_access_check)
     fallback_budget_check = _setting("fallback_budget_check", lambda r: r.settings().fallback_budget_check)
+    fallback_rate_limit_check = _setting("fallback_rate_limit_check", lambda r: r.settings().fallback_rate_limit_check)
     # These three are declared with the attribute type Router gave them rather than the descriptor's:
     # protocols in router_utils and the proxy match Router on them, and protocol matching does not
     # see through a descriptor. Reads and writes still go through _setting at runtime.
@@ -372,9 +398,9 @@ class DeprecatedRouterMembers:
         _note("get_router_model_info", "registry().router_model_info(...)")
         return _as_router(self).registry().router_model_info(deployment, received_model_name, id)
 
-    def get_discovered_model_info(self, model_id: str | None) -> Mapping[str, int]:
+    def get_discovered_model_info(self, model_id: str | None, model: str | None = None) -> Mapping[str, int]:
         _note("get_discovered_model_info", "registry().discovered_model_info(id)")
-        return _as_router(self).registry().discovered_model_info(model_id)
+        return _as_router(self).registry().discovered_model_info(model_id, model)
 
     # -- registry: many deployments -------------------------------------------------------------
     def get_model_list(
@@ -642,18 +668,18 @@ class DeprecatedRouterMembers:
     @staticmethod
     def is_deployment_blocked(deployment: "Deployment") -> bool:
         _note("is_deployment_blocked", "health().is_blocked(deployment)")
-        from litellm.router_api import RouterHealth
+        from litellm.router_rust.surface.health_routing import is_blocked as deployment_is_blocked
 
-        return RouterHealth.is_blocked(deployment)
+        return deployment_is_blocked(deployment)
 
     _is_deployment_blocked = is_deployment_blocked
 
     @staticmethod
     def are_all_deployments_blocked(deployments: "Sequence[DeploymentTypedDict]") -> bool:
         _note("are_all_deployments_blocked", "health().all_blocked(deployments)")
-        from litellm.router_api import RouterHealth
+        from litellm.router_rust.surface.health_routing import all_blocked as deployments_all_blocked
 
-        return RouterHealth.all_blocked(deployments)
+        return deployments_all_blocked(deployments)
 
     _are_all_deployments_blocked = are_all_deployments_blocked
 
@@ -689,7 +715,7 @@ class DeprecatedRouterMembers:
     async def async_get_healthy_deployments(
         self,
         model: str,
-        request_kwargs: dict,  # mutable-ok: the old parameter type, unchanged
+        request_kwargs: dict[str, object],  # mutable-ok: the old parameter type, unchanged
         messages: list[dict[str, str]] | None = None,  # mutable-ok: the old parameter type, unchanged
         input: str | list | None = None,  # mutable-ok: the old parameter type, unchanged
         specific_deployment: bool | None = False,
@@ -714,7 +740,7 @@ class DeprecatedRouterMembers:
         messages: list[dict[str, str]] | None = None,  # mutable-ok: the old parameter type, unchanged
         input: str | list | None = None,  # mutable-ok: the old parameter type, unchanged
         specific_deployment: bool | None = False,
-        request_kwargs: dict | None = None,  # mutable-ok: the old parameter type, unchanged
+        request_kwargs: dict[str, object] | None = None,  # mutable-ok: the old parameter type, unchanged
     ):
         _note("get_available_deployment_for_pass_through", "select(model, kind='pass_through')")
         return _run_ready(
@@ -802,7 +828,7 @@ class DeprecatedRouterMembers:
             specific_deployment=specific_deployment,
         )
 
-    def log_retry(self, kwargs: dict, e: Exception) -> dict:  # mutable-ok: the old signature, unchanged
+    def log_retry(self, kwargs: dict[str, object], e: Exception) -> dict:  # mutable-ok: the old signature, unchanged
         _note("log_retry", "RoutingContext.log_retry")
         return RoutingContext(_as_router(self)).log_retry(kwargs=kwargs, e=e)
 
@@ -810,7 +836,7 @@ class DeprecatedRouterMembers:
 # Router-family functions and classes that took the Router (``litellm_router_instance=``,
 # ``router=``, ...) take its RoutingContext now. These keep the old spellings working.
 
-_RoutingCallable: Final = TypeVar("_RoutingCallable", bound=Callable[..., object])
+_RoutingCallable = TypeVar("_RoutingCallable", bound=Callable[..., object])
 
 
 @functools.cache
@@ -914,7 +940,7 @@ def _name_members_after_router() -> None:
     # The old members were Router methods, so errors that name the method (a wrong-arity TypeError,
     # or "litellm.router.Router.<name>() argument after ** must be a mapping") keep naming it the
     # way they did before the members moved here.
-    for member in vars(DeprecatedRouterMembers).values():
+    for member in map(_MEMBER_VALUE.validate_python, vars(DeprecatedRouterMembers).values()):
         function = member.__func__ if isinstance(member, staticmethod) else member
         if inspect.isfunction(function):
             function.__qualname__ = f"Router.{function.__name__}"

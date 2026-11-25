@@ -598,6 +598,27 @@ def test_shipped_rules_are_provider_neutral_for_unmapped_ids(shipped_cost_map, m
     assert not info.get("output_cost_per_token")
 
 
+def _shipped_databricks_claude_rows_matching_the_mid_conversation_rule() -> tuple[str, ...]:
+    document: Final = json.loads((REPO_ROOT / "model_prices_and_context_window.json").read_text())
+    rule: Final = next(
+        rule
+        for rule in document["fallback_generalizations"]["rules"]
+        if rule["name"] == "claude-mid-conversation-system"
+    )
+    pattern: Final = re.compile(rule["pattern"], re.IGNORECASE)
+    return tuple(
+        key
+        for key, row in document.items()
+        if isinstance(row, dict) and row.get("litellm_provider") == "databricks" and pattern.search(key)
+    )
+
+
+@pytest.mark.parametrize("model", _shipped_databricks_claude_rows_matching_the_mid_conversation_rule())
+def test_shipped_databricks_claude_rows_agree_with_the_mid_conversation_rule(shipped_cost_map, model):
+    """The rule does not fill Databricks rows, so a row that omits the flag turns reminders into user turns."""
+    assert litellm.utils.supports_mid_conversation_system(model=model, custom_llm_provider="databricks") is True, model
+
+
 @pytest.mark.parametrize(
     "model,provider,adaptive,mid_conversation",
     [
@@ -808,6 +829,35 @@ def test_shipped_wandb_rule_is_anchored_to_the_wandb_namespace(shipped_cost_map)
     for foreign in ("openai/some-new-model", "notwandb/some-new-model", "together_ai/wandb/some-new-model"):
         matched = match_capability_generalizations(foreign)
         assert matched is None or not matched.get("supports_reasoning"), foreign
+
+
+@pytest.mark.parametrize("model", ["minimax/MiniMax-M3.2", "minimax/MiniMax-Text-02"])
+def test_shipped_rules_flag_unmapped_minimax_ids_as_reasoning(shipped_cost_map, model):
+    """MiniMax ships reasoning models faster than the registry names them. The rule
+    carries no mode and no pricing, so cost stays on the standard unpriced behavior."""
+    assert model not in litellm.model_cost
+
+    info = litellm.get_model_info(model, custom_llm_provider="minimax")
+    assert info["litellm_provider"] == "minimax"
+    assert info["supports_reasoning"] is True
+    assert info.get("mode") is None
+    assert not info.get("input_cost_per_token")
+    assert not info.get("output_cost_per_token")
+
+
+def test_shipped_minimax_rule_is_anchored_to_the_minimax_namespace(shipped_cost_map):
+    """``^minimax/`` is anchored, so it cannot leak onto another provider's ids."""
+    assert match_capability_generalizations("minimax/some-new-model") == {"supports_reasoning": True}
+    for foreign in ("openrouter/minimax/minimax-m3", "notminimax/MiniMax-M3", "together_ai/minimax/MiniMax-M3"):
+        matched = match_capability_generalizations(foreign)
+        assert matched is None or not matched.get("supports_reasoning"), foreign
+
+
+@pytest.mark.parametrize("model", ["speech-02-hd", "MiniMax-H3"])
+def test_shipped_minimax_rule_leaves_mapped_entries_alone(shipped_cost_map, model):
+    assert f"minimax/{model}" in litellm.model_cost
+    assert match_fill_missing_generalizations(f"minimax/{model}", "minimax") is None
+    assert litellm.supports_reasoning(model=model, custom_llm_provider="minimax") is False
 
 
 def test_shipped_wandb_rule_keeps_reasoning_effort_on_an_unmapped_model(shipped_cost_map):

@@ -12,12 +12,14 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     CONVERTED_SYSTEM_NOTE,
     anthropic_system_blocks,
     place_mid_conversation_system,
     split_leading_system_run,
+)
+from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
+    encrypted_reasoning_signature,
 )
 
 

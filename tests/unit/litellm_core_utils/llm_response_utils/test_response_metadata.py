@@ -12,6 +12,7 @@ from collections.abc import Iterator
 from typing import Final
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 import litellm
@@ -19,6 +20,7 @@ import litellm.litellm_core_utils.llm_response_utils.response_metadata as respon
 import litellm.proxy.common_request_processing as common_request_processing_mod
 from litellm.cost_calculator import select_model_name_for_cost_calc
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
     ResponseMetadata,
     _union_duration_ms,
@@ -206,6 +208,58 @@ class TestDictResultsSkipMetadataUpdate:
 
         logging_obj.set_response_timing_metrics.assert_not_called()
         assert result._hidden_params["litellm_overhead_time_ms"] == 100.0
+
+    def test_update_response_metadata_keeps_stream_wrapper_timing_on_logging_obj(self):
+        """A stream wrapper carries _hidden_params, but the response assembled from its chunks does
+        not inherit them, so the logging payload needs the stamped timing on the logging object."""
+        result = ModelResponse()
+        logging_obj = MagicMock()
+        logging_obj.stream = True
+        logging_obj.model_call_details = {"llm_api_duration_ms": 900.0}
+        logging_obj.caching_details = None
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.001)
+        logging_obj.litellm_call_id = "test-call-id"
+
+        update_response_metadata(
+            result=result,
+            logging_obj=logging_obj,
+            model="gpt-4",
+            kwargs={},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
+        )
+
+        logging_obj.set_response_timing_metrics.assert_called_once_with(
+            {"_response_ms": 1000.0, "litellm_overhead_time_ms": 100.0}
+        )
+        assert result._hidden_params["litellm_overhead_time_ms"] == 100.0
+
+    def test_update_response_metadata_keeps_the_handoff_overhead_when_a_stream_is_read_to_completion(self):
+        """A Responses API stream stamps its overhead when the stream is handed back and calls again at
+        stream end with include_overhead=False; that second call must not wipe the stamp."""
+        result = ModelResponse()
+        logging_obj = MagicMock()
+        logging_obj.stream = True
+        logging_obj.response_timing_metrics = {"_response_ms": 300.0, "litellm_overhead_time_ms": 100.0}
+        logging_obj.model_call_details = {"llm_api_duration_ms": 200.0}
+        logging_obj.caching_details = None
+        logging_obj.response_cost_calculator = MagicMock(return_value=0.001)
+        logging_obj.litellm_call_id = "test-call-id"
+
+        update_response_metadata(
+            result=result,
+            logging_obj=logging_obj,
+            model="gpt-4",
+            kwargs={},
+            start_time=datetime.datetime(2025, 1, 1, 0, 0, 0),
+            end_time=datetime.datetime(2025, 1, 1, 0, 0, 10),
+            include_overhead=False,
+        )
+
+        logging_obj.set_response_timing_metrics.assert_called_once_with(
+            {"_response_ms": 10000.0, "litellm_overhead_time_ms": 100.0}
+        )
+        assert "litellm_overhead_time_ms" not in result._hidden_params
 
     def test_update_response_metadata_omits_overhead_for_completed_stream(self):
         """LIT-5466: the Responses streaming iterator finishes the whole stream before updating
@@ -685,3 +739,62 @@ def test_update_response_metadata_keeps_the_provider_model_after_the_proxy_rewri
         select_model_name_for_cost_calc(model=None, completion_response=result, custom_llm_provider="azure")
         == "azure/gpt-5.4-nano-2026-03-17"
     )
+
+
+class _CannedChatClient(AsyncHTTPHandler):
+    async def post(self, url: str, *args: object, **kwargs: object) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "us.openai.gpt-6.1-sol",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+
+@pytest.mark.parametrize(
+    ("deployment_hosts", "expected_api_base"),
+    [
+        (
+            {
+                "api_base": "https://gateway.example.com/openai/v1/chat/completions",
+                "aws_bedrock_runtime_endpoint": "https://runtime.example.com",
+            },
+            "https://runtime.example.com",
+        ),
+        (
+            {"api_base": "https://gateway.example.com/openai/v1/chat/completions"},
+            "https://gateway.example.com/openai/v1/chat/completions",
+        ),
+        ({"api_base": "https://gateway.example.com"}, "https://gateway.example.com"),
+        ({"aws_bedrock_runtime_endpoint": "https://runtime.example.com"}, None),
+        (
+            {
+                "api_base": "https://gateway.example.com",
+                "aws_bedrock_runtime_endpoint": "https://svc:s3cret@runtime.example.com:8443",
+            },
+            "https://runtime.example.com:8443",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_bedrock_reported_api_base_names_the_host_called(
+    monkeypatch: pytest.MonkeyPatch, deployment_hosts: dict[str, str], expected_api_base: str | None
+) -> None:
+    monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
+    response: Final = await litellm.acompletion(
+        model="bedrock/us.openai.gpt-6.1-sol",
+        messages=[{"role": "user", "content": "hi"}],
+        aws_region_name="us-east-1",
+        aws_access_key_id="test-key-id",
+        aws_secret_access_key="test-secret",
+        client=_CannedChatClient(),
+        **deployment_hosts,
+    )
+
+    assert response._hidden_params["api_base"] == expected_api_base
