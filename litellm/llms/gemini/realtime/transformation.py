@@ -591,10 +591,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return bool(entry.get("gemini_native_audio") or entry.get("gemini_audio_only_live"))
 
     @staticmethod
-    def _is_text_only_live_model(model: str) -> bool:
-        entry: Final = GeminiRealtimeConfig._model_cost_entry(model)
-        if entry.get("mode") == "audio_transcription":
-            return True
+    def _is_realtime_text_output_entry(entry: Mapping[str, object]) -> bool:
         endpoints: Final = entry.get("supported_endpoints")
         output_modalities: Final = entry.get("supported_output_modalities")
         return (
@@ -602,6 +599,19 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             and "/v1/realtime" in endpoints
             and isinstance(output_modalities, list)
             and "audio" not in output_modalities
+        )
+
+    @staticmethod
+    def _is_text_only_live_model(model: str) -> bool:
+        entry: Final = GeminiRealtimeConfig._model_cost_entry(model)
+        return entry.get("mode") == "audio_transcription" or GeminiRealtimeConfig._is_realtime_text_output_entry(entry)
+
+    @staticmethod
+    def _is_transcription_live_model(model: str) -> bool:
+        entry: Final = GeminiRealtimeConfig._model_cost_entry(model)
+        return entry.get("mode") == "audio_transcription" or (
+            GeminiRealtimeConfig._is_realtime_text_output_entry(entry)
+            and entry.get("supported_modalities") == ["audio"]
         )
 
     @staticmethod
@@ -1572,7 +1582,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     def _consume_input_transcription_usage_estimate(self, model: str) -> RealtimeInputAudioTranscriptionUsage | None:
         """Gemini Live sends no usageMetadata for transcribe sessions; estimate billing from streamed audio duration."""
-        if self._unbilled_input_audio_bytes <= 0 or not self._is_text_only_live_model(model):
+        if self._unbilled_input_audio_bytes <= 0 or not self._is_transcription_live_model(model):
             return None
         audio_seconds: Final = self._unbilled_input_audio_bytes / PCM16_INPUT_AUDIO_BYTES_PER_SECOND
         self._unbilled_input_audio_bytes = 0

@@ -776,6 +776,10 @@ def _vertex_config() -> VertexAIRealtimeConfig:
     return VertexAIRealtimeConfig(access_token="tok", project="my-proj", location="us-central1")
 
 
+def _audio_append_message(pcm_bytes: int) -> str:
+    return json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(b"\x00" * pcm_bytes).decode()})
+
+
 @pytest.mark.parametrize(
     "cost_map_key",
     [f"vertex_ai/{_SYNTHETIC_TRANSCRIBE_MODEL}", _SYNTHETIC_TRANSCRIBE_MODEL, f"gemini/{_SYNTHETIC_TRANSCRIBE_MODEL}"],
@@ -826,6 +830,7 @@ def test_vertex_text_only_live_model_default_setup_requests_text_when_deployment
                 "litellm_provider": "vertex_ai",
                 "mode": "audio_transcription",
                 "supported_endpoints": ["/v1/realtime"],
+                "supported_modalities": ["audio"],
                 "supported_output_modalities": ["text"],
             }
         },
@@ -844,9 +849,36 @@ def test_vertex_text_only_live_model_default_setup_requests_text_when_deployment
         ]
     )
 
-    setup: Final = json.loads(_vertex_config().session_configuration_request(_SYNTHETIC_TRANSCRIBE_MODEL))["setup"]
+    cfg: Final = _vertex_config()
+    setup: Final = json.loads(cfg.session_configuration_request(_SYNTHETIC_TRANSCRIBE_MODEL))["setup"]
+    cfg.transform_realtime_request(_audio_append_message(96000), _SYNTHETIC_TRANSCRIBE_MODEL)
 
     assert setup["generationConfig"]["responseModalities"] == ["TEXT"]
+    assert cfg.unbilled_usage_on_session_close(_SYNTHETIC_TRANSCRIBE_MODEL) is not None
+
+
+@pytest.mark.parametrize("mode", ["realtime", "chat"])
+def test_vertex_text_output_live_chat_model_requests_text_without_estimated_transcription_usage(
+    monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            f"vertex_ai/{_SYNTHETIC_LIVE_MODEL}": {
+                "mode": mode,
+                "supported_endpoints": ["/v1/realtime"],
+                "supported_modalities": ["text", "image", "audio", "video"],
+                "supported_output_modalities": ["text"],
+            }
+        },
+    )
+    cfg: Final = _vertex_config()
+    setup: Final = json.loads(cfg.session_configuration_request(_SYNTHETIC_LIVE_MODEL))["setup"]
+    cfg.transform_realtime_request(_audio_append_message(96000), _SYNTHETIC_LIVE_MODEL)
+
+    assert setup["generationConfig"]["responseModalities"] == ["TEXT"]
+    assert cfg.unbilled_usage_on_session_close(_SYNTHETIC_LIVE_MODEL) is None
 
 
 def test_vertex_text_only_live_model_session_created_reports_text(vertex_only_transcribe_cost_map: None) -> None:
@@ -873,10 +905,7 @@ def test_vertex_only_text_only_live_model_estimates_usage_for_streamed_audio(
     vertex_only_transcribe_cost_map: None,
 ) -> None:
     cfg: Final = _vertex_config()
-    cfg.transform_realtime_request(
-        json.dumps({"type": "input_audio_buffer.append", "audio": base64.b64encode(b"\x00" * 96000).decode()}),
-        _SYNTHETIC_TRANSCRIBE_MODEL,
-    )
+    cfg.transform_realtime_request(_audio_append_message(96000), _SYNTHETIC_TRANSCRIBE_MODEL)
 
     usage: Final = cfg.unbilled_usage_on_session_close(_SYNTHETIC_TRANSCRIBE_MODEL)
 
