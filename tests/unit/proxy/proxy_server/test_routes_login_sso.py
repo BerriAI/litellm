@@ -33,7 +33,9 @@ def _install_login_mocks(monkeypatch, raise_on_auth: bool = False) -> None:
     """
     from litellm.proxy import proxy_server as ps
 
-    async def _fake_auth(username, password, master_key, prisma_client, throttle=None, general_settings=None):
+    async def _fake_auth(
+        username, password, master_key, prisma_client, throttle=None, general_settings=None, audit_route=None
+    ):
         if raise_on_auth:
             raise Exception("boom-auth-failure")
         fake = MagicMock()

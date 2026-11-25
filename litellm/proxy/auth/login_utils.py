@@ -6,6 +6,7 @@ login endpoints (e.g., /login and /v2/login).
 """
 
 import asyncio
+import json
 import os
 import secrets
 from collections.abc import Mapping
@@ -18,11 +19,14 @@ from fastapi import HTTPException
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, LITELLM_UI_SESSION_DURATION
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
+    LiteLLM_AuditLogs,
     LiteLLM_UserTable,
+    LitellmTableNames,
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
@@ -40,6 +44,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
 )
+from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update, track_audit_task
 from litellm.proxy.utils import (
     PrismaClient,
     get_server_root_path,
@@ -225,6 +230,27 @@ class LoginResult:
         self.password_reset_required = password_reset_required
 
 
+def _schedule_login_audit(
+    route: str,
+    user_id: str | None = None,
+    reason: str | None = None,
+) -> None:
+    async def write() -> None:
+        await create_audit_log_for_update(
+            LiteLLM_AuditLogs(
+                id=str(uuid.uuid4()),
+                updated_at=datetime.now(timezone.utc),
+                changed_by=user_id,
+                table_name=LitellmTableNames.USER_TABLE_NAME,
+                object_id=user_id or "",
+                action="login" if reason is None else "login_failed",
+                updated_values=json.dumps({"route": route, **({"reason": reason} if reason is not None else {})}),
+            )
+        )
+
+    track_audit_task(asyncio.create_task(write(), name=f"audit sign-in on {route}"))
+
+
 async def authenticate_user(
     username: str,
     password: str,
@@ -232,6 +258,7 @@ async def authenticate_user(
     prisma_client: PrismaClient | None,
     throttle: LoginThrottle,
     general_settings: Mapping[str, object] = MappingProxyType({}),
+    audit_route: Literal["/login", "/v2/login", "/v3/login"] | None = None,
 ) -> LoginResult:
     """
     Authenticate a user and generate an API key for UI access.
@@ -249,6 +276,7 @@ async def authenticate_user(
         general_settings: Proxy general_settings, checked for
             `disable_password_login_when_sso_enabled` and
             `disable_env_credential_login`
+        audit_route: Local login route to record in the audit log, if provided
 
     Returns:
         LoginResult: Object containing authentication data
@@ -291,8 +319,20 @@ async def authenticate_user(
             code=500,
         )
 
-    attempt: Final = await throttle.attempt(username)
-    return await _sign_in(username, password, master_key, prisma_client, attempt, general_settings)
+    try:
+        attempt: Final = await throttle.attempt(username)
+        result: Final = await _sign_in(username, password, master_key, prisma_client, attempt, general_settings)
+    except ProxyException as exc:
+        if audit_route is not None and exc.type == ProxyErrorTypes.auth_error:
+            if exc.code == "401":
+                _schedule_login_audit(audit_route, reason="invalid_credentials")
+            elif exc.code == "429":
+                _schedule_login_audit(audit_route, reason="throttled")
+        raise
+
+    if audit_route is not None and result.user_role == LitellmUserRoles.PROXY_ADMIN:
+        _schedule_login_audit(audit_route, user_id=result.user_id)
+    return result
 
 
 async def _sign_in(

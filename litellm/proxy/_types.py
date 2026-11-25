@@ -3735,7 +3735,9 @@ from litellm.types.proxy.management_endpoints.user_requests import (  # noqa: E4
     LiteLLM_UserTableWithKeyCount as LiteLLM_UserTableWithKeyCount,  # noqa: PLC0414  # public re-export
 )
 
-AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "unblocked", "rotated", "kill_switch_fired"]
+AUDIT_ACTIONS = Literal[
+    "created", "updated", "deleted", "blocked", "unblocked", "rotated", "kill_switch_fired", "login", "login_failed"
+]
 
 
 def masked_audit_log_value(value: object) -> object:

@@ -7,7 +7,7 @@ from typing import Final
 
 import httpx
 import pytest
-from tests.integration._support.client import Gateway, eventually, list_value, object_value
+from tests.integration._support.client import Gateway, eventually, list_value, object_value, string_value
 from tests.integration._support.database import read_rows, write_rows
 from tests.integration._support.process import graceful_stop_seconds, owned_proxy_process
 from pydantic import JsonValue
@@ -85,3 +85,56 @@ def test_the_audit_page_lists_an_update_row_whose_state_before_was_stored_as_jso
         assert (page.status_code, by_id.status_code) == (200, 200), f"{page.text} {by_id.text}"
         assert _before_values_of_updates(page) == _before_values_of_updates(stored), page.text
         assert object_value(by_id.json())["before_value"] == _before_values_of_updates(stored)[0], by_id.text
+
+
+@pytest.mark.timeout(OWNED_PROXY_TIMEOUT)
+def test_the_audit_page_records_local_admin_login_once_and_leaves_rejections_unattributed(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    config: Final = tmp_path / "login-audit.yaml"
+    config.write_text(
+        "general_settings:\n"
+        "  master_key: os.environ/LITELLM_MASTER_KEY\n"
+        "  control_plane_url: https://control-plane.example.invalid\n"
+        "litellm_settings:\n"
+        "  store_audit_logs: true\n"
+    )
+    username: Final = "audit-test-admin"
+    password: Final = "audit-test-password"
+    db: Final = os.environ["DATABASE_URL"]
+    sql: Final = """SELECT id, action, object_id, table_name, changed_by, changed_by_api_key, updated_values
+        FROM "LiteLLM_AuditLog" WHERE action IN (%s, %s)"""
+    actions: Final = ("login", "login_failed")
+    original: Final = {row["id"] for row in read_rows(sql, actions, database_url=db)}
+    with owned_proxy_process(
+        gateway,
+        tmp_path,
+        {"DATABASE_URL": db, "UI_USERNAME": username, "UI_PASSWORD": password},
+        config=config,
+        remove_environment=("DATABASE_URL_READ_REPLICA",),
+    ) as owned:
+        candidate: Final = owned.gateway
+        code: Final = string_value(candidate.post("/v3/login", {"username": username, "password": password})["code"])
+        exchange: Final = candidate.post("/v3/login/exchange", {"code": code})
+        rejected: Final = candidate.request("POST", "/v2/login", {"username": username, "password": "wrong-password"})
+        assert rejected.status_code == 401
+        assert string_value(exchange["token"])
+
+        eventually(lambda: candidate.rows(sql, actions), lambda rows: len(rows) >= len(original) + 2, seconds=30)
+        page: Final = candidate.request("GET", "/audit", params={"action": "login_failed"})
+        assert page.status_code == 200
+        events: Final = tuple(object_value(row) for row in list_value(object_value(page.json())["audit_logs"]))
+        assert [(row["action"], row["updated_values"]) for row in events if row["id"] not in original] == [
+            ("login_failed", {"route": "/v2/login", "reason": "invalid_credentials"})
+        ]
+
+    added: Final = [row for row in read_rows(sql, actions, database_url=db) if row["id"] not in original]
+    assert sorted(string_value(row["action"]) for row in added) == ["login", "login_failed"]
+    success: Final = next(row for row in added if row["action"] == "login")
+    failure: Final = next(row for row in added if row["action"] == "login_failed")
+    assert success["object_id"] and success["changed_by"] == success["object_id"]
+    assert success["changed_by_api_key"] == ""
+    assert success["table_name"] == failure["table_name"] == "LiteLLM_UserTable"
+    assert success["updated_values"] == {"route": "/v3/login"}
+    assert failure["object_id"] == failure["changed_by"] == failure["changed_by_api_key"] == ""
+    assert failure["updated_values"] == {"route": "/v2/login", "reason": "invalid_credentials"}

@@ -7,6 +7,7 @@ to login_utils.py for better reusability.
 
 import asyncio
 import hashlib
+import json
 import os
 from collections.abc import Mapping
 from contextlib import ExitStack
@@ -40,6 +41,7 @@ def _unlimited_throttle():
 
 
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     LiteLLM_UserTable,
@@ -55,11 +57,22 @@ from litellm.proxy.auth.login_utils import (
     is_env_credential_login_enabled,
     screen_login_password_for_breach,
 )
+from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
+from litellm.types.utils import StandardAuditLogPayload
 from tests._master_key import MASTER_KEY
 
 # Successful DB-user logins schedule the background HIBP screen; disable it so
 # no test ever does live network I/O to haveibeenpwned.com from CI.
 _POLICY_NO_BREACH_CHECK = {"password_policy_check_breached_passwords": False}
+
+
+class _AuditSink(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.events: Final[asyncio.Queue[StandardAuditLogPayload]] = asyncio.Queue()
+
+    async def async_log_audit_log_event(self, audit_log: StandardAuditLogPayload) -> None:
+        self.events.put_nowait(audit_log)
 
 
 def test_get_ui_credentials_prefers_explicit_password():
@@ -95,11 +108,16 @@ def test_get_ui_credentials_requires_password():
 
 
 @pytest.mark.asyncio
-async def test_authenticate_user_admin_login_with_ui_credentials():
+async def test_authenticate_user_admin_login_with_ui_credentials(monkeypatch: pytest.MonkeyPatch):
     """Test admin login using UI_USERNAME and UI_PASSWORD"""
     master_key = MASTER_KEY
     ui_username = "admin"
     ui_password = MASTER_KEY
+    sink: Final = _AuditSink()
+    monkeypatch.setattr("litellm.store_audit_logs", True)
+    monkeypatch.setattr("litellm.audit_log_callbacks", [sink])
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
 
     mock_prisma_client = MagicMock()
     mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
@@ -136,6 +154,7 @@ async def test_authenticate_user_admin_login_with_ui_credentials():
                         master_key=master_key,
                         prisma_client=mock_prisma_client,
                         throttle=_unlimited_throttle(),
+                        audit_route="/login",
                     )
 
                     assert isinstance(result, LoginResult)
@@ -144,6 +163,18 @@ async def test_authenticate_user_admin_login_with_ui_credentials():
                     assert result.user_email is None
                     assert result.user_role == LitellmUserRoles.PROXY_ADMIN
                     assert result.login_method == "username_password"
+
+    await drain_audit_tasks()
+    assert sink.events.qsize() == 1
+    event: Final = sink.events.get_nowait()
+    assert (
+        event["action"],
+        event["object_id"],
+        event["changed_by"],
+        event["changed_by_api_key"],
+        event["before_value"],
+        json.loads(event["updated_values"] or "null"),
+    ) == ("login", result.user_id, result.user_id, "", None, {"route": "/login"})
 
 
 @pytest.mark.asyncio
@@ -225,6 +256,55 @@ async def test_authenticate_user_invalid_credentials():
         assert exc_info.value.code == "401"
         assert "Invalid credentials" in exc_info.value.message
         assert "UI_USERNAME" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("configured", "premium"), [(True, True), (False, True), (True, False)])
+async def test_rejected_login_exports_only_safe_audit_fields_when_enabled(
+    configured: bool, premium: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("UI_USERNAME", "configured-admin")
+    monkeypatch.setenv("UI_PASSWORD", "configured-password")
+    monkeypatch.setattr("litellm.store_audit_logs", configured)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    sink: Final = _AuditSink()
+    monkeypatch.setattr("litellm.audit_log_callbacks", [sink])
+
+    with pytest.raises(ProxyException) as error:
+        await authenticate_user(
+            username="unverified-admin",
+            password="rejected-password",
+            master_key=MASTER_KEY,
+            prisma_client=None,
+            throttle=_unlimited_throttle(),
+            audit_route="/v2/login",
+        )
+    await drain_audit_tasks()
+
+    assert error.value.code == "401"
+    expected = (
+        "login_failed",
+        "LiteLLM_UserTable",
+        "",
+        "",
+        "",
+        None,
+        {"route": "/v2/login", "reason": "invalid_credentials"},
+    )
+    observed = tuple(
+        (
+            event["action"],
+            event["table_name"],
+            event["object_id"],
+            event["changed_by"],
+            event["changed_by_api_key"],
+            event["before_value"],
+            json.loads(event["updated_values"] or "null"),
+        )
+        for event in (sink.events.get_nowait() for _ in range(sink.events.qsize()))
+    )
+    assert observed == ((expected,) if configured and premium else ())
 
 
 @pytest.mark.asyncio
