@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Segment<'a> {
@@ -29,73 +29,183 @@ fn next_segment(path: &str) -> Option<(Segment<'_>, &str)> {
     Some((Segment::Field(field), after.trim_start_matches('.')))
 }
 
-/// Deletes what any of `paths` addresses under `value`, each path read one segment per level of
-/// `value`. A field that ends a path is deleted from the object holding it, and a path that ends
-/// on an element or `[*]` deletes nothing. Each part of `value` is visited once, with every path
-/// that reaches it, so paths that overlap through `[*]` and an index never walk the same element
-/// twice, and no path is read deeper than `value` goes.
-fn prune(paths: &HashSet<&str>, value: &mut Value) {
-    match value {
-        Value::Object(object) => {
-            let mut ending: HashSet<&str> = HashSet::new();
-            let mut below: HashMap<&str, HashSet<&str>> = HashMap::new();
-            paths
-                .iter()
-                .filter_map(|path| next_segment(path))
-                .for_each(|(segment, rest)| match segment {
-                    Segment::Field(name) if rest.is_empty() => {
-                        ending.insert(name);
-                    }
-                    Segment::Field(name) => {
-                        below.entry(name).or_default().insert(rest);
-                    }
-                    Segment::Every | Segment::Index(_) => {}
-                });
-            if ending.iter().any(|name| object.contains_key(*name)) {
-                object.retain(|key, _| !ending.contains(key.as_str()));
-            }
-            below
-                .iter()
-                .filter(|(name, _)| !ending.contains(*name))
-                .for_each(|(name, rests)| {
-                    if let Some(item) = object.get_mut(*name) {
-                        prune(rests, item);
-                    }
-                });
+type NodeId = usize;
+type NameId = usize;
+
+const ROOT: NodeId = 0;
+
+/// What the paths sharing one prefix address below it. `pending` holds the rest of each of those
+/// paths until a part of the body reaches the prefix and `expand` reads one more segment of each,
+/// so no path is read deeper than the body goes and each segment is read once.
+#[derive(Default)]
+struct Node<'a> {
+    ends: bool,
+    pending: Vec<&'a str>,
+    fields: HashMap<NameId, NodeId>,
+    field_name_bytes: usize,
+    every: Option<NodeId>,
+    indexes: HashMap<usize, NodeId>,
+}
+
+/// The paths as one tree of the segments they share, held in a flat list so that neither building
+/// nor dropping it recurses, with each field name numbered once.
+struct Removals<'a> {
+    nodes: Vec<Node<'a>>,
+    names: HashMap<&'a str, NameId>,
+    spelled: Vec<&'a str>,
+}
+
+impl<'a> Removals<'a> {
+    fn new(paths: impl IntoIterator<Item = &'a str>) -> Self {
+        let root = Node {
+            pending: paths.into_iter().collect(),
+            ..Node::default()
+        };
+        Self {
+            nodes: vec![root],
+            names: HashMap::new(),
+            spelled: Vec::new(),
         }
-        Value::Array(items) => {
-            let mut every: HashSet<&str> = HashSet::new();
-            let mut at: HashMap<usize, HashSet<&str>> = HashMap::new();
-            paths
-                .iter()
-                .filter_map(|path| next_segment(path))
-                .filter(|(_, rest)| !rest.is_empty())
-                .for_each(|(segment, rest)| match segment {
-                    Segment::Every => {
-                        every.insert(rest);
-                    }
-                    Segment::Index(index) => {
-                        at.entry(index).or_default().insert(rest);
-                    }
-                    Segment::Field(_) => {}
-                });
-            if every.is_empty() {
-                at.iter().for_each(|(index, rests)| {
-                    if let Some(item) = items.get_mut(*index) {
-                        prune(rests, item);
-                    }
-                });
-                return;
+    }
+
+    fn expand(&mut self, node: NodeId) {
+        std::mem::take(&mut self.nodes[node].pending)
+            .into_iter()
+            .filter_map(next_segment)
+            .for_each(|(segment, rest)| {
+                let child = self.child(node, segment);
+                match rest {
+                    "" => self.nodes[child].ends = true,
+                    rest => self.nodes[child].pending.push(rest),
+                }
+            });
+    }
+
+    fn child(&mut self, node: NodeId, segment: Segment<'a>) -> NodeId {
+        let fresh = self.nodes.len();
+        let child = match segment {
+            Segment::Field(name) => {
+                let id = self.number(name);
+                let parent = &mut self.nodes[node];
+                let child = *parent.fields.entry(id).or_insert(fresh);
+                if child == fresh {
+                    parent.field_name_bytes += name.len();
+                }
+                child
             }
-            items
-                .iter_mut()
-                .enumerate()
-                .for_each(|(index, item)| match at.get(&index) {
-                    Some(rests) => prune(&every.union(rests).copied().collect(), item),
-                    None => prune(&every, item),
-                });
+            Segment::Every => *self.nodes[node].every.get_or_insert(fresh),
+            Segment::Index(index) => *self.nodes[node].indexes.entry(index).or_insert(fresh),
+        };
+        if child == fresh {
+            self.nodes.push(Node::default());
         }
-        _ => {}
+        child
+    }
+
+    fn number(&mut self, name: &'a str) -> NameId {
+        let fresh = self.spelled.len();
+        let id = *self.names.entry(name).or_insert(fresh);
+        if id == fresh {
+            self.spelled.push(name);
+        }
+        id
+    }
+
+    /// Deletes what any of `nodes` addresses under `value`. A field that ends a path is deleted
+    /// from the object holding it, and a path that ends on an element or `[*]` deletes nothing.
+    /// Each part of `value` is visited once, with every node that reaches it, so paths that overlap
+    /// through `[*]` and an index never walk the same element twice.
+    fn prune(&mut self, nodes: &[NodeId], value: &mut Value) {
+        match value {
+            Value::Object(object) => self.prune_object(nodes, object),
+            Value::Array(items) => self.prune_array(nodes, items),
+            _ => {}
+        }
+    }
+
+    fn prune_object(&mut self, nodes: &[NodeId], object: &mut Map<String, Value>) {
+        nodes.iter().for_each(|node| self.expand(*node));
+        let reached = self.fields_in(nodes, object);
+        let ending: HashSet<NameId> = reached
+            .iter()
+            .filter(|(_, children)| children.iter().any(|child| self.nodes[*child].ends))
+            .map(|(name, _)| *name)
+            .collect();
+        if !ending.is_empty() {
+            object.retain(|key, _| {
+                self.names
+                    .get(key.as_str())
+                    .is_none_or(|name| !ending.contains(name))
+            });
+        }
+        reached
+            .into_iter()
+            .filter(|(name, _)| !ending.contains(name))
+            .for_each(|(name, children)| {
+                if let Some(item) = object.get_mut(self.spelled[name]) {
+                    self.prune(&children, item);
+                }
+            });
+    }
+
+    /// The fields of `object` that any of `nodes` names, each with the nodes below it. The match
+    /// reads the names when they are shorter in total than `object` has keys, and the keys
+    /// otherwise, so a part of the body never costs more to match than its own size, however long
+    /// the names are or however many parts the same nodes reach.
+    fn fields_in(
+        &self,
+        nodes: &[NodeId],
+        object: &Map<String, Value>,
+    ) -> HashMap<NameId, Vec<NodeId>> {
+        let mut reached: HashMap<NameId, Vec<NodeId>> = HashMap::new();
+        let name_bytes: usize = nodes
+            .iter()
+            .map(|node| self.nodes[*node].field_name_bytes)
+            .sum();
+        if name_bytes <= object.len() {
+            nodes
+                .iter()
+                .flat_map(|node| &self.nodes[*node].fields)
+                .filter(|(name, _)| object.contains_key(self.spelled[**name]))
+                .for_each(|(name, child)| reached.entry(*name).or_default().push(*child));
+            return reached;
+        }
+        object
+            .keys()
+            .filter_map(|key| self.names.get(key.as_str()))
+            .for_each(|name| {
+                nodes
+                    .iter()
+                    .filter_map(|node| self.nodes[*node].fields.get(name))
+                    .for_each(|child| reached.entry(*name).or_default().push(*child));
+            });
+        reached
+    }
+
+    fn prune_array(&mut self, nodes: &[NodeId], items: &mut [Value]) {
+        nodes.iter().for_each(|node| self.expand(*node));
+        let every: Vec<NodeId> = nodes
+            .iter()
+            .filter_map(|node| self.nodes[*node].every)
+            .collect();
+        let mut at: HashMap<usize, Vec<NodeId>> = HashMap::new();
+        nodes
+            .iter()
+            .flat_map(|node| &self.nodes[*node].indexes)
+            .filter(|(index, _)| **index < items.len())
+            .for_each(|(index, child)| at.entry(*index).or_default().push(*child));
+        if every.is_empty() {
+            at.into_iter()
+                .for_each(|(index, indexed)| self.prune(&indexed, &mut items[index]));
+            return;
+        }
+        items
+            .iter_mut()
+            .enumerate()
+            .for_each(|(index, item)| match at.get(&index) {
+                Some(indexed) => self.prune(&[every.as_slice(), indexed].concat(), item),
+                None => self.prune(&every, item),
+            });
     }
 }
 
@@ -105,7 +215,7 @@ pub fn delete_nested_values<'a>(
     mut value: Value,
     paths: impl IntoIterator<Item = &'a str>,
 ) -> Value {
-    prune(&paths.into_iter().collect(), &mut value);
+    Removals::new(paths).prune(&[ROOT], &mut value);
     value
 }
 
@@ -262,6 +372,18 @@ mod tests {
     fn a_path_far_deeper_than_the_value_leaves_it_untouched(#[case] body: Value) {
         let path = vec!["a"; 100_000].join(".");
         assert_eq!(delete_nested_values(body.clone(), [path.as_str()]), body);
+    }
+
+    #[rstest]
+    #[case::long_rest_after_an_absent_field("tools[*].missing.")]
+    #[case::long_field_name_in_every_element("tools[*].")]
+    fn a_long_path_under_many_elements_finishes_well_inside_one_request(#[case] prefix: &str) {
+        let body = json!({"tools": vec![json!({"name": "t"}); 2_000]});
+        let path = format!("{prefix}{}", "x".repeat(1 << 20));
+        let started = std::time::Instant::now();
+        let trimmed = delete_nested_values(body.clone(), [path.as_str()]);
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert_eq!(trimmed, body);
     }
 
     #[rstest]
