@@ -547,6 +547,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         anthropic_messages_request: dict,
         injected_thinking_for_clear_thinking: bool,
         litellm_params: GenericLiteLLMParams,
+        safeguards_dropped: bool,
     ) -> list[str]:
         anthropic_model_info: Final = AnthropicModelInfo()
         tools: Final = anthropic_messages_optional_request_params.get("tools")
@@ -590,7 +591,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         dangerous_tool_use_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
         if anthropic_messages_optional_request_params.get("safeguards") is not None:
             beta_set.add(dangerous_tool_use_beta)
-        elif dangerous_tool_use_beta in beta_set and self.drops_dangerous_tool_use_beta_without_safeguards():
+        elif dangerous_tool_use_beta in beta_set and (
+            safeguards_dropped or self.drops_dangerous_tool_use_beta_without_safeguards()
+        ):
             beta_set.discard(dangerous_tool_use_beta)
             verbose_logger.debug(
                 "Bedrock Invoke: dropping %s from client headers because the request has no safeguards. Bedrock "
@@ -839,6 +842,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             anthropic_messages_request=anthropic_messages_request,
             injected_thinking_for_clear_thinking=injected_thinking_for_clear_thinking,
             litellm_params=litellm_params,
+            safeguards_dropped=SAFEGUARDS in params and SAFEGUARDS not in upstream_params,
         )
 
         if filtered_betas:

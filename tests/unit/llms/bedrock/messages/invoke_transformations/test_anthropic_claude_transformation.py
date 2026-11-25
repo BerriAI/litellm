@@ -1595,6 +1595,48 @@ def test_bedrock_messages_safeguards_drop_warning_names_the_route_and_claims_no_
     assert "Dropped safeguards and the" not in drop_warnings[0]
 
 
+@pytest.mark.parametrize(
+    "config_path",
+    [
+        "litellm.llms.bedrock.messages.mantle_transformation.AmazonMantleMessagesConfig",
+        "litellm.llms.bedrock_mantle.messages.transformation.BedrockMantleAnthropicMessagesConfig",
+    ],
+    ids=["bedrock_mantle_route", "mantle_provider"],
+)
+@pytest.mark.parametrize(
+    ("model", "forwarded"),
+    [(_OPUS_4_1, False), (_SONNET_4_5, True)],
+    ids=["old_model_drops_both", "flagged_model_keeps_both"],
+)
+def test_bedrock_mantle_messages_sends_the_client_safeguards_beta_only_next_to_safeguards(
+    local_model_cost_map: None,
+    local_beta_headers_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    config_path: str,
+    model: str,
+    forwarded: bool,
+) -> None:
+    import importlib
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    module_name, class_name = config_path.rsplit(".", 1)
+    config: Final = getattr(importlib.import_module(module_name), class_name)()
+    monkeypatch.setattr(litellm, "drop_params", False)
+    headers: Final = {"anthropic-beta": "dangerous-tool-use-2026-09-03"}
+
+    result: Final = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "safeguards": [{"type": "dangerous_tool_use"}]},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers=headers,
+    )
+
+    assert ("safeguards" in result) is forwarded
+    assert ("dangerous-tool-use-2026-09-03" in headers.get("anthropic-beta", "")) is forwarded
+
+
 _NAME_SCHEMA: Final = {
     "type": "object",
     "properties": {"name": {"type": "string"}},

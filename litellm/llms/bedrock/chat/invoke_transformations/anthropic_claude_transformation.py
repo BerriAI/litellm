@@ -282,19 +282,24 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         )
 
         self._convert_document_url_sources_to_base64(_anthropic_request)
-        beta_list: Final = self._compute_bedrock_invoke_beta_headers(
+        header_and_auto_betas: Final = self._compute_bedrock_invoke_beta_headers(
             model=model,
             messages=messages,
             optional_params=upstream_params,
             headers=headers,
-            body_betas=active_beta_values({}, upstream_params.get("anthropic_beta")),
             thinking=_anthropic_request.get("thinking"),
             history_holds_tool_search=replays_tool_search(
                 OBJECT_MAPPING_ADAPTER.validate_python(_anthropic_request).get("messages")
             ),
         )
-        if beta_list:
-            _anthropic_request["anthropic_beta"] = beta_list
+        body_safeguards_beta: Final = (
+            active_beta_values({}, upstream_params.get("anthropic_beta"))
+            & {ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value}
+            if "safeguards" in upstream_params
+            else frozenset[str]()
+        )
+        if header_and_auto_betas:
+            _anthropic_request["anthropic_beta"] = sorted({*header_and_auto_betas, *body_safeguards_beta})
 
         return dict(
             strip_beta_gated_request_body(
@@ -449,7 +454,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         headers: dict[str, object],
-        body_betas: frozenset[str],
         thinking: AnthropicThinkingParam | None,
         history_holds_tool_search: bool,
     ) -> list[str]:
@@ -459,7 +463,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         input_examples_used: Final = self.is_input_examples_used(tools)
         is_mid_conversation_output_config_used: Final = self.is_mid_conversation_output_config_used(messages)
 
-        client_beta_set: Final = set(get_anthropic_beta_from_headers(headers)) | body_betas
+        client_beta_set: Final = set(get_anthropic_beta_from_headers(headers))
         user_beta_set: Final = (
             client_beta_set
             if "safeguards" in optional_params

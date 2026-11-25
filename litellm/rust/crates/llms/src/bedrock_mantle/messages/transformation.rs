@@ -1526,6 +1526,35 @@ mod tests {
     #[rstest]
     #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
     #[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG)]
+    fn dropped_safeguards_take_the_client_dangerous_tool_use_beta_with_them(
+        #[case] config: &dyn BaseMessagesConfig,
+    ) {
+        let request: MessagesRequest = serde_json::from_value(request(
+            "claude-test",
+            json!({"safeguards": [{"type": "dangerous_tool_use"}]}),
+        ))
+        .unwrap();
+        let context = MessagesTransformContext {
+            drops_rejected_safeguards: true,
+            ..MessagesTransformContext::new(MessagesModelCapabilities::default(), false)
+        };
+        let (request, headers) = config
+            .finalize_request(
+                request,
+                headers(&[("anthropic-beta", "dangerous-tool-use-2026-09-03")]),
+                &context,
+            )
+            .unwrap();
+        let body = config.wire_body(serde_json::to_value(&request).unwrap());
+        assert_eq!(
+            (body.get("safeguards"), header(&headers, "anthropic-beta")),
+            (None, Vec::<&str>::new())
+        );
+    }
+
+    #[rstest]
+    #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
+    #[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG)]
     fn null_safeguards_add_no_dangerous_tool_use_beta(#[case] config: &dyn BaseMessagesConfig) {
         let (_, headers) = sent(
             config,

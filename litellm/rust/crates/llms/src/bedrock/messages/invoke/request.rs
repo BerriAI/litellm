@@ -517,25 +517,31 @@ fn without_safeguards_bedrock_rejects(
     request: MessagesRequest,
     context: &MessagesTransformContext,
     settings: &InvokeRequestSettings,
-) -> MessagesRequest {
+) -> (MessagesRequest, InvokeRequestSettings) {
     if request.params.safeguards.is_none()
         || !context.drops_rejected_safeguards
         || context.thinking.capabilities.bedrock.supports_safeguards
     {
-        return request;
+        return (request, *settings);
     }
     tracing::warn!(
         "Dropped safeguards for model={} provider={} because drop_params is on or the proxy's safeguards classifier answers them, and the model map does not flag supports_safeguards for the model. A deployment keeps them with model_info supports_safeguards true.",
         request.model,
         settings.beta_headers_provider
     );
-    MessagesRequest {
-        params: MessagesOptionalParams {
-            safeguards: None,
-            ..request.params
+    (
+        MessagesRequest {
+            params: MessagesOptionalParams {
+                safeguards: None,
+                ..request.params
+            },
+            ..request
         },
-        ..request
-    }
+        InvokeRequestSettings {
+            drops_dangerous_tool_use_beta_without_safeguards: true,
+            ..*settings
+        },
+    )
 }
 
 /// Port of Python's `_strip_unsupported_bedrock_invoke_fields`.
@@ -562,7 +568,8 @@ pub(crate) fn transform_anthropic_messages_request(
     headers: Headers,
     settings: &InvokeRequestSettings,
 ) -> Result<(MessagesRequest, Headers), Error> {
-    let request = without_safeguards_bedrock_rejects(request, context, settings);
+    let (request, settings) = without_safeguards_bedrock_rejects(request, context, settings);
+    let settings = &settings;
     let model = request.model.clone();
     let stream = request.params.stream.clone();
     let capabilities = &context.thinking.capabilities;

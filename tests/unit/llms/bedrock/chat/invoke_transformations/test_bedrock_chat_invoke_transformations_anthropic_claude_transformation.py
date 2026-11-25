@@ -2597,6 +2597,37 @@ def test_bedrock_chat_invoke_reads_the_dangerous_tool_use_beta_from_the_anthropi
     assert "context-1m-2025-08-07" in result["anthropic_beta"]
 
 
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("safeguards", "sent_betas"),
+    [
+        pytest.param({}, ["context-1m-2025-08-07"], id="without_safeguards"),
+        pytest.param(
+            {"safeguards": [{"type": "dangerous_tool_use"}]},
+            ["context-1m-2025-08-07", _DANGEROUS_TOOL_USE_BETA],
+            id="with_safeguards",
+        ),
+    ],
+)
+def test_bedrock_chat_invoke_header_betas_replace_body_betas_except_the_safeguards_beta(
+    monkeypatch: pytest.MonkeyPatch, safeguards: dict[str, object], sent_betas: list[str]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    result: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=_SONNET_4_5,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={
+            "max_tokens": 64,
+            "anthropic_beta": ["files-api-2025-04-14", _DANGEROUS_TOOL_USE_BETA],
+            **safeguards,
+        },
+        litellm_params={"drop_params": True},
+        headers={"anthropic-beta": "context-1m-2025-08-07"},
+    )
+
+    assert result["anthropic_beta"] == sent_betas
+
+
 def _bedrock_invoke_claude_with_extra_body(
     extra_body: Mapping[str, object] | str, drop_params: bool, model: str = "us.anthropic.claude-sonnet-5"
 ) -> tuple[httpx.Request, ...]:
