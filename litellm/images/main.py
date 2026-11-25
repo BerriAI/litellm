@@ -82,6 +82,7 @@ _PROVIDERS_RESOLVING_THEIR_OWN_IMAGE_BASE: Final = (
     LlmProviders.DASHSCOPE,
     LlmProviders.QWENCLOUD,
     LlmProviders.QWEN_AI_PLATFORM,
+    LlmProviders.VOLCENGINE,
 )
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls

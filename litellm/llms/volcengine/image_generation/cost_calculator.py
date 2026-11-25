@@ -8,7 +8,7 @@ from pydantic import TypeAdapter
 from litellm.litellm_core_utils.llm_cost_calc.utils import resolve_image_model_info
 from litellm.types.utils import ImageObject, ImageResponse, ModelInfo
 
-_LOW_TIER_MAX_PIXELS: Final = 2_610_000
+_LOW_TIER_MAX_PIXELS: Final = 1536 * 1536 * 1.05 * 1.05
 _PROVIDER_ENTRY_KEY: Final = "volcengine_image"
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
 

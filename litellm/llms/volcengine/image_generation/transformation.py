@@ -25,7 +25,7 @@ from litellm.types.utils import ImageObject, ImageResponse, ImageUsage
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-ARK_API_BASE: Final = "https://ark.cn-beijing.volces.com/api/v3"
+ARK_DEFAULT_API_BASE: Final = "https://ark.cn-beijing.volces.com/api/v3"
 ARK_SAFETY_IDENTIFIER_MAX_LENGTH: Final = 64
 
 ARK_IMAGE_PARAMS: Final[tuple[str, ...]] = (
@@ -49,6 +49,7 @@ ARK_IMAGE_PARAMS: Final[tuple[str, ...]] = (
 
 _REQUEST_ONLY_PARAMS: Final = frozenset({"n", "user", "extra_headers", "extra_body", "stream"})
 _UNSENT_PARAMS: Final = frozenset({"user", "stream"})
+_UNSENT_EXTRA_BODY_FIELDS: Final = frozenset({"extra_headers", "stream"})
 _PROVIDER_FIELDS: Final = frozenset({"url", "b64_json"})
 _BOOLEAN_PARAMS: Final = frozenset({"watermark", "layer_decomposition"})
 _JSON_PARAMS: Final = frozenset(
@@ -111,13 +112,15 @@ _ARK_RESPONSE: Final = TypeAdapter(_ArkImageResponse)
 
 
 def ark_image_generation_url(api_base: str | None) -> str:
-    base: Final = (api_base or get_secret_str("VOLCENGINE_API_BASE") or ARK_API_BASE).rstrip("/")
+    base: Final = (
+        api_base or get_secret_str("VOLCENGINE_API_BASE") or get_secret_str("ARK_API_BASE") or ARK_DEFAULT_API_BASE
+    ).rstrip("/")
     if base.endswith("/images/generations"):
         return base
     return join_api_base(base, "images/generations")
 
 
-def ark_image_headers(headers: Mapping[str, object], api_key: str | None, model: str) -> Mapping[str, object]:
+def _ark_api_key(api_key: str | None, model: str) -> str:
     resolved_api_key: Final[str | None] = (
         api_key or get_secret_str("VOLCENGINE_API_KEY") or get_secret_str("ARK_API_KEY")
     )
@@ -127,7 +130,23 @@ def ark_image_headers(headers: Mapping[str, object], api_key: str | None, model:
             llm_provider="volcengine",
             model=model,
         )
-    return {**headers, "Authorization": f"Bearer {resolved_api_key}", "Content-Type": "application/json"}
+    return resolved_api_key
+
+
+def ark_image_headers(headers: Mapping[str, object], api_key: str | None, model: str) -> Mapping[str, object]:
+    caller_sets_authorization: Final = any(name.lower() == "authorization" for name in headers)
+    authorization: Final = (
+        {} if caller_sets_authorization else {"Authorization": f"Bearer {_ark_api_key(api_key, model)}"}
+    )
+    return {**authorization, "Content-Type": "application/json", **headers}
+
+
+def ark_extra_headers(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    extra_body: Final = _JSON_OBJECT.validate_python(optional_params.get("extra_body") or {})
+    return {
+        **_JSON_OBJECT.validate_python(extra_body.get("extra_headers") or {}),
+        **_JSON_OBJECT.validate_python(optional_params.get("extra_headers") or {}),
+    }
 
 
 def drop_params_requested(requested: object) -> bool:
@@ -139,7 +158,8 @@ def _reject_stream(stream: object, model: str, drop_params: bool) -> None:
         raise UnsupportedParamsError(
             status_code=400,
             message=f"stream is not supported for Volcengine image models ({model}). "
-            + "LiteLLM returns one JSON image response; set `litellm.drop_params = True` to ignore stream.",
+            + "LiteLLM does not parse Ark's image event stream. Set `litellm.drop_params = True` to send the "
+            + "request without stream and get the finished images in one response.",
         )
 
 
@@ -189,7 +209,7 @@ def ark_image_request(
     }
     return {
         **mapped,
-        **{key: value for key, value in extra_body.items() if key != "stream"},
+        **{key: value for key, value in extra_body.items() if key not in _UNSENT_EXTRA_BODY_FIELDS},
         "model": model,
         **({"prompt": prompt} if prompt is not None else {}),
     }
@@ -305,7 +325,7 @@ class VolcEngineImageGenerationConfig(BaseImageGenerationConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict[str, object]:  # mutable-ok: inherited contract
-        return dict(ark_image_headers(headers, api_key, model))
+        return dict(ark_image_headers({**headers, **ark_extra_headers(optional_params)}, api_key, model))
 
     @override
     def transform_image_generation_request(
