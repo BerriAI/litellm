@@ -93,8 +93,7 @@ def _assistant_tool_uses(messages: Iterable[AllAnthropicPassThroughMessageValues
 
 def _tool_reference_names(tool_result: Mapping[str, object]) -> Iterator[str]:
     for block in _content_dicts(tool_result.get("content")):
-        name = block.get("tool_name")
-        if block.get("type") == "tool_reference" and isinstance(name, str):
+        if block.get("type") == "tool_reference" and isinstance(name := block.get("tool_name"), str):
             yield name
 
 
@@ -109,8 +108,7 @@ def _tool_result_texts(tool_result: Mapping[str, object]) -> Iterator[str]:
             yield content
         return
     for block in _content_dicts(content):
-        text = block.get("text")
-        if block.get("type") == "text" and isinstance(text, str) and text:
+        if block.get("type") == "text" and isinstance(text := block.get("text"), str) and text:
             yield text
 
 
@@ -148,7 +146,11 @@ class ToolSearchReplay:
             "call_id": tool_result.get("tool_use_id", ""),
             "execution": "client",
             "status": "incomplete" if tool_result.get("is_error") is True else "completed",
-            "tools": [self.loadable[name] for name in _tool_reference_names(tool_result) if name in self.loadable],
+            "tools": [
+                self.loadable[name]
+                for name in dict.fromkeys(_tool_reference_names(tool_result))
+                if name in self.loadable
+            ],
         }
 
 

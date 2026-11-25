@@ -2758,6 +2758,24 @@ class TestNativeDeferredTools:
             {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Tool loaded."}]},
         ]
 
+    def test_a_tool_referenced_twice_in_one_search_result_loads_once(self):
+        result: Final = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_search",
+                    "content": [{"type": "tool_reference", "tool_name": "mcp__weather__get_forecast"}] * 3,
+                }
+            ],
+        }
+
+        request: Final = _translated(
+            [*_AFTER_LOAD[:2], result], _claude_code_tools("mcp__weather__get_forecast"), "native"
+        )
+
+        assert [tool["name"] for tool in request["input"][2]["tools"]] == ["mcp__weather__get_forecast"]
+
     @pytest.mark.parametrize(
         "result_fields, status, texts",
         [
