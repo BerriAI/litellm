@@ -4075,6 +4075,7 @@ async def test_native_messages_stream_ending_in_a_callback_crash_still_logs_its_
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("request_route", ["/v1/messages", "/v1beta/models/gemini-2.5-flash:streamGenerateContent"])
 @pytest.mark.parametrize("served_as", ["python_stream", "rust_bridge_byte_stream"])
 @pytest.mark.parametrize(
     "refusal_error",
@@ -4084,14 +4085,15 @@ async def test_native_messages_stream_ending_in_a_callback_crash_still_logs_its_
     ],
     ids=["guardrail_raised", "http_exception"],
 )
-async def test_messages_stream_refused_after_its_success_was_logged_is_billed_once(
-    monkeypatch, refusal_error, served_as
+async def test_stream_refused_after_its_success_was_logged_is_billed_once_and_still_logs_the_refusal(
+    monkeypatch, refusal_error, served_as, request_route: str
 ):
     rows: Final = await _spend_rows_of_native_messages_stream_ending_in(
-        monkeypatch, refusal_error, None, served_as, success_logged_before_refusal=True
+        monkeypatch, refusal_error, None, served_as, request_route, success_logged_before_refusal=True
     )
 
-    assert [row[:3] for row in rows] == [("success", 30, 20)]
+    assert [(status, cost > 0) for status, _, _, cost in rows] == [("success", True), ("failure", False)]
+    assert rows[0][1:3] == (30, 20)
 
 
 async def _native_pump_stream_refused_after(
