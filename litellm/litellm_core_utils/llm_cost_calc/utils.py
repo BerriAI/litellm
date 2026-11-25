@@ -1348,6 +1348,31 @@ def calculate_prompt_caching_savings(
     return (read_discount - write_premium) * quote.uplift
 
 
+def _complete_image_cache_details(
+    cached_details: object,
+    cached_tokens: int,
+    prompt_tokens: int,
+    text_tokens: int | None,
+    image_tokens: int | None,
+) -> CachedTokensDetails | None:
+    """The text and image cache split when it accounts for every cached token, otherwise None."""
+    modality_cache: Final = (
+        CachedTokensDetails.model_validate(cached_details, from_attributes=True)
+        if cached_details is not None
+        else (
+            CachedTokensDetails(text_tokens=text_tokens, image_tokens=image_tokens)
+            if cached_tokens == prompt_tokens
+            else None
+        )
+    )
+    if modality_cache is None:
+        return None
+    accounted_tokens: Final = (modality_cache.text_tokens or 0) + (modality_cache.image_tokens or 0)
+    if accounted_tokens != cached_tokens:
+        return None
+    return modality_cache
+
+
 def calculate_image_response_cost_from_usage(
     model: str,
     image_response: ImageResponse,
@@ -1397,13 +1422,18 @@ def calculate_image_response_cost_from_usage(
             if isinstance(input_tokens_details, dict)
             else getattr(input_tokens_details, "cached_tokens_details", None)
         )
+        modality_cache: Final = _complete_image_cache_details(
+            cached_details=cached_details,
+            cached_tokens=input_cached_tokens,
+            prompt_tokens=prompt_tokens,
+            text_tokens=input_text_tokens,
+            image_tokens=input_image_tokens,
+        )
         prompt_tokens_details = PromptTokensDetailsWrapper(
             text_tokens=input_text_tokens,
             image_tokens=input_image_tokens,
-            cached_tokens=input_cached_tokens,
-            cached_tokens_details=(
-                CachedTokensDetails.model_validate(cached_details) if cached_details is not None else None
-            ),
+            cached_tokens=input_cached_tokens if modality_cache is not None else 0,
+            cached_tokens_details=modality_cache,
         )
 
     completion_tokens_details_attr: Final[object] = getattr(usage, "completion_tokens_details", None)

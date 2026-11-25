@@ -3670,6 +3670,136 @@ def test_image_response_input_image_tokens_priced_at_image_rate(details_as_dict)
     assert round(cost, 12) == round(expected, 12)
 
 
+_IMAGE_CACHE_TEXT_RATE: Final = 5e-6
+_IMAGE_CACHE_IMAGE_RATE: Final = 8e-6
+_IMAGE_CACHE_CACHED_TEXT_RATE: Final = 1.25e-6
+_IMAGE_CACHE_CACHED_IMAGE_RATE: Final = 2e-6
+_IMAGE_CACHE_OUTPUT_IMAGE_RATE: Final = 3e-5
+_IMAGE_CACHE_PRICES: Final[ModelInfo] = {
+    "input_cost_per_token": _IMAGE_CACHE_TEXT_RATE,
+    "input_cost_per_image_token": _IMAGE_CACHE_IMAGE_RATE,
+    "cache_read_input_token_cost": _IMAGE_CACHE_CACHED_TEXT_RATE,
+    "cache_read_input_image_token_cost": _IMAGE_CACHE_CACHED_IMAGE_RATE,
+    "output_cost_per_token": 1e-5,
+    "output_cost_per_image_token": _IMAGE_CACHE_OUTPUT_IMAGE_RATE,
+}
+_UNDISCOUNTED_IMAGE_INPUT: Final = 4 * _IMAGE_CACHE_TEXT_RATE + 6 * _IMAGE_CACHE_IMAGE_RATE
+
+
+@pytest.mark.parametrize("details_as_dict", [False, True])
+@pytest.mark.parametrize(
+    ("cached_tokens", "cached_details", "expected_input_cost"),
+    (
+        (0, None, _UNDISCOUNTED_IMAGE_INPUT),
+        (10, None, 4 * _IMAGE_CACHE_CACHED_TEXT_RATE + 6 * _IMAGE_CACHE_CACHED_IMAGE_RATE),
+        (
+            5,
+            {"text_tokens": 2, "image_tokens": 3},
+            2 * _IMAGE_CACHE_TEXT_RATE
+            + 3 * _IMAGE_CACHE_IMAGE_RATE
+            + 2 * _IMAGE_CACHE_CACHED_TEXT_RATE
+            + 3 * _IMAGE_CACHE_CACHED_IMAGE_RATE,
+        ),
+        (5, None, _UNDISCOUNTED_IMAGE_INPUT),
+        (5, {}, _UNDISCOUNTED_IMAGE_INPUT),
+        (5, {"text_tokens": 2}, _UNDISCOUNTED_IMAGE_INPUT),
+    ),
+    ids=(
+        "uncached",
+        "fully_cached",
+        "partial_modality_cache",
+        "partial_cache_without_split",
+        "partial_cache_empty_split",
+        "partial_cache_incomplete_split",
+    ),
+)
+def test_image_response_discounts_only_a_fully_accounted_cache_split(
+    details_as_dict: bool,
+    cached_tokens: int,
+    cached_details: dict[str, int] | None,
+    expected_input_cost: float,
+) -> None:
+    input_details: Final[dict[str, object]] = {
+        "text_tokens": 4,
+        "image_tokens": 6,
+        "cached_tokens": cached_tokens,
+        **({"cached_tokens_details": dict(cached_details)} if cached_details is not None else {}),
+    }
+    response: Final = ImageResponse(data=[ImageObject(b64_json="x")])
+    response.usage = (
+        Usage(
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=20,
+            input_tokens=10,
+            output_tokens=10,
+            input_tokens_details=input_details,
+            output_tokens_details={"image_tokens": 10, "text_tokens": 0},
+        )
+        if details_as_dict
+        else ImageUsage(
+            input_tokens=10,
+            output_tokens=10,
+            total_tokens=20,
+            input_tokens_details=ImageUsageInputTokensDetails.model_validate(input_details),
+            output_tokens_details={"image_tokens": 10, "text_tokens": 0},
+        )
+    )
+
+    cost: Final = calculate_image_response_cost_from_usage(
+        model="gpt-image-cache-probe",
+        image_response=response,
+        custom_llm_provider="openai",
+        model_info=_IMAGE_CACHE_PRICES,
+    )
+
+    assert cost == pytest.approx(expected_input_cost + 10 * _IMAGE_CACHE_OUTPUT_IMAGE_RATE)
+
+
+def _image_cache_cost(input_details: dict[str, object]) -> float:
+    response: Final = ImageResponse(data=[ImageObject(b64_json="x")])
+    response.usage = Usage(
+        prompt_tokens=0,
+        completion_tokens=0,
+        total_tokens=20,
+        input_tokens=10,
+        output_tokens=10,
+        input_tokens_details=input_details,
+        output_tokens_details={"image_tokens": 10, "text_tokens": 0},
+    )
+    cost: Final = calculate_image_response_cost_from_usage(
+        model="gpt-image-cache-probe",
+        image_response=response,
+        custom_llm_provider="openai",
+        model_info=_IMAGE_CACHE_PRICES,
+    )
+    assert cost is not None
+    return cost
+
+
+def test_image_response_does_not_infer_a_full_cache_when_modality_counts_fall_short() -> None:
+    cost: Final = _image_cache_cost(
+        {"text_tokens": 3, "image_tokens": 3, "cached_tokens": 10},
+    )
+    assert cost == pytest.approx(
+        3 * _IMAGE_CACHE_TEXT_RATE + 3 * _IMAGE_CACHE_IMAGE_RATE + 10 * _IMAGE_CACHE_OUTPUT_IMAGE_RATE
+    )
+
+
+def test_image_response_discounts_a_complete_image_only_cache_split() -> None:
+    cost: Final = _image_cache_cost(
+        {
+            "text_tokens": 4,
+            "image_tokens": 6,
+            "cached_tokens": 6,
+            "cached_tokens_details": {"image_tokens": 6},
+        },
+    )
+    assert cost == pytest.approx(
+        4 * _IMAGE_CACHE_TEXT_RATE + 6 * _IMAGE_CACHE_CACHED_IMAGE_RATE + 10 * _IMAGE_CACHE_OUTPUT_IMAGE_RATE
+    )
+
+
 GEMINI_DAY0_LAUNCH_PRICING = [
     ("gemini-3.6-flash", 7.5e-07, 3.75e-06, 7.5e-08),
     ("gemini/gemini-3.6-flash", 7.5e-07, 3.75e-06, 7.5e-08),
