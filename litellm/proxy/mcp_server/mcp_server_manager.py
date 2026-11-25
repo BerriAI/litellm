@@ -5291,7 +5291,7 @@ class MCPServerManager:
 
             cache_key: Final = (key[0], f"{key[1]}:owner") if for_owner_lookup else key
             items: Final = await self._resource_discovery_cache.get(
-                cache_key, fetch, default_on_omission=for_owner_lookup
+                cache_key, fetch, default_on_omission=for_owner_lookup, isolate_uncached=for_owner_lookup
             )
             return tuple(self._create_prefixed_resources(items.resources, server, add_prefix=add_prefix))
         except Exception as error:

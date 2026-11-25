@@ -1371,7 +1371,7 @@ class MCPClient:
                 items.extend(items_of(page))
                 if not page.next_cursor:
                     now: Final = time.monotonic()
-                    freshness = aggregate_freshness(
+                    freshness: Final = aggregate_freshness(
                         tuple(age_freshness(value, now - received) for value, received in pages)
                     )
                     if preserve_ttl_omission and all("ttl_ms" not in value.model_fields_set for value, _ in pages):

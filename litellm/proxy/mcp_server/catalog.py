@@ -1411,9 +1411,10 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
         *,
         capped: bool = True,
         default_on_omission: bool = False,
+        isolate_uncached: bool = False,
     ) -> _DiscoveryPage:
         if self._ttl <= 0:
-            return await fetch()
+            return await (self._fetch_uncached(fetch) if isolate_uncached else fetch())
         entry: Final[object] = self._entries.get_cache(json.dumps(key))
         if entry is not None:
             expires_at, payload = _DISCOVERY_ENTRY.validate_python(entry)
@@ -1425,11 +1426,20 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
         if pending is not None:
             return await self._await_fetch(key, pending)
         if len(self._pending) >= _DISCOVERY_CACHE_LIMIT:
-            return await fetch()
+            return await (self._fetch_uncached(fetch) if isolate_uncached else fetch())
         task: Final = asyncio.create_task(self._fetch(key, fetch, capped, default_on_omission))
         self._pending[key] = task
         task.add_done_callback(self._observe_completion)
         return await self._await_fetch(key, task)
+
+    async def _fetch_uncached(self, fetch: Callable[[], Awaitable[_DiscoveryPage]]) -> _DiscoveryPage:
+        task: Final = asyncio.create_task(fetch())
+        task.add_done_callback(self._observe_completion)
+        try:
+            return await asyncio.shield(task)
+        finally:
+            if not task.done():
+                task.cancel()
 
     async def _await_fetch(self, key: _DiscoveryKey, task: asyncio.Task[_DiscoveryPage]) -> _DiscoveryPage:
         self._waiters[task] = self._waiters.get(task, 0) + 1

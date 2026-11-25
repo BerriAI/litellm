@@ -247,7 +247,7 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
         await asyncio.wait_for(slow_listing_cancelled.wait(), timeout=30)
 
 
-@pytest.mark.parametrize("slow_method", ("initialize", "resources/list"))
+@pytest.mark.parametrize("slow_method", ("initialize", "resources/list", "DELETE"))
 def test_resource_read_times_out_an_incomplete_lookup_without_remembering_the_failure(
     monkeypatch: pytest.MonkeyPatch, slow_method: str
 ) -> None:
@@ -258,8 +258,16 @@ def test_resource_read_times_out_an_incomplete_lookup_without_remembering_the_fa
     message: Final = TypeAdapter(JSONRPCMessage)
     entered: Final[asyncio.Queue[str]] = asyncio.Queue()
     monkeypatch.setattr(operations, "MCP_TOOL_LISTING_TIMEOUT", 1.0)
+    monkeypatch.setenv("LITELLM_MCP_DISCOVERY_CACHE_TTL", "0" if slow_method == "DELETE" else "60")
 
     async def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "GET":
+            return httpx2.Response(405)
+        if request.method == "DELETE":
+            if request.url.host == "other.example" and entered.empty():
+                entered.put_nowait(slow_method)
+                await asyncio.sleep(2)
+            return httpx2.Response(200)
         payload: Final = message.validate_json(request.content)
         if not isinstance(payload, JSONRPCRequest):
             return httpx2.Response(202)
@@ -276,7 +284,8 @@ def test_resource_read_times_out_an_incomplete_lookup_without_remembering_the_fa
             "resources/list": {"resources": [{"uri": uri, "name": "resource"}] if owner else []},
             "resources/read": {"contents": [{"uri": uri, "text": request.url.host}]},
         }[payload.method]
-        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
+        headers: Final = {"Mcp-Session-Id": "discovery"} if slow_method == "DELETE" else {}
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result}, headers=headers)
 
     manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
     for name in ("owner", "other"):
