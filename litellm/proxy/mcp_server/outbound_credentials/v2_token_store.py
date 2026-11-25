@@ -40,17 +40,23 @@ def _to_scopes(raw: object) -> tuple[str, ...]:
     return ()
 
 
+def _expires_at(payload: Mapping[str, object]) -> float | None:
+    if payload.get("access_token_rejected") is True:
+        return 0.0
+    expires_at: Final = payload.get("expires_at")
+    return _iso_to_epoch(expires_at) if isinstance(expires_at, str) else None
+
+
 def _to_oauth_token(payload: Mapping[str, object]) -> OAuthToken | None:
     access_token: Final = payload.get("access_token")
     if not isinstance(access_token, str):
         return None
     refresh_token: Final = None if payload.get("refresh_refused") is True else payload.get("refresh_token")
-    expires_at: Final = payload.get("expires_at")
     binding_proof: Final = payload.get("identity_binding_proof")
     cimd_client_id: Final = payload.get("cimd_client_id")
     return OAuthToken(
         access_token=access_token,
-        expires_at=_iso_to_epoch(expires_at) if isinstance(expires_at, str) else None,
+        expires_at=_expires_at(payload),
         refresh_token=refresh_token if isinstance(refresh_token, str) else None,
         scopes=_to_scopes(payload.get("scopes")),
         identity_binding_proof=binding_proof if isinstance(binding_proof, str) else None,

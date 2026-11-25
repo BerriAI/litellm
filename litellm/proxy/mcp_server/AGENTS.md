@@ -25,7 +25,7 @@ litellm/proxy/mcp_server/
     __init__.py              # public surface: resolve_credentials, the configs, CredError
     result.py                # Ok | Error union (pure stdlib)
     types.py                 # AuthConfig union, CredError, Subject, ServerSpec
-    httpx_auth.py            # NoOpAuth, StaticHeaderAuth (every mode -> one httpx.Auth)
+    httpx_auth.py            # NoOpAuth, StaticHeaderAuth, UserGrantBearerAuth (every mode -> one httpx.Auth)
     resolver.py              # resolve_credentials(): exhaustive per-mode match + assert_never
     seams.py                 # injected Protocols (one per cache-touching mode)
     v1_adapters.py           # v1-backed seam bodies that delegate to auth/oauth2/db owners

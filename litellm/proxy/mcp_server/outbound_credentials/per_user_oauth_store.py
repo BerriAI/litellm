@@ -147,6 +147,16 @@ async def _record_refresh_refusal(user_id: str, server_id: str, refused_refresh_
         verbose_logger.warning("MCP OAuth refresh refusal for server %s was not recorded: %s", server_id, exc)
 
 
+async def record_rejected_user_token(user_id: str, server_id: str, access_token: str) -> None:
+    from litellm.proxy.mcp_server.db import (  # noqa: PLC0415  # db imports this package
+        record_oauth_access_rejection,
+    )
+    from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415  # runtime global, set after import
+
+    if prisma_client is not None:
+        await record_oauth_access_rejection(prisma_client, user_id, server_id, access_token)
+
+
 def _redis_cache_is_available() -> bool:
     from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
 

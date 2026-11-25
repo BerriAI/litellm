@@ -20,6 +20,7 @@ v2: no imports from v1.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import partial
@@ -37,6 +38,7 @@ from litellm.proxy.mcp_server.outbound_credentials.client_credentials import (
 from litellm.proxy.mcp_server.outbound_credentials.httpx_auth import (
     NoOpAuth,
     StaticHeaderAuth,
+    UserGrantBearerAuth,
 )
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
@@ -104,6 +106,12 @@ class _IdJagSubjectToken:
     token_type: str
 
 
+async def _ignore_rejected_user_token(
+    user_id: str, server_id: str, access_token: str, upstream_error: str | None = None
+) -> None:
+    return None
+
+
 class _NullOAuthTokenStore:
     """Fail-closed default: with no token store wired, every user reads as not authorized."""
 
@@ -142,6 +150,7 @@ class UpstreamCredentialProvider:
         exchanged_tokens: ExchangedTokenCache | None = None,
         client_credentials_source: ClientCredentialsTokenSource | None = None,
         sso_assertion_store: SSOAssertionStore | None = None,
+        on_rejected_user_token: Callable[[str, str, str, str | None], Awaitable[None]] = _ignore_rejected_user_token,
     ) -> None:
         self._oauth_token_store: OAuthTokenStore = oauth_token_store or _NullOAuthTokenStore()
         self._token_exchanger: TokenExchanger = token_exchanger or _NullTokenExchanger()
@@ -149,6 +158,7 @@ class UpstreamCredentialProvider:
         self._exchanged_tokens: ExchangedTokenCache = exchanged_tokens or ExchangedTokenCache()
         self._client_credentials_source = client_credentials_source or ClientCredentialsTokenSource()
         self._sso_assertion_store: SSOAssertionStore = sso_assertion_store or default_sso_assertion_store()
+        self._on_rejected_user_token = on_rejected_user_token
 
     async def resolve_credentials(self, subject: Subject, server: ServerSpec) -> Result[httpx2.Auth, CredError]:
         match server.config:
@@ -333,12 +343,12 @@ class UpstreamCredentialProvider:
 
     async def _authorization_code(
         self, subject: Subject, server: ServerSpec, config: AuthorizationCodeConfig
-    ) -> Result[StaticHeaderAuth, CredError]:
+    ) -> Result[UserGrantBearerAuth, CredError]:
         token: Final = await self._authz_token(subject, server)
         if token is None:
             return Error(CredError.of_unauthorized("Authorization required: complete the OAuth flow for this server."))
-        header_name, header_value = config.header(token.access_token)
-        return Ok(StaticHeaderAuth(header_value, header_name=header_name))
+        on_rejected: Final = partial(self._on_rejected_user_token, subject.subject_id, server.server_id)
+        return Ok(UserGrantBearerAuth(token.access_token, config, on_rejected))
 
     async def _client_credentials(
         self, server_id: str, config: ClientCredentialsConfig

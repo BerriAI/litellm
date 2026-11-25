@@ -149,9 +149,11 @@ from litellm.proxy.mcp_server.outbound_credentials.adapter import (
 )
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     InvalidatableOAuthTokenStore,
+    run_to_completion,
 )
 from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import (
     LazyPerUserOAuthTokenStore,
+    record_rejected_user_token,
 )
 from litellm.proxy.mcp_server.outbound_credentials.token_exchange_provider import (
     build_token_exchanger,
@@ -2159,14 +2161,17 @@ class MCPServerManager:
         per_user_token_cache: MCPPerUserTokenCache | None = None,
         discovery_clock: Callable[[], float] = time.monotonic,
         upstream_transport: httpx2.AsyncBaseTransport | None = None,
-    ):
+        record_rejected_user_token: Callable[[str, str, str], Awaitable[None]] = record_rejected_user_token,
+    ) -> None:
         self._per_user_oauth_token_store = per_user_oauth_token_store or LazyPerUserOAuthTokenStore(
             self.get_mcp_server_by_id
         )
         self._per_user_token_cache = per_user_token_cache or mcp_per_user_token_cache
+        self._record_rejected_user_token = record_rejected_user_token
         self._cred_provider = cred_provider or UpstreamCredentialProvider(
             oauth_token_store=self._per_user_oauth_token_store,
             token_exchanger=build_token_exchanger(),
+            on_rejected_user_token=self.forget_rejected_user_token,
         )
         self._upstream_transport: httpx2.AsyncBaseTransport | None = upstream_transport
         discovery_ttl: Final = _mcp_discovery_cache_ttl()
@@ -7214,6 +7219,24 @@ class MCPServerManager:
             verbose_logger.warning(
                 "Failed to drop legacy cached MCP OAuth token for user=%s server=%s: %s", user_id, server_id, exc
             )
+
+    async def forget_rejected_user_token(
+        self, user_id: str, server_id: str, access_token: str, upstream_error: str | None = None
+    ) -> None:
+        verbose_logger.warning(
+            "MCP server %s rejected the stored OAuth token for user=%s (error=%r)", server_id, user_id, upstream_error
+        )
+
+        async def forget() -> None:
+            try:
+                await self._record_rejected_user_token(user_id, server_id, access_token)
+            except Exception as exc:  # noqa: BLE001  # the cache drop below must still run
+                verbose_logger.warning(
+                    "MCP rejected OAuth token for server %s was not marked: %s", server_id, type(exc).__name__
+                )
+            await self.invalidate_user_oauth_token_cache(user_id, server_id)
+
+        await run_to_completion(forget())
 
     async def _resolve_oauth2_headers_for_tool_call(
         self,

@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 from prisma.models import LiteLLM_MCPServerTable as PrismaMCPServer
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_MCPServerTable, NewMCPServerRequest, UpdateMCPServerRequest
@@ -1489,6 +1490,227 @@ async def test_v1_failed_refresh_logs_the_providers_error_code(
 
     logged: Final = " ".join(handled.args[0].getMessage() for handled in capture.handle.call_args_list)
     assert "error='invalid_client'" in logged and "Client authentication failed" in logged
+
+
+_GRANT_EXPIRY: Final = {
+    "none": {},
+    "future": {"expires_at": "2999-01-01T00:00:00+00:00"},
+    "past": {"expires_at": "2000-01-01T00:00:00+00:00"},
+}
+_GRANT_REFRESH: Final = {
+    "none": {},
+    "present": {"refresh_token": "rt-1"},
+    "refused": {"refresh_token": "rt-1", "refresh_refused": True},
+}
+
+
+@pytest.mark.parametrize(
+    "expiry, refresh, marked, state",
+    [
+        ("none", "none", False, "valid"),
+        ("none", "present", False, "valid"),
+        ("none", "refused", False, "valid"),
+        ("future", "none", False, "valid"),
+        ("future", "present", False, "valid"),
+        ("future", "refused", False, "valid"),
+        ("past", "none", False, "absent"),
+        ("past", "present", False, "refreshable"),
+        ("past", "refused", False, "absent"),
+        ("none", "none", True, "absent"),
+        ("none", "present", True, "refreshable"),
+        ("none", "refused", True, "absent"),
+        ("future", "none", True, "absent"),
+        ("future", "present", True, "refreshable"),
+        ("future", "refused", True, "absent"),
+        ("past", "none", True, "absent"),
+        ("past", "present", True, "refreshable"),
+        ("past", "refused", True, "absent"),
+    ],
+)
+def test_a_token_the_upstream_rejected_is_never_valid(expiry: str, refresh: str, marked: bool, state: str) -> None:
+    grant: Final = {
+        "type": "oauth2",
+        "access_token": "at-1",
+        **_GRANT_EXPIRY[expiry],
+        **_GRANT_REFRESH[refresh],
+        **({"access_token_rejected": True} if marked else {}),
+    }
+    assert oauth_grant_state(TypeAdapter(OAuthCredentialPayload).validate_python(grant)) == state
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refresh_token, state", [("rt-1", "refreshable"), (None, "absent")])
+async def test_a_rejected_access_token_stops_counting_as_connected_until_a_new_sign_in(
+    credentials_prisma: SimpleNamespace, refresh_token: str | None, state: str
+) -> None:
+    from litellm.proxy.mcp_server.db import record_oauth_access_rejection
+
+    await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-1", refresh_token=refresh_token, scopes=["repo"]
+    )
+    await record_oauth_access_rejection(credentials_prisma, "alice", "srv-1", "at-1")
+    rejected: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-2", refresh_token="rt-2")
+    signed_in_again: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+
+    assert oauth_grant_state(rejected) == state, "a token the upstream rejected must not count as connected"
+    assert rejected is not None and (rejected["access_token"], rejected.get("scopes")) == ("at-1", ["repo"])
+    assert oauth_grant_state(signed_in_again) == "valid"
+    assert signed_in_again is not None and "access_token_rejected" not in signed_in_again, "sign-in clears the mark"
+
+
+@pytest.mark.asyncio
+async def test_a_rejection_for_a_replaced_access_token_leaves_the_grant_alone(
+    credentials_prisma: SimpleNamespace,
+) -> None:
+    from litellm.proxy.mcp_server.db import record_oauth_access_rejection
+
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
+    await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-2", refresh_token="rt-2", refreshed_from="rt-1"
+    )
+    writes: Final = credentials_prisma.db.litellm_mcpusercredentials.writes
+    await record_oauth_access_rejection(credentials_prisma, "alice", "srv-1", "at-1")
+
+    saved: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+    assert saved is not None and oauth_grant_state(saved) == "valid", "only the rejected access token is marked"
+    assert credentials_prisma.db.litellm_mcpusercredentials.writes == writes
+
+
+@pytest.mark.asyncio
+async def test_a_refresh_read_before_the_rejection_still_saves_and_clears_it(
+    credentials_prisma: SimpleNamespace,
+) -> None:
+    from litellm.proxy.mcp_server.db import record_oauth_access_rejection
+
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    update: Final = rows.update_many
+
+    async def rejection_lands_first(data: Mapping[str, object], where: Mapping[str, str]) -> int:
+        rows.update_many = update
+        await record_oauth_access_rejection(credentials_prisma, "alice", "srv-1", "at-1")
+        return await update(data=data, where=where)
+
+    rows.update_many = rejection_lands_first
+    stored: Final = await store_user_oauth_credential(
+        credentials_prisma, "alice", "srv-1", "at-2", refresh_token="rt-2", expires_in=3600, refreshed_from="rt-1"
+    )
+
+    saved: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+    assert stored is True, "a refresh that raced the rejection must not be thrown away"
+    assert saved is not None and saved["access_token"] == "at-2" and oauth_grant_state(saved) == "valid"
+    assert "access_token_rejected" not in saved, "a saved refresh clears the mark"
+
+
+@pytest.mark.asyncio
+async def test_a_rejection_that_loses_a_race_with_a_scope_refusal_still_marks_the_grant(
+    credentials_prisma: SimpleNamespace,
+) -> None:
+    from litellm.proxy.mcp_server.db import record_oauth_access_rejection
+
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    update: Final = rows.update_many
+
+    async def scope_refusal_first(data: Mapping[str, object], where: Mapping[str, str]) -> int:
+        rows.update_many = update
+        await record_oauth_scope_refusal(credentials_prisma, "alice", "srv-1", "gist")
+        return await update(data=data, where=where)
+
+    rows.update_many = scope_refusal_first
+    await record_oauth_access_rejection(credentials_prisma, "alice", "srv-1", "at-1")
+
+    saved: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+    assert saved is not None and saved.get("access_token_rejected") is True, "a lost write retries on the newer row"
+    assert saved.get("needs_scopes") == ["gist"], "the retry keeps the concurrent scope refusal"
+
+
+@pytest.mark.asyncio
+async def test_a_rejection_for_a_grant_deleted_mid_write_does_not_recreate_it(
+    credentials_prisma: SimpleNamespace,
+) -> None:
+    from litellm.proxy.mcp_server.db import record_oauth_access_rejection
+
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
+    rows: Final = credentials_prisma.db.litellm_mcpusercredentials
+    update: Final = rows.update_many
+
+    async def deleted_first(data: Mapping[str, object], where: Mapping[str, str]) -> int:
+        rows.update_many = update
+        rows.rows = {}
+        return await update(data=data, where=where)
+
+    rows.update_many = deleted_first
+    await record_oauth_access_rejection(credentials_prisma, "alice", "srv-1", "at-1")
+
+    assert await get_user_oauth_credential(credentials_prisma, "alice", "srv-1") is None
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_rejection_does_not_rewrite_a_marked_grant(credentials_prisma: SimpleNamespace) -> None:
+    from litellm.proxy.mcp_server.db import record_oauth_access_rejection
+
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1")
+    await record_oauth_access_rejection(credentials_prisma, "alice", "srv-1", "at-1")
+    writes_after_first: Final = credentials_prisma.db.litellm_mcpusercredentials.writes
+    await record_oauth_access_rejection(credentials_prisma, "alice", "srv-1", "at-1")
+
+    assert credentials_prisma.db.litellm_mcpusercredentials.writes == writes_after_first
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refresh_token, expected", [("rt-1", "at-2"), (None, None)])
+async def test_v1_refreshes_a_token_the_upstream_rejected_or_asks_for_sign_in(
+    credentials_prisma: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: "MockRouter",
+    refresh_token: str | None,
+    expected: str | None,
+) -> None:
+    from litellm.proxy.mcp_server.db import record_oauth_access_rejection
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    route: Final = respx_mock.post("https://idp.example.com/token").respond(
+        200, json={"access_token": "at-2", "refresh_token": "rt-2", "expires_in": 3600}
+    )
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token=refresh_token)
+    await record_oauth_access_rejection(credentials_prisma, "alice", "srv-1", "at-1")
+    rejected: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+
+    resolved: Final = await resolve_valid_user_oauth_token("alice", _refresh_server(), rejected, credentials_prisma)
+
+    assert (resolved or {}).get("access_token") == expected, "v1 never hands back the rejected token"
+    assert route.call_count == (1 if refresh_token else 0)
+
+
+@pytest.mark.asyncio
+async def test_v1_request_that_waited_does_not_take_a_new_token_the_upstream_already_rejected(
+    credentials_prisma: SimpleNamespace,
+) -> None:
+    from litellm.proxy.mcp_server.db import record_oauth_access_rejection
+
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-1", "at-1", refresh_token="rt-1", expires_in=30)
+    expiring: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-1")
+
+    async def other_worker_saves_a_token_then_sees_it_rejected(_seconds: float) -> None:
+        await store_user_oauth_credential(
+            credentials_prisma, "alice", "srv-1", "at-2", refresh_token="rt-2", expires_in=30
+        )
+        await record_oauth_access_rejection(credentials_prisma, "alice", "srv-1", "at-2")
+
+    lock: Final = SimpleNamespace(
+        acquire=AsyncMock(return_value=LockAcquisition.HELD), is_held=AsyncMock(side_effect=[True, False])
+    )
+    resolved: Final = await resolve_valid_user_oauth_token(
+        "alice",
+        _refresh_server(),
+        expiring,
+        credentials_prisma,
+        refresh_coordinator=RedisRefreshCoordinator(lock, sleep=other_worker_saves_a_token_then_sees_it_rejected),
+    )
+
+    assert resolved is None, "a waiter does not hand on a token the upstream has already refused"
 
 
 def _row_written_under_previous_salt_key(monkeypatch, payload: str):
