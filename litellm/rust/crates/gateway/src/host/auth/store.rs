@@ -14,7 +14,7 @@ use litellm_auth_store::{
     AliasMatch, EndUserDatabase, Error, KeyDatabase, OrganizationDatabase, ProjectDatabase,
     TeamDatabase, TeamMembershipDatabase, UserDatabase,
 };
-use litellm_gateway_auth_core::KeyHash;
+use litellm_gateway_auth_core::{KeyHash, authn::jwt::MappedClaim};
 use litellm_redis_store::{
     FromValue, IntoValue,
     auth_cache::{
@@ -24,9 +24,11 @@ use litellm_redis_store::{
     },
 };
 use litellm_repositories::{
-    Database, EndUserRepository, KeyRepository, ObjectPermissionRepository, OrganizationRepository,
-    ProjectRepository, Side, TeamMembershipRepository, TeamRepository, UserRepository,
+    Database, EndUserRepository, JwtKeyMappingRepository, KeyRepository,
+    ObjectPermissionRepository, OrganizationRepository, ProjectRepository, Side,
+    TeamMembershipRepository, TeamRepository, UserRepository,
 };
+use serde_json::Value;
 use tokio::sync::Mutex;
 
 const ORG_CACHE_TTL: Duration = Duration::from_secs(5);
@@ -46,6 +48,7 @@ pub struct AuthStore {
     projects: ProjectDatabase,
     memberships: TeamMembershipDatabase,
     users: UserDatabase,
+    mappings: JwtKeyMappingRepository,
     end_users: EndUserDatabase,
     /// Lets one request at a time load the restricted end-user ids (`_END_USER_REGISTRY_LOAD_LOCK`).
     restricted_ids_loading: Mutex<()>,
@@ -83,6 +86,7 @@ impl AuthStore {
                 database.clone(),
             ))),
             users: UserDatabase::new(Arc::new(UserRepository::new(database.clone()))),
+            mappings: JwtKeyMappingRepository::new(database.clone()),
             end_users: EndUserDatabase::new(Arc::new(EndUserRepository::new(database))),
             restricted_ids_loading: Mutex::new(()),
             lookup_deadline: LOOKUP_DEADLINE,
@@ -363,6 +367,31 @@ impl AuthStore {
             ..self.cache.settings()
         });
     }
+
+    pub async fn cached_key_mapping(&self, claim: MappedClaim<'_>) -> Option<Value> {
+        self.read::<String>(&mapping_object(claim))
+            .await
+            .map(Value::String)
+    }
+
+    pub async fn cache_key_mapping(&self, claim: MappedClaim<'_>, value: &Value, ttl: Duration) {
+        if let Some(text) = value.as_str() {
+            self.write(&mapping_object(claim), text.to_owned(), Some(ttl))
+                .await;
+        }
+    }
+
+    pub async fn key_mapping_hash(
+        &self,
+        claim_field: &str,
+        claim_value: &str,
+        issuer: Option<&str>,
+    ) -> Result<Option<KeyHash>, litellm_db::Error> {
+        self.mappings
+            .mapped_token(claim_field, claim_value, issuer)
+            .await
+            .map(|token| token.map(KeyHash::new))
+    }
 }
 
 /// The cached ids, or `None` when they overflowed and every end user is read by its id.
@@ -383,6 +412,14 @@ fn now() -> f64 {
 
 fn object(hash: &KeyHash) -> AuthObject {
     AuthObject::Key(hash.as_str().to_owned())
+}
+
+fn mapping_object(claim: MappedClaim<'_>) -> AuthObject {
+    AuthObject::JwtKeyMapping {
+        issuer: claim.issuer.map(str::to_owned),
+        claim_name: claim.field.to_owned(),
+        claim_value: claim.value.to_owned(),
+    }
 }
 
 #[cfg(test)]

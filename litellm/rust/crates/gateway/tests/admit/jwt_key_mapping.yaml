@@ -1,0 +1,54 @@
+# With `virtual_key_claim_field` set, a JWT whose claim the database maps to a virtual key is that
+# key from then on: it reaches the models the key lists, and a key the native app does not serve
+# sends it to Python. A JWT no key is mapped to is served as itself, which no key's list limits.
+enterprise: true
+
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: claude-down
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    enable_jwt_auth: true
+    litellm_jwtauth:
+      virtual_key_claim_field: client_id
+
+keys:
+  sk-claude: {models: [claude]}
+  sk-budgeted: {models: [claude], max_budget: 5.0}
+
+mappings:
+  client_id:
+    svc-claude: sk-claude
+    svc-budgeted: sk-budgeted
+
+requests:
+  - name: a mapped JWT, for a model on its key's list
+    jwt: {claims: {client_id: svc-claude}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a mapped JWT, for a model off its key's list
+    jwt: {claims: {client_id: svc-claude}}
+    body: {model: claude-down, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: models
+
+  - name: a JWT no key is mapped to, for the same model
+    jwt: {claims: {client_id: svc-unmapped}}
+    body: {model: claude-down, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a mapped JWT whose key holds a budget
+    jwt: {claims: {client_id: svc-budgeted}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native

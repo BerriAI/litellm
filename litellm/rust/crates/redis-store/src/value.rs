@@ -33,6 +33,18 @@ impl IntoValue for Value {
     }
 }
 
+impl FromValue for String {
+    fn from_value(value: &Value) -> Result<Self, DecodeError> {
+        text(value, "text")
+    }
+}
+
+impl IntoValue for String {
+    fn into_value(self) -> Value {
+        Value::Str(self)
+    }
+}
+
 impl FromValue for Number {
     fn from_value(value: &Value) -> Result<Self, DecodeError> {
         number(value, "a number")

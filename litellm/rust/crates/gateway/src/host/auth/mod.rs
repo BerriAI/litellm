@@ -102,6 +102,7 @@ impl NativeAuthHost {
     fn store(&self, step: &'static str) -> Result<&AuthStore, Error> {
         self.store.as_deref().map_or_else(|| declined(step), Ok)
     }
+
     fn jwt_io(&self, step: &'static str) -> Result<&JwtIo, Error> {
         match &self.jwt_io {
             Some(io) => Ok(io),
@@ -256,17 +257,46 @@ impl AuthHost for NativeAuthHost {
         }
     }
 
-    async fn key_by_hash(&self, _: &KeyHash) -> Result<Option<MappedKey<Key>>, Error> {
-        declined("key_by_hash")
+    async fn key_by_hash(&self, hash: &KeyHash) -> Result<Option<MappedKey<Key>>, Error> {
+        let store = self.store("key_by_hash")?;
+        let cached = match Box::pin(store.cached(hash)).await {
+            Some(key) => Some(key),
+            None => match Box::pin(store.loaded(hash)).await {
+                Ok(key) => key,
+                Err(error) => {
+                    tracing::warn!(
+                        error = %litellm_error::Report::new(&error),
+                        "a mapped virtual key was not read from the database"
+                    );
+                    return Err(Error::HostFailed);
+                }
+            },
+        };
+        let Some(cached) = cached else {
+            return declined("key_by_hash");
+        };
+        Ok(keyed(&cached)?.map(|key| MappedKey {
+            key,
+            user_email: None,
+        }))
     }
 
     async fn key_mapping_hash(
         &self,
-        _: &str,
-        _: &str,
-        _: Option<&str>,
+        claim_field: &str,
+        claim_value: &str,
+        issuer: Option<&str>,
     ) -> Result<Option<KeyHash>, Error> {
-        declined("key_mapping_hash")
+        self.store("key_mapping_hash")?
+            .key_mapping_hash(claim_field, claim_value, issuer)
+            .await
+            .map_err(|error| {
+                tracing::warn!(
+                    error = %litellm_error::Report::new(&error),
+                    "a JWT key mapping was not read from the database"
+                );
+                Error::HostFailed
+            })
     }
 
     async fn reusable_key_hash(&self, _: &str, _: Option<&str>) -> Result<Option<KeyHash>, Error> {
@@ -306,19 +336,26 @@ impl AuthHost for NativeAuthHost {
         Ok(())
     }
 
-    async fn cached_key_mapping(&self, _: MappedClaim<'_>) -> Result<Option<Value>, Error> {
-        declined("cached_key_mapping")
+    async fn cached_key_mapping(&self, claim: MappedClaim<'_>) -> Result<Option<Value>, Error> {
+        Ok(self
+            .store("cached_key_mapping")?
+            .cached_key_mapping(claim)
+            .await)
     }
 
     async fn cache_key_mapping(
         &self,
-        _: MappedClaim<'_>,
-        _: &Value,
-        _: Duration,
+        claim: MappedClaim<'_>,
+        value: &Value,
+        ttl: Duration,
     ) -> Result<(), Error> {
-        declined("cache_key_mapping")
+        self.store("cache_key_mapping")?
+            .cache_key_mapping(claim, value, ttl)
+            .await;
+        Ok(())
     }
 
+    /// The core forgets a mapping only before it registers one, a write this host declines.
     async fn forget_key_mapping(&self, _: MappedClaim<'_>) -> Result<(), Error> {
         declined("forget_key_mapping")
     }
@@ -595,7 +632,7 @@ mod tests {
     use jiff::Timestamp;
     use litellm_gateway_auth::{Authenticated, Error as Rejected, RequireMasterKey};
     use litellm_gateway_auth_core::{
-        Credential, Holder, JwtActor, JwtStamp, Named, Team,
+        Credential, Holder, JwtActor, JwtStamp, Named, Team, Via,
         authz::{Layer, ModelList},
     };
     use litellm_redis_store::{
@@ -1721,17 +1758,27 @@ mod tests {
         assert_eq!(reads, expected);
     }
 
-    /// A gateway with an enterprise license that verifies a JWT against the JWKS at `jwks_url` and
-    /// lets a proxy admin call the inference route.
-    fn verifying(jwks_url: &str) -> Auth<NativeRows> {
-        let config = config(
-            "  master_key: sk-master\n  enable_jwt_auth: true\n  litellm_jwtauth:\n    admin_allowed_routes: [/v1/messages]\n",
-        );
+    /// A gateway with an enterprise license that verifies a JWT against the JWKS at `jwks_url`,
+    /// with `jwtauth` as its `litellm_jwtauth` and its keys read through `store`.
+    fn verifying_with(
+        jwks_url: &str,
+        jwtauth: &str,
+        store: Option<Arc<AuthStore>>,
+    ) -> Auth<NativeRows> {
+        let config = config(&format!(
+            "  master_key: sk-master\n  enable_jwt_auth: true\n  litellm_jwtauth:\n{jwtauth}"
+        ));
         let jwks_url = jwks_url.to_owned();
         let environment =
             move |name: &str| (name == "JWT_PUBLIC_KEY_URL").then(|| jwks_url.clone());
         let jwt_io = Arc::new(JwtIo::new(litellm_http::Client::for_test()));
-        auth_over(&config, None, false, Some(jwt_io), true, &environment)
+        auth_over(&config, store, false, Some(jwt_io), true, &environment)
+    }
+
+    /// A gateway that verifies a JWT as [`verifying_with`] does, reads no key and lets a proxy
+    /// admin call the inference route.
+    fn verifying(jwks_url: &str) -> Auth<NativeRows> {
+        verifying_with(jwks_url, "    admin_allowed_routes: [/v1/messages]\n", None)
     }
 
     #[rstest]
@@ -1800,5 +1847,192 @@ mod tests {
         #[case] candidate: bool,
     ) {
         assert_eq!(is_entra_agent_candidate(&claims), candidate);
+    }
+
+    /// The claim the mapping tests map to [`VIRTUAL_KEY`], for every issuer.
+    const MAPPED: MappedClaim<'static> = MappedClaim {
+        field: "client_id",
+        value: "svc-a",
+        issuer: None,
+    };
+
+    const IDP_A: &str = "https://idp-a.example";
+    const IDP_B: &str = "https://idp-b.example";
+
+    /// The store a gateway with no coordination Redis reads the keys and key mappings of `held`
+    /// through.
+    fn mapped_store(held: &Held) -> Arc<AuthStore> {
+        Arc::new(AuthStore::new(keys::memory_cache(), held.database()))
+    }
+
+    /// A gateway that maps a JWT's `client_id` claim to a virtual key read through `store`, with
+    /// `jwtauth` beside that setting. One provider signs for every issuer, and a JWT whose `iss`
+    /// is [`IDP_A`] or [`IDP_B`] is that issuer's.
+    async fn mapping_through(store: Arc<AuthStore>, jwtauth: &str) -> Auth<NativeRows> {
+        let jwks = jwt::serve_jwks().await;
+        let issuers = [IDP_A, IDP_B]
+            .map(|issuer| {
+                format!(
+                    "      - issuer: {issuer}\n        jwks_url: {}\n        disable_audience_validation: true\n",
+                    jwks.url
+                )
+            })
+            .concat();
+        let jwtauth =
+            format!("    virtual_key_claim_field: client_id\n    issuers:\n{issuers}{jwtauth}");
+        verifying_with(&jwks.url, &jwtauth, Some(store))
+    }
+
+    /// What a JWT carrying `claims` gets from `gateway`.
+    async fn presenting_jwt(
+        gateway: &Auth<NativeRows>,
+        claims: Value,
+    ) -> Result<Authenticated<NativeRows>, Rejected> {
+        bearing(gateway, &jwt::issue(claims.as_object().unwrap(), 3600)).await
+    }
+
+    /// Whether `caller` is [`VIRTUAL_KEY`], reached through a JWT mapped to it.
+    fn is_the_mapped_key(caller: &Authenticated<NativeRows>) -> bool {
+        let through_a_jwt = matches!(
+            &caller.credential,
+            Credential::Key {
+                via: Via::MappedJwt(_),
+                ..
+            }
+        );
+        through_a_jwt && caller.hash() == Some(&Token::new(VIRTUAL_KEY).hash())
+    }
+
+    #[rstest]
+    #[case::for_every_issuer("", json!({"client_id": "svc-a"}), json!({"client_id": "svc-b"}))]
+    #[case::for_one_issuer(
+        IDP_A,
+        json!({"client_id": "svc-a", "iss": IDP_A}),
+        json!({"client_id": "svc-a", "iss": IDP_B})
+    )]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_jwt_is_the_key_the_database_maps_its_claim_to(
+        #[case] issuer: &str,
+        #[case] mapped: Value,
+        #[case] unmapped: Value,
+    ) {
+        let held = Held::holding(VIRTUAL_KEY, json!({})).await;
+        held.mapping(issuer, "client_id", "svc-a", VIRTUAL_KEY)
+            .await;
+        let gateway = mapping_through(mapped_store(&held), "").await;
+
+        let as_its_key = presenting_jwt(&gateway, mapped).await.unwrap();
+        let as_itself = presenting_jwt(&gateway, unmapped).await.unwrap();
+
+        assert!(
+            is_the_mapped_key(&as_its_key),
+            "{:?}",
+            as_its_key.credential
+        );
+        assert!(
+            matches!(as_itself.credential, Credential::Jwt { .. }),
+            "{:?}",
+            as_itself.credential
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_mapped_jwt_is_served_again_from_the_cache_without_the_database() {
+        let held = Held::holding(VIRTUAL_KEY, json!({})).await;
+        held.mapping("", "client_id", "svc-a", VIRTUAL_KEY).await;
+        let gateway = mapping_through(mapped_store(&held), "").await;
+        let first = presenting_jwt(&gateway, json!({"client_id": "svc-a"})).await;
+
+        held.execute(
+            r#"DELETE FROM "LiteLLM_JWTKeyMapping"; DELETE FROM "LiteLLM_VerificationToken""#,
+        )
+        .await;
+        let again = presenting_jwt(&gateway, json!({"client_id": "svc-a"})).await;
+
+        assert_eq!(
+            [first, again].map(|caller| caller.is_ok_and(|caller| is_the_mapped_key(&caller))),
+            [true, true]
+        );
+    }
+
+    #[rstest]
+    #[case::gone(None)]
+    #[case::with_a_budget(Some(json!({"max_budget": 5.0})))]
+    #[case::with_an_owner(Some(json!({"user_id": "user"})))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_mapped_key_the_host_cannot_serve_goes_to_python(#[case] key: Option<Columns>) {
+        let held = Held::start().await;
+        if let Some(columns) = key {
+            held.key(VIRTUAL_KEY, columns).await;
+        }
+        let store = mapped_store(&held);
+        store
+            .cache_key_mapping(
+                MAPPED,
+                &Value::String(stored_hash()),
+                Duration::from_secs(60),
+            )
+            .await;
+        let gateway = mapping_through(store, "").await;
+
+        let answered = presenting_jwt(&gateway, json!({"client_id": "svc-a"})).await;
+
+        assert!(
+            matches!(answered, Err(Rejected::NotNative)),
+            "{:?}",
+            answered.map(|caller| caller.credential.clone())
+        );
+    }
+
+    #[rstest]
+    #[case::of_the_mapping(false)]
+    #[case::of_the_key_a_cached_mapping_names(true)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_mapping_read_that_fails_is_unavailable_and_never_a_denial(
+        #[case] mapping_cached: bool,
+    ) {
+        let store = Arc::new(AuthStore::new(keys::memory_cache(), keys::unreachable()));
+        if mapping_cached {
+            store
+                .cache_key_mapping(
+                    MAPPED,
+                    &Value::String(stored_hash()),
+                    Duration::from_secs(60),
+                )
+                .await;
+        }
+        let gateway = mapping_through(store, "").await;
+
+        let answered = presenting_jwt(&gateway, json!({"client_id": "svc-a"})).await;
+
+        assert!(
+            matches!(answered, Err(Rejected::Unavailable(_))),
+            "{:?}",
+            answered.map(|caller| caller.credential.clone())
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_mapping_is_read_from_the_database_again_once_its_own_ttl_passes() {
+        let held = Held::holding(VIRTUAL_KEY, json!({})).await;
+        held.mapping("", "client_id", "svc-a", VIRTUAL_KEY).await;
+        let (now, elapsed) = frozen();
+        let cache =
+            crate::state::auth_cache(&with_master_key(), &crate::RedisClients::default(), now);
+        let store = Arc::new(AuthStore::new(Arc::new(cache), held.database()));
+        let gateway = mapping_through(store, "    virtual_key_mapping_cache_ttl: 600\n").await;
+        let mapped_at = async |seconds: u64| {
+            elapsed.store(seconds, std::sync::atomic::Ordering::SeqCst);
+            let caller = presenting_jwt(&gateway, json!({"client_id": "svc-a"})).await;
+            is_the_mapped_key(&caller.unwrap())
+        };
+
+        let read = mapped_at(0).await;
+        held.execute(r#"DELETE FROM "LiteLLM_JWTKeyMapping""#).await;
+
+        assert_eq!(
+            (read, mapped_at(599).await, mapped_at(601).await),
+            (true, true, false)
+        );
     }
 }
