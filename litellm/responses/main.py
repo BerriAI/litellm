@@ -898,18 +898,21 @@ def will_bridge_to_chat_completions(
     )
 
 
-def forwards_background_upstream(
+def dispatched_responses_api_config(
     model: str, custom_llm_provider: str, model_info: object, api_base: str | None
-) -> bool:
+) -> BaseResponsesAPIConfig | None:
     normalized_model: Final = _normalize_openai_chat_completions_responses_model(model)
     provider_config: Final = _resolve_responses_api_provider_config(
         _dispatched_model_name(normalized_model[0], custom_llm_provider), custom_llm_provider, model_info, api_base
     )
-    return (
-        not _bridges_to_chat_completions(provider_config, normalized_model[1])
-        and provider_config is not None
-        and provider_config.forwards_background()
-    )
+    return None if _bridges_to_chat_completions(provider_config, normalized_model[1]) else provider_config
+
+
+def starts_background_run_upstream(
+    model: str, custom_llm_provider: str, model_info: object, api_base: str | None
+) -> bool:
+    provider_config: Final = dispatched_responses_api_config(model, custom_llm_provider, model_info, api_base)
+    return provider_config is not None and provider_config.starts_background_runs()
 
 
 def provider_stores_the_conversation(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:

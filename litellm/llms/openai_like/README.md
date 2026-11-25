@@ -72,6 +72,9 @@ That's it! The provider will be automatically loaded and available.
     // round_reasoning_effort_to_declared_levels sends reasoning_effort as the
     // nearest level in the model's reasoning_effort_levels cost map row, and
     // drops a level the row does not declare under drop_params
+    // answers_background_inline marks a /v1/responses provider that answers a
+    // background: true request in the same reply instead of starting a run,
+    // so chat completions bridged to it may send background
     "special_handling": {
       "convert_content_list_to_string": true
     },

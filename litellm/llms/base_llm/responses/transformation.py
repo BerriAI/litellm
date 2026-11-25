@@ -133,7 +133,7 @@ class BaseResponsesAPIConfig(ABC):
     def deployment_names_wrap_openai_models(self) -> bool:
         return False
 
-    def forwards_background(self) -> bool:
+    def starts_background_runs(self) -> bool:
         return True
 
     def unresolved_model_reasoning_field_values(self, model: str) -> ReasoningFieldValues | None:

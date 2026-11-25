@@ -62,7 +62,10 @@
     "base_url": "https://api.zerogpu.ai/v1",
     "api_key_env": "ZEROGPU_API_KEY",
     "api_base_env": "ZEROGPU_API_BASE",
-    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+    "special_handling": {
+      "answers_background_inline": true
+    }
   },
   "chutes": {
     "base_url": "https://llm.chutes.ai/v1/",
@@ -281,7 +284,10 @@
     "provider_info": {
       "supports_function_calling": true
     },
-    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"],
+    "special_handling": {
+      "answers_background_inline": true
+    }
   },
   "inferenceapis": {
     "base_url": "https://api.inferenceapis.com/v1",
@@ -299,7 +305,10 @@
     "supported_endpoints": [
       "/v1/chat/completions",
       "/v1/responses"
-    ]
+    ],
+    "special_handling": {
+      "answers_background_inline": true
+    }
   },
   "kyma": {
     "base_url": "https://kymaapi.com/v1",
