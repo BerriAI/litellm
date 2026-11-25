@@ -5,9 +5,7 @@ from typing import Final
 
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth, CustomerScopeKey
 
-_HEADER_SCOPES: Final[frozenset[CustomerScopeKey]] = frozenset(
-    ("customer_org", "customer_member", "app_customer_org", "app_customer_member")
-)
+_HEADER_SCOPES: Final[frozenset[CustomerScopeKey]] = frozenset(("app_customer_org", "app_customer_member"))
 
 
 def _budget_headers(

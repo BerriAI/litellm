@@ -70,14 +70,14 @@ def test_a_reset_time_is_reported_in_utc_whatever_zone_it_was_stored_in() -> Non
     hierarchy: Final = CustomerHierarchyAuth(
         scopes=(
             CustomerScopeAuth(
-                key="customer_org",
+                key="app_customer_org",
                 entity_id="org-1",
                 spend=1.0,
                 max_budget=10.0,
                 budget_reset_at=datetime(2026, 1, 1, 19, tzinfo=eastern),
             ),
             CustomerScopeAuth(
-                key="customer_member",
+                key="app_customer_member",
                 entity_id="member-1",
                 spend=1.0,
                 max_budget=10.0,
@@ -86,8 +86,25 @@ def test_a_reset_time_is_reported_in_utc_whatever_zone_it_was_stored_in() -> Non
         )
     )
     headers: Final = customer_budget_headers(hierarchy)
-    assert headers["x-litellm-customer-org-budget-reset-at"] == "2026-01-02T00:00:00+00:00"
-    assert headers["x-litellm-customer-member-budget-reset-at"] == "2026-01-02T00:00:00+00:00"
+    assert headers["x-litellm-app-customer-org-budget-reset-at"] == "2026-01-02T00:00:00+00:00"
+    assert headers["x-litellm-app-customer-member-budget-reset-at"] == "2026-01-02T00:00:00+00:00"
+
+
+def test_budgets_outside_the_calling_app_are_not_reported() -> None:
+    hierarchy: Final = CustomerHierarchyAuth(
+        scopes=tuple(
+            CustomerScopeAuth(key=key, entity_id=f"{key}-1", spend=1.0, max_budget=10.0)
+            for key in (
+                "customer_org",
+                "customer_team",
+                "customer_member",
+                "app",
+                "app_group",
+                "app_group_customer_org",
+            )
+        )
+    )
+    assert dict(customer_budget_headers(hierarchy)) == {}
 
 
 def test_a_successful_response_carries_the_customer_budget_headers() -> None:
