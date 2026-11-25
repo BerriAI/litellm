@@ -854,7 +854,7 @@ def _database_failure(
     message: str = "database query failed", unavailable: bool = False, requeue_safe: bool = False
 ) -> NativeDatabaseFailure:
     failure: Final = NativeDatabaseFailure(message)
-    failure.kind = "other"
+    failure.kind = "unreachable" if unavailable else "other" if requeue_safe else "data_rejected"
     failure.unavailable = unavailable
     failure.requeue_safe = requeue_safe
     return failure
@@ -862,6 +862,10 @@ def _database_failure(
 
 def _duplicate_id_failure() -> NativeDatabaseFailure:
     return _database_failure('duplicate key value violates unique constraint "LiteLLM_AuditLog_pkey"')
+
+
+async def _wait_for_audit_retries() -> None:
+    await asyncio.gather(*(task for task in asyncio.all_tasks() if task.get_name().startswith("retry of ")))
 
 
 @pytest.fixture
@@ -890,7 +894,7 @@ async def test_an_audit_write_that_fails_temporarily_is_stored_by_a_retry(
     )
 
     await create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"members": ["u1"]}))
-    await drain_audit_tasks()
+    await _wait_for_audit_retries()
 
     assert [row["id"] for row in audit_log_store.rows] == ["audit-1"]
     assert audit_failure_metric.callback_names == []
@@ -924,7 +928,7 @@ async def test_a_batch_whose_retries_run_out_is_logged_by_row_and_counted_once_p
     with patch.object(verbose_proxy_logger, "error") as logged_error:
         await create_audit_logs_for_updates((first, second))
         retry_names: Final = tuple(task.get_name() for task in asyncio.all_tasks() if "retry of" in task.get_name())
-        await drain_audit_tasks()
+        await _wait_for_audit_retries()
 
     assert audit_log_store.rows == []
     assert audit_log_store.attempts == 3
@@ -1018,7 +1022,7 @@ async def test_retries_of_concurrent_audit_writes_use_one_database_connection_at
     await asyncio.gather(
         *(create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"n": n})) for n in range(3))
     )
-    await drain_audit_tasks()
+    await _wait_for_audit_retries()
 
     assert overlap.most_running == 1
     assert audit_log_store.attempts == 9
@@ -1026,11 +1030,11 @@ async def test_retries_of_concurrent_audit_writes_use_one_database_connection_at
 
 
 @pytest.mark.asyncio
-async def test_a_retry_still_queued_when_its_time_budget_ends_is_counted_without_another_attempt(
+async def test_a_retry_that_hangs_past_its_time_budget_is_counted_with_the_retry_queued_behind_it(
     audit_log_store: FakeAuditLogStore,
     audit_failure_metric: _RecordedFailureMetric,
 ) -> None:
-    overlap: Final = _RetryOverlap(first_attempts=2, hold_seconds=0.6)
+    overlap: Final = _RetryOverlap(first_attempts=2, hold_seconds=3.0)
     audit_log_store.during_attempt = overlap.during_attempt
     audit_log_store.error = _database_failure(unavailable=True)
 
@@ -1038,7 +1042,50 @@ async def test_a_retry_still_queued_when_its_time_budget_ends_is_counted_without
         await asyncio.gather(
             *(create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"n": n})) for n in range(2))
         )
-        await drain_audit_tasks()
+        await drain_audit_tasks(timeout=1.0)
 
     assert audit_log_store.attempts == 3
     assert audit_failure_metric.callback_names == ["audit_log_database"] * 2
+
+
+@pytest.mark.asyncio
+async def test_a_retry_whose_time_budget_runs_out_is_counted_without_waiting_out_its_remaining_delays(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+) -> None:
+    audit_log_store.error = _database_failure(unavailable=True)
+
+    with (
+        patch("litellm.proxy.management_helpers.audit_logs._AUDIT_WRITE_RETRY_DELAYS_SECONDS", (0.05, 10.0)),
+        patch("litellm.proxy.management_helpers.audit_logs._AUDIT_WRITE_RETRY_BUDGET_SECONDS", 0.3),
+    ):
+        await create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"members": ["u1"]}))
+        await asyncio.wait_for(_wait_for_audit_retries(), timeout=2.0)
+
+    assert audit_log_store.attempts == 2
+    assert audit_failure_metric.callback_names == ["audit_log_database"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("database_recovers", "stored_ids", "counted"),
+    [(True, ["audit-1"], []), (False, [], ["audit_log_database"])],
+    ids=["database_back", "database_still_failing"],
+)
+async def test_the_shutdown_drain_gives_a_waiting_retry_one_last_attempt_at_once(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+    database_recovers: bool,
+    stored_ids: list[str],
+    counted: list[str],
+) -> None:
+    audit_log_store.next_errors.append(_database_failure(unavailable=True))
+    audit_log_store.error = None if database_recovers else _database_failure(unavailable=True)
+
+    with patch("litellm.proxy.management_helpers.audit_logs._AUDIT_WRITE_RETRY_DELAYS_SECONDS", (10.0, 10.0)):
+        await create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"members": ["u1"]}))
+        await asyncio.wait_for(drain_audit_tasks(timeout=5.0), timeout=1.0)
+
+    assert [row["id"] for row in audit_log_store.rows] == stored_ids
+    assert audit_log_store.attempts == 2
+    assert audit_failure_metric.callback_names == counted

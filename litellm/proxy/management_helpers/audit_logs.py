@@ -3,6 +3,7 @@ Functions to create audit logs for LiteLLM Proxy
 """
 
 import asyncio
+import contextlib
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -178,14 +179,25 @@ _T = TypeVar("_T")
 
 
 class AuditTaskRegistry:
-    __slots__ = ("_pending_tasks", "_retry_locks")
+    __slots__ = ("_drain_signals", "_pending_tasks", "_retry_locks")
 
     def __init__(self) -> None:
         self._pending_tasks: Final[set[asyncio.Task[object]]] = set()  # mutable-ok: background task tracking
         self._retry_locks: Final[WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]] = WeakKeyDictionary()
+        self._drain_signals: Final[WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Event]] = WeakKeyDictionary()
 
     def retry_lock(self) -> asyncio.Lock:
         return self._retry_locks.setdefault(asyncio.get_running_loop(), asyncio.Lock())
+
+    def _drain_signal(self) -> asyncio.Event:
+        return self._drain_signals.setdefault(asyncio.get_running_loop(), asyncio.Event())
+
+    def draining(self) -> bool:
+        return self._drain_signal().is_set()
+
+    async def wait_unless_draining(self, seconds: float) -> None:
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(self._drain_signal().wait(), timeout=max(seconds, 0.0))
 
     def track(self, task: asyncio.Task[_T]) -> asyncio.Task[_T]:
         if task.done() or task in self._pending_tasks:
@@ -199,6 +211,14 @@ class AuditTaskRegistry:
         _audit_log_task_done_callback(task)
 
     async def drain(self, timeout: float = 5.0) -> None:
+        signal: Final = self._drain_signal()
+        signal.set()
+        try:
+            await self._wait_for_pending_tasks(timeout)
+        finally:
+            signal.clear()
+
+    async def _wait_for_pending_tasks(self, timeout: float) -> None:
         loop: Final = asyncio.get_running_loop()
         deadline: Final = loop.time() + timeout
         while self._pending_tasks:
@@ -342,11 +362,19 @@ def _report_failed_audit_write(write: _AuditWrite, failure: Exception) -> None:
         reporter.handle_callback_failure(callback_name=_AUDIT_DATABASE_CALLBACK_NAME)
 
 
-async def _attempt_audit_retry(write: _AuditWrite, failure: Exception, deadline: float) -> Exception | None:
+async def _locked_audit_write(write: _AuditWrite) -> Exception | None:
     async with _audit_task_registry.retry_lock():
-        if asyncio.get_running_loop().time() >= deadline:
-            return failure
         return await _attempt_audit_write(write)
+
+
+async def _attempt_audit_retry(write: _AuditWrite, failure: Exception, deadline: float) -> Exception | None:
+    remaining: Final = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        return failure
+    try:
+        return await asyncio.wait_for(_locked_audit_write(write), timeout=remaining)
+    except asyncio.TimeoutError:
+        return failure
 
 
 async def _retry_audit_write(
@@ -355,11 +383,11 @@ async def _retry_audit_write(
     if not delays or not _is_retryable_audit_failure(failure):
         _report_failed_audit_write(write, failure)
         return
-    await asyncio.sleep(delays[0])
+    await _audit_task_registry.wait_unless_draining(min(delays[0], deadline - asyncio.get_running_loop().time()))
     next_failure: Final = await _attempt_audit_retry(write, failure, deadline)
     if next_failure is None or _is_stored_by_an_earlier_attempt(next_failure):
         return
-    await _retry_audit_write(write, next_failure, delays[1:], deadline)
+    await _retry_audit_write(write, next_failure, () if _audit_task_registry.draining() else delays[1:], deadline)
 
 
 async def _insert_audit_logs(write: _AuditWrite) -> None:
