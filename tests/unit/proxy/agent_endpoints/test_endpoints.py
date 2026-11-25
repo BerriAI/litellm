@@ -1385,6 +1385,27 @@ def test_jwt_authentication_status_does_not_require_virtual_keys(
     assert agent.jwt_auth_configured is False
 
 
+@pytest.mark.parametrize("is_admin", [True, False])
+def test_only_admins_read_the_token_exchange_block(is_admin: bool) -> None:
+    from litellm.constants import REDACTED_BY_LITELM_STRING
+
+    block: Final = {
+        "token_exchange_endpoint": "https://user:pass@idp.example.com/token",
+        "client_id": "agent-client",
+        "client_secret": "obo-client-secret",
+        "audience": "api://agent",
+    }
+    agent: Final = _sample_agent_response().model_copy(update={"litellm_params": {"token_exchange": block}})
+
+    response: Final = agent_endpoints._redact_sensitive_agent_fields(
+        (agent,), is_admin=is_admin, request_base_url="http://testserver"
+    )[0]
+
+    assert response.litellm_params is not None
+    shown: Final = response.litellm_params["token_exchange"]
+    assert shown == ({**block, "client_secret": REDACTED_BY_LITELM_STRING} if is_admin else REDACTED_BY_LITELM_STRING)
+
+
 def test_identity_providers_require_configured_issuer_and_audience(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy import proxy_server
     from litellm.proxy._types import LiteLLM_JWTAuth

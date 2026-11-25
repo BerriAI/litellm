@@ -21,7 +21,11 @@ from typing_extensions import ReadOnly, Required, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS, AGENT_HEALTH_CHECK_TIMEOUT_SECONDS
+from litellm.constants import (
+    AGENT_HEALTH_CHECK_GATHER_TIMEOUT_SECONDS,
+    AGENT_HEALTH_CHECK_TIMEOUT_SECONDS,
+    REDACTED_BY_LITELM_STRING,
+)
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
@@ -67,6 +71,7 @@ from litellm.proxy.agent_endpoints.kill_switch import (
     redact_kill_switch,
 )
 from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
+from litellm.proxy.agent_endpoints.token_exchange import TOKEN_EXCHANGE_PARAM
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity, unless_database_fails
@@ -182,6 +187,15 @@ def _redact_agent_litellm_params_dict(
     return dict(parse_agent_litellm_params(redact_sensitive_agent_litellm_params(litellm_params)))
 
 
+def _masked_token_exchange(
+    litellm_params: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: AgentResponse.litellm_params is declared as a plain dict, not Mapping
+    return {
+        key: REDACTED_BY_LITELM_STRING if key == TOKEN_EXCHANGE_PARAM else value
+        for key, value in litellm_params.items()
+    }
+
+
 def _non_admin_agent_card(
     card: Mapping[str, object], proxy_url: str
 ) -> dict[str, object]:  # mutable-ok: AgentResponse.agent_card_params requires a mutable dictionary
@@ -241,7 +255,8 @@ def _redact_sensitive_agent_fields(
                     get_custom_url(request_base_url, route=f"a2a/{copy.agent_id}"),
                 )
         if copy.litellm_params:
-            copy.litellm_params = _redact_agent_litellm_params_dict(copy.litellm_params)
+            redacted_params = _redact_agent_litellm_params_dict(copy.litellm_params)
+            copy.litellm_params = redacted_params if is_admin else _masked_token_exchange(redacted_params)
         copy.kill_switch = redact_kill_switch(copy.kill_switch)
         redacted.append(copy)
     return redacted
