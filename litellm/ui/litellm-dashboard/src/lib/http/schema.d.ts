@@ -31912,6 +31912,10 @@ export interface components {
         };
         /** ChatCompletionAudioObject */
         ChatCompletionAudioObject: {
+            /** Audio Metadata */
+            audio_metadata?: {
+                [key: string]: unknown;
+            };
             cache_control?: components["schemas"]["ChatCompletionCachedContent"];
             input_audio: components["schemas"]["ChatCompletionInputAudio"];
             /**
@@ -32053,6 +32057,10 @@ export interface components {
         };
         /** ChatCompletionInputAudio */
         ChatCompletionInputAudio: {
+            /** Audio Metadata */
+            audio_metadata?: {
+                [key: string]: unknown;
+            };
             /** Data */
             data: string;
             /** Format */

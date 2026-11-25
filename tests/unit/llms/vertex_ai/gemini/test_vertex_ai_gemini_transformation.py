@@ -614,6 +614,100 @@ def test_responses_video_content_layers_reach_gemini(role: str) -> None:
     )
 
 
+_PDF_PART: Final = {"inline_data": {"data": "JVBERg==", "mime_type": "application/pdf"}}
+_SOUND_PART: Final = {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/wav"}}
+
+
+@pytest.mark.parametrize("role", ["user", "tool"])
+@pytest.mark.parametrize(
+    ("media", "expected"),
+    [
+        pytest.param(
+            {
+                "type": "input_file",
+                "file_data": "data:application/pdf;base64,JVBERg==",
+                "document_metadata": {"start_page": 2, "end_page": 4},
+            },
+            {**_PDF_PART, "document_metadata": {"startPage": 2, "endPage": 4}},
+            id="input_file-document-beside",
+        ),
+        pytest.param(
+            {
+                "type": "input_file",
+                "file": {
+                    "file_data": "data:application/pdf;base64,JVBERg==",
+                    "spreadsheet_metadata": {"sheet_index": 2},
+                },
+            },
+            {**_PDF_PART, "spreadsheet_metadata": {"sheetIndex": 2}},
+            id="input_file-spreadsheet-nested",
+        ),
+        pytest.param(
+            {"type": "input_file", "file_data": "data:audio/wav;base64,c291bmQ=", "audio_metadata": _AUDIO_SLICE},
+            {**_SOUND_PART, "audio_metadata": _GEMINI_AUDIO_SLICE},
+            id="input_file-audio-beside",
+        ),
+        pytest.param(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "c291bmQ=", "format": "wav", "audio_metadata": _AUDIO_SLICE},
+            },
+            {**_SOUND_PART, "audio_metadata": _GEMINI_AUDIO_SLICE},
+            id="input_audio-inside",
+        ),
+        pytest.param(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "c291bmQ=", "format": "wav"},
+                "audio_metadata": _AUDIO_SLICE,
+            },
+            {**_SOUND_PART, "audio_metadata": _GEMINI_AUDIO_SLICE},
+            id="input_audio-beside",
+        ),
+        pytest.param(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "c291bmQ=", "format": "wav", "audio_metadata": _AUDIO_SLICE},
+                "audio_metadata": {"start_offset": "0s", "end_offset": "5s"},
+            },
+            {**_SOUND_PART, "audio_metadata": _GEMINI_AUDIO_SLICE},
+            id="input_audio-inside-wins",
+        ),
+    ],
+)
+def test_responses_slice_fields_reach_gemini(role: str, media: dict[str, object], expected: dict[str, object]) -> None:
+    parts: Final = [{"type": "input_text", "text": '{"ok":true}'}, media]
+    input_items: Final = (
+        [
+            {"type": "function_call", "call_id": "call_media", "name": "get_media", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_media", "output": parts},
+        ]
+        if role == "tool"
+        else [{"role": "user", "content": parts}]
+    )
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(input_items, {})
+    result: Final = gemini_convert_messages_with_history(
+        messages, model="gemini-3.8-flash", custom_llm_provider="gemini"
+    )
+    assert result[-1] == (
+        {
+            "role": "user",
+            "parts": [
+                {
+                    "function_response": {
+                        "id": "call_media",
+                        "name": "get_media",
+                        "response": {"ok": True},
+                        "parts": [expected],
+                    }
+                }
+            ],
+        }
+        if role == "tool"
+        else {"role": "user", "parts": [{"text": '{"ok":true}'}, expected]}
+    )
+
+
 def test_managed_file_audio_slice_survives_the_provider_file_id_rewrite() -> None:
     managed_file_id: Final = base64.urlsafe_b64encode(
         b"litellm_proxy:audio/mpeg;unified_id,4f6d1c2e;target_model_names,gemini-4-argon"

@@ -298,6 +298,12 @@ class _ResponsesFilePart(ChatCompletionFileObject, total=False):
     cache_control: ReadOnly[object]
 
 
+class _ResponsesFile(S3MediaFileObjectFile, total=False):
+    document_metadata: ReadOnly[Mapping[str, object]]
+    spreadsheet_metadata: ReadOnly[Mapping[str, object]]
+    audio_metadata: ReadOnly[Mapping[str, object]]
+
+
 class _ResponsesImagePart(ChatCompletionImageObject, total=False):
     cache_control: ReadOnly[object]
 
@@ -334,7 +340,16 @@ def _valid_content_type(content_type: str) -> ValidChatCompletionMessageContentT
 
 _AUDIO_PART_ADAPTER: Final = TypeAdapter(ChatCompletionAudioObject)
 _IMAGE_URL_ADAPTER: Final = TypeAdapter(S3MediaImageUrlObject)
-_FILE_ADAPTER: Final = TypeAdapter(S3MediaFileObjectFile)
+_FILE_ADAPTER: Final = TypeAdapter(_ResponsesFile)
+_RESPONSES_FILE_KEYS: Final = (
+    "file_data",
+    "filename",
+    "detail",
+    "video_metadata",
+    "document_metadata",
+    "spreadsheet_metadata",
+    "audio_metadata",
+)
 _MessageT = TypeVar("_MessageT")
 _MediaT = TypeVar("_MediaT")
 _InputItemT = TypeVar("_InputItemT")
@@ -416,7 +431,7 @@ def _responses_file_part(item: Mapping[str, object]) -> _ResponsesFilePart:
     file: Final = _validate_responses_media(
         _FILE_ADAPTER,
         {
-            **{key: fields[key] for key in ("file_data", "filename", "detail", "video_metadata") if fields.get(key)},
+            **{key: fields[key] for key in _RESPONSES_FILE_KEYS if fields.get(key)},
             **({"file_id": file_id} if file_id else {}),
             **({"format": media_format} if media_format is not None else {}),
             **_s3_bucket_owner_field(file_id or fields.get("file_data"), fields.get("bucket_owner")),

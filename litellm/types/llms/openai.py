@@ -890,11 +890,13 @@ class ChatCompletionVideoObject(TypedDict):
 class ChatCompletionInputAudio(TypedDict):
     data: ReadOnly[str]
     format: ReadOnly[str]
+    audio_metadata: NotRequired[ReadOnly[Mapping[str, object]]]
 
 
 class ChatCompletionAudioObject(TypedDict):
     type: ReadOnly[Literal["input_audio"]]
     input_audio: ReadOnly[ChatCompletionInputAudio]
+    audio_metadata: NotRequired[ReadOnly[Mapping[str, object]]]
     cache_control: NotRequired[ChatCompletionCachedContent]  # writable-ok: [LIT012] cache hook mutates blocks
 
 

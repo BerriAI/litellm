@@ -50653,6 +50653,11 @@
         },
         "ChatCompletionAudioObject": {
           "properties": {
+            "audio_metadata": {
+              "additionalProperties": true,
+              "title": "Audio Metadata",
+              "type": "object"
+            },
             "cache_control": {
               "$ref": "#/components/schemas/ChatCompletionCachedContent"
             },
@@ -50924,6 +50929,11 @@
         },
         "ChatCompletionInputAudio": {
           "properties": {
+            "audio_metadata": {
+              "additionalProperties": true,
+              "title": "Audio Metadata",
+              "type": "object"
+            },
             "data": {
               "title": "Data",
               "type": "string"
