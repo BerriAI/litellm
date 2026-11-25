@@ -513,6 +513,11 @@ mod tests {
             AnthropicBeta::Other("custom-b".into()),
         ]
     )]
+    #[case::server_side_fallback_june_kept_july_dropped(
+        json!(["server-side-fallback-2026-07-01"]),
+        vec![("Anthropic-Beta".into(), "server-side-fallback-2026-06-01".into())],
+        vec![AnthropicBeta::ServerSideFallback20260601]
+    )]
     fn body_betas_are_filtered_renamed_and_merged_with_headers(
         #[case] body_betas: Value,
         #[case] headers: Headers,
