@@ -23,7 +23,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_CONVERSATION_METADATA_KEY,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger import CustomLogger, register_callback_metric_name
 from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
     get_or_create_metadata_bucket,
@@ -151,7 +151,7 @@ def _loaded_callback_or_raise(entry: str, loaded: object) -> CustomLogger | Call
 def load_configured_callback(name: str, config_file_path: str | None) -> object:
     callback: Final = _LOADED_CALLBACK.validate_python(get_instance_fn(value=name, config_file_path=config_file_path))
     if isinstance(callback, CustomLogger) and "." in name and "://" not in name:
-        CustomLogger.set_callback_registration_name(callback, name)
+        register_callback_metric_name(callback, name)
     return callback
 
 

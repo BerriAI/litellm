@@ -15,9 +15,11 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_worker import LoggingWorker
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
+from litellm.proxy.logging_endpoints.callback_logs_endpoints import ingest_callback_logs
 from litellm.proxy.utils import ProxyLogging
+from litellm.types.proxy.callback_logs_endpoints import CallbackLogRecord, CallbackLogsRequest
 from litellm.types.utils import CallTypesLiteral, ModelResponse
 
 _METRIC: Final = "litellm_callback_duration_seconds"
@@ -205,3 +207,59 @@ async def test_success_hooks_follow_the_logging_worker_execution_path(
         if enabled and call_type == "acompletion"
         else {}
     )
+
+
+@pytest.mark.usefixtures("_registry_scope")
+async def test_metric_name_comes_from_registration_despite_callback_state_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    callback: Final = _Callback()
+    monkeypatch.setattr(callback, "callback_registration_name", "callback-owned state", raising=False)
+    _register(monkeypatch, enabled=True, callback=callback)
+
+    await _pre_call()
+    monkeypatch.setattr(callback, "callback_registration_name", "request-derived state")
+    await _success_handler().async_success_handler(result=ModelResponse(model="chat"), end_time=_TIMESTAMP)
+
+    assert _counts() == {
+        _labels("first", "async_pre_call_hook", "request_path"): 1,
+        _labels("second", "async_pre_call_hook", "request_path"): 1,
+        _labels("first", "async_log_success_event", "request_path"): 1,
+        _labels("second", "async_log_success_event", "request_path"): 1,
+    }
+
+
+@pytest.mark.usefixtures("_registry_scope")
+@pytest.mark.parametrize(
+    "call_fields",
+    [
+        {"call_type": "acompletion", "stream": True},
+        {"call_type": "acompletion", "stream": False},
+        {"stream": True},
+    ],
+)
+async def test_replaying_finished_chat_delivers_success_without_observing_latency(
+    monkeypatch: pytest.MonkeyPatch, call_fields: Mapping[str, object]
+) -> None:
+    callback: Final = _Callback()
+    _register(monkeypatch, enabled=True, callback=callback)
+    monkeypatch.setattr(litellm, "_async_success_callback", [callback])
+    record: Final = CallbackLogRecord(
+        status="success",
+        standard_logging_payload={
+            "id": "replayed chat",
+            "model": "chat",
+            "startTime": _TIMESTAMP.timestamp(),
+            "endTime": _TIMESTAMP.timestamp(),
+            **call_fields,
+        },
+    )
+
+    result: Final = await ingest_callback_logs(
+        CallbackLogsRequest(records=[record]),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert (result.processed, result.failed) == (1, 0)
+    assert callback.started.is_set()
+    assert _counts() == {}

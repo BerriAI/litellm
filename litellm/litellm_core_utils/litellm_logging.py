@@ -86,7 +86,7 @@ from litellm.integrations.agentops import AgentOps
 from litellm.integrations.anthropic_cache_control_hook import AnthropicCacheControlHook
 from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.custom_logger import CustomLogger, get_callback_metric_name
 from litellm.integrations.custom_logger_v2 import derivations as v2_derive
 from litellm.integrations.custom_logger_v2.call import CallFacts, CallIds, CallKind, CallTarget, CallTiming
 from litellm.integrations.custom_logger_v2.dispatcher import RequestScope
@@ -1136,6 +1136,8 @@ class Logging(LiteLLMLoggingBaseClass):
         log_raw_request_response: bool = False,
         supports_correlation_logging: bool = True,
         raw_request_only: bool = False,
+        *,
+        is_callback_log_replay: bool = False,
     ):
         _input: Final[str | None] = messages  # save original value of messages
         if messages is not None:
@@ -1210,6 +1212,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.sync_streaming_chunks: list[object] = []
         self.log_raw_request_response = log_raw_request_response
         self.raw_request_only = raw_request_only
+        self._is_callback_log_replay: Final = is_callback_log_replay
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: list[str | Callable[..., object] | CustomLogger] | None = dynamic_input_callbacks
@@ -5444,7 +5447,9 @@ class Logging(LiteLLMLoggingBaseClass):
                     with time_callback_hook(
                         callback,
                         "async_log_success_event",
-                        enabled_for_call=not self.stream and self.call_type == CallTypes.acompletion.value,
+                        enabled_for_call=not self._is_callback_log_replay
+                        and not self.stream
+                        and self.call_type == CallTypes.acompletion.value,
                     ):
                         if isinstance(callback, ShadowEvalLogger):
                             await callback.async_log_success_event(
@@ -7751,7 +7756,7 @@ def time_callback_hook(
     if not enabled_for_call or litellm.prometheus_callback_latency is not True:
         yield
         return
-    name: Final = callback.callback_registration_name
+    name: Final = get_callback_metric_name(callback)
     if name is None:
         yield
         return
