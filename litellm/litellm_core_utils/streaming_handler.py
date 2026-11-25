@@ -630,6 +630,7 @@ class CustomStreamWrapper:
         self.tool_call = False
         # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self.chunks: list[ModelResponseStream] = []
+        self._completed_streaming_response: _CompleteStreamingResponse | None = None
         self._repeated_messages_count = 1
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: int | None = None
@@ -2492,26 +2493,34 @@ class CustomStreamWrapper:
             return None
 
     def _build_complete_streaming_response(self) -> _CompleteStreamingResponse:
+        if self._completed_streaming_response is not None:
+            return self._completed_streaming_response
         try:
-            return litellm.stream_chunk_builder(
+            built: Final = litellm.stream_chunk_builder(
                 chunks=self.chunks,
                 messages=self.messages,
                 logging_obj=self.logging_obj,
                 count_prompt_tokens=self.count_prompt_tokens,
             )
         except Exception as e:
-            return self._builder_failure_response(e)
+            built = self._builder_failure_response(e)
+        self._completed_streaming_response = built
+        return built
 
     async def _async_build_complete_streaming_response(self) -> _CompleteStreamingResponse:
+        if self._completed_streaming_response is not None:
+            return self._completed_streaming_response
         try:
-            return await asyncify(litellm.stream_chunk_builder)(
+            built: Final = await asyncify(litellm.stream_chunk_builder)(
                 chunks=self.chunks,
                 messages=self.messages,
                 logging_obj=self.logging_obj,
                 count_prompt_tokens=self.count_prompt_tokens,
             )
         except Exception as e:
-            return self._builder_failure_response(e)
+            built = self._builder_failure_response(e)
+        self._completed_streaming_response = built
+        return built
 
     def _set_final_chunk_usage(self, chunk: ModelResponseStream) -> None:
         reported_usage: Final = _reported_total_usage(chunks=self.chunks)
@@ -2843,43 +2852,48 @@ class CustomStreamWrapper:
 
         if self.sent_last_chunk is True:
             complete_streaming_response: Final = await self._async_build_complete_streaming_response()
-            response: Final = self._new_usage_chunk()
-            if complete_streaming_response is not None:
-                self._propagate_usage_cost_to_hidden_params(
-                    complete_streaming_response, self.custom_llm_provider, self.chunks
-                )
-
-                setattr(
-                    response,
-                    "usage",
-                    getattr(complete_streaming_response, "usage"),
-                )
-                _stamp_served_service_tier(response, complete_streaming_response)
-                _stamp_usage_cost(response, complete_streaming_response)
-                try:
-                    _copy = complete_streaming_response.model_copy(deep=True)
-                except RuntimeError:
-                    _copy = complete_streaming_response.model_copy()
-                asyncio.create_task(
-                    self.async_cache_streaming_response(
-                        processed_chunk=_copy,
-                        cache_hit=cache_hit,
+            if self.sent_stream_usage is False:
+                response: Final = self._new_usage_chunk()
+                if complete_streaming_response is not None:
+                    self._propagate_usage_cost_to_hidden_params(
+                        complete_streaming_response, self.custom_llm_provider, self.chunks
                     )
-                )
-            # Update hidden_params with final usage from
-            # stream_chunk_builder (see sync __next__ for full comment).
-            if (
-                not self.send_stream_usage
-                and complete_streaming_response is not None
-                and self._last_returned_hidden_params is not None
-            ):
-                final_usage: Final = getattr(complete_streaming_response, "usage", None)
-                if final_usage is not None:
-                    self._last_returned_hidden_params["usage"] = final_usage
 
-            if self.sent_stream_usage is False and self.send_stream_usage is True:
-                self.sent_stream_usage = True
-                return response
+                    usage_obj = getattr(complete_streaming_response, "usage", None)
+                    if usage_obj is not None:
+                        try:
+                            usage_copy = usage_obj.model_copy(deep=True)
+                        except (AttributeError, RuntimeError):
+                            import copy
+
+                            usage_copy = copy.deepcopy(usage_obj)
+                        setattr(response, "usage", usage_copy)  # noqa: B010
+                    _stamp_served_service_tier(response, complete_streaming_response)
+                    _stamp_usage_cost(response, complete_streaming_response)
+                    try:
+                        _copy = complete_streaming_response.model_copy(deep=True)
+                    except RuntimeError:
+                        _copy = complete_streaming_response.model_copy()
+                    asyncio.create_task(
+                        self.async_cache_streaming_response(
+                            processed_chunk=_copy,
+                            cache_hit=cache_hit,
+                        )
+                    )
+                # Update hidden_params with final usage from
+                # stream_chunk_builder (see sync __next__ for full comment).
+                if (
+                    not self.send_stream_usage
+                    and complete_streaming_response is not None
+                    and self._last_returned_hidden_params is not None
+                ):
+                    final_usage: Final = getattr(complete_streaming_response, "usage", None)
+                    if final_usage is not None:
+                        self._last_returned_hidden_params["usage"] = final_usage
+
+                if self.send_stream_usage is True:
+                    self.sent_stream_usage = True
+                    return response
 
             _deferred_cb: Final = getattr(
                 self.logging_obj,

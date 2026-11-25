@@ -11282,3 +11282,143 @@ def test_text_completion_stream_carries_the_finish_chunks_choice_fields_only_on_
         (choice.finish_reason, getattr(choice, "provider_specific_fields", None))
         for choice in chain.from_iterable(chunk.choices for chunk in emitted)
     ] == [(None, None), *([(None, None)] if final_text else []), ("stop", _UPSTREAM_REASON_FIELDS)]
+
+
+@pytest.mark.asyncio
+async def test_async_stream_with_include_usage_finalizes_with_single_build_and_caching(
+    monkeypatch: pytest.MonkeyPatch, logging_obj: Logging
+) -> None:
+    """Verifies #54306:
+    - stream_chunk_builder is invoked exactly once during async stream finalization with include_usage.
+    - Emitted usage chunk receives a deep copy of usage (not sharing object reference with complete response).
+    - Response caching occurs exactly once per completed stream.
+    """
+    raw_chunks: Final = [
+        ModelResponseStream(
+            id="chatcmpl-54306",
+            created=1742056047,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(finish_reason=None, index=0, delta=Delta(content="Hello", role="assistant"))],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-54306",
+            created=1742056048,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=""))],
+            usage=Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+        ),
+    ]
+
+    builder_call_count = 0
+    real_stream_chunk_builder = litellm.stream_chunk_builder
+
+    def counting_builder(*args: object, **kwargs: object) -> object:
+        nonlocal builder_call_count
+        builder_call_count += 1
+        return real_stream_chunk_builder(*args, **kwargs)
+
+    monkeypatch.setattr(litellm, "stream_chunk_builder", counting_builder)
+
+    cache_calls: list[tuple[object, bool]] = []
+    real_async_cache = CustomStreamWrapper.async_cache_streaming_response
+
+    async def tracking_cache(
+        self: CustomStreamWrapper, processed_chunk: object, cache_hit: bool
+    ) -> None:
+        cache_calls.append((processed_chunk, cache_hit))
+        await real_async_cache(self, processed_chunk=processed_chunk, cache_hit=cache_hit)
+
+    monkeypatch.setattr(CustomStreamWrapper, "async_cache_streaming_response", tracking_cache)
+
+    logging_obj.update_environment_variables(
+        model="gpt-4.1-mini",
+        optional_params={"stream_options": {"include_usage": True}},
+        litellm_params={},
+        custom_llm_provider="openai",
+    )
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=raw_chunks),
+        model="gpt-4.1-mini",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    )
+
+    emitted_chunks = [chunk async for chunk in wrapper]
+    await asyncio.sleep(0.01)
+
+    assert len(emitted_chunks) == 3
+    usage_trailer = emitted_chunks[-1]
+    assert getattr(usage_trailer, "usage", None) is not None
+
+    # a) stream_chunk_builder is invoked exactly ONCE
+    assert builder_call_count == 1
+    assert wrapper._completed_streaming_response is not None
+
+    # b) The usage object on the emitted usage chunk does not share the same reference as complete_streaming_response
+    completed_usage = getattr(wrapper._completed_streaming_response, "usage", None)
+    assert completed_usage is not None
+    assert usage_trailer.usage == completed_usage
+    assert usage_trailer.usage is not completed_usage
+
+    # Mutating emitted usage trailer does not mutate completed response usage
+    usage_trailer.usage.total_tokens = 99999
+    assert completed_usage.total_tokens != 99999
+
+    # c) Response caching occurs once per completed stream
+    assert len(cache_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_complete_streaming_response_caching_on_instance(
+    monkeypatch: pytest.MonkeyPatch, logging_obj: Logging
+) -> None:
+    """Verifies that _build_complete_streaming_response and _async_build_complete_streaming_response
+    cache the built response on self._completed_streaming_response and return it immediately on repeat calls.
+    """
+    raw_chunks: Final = [
+        ModelResponseStream(
+            id="chatcmpl-cache-test",
+            created=1742056047,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content="done"))],
+            usage=Usage(prompt_tokens=5, completion_tokens=1, total_tokens=6),
+        ),
+    ]
+
+    builder_calls = 0
+    real_builder = litellm.stream_chunk_builder
+
+    def counting_builder(*args: object, **kwargs: object) -> object:
+        nonlocal builder_calls
+        builder_calls += 1
+        return real_builder(*args, **kwargs)
+
+    monkeypatch.setattr(litellm, "stream_chunk_builder", counting_builder)
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=iter(raw_chunks),
+        model="gpt-4.1-mini",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+    )
+    wrapper.chunks = list(raw_chunks)
+    assert wrapper._completed_streaming_response is None
+
+    # First async call builds it
+    res1 = await wrapper._async_build_complete_streaming_response()
+    assert builder_calls == 1
+    assert wrapper._completed_streaming_response is res1
+
+    # Second async call returns cached response without calling builder
+    res2 = await wrapper._async_build_complete_streaming_response()
+    assert builder_calls == 1
+    assert res2 is res1
+
+    # Sync call also returns cached response without calling builder
+    res3 = wrapper._build_complete_streaming_response()
+    assert builder_calls == 1
+    assert res3 is res1
+
+
