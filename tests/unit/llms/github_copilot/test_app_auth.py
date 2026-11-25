@@ -1078,3 +1078,68 @@ def test_uploaded_key_rejects_unsupported_key_types(kind: str) -> None:
     with pytest.raises(BadRequestError, match="unencrypted RSA PEM") as error:
         app_auth.validate_private_key(pem)
     assert pem not in str(error.value)
+
+
+@pytest.mark.parametrize("async_call", [False, True])
+async def test_uploaded_key_credential_bridges_chat_completions_to_responses_only_model(
+    private_key: str,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    async_call: bool,
+) -> None:
+    clock: Final = Clock()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(app_auth, "APP_TOKEN_MANAGER", AppTokenManager(clock=clock.wall, monotonic=clock.monotonic))
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="github-copilot-uploaded",
+                credential_values={
+                    "github_copilot_auth_type": "github_app",
+                    "github_copilot_app_id": _CONFIG.app_id,
+                    "github_copilot_app_installation_id": str(_CONFIG.installation_id),
+                    "github_copilot_app_private_key": private_key,
+                },
+                credential_info={"custom_llm_provider": "github_copilot"},
+            )
+        ],
+    )
+    token_route: Final = respx_mock.post(_CONFIG.token_url).respond(201, json=token_payload())
+    upstream: Final = respx_mock.post("https://api.githubcopilot.com/responses").respond(
+        200,
+        json={
+            **_model_payload("responses"),
+            "model": "mai-code-2",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg-app",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "OK"}],
+                }
+            ],
+        },
+    )
+    args: Final = {
+        "model": "github_copilot/mai-code-2",
+        "messages": [{"role": "user", "content": "hi"}],
+        "litellm_credential_name": "github-copilot-uploaded",
+        "extra_headers": {
+            "Authorization": "Bearer attacker",
+            "Copilot-Integration-ID": "attacker-integration",
+            "x-keep": "ok",
+        },
+    }
+    response: Final = await litellm.acompletion(**args) if async_call else litellm.completion(**args)
+    assert response.choices[0].message.content == "OK"
+    assert token_route.call_count == 1
+    assert upstream.call_count == 1
+    request: Final = upstream.calls.last.request
+    assert request.headers["authorization"] == "Bearer installation-token"
+    assert request.headers.get_list("copilot-integration-id") == ["copilot-developer-cli"]
+    assert request.headers["x-keep"] == "ok"
+    assert not any(field in json.loads(request.content) for field in APP_FIELDS)
+    assert private_key.encode() not in request.content

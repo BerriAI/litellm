@@ -851,6 +851,10 @@ def _strip_caller_authorization(
 def attach_github_copilot_user_session(
     kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
 ) -> None:
+    existing_session: Final = kwargs.get(GITHUB_COPILOT_USER_SESSION_KWARG_KEY)
+    if isinstance(existing_session, GithubCopilotUserSession):
+        _strip_caller_authorization(kwargs, existing_session.integration_id)
+        return
     from .app_auth import APP_TOKEN_MANAGER, app_config
 
     config: Final = app_config(kwargs)
@@ -862,8 +866,6 @@ def attach_github_copilot_user_session(
     credential_name_obj: Final[object] = kwargs.get("litellm_credential_name")
     auth_type_obj: Final[object] = kwargs.get(GITHUB_COPILOT_AUTH_TYPE_KEY)
     if not github_copilot_auth_mode(credential_name_obj, auth_type_obj):
-        return
-    if isinstance(kwargs.get(GITHUB_COPILOT_USER_SESSION_KWARG_KEY), GithubCopilotUserSession):
         return
     credential_name: Final = credential_name_obj if isinstance(credential_name_obj, str) else ""
     endpoints: Final = github_copilot_host_endpoints(credential_name)
@@ -881,6 +883,10 @@ def attach_github_copilot_user_session(
 async def aattach_github_copilot_user_session(
     kwargs: dict[str, object],  # mutable-ok: kwargs is the request mutation channel
 ) -> None:
+    existing_session: Final = kwargs.get(GITHUB_COPILOT_USER_SESSION_KWARG_KEY)
+    if isinstance(existing_session, GithubCopilotUserSession):
+        _strip_caller_authorization(kwargs, existing_session.integration_id)
+        return
     from .app_auth import APP_TOKEN_MANAGER, app_config
 
     config: Final = app_config(kwargs)
@@ -892,8 +898,6 @@ async def aattach_github_copilot_user_session(
     credential_name_obj: Final[object] = kwargs.get("litellm_credential_name")
     auth_type_obj: Final[object] = kwargs.get(GITHUB_COPILOT_AUTH_TYPE_KEY)
     if not github_copilot_auth_mode(credential_name_obj, auth_type_obj):
-        return
-    if isinstance(kwargs.get(GITHUB_COPILOT_USER_SESSION_KWARG_KEY), GithubCopilotUserSession):
         return
     credential_name: Final = credential_name_obj if isinstance(credential_name_obj, str) else ""
     endpoints: Final = github_copilot_host_endpoints(credential_name)
