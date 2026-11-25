@@ -133,7 +133,38 @@ def test_turn_detection_other_than_server_vad_and_a_prompt_are_rejected_unless_d
     assert json.loads(wire) == {"type": "update_settings", "language_code": "en-IN"}
 
 
-@pytest.mark.parametrize("deployment_headers", [{}, {"lang_code": "indic-auto"}, {"lang_code": "hi, en"}])
+@pytest.mark.parametrize(
+    ("session", "setting"),
+    [
+        ({"audio": {"input": {"noise_reduction": {"type": "near_field"}}}}, "noise_reduction"),
+        ({"input_audio_noise_reduction": {"type": "far_field"}}, "noise_reduction"),
+        ({"include": ["item.input_audio_transcription.logprobs"]}, "include"),
+    ],
+)
+def test_noise_reduction_and_include_are_rejected_unless_drop_params_drops_them(
+    session: Mapping[str, object], setting: str
+) -> None:
+    update: Final = json.dumps({"type": "session.update", "session": {"type": "transcription", **session}})
+    with pytest.raises(RealtimeTranscriptionProtocolError, match=f"settings: {setting}\\. Set drop_params"):
+        GnaniRealtimeConfig().transform_realtime_request(update, "prisma-v3.0")
+    (wire,) = GnaniRealtimeConfig(drop_params=True).transform_realtime_request(update, "prisma-v3.0")
+    assert isinstance(wire, str)
+    assert json.loads(wire) == {"type": "update_settings"}
+
+
+def test_noise_reduction_off_and_an_empty_include_are_accepted_without_drop_params() -> None:
+    update: Final = json.dumps(
+        {
+            "type": "session.update",
+            "session": {"type": "transcription", "audio": {"input": {"noise_reduction": None}}, "include": []},
+        }
+    )
+    (wire,) = GnaniRealtimeConfig().transform_realtime_request(update, "prisma-v3.0")
+    assert isinstance(wire, str)
+    assert json.loads(wire) == {"type": "update_settings"}
+
+
+@pytest.mark.parametrize("deployment_headers",[{}, {"lang_code": "indic-auto"}, {"lang_code": "hi, en"}])
 def test_prisma_v25_needs_one_explicit_language_before_audio(deployment_headers: Mapping[str, str]) -> None:
     v25: Final = ProviderConfigManager.get_provider_realtime_config("prisma-v2.5", LlmProviders.GNANI)
     v3: Final = ProviderConfigManager.get_provider_realtime_config("prisma-v3.0", LlmProviders.GNANI)

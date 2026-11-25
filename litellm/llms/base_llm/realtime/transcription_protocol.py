@@ -55,6 +55,7 @@ class TranscriptionSessionUpdate:
     unsupported_transcription_keys: tuple[str, ...]
     turn_detection: Mapping[str, JsonValue] | None
     turn_detection_disabled: bool
+    unsupported_session_keys: tuple[str, ...] = ()
 
     @property
     def turn_detection_type(self) -> JsonValue | None:
@@ -116,7 +117,7 @@ def uses_server_vad(
 
 def ignored_session_settings(update: TranscriptionSessionUpdate) -> tuple[str, ...]:
     vad_tuning: Final = (f"turn_detection.{key}" for key in sorted(update.turn_detection or {}) if key != "type")
-    return (*update.unsupported_transcription_keys, *vad_tuning)
+    return (*update.unsupported_session_keys, *update.unsupported_transcription_keys, *vad_tuning)
 
 
 def new_event_id() -> str:
@@ -159,7 +160,18 @@ def parse_transcription_session_update(
         ),
         turn_detection=None if turn_detection is None else json_mapping(turn_detection, "turn_detection", error),
         turn_detection_disabled=turn_detection_present and turn_detection is None,
+        unsupported_session_keys=_unsupported_session_keys(session, audio_input),
     )
+
+
+def _unsupported_session_keys(
+    session: Mapping[str, JsonValue], audio_input: Mapping[str, JsonValue]
+) -> tuple[str, ...]:
+    requested: Final = (
+        ("noise_reduction", session.get("input_audio_noise_reduction") or audio_input.get("noise_reduction")),
+        ("include", session.get("include")),
+    )
+    return tuple(name for name, value in requested if value)
 
 
 def _parse_audio_format(
