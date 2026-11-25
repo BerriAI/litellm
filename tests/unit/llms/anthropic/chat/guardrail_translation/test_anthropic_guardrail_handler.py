@@ -550,6 +550,28 @@ class TestAnthropicMessagesHandlerInputProcessing:
         assert [tool["name"] for tool in data["tools"] if "name" in tool] == ["get_weather"]
 
     @pytest.mark.asyncio
+    async def test_mcp_toolset_survives_guardrail_round_trip_as_sent(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+        toolset = {
+            "type": "mcp_toolset",
+            "mcp_server_name": "deepwiki",
+            "default_config": {"enabled": False},
+            "configs": {"read_wiki_structure": {"enabled": True}},
+        }
+        data = {
+            "model": "gpt-5.5",
+            "messages": [{"role": "user", "content": "what is litellm?"}],
+            "mcp_servers": [{"type": "url", "url": "https://mcp.deepwiki.com/mcp", "name": "deepwiki"}],
+            "tools": [toolset, {"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert [tool for tool in data["tools"] if tool.get("type") == "mcp_toolset"] == [toolset]
+        assert [tool["name"] for tool in data["tools"] if "name" in tool] == ["get_weather"]
+
+    @pytest.mark.asyncio
     async def test_midturn_system_correction_is_guardrailed_when_top_level_system_is_skipped(
         self,
     ):

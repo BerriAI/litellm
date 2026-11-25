@@ -278,6 +278,22 @@ def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[s
     return {**tool, "function": {**function, "name": original}}
 
 
+def _is_mcp_toolset(tool: object) -> bool:
+    match tool:
+        case {"type": "mcp_toolset"}:
+            return True
+        case _:
+            return False
+
+
+def _is_sent_as_is(tool: Mapping[str, object]) -> bool:
+    return is_provider_native_tool_dict(tool) or _is_mcp_toolset(tool)
+
+
+def _without_mcp_toolsets(tools: object) -> object:
+    return [tool for tool in tools if not _is_mcp_toolset(tool)] if isinstance(tools, list) else tools
+
+
 def _write_back_system_block(system: object, block_idx: int, response: str) -> None:
     if not isinstance(system, list):
         return
@@ -684,8 +700,12 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         # The top-level prompt is translated on its own below so it can be hoisted in front of
         # any mid-turn system entries and scanned first, aligned with that structured position.
-        translation_source: Final = {key: value for key, value in data.items() if key != "system"}
         request_fields: Final = _as_str_mapping(data)
+        translation_source: Final = {
+            key: _without_mcp_toolsets(value) if key == "tools" else value
+            for key, value in request_fields.items()
+            if key != "system"
+        }
         request_model: Final = request_fields.get("model")
         keep_cache_control: Final = self._serves_cache_control(
             request_model if isinstance(request_model, str) else "", get_request_team_id(request_fields)
@@ -799,7 +819,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                     )
                     if scan_only_tool_results
                     else [
-                        *(tool for tool in data.get("tools") or [] if is_provider_native_tool_dict(tool)),
+                        *(tool for tool in data.get("tools") or [] if _is_sent_as_is(tool)),
                         *anthropic_tools,
                     ]
                 )
