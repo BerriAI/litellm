@@ -6268,6 +6268,51 @@ async def test_key_model_rpm_override_takes_precedence_over_team_model_rpm_limit
     assert "model_per_key" in str(exc.value.detail)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("counts_cached_tokens", "team_model_tokens"),
+    [(None, 250), ({"test-model": False}, 250), ({"test-model": True}, 1050), ({"other-model": True}, 250)],
+    ids=["unset", "off", "on", "on_for_another_model"],
+)
+@pytest.mark.parametrize("event", ("success", "partial"))
+async def test_team_model_tpm_limit_counts_cached_tokens_only_for_models_the_team_opts_in(
+    counts_cached_tokens: dict[str, bool] | None, team_model_tokens: int, event: str
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    team_metadata: Final = {
+        "model_tpm_limit": {"test-model": 100000},
+        **({} if counts_cached_tokens is None else {"model_tpm_limit_counts_cached_tokens": counts_cached_tokens}),
+    }
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-cached"), team_id="cached-team", tpm_limit=100000, team_metadata=team_metadata
+    )
+    await handler.async_pre_call_hook(
+        auth,
+        cache,
+        {"model": "test-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 64},
+        "acompletion",
+    )
+    usage: Final = Usage(
+        prompt_tokens=1000, completion_tokens=50, total_tokens=1050, prompt_tokens_details={"cached_tokens": 800}
+    )
+    kwargs: Final = {
+        "standard_logging_object": {
+            "model_group": "test-model",
+            "metadata": {"user_api_key_hash": auth.api_key, "user_api_key_team_id": auth.team_id},
+        },
+        "litellm_params": {"metadata": {"model_group": "test-model", "user_api_key_team_metadata": team_metadata}},
+        **({"combined_usage_object": usage} if event == "partial" else {}),
+    }
+    if event == "success":
+        await handler.async_log_success_event(kwargs, ModelResponse(model="test-model", usage=usage), None, None)
+    else:
+        await handler.async_log_failure_event(kwargs, None, None, None)
+
+    assert await handler.rate_limits.get(_counter("model_per_team", "cached-team:test-model")) == team_model_tokens
+    assert await handler.rate_limits.get(_counter("api_key", auth.api_key)) == 250
+
+
 @pytest.mark.parametrize(
     "key_limits, override_key_gets_through",
     [

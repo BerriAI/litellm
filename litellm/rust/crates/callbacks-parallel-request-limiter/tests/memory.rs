@@ -5,8 +5,9 @@ use std::sync::{
 
 use litellm_callbacks::Abort;
 use litellm_callbacks_parallel_request_limiter::{
-    Code, Descriptor, Engine, LimiterState, ParallelRequestLimiter, PostCallFailureFacts,
-    PreCallFacts, PriorResponse, Settings, SuccessFacts, TargetFacts,
+    Candidate, Code, Descriptor, Engine, LimiterState, ModelFacts, ParallelRequestLimiter,
+    PostCallFailureFacts, PreCallFacts, PriorResponse, RateLimitedModel, Settings, SuccessFacts,
+    TargetFacts,
 };
 use litellm_redis_store::{
     Number,
@@ -205,6 +206,124 @@ async fn a_reservation_is_settled_to_actual_usage_and_refunded_on_failure() {
     assert_eq!(
         count(&store, "api_key", "k", Kind::Tokens),
         Some(Local::Number(Number::Int(120)))
+    );
+}
+
+#[rstest]
+#[case::cached_tokens_left_out(false, 120)]
+#[case::cached_tokens_counted(true, 920)]
+#[tokio::test]
+async fn a_team_model_limit_counts_cached_tokens_only_when_the_team_asks(
+    #[case] counts_cached_tokens: bool,
+    #[case] team_model_tokens: i64,
+) {
+    let (limiter, store, _) = limiter(true);
+    let tpm = descriptors(json!([
+        {"key": "team", "value": "t", "rate_limit": {"tokens_per_unit": 5000}},
+        {"key": "model_per_team", "value": "t:gpt", "rate_limit": {"tokens_per_unit": 5000}},
+    ]));
+    let state = LimiterState::default();
+    assert_eq!(
+        limiter.pre_call(&state, facts(tpm, Some(300)), None).await,
+        None
+    );
+    let model = RateLimitedModel {
+        requested: "gpt".into(),
+        group: "gpt".into(),
+    };
+    limiter
+        .settle_success(
+            &state,
+            SuccessFacts {
+                call_id: Some("call".into()),
+                total_tokens: 120,
+                cached_tokens_left_out: 800,
+                team_label: "t".into(),
+                targets: TargetFacts {
+                    user_api_key_team_id: Some("t".into()),
+                    ..TargetFacts::default()
+                },
+                served_model: Some(model),
+                models: [(
+                    "gpt".to_owned(),
+                    ModelFacts {
+                        candidates: vec![Candidate {
+                            group: "gpt".into(),
+                            key_owns: false,
+                            counts_cached_tokens,
+                        }],
+                        ptu: None,
+                    },
+                )]
+                .into(),
+                ..SuccessFacts::default()
+            },
+            None,
+        )
+        .await;
+    assert_eq!(
+        count(&store, "team", "t", Kind::Tokens),
+        Some(Local::Number(Number::Int(120)))
+    );
+    assert_eq!(
+        count(&store, "model_per_team", "t:gpt", Kind::Tokens),
+        Some(Local::Number(Number::Int(team_model_tokens)))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_fallback_sharing_the_reserved_team_model_scope_settles_cached_tokens_once() {
+    let (limiter, store, _) = limiter(true);
+    let tpm = descriptors(json!([
+        {"key": "model_per_team", "value": "t:gpt", "rate_limit": {"tokens_per_unit": 5000}},
+    ]));
+    let state = LimiterState::default();
+    let reserved = PreCallFacts {
+        reserved_model: Some(RateLimitedModel {
+            requested: "alias".into(),
+            group: "gpt".into(),
+        }),
+        ..facts(tpm, Some(1000))
+    };
+    assert_eq!(limiter.pre_call(&state, reserved, None).await, None);
+    state.stash().fallback_models.insert("target".into());
+    limiter
+        .settle_success(
+            &state,
+            SuccessFacts {
+                call_id: Some("call".into()),
+                total_tokens: 120,
+                cached_tokens_left_out: 800,
+                team_label: "t".into(),
+                targets: TargetFacts {
+                    user_api_key_team_id: Some("t".into()),
+                    ..TargetFacts::default()
+                },
+                served_model: Some(RateLimitedModel {
+                    requested: "target".into(),
+                    group: "gpt".into(),
+                }),
+                models: [(
+                    "target".to_owned(),
+                    ModelFacts {
+                        candidates: vec![Candidate {
+                            group: "gpt".into(),
+                            key_owns: false,
+                            counts_cached_tokens: true,
+                        }],
+                        ptu: None,
+                    },
+                )]
+                .into(),
+                ..SuccessFacts::default()
+            },
+            None,
+        )
+        .await;
+    assert_eq!(
+        count(&store, "model_per_team", "t:gpt", Kind::Tokens),
+        Some(Local::Number(Number::Int(920)))
     );
 }
 

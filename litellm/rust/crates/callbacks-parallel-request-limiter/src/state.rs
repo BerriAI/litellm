@@ -40,6 +40,8 @@ pub struct Stash {
     pub reserved_tokens: i64,
     pub reserved_model: Option<RateLimitedModel>,
     pub reserved_scopes: BTreeSet<(String, String)>,
+    /// The team model scopes that count cache-read prompt tokens against their TPM limit.
+    pub cached_counting_scopes: BTreeSet<(String, String)>,
     pub fallback_models: BTreeSet<String>,
     pub reservation_released: bool,
     pub tpm_limited_tags: BTreeSet<String>,
