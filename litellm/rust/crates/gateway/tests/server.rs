@@ -75,6 +75,7 @@ fn without_stores(inference: Inference) -> AppState {
         entitlements: Arc::new(Entitlements::Community),
         environment: Arc::new(litellm_env::ProcessEnvironment),
         counters: litellm_gateway::parallel_request_limiter::counters(None),
+        variables: Environment::default(),
         gateway_requests: None,
         gateway_requests_flush: None,
     }

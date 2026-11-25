@@ -353,6 +353,11 @@ impl KeyLimiter {
         })
     }
 
+    #[cfg(test)]
+    pub(crate) fn window_size(&self) -> i64 {
+        self.limiter.engine().settings().window_size
+    }
+
     /// The limiter as the stage registers it, with each request's admission made from its caller.
     pub(crate) fn registered(self: &Arc<Self>) -> Registered {
         let limiter = self.clone();

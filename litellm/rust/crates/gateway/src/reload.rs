@@ -641,7 +641,7 @@ mod tests {
     ) -> Result<Served, Error> {
         let environment = Environment::default();
         let state = current.state.next(&config, &environment).await?;
-        let admit = Admit::new(&config, &environment, &state, stored);
+        let admit = Admit::new(&config, &state, stored);
         Ok(Served::new(state, Some(Arc::new(admit)), native()))
     }
 
@@ -667,12 +667,7 @@ mod tests {
         let state = AppState::build(&loaded.config, &Environment::default())
             .await
             .unwrap();
-        let admit = Admit::new(
-            &loaded.config,
-            &Environment::default(),
-            &state,
-            loaded.stored,
-        );
+        let admit = Admit::new(&loaded.config, &state, loaded.stored);
         let live = Live::new(Served::new(state, Some(Arc::new(admit)), native()));
         let reading = Reading {
             booted: booted_document(&document, served.as_ref()),

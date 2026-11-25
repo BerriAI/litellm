@@ -108,7 +108,7 @@ async fn standalone(
     } = litellm_gateway::load_config(settings.litellm_config).await?;
     let state = AppState::build(&config, environment).await?;
     scrub_at_the_configs_key_length(key_length, &*state.environment);
-    let admit = Arc::new(Admit::new(&config, environment, &state, stored));
+    let admit = Arc::new(Admit::new(&config, &state, stored));
     let in_flight = InFlight::new();
     let live = Arc::new(Live::new(served(
         state,
@@ -241,7 +241,7 @@ async fn admitted_state(
 ) -> Result<(AppState, Admit), litellm_gateway::Error> {
     let resources = Resources::build(config)?;
     let state = AppState::over(config, environment, &resources).await?;
-    let admit = Admit::new(config, environment, &state, stored);
+    let admit = Admit::new(config, &state, stored);
     Ok((state, admit))
 }
 
@@ -304,7 +304,7 @@ fn polled(
             let in_flight = in_flight.clone();
             async move {
                 let state = current.state.next(&config, &environment).await?;
-                let admit = Arc::new(Admit::new(&config, &environment, &state, stored));
+                let admit = Arc::new(Admit::new(&config, &state, stored));
                 Ok(served(
                     state,
                     Some(admit),
