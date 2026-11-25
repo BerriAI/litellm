@@ -113,7 +113,7 @@ async def acreate_file(
     custom_llm_provider: FileCreateProvider = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> OpenAIFileObject:
     """
     Async: Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.
@@ -303,7 +303,7 @@ async def afile_retrieve(
     custom_llm_provider: FileRetrieveProvider = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> OpenAIFileObject:
     """
     Async: Get file contents
@@ -477,7 +477,7 @@ async def afile_delete(
     custom_llm_provider: FileDeleteProvider = "openai",
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> Coroutine[object, object, FileObject]:
     """
     Async: Delete file
@@ -650,7 +650,7 @@ async def afile_list(
     purpose: str | None = None,
     extra_headers: dict[str, str] | None = None,
     extra_body: dict[str, str] | None = None,
-    **kwargs,
+    **kwargs: object,
 ):
     """
     Async: List files
@@ -811,7 +811,7 @@ async def afile_content(
     extra_body: dict[str, str] | None = None,
     chunk_size: int = 1024 * 1024,
     stream: bool = False,
-    **kwargs,
+    **kwargs: object,
 ) -> HttpxBinaryResponseContent | FileContentStreamingResult:
     """
     Async: Get file contents
@@ -1017,7 +1017,7 @@ def file_content_streaming(
     extra_headers: dict[str, str] | None,
     chunk_size: int,
     optional_params: GenericLiteLLMParams,
-    litellm_params: dict,
+    litellm_params: dict[str, object],
     timeout: float | httpx.Timeout,
     logging_obj: LiteLLMLoggingObj,
     _is_async: bool,

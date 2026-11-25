@@ -20,6 +20,7 @@ from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm._internal_context import reporting_nested_tool_call_failure
 from litellm.proxy.mcp_server import operations as mcp_operations
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.redis.stores.auth_cache import AuthObject
@@ -514,6 +515,10 @@ async def test_execute_tool_calls_logs_failure_via_post_call_failure_hook(monkey
 async def test_execute_tool_calls_reports_an_unmapped_tool_failure_as_that_tool_calls_failure(monkeypatch):
     call_tool_mock: Final = _setup_mcp_call_environment(monkeypatch)
     post_call_failure_hook: Final = _setup_proxy_logging(monkeypatch)
+    reported_inside_a_nested_tool_call: Final = MagicMock()
+    post_call_failure_hook.side_effect = lambda **_: reported_inside_a_nested_tool_call(
+        reporting_nested_tool_call_failure()
+    )
 
     results: Final = await LiteLLM_Proxy_MCP_Handler.execute_tool_calls(
         tool_server_map={},
@@ -529,6 +534,8 @@ async def test_execute_tool_calls_reports_an_unmapped_tool_failure_as_that_tool_
     reported_request: Final = post_call_failure_hook.await_args.kwargs["request_data"]
     assert reported_request["litellm_call_id"] == "cid_call-unmapped"
     assert reported_request["call_type"] == CallTypes.call_mcp_tool.value
+    reported_inside_a_nested_tool_call.assert_called_once_with(True)
+    assert reporting_nested_tool_call_failure() is False
 
 
 @pytest.mark.asyncio
@@ -1149,6 +1156,26 @@ async def test_gateway_served_names_matches_alias_server_name_name_access_group_
     )
 
     assert served == {"github", "github-server", "github-name", "deepwiki", "prod-group", "my-toolset"}
+
+
+@pytest.mark.asyncio
+async def test_gateway_served_names_leaves_out_a_name_whose_toolset_read_fails() -> None:
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import _gateway_served_names
+
+    prisma: Final = MagicMock()
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
+    prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+    prisma.db.litellm_mcptoolsettable.find_first = AsyncMock(side_effect=RuntimeError("toolset table unavailable"))
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+        patch("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", MCPServerManager()),
+    ):
+        served: Final = await _gateway_served_names({"research"}, servers=lambda: ())
+
+    assert served == frozenset()
 
 
 @pytest.mark.asyncio

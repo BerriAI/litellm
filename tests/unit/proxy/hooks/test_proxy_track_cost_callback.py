@@ -25,6 +25,7 @@ from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.model_usage_rollup import build_model_usage_transaction
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
+from litellm._internal_context import nested_tool_call_failure
 from litellm.proxy.hooks.proxy_track_cost_callback import (
     ProxyDBLogger,
     _charge_request_cost,
@@ -1089,6 +1090,28 @@ async def test_async_post_call_failure_hook_releases_budget_reservation_before_r
             is user_api_key_dict.budget_reservation
         )
         mock_update_database.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_failed_tool_call_inside_the_request_leaves_the_requests_budget_reservation_open():
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test_api_key",
+        request_route="/custom/route",
+        budget_reservation={"reserved_cost": 0.5, "entries": []},
+    )
+
+    async def fail(error: str) -> None:
+        await ProxyDBLogger().async_post_call_failure_hook(
+            request_data={}, original_exception=Exception(error), user_api_key_dict=user_api_key_dict
+        )
+
+    with nested_tool_call_failure():
+        await fail("tool failed")
+    assert user_api_key_dict.budget_reservation is not None
+    assert user_api_key_dict.budget_reservation.get("finalized") is None
+
+    await fail("request failed")
+    assert user_api_key_dict.budget_reservation.get("finalized") is True
 
 
 @pytest.mark.asyncio

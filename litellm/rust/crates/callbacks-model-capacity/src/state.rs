@@ -54,6 +54,9 @@ pub struct Stash {
     pub priority: Option<Value>,
     pub borrowing: [ShareState; 3],
     pub output_cap: Option<(i64, Option<String>)>,
+    pub turn_settled_tokens: i64,
+    pub session_settled: bool,
+    pub turn_model_group: Option<String>,
 }
 
 impl Stash {

@@ -4,12 +4,13 @@ version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Rust repositories for the auth objects the proxy reads from Postgres on a cache miss and the spend logs it writes"
+description = "Rust repositories for the auth objects the proxy reads from Postgres on a cache miss, the config tables the gateway loads, and the spend logs it writes"
 include = ["Cargo.toml", "README.md", "src/**", ".sqlx/**"]
 
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
 jiff.workspace = true
+litellm-core-utils.workspace = true
 litellm-db.workspace = true
 litellm-error.workspace = true
 litellm-python-compat.workspace = true

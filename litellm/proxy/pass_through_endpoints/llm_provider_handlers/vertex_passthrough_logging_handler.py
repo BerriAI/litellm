@@ -2,6 +2,7 @@ import asyncio
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 from urllib.parse import parse_qs, urlparse
 
@@ -11,6 +12,7 @@ from pydantic import ConfigDict, TypeAdapter
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import VERTEX_BATCH_PREDICTION_JOBS_ROUTE
+from litellm.litellm_core_utils.core_helpers import SupportsGet, as_object_list, iter_items, joined, require_get
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
@@ -88,6 +90,15 @@ def _interactions_model(
     return None
 
 
+def _dict_getter(value: object) -> SupportsGet | None:
+    """The value's key reader when it is a dict, else None."""
+    return require_get(value) if _is_dict(value) else None
+
+
+def _is_dict(value: object) -> bool:
+    return isinstance(value, dict)
+
+
 class GeminiSseChunkParser(VertexModelResponseIterator):
     def parse_sse_chunk(self, chunk: str) -> ModelResponseStream | None:
         return self._common_chunk_parsing_logic(chunk=chunk)
@@ -160,8 +171,8 @@ class VertexPassthroughLoggingHandler:
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
-        request_body: dict | None = None,
-        **kwargs,
+        request_body: dict[str, object] | None = None,
+        **kwargs: object,
     ) -> PassThroughEndpointLoggingTypedDict:
         vertex_location: Final = get_vertex_location_from_url(url_route)
         if vertex_location is not None:
@@ -221,17 +232,8 @@ class VertexPassthroughLoggingHandler:
             model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
 
             instance_of_vertex_llm: Final = litellm.VertexGeminiConfig()
-            litellm_model_response: Final[ModelResponse] = instance_of_vertex_llm.transform_response(
-                model=model,
-                messages=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
-                raw_response=httpx_response,
-                model_response=litellm.ModelResponse(),
-                logging_obj=logging_obj,
-                optional_params={},
-                litellm_params={},
-                api_key="",
-                request_data={},
-                encoding=getattr(litellm, "encoding", None),
+            litellm_model_response: Final[ModelResponse] = instance_of_vertex_llm.transform_pass_through_response(
+                model=model, raw_response=httpx_response, logging_obj=logging_obj
             )
             kwargs = VertexPassthroughLoggingHandler._create_vertex_response_logging_payload_for_generate_content(
                 litellm_model_response=litellm_model_response,
@@ -365,7 +367,7 @@ class VertexPassthroughLoggingHandler:
         httpx_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
-        kwargs: dict,
+        kwargs: dict[str, object],
     ) -> PassThroughEndpointLoggingTypedDict:
         """Handle predict endpoint responses (embeddings, image generation)."""
         from litellm.llms.vertex_ai.image_generation.image_generation_handler import (
@@ -451,7 +453,7 @@ class VertexPassthroughLoggingHandler:
         json_response: dict,  # mutable-ok: passthrough logging receives the decoded provider response dictionary
         logging_obj: LiteLLMLoggingObj,
         model: str,
-        kwargs: dict,  # mutable-ok: passthrough logging enriches the shared callback metadata dictionary
+        kwargs: dict[str, object],  # mutable-ok: passthrough logging enriches the shared callback metadata dictionary
     ) -> PassThroughEndpointLoggingTypedDict:
         prediction_count: Final = VertexPassthroughLoggingHandler._get_audio_prediction_count(
             json_response=json_response
@@ -500,37 +502,38 @@ class VertexPassthroughLoggingHandler:
     def _get_audio_prediction_count(
         json_response: Mapping[str, object],
     ) -> int:
-        predictions: Final = json_response.get("predictions")
-        if not isinstance(predictions, list):
+        predictions: Final = as_object_list(json_response.get("predictions"))
+        if predictions is None:
             return 0
         return sum(
             1
-            for prediction in predictions
-            if isinstance(prediction, dict) and (prediction.get("audioContent") or prediction.get("bytesBase64Encoded"))
+            for fields in (_dict_getter(prediction) for prediction in predictions)
+            if fields is not None and (fields.get("audioContent") or fields.get("bytesBase64Encoded"))
         )
 
     @staticmethod
-    def _extract_embed_content_input(request_body: dict | None, batch: bool) -> str:
+    def _extract_embed_content_input(request_body: Mapping[str, object] | None, batch: bool) -> str:
         """Extract raw input text from an :embedContent or :batchEmbedContents request body for token counting."""
         if not request_body:
             return ""
         if batch:
-            texts: Final = []
-            for req in request_body.get("requests", []):
-                for part in req.get("content", {}).get("parts", []):
-                    texts.append(part.get("text", ""))
-            return " ".join(texts)
+            part_lists: Final = (
+                iter_items(require_get(require_get(req).get("content", {})).get("parts", []))
+                for req in iter_items(request_body.get("requests", []))
+            )
+            texts: Final = [require_get(part).get("text", "") for part in chain.from_iterable(part_lists)]
+            return joined(" ", texts)
         else:
-            parts: Final = request_body.get("content", {}).get("parts", [])
-            return " ".join(part.get("text", "") for part in parts)
+            parts: Final = require_get(request_body.get("content", {})).get("parts", [])
+            return joined(" ", (require_get(part).get("text", "") for part in iter_items(parts)))
 
     @staticmethod
     def _handle_embed_content_response(
         httpx_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
-        kwargs: dict,
-        request_body: dict | None = None,
+        kwargs: dict[str, object],
+        request_body: Mapping[str, object] | None = None,
     ) -> PassThroughEndpointLoggingTypedDict:
         """Handle Vertex :embedContent and :batchEmbedContents endpoint responses."""
         from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
@@ -594,7 +597,7 @@ class VertexPassthroughLoggingHandler:
         litellm_logging_obj: LiteLLMLoggingObj,
         passthrough_success_handler_obj: PassThroughEndpointLogging,
         url_route: str,
-        request_body: dict,
+        request_body: Mapping[str, object],
         endpoint_type: EndpointType,
         start_time: datetime,
         all_chunks: list[str],
@@ -661,6 +664,7 @@ class VertexPassthroughLoggingHandler:
                 streaming_response=None,
                 sync_stream=False,
                 logging_obj=litellm_logging_obj,
+                returns_provider_audio=True,
             )
             parsed_chunks = [vertex_iterator.parse_sse_chunk(chunk) for chunk in all_chunks]
         elif "rawPredict" in url_route or "streamRawPredict" in url_route:
@@ -782,7 +786,7 @@ class VertexPassthroughLoggingHandler:
         return VertexPassthroughLoggingHandler.custom_llm_provider_from_url(url)
 
     @staticmethod
-    def _is_multimodal_embedding_response(json_response: dict) -> bool:
+    def _is_multimodal_embedding_response(json_response: Mapping[str, object]) -> bool:
         """
         Detect if the response is from a multimodal embedding request.
 
@@ -799,7 +803,7 @@ class VertexPassthroughLoggingHandler:
         # Check if response contains multimodal embedding fields
         if "predictions" in json_response:
             predictions: Final = json_response["predictions"]
-            for prediction in predictions:
+            for prediction in iter_items(predictions):
                 if isinstance(prediction, dict):
                     # Check for multimodal embedding response fields
                     if any(
@@ -818,13 +822,13 @@ class VertexPassthroughLoggingHandler:
     def _create_vertex_response_logging_payload_for_generate_content(
         litellm_model_response: ModelResponse | TextCompletionResponse,
         model: str,
-        kwargs: dict,
+        kwargs: dict[str, object],
         start_time: datetime,
         end_time: datetime,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str,
         vertex_location: str | None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Create the standard logging object for Vertex passthrough generateContent (streaming and non-streaming)
 
@@ -859,7 +863,7 @@ class VertexPassthroughLoggingHandler:
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
-        **kwargs,
+        **kwargs: object,
     ) -> PassThroughEndpointLoggingTypedDict:
         """
         Handle batch prediction jobs passthrough logging.

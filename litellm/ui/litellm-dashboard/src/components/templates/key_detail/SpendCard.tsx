@@ -272,7 +272,7 @@ function BudgetRow({
               <span className="text-muted-foreground">
                 {t("keyDetail.overview.budgets.ofLimit", { limit: formatMoney(budget.maxBudget) })}
               </span>
-              <span className="inline-block min-w-11 text-right font-medium">
+              <span className="ms-2 inline-block min-w-11 text-right font-medium">
                 {t("keyDetail.overview.budgets.percent", { percent: Math.round(usage ?? 0) })}
               </span>
             </>

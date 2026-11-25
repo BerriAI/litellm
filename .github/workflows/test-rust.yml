@@ -139,6 +139,11 @@ jobs:
             cargo check -p litellm-python-bridge --locked --no-default-features --features "abi3${features:+,$features}"
           done
 
+      - name: Test the FIPS build
+        run: |
+          cargo test -p litellm-http --locked --features fips
+          cargo check -p litellm-gateway -p litellm-python-bridge --locked --features fips
+
       - name: Test secret manager feature combinations
         run: |
           cargo test -p litellm-auth-gcp --locked --no-default-features

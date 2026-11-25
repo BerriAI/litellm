@@ -16,8 +16,8 @@ pub use host::{
     SeamFuture, ShareGauge, Throttle, Touched,
 };
 pub use model::{
-    ClassShareEntity, GroupInfo, KeyFacts, KeyGaps, KeyInputs, LoggedGroup, Priority, Settings,
-    TokenRateLimitType, UsageTokens,
+    Charge, ClassShareEntity, GroupInfo, KeyFacts, KeyGaps, KeyInputs, LoggedGroup, Priority,
+    Settings, TokenRateLimitType, UsageTokens,
 };
 pub use refusal::Refusal;
 pub use refusal::{RATE_LIMIT_ERROR, RERAISE};

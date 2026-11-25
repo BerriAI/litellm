@@ -8,7 +8,9 @@ Tests that session-scoped budget tracking works correctly:
 - Requests without agent_id pass through
 """
 
+import time
 from collections.abc import Mapping
+from datetime import datetime
 from types import MappingProxyType
 from typing import Final
 from unittest.mock import patch
@@ -17,7 +19,9 @@ import logging
 import pytest
 from fastapi import HTTPException
 
+import litellm
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.caching.redis_cache import _redis_circuit_breaker_guard
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.max_budget_per_session_limiter import (
@@ -25,6 +29,7 @@ from litellm.proxy.hooks.max_budget_per_session_limiter import (
 )
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.agents import AgentResponse
+from litellm.types.utils import ModelResponse, Usage
 from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 
 
@@ -396,6 +401,70 @@ async def test_a_cost_that_is_not_a_finite_number_leaves_the_session_spend_alone
         )
 
     assert await handler._get_current_spend(cache_key) == 0.25
+
+
+@pytest.mark.asyncio
+async def test_a_failure_the_provider_billed_uses_up_the_session_budget():
+    handler = PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    session_metadata: Final = {"session_id": "session-refused-stream", "agent_id": "agent-budget-123"}
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
+    ) as mock_registry:
+        mock_registry.get_agent_by_id.return_value = _make_mock_agent(max_budget_per_session=1.0)
+        await handler.async_log_failure_event(
+            {"call_type": "anthropic_messages", "response_cost": 1.5, "litellm_params": {"metadata": session_metadata}},
+            None,
+            None,
+            None,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await handler.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test-key-budget", agent_id="agent-budget-123"),
+                cache=DualCache(),
+                data={"metadata": {"session_id": "session-refused-stream"}},
+                call_type="",
+            )
+
+    assert exc_info.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_a_retry_counts_the_follow_up_its_failure_already_billed_once_toward_the_session():
+    handler = PROXY_MaxBudgetPerSessionHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="session-retry",
+        function_id="session-retry",
+        dynamic_async_success_callbacks=[handler],
+        dynamic_async_failure_callbacks=[handler],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o-mini",
+        user="",
+        optional_params={},
+        litellm_params={"metadata": {"session_id": "session-retry", "agent_id": "agent-budget-123"}},
+        custom_llm_provider="openai",
+    )
+    earlier_attempt: Final = (Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500), 0.5)
+    served: Final = ModelResponse(model="gpt-4o-mini", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+    now: Final = datetime.now()
+
+    with patch(
+        "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry"
+    ) as mock_registry:
+        mock_registry.get_agent_by_id.return_value = _make_mock_agent(max_budget_per_session=5.0)
+        logging_obj.record_served_rounds_for_failure((earlier_attempt,))
+        await logging_obj.async_failure_handler(Exception("the agentic follow-up failed"), "", now, now)
+        logging_obj.carry_failed_attempt_usage()
+        await logging_obj.async_success_handler(served, now, now)
+
+    spend = await handler._get_current_spend(handler._make_cache_key("session-retry"))
+    assert spend == pytest.approx(earlier_attempt[1] + litellm.completion_cost(served, model="gpt-4o-mini"))
 
 
 @pytest.mark.asyncio

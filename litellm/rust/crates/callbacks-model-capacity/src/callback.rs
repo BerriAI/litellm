@@ -6,15 +6,16 @@ use litellm_callbacks::{
     LimiterRequest, LoggedKeyIdentity, Manifest, MetadataKind, Outcome, Patch, Scalar, Selection,
     Subscription, Verdict, typed,
 };
+use litellm_callbacks_parallel_request_limiter::EMBEDDING_CALL_TYPES;
 use litellm_redis_store::RequestRedis;
 use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use crate::{
-    capacity::{Engine, Frame, PreCall, Request, SaturationFallback, Settlement},
+    capacity::{Engine, Frame, PreCall, Request, SaturationFallback, Settlement, TurnCharge},
     error::CapacityError,
     host::{CapacityHost, CounterStore, Facts},
-    model::{KeyFacts, KeyGaps, LoggedGroup, UsageTokens},
+    model::{Charge, KeyFacts, KeyGaps, LoggedGroup, UsageTokens},
     refusal::{reraise, unverifiable},
     state::SharedStash,
 };
@@ -299,7 +300,11 @@ impl ModelCapacity {
             return Ok(None);
         };
         let gaps: AttemptGaps = projected(input)?;
-        let group = LoggedGroup::read(input.fields.get::<typed::LoggedModelGroup>()?.as_ref());
+        let turn_group = stash.and_then(|stash| stash.lock().turn_model_group.clone());
+        let group = match turn_group {
+            Some(served) => Ok(Some(LoggedGroup::served(served))),
+            None => LoggedGroup::read(input.fields.get::<typed::LoggedModelGroup>()?.as_ref()),
+        };
         let identity = input.fields.get::<typed::LoggedKeyIdentity>()?;
         let usage = input.fields.get::<typed::Usage>()?;
         let stash = stash.cloned();
@@ -312,8 +317,16 @@ impl ModelCapacity {
             }
             Outcome::Success => {
                 let used = UsageTokens::delivered(usage.as_ref());
+                let call_type = input.call.as_ref().map(|call| call.kind.call_type.as_str());
                 if let Err(error) = self
-                    .success(&gaps, group, identity.as_ref(), used, stash, host)
+                    .success(
+                        &gaps,
+                        group,
+                        identity.as_ref(),
+                        (used, call_type),
+                        stash,
+                        host,
+                    )
                     .await
                 {
                     let message = format!("Error in dynamic rate limiter success event: {error}");
@@ -330,7 +343,7 @@ impl ModelCapacity {
         gaps: &AttemptGaps,
         group: Result<Option<LoggedGroup>, String>,
         identity: Option<&LoggedKeyIdentity>,
-        used: Option<UsageTokens>,
+        (used, call_type): (Option<UsageTokens>, Option<&str>),
         stash: Option<SharedStash>,
         host: Host<'_>,
     ) -> Result<(), String> {
@@ -344,7 +357,30 @@ impl ModelCapacity {
             .facts
             .settings()
             .map_err(|error| error.python_message())?;
-        let total = UsageTokens::settled(used.as_ref(), settings.rate_limit_type);
+        let embedding =
+            call_type.is_some_and(|call_type| EMBEDDING_CALL_TYPES.contains(&call_type));
+        let estimate =
+            if UsageTokens::settles_at_estimate(used.as_ref(), settings.rate_limit_type, embedding)
+            {
+                let model = group
+                    .as_ref()
+                    .filter(|group| group.truthy)
+                    .map(|group| group.text.as_str());
+                self.engine
+                    .settled_estimate(model, call_type)
+                    .await
+                    .map_err(|error| error.python_message())?
+            } else {
+                None
+            };
+        let charge = match estimate {
+            Some(tokens) => Charge::Estimated(tokens),
+            None => Charge::Reported(UsageTokens::charged(
+                used.as_ref(),
+                settings.rate_limit_type,
+                embedding,
+            )),
+        };
         let settlement = team.settlement(group.as_ref(), gaps);
         self.engine
             .settle_success(
@@ -352,7 +388,7 @@ impl ModelCapacity {
                 stash.as_ref(),
                 &settlement,
                 team.priority.as_deref(),
-                total,
+                charge,
                 host.redis,
             )
             .await
@@ -465,6 +501,31 @@ impl ModelCapacity {
             facts,
         };
         self.engine.enforce_frame(&request, model, connection).await
+    }
+
+    pub async fn charge_turn(
+        &self,
+        connection: Option<&SharedStash>,
+        key: &KeyFacts,
+        model: &str,
+        used: &UsageTokens,
+        redis: Option<&RequestRedis>,
+        facts: &Facts,
+    ) -> Result<(), CapacityError> {
+        let Some(connection) = connection else {
+            return Ok(());
+        };
+        let settings = facts.settings()?;
+        let priority = key.priority_value();
+        let turn = TurnCharge {
+            model_group: model,
+            priority: priority.as_ref().and_then(Value::as_str),
+            team_id: key.team_str(),
+            tokens: UsageTokens::settled(Some(used), settings.rate_limit_type),
+        };
+        self.engine
+            .charge_turn(&settings, connection, &turn, redis)
+            .await
     }
 }
 

@@ -9,6 +9,7 @@ import os
 import re
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
@@ -31,12 +32,14 @@ from starlette.datastructures import FormData
 
 from litellm.redis.stores.auth_cache import AuthObject
 import litellm
+from litellm._logging import LevelRoutingStreamHandler
 from litellm.caching.caching import DualCache
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException, ModifyResponseException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.eu_jev.common_utils import eu_jev_scoped_model, eu_jev_upstream_body
 from litellm.passthrough.main import raise_for_provider_status
@@ -72,14 +75,28 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
     mistral_proxy_route,
+    openai_passthrough_poll_headers,
     openai_proxy_route,
     openrouter_proxy_route,
     relay_nvidia_nim_request,
-    typesafe_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
     vllm_proxy_route,
 )
+from litellm.proxy.pass_through_endpoints.background_response_creator import (
+    BackgroundResponseCreateContext,
+    PrismaBackgroundResponseCreatorStore,
+)
+from litellm.proxy.pass_through_endpoints.background_response_polling import (
+    BackgroundResponsePoller,
+    BackgroundResponsePollRequest,
+    Fetched,
+    FetchOutcome,
+)
+from litellm.proxy.pass_through_endpoints.background_response_settlement import (
+    PrismaBackgroundResponseSettlementStore,
+)
+from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndpointLogging
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_spend_logs_id
 from litellm.proxy.utils import ProxyLogging, hash_token
 from litellm.types.guardrails import GuardrailEventHooks
@@ -3386,7 +3403,7 @@ class TestForwardHeaders:
         # Mock the request body
         mock_request_body = {"test": "data"}
 
-        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict = UserAPIKeyAuth()
 
         # Custom headers that should be merged with user headers
         custom_headers = {
@@ -3483,7 +3500,7 @@ class TestForwardHeaders:
         mock_request.query_params = {}
 
         mock_request_body = {"test": "data"}
-        mock_user_api_key_dict = MagicMock()
+        mock_user_api_key_dict = UserAPIKeyAuth()
 
         # Only these custom headers should be sent
         custom_headers = {
@@ -4494,6 +4511,263 @@ async def test_openai_passthrough_never_sends_workload_identity_token_to_foreign
     assert upstream.calls.call_count == 0
 
 
+@pytest.mark.asyncio
+async def test_a_resumed_background_response_poll_reads_with_the_configured_openai_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-configured-upstream")
+
+    headers: Final = await openai_passthrough_poll_headers("https://api.openai.com/")
+
+    assert headers == {"authorization": "Bearer sk-configured-upstream", "api-key": "sk-configured-upstream"}
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_background_response_poll_reads_with_the_workload_identity_token_without_a_key(
+    openai_wif_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    with respx.mock(assert_all_called=True) as upstream:
+        upstream.post("https://auth.openai.com/oauth/token").mock(
+            return_value=httpx.Response(200, json={"access_token": "wif-bearer", "expires_in": 3600})
+        )
+
+        headers: Final = await openai_passthrough_poll_headers("https://api.openai.com/")
+
+    assert headers is not None
+    assert headers["authorization"] == "Bearer wif-bearer"
+
+
+@pytest.mark.asyncio
+async def test_a_resumed_background_response_poll_has_no_headers_without_an_openai_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_IDENTITY_PROVIDER_ID", raising=False)
+    monkeypatch.delenv("OPENAI_SERVICE_ACCOUNT_ID", raising=False)
+    monkeypatch.delenv("OPENAI_IDENTITY_TOKEN_FILE", raising=False)
+
+    assert await openai_passthrough_poll_headers("https://api.openai.com/") is None
+
+
+DELETED_RESPONSE_ID: Final = "resp_080b10ff5d740c69006ad3de732e5087"
+DELETED_RESPONSE_CREATOR_CALL_ID: Final = "0d4b7e19-6a2c-4f83-9e51-2c8a7f3b6d40"
+FINISHED_BACKGROUND_RESPONSE: Final = {
+    "id": DELETED_RESPONSE_ID,
+    "object": "response",
+    "created_at": 1792269939,
+    "status": "completed",
+    "background": True,
+    "model": "gpt-5.4-mini-2026-03-17",
+    "output": [],
+    "parallel_tool_calls": True,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {
+        "input_tokens": 11,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens": 5,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": 16,
+    },
+}
+
+
+@dataclass(frozen=True, slots=True)
+class _TrackedCreatorRow:
+    response_id: str
+    upstream_url: str
+    create_context: object
+
+
+class _TrackedCreators:
+    def __init__(self) -> None:
+        context: Final = BackgroundResponseCreateContext(
+            model="gpt-5.4-mini",
+            custom_llm_provider="openai",
+            litellm_call_id=DELETED_RESPONSE_CREATOR_CALL_ID,
+            litellm_trace_id="5f1d2c3b-8e7a-4b69-9c0d-1a2b3c4d5e6f",
+            start_time=datetime(2026, 10, 17, 13, 47, 3, tzinfo=timezone.utc),
+            metadata={"user_api_key_team_id": "team-creator"},
+        )
+        self.rows: Final = {
+            DELETED_RESPONSE_ID: _TrackedCreatorRow(
+                DELETED_RESPONSE_ID, "https://api.openai.com/v1/responses", context.model_dump(mode="json")
+            )
+        }
+
+    async def find_unique(self, *, where: Mapping[str, str]) -> _TrackedCreatorRow | None:
+        return self.rows.get(where["response_id"])
+
+    async def delete_many(self, *, where: Mapping[str, str]) -> int:
+        return int(self.rows.pop(where["response_id"], None) is not None)
+
+
+class _SettlementClaims:
+    def __init__(self) -> None:
+        self.claimed: Final[set[str]] = set()
+
+    async def create_many(self, data: list[Mapping[str, str]], *, skip_duplicates: bool) -> int:
+        new_ids: Final = {row["response_id"] for row in data} - self.claimed
+        self.claimed.update(new_ids)
+        return len(new_ids)
+
+    async def delete_many(self, *, where: Mapping[str, str]) -> int:
+        self.claimed.discard(where["response_id"])
+        return 1
+
+
+class _ReadBeforeDelete:
+    def __init__(self, answer: FetchOutcome | Exception) -> None:
+        self.answer: Final = answer
+        self.requests: Final[list[BackgroundResponsePollRequest]] = []
+
+    async def __call__(self, request: BackgroundResponsePollRequest) -> FetchOutcome:
+        self.requests.append(request)
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+def _delete_tracked_response(
+    client: TestClient,
+    creators: _TrackedCreators,
+    fetch: _ReadBeforeDelete,
+    events: list[str],
+    endpoint: str = f"v1/responses/{DELETED_RESPONSE_ID}",
+) -> object:
+    from litellm.proxy import proxy_server
+
+    async def record_creator_bill(*, logging_obj: LiteLLMLoggingObj, **kwargs: object) -> None:
+        if logging_obj.litellm_call_id == DELETED_RESPONSE_CREATOR_CALL_ID:
+            events.append(f"billed {logging_obj.litellm_call_id}")
+
+    def forward(upstream_request: httpx.Request) -> httpx.Response:
+        events.append("forwarded")
+        return httpx.Response(200, json={"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True})
+
+    admit: Final = proxy_server.proxy_logging_obj.pre_call_hook
+
+    async def admitted(*args: object, **kwargs: object) -> object:
+        admitted_body: Final = await admit(*args, **kwargs)
+        events.append("admitted")
+        return admitted_body
+
+    claims: Final = _SettlementClaims()
+    passthrough_logging: Final = PassThroughEndpointLogging(
+        log_dispatch=record_creator_bill,
+        background_response_settlement=PrismaBackgroundResponseSettlementStore(table=lambda: claims, timeout_seconds=5),
+        background_response_creators=PrismaBackgroundResponseCreatorStore(table=lambda: creators, timeout_seconds=5),
+        background_response_poller=BackgroundResponsePoller(fetch=fetch, database_configured=lambda: True),
+    )
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging",
+            passthrough_logging,
+        ),
+        patch.object(proxy_server.proxy_logging_obj, "pre_call_hook", admitted),
+        respx.mock(assert_all_called=True) as upstream,
+    ):
+        upstream.delete(f"https://api.openai.com/{endpoint}").mock(side_effect=forward)
+        deleted: Final = client.delete(f"/openai_passthrough/{endpoint}")
+    return deleted.json()
+
+
+def test_deleting_a_finished_background_response_bills_its_creator_once_after_admission_and_before_forwarding(
+    openai_passthrough_client: TestClient, local_model_cost_map
+) -> None:
+    creators: Final = _TrackedCreators()
+    fetch: Final = _ReadBeforeDelete(Fetched(body=FINISHED_BACKGROUND_RESPONSE))
+    events: Final[list[str]] = []
+
+    deleted: Final = _delete_tracked_response(openai_passthrough_client, creators, fetch, events)
+
+    assert deleted == {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
+    assert events == ["admitted", f"billed {DELETED_RESPONSE_CREATOR_CALL_ID}", "forwarded"]
+    (read,) = fetch.requests
+    assert read.url == httpx.URL(f"https://api.openai.com/v1/responses/{DELETED_RESPONSE_ID}")
+    assert ("authorization", "Bearer sk-upstream") in read.headers
+    assert creators.rows == {}
+
+
+def test_deleting_a_tracked_background_response_still_forwards_when_settling_it_fails(
+    openai_passthrough_client: TestClient, local_model_cost_map
+) -> None:
+    creators: Final = _TrackedCreators()
+    events: Final[list[str]] = []
+
+    deleted: Final = _delete_tracked_response(
+        openai_passthrough_client, creators, _ReadBeforeDelete(RuntimeError("provider unreachable")), events
+    )
+
+    assert deleted == {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
+    assert events == ["admitted", "forwarded"]
+    assert set(creators.rows) == {DELETED_RESPONSE_ID}
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "answer", "reads"),
+    [
+        pytest.param(
+            f"v1/responses/{DELETED_RESPONSE_ID}",
+            {**FINISHED_BACKGROUND_RESPONSE, "status": "in_progress", "usage": None},
+            1,
+            id="still_running",
+        ),
+        pytest.param("v1/responses/resp_untracked", FINISHED_BACKGROUND_RESPONSE, 0, id="untracked"),
+        pytest.param(f"v1/responses/{DELETED_RESPONSE_ID}/input_items", FINISHED_BACKGROUND_RESPONSE, 0, id="sub_route"),
+    ],
+)
+def test_a_delete_with_nothing_finished_to_settle_bills_nobody_and_forwards(
+    openai_passthrough_client: TestClient,
+    endpoint: str,
+    answer: Mapping[str, object],
+    reads: int,
+    local_model_cost_map,
+) -> None:
+    creators: Final = _TrackedCreators()
+    fetch: Final = _ReadBeforeDelete(Fetched(body=answer))
+    events: Final[list[str]] = []
+
+    deleted: Final = _delete_tracked_response(openai_passthrough_client, creators, fetch, events, endpoint)
+
+    assert deleted == {"id": DELETED_RESPONSE_ID, "object": "response", "deleted": True}
+    assert events == ["admitted", "forwarded"]
+    assert len(fetch.requests) == reads
+    assert set(creators.rows) == {DELETED_RESPONSE_ID}
+
+
+@pytest.mark.asyncio
+async def test_a_delete_through_a_configured_openai_route_bills_the_creator_with_that_route_credential(
+    local_model_cost_map,
+) -> None:
+    billed: Final[list[str]] = []
+
+    async def record_creator_bill(*, logging_obj: LiteLLMLoggingObj, **kwargs: object) -> None:
+        billed.append(logging_obj.litellm_call_id)
+
+    creators: Final = _TrackedCreators()
+    fetch: Final = _ReadBeforeDelete(Fetched(body=FINISHED_BACKGROUND_RESPONSE))
+    claims: Final = _SettlementClaims()
+    passthrough_logging: Final = PassThroughEndpointLogging(
+        log_dispatch=record_creator_bill,
+        background_response_settlement=PrismaBackgroundResponseSettlementStore(table=lambda: claims, timeout_seconds=5),
+        background_response_creators=PrismaBackgroundResponseCreatorStore(table=lambda: creators, timeout_seconds=5),
+        background_response_poller=BackgroundResponsePoller(fetch=fetch, database_configured=lambda: True),
+    )
+
+    await passthrough_logging.settle_background_response_before_delete(
+        "DELETE",
+        f"https://api.openai.com/v1/responses/{DELETED_RESPONSE_ID}",
+        {"authorization": "Bearer sk-configured-route"},
+    )
+
+    (read,) = fetch.requests
+    assert ("authorization", "Bearer sk-configured-route") in read.headers
+    assert billed == [DELETED_RESPONSE_CREATOR_CALL_ID]
+    assert creators.rows == {}
+
+
 class TestCursorProxyRoute:
     """Tests for the Cursor Cloud Agents pass-through route."""
 
@@ -4619,6 +4893,75 @@ class TestCursorProxyRoute:
 
             expected_auth = base64.b64encode(b"crsr_ui_test_key:").decode("ascii")
             assert call_args["custom_headers"]["Authorization"] == f"Basic {expected_auth}"
+
+    def test_cursor_proxy_route_sends_the_secret_behind_a_ui_credential_oidc_reference(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from litellm.proxy.proxy_server import app
+        from litellm.types.utils import CredentialItem
+
+        monkeypatch.delenv("CURSOR_API_KEY", raising=False)
+        monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
+        monkeypatch.setenv("CURSOR_UI_TOKEN", "crsr_resolved_key")
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        monkeypatch.setattr(
+            litellm,
+            "credential_list",
+            [
+                CredentialItem(
+                    credential_name="my-cursor-oidc",
+                    credential_values={"api_key": "oidc/env/CURSOR_UI_TOKEN", "api_base": "https://api.cursor.com"},
+                    credential_info={"custom_llm_provider": "cursor"},
+                )
+            ],
+        )
+        litellm.in_memory_llm_clients_cache.flush_cache()
+        monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
+
+        with respx.mock(assert_all_called=True) as upstream:
+            route: Final = upstream.get("https://api.cursor.com/v0/models").mock(
+                return_value=httpx.Response(200, json={"models": []})
+            )
+            response: Final = TestClient(app).get("/cursor/v0/models")
+
+        expected_auth: Final = base64.b64encode(b"crsr_resolved_key:").decode("ascii")
+        assert (response.status_code, response.json()) == (200, {"models": []})
+        assert route.calls.last.request.headers["authorization"] == f"Basic {expected_auth}"
+
+    @pytest.mark.asyncio
+    async def test_cursor_proxy_route_refuses_a_ui_credential_google_reference(self):
+        from litellm.types.utils import CredentialItem
+
+        ui_credential = CredentialItem(
+            credential_name="my-cursor-google",
+            credential_values={"api_key": "oidc/google/https://api.cursor.com"},
+            credential_info={"custom_llm_provider": "cursor"},
+        )
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value=None,
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.litellm.credential_list",
+                [ui_credential],
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_create_route,
+            pytest.raises(HTTPException) as caught,
+        ):
+            await cursor_proxy_route(
+                endpoint="v0/models",
+                request=MagicMock(spec=Request),
+                fastapi_response=MagicMock(spec=Response),
+                user_api_key_dict=MagicMock(),
+            )
+
+        assert caught.value.status_code == 401
+        assert "pass-through routes do not fetch Google ID tokens" in caught.value.detail
+        mock_create_route.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cursor_proxy_route_custom_api_base(self):
@@ -7799,6 +8142,11 @@ class TestPassthroughRouterModelBudgetReservation:
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
         )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
+        )
         return captured
 
     def _assert_metadata_carries_attribution(self, captured: list[dict], user_api_key_dict: UserAPIKeyAuth) -> None:
@@ -7902,6 +8250,11 @@ class TestAzureRouterModelStreamingDispatch:
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
         )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
+        )
 
         request = MagicMock(spec=Request)
         request.method = "POST"
@@ -7965,6 +8318,11 @@ class TestAzureRouterModelStreamingKeepalive:
             ep,
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
         )
 
         request = MagicMock(spec=Request)
@@ -8036,6 +8394,11 @@ class TestRouterModelRelayUpstreamContract:
             ep,
             "is_passthrough_request_using_router_model",
             lambda request_body, llm_router=None: request_body.get("model") in ("gpt-5", "router-model"),
+        )
+        monkeypatch.setattr(
+            ep,
+            "is_azure_router_model_group",
+            lambda llm_router, model_group: model_group in ("gpt-5", "router-model"),
         )
 
     def _recording_router(self, captured: list[dict]):
@@ -8691,7 +9054,9 @@ async def test_bedrock_native_count_tokens_counts_on_the_callers_own_deployment_
                     "rpm": 1,
                 },
             ),
-            _bedrock_count_deployment(_BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "global-deployment", "rpm": 1}),
+            _bedrock_count_deployment(
+                _BEDROCK_COUNT_ALIAS, _BEDROCK_COUNT_MODEL, {"id": "global-deployment", "rpm": 1}
+            ),
         ),
         caller=UserAPIKeyAuth(api_key=f"sk-{team_id}-caller", team_id=team_id),
         routing_strategy="usage-based-routing-v2",
@@ -8955,6 +9320,65 @@ async def test_bedrock_native_count_tokens_logs_the_provider_status_when_the_cou
 
 
 @pytest.mark.parametrize(
+    ("aws_status", "aws_message", "log_level", "stream"),
+    [
+        # Bedrock us-east-1 answered a count for Claude Opus 5.5 with this message on 2026-11-22
+        (400, "The provided model doesn't support counting tokens.", logging.WARNING, "stdout"),
+        (429, "Too many requests, please wait before trying again.", logging.WARNING, "stdout"),
+        (400, "The provided model identifier is invalid.", logging.ERROR, "stderr"),
+        (400, "`max_tokens` must be greater than `thinking.budget_tokens`", logging.ERROR, "stderr"),
+        (
+            400,
+            "The provided model doesn't support counting tokens.: Extra inputs are not permitted",
+            logging.ERROR,
+            "stderr",
+        ),
+        (403, "The security token included in the request is invalid.", logging.ERROR, "stderr"),
+        (404, "The count failed.", logging.ERROR, "stderr"),
+        (500, "The count failed.", logging.ERROR, "stderr"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_bedrock_native_count_tokens_logs_caller_errors_as_stdout_warnings_and_other_failures_as_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    httpx_transport: None,
+    respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+    aws_status: int,
+    aws_message: str,
+    log_level: int,
+    stream: Literal["stdout", "stderr"],
+) -> None:
+    aws_reply: Final = httpx.Response(aws_status, json={"message": aws_message})
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"), pytest.raises(HTTPException) as exc_info:
+        await _bedrock_native_count(monkeypatch, respx_mock, aws_reply, Response())
+
+    assert exc_info.value.status_code == aws_status
+    alerts: Final = _proxy_alerts(caplog)
+    assert [(record.name, record.levelno) for record in alerts] == [("LiteLLM Proxy", log_level)]
+    assert _default_handler_stream(alerts[0], capsys) == stream
+
+
+def _proxy_alerts(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
+        record
+        for record in caplog.records
+        if record.name.startswith("LiteLLM Proxy") and record.levelno >= logging.WARNING
+    ]
+
+
+def _default_handler_stream(record: logging.LogRecord, capsys: pytest.CaptureFixture[str]) -> str:
+    _ = capsys.readouterr()
+    routing: Final = LevelRoutingStreamHandler()
+    routing.setFormatter(logging.Formatter("%(message)s"))
+    routing.emit(record)
+    written: Final = capsys.readouterr()
+    line: Final = f"{record.getMessage()}\n"
+    return {(line, ""): "stdout", ("", line): "stderr"}.get((written.out, written.err), "both or neither")
+
+
+@pytest.mark.parametrize(
     ("request_body", "problem"),
     [
         ({"model": _BEDROCK_COUNT_ALIAS}, "Request must contain content to count tokens"),
@@ -8968,16 +9392,21 @@ async def test_bedrock_native_count_tokens_answers_400_for_a_malformed_body_with
     monkeypatch: pytest.MonkeyPatch,
     httpx_transport: None,
     respx_mock: respx.MockRouter,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
     request_body: Mapping[str, object],
     problem: str,
 ) -> None:
-    with pytest.raises(HTTPException) as exc_info:
+    with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"), pytest.raises(HTTPException) as exc_info:
         await _bedrock_native_count(
             monkeypatch, respx_mock, httpx.Response(200, json={"inputTokens": 12}), Response(), request_body
         )
 
     assert (exc_info.value.status_code, exc_info.value.detail) == (400, {"error": problem})
     assert len(respx_mock.calls) == 0
+    alerts: Final = _proxy_alerts(caplog)
+    assert [(record.name, record.levelno) for record in alerts] == [("LiteLLM Proxy", logging.WARNING)]
+    assert _default_handler_stream(alerts[0], capsys) == "stdout"
 
 
 @pytest.mark.parametrize(
@@ -9231,21 +9660,28 @@ async def _azure_relay_json_upstream() -> httpx.Response:
     return httpx.Response(200, json={"id": "resp_1", "model": "gpt-5.4-fallback"}, headers={"x-request-id": "r-1"})
 
 
+_AZURE_RELAY_GROUP_MODELS: Final = (("gpt-5.4", "azure/gpt-5.4-primary"), ("azure-gpt-5.4", "azure/gpt-5.4-fallback"))
+
+
 class _AzureBodyModelGroupRouter:
-    def __init__(self, captured: list[dict], upstream: _AzureRelayUpstream = _azure_relay_json_upstream) -> None:
+    def __init__(
+        self,
+        captured: list[dict],
+        upstream: _AzureRelayUpstream = _azure_relay_json_upstream,
+        group_models: tuple[tuple[str, str], ...] = _AZURE_RELAY_GROUP_MODELS,
+    ) -> None:
         self.captured = captured
         self.upstream = upstream
+        self.rows = [
+            {"model_name": group, "litellm_params": {"model": model, "api_key": "k"}} for group, model in group_models
+        ]
         route_entry_points_to_stubs(self)
 
     def get_model_names(self, team_id=None):
-        return ["gpt-5.4", "azure-gpt-5.4"]
+        return [row["model_name"] for row in self.rows]
 
     def get_model_list(self, model_name=None, team_id=None):
-        rows = [
-            {"model_name": "gpt-5.4", "litellm_params": {"model": "azure/gpt-5.4-primary", "api_key": "k"}},
-            {"model_name": "azure-gpt-5.4", "litellm_params": {"model": "azure/gpt-5.4-fallback", "api_key": "k"}},
-        ]
-        return [row for row in rows if model_name is None or row["model_name"] == model_name]
+        return [row for row in self.rows if model_name is None or row["model_name"] == model_name]
 
     async def allm_passthrough_route(self, **kwargs):
         self.captured.append(kwargs)
@@ -9258,6 +9694,7 @@ class TestAzureBodyModelGroupRelay:
         monkeypatch: pytest.MonkeyPatch,
         body: dict,
         upstream: _AzureRelayUpstream = _azure_relay_json_upstream,
+        group_models: tuple[tuple[str, str], ...] = _AZURE_RELAY_GROUP_MODELS,
     ) -> list[dict]:
         import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
         from litellm.proxy import proxy_server
@@ -9267,7 +9704,7 @@ class TestAzureBodyModelGroupRelay:
         async def fake_get_request_body(_request: Request) -> dict:
             return body
 
-        monkeypatch.setattr(proxy_server, "llm_router", _AzureBodyModelGroupRouter(captured, upstream))
+        monkeypatch.setattr(proxy_server, "llm_router", _AzureBodyModelGroupRouter(captured, upstream, group_models))
         monkeypatch.setattr(ep, "get_request_body", fake_get_request_body)
         monkeypatch.delenv("AZURE_API_BASE", raising=False)
         return captured
@@ -9435,6 +9872,67 @@ class TestAzureBodyModelGroupRelay:
         assert captured == []
         (route,) = routes
         assert route["target"] == "https://operator.openai.azure.com/openai/v1/fine_tuning/jobs"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "group_models",
+        [
+            pytest.param((("gpt-5.4", "openai/gpt-4o"),), id="openai_group"),
+            pytest.param((("gpt-5.4", "bedrock/anthropic.claude-sonnet-4-5"),), id="bedrock_group"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "endpoint",
+        ["openai/v1/responses", "openai/v1/chat/completions", "openai/deployments/gpt-5.4/chat/completions"],
+    )
+    async def test_model_group_not_served_by_azure_goes_to_the_operator_azure_endpoint(
+        self, monkeypatch, group_models, endpoint
+    ):
+        import litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints as ep
+
+        captured = self._install(monkeypatch, {"model": "gpt-5.4", "input": "ping"}, group_models=group_models)
+        monkeypatch.setenv("AZURE_API_BASE", "https://operator.openai.azure.com")
+        monkeypatch.setenv("AZURE_API_KEY", "operator-key")
+        routes: list[dict] = []
+
+        def fake_create_pass_through_route(**kwargs):
+            routes.append(kwargs)
+            return AsyncMock(return_value=Response(content=b"{}", status_code=200))
+
+        monkeypatch.setattr(ep, "create_pass_through_route", fake_create_pass_through_route)
+
+        result = await azure_proxy_route(
+            endpoint=endpoint,
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert result.status_code == 200
+        assert captured == []
+        (route,) = routes
+        assert route["target"] == f"https://operator.openai.azure.com/{endpoint}"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "group_models",
+        [
+            pytest.param((("gpt-5.4", "azure_ai/gpt-5.4"),), id="azure_ai_group"),
+            pytest.param((("gpt-5.4", "openai/gpt-4o"), ("gpt-5.4", "azure/gpt-5.4-primary")), id="mixed_group"),
+        ],
+    )
+    async def test_model_group_with_an_azure_deployment_is_relayed_through_the_router(self, monkeypatch, group_models):
+        captured = self._install(monkeypatch, {"model": "gpt-5.4", "input": "ping"}, group_models=group_models)
+
+        result = await azure_proxy_route(
+            endpoint="openai/v1/responses",
+            request=self._request(),
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        assert result.status_code == 200
+        assert [relay["model"] for relay in captured] == ["gpt-5.4"]
 
 
 AZURE_SPEECH_SHORT_AUDIO_ENDPOINT: Final = "/speech/recognition/conversation/cognitiveservices/v1"
@@ -10250,78 +10748,21 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         assert not google.called
 
 
-class TestTypeSafePassthroughRoute:
-    @staticmethod
-    def _request(body: object, query_params: Mapping[str, str] | None = None) -> MagicMock:
-        request = MagicMock(spec=Request)
-        request.method = "POST"
-        request.query_params = query_params or {}
-        request.json = AsyncMock(return_value=body)
-        return request
-
+class TestDecisionPassthroughTokenLimits:
     @pytest.fixture
     def client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         from litellm.proxy.proxy_server import app
 
-        monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
-        monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.example/base")
         monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         litellm.in_memory_llm_clients_cache.flush_cache()
         monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
         yield TestClient(app)
-
-    @pytest.mark.parametrize(
-        "method, body",
-        [
-            ("GET", None),
-            ("POST", {"state": "x"}),
-            ("PUT", {"state": "x"}),
-            ("DELETE", None),
-            ("PATCH", {"state": "x"}),
-        ],
-    )
-    def test_forwards_every_method_and_body_upstream(
-        self, client: TestClient, method: str, body: dict[str, str] | None
-    ) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.request(method, "https://typesafe.example/base/v1/systemone").mock(
-                return_value=httpx.Response(200, json={"id": "upstream_123"})
-            )
-            response = client.request(method, "/typesafe/v1/systemone", json=body)
-
-            assert (response.status_code, response.json()) == (200, {"id": "upstream_123"})
-            sent: Final = route.calls.last.request
-            assert sent.headers["authorization"] == "Bearer typesafe-test-key"
-            assert json.loads(sent.content or b"{}") == (body or {})
-
-    def test_forwards_only_the_typesafe_danger_zone_headers_upstream(self, client: TestClient) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.post("https://typesafe.example/base/v1/systemone").mock(
-                return_value=httpx.Response(200, json={"id": "upstream_123"})
-            )
-            client.post(
-                "/typesafe/v1/systemone",
-                json={"state": "x"},
-                headers={"TypeSafe-Danger-Zone-Images": "true", "X-Unrelated": "1"},
-            )
-
-            sent: Final = route.calls.last.request.headers
-            assert (sent.get("typesafe-danger-zone-images"), sent.get("x-unrelated")) == ("true", None)
-
     @pytest.mark.parametrize(
         "provider, endpoint, is_decision_request",
         (
-            ("typesafe", "systemone", True),
             ("laya", "systemone", True),
             ("bespoke", "systemone", True),
-            ("typesafe", "systemone/", True),
-            ("typesafe", "systemone?trace=1", True),
-            ("typesafe", "systemone/?trace=1", True),
-            ("typesafe", "systemone/other", False),
-            ("typesafe", "systemone/other/", False),
-            ("typesafe", "systemone-other", False),
-            ("typesafe", "chat/completions?next=/typesafe/v1/systemone", False),
             ("openrouter", "systemone", False),
             ("openrouter", "systemone/", False),
             ("openrouter", "chat/completions", False),
@@ -10333,7 +10774,7 @@ class TestTypeSafePassthroughRoute:
         self,
         client: TestClient,
         monkeypatch: pytest.MonkeyPatch,
-        provider: Literal["typesafe", "openrouter", "laya", "bespoke"],
+        provider: Literal["openrouter", "laya", "bespoke"],
         endpoint: str,
         is_decision_request: bool,
         quota_scope: Literal["key", "project_output"],
@@ -10353,9 +10794,7 @@ class TestTypeSafePassthroughRoute:
         monkeypatch.setenv("OPENROUTER_API_BASE", "https://typesafe.example/base")
         monkeypatch.setenv("LAYA_API_BASE", "https://typesafe.example/base")
         monkeypatch.setenv("BESPOKE_API_BASE", "https://typesafe.example/base")
-        model: Final = {"typesafe": "jev-latest", "laya": "english", "bespoke": "nimble-latest"}.get(
-            provider, "test-generative-model"
-        )
+        model: Final = {"laya": "english", "bespoke": "nimble-latest"}.get(provider, "test-generative-model")
         permission_model: Final = f"{provider}/{model}" if provider in ("laya", "bespoke") else model
         auth: Final = UserAPIKeyAuth(
             api_key="sk-limited",
@@ -10393,43 +10832,6 @@ class TestTypeSafePassthroughRoute:
         assert response.status_code == (429 if token_limit == 0 else 200), response.text
         assert route.call_count == (0 if token_limit == 0 else 1)
 
-    @pytest.mark.asyncio
-    async def test_forwards_target_auth_headers_provider_and_query(self, monkeypatch):
-        monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
-        monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.example/base")
-
-        async def fake_upstream(request, *_args):
-            target: Final = create_route.call_args.kwargs["target"]
-            upstream_url: Final = httpx.URL(target).copy_merge_params(request.query_params)
-            return {"upstream_query": parse_qs(upstream_url.query.decode())}
-
-        endpoint_func = AsyncMock(side_effect=fake_upstream)
-        create_route = Mock(return_value=endpoint_func)
-        monkeypatch.setattr(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
-            create_route,
-        )
-
-        request = self._request({"state": "x"}, {"trace": "yes"})
-        result = await typesafe_proxy_route(
-            endpoint="v1/systemone",
-            request=request,
-            fastapi_response=MagicMock(spec=Response),
-            user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
-        )
-
-        assert result == {"upstream_query": {"trace": ["yes"]}}
-        endpoint_func.assert_awaited_once()
-        create_route.assert_called_once_with(
-            endpoint="v1/systemone",
-            target="https://typesafe.example/base/v1/systemone",
-            custom_headers={
-                "Authorization": "Bearer typesafe-test-key",
-                "Content-Type": "application/json",
-            },
-            custom_llm_provider="typesafe",
-            is_streaming_request=False,
-        )
 
 
 class _RecordsPreCallModel(CustomLogger):
