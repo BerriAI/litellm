@@ -7,7 +7,16 @@ from litellm.litellm_core_utils.model_cost_table import published
 
 _REGION_CODE: Final = re.compile(r"([A-Za-z]{2})-([A-Za-z]{2})")
 _V25_MODEL: Final = "prisma-v2.5"
+_REALTIME_ENDPOINT: Final = "/v1/realtime"
 V25_FIELDS_FLAG: Final = "gnani_v25_request_fields"
+
+
+def supports_realtime(model: str) -> bool:
+    from litellm.utils import catalog_with_runtime_registrations
+
+    row: Final = catalog_with_runtime_registrations().get(f"gnani/{model.removeprefix('gnani/')}") or {}
+    endpoints: Final = row.get("supported_endpoints")
+    return row.get("litellm_provider") == "gnani" and isinstance(endpoints, list) and _REALTIME_ENDPOINT in endpoints
 
 
 def normalize_language(hint: str) -> str:

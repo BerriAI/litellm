@@ -201,6 +201,23 @@ def test_a_deployment_with_a_stored_transcription_only_endpoint_list_keeps_realt
     assert ProviderConfigManager.get_provider_realtime_config("prisma-v3.0", LlmProviders.GNANI) is not None
 
 
+def test_a_priced_deployment_of_an_unknown_gnani_model_stays_unsupported() -> None:
+    Router(
+        model_list=[
+            {
+                "model_name": "typo",
+                "litellm_params": {
+                    "model": "gnani/prisma-v9.0",
+                    "api_key": "deployment-key",
+                    "input_cost_per_second": 0.01,
+                },
+                "model_info": {"supported_endpoints": ["/v1/realtime"]},
+            }
+        ]
+    )
+    assert ProviderConfigManager.get_provider_realtime_config("prisma-v9.0", LlmProviders.GNANI) is None
+
+
 def test_opening_and_updating_a_session_preserves_the_client_rate_and_acknowledged_language() -> None:
     config: Final = GnaniRealtimeConfig()
     headers: Final = config.validate_environment(
