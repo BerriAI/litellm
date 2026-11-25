@@ -3369,7 +3369,9 @@ class RustCore(
         try:
             await await_all(driver.outcomes.take_pending())
             if step["kind"] == "failed":
-                return driver.last_error if driver.last_error is not None else failure
+                return (
+                    driver.last_error if driver.last_error is not None and not driver.raises_stream_origin else failure
+                )
             attempted: Final = step.get("attempted_retries")
             budget: Final = step.get("max_retries")
             return (
@@ -4717,6 +4719,8 @@ class _Driver:
             (stream_failure,) if stream_failure else ()
         )
         self._ending_error: BaseException | None = None
+        self._attempt_errors: Final[dict[tuple[int, str], BaseException]] = {}  # mutable-ok: filled as the call runs
+        self._raises_stream_origin: bool = False
         # The retry counts an exhausted retry loop stamps on the pick error its level then raises.
         self._pending_stamps: Final[dict[int, tuple[object, object]]] = {}  # mutable-ok: filled as the call runs
         # Each level's current hop's first failure, once it retries: the error its retry loop raises
@@ -4760,6 +4764,8 @@ class _Driver:
         self._ending_error = None
         self._level_errors.clear()
         self._hop_first.clear()
+        self._attempt_errors.clear()
+        self._raises_stream_origin = False
         self._level_picks.clear()
 
     def _blocked(self, response: object, endpoint_name: str) -> str | None:
@@ -4838,6 +4844,17 @@ class _Driver:
         level: Final = event.get("level")
         self._last_error = raised
         self._level_errors[level if isinstance(level, int) else 0] = raised
+
+    def _context_window_raised(self, event: Mapping[str, object]) -> None:
+        if event.get("stream_origin") is True:
+            self._raises_stream_origin = True
+            return
+        level: Final = event.get("level")
+        at: Final = level if isinstance(level, int) else 0
+        refused: Final = self._attempt_errors.get((at, str(event.get("deployment_id"))))
+        if refused is not None:
+            self._last_error = refused
+            self._level_errors[at] = refused
 
     def _cause_error(self, event: Mapping[str, object]) -> BaseException | None:
         """The error the ``cause`` of a ``retry_logged`` or ``retry_policy_raised`` event names."""
@@ -5124,6 +5141,9 @@ class _Driver:
             if event.get("kind") == "retry_count_raised":
                 self._count_raised(event)
                 continue
+            if event.get("kind") == "context_window_raised":
+                self._context_window_raised(event)
+                continue
             if event.get("kind") == "level_failed":
                 self._level_failed(event)
                 continue
@@ -5298,6 +5318,10 @@ class _Driver:
     def last_error(self) -> BaseException | None:
         return self._last_error
 
+    @property
+    def raises_stream_origin(self) -> bool:
+        return self._raises_stream_origin
+
     def _stream_attempt(
         self, step: Mapping[str, object], kwargs: Mapping[str, object], slot: "contextlib.ExitStack | None" = None
     ) -> StreamAttempt:
@@ -5320,6 +5344,8 @@ class _Driver:
             deployment_id=deployment_id if isinstance(deployment_id, str) else None,
             attempted_retries=number("retry"),
             routed=routed if isinstance(routed, str) else None,
+            refused_ids=_strings(step.get("refused_ids")),
+            provider_refused_window=step.get("provider_refused_window") is True,
             slot=slot,
             explain_failure=self._hop_failure_explainer(step),
             caller_key_origin=self._caller_key_origin,
@@ -5360,6 +5386,9 @@ class _Driver:
         if isinstance(retry, int) and retry > 0:
             self._chain_to_hop_first(error, level if isinstance(level, int) else 0)
         self._level_errors[level if isinstance(level, int) else 0] = error
+        attempted_on: Final = step.get("deployment_id")
+        if isinstance(attempted_on, str):
+            self._attempt_errors[(level if isinstance(level, int) else 0, attempted_on)] = error
         logged: Final = logged_call(
             call.host_op if call is not None else self._plan.host_op,
             served or self._request,  # pyright: ignore[reportUnknownArgumentType]  # see above

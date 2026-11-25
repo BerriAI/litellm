@@ -131,6 +131,8 @@ class StreamAttempt:
     committed_budget: int | None = None
     # The group a pre-routing hook selected for ``group``, which a fallback lookup keys on first.
     routed: str | None = None
+    refused_ids: tuple[str, ...] = ()
+    provider_refused_window: bool = False
     # The deployment's max_parallel_requests slot the attempt holds; an open chat or speech stream takes it.
     slot: contextlib.ExitStack | None = None
     explain_failure: "Callable[[BaseException], tuple[str, str] | None] | None" = None
@@ -162,6 +164,8 @@ class StreamAttempt:
             "attempted_retries": self.attempted_retries,
             "committed_budget": self.committed_budget,
             "routed": self.routed,
+            "refused_ids": list(self.refused_ids),
+            "provider_refused_window": self.provider_refused_window,
         }
 
     def policy(self, trigger: BaseException | None = None) -> Mapping[str, object]:

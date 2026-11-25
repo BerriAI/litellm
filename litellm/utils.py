@@ -12028,6 +12028,13 @@ class ProviderConfigManager:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 
             return MetaRealtimeConfig(drop_params=drop_params)
+        if LlmProviders.GNANI == provider:
+            from litellm.llms.gnani.common_utils import is_prisma_v25, supports_realtime
+            from litellm.llms.gnani.realtime.transformation import GnaniRealtimeConfig
+
+            if not supports_realtime(model):
+                return None
+            return GnaniRealtimeConfig(drop_params=drop_params, requires_explicit_language=is_prisma_v25(model))
         if LlmProviders.SONIOX == provider:
             from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
 

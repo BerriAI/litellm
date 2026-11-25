@@ -233,6 +233,7 @@ from litellm.types.proxy.auth.user_roles import (  # noqa: E402  # re-export aft
     KeyManagementRoutes as KeyManagementRoutes,  # noqa: PLC0414  # public re-export
 )
 
+CLAUDE_CODE_GATEWAY_PREFIX: Final = "/claude_code_gateway"
 MODEL_LIST_ROUTES: Final = ("/models", "/v1/models", "/claude_code_gateway/v1/models")
 
 
@@ -3246,6 +3247,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     mcp_require_explicit_server_scope: bool = Field(
         default=False,
         description="Require aggregate MCP requests to include x-mcp-servers unless a toolset or gateway OAuth session already scopes the server. Off by default.",
+    )
+    require_key_mcp_access_defined: bool | None = Field(
+        None,
+        description="When true, a virtual key that grants no MCP servers of its own inherits none from its team, so the team acts as a ceiling rather than a default and the key reaches no MCP servers until it grants some explicitly or through an access group. Keyless subjects admitted through a gateway or the dashboard are unaffected, since team membership is their only access path. Default false: such a key inherits every MCP server its team holds.",
     )
     mcp_client_id_header: str | None = Field(
         None,

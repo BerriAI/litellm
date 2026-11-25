@@ -4,23 +4,33 @@
 //!
 //! One rule for every such key: the config's own value first, then `LITELLM_<KEY>`, then the
 //! default. `general_settings.proxy_config_reload_interval_seconds` follows it with
-//! `PROXY_CONFIG_RELOAD_INTERVAL_SECONDS`, the name the proxy reads. A flag is read by the one flag rule, `lax_bool`, whichever of the two wrote it, and
-//! leaves this crate as a `bool`.
+//! `PROXY_CONFIG_RELOAD_INTERVAL_SECONDS`, the name the proxy reads. A flag is read by the one
+//! flag rule, `lax_bool`, whichever of the two wrote it, and leaves this crate as a `bool`. Two
+//! keys are read as the proxy reads them instead. `reasoning_auto_summary` is on when the config's
+//! value is truthy or its variable is `true` in any case, even under a config that sets it to
+//! `false`. `request_timeout` is read from `REQUEST_TIMEOUT`, the name the proxy reads it by, as
+//! `float()` reads its text, and only from the process's own environment, since the proxy reads it
+//! once when `litellm` is imported, before the config's `environment_variables` are exported, so a
+//! timeout the config exports times nothing out there.
 //!
-//! The proxy differs in three places, and none of them is kept. It reads some of these variables
-//! only when it starts, before the config's `environment_variables` are exported, where the
-//! variable here is read from whatever `environment` is given. It reads each flag variable by a
-//! rule of its own, one of which takes any word as on, where a word that is no flag leaves the key
-//! unset here. And it reads `reasoning_auto_summary` as on when its variable is, even under a
-//! config that sets it to `false`.
+//! The proxy differs in two places, and neither is kept. It reads some of the `LITELLM_<KEY>`
+//! variables only when it starts too, where the variable here is read from whatever `environment`
+//! is given. It reads each flag variable by a rule of its own, one of which takes any word as on,
+//! where a word that is no flag leaves the key unset here.
 
 use std::collections::BTreeMap;
 
 use litellm_env::Lookup;
-use litellm_python_compat::flags::lax_bool;
+use litellm_python_compat::{
+    flags::{lax_bool, lower_is_true},
+    number::float,
+};
 use litellm_secret_value::SecretValue;
 
-use crate::{Config, GeneralSettings, LiteLlmSettings};
+use crate::{Config, GeneralSettings, LiteLlmSettings, Spelled};
+
+const REASONING_AUTO_SUMMARY: &str = "litellm_settings.reasoning_auto_summary";
+const REASONING_AUTO_SUMMARY_VARIABLE: &str = "LITELLM_REASONING_AUTO_SUMMARY";
 
 /// What the environment did to each config key the config left unset, with the variable it read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -81,6 +91,12 @@ impl Written for SecretValue {
     }
 }
 
+impl Written for Spelled<f64> {
+    fn written(text: String) -> Option<Self> {
+        float(&text).map(Self::Value)
+    }
+}
+
 /// The config's `own` value of `key` when it set one, else what `variable` holds, with what the
 /// variable did to the key. A blank variable is unset.
 fn filled<T: Written>(
@@ -102,6 +118,22 @@ fn filled<T: Written>(
         Some(value) => (Some(value), Some((key, Origin::Set(variable)))),
         None => (None, Some((key, Origin::Unread(variable)))),
     }
+}
+
+/// `is_reasoning_auto_summary_enabled`: on when the config's `own` value is, else when the
+/// variable is `true` in any case, with the variable when it turned the key on.
+fn reasoning_auto_summary(
+    own: bool,
+    environment: &dyn Lookup,
+) -> (bool, Option<(&'static str, Origin)>) {
+    if own {
+        return (true, None);
+    }
+    let on = environment
+        .get(REASONING_AUTO_SUMMARY_VARIABLE)
+        .is_some_and(|text| lower_is_true(&text));
+    let origin = Origin::Set(REASONING_AUTO_SUMMARY_VARIABLE.to_owned());
+    (on, on.then_some((REASONING_AUTO_SUMMARY, origin)))
 }
 
 /// `$settings` with each of the fields it leaves unset read from `LITELLM_<FIELD>`, and what the
@@ -134,7 +166,6 @@ impl Config {
                 drop_params,
                 modify_params,
                 enable_anthropic_prompt_caching,
-                reasoning_auto_summary,
                 use_chat_completions_url_for_anthropic_messages,
                 route_all_chat_openai_to_responses,
                 gemini_live_defer_setup,
@@ -145,6 +176,8 @@ impl Config {
                 autorouter_presets_url,
             ]
         );
+        let (reasoning_auto_summary, summarized) =
+            reasoning_auto_summary(litellm_settings.reasoning_auto_summary, environment);
         let (proxy_config_reload_interval_seconds, interval_origin) = filled(
             self.general_settings.proxy_config_reload_interval_seconds,
             environment,
@@ -152,7 +185,10 @@ impl Config {
             "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS".to_owned(),
         );
         Self {
-            litellm_settings,
+            litellm_settings: LiteLlmSettings {
+                reasoning_auto_summary,
+                ..litellm_settings
+            },
             general_settings: GeneralSettings {
                 proxy_config_reload_interval_seconds,
                 ..self.general_settings
@@ -162,9 +198,29 @@ impl Config {
                     .0
                     .into_iter()
                     .chain(origins.into_iter().flatten())
+                    .chain(summarized)
                     .chain(interval_origin)
                     .collect(),
             ),
+            ..self
+        }
+    }
+
+    /// This config with the process's own environment, `process`, under the keys the proxy reads
+    /// only from it.
+    pub fn with_process_environment(self, process: &dyn Lookup) -> Self {
+        let (request_timeout, timed) = filled(
+            self.litellm_settings.request_timeout,
+            process,
+            "litellm_settings.request_timeout",
+            "REQUEST_TIMEOUT".to_owned(),
+        );
+        Self {
+            litellm_settings: LiteLlmSettings {
+                request_timeout,
+                ..self.litellm_settings
+            },
+            origins: Origins(self.origins.0.into_iter().chain(timed).collect()),
             ..self
         }
     }
@@ -256,6 +312,75 @@ mod tests {
                 config.origins.unread(KEY)
             ),
             (value, variable, unread)
+        );
+    }
+
+    fn read_with(yaml: &str, variable: &str, written: Option<&str>) -> Config {
+        let lookup = |name: &str| {
+            (name == variable)
+                .then_some(written)
+                .flatten()
+                .map(str::to_owned)
+        };
+        Config::from_yaml(yaml)
+            .unwrap()
+            .with_environment(&lookup)
+            .with_process_environment(&lookup)
+    }
+
+    #[rstest]
+    #[case::unset("model_list: []\n", None, false)]
+    #[case::the_config("litellm_settings:\n  reasoning_auto_summary: true\n", None, true)]
+    #[case::config_text_that_is_truthy(
+        "litellm_settings:\n  reasoning_auto_summary: \"false\"\n",
+        None,
+        true
+    )]
+    #[case::the_variable_under_a_config_set_to_false(
+        "litellm_settings:\n  reasoning_auto_summary: false\n",
+        Some("TRUE"),
+        true
+    )]
+    #[case::a_variable_word_other_than_true("model_list: []\n", Some("yes"), false)]
+    #[case::a_padded_variable("model_list: []\n", Some(" true"), false)]
+    fn reasoning_auto_summary_is_on_when_the_config_is_truthy_or_its_variable_is_true(
+        #[case] yaml: &str,
+        #[case] written: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        let config = read_with(yaml, "LITELLM_REASONING_AUTO_SUMMARY", written);
+
+        assert_eq!(config.litellm_settings.reasoning_auto_summary, expected);
+    }
+
+    #[rstest]
+    #[case::the_variable_when_the_config_leaves_it_unset(
+        "model_list: []\n",
+        Some(" 2.5 "),
+        Some(2.5),
+        Some("REQUEST_TIMEOUT")
+    )]
+    #[case::the_config_when_both_set_it(
+        "litellm_settings:\n  request_timeout: 30\n",
+        Some("5"),
+        Some(30.0),
+        None
+    )]
+    #[case::text_float_refuses("model_list: []\n", Some("soon"), None, None)]
+    fn a_request_timeout_is_read_from_the_config_first_and_request_timeout_second(
+        #[case] yaml: &str,
+        #[case] written: Option<&str>,
+        #[case] seconds: Option<f64>,
+        #[case] variable: Option<&str>,
+    ) {
+        let config = read_with(yaml, "REQUEST_TIMEOUT", written);
+
+        assert_eq!(
+            (
+                config.litellm_settings.request_timeout,
+                config.origins.variable("litellm_settings.request_timeout")
+            ),
+            (seconds.map(Spelled::Value), variable)
         );
     }
 
