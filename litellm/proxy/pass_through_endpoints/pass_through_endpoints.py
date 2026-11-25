@@ -5137,10 +5137,10 @@ async def update_pass_through_endpoints(
         )
 
     # Only merge fields the caller explicitly sent so omitted fields keep their
-    # stored value. Without exclude_unset, defaults like auth=True would overwrite
-    # an existing auth=false entry on any unrelated edit.
+    # stored value and an explicit null clears it. Without exclude_unset, defaults
+    # like auth=True would overwrite an existing auth=false entry on any unrelated edit.
     # Exclude is_from_config as it's a response-only field (computed at read time)
-    update_data: Final = data.model_dump(exclude_unset=True, exclude_none=True, exclude={"is_from_config"})
+    update_data: Final = data.model_dump(exclude_unset=True, exclude={"is_from_config"})
 
     # Start with existing endpoint data
     endpoint_dict: Final = found_endpoint.model_dump()
@@ -5148,8 +5148,8 @@ async def update_pass_through_endpoints(
     # Update with new data (only explicitly provided values)
     endpoint_dict.update(update_data)
 
-    # Preserve existing ID if not provided in update and endpoint has ID
-    if "id" not in update_data and found_endpoint.id is not None:
+    # Preserve existing ID if the update omits it or sends null and endpoint has ID
+    if update_data.get("id") is None and found_endpoint.id is not None:
         endpoint_dict["id"] = found_endpoint.id
 
     # Remove is_from_config before saving - it's a response-only field (computed at read time)

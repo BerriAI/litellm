@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ComponentProps } from "react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
-import { fireEvent, renderWithProviders, screen, waitFor } from "../../tests/test-utils";
+import { chooseSelectOption, fireEvent, renderWithProviders, screen, waitFor } from "../../tests/test-utils";
 import PassThroughInfoView from "./pass_through_info";
 
 const updatePassThroughEndpoint = vi.fn();
@@ -53,7 +53,7 @@ describe("pass_through_info update payload", () => {
     updatePassThroughEndpoint.mockResolvedValue({});
   });
 
-  it("sends exactly the antd payload, once, for an untouched save", async () => {
+  it("sends exactly the stored settings, once, for an untouched save", async () => {
     const user = setup();
     renderView();
     await openEditForm(user);
@@ -74,7 +74,7 @@ describe("pass_through_info update payload", () => {
       timeout: 600,
       auth: false,
       methods: ["GET"],
-      guardrails: undefined,
+      guardrails: null,
       display_name: "",
       show_in_model_hub: false,
     });
@@ -124,7 +124,31 @@ describe("pass_through_info update payload", () => {
 
     await waitFor(() => expect(updatePassThroughEndpoint).toHaveBeenCalled());
     expect(screen.queryByText("Invalid input")).not.toBeInTheDocument();
-    expect(lastPayload().timeout).toBeUndefined();
+    expect(lastPayload().timeout).toBeNull();
+  });
+
+  it("sends timeout null when the stored timeout is cleared", async () => {
+    const user = setup();
+    renderView();
+    await openEditForm(user);
+
+    await user.clear(screen.getByLabelText("Request Timeout (seconds)"));
+    await save(user);
+
+    await waitFor(() => expect(updatePassThroughEndpoint).toHaveBeenCalled());
+    expect(lastPayload().timeout).toBeNull();
+  });
+
+  it("sends cost_per_request 0 when the stored cost is cleared", async () => {
+    const user = setup();
+    renderView();
+    await openEditForm(user);
+
+    await user.clear(screen.getByLabelText("Cost per Request"));
+    await save(user);
+
+    await waitFor(() => expect(updatePassThroughEndpoint).toHaveBeenCalled());
+    expect(lastPayload().cost_per_request).toBe(0);
   });
 
   it("keeps the path from the loaded endpoint rather than the form", async () => {
@@ -179,7 +203,7 @@ describe("pass_through_info update payload", () => {
     }
   });
 
-  it("sends methods undefined when the endpoint has none", async () => {
+  it("sends methods null when the endpoint has none", async () => {
     const user = setup();
     renderView({ ...endpoint, methods: [] });
     await openEditForm(user);
@@ -187,7 +211,21 @@ describe("pass_through_info update payload", () => {
     await save(user);
 
     await waitFor(() => expect(updatePassThroughEndpoint).toHaveBeenCalled());
-    expect(lastPayload().methods).toBeUndefined();
+    expect(lastPayload().methods).toBeNull();
+  });
+
+  it("sends methods null when every stored method is deselected", async () => {
+    const user = setup();
+    renderView({ ...endpoint, methods: ["GET", "POST"] });
+    await openEditForm(user);
+
+    await chooseSelectOption(user, screen.getByLabelText("HTTP Methods (Optional)"), "GET");
+    await user.click(screen.getByRole("option", { name: "POST" }));
+    await user.keyboard("{Escape}");
+    await save(user);
+
+    await waitFor(() => expect(updatePassThroughEndpoint).toHaveBeenCalled());
+    expect(lastPayload().methods).toBeNull();
   });
 
   it("rounds cost_per_request to two decimals", async () => {

@@ -108,8 +108,8 @@ interface PassThroughEndpoint {
   cost_per_request?: number;
   timeout?: number | null;
   auth?: boolean;
-  methods?: string[];
-  guardrails?: Record<string, { request_fields?: string[]; response_fields?: string[] } | null>;
+  methods?: string[] | null;
+  guardrails?: Record<string, { request_fields?: string[]; response_fields?: string[] } | null> | null;
   display_name?: string | null;
   show_in_model_hub?: boolean;
 }
@@ -196,11 +196,11 @@ const PassThroughInfoView: React.FC<PassThroughInfoProps> = ({
         target: values.target,
         headers: headers,
         include_subpath: values.include_subpath,
-        cost_per_request: values.cost_per_request,
-        timeout: values.timeout,
+        cost_per_request: values.cost_per_request ?? 0,
+        timeout: values.timeout ?? null,
         auth: values.auth,
-        methods: values.methods.length > 0 ? values.methods : undefined,
-        guardrails: guardrails && Object.keys(guardrails).length > 0 ? guardrails : undefined,
+        methods: values.methods.length > 0 ? values.methods : null,
+        guardrails: guardrails && Object.keys(guardrails).length > 0 ? guardrails : null,
         display_name: values.display_name?.trim() ?? "",
         show_in_model_hub: values.show_in_model_hub,
       };

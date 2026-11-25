@@ -3149,6 +3149,62 @@ async def test_update_pass_through_endpoint_preserves_auth_false():
 
 
 @pytest.mark.asyncio
+async def test_update_pass_through_endpoint_explicit_null_clears_a_field_and_omitted_fields_keep_stored_values():
+    from litellm.proxy._types import ConfigFieldInfo, PassThroughGenericEndpoint
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        update_pass_through_endpoints,
+    )
+
+    stored_endpoint: Final = {
+        "id": "slow-upstream",
+        "path": "/slow-upstream",
+        "target": "http://slow.example/api",
+        "timeout": 30.0,
+        "methods": ["GET"],
+        "guardrails": {"pii-mask": None},
+        "display_name": "Slow upstream",
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.get_config_general_settings") as mock_get_config,
+        patch("litellm.proxy.proxy_server.update_config_general_settings") as mock_update_config,
+        patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes", {}),
+    ):
+        mock_get_config.return_value = ConfigFieldInfo(
+            field_name="pass_through_endpoints", field_value=[dict(stored_endpoint)]
+        )
+
+        await update_pass_through_endpoints(
+            endpoint_id="slow-upstream",
+            data=PassThroughGenericEndpoint.model_validate(
+                {
+                    "id": None,
+                    "path": "/slow-upstream",
+                    "target": "http://slow.example/api",
+                    "timeout": None,
+                    "methods": None,
+                }
+            ),
+            request=MagicMock(spec=Request),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+        persisted: Final = mock_update_config.call_args[1]["data"].field_value[0]
+        registered: Final = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            route="/slow-upstream", method="POST"
+        )
+
+    assert {key: persisted[key] for key in stored_endpoint} == {
+        **stored_endpoint,
+        "timeout": None,
+        "methods": None,
+    }
+    assert registered is not None
+    assert registered["passthrough_params"]["timeout"] is None
+
+
+@pytest.mark.asyncio
 async def test_update_pass_through_endpoint_keeps_serving_the_old_route_until_the_new_one_is_registered():
     from litellm.proxy._types import ConfigFieldInfo, PassThroughGenericEndpoint, UserAPIKeyAuth
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
