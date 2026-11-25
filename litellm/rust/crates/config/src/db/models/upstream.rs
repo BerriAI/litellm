@@ -25,8 +25,8 @@ const API_KEY: &str = "api_key";
 /// Whether filling `credential`'s api_key into `params` would send an `oidc/` secret to a host
 /// the credential does not name, which Python refuses at call time (`may_reach`). The hosts a
 /// call goes to are the model's `model` and, per upstream param, the model's value when it sets
-/// the param and the credential's otherwise. A call that names no host may carry the secret only
-/// when the credential names none either.
+/// the param to non-null and the credential's otherwise. A call that names no host may carry the
+/// secret only when the credential names none either.
 pub(super) fn withholds_api_key(params: &Mapping, credential: &Object) -> bool {
     let Some(Value::String(api_key)) = credential.get(API_KEY) else {
         return false;
@@ -44,8 +44,8 @@ pub(super) fn withholds_api_key(params: &Mapping, credential: &Object) -> bool {
         UPSTREAM_PARAMS
             .iter()
             .filter_map(|param| match params.get(*param) {
-                Some(own) => text(Some(own)),
-                None => text(credential.get(param)),
+                Some(own) if !own.is_null() => text(Some(own)),
+                _ => text(credential.get(param)),
             })
             .chain(text(params.get(MODEL)).and_then(model_url)),
     );
