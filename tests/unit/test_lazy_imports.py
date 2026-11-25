@@ -1,4 +1,5 @@
 import importlib
+import json
 from typing import Final
 
 import pytest
@@ -36,6 +37,7 @@ def test_utils_attribute_is_the_same_object_from_litellm_and_litellm_utils(name:
         ("openAIGPT5Config", "OpenAIGPT5Config"),
         ("nvidiaNimConfig", "NvidiaNimConfig"),
         ("nvidiaNimEmbeddingConfig", "NvidiaNimEmbeddingConfig"),
+        ("oci_transformation", "OCIChatConfig"),
         ("priority_reservation_settings", "PriorityReservationSettings"),
         ("logging_callback_manager", "LoggingCallbackManager"),
     ],
@@ -64,9 +66,28 @@ def test_provider_list_lists_every_provider():
     assert litellm.provider_list == list(litellm.LlmProviders)
 
 
-@pytest.mark.parametrize("name", ["proxy", "guardrails", "harness", "_service_logger"])
+@pytest.mark.parametrize(
+    "name", ["proxy", "guardrails", "harness", "_service_logger", "anthropic_interface", "messages"]
+)
 def test_submodule_attribute_is_the_submodule(name: str):
     assert getattr(litellm, name) is importlib.import_module(f"litellm.{name}")
+
+
+def test_anthropic_attribute_is_the_anthropic_interface():
+    assert litellm.anthropic is importlib.import_module("litellm.anthropic_interface")
+
+
+def test_import_litellm_leaves_oci_and_anthropic_messages_modules_unloaded_until_first_use():
+    result: Final = run_child_interpreter(
+        "import json, sys, litellm\n"
+        "lazy = ('litellm.llms.oci.chat.transformation', 'litellm.messages.dispatch', 'litellm.anthropic_interface')\n"
+        "before = [name for name in lazy if name in sys.modules]\n"
+        "from litellm import anthropic, anthropic_messages, oci_transformation\n"
+        "print(json.dumps([before, [name for name in lazy if name not in sys.modules]]))\n",
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout.splitlines()[-1]) == [[], []]
 
 
 @pytest.mark.parametrize("module", [litellm, litellm.utils])

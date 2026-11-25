@@ -1556,7 +1556,6 @@ from .images.main import *
 from .videos.main import *
 from .batch_completion.main import *
 from .rerank_api.main import *
-from .messages.dispatch import *
 from .responses.dispatch import *
 from .responses.main import (
     acancel_responses,
@@ -1640,7 +1639,6 @@ from .scheduler import *
 
 ### ADAPTERS ###
 from .types.adapter import AdapterItem
-import litellm.anthropic_interface as anthropic
 
 adapters: List[AdapterItem] = []
 
@@ -1700,7 +1698,15 @@ def set_global_gitlab_config(config: Mapping[str, object]) -> None:
 
 
 if TYPE_CHECKING:
+    from . import anthropic_interface as anthropic
+    from . import anthropic_interface as anthropic_interface
     from . import guardrails as guardrails
+    from . import messages as messages
+    from .llms.oci.chat.transformation import OCIChatConfig as _OCIChatConfig
+    from .messages.dispatch import anthropic_messages as anthropic_messages
+    from .messages.dispatch import anthropic_messages_handler as anthropic_messages_handler
+
+    oci_transformation: _OCIChatConfig
     from litellm.types.utils import ModelInfo as _ModelInfoType
     from litellm.types.utils import PriorityReservationSettings
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler

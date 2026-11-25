@@ -7,6 +7,8 @@ from typing import Final
 LITELLM_ATTRIBUTES: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
     {
         "completion_cost": (".cost_calculator", "completion_cost"),
+        "anthropic_messages": (".messages.dispatch", "anthropic_messages"),
+        "anthropic_messages_handler": (".messages.dispatch", "anthropic_messages_handler"),
         "cost_per_token": (".cost_calculator", "cost_per_token"),
         "response_cost_calculator": (".cost_calculator", "response_cost_calculator"),
         "Logging": ("litellm.litellm_core_utils.litellm_logging", "Logging"),

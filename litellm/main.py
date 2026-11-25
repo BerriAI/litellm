@@ -326,7 +326,6 @@ from .llms.nvidia_riva.audio_transcription.handler import (
 from .llms.nvidia_riva.audio_transcription.transformation import (
     NvidiaRivaAudioTranscriptionConfig,
 )
-from .llms.oci.chat.transformation import OCIChatConfig
 from .llms.ollama.completion import handler as ollama
 from .llms.oobabooga.chat import oobabooga
 from .llms.openai.completion.handler import OpenAITextCompletion
@@ -426,7 +425,6 @@ base_llm_aiohttp_handler = BaseLLMAIOHTTPHandler()
 sagemaker_chat_completion: Final = SagemakerChatHandler()
 bytez_transformation: Final = BytezChatConfig()
 heroku_transformation: Final = HerokuChatConfig()
-oci_transformation: Final = OCIChatConfig()
 ovhcloud_transformation: Final = OVHCloudChatConfig()
 lemonade_transformation: Final = LemonadeChatConfig()
 
