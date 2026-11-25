@@ -655,7 +655,7 @@ mod tests {
                 caller.hash(),
                 caller.role(),
                 key.record.expires,
-                key.models().to_vec(),
+                crate::host::allowed_models(&caller),
             ),
             (
                 Some(&Token::new(VIRTUAL_KEY).hash()),
