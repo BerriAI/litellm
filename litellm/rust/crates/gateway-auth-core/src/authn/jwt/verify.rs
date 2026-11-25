@@ -589,6 +589,8 @@ fn decode(
     jwk: &Map<String, Value>,
     checks: &Checks<'_>,
 ) -> Result<Map<String, Value>, TokenError> {
+    #[cfg(feature = "fips")]
+    let _ = jsonwebtoken::crypto::aws_lc::DEFAULT_PROVIDER.install_default();
     let (key, validation) = verifier(jwk)?;
     let payload = jsonwebtoken::decode::<Map<String, Value>>(token, &key, &validation)?.claims;
     validate_claims(&payload, checks)?;
@@ -708,10 +710,12 @@ fn verifier(key: &Map<String, Value>) -> Result<(DecodingKey, Validation), KeyEr
             let (Some(n), Some(e)) = (field(JwkField::N), field(JwkField::E)) else {
                 return Err(malformed("Not a public or private key"));
             };
-            verifying(
-                DecodingKey::from_rsa_components(n, e),
-                Validation::new_for_family(AlgorithmFamily::Rsa),
-            )
+            let key = DecodingKey::from_rsa_components(n, e);
+            #[cfg(feature = "fips")]
+            if let Ok(key) = &key {
+                fips_rsa_size(key)?;
+            }
+            verifying(key, Validation::new_for_family(AlgorithmFamily::Rsa))
         }
         Some("EC") => {
             let algorithm = match crv.map(Value::as_str) {
@@ -755,12 +759,27 @@ fn verifier(key: &Map<String, Value>) -> Result<(DecodingKey, Validation), KeyEr
     }
 }
 
+#[cfg(feature = "fips")]
+fn fips_rsa_size(key: &DecodingKey) -> Result<(), KeyError> {
+    let jsonwebtoken::DecodingKeyKind::RsaModulusExponent { n, .. } = key.kind() else {
+        return Ok(());
+    };
+    let n = &n[n.iter().take_while(|byte| **byte == 0).count()..];
+    let bits = n
+        .first()
+        .map_or(0, |top| n.len() * 8 - top.leading_zeros() as usize);
+    if bits < 2048 {
+        return Err(KeyError::RsaKeyTooShort { bits });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, sync::Mutex};
 
     use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-    use jsonwebtoken::{EncodingKey, Header, crypto::sign, errors::ErrorKind};
+    use jsonwebtoken::{EncodingKey, Header, crypto::rust_crypto, errors::ErrorKind};
     use litellm_config::{JwtAuthSettings, JwtIssuerConfig, OneOrMany};
     use rstest::{fixture, rstest};
     use serde_json::{Value, json};
@@ -874,6 +893,54 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
 -----END PRIVATE KEY-----
 ";
     const ED_X: &str = "iO5qGwVLMzVNKsLll1PGbMPQzI_aTO9tZuoe8AEWCo4";
+    const RSA_1024_PEM: &str = "-----BEGIN PRIVATE KEY-----
+MIICdwIBADANBgkqhkiG9w0BAQEFAASCAmEwggJdAgEAAoGBAKUUlgE+jbAD4zf2
+yFbrICNI9gigXm0k6pxvka5auiXsrKAidVKtMTFfjxzSl3ZvdqgvVXI+EFz+P9WE
+KwWR2aL7u1rLGMwMhKcGG75pAeXqw557Lei7R044OpZ12kqefeJm8Q3PdUwgic1t
+e2WpdVsD0h5XpIi2t8N2adYgCFsVAgMBAAECgYEAhZL7sbQQ57ytjWoVPydv0L1H
+v0EsRrpZUA2C3oaxGuC/6a8YKbbUGDRPU64fOokEhSAPzqnjiat8sWMJgK88XrUM
+564kImd3z0zlfg8j04PgRMAhzfkCC/E5Q3ZOELyBoZOHE8j7FI64kU2Hnphkx67H
+uKHyUsNBedN5gOncmT0CQQDOHDMCtju3vuMHJRHJs0+9N34grS/x3IB5ZlZGWotX
+xW0FfEz2OpWpdNqrMymLbSIGcJUmK6U5CTK4dYM7c82jAkEAzQnxKeXE4YOIZELQ
+iUPT48/9MA+pAGmbUMi/ic9qffrNl/whdkPpVYA05Bl5f+ACP1yptVi25WaNb3T2
+KeHP5wJAPr93CCxSoe4LT/GJKM7eR8zNKUWQgyGOO2dcfK60HVSNjE37YDsVtTFO
+ITDCRSBEa5F61tQSyPpz5pRgD4mB4QJACw9BOeBR6VQd9EKCWxUUhdI/NutxUztf
+DFF3u2g7t0Xi9xK7f1SUbm826yLQoewkUuSdptF9NAx/DocBjCrI+wJBAJwJdgTL
+izsIPrdkTtuZGLmvP1RUR8C6erFeVR2cA48t3bikUTrT6/vXgff8XWdmTw8rUBZd
+PpJJnVD0Rp6PJwk=
+-----END PRIVATE KEY-----
+";
+    const RSA_1024_N: &str = "pRSWAT6NsAPjN_bIVusgI0j2CKBebSTqnG-Rrlq6JeysoCJ1Uq0xMV-PHNKXdm92qC9Vcj4QXP4_1YQrBZHZovu7WssYzAyEpwYbvmkB5erDnnst6LtHTjg6lnXaSp594mbxDc91TCCJzW17Zal1WwPSHlekiLa3w3Zp1iAIWxU";
+    const RSA_2047_PEM: &str = "-----BEGIN PRIVATE KEY-----
+MIIEuwIBADANBgkqhkiG9w0BAQEFAASCBKUwggShAgEAAoIBAF+nkJxXchaLKv95
+cCD6o/tskpoyh2Hinm44heIZ4Jw1vRks3/M82tZlLrLVFhHKxzyM2LhHSdClovSm
+8y9/o/pXt7vLIv5iBjAvrSQaiNolLekmFOJn12oD4/au7AV86KUfn2VQ9ULOnhCk
+lDG1hR04fWjwouS0ogBaCcUbUGaz4q5zI8wYDxQB5NMzllMRg+cyA+bI+7v2VYdj
+jnEE3LcBi3wlza25cehuwQQ5hvhYNADK6/dsKrEZLOFcdATigR3kaRt3tId3cmX8
+KTRtv1OVINM/uEqkQme2P2zBxdgR0Mcy0c9GWikCLb7b5mOONopy8bR2kzOQFCkD
+g2EipqUCAwEAAQKCAQBTyLYF+yJXVLbo5zmr6V5RD5ypq7ChsJoM+T1r+jafHQLx
+VjkjGR6lxCLPSY33L6KsCsKZRvgE5dCCcul3pVnAIa0xtJCGON4qvtftU8CjMwWv
+vkd0uHgayCWZIUZi2DH+0GARooPxbIFPGpkjoVdjbOOMU5qasQ1lOXhtSat3COXY
+Rg7F9tb2+GkAVw6bHRzjczx1mWTgN7H95pN/gTUTDvvoCS679UNipbpx1WwctffH
+u4mLi+l1CelorKkKOOxUv1Sg55hHrCEQpZyFy6XDycgKsklhvVfMtHTPOVWOtGzd
+/dqn2DtsvvHm5GPbb1jxfQPFidA7BRaOTsWR3BrRAoGBAMtwKEiNFAeD6rs3eQ67
+WjfvZa/YjvMVd5FGGGe6Hx5bY5tXkoE8ZH7Nckr0gIRjyBk1YGajtjwPxz0YFyTU
+n0zXXWSlz3RY+1CwyGc/J9Bn7miTN2nxclRn+7PWzfr8HJHzCnOZ7YsUPXZSDK/z
+yDg00+QDbA4qZOM+PCbHbGwrAoGAeF5dzh3vnkEWLnmRU9Vihz4ifRSRpTYlWa5N
+Ta6nJVIFA24+UlMGNqj+Sy3+xIdRRn3Eq7gwNd9vu91dj+A2ZxJwyNekmzuBUcLf
+UqqeTpvO6RuK2QG9GT+EmE5Wz3GK6YOtGepFDBEHlMZG6ha1nbewQxIca+7wtaNY
++k6/QG8CgYAq5+a3FnoI87uH7LUtdDoc3fK2WZgckIR9MSlohwqVHnUtiBSwCQqw
+66eVQ2fvhBPprSY9v31pwXIl4nTPIcDPNgTOe2H7ieDHLeG2VM2S2LiheZsQTwnr
+31ponX8n1hA4f+fOZcKBuK0VzUw7t9CcehfOWSJrAmnwu2l4TEsDrQKBgCQzxaTb
+jhkb3E8IEzSSpjqk7nyONivpeBxb9zYZBH6OB6H7g1UBUYoZE7qKz+hOBpzb8M3w
+7NcXJ6TqNFy0g8hGXJObgA+MOx3bLY3QcSKVbAriVMVl53jziK7CSQvFS5FmICb+
+NdwmNxCA/g0j3WXdPG8/wDqaN915jqZiDtWTAoGBAJIy219CzaEcsS/pRgQa7OtS
+HOGr0fv+wlOPx28UUHe2iLZdvsdg/qO7gCStgGMOlo22jcLvsrm9K0r8xJrDEYnf
+ewC5/Qr20BJMbAWIJLOT9wv230NkqO4X24DgyTpRgn6cE7CNiOrKtS0MjWOfkcrR
+opRLTvropJlC3eLaI6JN
+-----END PRIVATE KEY-----
+";
+    const RSA_2047_N: &str = "X6eQnFdyFosq_3lwIPqj-2ySmjKHYeKebjiF4hngnDW9GSzf8zza1mUustUWEcrHPIzYuEdJ0KWi9KbzL3-j-le3u8si_mIGMC-tJBqI2iUt6SYU4mfXagPj9q7sBXzopR-fZVD1Qs6eEKSUMbWFHTh9aPCi5LSiAFoJxRtQZrPirnMjzBgPFAHk0zOWUxGD5zID5sj7u_ZVh2OOcQTctwGLfCXNrblx6G7BBDmG-Fg0AMrr92wqsRks4Vx0BOKBHeRpG3e0h3dyZfwpNG2_U5Ug0z-4SqRCZ7Y_bMHF2BHQxzLRz0ZaKQItvtvmY442inLxtHaTM5AUKQODYSKmpQ";
 
     #[derive(Clone, Copy)]
     enum Signer {
@@ -882,6 +949,8 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
         Ec,
         Ed,
         Secret,
+        Rsa1024,
+        Rsa2047,
     }
 
     fn b64(value: &Value) -> String {
@@ -895,11 +964,16 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
             Signer::Ec => EncodingKey::from_ec_pem(EC_PEM.as_bytes()),
             Signer::Ed => EncodingKey::from_ed_pem(ED_PEM.as_bytes()),
             Signer::Secret => Ok(EncodingKey::from_secret(b"shared-secret")),
+            Signer::Rsa1024 => EncodingKey::from_rsa_pem(RSA_1024_PEM.as_bytes()),
+            Signer::Rsa2047 => EncodingKey::from_rsa_pem(RSA_2047_PEM.as_bytes()),
         }
         .unwrap();
         let input = format!("{}.{}", b64(&header), b64(&claims));
-        let signature = sign(input.as_bytes(), &key, algorithm).unwrap();
-        format!("{input}.{signature}")
+        let signature = (rust_crypto::DEFAULT_PROVIDER.signer_factory)(&algorithm, &key)
+            .unwrap()
+            .try_sign(input.as_bytes())
+            .unwrap();
+        format!("{input}.{}", URL_SAFE_NO_PAD.encode(signature))
     }
 
     fn token(algorithm: Algorithm, signer: Signer, kid: Option<&str>, claims: Value) -> String {
@@ -1037,6 +1111,35 @@ MC4CAQAwBQYDK2VwBCIEIEjkuYWkj6THWjxVRFL36QT1XS2a1KjdV89JMvLev7r2
         let expected = match rejection {
             None => Ok(Claims(object(claims))),
             Some(error) => Err(VerifyDenial::Invalid(error).into()),
+        };
+        assert_eq!(verified, expected);
+    }
+
+    #[rstest]
+    #[case::rsa_1024(Signer::Rsa1024, RSA_1024_N, 1024)]
+    #[case::rsa_2047(Signer::Rsa2047, RSA_2047_N, 2047)]
+    #[tokio::test]
+    async fn rsa_keys_under_2048_bits_are_refused_only_in_the_fips_build(
+        settings: JwtSettings,
+        #[case] signer: Signer,
+        #[case] n: &str,
+        #[case] bits: usize,
+    ) {
+        let claims = json!({"sub": "user"});
+        let host = host(&[(JWKS, jwks(&[rsa_jwk("k", n)]))]);
+
+        let verified = verify(
+            &host,
+            &token(Algorithm::RS256, signer, Some("k"), claims.clone()),
+            &settings,
+            AT,
+        )
+        .await;
+
+        let expected = if cfg!(feature = "fips") {
+            Err(VerifyDenial::Invalid(KeyError::RsaKeyTooShort { bits }.into()).into())
+        } else {
+            Ok(Claims(object(claims)))
         };
         assert_eq!(verified, expected);
     }

@@ -176,6 +176,8 @@ pub enum KeyError {
     Malformed { reason: String },
     #[error("{algorithm} keys cannot be verified by the gateway")]
     Unverifiable { algorithm: &'static str },
+    #[error("RSA key is {bits} bits, below the 2048 bits FIPS mode requires")]
+    RsaKeyTooShort { bits: usize },
 }
 
 /// The URLs a kid was looked up in, as `NoMatchingJWTPublicKeyError` names them.
