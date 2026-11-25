@@ -590,6 +590,35 @@ def _filter_embed_params(optional_params: Mapping[str, object]) -> dict:
     }
 
 
+def _embed_content_request(
+    element: GeminiEmbeddingElement | list[str] | list[GeminiEmbeddingElement],
+    *,
+    model: str,
+    input_params: Mapping[str, object],
+    resolved_files: Mapping[str, Mapping[str, str]] | None,
+    drop_params: bool,
+) -> Mapping[str, object]:
+    audio_track_extraction: Final = audio_track_extraction_enabled(input_params)
+    if isinstance(element, list) and not element:
+        raise ValueError("Nested input list must not be empty")
+    elements: Final[Sequence[GeminiEmbeddingElement]] = element if isinstance(element, list) else [element]
+    parts: Final = [
+        _build_part_for_input(
+            sub,
+            resolved_files=resolved_files,
+            drop_params=drop_params,
+            audio_track_extraction=audio_track_extraction,
+        )
+        for sub in elements
+    ]
+    request: Final = EmbedContentRequest(
+        model=model,
+        content=ContentType(parts=parts),
+        **_filter_embed_params(input_params),
+    )
+    return _STRING_KEYED_FIELDS.validate_python(request)
+
+
 def transform_openai_input_gemini_content(
     input: GeminiEmbeddingInput,
     model: str,
@@ -624,38 +653,16 @@ def transform_openai_input_gemini_content(
             for _, item in zip(input_list, itertools.chain(extra_requests, itertools.repeat(None)))
         ],
     )
-    requests: Final[list[Mapping[str, object]]] = []
-
-    for element, input_extra_body in zip(input_list, input_extra_bodies):
-        input_params = {**optional_params, "extra_body": input_extra_body}
-        audio_track_extraction = audio_track_extraction_enabled(input_params)
-        if isinstance(element, list):
-            if not element:
-                raise ValueError("Nested input list must not be empty")
-            parts = [
-                _build_part_for_input(
-                    sub,
-                    resolved_files=resolved_files,
-                    drop_params=drop_params,
-                    audio_track_extraction=audio_track_extraction,
-                )
-                for sub in element
-            ]
-        else:
-            parts = [
-                _build_part_for_input(
-                    element,
-                    resolved_files=resolved_files,
-                    drop_params=drop_params,
-                    audio_track_extraction=audio_track_extraction,
-                )
-            ]
-        request = EmbedContentRequest(
+    requests: Final = [
+        _embed_content_request(
+            element,
             model=gemini_model_name,
-            content=ContentType(parts=parts),
-            **_filter_embed_params(input_params),
+            input_params={**optional_params, "extra_body": input_extra_body},
+            resolved_files=resolved_files,
+            drop_params=drop_params,
         )
-        requests.append(_STRING_KEYED_FIELDS.validate_python(request))
+        for element, input_extra_body in zip(input_list, input_extra_bodies)
+    ]
 
     return VertexAIBatchEmbeddingsRequestBody(
         requests=cast(  # cast-ok: extra_body carries raw Gemini fields the TypedDict does not list

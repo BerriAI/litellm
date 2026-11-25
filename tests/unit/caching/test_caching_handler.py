@@ -2800,7 +2800,9 @@ async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_ord
     assert [item["embedding"] for item in repeat.data] == [[float(len(text))] for text in mixed_input]
 
 
-def _serve_gemini_embeddings_echoing_output_dimensionality(monkeypatch, sent_bodies: list[dict]) -> None:
+def _serve_gemini_embeddings_echoing_output_dimensionality(
+    monkeypatch: pytest.MonkeyPatch, sent_bodies: list[dict[str, object]]
+) -> None:
     """Gemini answers each request with that request's ``outputDimensionality`` as its embedding."""
     import httpx
 
@@ -2822,7 +2824,9 @@ def _serve_gemini_embeddings_echoing_output_dimensionality(monkeypatch, sent_bod
 
 
 @pytest.mark.asyncio
-async def test_a_cached_embedding_is_not_served_to_the_same_input_under_another_extra_body_item(monkeypatch):
+async def test_a_cached_embedding_is_not_served_to_the_same_input_under_another_extra_body_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import litellm
     from litellm.caching.caching import Cache
 
@@ -2830,7 +2834,7 @@ async def test_a_cached_embedding_is_not_served_to_the_same_input_under_another_
     _serve_gemini_embeddings_echoing_output_dimensionality(monkeypatch, [])
     extra_body = {"requests": [{"outputDimensionality": 256}, {"outputDimensionality": 128}]}
 
-    async def embed(input):
+    async def embed(input: list[str]) -> litellm.EmbeddingResponse:
         response = await litellm.aembedding(
             model="gemini/gemini-embedding-001", input=input, extra_body=extra_body, api_key="k"
         )
@@ -2848,19 +2852,21 @@ async def test_a_cached_embedding_is_not_served_to_the_same_input_under_another_
 
 
 @pytest.mark.asyncio
-async def test_a_partial_embedding_cache_hit_sends_each_missed_input_with_its_own_extra_body_item(monkeypatch):
+async def test_a_partial_embedding_cache_hit_sends_each_missed_input_with_its_own_extra_body_item(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import litellm
     from litellm.caching.caching import Cache
 
     monkeypatch.setattr(litellm, "cache", Cache(type="local"))
-    sent_bodies: list[dict] = []
+    sent_bodies: list[dict[str, object]] = []
     _serve_gemini_embeddings_echoing_output_dimensionality(monkeypatch, sent_bodies)
     extra_body = {
         "requests": [{"outputDimensionality": 1}, {"outputDimensionality": 2}, {"outputDimensionality": 3}],
         "taskType": "shared",
     }
 
-    async def embed(input):
+    async def embed(input: list[str]) -> litellm.EmbeddingResponse:
         response = await litellm.aembedding(
             model="gemini/gemini-embedding-001", input=input, extra_body=extra_body, api_key="k"
         )
@@ -2881,8 +2887,8 @@ async def test_a_partial_embedding_cache_hit_sends_each_missed_input_with_its_ow
 
 @pytest.mark.asyncio
 async def test_a_partial_embedding_cache_hit_leaves_extra_body_whole_for_a_provider_without_per_input_items(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import litellm
     from litellm import CustomLLM
     from litellm.caching.caching import Cache
