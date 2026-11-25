@@ -1,6 +1,7 @@
 import asyncio
 import io
 import json
+import os
 import subprocess
 from collections.abc import Mapping
 from datetime import timedelta
@@ -124,7 +125,7 @@ async def test_an_engine_that_stalls_times_out(stalls_at: Literal["publishing", 
     async def connect(_: str) -> None:
         await never
 
-    assert await _connect_when_listening(ready, connect, timedelta(milliseconds=10)) == "timed out"
+    assert isinstance(await _connect_when_listening(ready, connect, timedelta(milliseconds=10)), asyncio.TimeoutError)
 
 
 class _EngineTakingAnHttpConfig:
@@ -168,3 +169,28 @@ async def test_spawn_hands_the_engine_its_datasource_override_and_reports_an_exi
     assert isinstance(process, _EngineThatExitsWithoutListening)
     assert process.argv[:3] == (str(Path("query-engine").absolute()), "-p", "0")
     assert json.loads(process.environment["OVERWRITE_DATASOURCES"]) == [override]
+
+
+class _EngineThatNeverListens(subprocess.Popen[bytes]):
+    def __init__(self, argv: tuple[str, ...], environment: Mapping[str, str]) -> None:
+        read_end, self.write_end = os.pipe()
+        self.stdout = os.fdopen(read_end, "rb")
+        self.returncode = 0
+
+
+@pytest.mark.asyncio
+async def test_spawn_reports_an_engine_that_never_listens_as_a_timeout_caused_by_the_wait() -> None:
+    client: Final = Prisma(datasource={"url": "postgresql://unused@localhost/unused"})
+    initialize_query_engine(client, launch=_EngineThatNeverListens)
+    engine: Final = client._engine  # pyright: ignore[reportPrivateUsage]  # the engine initialize_query_engine installed
+    assert isinstance(engine, QueryEngine)
+
+    try:
+        with pytest.raises(EngineConnectionError, match="Timed out waiting") as raised:
+            await engine.spawn(Path("query-engine"), timedelta(milliseconds=50), None)
+    finally:
+        process: Final = engine.process
+        assert isinstance(process, _EngineThatNeverListens)
+        os.close(process.write_end)
+
+    assert isinstance(raised.value.__cause__, asyncio.TimeoutError)

@@ -67,7 +67,7 @@ def _forward_output(stream: BinaryIO, loop: asyncio.AbstractEventLoop, ready: as
 
 async def _connect_when_listening(
     ready: asyncio.Future[str | None], connect: Callable[[str], Awaitable[None]], timeout: timedelta
-) -> Literal["connected", "exited", "timed out"]:
+) -> Literal["connected", "exited"] | asyncio.TimeoutError:
     async def attempt() -> Literal["connected", "exited"]:
         address: Final = await ready
         if address is None:
@@ -77,8 +77,8 @@ async def _connect_when_listening(
 
     try:
         return await asyncio.wait_for(attempt(), timeout.total_seconds())
-    except asyncio.TimeoutError:
-        return "timed out"
+    except asyncio.TimeoutError as timed_out:
+        return timed_out
 
 
 def _engine_http_options(engine: type[object], http_config: Mapping[str, object]) -> Mapping[str, object]:
@@ -163,8 +163,10 @@ def initialize_query_engine(
                     return
                 case "exited":
                     raise errors.EngineConnectionError("Query engine exited before publishing its listening address")
-                case "timed out":
-                    raise errors.EngineConnectionError("Timed out waiting for the query engine's listening address")
+                case asyncio.TimeoutError() as timed_out:
+                    raise errors.EngineConnectionError(
+                        "Timed out waiting for the query engine's listening address"
+                    ) from timed_out
 
     client._engine = PortOwningQueryEngine(  # pyright: ignore[reportPrivateUsage]  # Prisma exposes engine injection only through this setter  # rebind-ok: install the lifecycle-owned transport
         dml_path=PACKAGED_SCHEMA_PATH,
