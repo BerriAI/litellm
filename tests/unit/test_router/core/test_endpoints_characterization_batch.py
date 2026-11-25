@@ -15,6 +15,7 @@ from typing import Final
 import pytest
 
 import litellm
+from litellm.router_rust.invoke.endpoints import _covered_targets
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.router_core import RouterCore
 from litellm.types.utils import LiteLLMBatch, ModelResponse
@@ -239,6 +240,27 @@ async def test_acreate_file_after_an_order_fallback_names_every_target_downstrea
     assert response._hidden_params["target_model_names_by_deployment"] == {
         "wild-high": ("litellm_proxy/gpt-a", "litellm_proxy/claude-b")
     }
+
+
+@pytest.mark.parametrize(
+    "chat_route,names_on_proxy_copies,covered",
+    [
+        ({"wild-high": "claude-b"}, {"wild-high": ("litellm_proxy/gpt-a",)}, ()),
+        (
+            {"wild-high": "claude-b"},
+            {"wild-high": ("litellm_proxy/gpt-a", "litellm_proxy/claude-b")},
+            ("litellm_proxy/claude-b",),
+        ),
+        ({"direct": "claude-b"}, {"wild-high": ("litellm_proxy/gpt-a",)}, ("litellm_proxy/claude-b",)),
+        ({"direct": "claude-b", "wild-high": "claude-b"}, {"wild-high": ("litellm_proxy/gpt-a",)}, ()),
+        ({"wild-low": "claude-b"}, {"wild-high": ("litellm_proxy/gpt-a", "litellm_proxy/claude-b")}, ()),
+    ],
+)
+def test_a_target_counts_as_covered_only_when_every_upload_on_its_chat_route_serves_it(
+    chat_route: Mapping[str, str], names_on_proxy_copies: Mapping[str, tuple[str, ...]], covered: tuple[str, ...]
+):
+    uploaded_to: Final = frozenset({"wild-high", "direct"})
+    assert _covered_targets({"litellm_proxy/claude-b": chat_route}, uploaded_to, names_on_proxy_copies) == covered
 
 
 @pytest.mark.parametrize(

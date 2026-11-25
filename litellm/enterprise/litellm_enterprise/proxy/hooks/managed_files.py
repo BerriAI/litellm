@@ -416,7 +416,7 @@ class _ProviderUpload:
     model_id: str
     provider_file_id: str
     upload_call_id: str | None = None
-    served_target_count: int = 0
+    served_targets: frozenset[str] = frozenset()
 
 
 def _file_hidden_params(file_object: OpenAIFileObject) -> dict[str, object]:
@@ -450,20 +450,34 @@ def _provider_uploads(file_object: OpenAIFileObject) -> tuple[_ProviderUpload, .
             model_id=model_id,
             provider_file_id=provider_file_id,
             upload_call_id=upload_call_id if isinstance(upload_call_id, str) else None,
-            served_target_count=len(served_targets.get(model_id, ())),
+            served_targets=frozenset(served_targets.get(model_id, ())),
         )
         for model_id, provider_file_id in model_file_id_mapping.items()
     )
 
 
 def _keep_rank(uploads: Sequence[_ProviderUpload], index: int) -> tuple[int, int]:
-    served_target_count: Final = uploads[index].served_target_count
+    served_target_count: Final = len(uploads[index].served_targets)
     return served_target_count, index if served_target_count else -index
 
 
+def _repeats_an_earlier_upload(uploads: Sequence[_ProviderUpload], index: int) -> bool:
+    upload: Final = uploads[index]
+    return bool(upload.served_targets) and any(
+        earlier.model_id == upload.model_id and upload.served_targets <= earlier.served_targets
+        for earlier in uploads[:index]
+    )
+
+
 def _is_kept_upload(uploads: Sequence[_ProviderUpload], index: int) -> bool:
-    same_deployment: Final = tuple(i for i, upload in enumerate(uploads) if upload.model_id == uploads[index].model_id)
-    return max(same_deployment, key=lambda i: _keep_rank(uploads, i)) == index
+    if _repeats_an_earlier_upload(uploads, index):
+        return False
+    candidates: Final = tuple(
+        i
+        for i, upload in enumerate(uploads)
+        if upload.model_id == uploads[index].model_id and not _repeats_an_earlier_upload(uploads, i)
+    )
+    return max(candidates, key=lambda i: _keep_rank(uploads, i)) == index
 
 
 def _upload_from_trailing_id_fields(decoded_unified_file_id: str) -> _ProviderUpload:
@@ -2206,7 +2220,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     ) -> List[OpenAIFileObject]:
         if llm_router is None:
             raise Exception("LLM Router not initialized. Ensure models added to proxy.")
-        responses: List[OpenAIFileObject] = []
+        responses: list[OpenAIFileObject] = []
         for model in target_model_names_list:
             if model in _targets_covered_by(responses):
                 continue

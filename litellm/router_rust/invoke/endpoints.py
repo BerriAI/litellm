@@ -727,9 +727,21 @@ def _deployment_id(deployment: Mapping[str, object]) -> str:
 
 
 def _covered_targets(
-    names_by_target: Mapping[str, Mapping[str, str]], deployment_ids: frozenset[str]
+    names_by_target: Mapping[str, Mapping[str, str]],
+    deployment_ids: frozenset[str],
+    targets_by_proxy_deployment: Mapping[str, tuple[str, ...]],
 ) -> tuple[str, ...]:
-    return tuple(target for target, served in names_by_target.items() if served and served.keys() <= deployment_ids)
+    return tuple(
+        target
+        for target, served in names_by_target.items()
+        if served
+        and served.keys() <= deployment_ids
+        and all(_copy_names_target(target, targets_by_proxy_deployment.get(deployment_id)) for deployment_id in served)
+    )
+
+
+def _copy_names_target(target: str, served_targets: tuple[str, ...] | None) -> bool:
+    return served_targets is None or target in served_targets
 
 
 def _served_targets(
@@ -2534,16 +2546,19 @@ class RustEndpoints:
         hidden: Final = get_hidden_params(returned)
         if hidden is not None:
             hidden["model_file_id_mapping"] = mapping
-            hidden[_COVERED_TARGET_MODEL_NAMES_KEY] = _covered_targets(
-                routing.own, frozenset(_deployment_id(as_dict(d)) for d in deployments)
-            )
-            hidden[_TARGET_MODEL_NAMES_BY_DEPLOYMENT_KEY] = {
+            targets_by_proxy_deployment: Final = {
                 _deployment_id(as_dict(d)): _served_targets(
                     _deployment_id(as_dict(d)), ordered_targets, requested, routing.at_reached_order
                 )
                 for d in deployments
                 if self._is_litellm_proxy(d)
             }
+            hidden[_COVERED_TARGET_MODEL_NAMES_KEY] = _covered_targets(
+                routing.own,
+                frozenset(_deployment_id(as_dict(d)) for d in deployments),
+                targets_by_proxy_deployment,
+            )
+            hidden[_TARGET_MODEL_NAMES_BY_DEPLOYMENT_KEY] = targets_by_proxy_deployment
         return returned
 
     def _stripped_model_and_provider(self, params: Mapping[str, object]) -> tuple[str, object]:

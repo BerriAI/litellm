@@ -2597,6 +2597,30 @@ async def test_a_later_litellm_proxy_upload_serving_at_least_as_many_targets_is_
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "later_upload_serves",
+    [pytest.param(("gpt-a", "gpt-b"), id="same-targets"), pytest.param(("gpt-b",), id="fewer-targets")],
+)
+async def test_a_later_litellm_proxy_upload_serving_no_target_the_first_misses_is_deleted_and_the_first_kept(
+    later_upload_serves: tuple[str, ...],
+):
+    router: Final = _FakeFilesRouter(
+        {"gpt-a": ("proxy-wildcard-dep",), "gpt-b": ("proxy-wildcard-dep",)},
+        provider="litellm_proxy",
+        served_targets_by_model={"gpt-a": ("gpt-a", "gpt-b"), "gpt-b": later_upload_serves},
+    )
+    managed_files, mock_prisma = _make_real_managed_files_instance()
+
+    response: Final = await _upload(managed_files, router, ["gpt-a", "gpt-b"])
+    await _eventually(lambda: len(router.deletes) == 1)
+    stored: Final = mock_prisma.db.litellm_managedfiletable.upsert.await_args.kwargs["data"]["create"]
+
+    assert json.loads(stored["model_mappings"]) == {"proxy-wildcard-dep": "file-upload-1"}
+    assert [delete[:2] for delete in router.deletes] == [("proxy-wildcard-dep", "file-upload-2")]
+    assert await _delete_managed_file(managed_files, mock_prisma, router, response.id) == ("file-upload-1",)
+
+
 async def _delete_managed_file(
     managed_files: "PROXY_LiteLLMManagedFiles", mock_prisma: MagicMock, router: _FakeFilesRouter, file_id: str
 ) -> tuple[str, ...]:
