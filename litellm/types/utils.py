@@ -5048,6 +5048,11 @@ TokenCountMessagesFormat: TypeAlias = Literal["openai", "anthropic"]
 
 
 @dataclass(frozen=True, slots=True)
+class FailureLoggedCost:
+    cost: float
+
+
+@dataclass(frozen=True, slots=True)
 class CountContextManagement:
     spec: JsonValue
     drop_invalid_edits: bool
