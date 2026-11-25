@@ -64525,6 +64525,7 @@
         "supports_tool_choice": true,
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
+        "supports_sampling_params": false,
         "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-daybreak-blue-56-sol.html",
         "supports_web_search": true
     },

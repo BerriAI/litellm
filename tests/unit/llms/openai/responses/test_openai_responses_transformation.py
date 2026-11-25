@@ -23,6 +23,7 @@ from litellm.llms.bedrock_mantle.responses.transformation import BedrockMantleRe
 from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
 from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.perplexity.responses.transformation import PerplexityResponsesConfig
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.responses.utils import ResponsesAPIRequestUtils
@@ -5440,3 +5441,154 @@ def test_a_system_first_openai_compatible_deployment_sends_sanitized_tools_besid
     )
 
     assert (request["instructions"], request["tools"]) == ("Answer in one word.\n\nReply in French.", [lookup_capital])
+
+
+_NO_SAMPLING_ROWS: Final = (
+    pytest.param(OpenAIResponsesAPIConfig, "sampling-test-model", "sampling-test-model", id="openai"),
+    pytest.param(
+        BedrockMantleResponsesAPIConfig,
+        "openai.sampling-test-model",
+        "bedrock_mantle/openai.sampling-test-model",
+        id="bedrock_mantle",
+    ),
+    pytest.param(
+        BedrockMantleResponsesAPIConfig,
+        "us-east-2/openai.sampling-test-model",
+        "bedrock_mantle/openai.sampling-test-model",
+        id="bedrock_mantle-region-prefix",
+    ),
+    pytest.param(
+        BedrockMantleResponsesAPIConfig,
+        "us-east-2/openai.sampling-test-model",
+        "bedrock_mantle/us-east-2/openai.sampling-test-model",
+        id="bedrock_mantle-regional-row",
+    ),
+)
+_SAMPLED_REQUEST: Final = {"temperature": 0.0, "top_p": 0.9, "reasoning": {"effort": "medium"}, "stream": True}
+_NO_SAMPLING: Final = {"supports_sampling_params": False}
+
+
+def _responses_row(row_key: str, flags: Mapping[str, bool]) -> dict[str, object]:
+    provider: Final = "bedrock_mantle" if row_key.startswith("bedrock_mantle/") else "openai"
+    return {"litellm_provider": provider, "mode": "responses", "supports_reasoning": True, **flags}
+
+
+@pytest.mark.parametrize("config, model, row_key", _NO_SAMPLING_ROWS)
+def test_a_row_without_sampling_support_drops_temperature_and_top_p_and_keeps_the_rest(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    config: type[OpenAIResponsesAPIConfig],
+    model: str,
+    row_key: str,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, row_key, _responses_row(row_key, _NO_SAMPLING))
+
+    mapped: Final = config().map_openai_params(
+        response_api_optional_params=copy.deepcopy(_SAMPLED_REQUEST), model=model, drop_params=True
+    )
+
+    assert mapped == {"reasoning": {"effort": "medium"}, "stream": True}, mapped
+
+
+@pytest.mark.parametrize("sent", ["temperature", "top_p"])
+@pytest.mark.parametrize("config, model, row_key", _NO_SAMPLING_ROWS)
+def test_a_row_without_sampling_support_refuses_each_sampling_param_without_drop_params(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    config: type[OpenAIResponsesAPIConfig],
+    model: str,
+    row_key: str,
+    sent: str,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, row_key, _responses_row(row_key, _NO_SAMPLING))
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=f"support {sent}: .*supports_sampling_params: false"):
+        config().map_openai_params(response_api_optional_params={sent: 0.5}, model=model, drop_params=False)
+
+
+@pytest.mark.parametrize("config, model, row_key", _NO_SAMPLING_ROWS)
+def test_a_row_without_sampling_support_drops_default_sampling_values_without_drop_params(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    config: type[OpenAIResponsesAPIConfig],
+    model: str,
+    row_key: str,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, row_key, _responses_row(row_key, _NO_SAMPLING))
+
+    mapped: Final = config().map_openai_params(
+        response_api_optional_params={"temperature": 1, "top_p": 1, "stream": True}, model=model, drop_params=False
+    )
+
+    assert mapped == {"stream": True}, mapped
+
+
+def test_global_drop_params_drops_sampling_for_a_row_without_sampling_support(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, "sampling-test-model", _responses_row("sampling-test-model", _NO_SAMPLING))
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    mapped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+        response_api_optional_params={"temperature": 0.0, "top_p": 0.9, "stream": True},
+        model="sampling-test-model",
+        drop_params=False,
+    )
+
+    assert mapped == {"stream": True}, mapped
+
+
+@pytest.mark.parametrize("config, model, row_key", _NO_SAMPLING_ROWS)
+def test_a_row_without_the_sampling_flag_forwards_temperature_and_top_p(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    config: type[OpenAIResponsesAPIConfig],
+    model: str,
+    row_key: str,
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, row_key, _responses_row(row_key, {}))
+
+    mapped: Final = config().map_openai_params(
+        response_api_optional_params=copy.deepcopy(_SAMPLED_REQUEST), model=model, drop_params=True
+    )
+
+    assert mapped == _SAMPLED_REQUEST, mapped
+
+
+@pytest.mark.parametrize(
+    "config, row_key, row",
+    [
+        pytest.param(
+            OpenAIResponsesAPIConfig,
+            "sampling-test-model",
+            {"litellm_provider": "anthropic", "mode": "responses", **_NO_SAMPLING},
+            id="same-name-row-of-another-provider",
+        ),
+        pytest.param(
+            OpenAIResponsesAPIConfig,
+            "sampling-test-model",
+            {"litellm_provider": "openai", "mode": "chat", **_NO_SAMPLING},
+            id="chat-mode-row",
+        ),
+        pytest.param(
+            PerplexityResponsesConfig,
+            "perplexity/sampling-test-model",
+            {"litellm_provider": "perplexity", "mode": "responses", **_NO_SAMPLING},
+            id="provider-that-does-not-read-the-flag",
+        ),
+    ],
+)
+def test_a_sampling_flag_on_a_row_this_route_does_not_own_is_ignored(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    config: type[OpenAIResponsesAPIConfig],
+    row_key: str,
+    row: dict[str, object],
+) -> None:
+    monkeypatch.setitem(litellm.model_cost, row_key, row)
+
+    mapped: Final = config().map_openai_params(
+        response_api_optional_params={"temperature": 0.0, "top_p": 0.9}, model="sampling-test-model", drop_params=False
+    )
+
+    assert mapped == {"temperature": 0.0, "top_p": 0.9}, mapped

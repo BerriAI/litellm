@@ -16,6 +16,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     deployment_prompt_cache_breakpoint_support,
     targets_openai_api,
 )
+from litellm.litellm_core_utils import model_cost_table
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     length_of,
@@ -398,6 +399,17 @@ def list_input_items_query_params(
     }
 
 
+def _declared_sampling_support(row: object, provider: str) -> bool | None:
+    """The flag only on a Responses-only row of this provider, since other rows' paths give it their own meaning."""
+    match as_str_mapping(row):
+        case {"supports_sampling_params": bool(declared), "litellm_provider": str(owner), "mode": "responses"} if (
+            owner == provider
+        ):
+            return declared
+        case _:
+            return None
+
+
 class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     error_exception_class: ClassVar[type[BaseLLMException]] = BaseLLMException
 
@@ -426,6 +438,36 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     @staticmethod
     def _model_map_lookup_name(model: str) -> str:
         return model
+
+    def _model_map_row_keys(self, model: str) -> tuple[str, ...]:
+        return (model,) if self.custom_llm_provider == LlmProviders.OPENAI else ()
+
+    def _refused_sampling_params(self, params: Mapping[str, object], model: str, drop_params: bool) -> frozenset[str]:
+        rows: Final = model_cost_table.published()
+        declared: Final = next(
+            (
+                flag
+                for key in self._model_map_row_keys(model)
+                if (flag := _declared_sampling_support(rows.get(key), self.custom_llm_provider)) is not None
+            ),
+            None,
+        )
+        if declared is not False:
+            return frozenset()
+        defaults: Final = frozenset(name for name in ("temperature", "top_p") if params.get(name) == 1)
+        sent: Final = tuple(name for name in ("temperature", "top_p") if params.get(name) not in (None, 1))
+        if not sent:
+            return defaults
+        if not drop_params:
+            raise litellm.UnsupportedParamsError(
+                status_code=400,
+                message=(
+                    f"{model} doesn't support {', '.join(sent)}: its model map entry sets "
+                    "`supports_sampling_params: false`. To drop unsupported params set `litellm.drop_params = True`"
+                ),
+            )
+        verbose_logger.warning("Responses API: dropping %s, which %s doesn't support.", list(sent), model)
+        return defaults | frozenset(sent)
 
     @staticmethod
     def _supports_reasoning_effort_none(model: str) -> bool:
@@ -562,10 +604,13 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             and response_api_optional_params["temperature"] not in (None, 1)
             and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
         )
+        refused_sampling: Final = self._refused_sampling_params(
+            response_api_optional_params, model, drop_params or litellm.drop_params
+        )
         params: Final = {
             key: value
             for key, value in response_api_optional_params.items()
-            if key != "temperature" or not drops_o_series_temperature
+            if key not in refused_sampling and (key != "temperature" or not drops_o_series_temperature)
         }
 
         if "max_output_tokens" in params:
