@@ -184,3 +184,86 @@ fn a_name_reaches_its_group_then_each_group_its_fallbacks_reach(
 fn a_name_that_is_no_model_group_reaches_nothing(#[case] settings: Value, #[case] name: &str) {
     assert_eq!(router(settings).reach(name), None);
 }
+
+#[rstest]
+#[case::no_fallbacks(json!({}), "claude", &[])]
+#[case::a_chain_of_fallbacks(
+    json!({"fallbacks": [{"claude": ["last"]}, {"last": ["backup"]}]}),
+    "claude",
+    &["backup", "last"]
+)]
+#[case::every_fallback_type(
+    json!({
+        "fallbacks": [{"claude": ["backup"]}],
+        "context_window_fallbacks": [{"claude": ["last"]}],
+        "content_policy_fallbacks": [{"claude": [{"model": "other", "temperature": 0}]}],
+    }),
+    "claude",
+    &["backup", "last", "other"]
+)]
+#[case::a_cycle_back_to_the_model(
+    json!({"fallbacks": [{"claude": ["backup"]}, {"backup": ["claude"]}]}),
+    "claude",
+    &["backup"]
+)]
+#[case::the_chain_of_every_group(json!({"fallbacks": [{"*": ["backup"]}]}), "other", &["backup"])]
+#[case::default_fallbacks_over_the_chain_of_every_group(
+    json!({"fallbacks": [{"*": ["last"]}], "default_fallbacks": ["backup"]}),
+    "other",
+    &["backup"]
+)]
+#[case::its_own_chain_over_default_fallbacks(
+    json!({"fallbacks": [{"claude": ["last"]}], "default_fallbacks": ["backup"]}),
+    "claude",
+    &["backup", "last"]
+)]
+#[case::an_alias_as_written(
+    json!({"fallbacks": [{"claude": ["spare"]}], "model_group_alias": {"spare": "backup"}}),
+    "claude",
+    &["spare"]
+)]
+fn fallback_model_names_follow_every_fallback_list_to_its_end(
+    #[case] settings: Value,
+    #[case] model: &str,
+    #[case] expected: &[&str],
+) {
+    let names = router(settings).fallback_model_names(model);
+
+    assert_eq!(
+        names.iter().map(String::as_str).collect::<Vec<_>>(),
+        expected
+    );
+}
+
+#[rstest]
+#[case::the_requested_group(json!({}), &["claude"], vec![vec!["claude"]])]
+#[case::an_alias_by_its_group(json!({"model_group_alias": {"spare": "backup"}}), &["spare"], vec![vec!["backup"]])]
+#[case::its_fallbacks(
+    json!({"fallbacks": [{"claude": ["spare"]}, {"backup": ["last"]}], "model_group_alias": {"spare": "backup"}}),
+    &["claude"],
+    vec![vec!["backup"], vec!["claude"], vec!["last"]]
+)]
+#[case::a_name_no_deployment_serves(json!({}), &["unknown"], vec![vec![]])]
+fn opt_in_groups_hold_every_group_a_request_can_reach(
+    #[case] settings: Value,
+    #[case] requested: &[&str],
+    #[case] expected: Vec<Vec<&str>>,
+) {
+    let requested = requested.iter().map(|name| (*name).to_owned()).collect();
+
+    let groups = router(settings).opt_in_groups(&requested, None);
+
+    assert_eq!(
+        groups
+            .iter()
+            .map(|group| group
+                .iter()
+                .map(|deployment| deployment.model_name.as_str())
+                .collect::<Vec<_>>())
+            .collect::<Vec<_>>(),
+        expected
+            .iter()
+            .map(|group| group.to_vec())
+            .collect::<Vec<_>>()
+    );
+}

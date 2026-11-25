@@ -236,6 +236,27 @@ impl Fallbacks {
             })
     }
 
+    /// `get_fallback_model_group` for one group on this list with `defaults` appended as a `"*"`
+    /// entry, as the Python router folds `default_fallbacks` into `fallbacks`. The last `"*"`
+    /// entry wins there, so `defaults` replace a `"*"` the list writes itself.
+    pub(crate) fn chain_with_defaults(
+        &self,
+        group: &str,
+        keys: &FallbackKeys,
+        defaults: &[String],
+    ) -> Option<Vec<FallbackTarget>> {
+        match self.lookup(group, keys) {
+            Some(Found {
+                targets,
+                generic: false,
+            }) => Some(targets),
+            _ if !defaults.is_empty() => {
+                Some(defaults.iter().cloned().map(FallbackTarget::Name).collect())
+            }
+            found => found.map(|found| found.targets),
+        }
+    }
+
     /// `get_fallback_model_group_for_lookup_groups`: the first lookup group with its own chain
     /// wins; `"*"` applies only after every group missed.
     pub fn lookup_groups(

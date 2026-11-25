@@ -13,17 +13,17 @@ use litellm_router_core::{Attempt, Op};
 use serde_json::{Map, Value};
 
 use crate::{
-    Error,
+    Checked, Error,
     error::ErrorFormat,
     hooks::CallType,
     model_restamp::ReportedModel,
     request::{InferenceBody, Upload},
     routing::{self, Host, Prompt, RouteAttempt},
-    serve::{self, Call, Endpoint},
+    serve::{self, Endpoint},
     stream_event::Counts,
 };
 
-pub(crate) async fn create<H: Host>(call: Call<H>, body: Result<InferenceBody, Error>) -> Response {
+pub(crate) async fn create<H: Host>(Checked { call, body }: Checked<H, InferenceBody>) -> Response {
     let (body, upload) = match body {
         Ok(InferenceBody { fields, upload }) => (Ok(fields), upload),
         Err(error) => (Err(error), None),

@@ -19,10 +19,14 @@ pub use precall::ContextWindows;
 pub use router::NativeRouterHost;
 pub use spend_log::RustSpendLogHost;
 
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use litellm_gateway_auth::Authenticated;
-use litellm_gateway_auth_core::{Caller, authz::Layer};
+use litellm_gateway_auth_core::{
+    Caller,
+    authz::Layer,
+    body::{self, Credentials},
+};
 use litellm_gateway_inference::routing::{Host, RouteAttempt};
 use tokio::sync::OnceCell;
 
@@ -63,6 +67,13 @@ impl Host for NativeHost {
         identity: &'a Authenticated<NativeRows>,
     ) -> impl Iterator<Item = Layer<'a>> {
         layers(identity)
+    }
+
+    async fn credentials(
+        &self,
+        names: &BTreeSet<String>,
+    ) -> Result<Credentials, litellm_gateway_auth_core::Error> {
+        body::credentials(&auth::NativeAuthHost::credential_store(), names).await
     }
 
     fn hooks(&self, identity: &Authenticated<NativeRows>) -> callbacks::Call {
