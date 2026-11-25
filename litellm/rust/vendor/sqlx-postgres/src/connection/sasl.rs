@@ -1,7 +1,6 @@
 use crate::connection::stream::PgStream;
 use crate::error::Error;
 use crate::message::{Authentication, AuthenticationSasl, SaslInitialResponse, SaslResponse};
-#[cfg(not(feature = "fips"))]
 use crate::rt;
 use crate::PgConnectOptions;
 #[cfg(not(feature = "fips"))]
@@ -251,16 +250,20 @@ fn gen_nonce() -> Result<String, Error> {
 async fn hi<'a>(s: &'a str, salt: &'a [u8], iter_count: u32) -> Result<[u8; 32], Error> {
     let iterations = std::num::NonZeroU32::new(iter_count)
         .ok_or_else(|| err_protocol!("SCRAM iteration count must be positive"))?;
-    let mut hi = [0u8; 32];
-    aws_lc_rs::pbkdf2::derive(
-        aws_lc_rs::pbkdf2::PBKDF2_HMAC_SHA256,
-        iterations,
-        salt,
-        s.as_bytes(),
-        &mut hi,
-    );
+    let (secret, salt) = (s.as_bytes().to_vec(), salt.to_vec());
 
-    Ok(hi)
+    Ok(rt::spawn_blocking(move || {
+        let mut hi = [0u8; 32];
+        aws_lc_rs::pbkdf2::derive(
+            aws_lc_rs::pbkdf2::PBKDF2_HMAC_SHA256,
+            iterations,
+            &salt,
+            &secret,
+            &mut hi,
+        );
+        hi
+    })
+    .await)
 }
 
 #[cfg(feature = "fips")]

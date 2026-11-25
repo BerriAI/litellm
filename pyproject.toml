@@ -417,6 +417,7 @@ cache-keys = [
     { file = "litellm/rust/Cargo.lock" },
     { file = "litellm/rust/Cargo.toml" },
     { file = "litellm/rust/crates/**/*" },
+    { file = "litellm/rust/vendor/**/*" },
     { file = "model_prices_and_context_window.json" },
 ]
 constraint-dependencies = [
