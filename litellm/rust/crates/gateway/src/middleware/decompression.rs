@@ -125,7 +125,7 @@ impl Budget {
     /// A body that is alone in flight always fits.
     fn hold(&self, already: u64, more: u64) -> bool {
         self.held
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |held| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |held| {
                 (held == already || held + more <= self.max_bytes).then_some(held + more)
             })
             .is_ok()

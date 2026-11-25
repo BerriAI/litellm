@@ -100,7 +100,7 @@ impl Admission {
 
     fn queue(&self) -> Option<Queued<'_>> {
         self.queued
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
                 (queued < self.settings.max_queued).then_some(queued + 1)
             })
             .ok()?;

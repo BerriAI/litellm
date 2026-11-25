@@ -18,7 +18,7 @@ struct DrainSlot;
 impl DrainSlot {
     fn claim(limit: usize) -> Option<Self> {
         DETACHED_DRAINS
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |running| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |running| {
                 (running < limit).then_some(running + 1)
             })
             .ok()
