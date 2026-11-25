@@ -1,6 +1,7 @@
 mod admission;
 pub mod authn;
 pub mod authz;
+pub mod body;
 mod caller;
 pub mod client_address;
 mod commit;
