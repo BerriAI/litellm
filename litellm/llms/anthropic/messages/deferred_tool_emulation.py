@@ -260,7 +260,7 @@ class DeferredToolEmulation:
     deferred: Mapping[str, Mapping[str, object]]
     dispatcher: str = DISPATCHER_NAME
     forced: str | None = None
-    loaded: frozenset[str] = frozenset()
+    restorable: frozenset[str] = frozenset()
 
     def tools(self, tools: Iterable[_Item]) -> tuple[_Item, ...]:
         dispatcher: Final = cast(  # cast-ok: the dispatcher is a tool like the others
@@ -315,7 +315,7 @@ class DeferredToolEmulation:
         return cast(_Result, self._restored(result))  # cast-ok: each branch hands back the shape it was given
 
     def _call_restoration(self) -> Dispatcher:
-        return Dispatcher(name=self.dispatcher, catalog=self.loaded if self.forced is None else (self.forced,))
+        return Dispatcher(name=self.dispatcher, catalog=self.restorable if self.forced is None else (self.forced,))
 
     def _restored(self, result: object) -> object:
         if inspect.isawaitable(result):
@@ -360,9 +360,10 @@ def deferred_tool_emulation(
         name for name in (tool.get("name") for tool in tool_mappings) if isinstance(name, str)
     )
     forced: Final = _forced_tool_name(tool_choice)
+    loaded: Final = frozenset(name for name in _loaded_tool_names(messages) if name in deferred)
     return DeferredToolEmulation(
         deferred=deferred,
         dispatcher=_unused_dispatcher_name(tool_names),
         forced=forced if isinstance(forced, str) and forced in deferred else None,
-        loaded=frozenset(name for name in _loaded_tool_names(messages) if name in deferred),
+        restorable=loaded | (tool_names - deferred.keys()),
     )

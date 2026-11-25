@@ -461,8 +461,9 @@ def tools_marked_for_a_tool_config_point(tools: object, points: object) -> tuple
     """Put the ``tool_config`` point's breakpoint on the last tool Anthropic caches.
 
     Anthropic caches tools as one prefix ending at the marked tool, so the last one carries
-    the mark, skipping tool-search tools whose transform drops cache markers. A client that
-    already marked a tool keeps its own breakpoint. Returns ``None`` when nothing is marked.
+    the mark, skipping tool-search tools whose transform drops cache markers and deferred tools,
+    which Anthropic refuses to mark. A client that already marked a tool keeps its own breakpoint.
+    Returns ``None`` when nothing is marked.
     """
     control: Final = _tool_config_point_control(points)
     tool_list: Final = validated_object_list(tools) or ()
@@ -472,7 +473,9 @@ def tools_marked_for_a_tool_config_point(tools: object, points: object) -> tuple
     cacheable: Final = tuple(
         (position, fields)
         for position, fields in enumerate(tool_fields)
-        if fields is not None and fields.get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+        if fields is not None
+        and fields.get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+        and fields.get("defer_loading") is not True
     )
     if not cacheable:
         return None

@@ -13,7 +13,7 @@ _GREP_TOOL: Final = {"name": "Grep", "input_schema": {"type": "object"}, "defer_
 _DELETE_TOOL: Final = {"name": "Delete", "input_schema": {"type": "object"}, "defer_loading": True}
 _TOOL_SEARCH: Final = {"name": "ToolSearch", "input_schema": {"type": "object"}}
 _EMULATE: Final = {"deferred_tools": "emulate"}
-_EMULATION: Final = DeferredToolEmulation(deferred={"Grep": _GREP_TOOL}, loaded=frozenset({"Grep"}))
+_EMULATION: Final = DeferredToolEmulation(deferred={"Grep": _GREP_TOOL}, restorable=frozenset({"Grep"}))
 
 
 def _tool_search_history(*loaded: str) -> list[dict[str, object]]:
@@ -164,6 +164,13 @@ def test_the_dispatcher_never_takes_the_name_of_a_tool_the_caller_sent() -> None
     assert len(sent_names) == len(set(sent_names))
     assert emulation.restored(own_call) == own_call
     assert emulation.restored(_dispatcher_response(dispatcher, "Grep"))["content"][0]["name"] == "Grep"
+
+
+def test_a_dispatcher_call_to_a_tool_the_request_did_not_defer_is_restored() -> None:
+    bash: Final = {"name": "Bash", "input_schema": {"type": "object"}}
+    emulation: Final = _emulation([_TOOL_SEARCH, bash, _GREP_TOOL], None, "Bash")
+
+    assert emulation.restored(_dispatcher_response("CallLoadedTool", "Bash"))["content"][0]["name"] == "Bash"
 
 
 def test_a_dispatcher_call_to_a_deferred_tool_tool_search_never_loaded_is_kept_as_sent() -> None:
