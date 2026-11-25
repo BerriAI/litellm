@@ -44,7 +44,9 @@ from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import (
 from litellm.llms.anthropic.chat.guardrail_translation.handler import AnthropicMessagesHandler
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
+    effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
+    scoped_structured_message_indices,
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token, run_aws_signing
 from litellm.llms.bedrock.guardrail_attachments import find_request_attachments
@@ -538,6 +540,34 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             block.text
             for block in chain.from_iterable(self.get_content_items_for_message(message) or () for message in messages)
         )
+
+    def _anthropic_texts_missing_from_messages(
+        self, data: Mapping[str, object], messages: Sequence[AllMessageValues]
+    ) -> tuple[str, ...]:
+        """Texts pre_call scans in a ``/v1/messages`` request that its raw ``messages`` do not carry, which are the
+        top-level ``system`` prompt and the ``tool_result`` blocks"""
+        try:
+            structured: Final = AnthropicMessagesHandler().get_structured_messages(dict(data)) or ()
+        except Exception as e:  # noqa: BLE001  # a request the translation cannot read is still scanned as before
+            verbose_proxy_logger.warning(
+                "Bedrock Guardrail %s: could not read the /v1/messages request as pre_call does (%s); "
+                "scanning its message texts only",
+                self.guardrail_name,
+                e,
+            )
+            return ()
+        scoped: Final = tuple(
+            structured[index]
+            for index in scoped_structured_message_indices(
+                structured,
+                scan_only_tool_results=effective_scan_only_tool_results_for_guardrail(self),
+                skip_system=effective_skip_system_message_for_guardrail(self),
+                skip_tool=effective_skip_tool_message_for_guardrail(self),
+            )
+            if structured[index]["role"] in ("system", "tool")
+        )
+        carried: Final = frozenset(self._message_texts(messages))
+        return tuple(text for text in self._message_texts(scoped) if text not in carried)
 
     def _build_content_item(self, block: QualifiedTextBlock) -> BedrockContentItem:
         """Build a Bedrock content item, attaching qualifiers only when present."""
@@ -2777,8 +2807,20 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             verbose_proxy_logger.debug("Bedrock AI: not running guardrail. No user-role messages")
             return
 
+        scanned_messages: Final = (
+            [
+                *filtered_messages,
+                *(
+                    ChatCompletionUserMessage(role="user", content=text)
+                    for text in self._anthropic_texts_missing_from_messages(data, filtered_messages)
+                ),
+            ]
+            if call_type == CallTypes.anthropic_messages.value
+            and self.experimental_use_latest_role_message_only is not True
+            else filtered_messages
+        )
         session_scan: Final = await self._scanned_only_new_texts(
-            texts=self._message_texts(filtered_messages),
+            texts=self._message_texts(scanned_messages),
             request_data=data,
             logging_event_type=event_type,
             log_when_nothing_new=True,
@@ -2804,7 +2846,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         # the endpoint handler returns the block response.
         bedrock_guardrail_response: Final = session_scan or await self.make_bedrock_api_request(
             source="INPUT",
-            messages=filtered_messages,
+            messages=scanned_messages,
             request_data=data,
             logging_event_type=event_type,
         )
@@ -2813,9 +2855,15 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 2. Update the messages with the guardrail response ##########
         #########################################################
-        updated_subset: Final = self._update_messages_with_updated_bedrock_guardrail_response(
-            messages=filtered_messages,
-            bedrock_guardrail_response=bedrock_guardrail_response,
+        own_texts: Final = self._message_texts(filtered_messages)
+        updated_subset: Final = (
+            filtered_messages
+            if tuple(self._extract_masked_texts_from_response(bedrock_guardrail_response)[: len(own_texts)])
+            == own_texts
+            else self._update_messages_with_updated_bedrock_guardrail_response(
+                messages=filtered_messages,
+                bedrock_guardrail_response=bedrock_guardrail_response,
+            )
         )
         data["messages"] = self._merge_filtered_messages(
             original_messages=filter_result.original_messages or new_messages,
