@@ -86,13 +86,11 @@ pub fn unix(at: SystemTime) -> f64 {
 }
 
 impl CallState {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(trace_id: String) -> Self {
         Self {
             call_type: None,
             call_id: None,
-            // A placeholder: every call gets a fresh trace. Up the stack, `record::scoped` takes it
-            // from the request's trace and session headers, as Python's `litellm_trace_id` is.
-            trace_id: uuid::Uuid::new_v4().to_string(),
+            trace_id,
             charged: Charged::default(),
             start: SystemTime::now(),
             api_call_start: None,
@@ -264,7 +262,7 @@ mod tests {
     #[case::held(false)]
     #[case::released(true)]
     fn the_model_and_the_stream_flag_outlast_the_body(#[case] released: bool) {
-        let mut entries = CallState::new();
+        let mut entries = CallState::new("trace-1".to_owned());
         entries.hold(body(true));
         entries
             .body_mut()
