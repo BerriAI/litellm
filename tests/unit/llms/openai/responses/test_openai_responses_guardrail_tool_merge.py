@@ -4,6 +4,7 @@ Responses API request tools they were flattened from
 """
 
 import copy
+from collections import Counter
 from collections.abc import Callable, Mapping
 from typing import Final
 
@@ -250,6 +251,40 @@ def test_merging_many_tools_reads_each_tool_a_bounded_number_of_times():
 
     assert list(merged) == original
     assert len(reads) <= 8 * tool_count
+
+
+@pytest.mark.parametrize(
+    ("same_named", "unique"),
+    [(400, 0), (32, 600)],
+    ids=["many_same_named_tools", "same_named_tools_among_many_unique_tools"],
+)
+def test_dropping_half_of_many_same_named_tools_reads_each_tool_a_bounded_number_of_times(
+    same_named: int, unique: int
+) -> None:
+    reads: Final[Counter[int]] = Counter()
+
+    class CountingTool(dict[str, object]):
+        def get(self, key: str, default: object = None) -> object:
+            reads[id(self)] += 1
+            return super().get(key, default)
+
+    original: Final = [
+        *(_function("search") for _ in range(same_named)),
+        *(_function(f"tool-{index}") for index in range(unique)),
+    ]
+    groups: Final = [[CountingTool(tool) for tool in group] for group in _groups(original)]
+    returned: Final = [
+        tool for index, tool in enumerate(_flat(_groups(original))) if index >= same_named or index % 2 == 0
+    ]
+
+    merged: Final = merge_guardrailed_tools(original, groups, returned)
+
+    assert merged is not None
+    assert [tool["name"] for tool in merged] == [
+        *(["search"] * ((same_named + 1) // 2)),
+        *(f"tool-{index}" for index in range(unique)),
+    ]
+    assert max(reads.values()) <= 8
 
 
 def test_edited_mcp_tool_is_rewritten():
