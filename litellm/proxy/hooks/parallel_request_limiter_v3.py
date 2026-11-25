@@ -76,6 +76,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     get_key_own_model_rate_limit,
     get_model_rate_limit_from_metadata,
+    team_models_counting_cached_tokens,
 )
 from litellm.proxy.common_utils.callback_utils import get_model_group_from_litellm_kwargs
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
@@ -1319,6 +1320,11 @@ class ParallelRequestLimiterHook(CustomLogger):
                         "user_api_key_model_max_budget": _METADATA.validate_python(
                             user_api_key_dict.model_max_budget or {}  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.model_max_budget is a bare dict
                         ),
+                        "user_api_key_team_metadata": {
+                            "model_tpm_limit_counts_cached_tokens": team_models_counting_cached_tokens(
+                                user_api_key_dict.team_metadata
+                            )
+                        },
                     }
                 },
                 "standard_logging_object": {
@@ -2568,6 +2574,14 @@ async def increment_reservation_aware_tokens(
     )
 
 
+def _team_counts_cached_tokens_from_request_metadata(
+    request_metadata: Mapping[str, object],
+    model: RateLimitedModel,
+) -> bool:
+    models: Final = team_models_counting_cached_tokens(request_metadata.get("user_api_key_team_metadata"))
+    return models.get(model.requested, models.get(model.group, False))
+
+
 def _settlement_resolved(
     limiter: ParallelRequestLimiterHook,
     kwargs: Mapping[str, object],
@@ -2605,6 +2619,9 @@ def _settlement_resolved(
                     {
                         "group": candidate.group,
                         "key_owns": _key_owns_model_tpm_limit_from_request_metadata(request_metadata, candidate),
+                        "counts_cached_tokens": _team_counts_cached_tokens_from_request_metadata(
+                            request_metadata, candidate
+                        ),
                     }
                     for candidate in _rate_limited_models(limiter, model)
                 ],
