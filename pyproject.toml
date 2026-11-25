@@ -56,6 +56,7 @@ Documentation = "https://docs.litellm.ai"
 [project.optional-dependencies]
 switchyard = ["nemo-switchyard==0.4.0a1"]
 proxy = [
+    "audioop-lts>=0.2.2,<1; python_version >= '3.13'",
     "sqlalchemy>=2.0.49,<2.1",
     "alembic>=1.18.4,<2.0",
     "psycopg>=3.2,<4.0",

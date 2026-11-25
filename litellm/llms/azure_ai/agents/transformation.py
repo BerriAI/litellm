@@ -132,7 +132,7 @@ class AzureAIAgentsConfig(BaseConfig):
         optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI params to Azure Agents params.
         """
@@ -250,7 +250,7 @@ class AzureAIAgentsConfig(BaseConfig):
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate and set up environment for Azure Foundry Agents requests.
 

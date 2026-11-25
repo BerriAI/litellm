@@ -110,7 +110,7 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
     def validate_environment(
         self, headers: dict[str, object], model: str, litellm_params: GenericLiteLLMParams | None
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Build auth headers for Volcengine Responses API.
         """

@@ -291,6 +291,9 @@ fn route_status(error: &InferenceError) -> StatusCode {
     if let Some((status, _)) = error.upstream_response() {
         return StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
     }
+    if error.timeout().is_some() {
+        return StatusCode::REQUEST_TIMEOUT;
+    }
     if error.is_missing_credential() {
         return StatusCode::UNAUTHORIZED;
     }

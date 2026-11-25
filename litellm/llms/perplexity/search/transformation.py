@@ -52,7 +52,7 @@ class PerplexitySearchConfig(BaseSearchConfig):
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and return headers.
         """

@@ -273,7 +273,7 @@ class BaseConfig(ABC):
         value: dict,
         is_response_format_supported: bool,
         enforce_tool_choice: bool = True,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Follow similar approach to anthropic - translate to a single tool call.
 
