@@ -1577,8 +1577,17 @@ class TestContextCachingEndpoints:
     )
     @pytest.mark.asyncio
     async def test_gemini_4_cache_control_never_calls_cached_contents(
-        self, custom_llm_provider, model, creates_cache, is_async
-    ):
+        self,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+        model: str,
+        creates_cache: bool,
+        is_async: bool,
+    ) -> None:
+        context_caching: Final = ContextCachingEndpoints(known_caches=KnownCachedContents())
+        listed: Final = MagicMock()
+        listed.json.return_value = {"cachedContents": []}
+        self.mock_client.get.return_value = listed
+        self.mock_async_client.get = AsyncMock(return_value=listed)
         created: Final = MagicMock()
         created.json.return_value = {"name": "cachedContents/created", "model": model}
         self.mock_client.post.return_value = created
@@ -1598,27 +1607,23 @@ class TestContextCachingEndpoints:
             "vertex_auth_header": "test_token",
         }
 
-        with (
-            patch.object(
-                self.context_caching,
-                "_get_token_and_url_context_caching",
-                return_value=("fake_token", "https://fake.url/cachedContents"),
-            ),
-            patch.object(self.context_caching, "check_cache", return_value=None),
-            patch.object(self.context_caching, "async_check_cache", new_callable=AsyncMock, return_value=None),
-        ):
-            result: Final = (
-                await self.context_caching.async_check_and_create_cache(client=self.mock_async_client, **call_args)
-                if is_async
-                else self.context_caching.check_and_create_cache(client=self.mock_client, **call_args)
-            )
+        result: Final = (
+            await context_caching.async_check_and_create_cache(client=self.mock_async_client, **call_args)
+            if is_async
+            else context_caching.check_and_create_cache(client=self.mock_client, **call_args)
+        )
 
-        cache_posts: Final = self.mock_async_client.post.call_count + self.mock_client.post.call_count
+        cache_calls: Final = (
+            self.mock_async_client.post.call_count
+            + self.mock_client.post.call_count
+            + self.mock_async_client.get.call_count
+            + self.mock_client.get.call_count
+        )
         if creates_cache:
-            assert cache_posts == 1, f"{model} must still create its cachedContents object"
+            assert cache_calls == 2, f"{model} must still look up and create its cachedContents object"
             assert result == (self.sample_messages[1:], {}, "cachedContents/created")
         else:
-            assert cache_posts == 0, f"{model} rejects cachedContents, so no creation call may be sent"
+            assert cache_calls == 0, f"{model} rejects cachedContents, so no cachedContents call may be sent"
             assert result == (self.sample_messages, {"tools": self.sample_tools}, None)
 
     @pytest.mark.parametrize("is_async", [False, True])
