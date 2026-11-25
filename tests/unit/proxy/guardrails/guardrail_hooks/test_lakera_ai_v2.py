@@ -6,8 +6,8 @@ Additional tests live in tests/guardrails_tests/test_lakera_v2.py.
 """
 
 import importlib, logging, os
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Callable, Mapping
+from typing import Final, TypeAlias
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -2479,6 +2479,8 @@ async def test_call_v2_guard_returns_the_lakera_verdict_and_logs_it_without_the_
 _CARD: Final = "4111 1111 1111 1111"
 _CARD_REPLY: Final = f"Card {_CARD} is on file."
 _CLEAN_VERDICT: Final = {"flagged": False, "breakdown": [], "payload": []}
+_NativeReply: TypeAlias = Callable[..., ResponsesAPIResponse | dict[str, object]]
+_ReasoningReply: TypeAlias = Callable[[str, str], ResponsesAPIResponse | dict[str, object]]
 
 
 def _card_verdict(message_id: int) -> dict[str, object]:
@@ -2537,7 +2539,9 @@ _NATIVE_SHAPES: Final = [
 @pytest.mark.asyncio
 class TestPostCallNativeResponseShapes:
     @pytest.mark.parametrize(("data", "reply"), _NATIVE_SHAPES)
-    async def test_lakera_sees_the_prompt_and_every_assistant_text_block(self, data, reply):
+    async def test_lakera_sees_the_prompt_and_every_assistant_text_block(
+        self, data: dict[str, object], reply: _NativeReply
+    ) -> None:
         response = reply("Paris.", "It is in France.")
 
         result, client = await _post_call("block", _CLEAN_VERDICT, data, response)
@@ -2550,14 +2554,16 @@ class TestPostCallNativeResponseShapes:
         ]
 
     @pytest.mark.parametrize(("data", "reply"), _NATIVE_SHAPES)
-    async def test_block_rejects_a_flagged_reply(self, data, reply):
+    async def test_block_rejects_a_flagged_reply(self, data: dict[str, object], reply: _NativeReply) -> None:
         with pytest.raises(HTTPException) as blocked:
             await _post_call("block", _card_verdict(1), data, reply(_CARD_REPLY))
 
         assert (blocked.value.status_code, blocked.value.detail["error"]) == (400, "Violated guardrail policy")
 
     @pytest.mark.parametrize(("data", "reply"), _NATIVE_SHAPES)
-    async def test_mask_rewrites_only_the_flagged_block_and_keeps_the_response_type(self, data, reply):
+    async def test_mask_rewrites_only_the_flagged_block_and_keeps_the_response_type(
+        self, data: dict[str, object], reply: _NativeReply
+    ) -> None:
         response = reply("Here you go.", _CARD_REPLY)
 
         result, _ = await _post_call("mask", _card_verdict(2), data, response)
@@ -2565,7 +2571,7 @@ class TestPostCallNativeResponseShapes:
         assert result is response
         assert _served_texts(result) == ("Here you go.", "Card [MASKED CREDIT_CARD] is on file.")
 
-    async def test_mask_keeps_a_tool_call_only_responses_reply_when_pii_is_in_the_prompt(self):
+    async def test_mask_keeps_a_tool_call_only_responses_reply_when_pii_is_in_the_prompt(self) -> None:
         call: Final = {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "lookup", "arguments": "{}"}
         response = ResponsesAPIResponse(id="resp_1", created_at=1, output=[call])
         prompt: Final = f"Card {_CARD} please."
@@ -2575,7 +2581,7 @@ class TestPostCallNativeResponseShapes:
         assert result is response
         assert client.posts[0]["json"]["messages"] == [{"role": "user", "content": prompt}]
 
-    async def test_nothing_to_inspect_skips_lakera_and_returns_the_response(self):
+    async def test_nothing_to_inspect_skips_lakera_and_returns_the_response(self) -> None:
         response = _responses_reply()
 
         result, client = await _post_call("block", _card_verdict(0), {"model": "m", "input": []}, response)
@@ -2624,7 +2630,7 @@ _REASONING_SHAPES: Final = [
 @pytest.mark.asyncio
 class TestPostCallResponsesReasoning:
     @pytest.mark.parametrize("reply", _REASONING_SHAPES)
-    async def test_lakera_sees_reasoning_summary_and_content_as_assistant_text(self, reply):
+    async def test_lakera_sees_reasoning_summary_and_content_as_assistant_text(self, reply: _ReasoningReply) -> None:
         _, client = await _post_call("block", _CLEAN_VERDICT, {"model": "m", "input": "Which card?"}, reply("S.", "C."))
 
         assert client.posts[0]["json"]["messages"] == [
@@ -2635,7 +2641,7 @@ class TestPostCallResponsesReasoning:
         ]
 
     @pytest.mark.parametrize("reply", _REASONING_SHAPES)
-    async def test_mask_rewrites_the_reasoning_summary_in_place(self, reply):
+    async def test_mask_rewrites_the_reasoning_summary_in_place(self, reply: _ReasoningReply) -> None:
         response = reply(_CARD_REPLY, "C.")
 
         result, _ = await _post_call("mask", _card_verdict(1), {"model": "m", "input": "Which card?"}, response)
@@ -2643,7 +2649,7 @@ class TestPostCallResponsesReasoning:
         assert result is response
         assert _reasoning_texts(result) == ("Card [MASKED CREDIT_CARD] is on file.", "C.")
 
-    async def test_mask_rewrites_every_copy_of_bridged_thinking_text(self):
+    async def test_mask_rewrites_every_copy_of_bridged_thinking_text(self) -> None:
         encrypted: Final = encode_thinking_blocks([{"type": "thinking", "thinking": _CARD_REPLY, "signature": "sig"}])
         reasoning: Final = {
             "type": "reasoning",
