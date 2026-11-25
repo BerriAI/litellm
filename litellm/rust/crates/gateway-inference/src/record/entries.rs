@@ -6,7 +6,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use litellm_gateway_auth_core::record::Label;
 use serde_json::{Map, Value};
 
-use super::{AttemptRecord, ServedDeployment};
+use super::{AttemptRecord, RequestFacts, ServedDeployment};
 use crate::{CallType, ServedCall, headers::Routing};
 
 const MODEL: &str = "model";
@@ -143,6 +143,8 @@ pub struct CallState {
     pub stream_response: bool,
     /// The time the callbacks spent on the call's hooks so far.
     pub callback_time: Duration,
+    /// What the request told of its caller as it came in, which [`super::scoped`] writes.
+    pub request_facts: RequestFacts,
 }
 
 /// `at` in seconds since the Unix epoch.
@@ -179,6 +181,7 @@ impl CallState {
             stream_timeout: false,
             stream_response: false,
             callback_time: Duration::ZERO,
+            request_facts: RequestFacts::default(),
         }
     }
 
