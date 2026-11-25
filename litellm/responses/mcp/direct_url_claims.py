@@ -199,6 +199,10 @@ def _text_field(tool: Mapping[str, object], key: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _server_label(tool: Mapping[str, object]) -> str:
+    return _text_field(tool, "server_label") or "unlabeled"
+
+
 def _is_caller_header(name: str) -> bool:
     lowered: Final = name.lower()
     return lowered not in _GATEWAY_OWNED_HEADERS and not lowered.startswith("x-forwarded-")
@@ -269,7 +273,7 @@ def _names_a_reachable_url(tool: Mapping[str, object]) -> bool:
 
 
 def direct_mcp_labels(tools: Iterable[Mapping[str, object]]) -> frozenset[str]:
-    return frozenset(_text_field(tool, "server_label") or "unlabeled" for tool in tools if _names_a_reachable_url(tool))
+    return frozenset(_server_label(tool) for tool in tools if _names_a_reachable_url(tool))
 
 
 def _claim(
@@ -284,7 +288,7 @@ def _claim(
         return _Unclaimed(tool=tool)
     if server_url.startswith(LITELLM_PROXY_MCP_SERVER_URL) or _served_proxy_path(tool, servers):
         return _Unclaimed(tool=tool)
-    label: Final = _text_field(tool, "server_label") or "unlabeled"
+    label: Final = _server_label(tool)
     matches: Final = _registered_matches(url, servers)
     if matches:
         return _registered_claim(tool, label, matches)
@@ -322,6 +326,20 @@ def _label_entries(claim: _RegisteredClaim) -> Mapping[str, str]:
     return MappingProxyType(dict.fromkeys(server_names(claim.server), claim.label))
 
 
+def _raise_if_server_labels_repeat(tools: Sequence[Mapping[str, object]], model: str) -> None:
+    labels: Final = tuple(_server_label(tool) for tool in tools if tool.get("type") == "mcp")
+    repeated: Final = next((label for index, label in enumerate(labels) if label in labels[:index]), None)
+    if repeated is None:
+        return
+    raise BadRequestError(
+        message=(
+            f"Duplicate MCP server_label `{repeated}` found in `tools`. Give each hosted MCP tool its own server_label."
+        ),
+        model=model,
+        llm_provider="mcp",
+    )
+
+
 def plan_hosted_mcp_claims(
     tools: Sequence[Mapping[str, object]],
     servers: Collection[MCPServer],
@@ -332,20 +350,22 @@ def plan_hosted_mcp_claims(
 ) -> HostedMCPClaims | None:
     """Claim each hosted MCP tool whose URL a registered server serves or whose host the admin allowlisted. A claimed
     tool that needs approval answers 400, or under drop_params is left for the hosted MCP strip to drop. None when
-    nothing is claimed, so the request keeps its current path."""
+    nothing is claimed, so the request keeps its current path. Once anything is claimed, two hosted MCP tools sharing a
+    server_label answer 400, as OpenAI does."""
     allowed_origins: Final = hosted_mcp_allowed_origins(allowed_hosts)
     registered_hosts: Final = _registered_hosts(servers)
     claims: Final = tuple(_claim(tool, servers, allowed_origins, registered_hosts) for tool in tools)
     needs_approval: Final = tuple(claim for claim in claims if not _runs_without_approval(claim))
     if needs_approval and not drops_unsupported_params(drop_params):
         raise hosted_mcp_approval_error(
-            tuple(_text_field(claim.tool, "server_label") or "unlabeled" for claim in needs_approval),
+            tuple(_server_label(claim.tool) for claim in needs_approval),
             model=model,
             route=route,
         )
     runnable: Final = tuple(claim if _runs_without_approval(claim) else _Unclaimed(claim.tool) for claim in claims)
     if all(isinstance(claim, _Unclaimed) for claim in runnable):
         return None
+    _raise_if_server_labels_repeat(tools, model)
     registered: Final = tuple(claim for claim in runnable if isinstance(claim, _RegisteredClaim))
     return HostedMCPClaims(
         tools=tuple(tool for tool in map(_gateway_tool, runnable) if tool is not None),

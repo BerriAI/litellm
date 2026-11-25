@@ -112,6 +112,8 @@ async def _next_round(
     claimed_calls: Final = tuple(call for call in tool_calls if _call_details(call)[0] in rounds.items.names)
     if not claimed_calls:
         return _answer(rounds, response, composed, output_items(response))
+    if round_number > rounds.max_rounds:
+        return _handed_back(rounds, response, composed)
     if len(claimed_calls) < len(tool_calls):
         return _answer(rounds, response, composed, await _held_round_output(rounds, response, claimed_calls))
     with first_round_billed_on_failure(rounds.logging_obj, response):
@@ -159,5 +161,6 @@ async def run_claimed_rounds(
     """Run every tool call the model makes on the gateway's MCP tools, round after round up to `max_rounds`, and
     answer with OpenAI's items: mcp_list_tools first, each executed call as an mcp_call after its round's other items,
     and one bill for all rounds. A round that also calls a tool the gateway does not run ends the loop: the gateway
-    runs its own calls and hands the others back to the caller as function_call items ahead of those mcp_call items."""
+    runs its own calls and hands the others back to the caller as function_call items ahead of those mcp_call items.
+    Calls the model still makes after `max_rounds` are handed back unrun the same way."""
     return await _next_round(rounds, first, first_breakdown, _initial_history(original_input), (), 1)

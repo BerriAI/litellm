@@ -4642,20 +4642,54 @@ async def test_a_claimed_url_that_needs_approval_is_dropped_beside_a_gateway_ref
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "beside",
+    ("label", "beside", "clashing_name"),
     [
-        {"type": "function", "name": "deepwiki-ask_question", "parameters": {"type": "object", "properties": {}}},
-        {
-            "type": "mcp",
-            "server_label": "deepwiki",
-            "server_url": "https://mcp.example.com/mcp",
-            "require_approval": "never",
-        },
+        (
+            "deepwiki",
+            {"type": "function", "name": "deepwiki-ask_question", "parameters": {"type": "object", "properties": {}}},
+            "deepwiki-ask_question",
+        ),
+        (
+            "deep wiki",
+            {
+                "type": "mcp",
+                "server_label": "deep_wiki",
+                "server_url": "https://mcp.example.com/mcp",
+                "require_approval": "never",
+            },
+            "deep_wiki-ask_question",
+        ),
     ],
     ids=["client_function", "second_direct_server"],
 )
 @respx.mock
 async def test_a_direct_mcp_tool_whose_name_clashes_with_another_tool_answers_400_before_the_model_runs(
+    monkeypatch: pytest.MonkeyPatch, label: str, beside: Mapping[str, object], clashing_name: str
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com", "mcp.example.com"))
+    provider: Final = _serve_responses(respx.mock, monkeypatch, (), _BEDROCK_URL)
+    server: Final = _ScriptedMCPServer()
+
+    with pytest.raises(litellm.BadRequestError) as refused:
+        await _gateway_hosted_mcp_request(
+            _BEDROCK_MODEL, server, {**_DEEPWIKI_TOOL, "server_label": label}, beside=(beside,)
+        )
+
+    assert f"`{clashing_name}`" in str(refused.value)
+    assert (server.calls, provider.call_count) == ((), 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "beside",
+    [
+        {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.example.com/mcp"},
+        {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.unlisted.example/mcp"},
+    ],
+    ids=["second_direct_server", "unclaimed_server"],
+)
+@respx.mock
+async def test_two_hosted_mcp_tools_with_the_same_server_label_answer_400_before_any_server_is_opened(
     monkeypatch: pytest.MonkeyPatch, beside: Mapping[str, object]
 ):
     _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com", "mcp.example.com"))
@@ -4663,10 +4697,45 @@ async def test_a_direct_mcp_tool_whose_name_clashes_with_another_tool_answers_40
     server: Final = _ScriptedMCPServer()
 
     with pytest.raises(litellm.BadRequestError) as refused:
-        await _gateway_hosted_mcp_request(_BEDROCK_MODEL, server, beside=(beside,))
+        await _gateway_hosted_mcp_request(
+            _BEDROCK_MODEL, server, beside=({**beside, "require_approval": "never"},), drop_params=True
+        )
 
-    assert "`deepwiki-ask_question`" in str(refused.value)
-    assert (server.calls, provider.call_count) == ((), 0)
+    assert "Duplicate MCP server_label `deepwiki`" in str(refused.value)
+    assert (server.opened, provider.call_count) == ((), 0)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_a_model_that_keeps_calling_a_direct_mcp_tool_past_the_round_cap_gets_the_call_back_unrun(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _gateway_runs_hosted_mcp(monkeypatch, ("mcp.deepwiki.com",))
+    provider: Final = _serve_responses(
+        respx.mock,
+        monkeypatch,
+        tuple(_tool_call_round(_BEDROCK_MODEL, "deepwiki-ask_question") for _ in range(3)),
+        _BEDROCK_URL,
+    )
+    server: Final = _ScriptedMCPServer()
+
+    with using_responses_dependencies(ResponsesDependencies(direct_client_factory=server.client_for)):
+        response: Final = await litellm.aresponses(
+            model=_BEDROCK_MODEL,
+            input="Ask DeepWiki what LiteLLM is",
+            tools=[dict(_DEEPWIKI_TOOL)],
+            max_agentic_loops=1,
+            **_ROUTE_KWARGS[_BEDROCK_MODEL],
+        )
+
+    assert [call.name for call in server.calls] == ["ask_question"]
+    assert provider.call_count == 2
+    assert _output_summary(response.output) == (
+        ("mcp_list_tools", "deepwiki", None),
+        ("mcp_call", "deepwiki", "ask_question"),
+        ("message", None, None),
+        ("function_call", None, "deepwiki-ask_question"),
+    )
 
 
 @pytest.mark.asyncio
