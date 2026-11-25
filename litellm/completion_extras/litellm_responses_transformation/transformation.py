@@ -2648,6 +2648,21 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 )
             else:
                 raise ValueError(f"Chat provider: Invalid text delta {parsed_chunk}")
+        elif (
+            event_type == ResponsesAPIStreamEvents.REFUSAL_DELTA.value
+            and isinstance(refusal := parsed_chunk.get("delta"), str)
+            and refusal
+        ):
+            return ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(content=refusal),
+                        finish_reason=None,
+                    )
+                ],
+                provider_specific_fields={PHASE_FIELD: item_phase} if item_phase is not None else None,
+            )
         elif event_type == "response.reasoning_summary_part.added" and reasoning_summary_streamed:
             return ModelResponseStream(choices=[StreamingChoices(index=0, delta=Delta(reasoning_content=" "))])
         elif event_type == "response.reasoning_summary_text.delta":
@@ -2793,7 +2808,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         return (
             self._structured_output
             and self._first_message_item_done
-            and _responses_event_type(chunk) == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA.value
+            and _responses_event_type(chunk)
+            in (ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA.value, ResponsesAPIStreamEvents.REFUSAL_DELTA.value)
         )
 
     @staticmethod
