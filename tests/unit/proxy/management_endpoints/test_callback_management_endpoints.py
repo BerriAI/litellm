@@ -527,8 +527,9 @@ class TestMixpanelCallbackValidation:
             {"logging": [{"callback_name": "mixpanel", "callback_vars": {"mixpanel_project_token": "***REDACTED***"}}]},
             {"logging": [{"callback_name": "mixpanel", "callback_vars": {"mixpanel_region": "eu"}}]},
             {"callback_settings": {"callback_vars": {"mixpanel_project_token": "   "}}},
+            {"logging": json.dumps([{"callback_name": "mixpanel", "callback_vars": {"mixpanel_project_token": ""}}])},
         ],
-        ids=["masked-logging-entry", "region-without-token", "blank-callback-settings"],
+        ids=["masked-logging-entry", "region-without-token", "blank-callback-settings", "json-string-logging"],
     )
     @pytest.mark.asyncio
     async def test_team_writers_refuse_a_mixpanel_token_they_could_never_send(

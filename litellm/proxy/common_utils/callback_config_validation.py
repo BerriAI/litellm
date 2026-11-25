@@ -328,9 +328,11 @@ def stored_callback_entries(logging_entries: object) -> tuple[tuple[str | None, 
 
 
 def _mixpanel_callback_vars(metadata: Mapping[str, object]) -> Iterator[Mapping[str, str]]:
+    logging_entries: Final = metadata.get("logging")
+    entries: Final = normalize_logging_entries(logging_entries) if isinstance(logging_entries, str) else logging_entries
     yield from (
         _entry_callback_vars(entry)
-        for entry in object_sequence(metadata.get("logging")) or ()
+        for entry in object_sequence(entries) or ()
         if _entry_callback_name(entry) == _MIXPANEL_CALLBACK
     )
     settings_vars: Final = _entry_callback_vars(metadata.get("callback_settings"))
