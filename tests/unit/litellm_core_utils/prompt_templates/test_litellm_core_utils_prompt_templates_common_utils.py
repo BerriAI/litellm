@@ -2941,6 +2941,67 @@ class TestDropSchemaKeywords:
         }
         assert tags_not == {"uniqueItems": True, "items": {"type": "object", "propertyNames": {"maxLength": 3}}}
 
+    def test_drops_every_not_holding_a_reference_once_a_keyword_is_dropped(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
+
+        plain_not: Final = {"maxItems": 0}
+        definitions: Final = {"a/b": {"type": "array", "items": {"$ref": "#/components/schemas/Unique"}}}
+        schema: Final = {
+            "type": "object",
+            "properties": {
+                "tags": {"type": "array", "uniqueItems": True, "not": {"$ref": "#/components/schemas/Unique"}},
+                "labels": {"type": "array", "not": {"anyOf": [{"maxItems": 1}, {"$ref": "#/$defs/a~1b"}]}},
+                "names": {"type": "array", "not": {"$ref": "#/properties/tags"}},
+                "anchored": {"type": "array", "not": {"$dynamicRef": "#items"}},
+                "recursive": {"type": "array", "not": {"$recursiveRef": "#"}},
+                "nested": {"type": "array", "not": {"not": {"not": {"$ref": "#/components/schemas/Unique"}}}},
+                "owners": {"type": "object", "not": {"dependencies": {"id": {"$ref": "#/components/schemas/Unique"}}}},
+                "plain": {"type": "array", "not": plain_not},
+            },
+            "$defs": definitions,
+            "components": {"schemas": {"Unique": {"type": "array", "uniqueItems": True}}},
+        }
+
+        result: Final = drop_schema_keywords(schema, _DROPPED_KEYWORDS)
+
+        assert result == {
+            "type": "object",
+            "properties": {
+                "tags": {"type": "array"},
+                "labels": {"type": "array"},
+                "names": {"type": "array"},
+                "anchored": {"type": "array"},
+                "recursive": {"type": "array"},
+                "nested": {"type": "array"},
+                "owners": {"type": "object"},
+                "plain": {"type": "array", "not": plain_not},
+            },
+            "$defs": definitions,
+            "components": {"schemas": {"Unique": {"type": "array"}}},
+        }
+
+    def test_keeps_a_not_as_sent_when_its_schema_object_is_also_used_elsewhere(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
+
+        shared: Final = {"type": "array", "uniqueItems": True}
+        schema: Final = {"type": "object", "properties": {"tags": shared, "labels": {"not": shared}}}
+
+        result: Final = drop_schema_keywords(schema, _DROPPED_KEYWORDS)
+
+        assert result == {"type": "object", "properties": {"tags": {"type": "array"}, "labels": {"not": shared}}}
+        assert shared == {"type": "array", "uniqueItems": True}
+
+    def test_keeps_a_not_holding_a_reference_when_no_keyword_is_dropped(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
+
+        schema: Final = {
+            "type": "object",
+            "properties": {"tags": {"type": "array", "not": {"$ref": "#/$defs/Short"}}},
+            "$defs": {"Short": {"maxItems": 0}},
+        }
+
+        assert drop_schema_keywords(schema, _DROPPED_KEYWORDS) is schema
+
     def test_drops_the_keywords_from_the_component_schemas_a_ref_reaches(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
 

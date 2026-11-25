@@ -16,7 +16,6 @@ BaseAWSLLM._sign_request after the request body is finalized.
 """
 
 from collections.abc import Mapping, Sequence
-from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # map_openai_params returns the filtered params as a bare dict
 
 import httpx
@@ -35,6 +34,7 @@ from litellm.llms.bedrock_mantle.common_utils import (
     drop_schema_keywords_gemma_4_rejects,
     live_model_cost,
     mantle_supports_all_json_schema_keywords,
+    with_values_gemma_4_accepts,
 )
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.additional_tools import HoistedAdditionalTools, hoist_additional_tools
@@ -243,10 +243,7 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
         )
         if mantle_supports_all_json_schema_keywords(model, region, litellm_params, live_model_cost()):
             return params
-        verbose_logger.debug(
-            "Bedrock Mantle %s does not support all JSON schema keywords, so the ones it rejects are dropped", model
-        )
-        return MappingProxyType({key: cls._value_gemma_4_accepts(key, value) for key, value in params.items()})
+        return with_values_gemma_4_accepts(params, model, cls._value_gemma_4_accepts)
 
     @classmethod
     def _value_gemma_4_accepts(cls, key: str, value: object) -> object:
