@@ -479,8 +479,8 @@ async def _stream_chunks(sync_mode: bool) -> list[object]:
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.parametrize(
     "fields",
-    ["id: {n}\nevent: message\n", "retry: 1000\n", ": ping\n", "x-trace: {n}\n"],
-    ids=["id-and-event", "retry", "comment", "unknown-field"],
+    ["id: {n}\nevent: message\n", "retry: 1000\n", ": ping\n", "x-trace: {n}\n", "data: \n\n"],
+    ids=["id-and-event", "retry", "comment", "unknown-field", "empty-data"],
 )
 @pytest.mark.asyncio
 async def test_stream_usage_survives_sse_lines_that_carry_no_data(
