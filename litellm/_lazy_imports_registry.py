@@ -596,6 +596,10 @@ LAZY_ATTRIBUTES: Final[Mapping[str, Mapping[str, tuple[str, str]]]] = MappingPro
                 ),
                 "LLMClientCache": (".caching.llm_caching_handler", "LLMClientCache"),
                 "bedrock_tool_name_mappings": (".llms.bedrock.chat.invoke_handler", "bedrock_tool_name_mappings"),
+                "bedrock_tool_name_mappings_context": (
+                    ".llms.bedrock.common_utils",
+                    "bedrock_tool_name_mappings_context",
+                ),
                 "AzureOpenAIError": (".llms.azure.common_utils", "AzureOpenAIError"),
                 "agent": (".harness", "agent"),
                 "aagent": (".harness", "aagent"),

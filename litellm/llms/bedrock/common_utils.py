@@ -5,6 +5,7 @@ Common utilities used across bedrock chat/embedding/image generation
 """
 
 import contextlib
+from contextvars import ContextVar
 import functools
 import json
 import os
@@ -1181,6 +1182,11 @@ class ModelResponseIterator:
         return self.model_response
 
 
+bedrock_tool_name_mappings_context: ContextVar[dict[str, str] | None] = ContextVar(
+    "bedrock_tool_name_mappings_context", default=None
+)
+
+
 def get_bedrock_tool_name(response_tool_name: str) -> str:
     """
     If litellm formatted the input tool name, we need to convert it back to the original name.
@@ -1191,9 +1197,15 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
     Returns:
         str: The original name of the tool.
     """
+    ctx_mappings = bedrock_tool_name_mappings_context.get()
+    if ctx_mappings is not None and response_tool_name in ctx_mappings:
+        return ctx_mappings[response_tool_name]
 
-    if response_tool_name in litellm.bedrock_tool_name_mappings.cache_dict:
-        response_tool_name = litellm.bedrock_tool_name_mappings.cache_dict[response_tool_name]
+    if hasattr(litellm, "bedrock_tool_name_mappings") and litellm.bedrock_tool_name_mappings is not None:
+        cached_tool_name = litellm.bedrock_tool_name_mappings.get_cache(key=response_tool_name)
+        if cached_tool_name is not None:
+            return str(cached_tool_name)
+
     return response_tool_name
 
 

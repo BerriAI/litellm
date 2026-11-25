@@ -2815,3 +2815,107 @@ def test_normalize_json_schema_custom_types_to_object_reaches_subschemas_under_d
         "properties": {"tool": {"$ref": "#/$defs/Tool"}},
         "$defs": {"Tool": tool_schema("object")},
     }
+
+
+def test_get_bedrock_tool_name_honors_ttl():
+    """
+    Issue #54172: get_bedrock_tool_name should honor TTL and not return expired cached entries.
+    """
+    import litellm
+    from litellm.llms.bedrock.common_utils import (
+        bedrock_tool_name_mappings_context,
+        get_bedrock_tool_name,
+    )
+
+    # Ensure context is empty
+    token = bedrock_tool_name_mappings_context.set(None)
+    try:
+        # Set a cache entry with negative TTL (already expired)
+        litellm.bedrock_tool_name_mappings.set_cache(
+            key="expired_tool_name", value="original:expired:tool", ttl=-1
+        )
+
+        # get_bedrock_tool_name should NOT return the expired value
+        assert get_bedrock_tool_name("expired_tool_name") == "expired_tool_name"
+    finally:
+        bedrock_tool_name_mappings_context.reset(token)
+
+
+def test_get_bedrock_tool_name_context_isolation():
+    """
+    Issue #54172: Request context isolation: mappings set in one context do not
+    leak into another context or overwrite valid tool names.
+    """
+    import contextvars
+    from litellm.llms.bedrock.common_utils import (
+        bedrock_tool_name_mappings_context,
+        get_bedrock_tool_name,
+    )
+
+    def run_in_context_1():
+        ctx = {"sanitized_tool": "original_tool_1"}
+        token = bedrock_tool_name_mappings_context.set(ctx)
+        try:
+            assert get_bedrock_tool_name("sanitized_tool") == "original_tool_1"
+            assert get_bedrock_tool_name("other_tool") == "other_tool"
+        finally:
+            bedrock_tool_name_mappings_context.reset(token)
+
+    def run_in_context_2():
+        ctx = {"sanitized_tool": "original_tool_2"}
+        token = bedrock_tool_name_mappings_context.set(ctx)
+        try:
+            assert get_bedrock_tool_name("sanitized_tool") == "original_tool_2"
+            assert get_bedrock_tool_name("other_tool") == "other_tool"
+        finally:
+            bedrock_tool_name_mappings_context.reset(token)
+
+    def run_in_clean_context():
+        # Clean context with no mappings
+        token = bedrock_tool_name_mappings_context.set(None)
+        try:
+            assert get_bedrock_tool_name("sanitized_tool") == "sanitized_tool"
+        finally:
+            bedrock_tool_name_mappings_context.reset(token)
+
+    ctx1 = contextvars.copy_context()
+    ctx2 = contextvars.copy_context()
+    ctx3 = contextvars.copy_context()
+
+    ctx1.run(run_in_context_1)
+    ctx2.run(run_in_context_2)
+    ctx3.run(run_in_clean_context)
+
+
+def test_get_bedrock_tool_name_global_cache_fallback():
+    """
+    Issue #54172: When request context is not set or key is not in context,
+    global cache fallback works when TTL is valid.
+    """
+    import litellm
+    from litellm.llms.bedrock.common_utils import (
+        bedrock_tool_name_mappings_context,
+        get_bedrock_tool_name,
+    )
+
+    token = bedrock_tool_name_mappings_context.set(None)
+    try:
+        # Valid unexpired TTL
+        litellm.bedrock_tool_name_mappings.set_cache(
+            key="valid_cached_tool", value="original:cached:tool", ttl=600
+        )
+        assert get_bedrock_tool_name("valid_cached_tool") == "original:cached:tool"
+
+        # Request context takes precedence over global cache
+        ctx_token = bedrock_tool_name_mappings_context.set(
+            {"valid_cached_tool": "ctx:override:tool"}
+        )
+        try:
+            assert get_bedrock_tool_name("valid_cached_tool") == "ctx:override:tool"
+        finally:
+            bedrock_tool_name_mappings_context.reset(ctx_token)
+
+        # After resetting request context, global cache is returned
+        assert get_bedrock_tool_name("valid_cached_tool") == "original:cached:tool"
+    finally:
+        bedrock_tool_name_mappings_context.reset(token)

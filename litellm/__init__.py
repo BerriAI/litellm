@@ -2499,9 +2499,11 @@ if TYPE_CHECKING:
     module_level_aclient: AsyncHTTPHandler
     module_level_client: HTTPHandler
 
+    from contextvars import ContextVar
     from litellm.caching.caching import InMemoryCache
 
     bedrock_tool_name_mappings: InMemoryCache
+    bedrock_tool_name_mappings_context: ContextVar[dict[str, str] | None]
 
     from litellm.llms.azure.common_utils import AzureOpenAIError
 

@@ -62,6 +62,7 @@ from ..common_utils import (
     get_bedrock_response_stream_shape,
     get_bedrock_stream_event_statuses,
     get_bedrock_tool_name,
+    bedrock_tool_name_mappings_context,
     parse_bedrock_event_stream,
     served_service_tier,
 )
