@@ -185,6 +185,32 @@ def test_a_first_sso_sign_in_creates_the_user_with_the_default_role(
         ]
 
 
+@pytest.mark.parametrize(
+    ("licensed", "expected_budget"),
+    [(True, {"gpt-4o": {"budget_limit": 5.0, "time_period": "30d"}}), (False, {})],
+    ids=["licensed", "no-enterprise-license"],
+)
+def test_a_first_sso_sign_in_gets_the_default_model_max_budget_only_with_an_enterprise_license(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, licensed: bool, expected_budget: Mapping[str, JsonValue]
+) -> None:
+    monkeypatch.setenv(OWNED_STATE_VARIABLE, OwnedState.PRIVATE.value)
+    if not licensed:
+        monkeypatch.delenv("LITELLM_LICENSE", raising=False)
+    subject: Final = f"sso-default-budget-{uuid.uuid4().hex[:12]}"
+    defaults: Final[Mapping[str, JsonValue]] = {
+        "user_role": "internal_user",
+        "max_budget": 7.0,
+        "model_max_budget": {"gpt-4o": {"budget_limit": 5.0, "time_period": "30d"}},
+    }
+    with _sso_gateway(tmp_path, {"default_internal_user_params": defaults}) as gateway:
+        callback: Final = _sign_in(gateway, subject)
+
+        assert callback.status_code == 303, f"{callback.status_code} {callback.text}"
+        assert gateway.rows(
+            'SELECT user_role, max_budget, model_max_budget FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,)
+        ) == [{"user_role": "internal_user", "max_budget": 7.0, "model_max_budget": expected_budget}]
+
+
 def test_generic_sso_links_a_verified_private_email_to_the_existing_local_account(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

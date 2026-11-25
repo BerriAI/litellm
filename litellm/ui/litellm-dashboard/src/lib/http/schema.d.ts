@@ -35093,6 +35093,13 @@ export interface components {
              */
             max_budget?: number | null;
             /**
+             * Model Max Budget
+             * @description Default per-model budgets for new users, keyed by model name, e.g. {"gpt-4o": {"budget_limit": 5.0, "time_period": "30d"}}. Requires an enterprise license
+             */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["JsonValue"];
+            } | null;
+            /**
              * Models
              * @description Default list of models that new users can access
              */

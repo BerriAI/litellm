@@ -3220,9 +3220,12 @@ async def get_user_object(
                 add_new_user_to_default_team,
                 check_if_default_team_set,
             )
-            from litellm.proxy.management_helpers.utils import initial_budget_windows_json
+            from litellm.proxy.management_helpers.utils import (
+                initial_budget_windows_json,
+                licensed_default_internal_user_params,
+            )
 
-            default_params: Final = _default_internal_user_params()
+            default_params: Final = licensed_default_internal_user_params()
             defaults: Final = NewUserDefaults.model_validate(default_params)
             unstored: Final = unstored_default_keys(default_params)
             if unstored:

@@ -1595,6 +1595,7 @@ async def test_get_user_object_upsert_stores_every_default_column_prisma_stored(
     configured: Mapping[str, object], caplog, rust_auth_stores: RustAuthStores, monkeypatch
 ):
     monkeypatch.setattr(litellm, "default_internal_user_params", {**_OTHER_DEFAULT_COLUMNS, **configured})
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     prisma_client, cache = _no_user_yet()
     _rust_stores_over_prisma(rust_auth_stores, prisma_client)
 
@@ -1622,6 +1623,34 @@ async def test_get_user_object_upsert_stores_every_default_column_prisma_stored(
         {"source": "jwt"},
     )
     assert [r.getMessage() for r in caplog.records if "default_internal_user_params" in r.getMessage()] == []
+
+
+@pytest.mark.asyncio
+async def test_get_user_object_upsert_without_an_enterprise_license_drops_only_the_default_model_max_budget(
+    caplog, rust_auth_stores: RustAuthStores, monkeypatch
+):
+    monkeypatch.setattr(
+        litellm, "default_internal_user_params", {"max_budget": 7.0, "model_max_budget": {"gpt-4o": 5.0}}
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    prisma_client, cache = _no_user_yet()
+    _rust_stores_over_prisma(rust_auth_stores, prisma_client)
+
+    with caplog.at_level("WARNING", logger="LiteLLM Proxy"):
+        user_obj: Final = await get_user_object(
+            user_id="jwt_upsert_no_license",
+            prisma_client=prisma_client,
+            user_api_key_cache=cache,
+            user_id_upsert=True,
+            proxy_logging_obj=None,
+        )
+
+    (inserted,) = rust_auth_stores.user.inserts
+    assert (inserted["max_budget"], inserted.get("model_max_budget")) == (7.0, None), inserted
+    assert user_obj is not None
+    assert [r.getMessage() for r in caplog.records if "default_internal_user_params" in r.getMessage()] == [
+        "default_internal_user_params keys not applied without an enterprise license: model_max_budget"
+    ]
 
 
 @pytest.mark.asyncio
@@ -5752,7 +5781,8 @@ async def test_team_max_budget_check_dispatches_team_alert_from_the_shared_spend
 @pytest.mark.parametrize("send_percentage_alerts", [False, True])
 @pytest.mark.asyncio
 async def test_team_max_budget_check_still_rejects_over_budget_after_dispatching_the_alert(
-    send_percentage_alerts: bool, monkeypatch: pytest.MonkeyPatch,
+    send_percentage_alerts: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     team_object: Final = LiteLLM_TeamTable(
         team_id="team-1",

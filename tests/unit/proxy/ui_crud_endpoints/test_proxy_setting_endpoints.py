@@ -4917,3 +4917,73 @@ def test_background_chat_settings_failed_save_does_not_enable_runtime(background
     assert client.get("/get/background_chat_settings").json()["enabled"] is False
     assert proxy_server.polling_via_cache_enabled is False
     audit.assert_not_awaited()
+
+
+def test_update_internal_user_settings_stores_and_returns_model_max_budget(mock_proxy_config, mock_auth, monkeypatch):
+    import litellm
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr(litellm, "default_internal_user_params", {})
+    budget = {"gpt-4o": {"budget_limit": 5.0, "time_period": "30d"}}
+
+    updated = client.patch("/update/internal_user_settings", json={"max_budget": 10.0, "model_max_budget": budget})
+
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["settings"]["model_max_budget"] == budget
+    assert litellm.default_internal_user_params["model_max_budget"] == budget
+    fetched = client.get("/get/internal_user_settings").json()
+    assert fetched["values"]["model_max_budget"] == budget
+    assert fetched["field_schema"]["properties"]["model_max_budget"]["description"].startswith(
+        "Default per-model budgets"
+    )
+
+
+@pytest.mark.parametrize(
+    ("premium_user", "model_max_budget", "expected_error"),
+    [
+        (
+            False,
+            {"gpt-4o": {"budget_limit": 5.0, "time_period": "30d"}},
+            "You must have an enterprise license to set model_max_budget",
+        ),
+        (True, {"gpt-4o": {"budget_limit": "not-a-number"}}, "Invalid model_max_budget"),
+        (True, {"gpt-4o": 5.0}, "Invalid model_max_budget"),
+    ],
+    ids=["no-enterprise-license", "malformed-budget-limit", "budget-not-an-object"],
+)
+def test_update_internal_user_settings_rejects_model_max_budget_and_saves_nothing(
+    mock_proxy_config, mock_auth, monkeypatch, premium_user, model_max_budget, expected_error
+):
+    import litellm
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium_user)
+    monkeypatch.setattr(litellm, "default_internal_user_params", {})
+
+    rejected = client.patch(
+        "/update/internal_user_settings", json={"max_budget": 10.0, "model_max_budget": model_max_budget}
+    )
+
+    assert rejected.status_code == 400, rejected.text
+    assert expected_error in rejected.json()["detail"]["error"]
+    assert mock_proxy_config["save_call_count"]() == 0
+    assert litellm.default_internal_user_params == {}
+
+
+@pytest.mark.parametrize("model_max_budget", [{}, None], ids=["empty", "null"])
+def test_update_internal_user_settings_accepts_an_empty_model_max_budget_without_a_license(
+    mock_proxy_config, mock_auth, monkeypatch, model_max_budget
+):
+    import litellm
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr(litellm, "default_internal_user_params", {})
+
+    updated = client.patch(
+        "/update/internal_user_settings", json={"max_budget": 10.0, "model_max_budget": model_max_budget}
+    )
+
+    assert updated.status_code == 200, updated.text
+    assert litellm.default_internal_user_params["max_budget"] == 10.0

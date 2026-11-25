@@ -1174,6 +1174,13 @@ async def update_internal_user_settings(
     Update the default internal user parameters for SSO users.
     These settings will be applied to new users who sign in via SSO.
     """
+    from litellm.proxy.management_endpoints.key_management_endpoints import validate_model_max_budget
+
+    try:
+        validate_model_max_budget(None if settings.model_max_budget is None else dict(settings.model_max_budget))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail={"error": str(e)}) from e
+
     if settings.teams is not None:
         await _validate_default_teams_exist(settings.teams)
 

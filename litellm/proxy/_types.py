@@ -5587,6 +5587,13 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
         description="Default budget duration for new users (e.g. 'daily', 'weekly', 'monthly')",
     )
     models: list[str] | None = Field(default=None, description="Default list of models that new users can access")
+    model_max_budget: Mapping[str, JsonValue] | None = Field(
+        default=None,
+        description=(
+            "Default per-model budgets for new users, keyed by model name, "
+            'e.g. {"gpt-4o": {"budget_limit": 5.0, "time_period": "30d"}}. Requires an enterprise license'
+        ),
+    )
 
     teams: list[str] | list[NewUserRequestTeam] | None = Field(
         default=None,

@@ -1673,3 +1673,53 @@ async def test_add_new_member_gives_a_new_user_the_default_budget_windows(new_me
         in (resets_before_call[window["budget_duration"]], resets_after_call[window["budget_duration"]])
         for window in windows
     )
+
+
+@pytest.mark.parametrize(
+    ("premium_user", "expected", "warned"),
+    [
+        (True, {"max_budget": 7.0, "model_max_budget": {"gpt-4o": {"budget_limit": 5.0}}}, False),
+        (False, {"max_budget": 7.0}, True),
+    ],
+    ids=["licensed", "no-enterprise-license"],
+)
+def test_licensed_default_internal_user_params_drops_model_max_budget_without_a_license(
+    monkeypatch, caplog, premium_user, expected, warned
+):
+    import logging
+
+    from litellm.proxy.management_helpers.utils import licensed_default_internal_user_params
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium_user)
+    caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
+
+    monkeypatch.setattr(
+        litellm,
+        "default_internal_user_params",
+        {"max_budget": 7.0, "model_max_budget": {"gpt-4o": {"budget_limit": 5.0}}},
+    )
+
+    applied = licensed_default_internal_user_params()
+
+    assert applied == expected
+    assert [record.getMessage() for record in caplog.records if "model_max_budget" in record.getMessage()] == (
+        ["default_internal_user_params keys not applied without an enterprise license: model_max_budget"]
+        if warned
+        else []
+    )
+
+
+def test_licensed_default_internal_user_params_does_not_warn_when_no_model_max_budget_is_configured(
+    monkeypatch, caplog
+):
+    import logging
+
+    from litellm.proxy.management_helpers.utils import licensed_default_internal_user_params
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
+    defaults = {"max_budget": 7.0, "model_max_budget": {}}
+    monkeypatch.setattr(litellm, "default_internal_user_params", defaults)
+
+    assert licensed_default_internal_user_params() is defaults
+    assert caplog.records == []
