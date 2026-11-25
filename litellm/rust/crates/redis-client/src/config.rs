@@ -13,6 +13,8 @@ use litellm_secret_value::SecretValue;
 
 use pkcs8::EncryptedPrivateKeyInfo;
 
+#[cfg(feature = "fips")]
+use crate::fips::decrypt;
 use crate::{ConnectError, KeyError, Namespace, RedisEvents};
 use litellm_redis_types::{Cluster, RedisUrl, Target, TlsOptions};
 
@@ -204,8 +206,9 @@ fn client_key(path: &PathBuf, password: Option<&SecretValue>) -> Result<Vec<u8>,
         (Some(_), None) => Err(key_error(KeyError::MissingPassword)),
         (Some(section), Some(password)) => {
             let decrypted = EncryptedPrivateKeyInfo::try_from(section.contents())
-                .and_then(|info| info.decrypt(password.expose()))
-                .map_err(|source| key_error(KeyError::Decrypt(source)))?;
+                .map_err(KeyError::Decrypt)
+                .and_then(|info| decrypt(&info, password.expose()))
+                .map_err(key_error)?;
             Ok(pem::encode(&pem::Pem::new("PRIVATE KEY", decrypted.as_bytes())).into_bytes())
         }
         (None, _) if sections.iter().any(is_legacy_encrypted) => {
@@ -213,6 +216,14 @@ fn client_key(path: &PathBuf, password: Option<&SecretValue>) -> Result<Vec<u8>,
         }
         (None, _) => Ok(contents),
     }
+}
+
+#[cfg(not(feature = "fips"))]
+fn decrypt(
+    info: &EncryptedPrivateKeyInfo<'_>,
+    password: &str,
+) -> Result<pkcs8::SecretDocument, KeyError> {
+    info.decrypt(password).map_err(KeyError::Decrypt)
 }
 
 fn is_legacy_encrypted(section: &pem::Pem) -> bool {
@@ -355,6 +366,11 @@ pub(crate) async fn authenticated(
 #[cfg(test)]
 mod tests {
     use litellm_redis_types::{RedisUrl, UnixSocket};
+    use pkcs8::{
+        SecretDocument,
+        der::Encode,
+        pkcs5::{self, pbes2},
+    };
     use rstest::rstest;
 
     use super::*;
@@ -454,5 +470,154 @@ mod tests {
         let info = connection_info(&target, &Credentials::NONE, true).unwrap();
 
         assert_eq!(info.redis_settings().protocol(), ProtocolVersion::RESP2);
+    }
+
+    const KEY_PASSWORD: &str = "redis-client-key-password";
+    const SALT: &[u8] = b"redis-client-key-salt";
+    const AES_IV: [u8; 16] = [7; 16];
+    const DES_IV: [u8; 8] = [7; 8];
+    const DER_SEQUENCE: &[u8] = &[0x30, 0x03, 0x02, 0x01, 0x00];
+    const OPENSSL_KEY: &str = "-----BEGIN PRIVATE KEY-----
+MC4CAQAwBQYDK2VwBCIEIPZi/sVwfl31RuldRWGBkxFUm0MRR4zS/AbJfSTz5gOw
+-----END PRIVATE KEY-----";
+    const OPENSSL_HMAC_WITH_SHA1_KEY: &str = "-----BEGIN ENCRYPTED PRIVATE KEY-----
+MIGNMEkGCSqGSIb3DQEFDTA8MBsGCSqGSIb3DQEFDDAOBAgDuXPNju0QywICCAAw
+HQYJYIZIAWUDBAEqBBA8MVTinGPVUQDLB4P3mZuRBEB/tXUkOHEL20ANYfQoI+P0
+CCHipAQfdXEEZS/iF+yOZZivchKhFk93s8NXqb1XEq6w/PboxfF3V+QKwSHajMYL
+-----END ENCRYPTED PRIVATE KEY-----";
+
+    fn pbkdf2(prf: pbes2::Pbkdf2Prf) -> pbes2::Kdf<'static> {
+        pbes2::Pbkdf2Params {
+            salt: SALT,
+            iteration_count: 1000,
+            key_length: None,
+            prf,
+        }
+        .into()
+    }
+
+    fn scrypt() -> pbes2::Kdf<'static> {
+        let params = pkcs5::scrypt::Params::new(10, 8, 1, 32).unwrap();
+        pbes2::ScryptParams::from_params_and_salt(params, SALT)
+            .unwrap()
+            .into()
+    }
+
+    fn encrypted(
+        kdf: pbes2::Kdf<'static>,
+        encryption: pbes2::EncryptionScheme<'static>,
+    ) -> Vec<u8> {
+        let params = pbes2::Parameters { kdf, encryption };
+        let encrypted_data = params.encrypt(KEY_PASSWORD, DER_SEQUENCE).unwrap();
+        EncryptedPrivateKeyInfo {
+            encryption_algorithm: params.into(),
+            encrypted_data: &encrypted_data,
+        }
+        .to_der()
+        .unwrap()
+    }
+
+    fn decrypted(key: &[u8], password: &str) -> Result<SecretDocument, KeyError> {
+        decrypt(&EncryptedPrivateKeyInfo::try_from(key).unwrap(), password)
+    }
+
+    #[rstest]
+    #[case::sha256_aes_256(
+        pbes2::Pbkdf2Prf::HmacWithSha256,
+        pbes2::EncryptionScheme::Aes256Cbc { iv: &AES_IV }
+    )]
+    #[case::sha384_aes_128(
+        pbes2::Pbkdf2Prf::HmacWithSha384,
+        pbes2::EncryptionScheme::Aes128Cbc { iv: &AES_IV }
+    )]
+    #[case::sha512_aes_192(
+        pbes2::Pbkdf2Prf::HmacWithSha512,
+        pbes2::EncryptionScheme::Aes192Cbc { iv: &AES_IV }
+    )]
+    fn a_pbkdf2_aes_cbc_key_decrypts_only_with_its_ssl_password(
+        #[case] prf: pbes2::Pbkdf2Prf,
+        #[case] encryption: pbes2::EncryptionScheme<'static>,
+    ) {
+        let key = encrypted(pbkdf2(prf), encryption);
+
+        assert_eq!(
+            decrypted(&key, KEY_PASSWORD).unwrap().as_bytes(),
+            DER_SEQUENCE
+        );
+        assert!(matches!(
+            decrypted(&key, "wrong-password"),
+            Err(KeyError::Decrypt(_))
+        ));
+    }
+
+    #[rstest]
+    fn an_openssl_key_whose_prf_defaults_to_hmac_with_sha1_decrypts_only_in_the_fips_build() {
+        let key = pem::parse(OPENSSL_HMAC_WITH_SHA1_KEY).unwrap();
+
+        let plaintext = decrypted(key.contents(), KEY_PASSWORD)
+            .map(|document| document.as_bytes().to_vec())
+            .ok();
+
+        let expected = pem::parse(OPENSSL_KEY).unwrap().contents().to_vec();
+        assert_eq!(plaintext, cfg!(feature = "fips").then_some(expected));
+    }
+
+    #[cfg(not(feature = "fips"))]
+    #[rstest]
+    #[case::scrypt(scrypt(), pbes2::EncryptionScheme::Aes256Cbc { iv: &AES_IV })]
+    #[case::des_ede3_cbc(
+        pbkdf2(pbes2::Pbkdf2Prf::HmacWithSha256),
+        pbes2::EncryptionScheme::DesEde3Cbc { iv: &DES_IV }
+    )]
+    #[case::hmac_with_sha224(
+        pbkdf2(pbes2::Pbkdf2Prf::HmacWithSha224),
+        pbes2::EncryptionScheme::Aes256Cbc { iv: &AES_IV }
+    )]
+    fn the_default_build_decrypts_every_pbes2_scheme_rustcrypto_offers(
+        #[case] kdf: pbes2::Kdf<'static>,
+        #[case] encryption: pbes2::EncryptionScheme<'static>,
+    ) {
+        let key = encrypted(kdf, encryption);
+
+        assert_eq!(
+            decrypted(&key, KEY_PASSWORD).unwrap().as_bytes(),
+            DER_SEQUENCE
+        );
+    }
+
+    #[cfg(feature = "fips")]
+    #[rstest]
+    #[case::scrypt(
+        scrypt(),
+        pbes2::EncryptionScheme::Aes256Cbc { iv: &AES_IV },
+        crate::UnapprovedScheme::Scrypt
+    )]
+    #[case::des_ede3_cbc(
+        pbkdf2(pbes2::Pbkdf2Prf::HmacWithSha256),
+        pbes2::EncryptionScheme::DesEde3Cbc { iv: &DES_IV },
+        crate::UnapprovedScheme::DesEde3Cbc
+    )]
+    #[case::hmac_with_sha224(
+        pbkdf2(pbes2::Pbkdf2Prf::HmacWithSha224),
+        pbes2::EncryptionScheme::Aes256Cbc { iv: &AES_IV },
+        crate::UnapprovedScheme::HmacWithSha224
+    )]
+    fn the_fips_build_refuses_a_scheme_outside_the_module_by_name(
+        #[case] kdf: pbes2::Kdf<'static>,
+        #[case] encryption: pbes2::EncryptionScheme<'static>,
+        #[case] scheme: crate::UnapprovedScheme,
+    ) {
+        let key = encrypted(kdf, encryption);
+
+        let error = decrypted(&key, KEY_PASSWORD).unwrap_err();
+
+        assert!(
+            matches!(&error, KeyError::NotFipsApproved(refused) if *refused == scheme),
+            "{error:?}"
+        );
+        assert!(
+            error.to_string().contains("openssl pkcs8 -topk8"),
+            "{error}"
+        );
     }
 }

@@ -40,6 +40,24 @@ pub enum KeyError {
         "the key uses legacy OpenSSL PEM encryption, which Rust cannot read. Convert it to PKCS#8 with `openssl pkcs8 -topk8`"
     )]
     LegacyEncryption,
+    #[cfg(feature = "fips")]
+    #[error(
+        "the key is encrypted with {0}, which the FIPS build does not allow. Re-encrypt it with PBKDF2-HMAC-SHA256 and AES-256-CBC: `openssl pkcs8 -topk8 -v2 aes-256-cbc -v2prf hmacWithSHA256`"
+    )]
+    NotFipsApproved(UnapprovedScheme),
+}
+
+#[cfg(feature = "fips")]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum UnapprovedScheme {
+    #[error("scrypt")]
+    Scrypt,
+    #[error("des-ede3-cbc")]
+    DesEde3Cbc,
+    #[error("hmacWithSHA224")]
+    HmacWithSha224,
+    #[error("PKCS#5 algorithm {0}")]
+    Other(pkcs8::ObjectIdentifier),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -142,6 +142,7 @@ jobs:
       - name: Test the FIPS build
         run: |
           cargo test -p litellm-http --locked --features fips
+          cargo test -p litellm-redis-client --locked --features fips --lib
           cargo check -p litellm-gateway -p litellm-python-bridge --locked --features fips
 
       - name: Test secret manager feature combinations
