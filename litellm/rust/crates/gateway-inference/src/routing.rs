@@ -12,8 +12,8 @@ use futures_util::{StreamExt, stream};
 use litellm_config::LitellmRole;
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{
-    Rows, StoredKey,
-    authz::{self, Denied, Layer, ModelAsk},
+    AuthzDenial, Rows, StoredKey,
+    authz::{self, Layer, ModelAsk},
 };
 use litellm_inference::Error as InferenceError;
 use litellm_router_core::{
@@ -148,7 +148,7 @@ fn authorize<H: Host>(
     gateway: &Gateway<H>,
     identity: &Authenticated<H::Rows>,
     name: &str,
-) -> Result<(), Denied> {
+) -> Result<(), AuthzDenial> {
     let registry = gateway.router.registry();
     let access_groups: Vec<String> = resolve::model_access_groups(&registry, name, None)
         .into_iter()

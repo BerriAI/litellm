@@ -26,7 +26,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
-from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError
+from litellm.exceptions import MidStreamFallbackError, MissingMessageRoleError, UnresolvablePreviousResponseError
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
@@ -143,10 +143,16 @@ def mark_deployment_selection_failure(exception: BaseException) -> None:
 def is_failure_outside_selected_deployment(exception: BaseException | None) -> bool:
     return (
         is_advisor_orchestration_failure(exception)
-        or isinstance(exception, MissingMessageRoleError)
+        or isinstance(exception, (MissingMessageRoleError, UnresolvablePreviousResponseError))
+        or is_previous_response_rejected(exception)
         or is_answer_without_an_image(exception)
         or bool(getattr(exception, _DEPLOYMENT_SELECTION_FAILURE_ATTR, False))
     )
+
+
+def is_previous_response_rejected(exception: BaseException | None) -> bool:
+    rejected_param: Final[object] = getattr(exception, "param", None)
+    return rejected_param == "previous_response_id"
 
 
 _BACKGROUND_RESPONSE_POLL_CALL_ORIGINS: Final[frozenset[InternalCallOrigin]] = frozenset(

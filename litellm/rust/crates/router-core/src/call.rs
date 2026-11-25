@@ -328,6 +328,7 @@ fn is_bad_request_without_fallback(failure: &AttemptError) -> bool {
         "ContextWindowExceededError",
         "ContentPolicyViolationError",
         "UnsupportedEndpointError",
+        "UnresolvablePreviousResponseError",
     ]
     .iter()
     .any(|class| failure.is_a(class))
@@ -443,11 +444,13 @@ fn fallback_lookup<'a>(
     lookup
 }
 
-/// The host refused an attempt, or the dynamic queue did, somewhere in the walk: the request ends
-/// with that error, whichever level or fallback hop raised it.
+/// The host refused an attempt, the dynamic queue did, or a follow-up names a response no provider
+/// holds, somewhere in the walk: the request ends with that error, whichever level or fallback hop
+/// raised it.
 fn ends_call(error: &Error) -> bool {
     matches!(error, Error::Refused(_))
-        || retried_failure(error).is_some_and(|failure| failure.queue_rejected())
+        || retried_failure(error)
+            .is_some_and(|failure| failure.queue_rejected() || failure.is_unknown_follow_up())
 }
 
 fn may_have_created(error: &Error) -> bool {
@@ -913,8 +916,8 @@ impl<H: RouterHost> Call<'_, H> {
     }
 
     /// `async_function_with_fallbacks_common_utils` raises before looking for any fallback:
-    /// fallbacks are off, the error is a guardrail's, a bad request without
-    /// `fallback_on_unsupported_params`, or no fallback serves the error at all.
+    /// fallbacks are off, the error is a guardrail's or an unresolvable follow-up's, a bad request
+    /// without `fallback_on_unsupported_params`, or no fallback serves the error at all.
     fn raises_without_fallback(
         &self,
         snapshot: &RouterStateSnapshot,
@@ -931,6 +934,7 @@ impl<H: RouterHost> Call<'_, H> {
             failure.kind == FailureKind::GuardrailIntervention
                 || failure.create_may_exist
                 || failure.queue_rejected()
+                || failure.is_unknown_follow_up()
                 || (!snapshot.settings.fallback_on_unsupported_params
                     && is_bad_request_without_fallback(&failure))
         })

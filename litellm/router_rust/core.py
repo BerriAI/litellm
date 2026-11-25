@@ -37,6 +37,7 @@ from typing_extensions import assert_never
 
 from litellm._internal_context import request_parent_otel_span, service_target
 from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS, SEMANTIC_CACHE_POLICY_KEY
+from litellm.exceptions import UnknownPreviousResponseError
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -4724,7 +4725,7 @@ class _Driver:
         self._level_errors: Final[dict[int, BaseException]] = dict(  # mutable-ok: filled as the call runs
             (stream_failure,) if stream_failure else ()
         )
-        self._queue_rejection: QueueRejectedError | None = None
+        self._ending_error: BaseException | None = None
         self._answer_without_an_image: BaseException | None = None
         self._attempt_errors: Final[dict[tuple[int, str], BaseException]] = {}  # mutable-ok: filled as the call runs
         self._raises_stream_origin: bool = False
@@ -4768,7 +4769,7 @@ class _Driver:
 
     def clear_errors(self) -> None:
         self._last_error = None
-        self._queue_rejection = None
+        self._ending_error = None
         self._answer_without_an_image = None
         self._level_errors.clear()
         self._hop_first.clear()
@@ -4891,7 +4892,7 @@ class _Driver:
         if isinstance(error, RustCoreUnsupported):
             raise error
         if isinstance(error, QueueRejectedError):
-            self._queue_rejection = error
+            self._ending_error = error
         if logged:
             self._log_pick_failure(error)
         else:
@@ -5387,6 +5388,8 @@ class _Driver:
         stamp_error(self._plan, error, deployment, served)  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
         self._core._endpoints.attempt_failed(self._plan, error, deployment, call, str(step.get("model")))  # pyright: ignore[reportPrivateUsage]  # see above
         self._last_error = error
+        if isinstance(error, UnknownPreviousResponseError):
+            self._ending_error = error
         if _answered_without_an_image(error) and self._answer_without_an_image is None:
             self._answer_without_an_image = error
         level: Final = step.get("fallback_level")
@@ -5742,7 +5745,7 @@ class _Driver:
     ) -> Mapping[str, object]:
         terminal: Final = await self._queue_terminal(admission, error)
         if terminal is not None:
-            self._queue_rejection = terminal
+            self._ending_error = terminal
             return {**self._failed(step, deployment, call, terminal), "recorded": True}
         failed: Final = self._failed(step, deployment, call, error)
         if reading_stream is None or not logs_failure:
@@ -6076,8 +6079,8 @@ class _Driver:
             self.clear_errors()
 
     def _failure(self, step: Mapping[str, object]) -> BaseException:
-        if self._queue_rejection is not None:
-            return self._queue_rejection
+        if self._ending_error is not None:
+            return self._ending_error
         model: Final = str(self._request.get("model"))
         primary: Final = self._error_the_client_gets()
         if primary is None:

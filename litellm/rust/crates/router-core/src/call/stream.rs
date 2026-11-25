@@ -93,6 +93,8 @@ pub struct StreamPolicy {
     pub can_fall_back: bool,
     /// `_refusal_fallback_available`.
     pub refusal_fallback: bool,
+    /// Whether a `context_window_fallbacks` chain still has a target for the stream's group.
+    pub context_window_fallback: bool,
     /// `_stream_retry_budget` for the failure kind asked about: the budget, and whether a retry
     /// policy governs the retry.
     pub retry_budget: Option<(u32, bool)>,
@@ -256,6 +258,7 @@ impl Router {
             can_retry: stream_can_retry(&snapshot, request, origin),
             can_fall_back: stream_can_fall_back(&snapshot, request, origin),
             refusal_fallback: refusal_fallback_available(&snapshot, request, origin),
+            context_window_fallback: context_window_fallback_available(&snapshot, request, origin),
             retry_budget: kind.map(|kind| stream_retry_budget(&snapshot, request, origin, kind)),
         }
     }
@@ -706,6 +709,21 @@ fn stream_can_fall_back(
         return true;
     }
     origin.has_unattempted(request, regular_targets(snapshot, request, &lists, &lookup))
+}
+
+fn context_window_fallback_available(
+    snapshot: &RouterStateSnapshot,
+    request: &RouterRequest,
+    origin: &StreamOrigin,
+) -> bool {
+    if request.disable_fallbacks {
+        return false;
+    }
+    let lists = Lists::of(snapshot, request);
+    let lookup = origin.lookup(request);
+    lists.context_window.is_some_and(|list| {
+        origin.has_unattempted(request, names(list.lookup_groups(&lookup, lists.keys)))
+    })
 }
 
 fn refusal_fallback_available(

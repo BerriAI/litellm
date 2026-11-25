@@ -506,6 +506,25 @@ fn agentic_followup() -> AttemptError {
     failed
 }
 
+fn follow_up_to_a_provider_held_response() -> AttemptError {
+    let mut failed = failure(FailureKind::Declined, 400);
+    failed.classes = vec![
+        "UnresolvablePreviousResponseError".into(),
+        "MalformedRequestFieldError".into(),
+        "BadRequestError".into(),
+    ];
+    failed.names_provider = true;
+    failed
+}
+
+fn follow_up_to_an_unknown_response() -> AttemptError {
+    let mut failed = follow_up_to_a_provider_held_response();
+    failed
+        .classes
+        .insert(0, "UnknownPreviousResponseError".into());
+    failed
+}
+
 fn create_may_exist() -> AttemptError {
     let mut failed = failure(FailureKind::Timeout, 408);
     failed.create_may_exist = true;
@@ -2504,6 +2523,7 @@ async fn a_num_retries_that_raises_leaves_a_context_window_error_standing(config
 #[rstest]
 #[case::agentic_followup(agentic_followup())]
 #[case::over_every_tpm_limit(over_every_tpm_limit())]
+#[case::follow_up_to_a_provider_held_response(follow_up_to_a_provider_held_response())]
 #[tokio::test]
 async fn a_failure_no_retry_clears_is_not_retried_but_still_falls_back(
     config: RouterConfig,
@@ -2522,6 +2542,89 @@ async fn a_failure_no_retry_clears_is_not_retried_but_still_falls_back(
     assert_eq!(response.deployment_id, "b1");
     assert_eq!(host.retries(), 0);
     assert_eq!(host.selected().len(), 2);
+}
+
+#[rstest]
+#[case::fallbacks(json!({"num_retries": 3, "fallbacks": [{"primary": ["backup"]}]}))]
+#[case::default_fallbacks(json!({"num_retries": 3, "default_fallbacks": ["backup"]}))]
+#[tokio::test]
+async fn a_follow_up_to_an_unknown_response_is_neither_retried_nor_falls_back(
+    config: RouterConfig,
+    #[case] dynamic: Value,
+) {
+    let mut config = config;
+    config.retry_policy = serde_json::from_value(json!({"BadRequestErrorRetries": 2})).unwrap();
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![follow_up_to_an_unknown_response()],
+    ));
+    let router = router(config, dynamic, host.clone());
+    let refused = router.call(Op::from("acompletion"), request()).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt { failure: failed, .. }) if failed.is_a("UnresolvablePreviousResponseError"))
+    );
+    assert_eq!((host.retries(), host.selected().len()), (0, 1));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_follow_up_to_an_unknown_response_on_a_fallback_ends_the_call_before_the_next_target() {
+    let host = Arc::new(ScriptedHost::scripted(vec![
+        ("primary", vec![server_error()]),
+        ("backup", vec![follow_up_to_an_unknown_response()]),
+    ]));
+    let router = router(
+        tiers(false),
+        json!({"num_retries": 0, "fallbacks": [{"primary": ["backup", "context"]}]}),
+        host.clone(),
+    );
+    let refused = router.call(Op::from("acompletion"), request()).await;
+    assert!(
+        matches!(refused, Err(Error::Attempt { failure: failed, .. }) if failed.is_a("UnknownPreviousResponseError"))
+    );
+    assert_eq!(host.selected(), ["p1", "b1"]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_fallback_that_cannot_rebuild_a_provider_held_response_hands_it_to_the_next_target() {
+    let host = Arc::new(ScriptedHost::scripted(vec![
+        ("primary", vec![server_error()]),
+        ("backup", vec![follow_up_to_a_provider_held_response()]),
+    ]));
+    let router = router(
+        tiers(false),
+        json!({"num_retries": 0, "fallbacks": [{"primary": ["backup", "context"]}]}),
+        host.clone(),
+    );
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    assert_eq!(response.deployment_id, "c1");
+    assert_eq!(host.selected(), ["p1", "b1", "c1"]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_provider_held_follow_up_falls_back_without_fallback_on_unsupported_params(
+    mut config: RouterConfig,
+) {
+    config.fallback_on_unsupported_params = Some(false);
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![follow_up_to_a_provider_held_response()],
+    ));
+    let router = router(
+        config,
+        json!({"num_retries": 0, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    assert_eq!(response.deployment_id, "b1");
 }
 
 #[rstest]
@@ -3275,6 +3378,28 @@ fn a_request_content_policy_list_can_take_over_a_stream(config: RouterConfig) {
     let policy = router.stream_policy(&request, &stream_origin(), None);
     assert!(policy.can_fall_back);
     assert!(policy.refusal_fallback);
+}
+
+#[rstest]
+#[case::for_the_group(json!({"context_window_fallbacks": [{"primary": ["backup"]}]}), false, true, false)]
+#[case::for_another_group(json!({"context_window_fallbacks": [{"other": ["backup"]}]}), false, false, false)]
+#[case::fallbacks_disabled(json!({"context_window_fallbacks": [{"primary": ["backup"]}]}), true, false, false)]
+#[case::regular_fallbacks_only(json!({"fallbacks": [{"primary": ["backup"]}]}), false, false, true)]
+fn a_context_window_list_for_the_group_can_take_over_a_stream_apart_from_the_regular_fallbacks(
+    config: RouterConfig,
+    #[case] settings: serde_json::Value,
+    #[case] disable_fallbacks: bool,
+    #[case] context_window_fallback: bool,
+    #[case] can_fall_back: bool,
+) {
+    let router = router(config, settings, Arc::new(ScriptedHost::default()));
+    let request = RouterRequest {
+        disable_fallbacks,
+        ..request()
+    };
+    let policy = router.stream_policy(&request, &stream_origin(), None);
+    assert_eq!(policy.context_window_fallback, context_window_fallback);
+    assert_eq!(policy.can_fall_back, can_fall_back);
 }
 
 #[rstest]
