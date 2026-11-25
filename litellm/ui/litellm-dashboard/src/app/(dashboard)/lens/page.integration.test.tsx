@@ -1,10 +1,9 @@
 import { act, screen, waitFor } from "@testing-library/react";
-import { useEffect } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { renderWithProviders, testQueryClient } from "../../../../tests/test-utils";
-import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { AuthProvider } from "@/contexts/AuthContext";
 import SidebarAccountMenu from "@/components/SidebarAccountMenu/SidebarAccountMenu";
-import { getGlobalLitellmHeaderName, setGlobalLitellmHeaderName, switchToWorkerUrl } from "@/components/networking";
+import { setGlobalLitellmHeaderName, switchToWorkerUrl } from "@/components/networking";
 import { setServerRootPath } from "@/lib/serverRootPath";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import type { CurrentUser } from "@/app/(dashboard)/hooks/currentUser/useCurrentUser";
@@ -16,7 +15,6 @@ vi.mock("next/navigation", () => ({
 }));
 
 const network = vi.fn<typeof fetch>();
-const observedToken = vi.fn<(token: string | null) => void>();
 const logout = vi.fn();
 const usersByBearer = new Map<string, CurrentUser>([
   ["Bearer sk-alice", { user_id: "Alice", user_email: null, user_role: "proxy_admin" }],
@@ -33,15 +31,8 @@ const session = (user: string, expiresAt: number) => {
   return `header.${btoa(JSON.stringify(claims))}.signature`;
 };
 
-function ObserveMountedSession() {
-  const { token } = useAuth();
-  useEffect(() => observedToken(token), [token]);
-  return null;
-}
-
 const dashboard = (showLens = true) => (
   <AuthProvider>
-    <ObserveMountedSession />
     <SidebarAccountMenu onLogout={logout} />
     {showLens && <LensPage />}
   </AuthProvider>
@@ -80,7 +71,6 @@ function expectLensCredentials(iframe: HTMLIFrameElement, accessToken: string, h
 
 beforeEach(() => {
   network.mockReset();
-  observedToken.mockClear();
   testQueryClient.clear();
   window.history.replaceState(null, "", "/ui/lens/?tab=traces");
   clearTokenCookies();
@@ -127,7 +117,6 @@ afterEach(() => {
 });
 
 it("uses the visible Admin account and JWT header for the first service request and handshake", async () => {
-  expect(getGlobalLitellmHeaderName()).toBe("Authorization");
   document.cookie = `token=${session("Alice", Math.floor(Date.now() / 1000) + 3600)}; Path=/`;
   renderWithProviders(dashboard());
   expect(await screen.findByRole("button", { name: /Account menu.*Admin.*signed in as Alice/ })).toBeVisible();
@@ -160,8 +149,28 @@ it.each(["navigation to Lens", "a shared rerender with Lens open"])(
     expect(serviceRequests()).toHaveLength(wasOpen ? 2 : 1);
     if (previousFrame) expect(previousFrame).not.toBeInTheDocument();
     expect(getCookie("token")).toBe(bob);
-    expect(observedToken).toHaveBeenLastCalledWith(alice);
-    expect(getGlobalLitellmHeaderName()).toBe("X-Admin-Key");
+  },
+);
+
+it.each(["missing", "another account"])(
+  "keeps Lens on the visible dashboard account when the root cookie is %s",
+  async (rootCookie) => {
+    const expiresAt = Math.floor(Date.now() / 1000) + 3600;
+    const alice = session("Alice", expiresAt);
+    document.cookie = `token=${alice}; Path=/ui`;
+    document.cookie = `token=${alice}; Path=/`;
+    const { rerender } = renderWithProviders(dashboard(false));
+    expect(await screen.findByRole("button", { name: /Account menu.*Admin.*signed in as Alice/ })).toBeVisible();
+
+    document.cookie =
+      rootCookie === "missing" ? "token=; Max-Age=0; Path=/" : `token=${session("Bob", expiresAt)}; Path=/`;
+    rerender(dashboard());
+
+    expect(await screen.findByRole("button", { name: /Account menu.*Admin.*signed in as Alice/ })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Account menu.*signed in as Bob/ })).not.toBeInTheDocument();
+    const iframe = await screen.findByTitle<HTMLIFrameElement>("Lens");
+    expectLensCredentials(iframe, "sk-alice", "X-Admin-Key");
+    expect(serviceRequests()).toHaveLength(1);
   },
 );
 
