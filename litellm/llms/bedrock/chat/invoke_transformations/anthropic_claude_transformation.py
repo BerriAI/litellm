@@ -300,6 +300,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             messages=messages,
             optional_params=upstream_params,
             headers=headers,
+            body_betas=active_beta_values({}, upstream_params.get("anthropic_beta")),
             thinking=_anthropic_request.get("thinking"),
             history_holds_tool_search=replays_tool_search(
                 OBJECT_MAPPING_ADAPTER.validate_python(_anthropic_request).get("messages")
@@ -465,6 +466,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         headers: dict[str, object],
+        body_betas: frozenset[str],
         thinking: AnthropicThinkingParam | None,
         history_holds_tool_search: bool,
     ) -> list[str]:
@@ -474,7 +476,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         input_examples_used: Final = self.is_input_examples_used(tools)
         is_mid_conversation_output_config_used: Final = self.is_mid_conversation_output_config_used(messages)
 
-        client_beta_set: Final = set(get_anthropic_beta_from_headers(headers))
+        client_beta_set: Final = set(get_anthropic_beta_from_headers(headers)) | body_betas
         user_beta_set: Final = (
             client_beta_set
             if "safeguards" in optional_params

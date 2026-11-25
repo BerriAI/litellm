@@ -2566,21 +2566,30 @@ def test_bedrock_chat_invoke_drops_safeguards_and_beta_under_drop_params_when_be
         pytest.param(_OPUS_4_1, False, id="old_model_drops_both"),
     ],
 )
+@pytest.mark.parametrize(
+    ("anthropic_beta", "headers"),
+    [
+        pytest.param([_DANGEROUS_TOOL_USE_BETA, "context-1m-2025-08-07"], {}, id="both_betas_in_the_body"),
+        pytest.param(
+            [_DANGEROUS_TOOL_USE_BETA], {"anthropic-beta": "context-1m-2025-08-07"}, id="other_beta_in_a_header"
+        ),
+    ],
+)
 def test_bedrock_chat_invoke_reads_the_dangerous_tool_use_beta_from_the_anthropic_beta_param(
-    monkeypatch: pytest.MonkeyPatch, model: str, forwarded: bool
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    forwarded: bool,
+    anthropic_beta: list[str],
+    headers: dict[str, object],
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     safeguards: Final = [{"type": "dangerous_tool_use"}]
     result: Final = AmazonAnthropicClaudeConfig().transform_request(
         model=model,
         messages=[{"role": "user", "content": "hi"}],
-        optional_params={
-            "max_tokens": 64,
-            "safeguards": safeguards,
-            "anthropic_beta": [_DANGEROUS_TOOL_USE_BETA, "context-1m-2025-08-07"],
-        },
+        optional_params={"max_tokens": 64, "safeguards": safeguards, "anthropic_beta": anthropic_beta},
         litellm_params={"drop_params": True},
-        headers={},
+        headers=headers,
     )
 
     assert result.get("safeguards") == (safeguards if forwarded else None)
