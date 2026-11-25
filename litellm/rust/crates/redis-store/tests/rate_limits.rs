@@ -135,6 +135,17 @@ async fn raw_text(raw: &RedisClient, key: &str) -> Option<String> {
     raw.send(commands::get(key)).await.unwrap()
 }
 
+async fn seed(raw: &RedisClient, key: &str, value: &str, ttl: Duration) {
+    raw.send(commands::set(key, value, ttl)).await.unwrap();
+}
+
+async fn ttl_of(raw: &RedisClient, key: &str) -> Duration {
+    let Ttl::Expires(ttl) = raw.send(commands::ttl(key)).await.unwrap() else {
+        panic!("{key} has no TTL");
+    };
+    ttl
+}
+
 async fn zcard(raw: &RedisClient, key: &str) -> i64 {
     raw.send(commands::eval(
         &Script::new("return redis.call('ZCARD', KEYS[1])"),
@@ -642,14 +653,9 @@ async fn token_increment_into_a_closed_window_opens_it_so_admission_counts_the_t
             .unwrap();
         async move { pending.await.unwrap() }
     };
-    for (stale, value) in [
-        ("{api_key:relay-first}:tokens", "900"),
-        ("{api_key:relay-first}:requests", "7"),
-    ] {
-        raw.send(commands::set(stale, value, Duration::from_secs(600)))
-            .await
-            .unwrap();
-    }
+    let ten_minutes = Duration::from_secs(600);
+    seed(&raw, "{api_key:relay-first}:tokens", "900", ten_minutes).await;
+    seed(&raw, "{api_key:relay-first}:requests", "7", ten_minutes).await;
 
     assert_eq!(charge(-50).await, vec![0.0]);
     assert_eq!(raw_text(&raw, "{api_key:relay-first}:window").await, None);
@@ -662,15 +668,10 @@ async fn token_increment_into_a_closed_window_opens_it_so_admission_counts_the_t
         .unwrap();
     assert!((now - window_start).abs() <= 2, "{window_start} vs {now}");
     assert_eq!(raw_text(&raw, "{api_key:relay-first}:requests").await, None);
-    for key in [
-        "{api_key:relay-first}:window",
-        "{api_key:relay-first}:tokens",
-    ] {
-        let Ttl::Expires(ttl) = raw.send(commands::ttl(key)).await.unwrap() else {
-            panic!("{key} has no TTL");
-        };
-        assert!(within(ttl, 60), "{key} {ttl:?}");
-    }
+    let window_ttl = ttl_of(&raw, "{api_key:relay-first}:window").await;
+    assert!(within(window_ttl, 60), "{window_ttl:?}");
+    let tokens_ttl = ttl_of(&raw, "{api_key:relay-first}:tokens").await;
+    assert!(within(tokens_ttl, 60), "{tokens_ttl:?}");
     assert_eq!(charge(720).await, vec![1080.0]);
 
     assert_eq!(
@@ -698,13 +699,9 @@ async fn token_increment_keeps_a_live_window_that_outlasts_its_ttl(
     let key = scope("api_key_tpd", "daily");
     let window_start = (redis_now(&raw).await - 120).to_string();
     let day = Duration::from_secs(86_400);
-    for (stored, value) in [
-        ("{api_key_tpd:daily}:window", window_start.as_str()),
-        ("{api_key_tpd:daily}:tokens", "500"),
-        ("{api_key_tpd:daily}:requests", "3"),
-    ] {
-        raw.send(commands::set(stored, value, day)).await.unwrap();
-    }
+    seed(&raw, "{api_key_tpd:daily}:window", &window_start, day).await;
+    seed(&raw, "{api_key_tpd:daily}:tokens", "500", day).await;
+    seed(&raw, "{api_key_tpd:daily}:requests", "3", day).await;
 
     let charged = limits
         .token_increment(

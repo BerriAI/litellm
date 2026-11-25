@@ -1639,10 +1639,9 @@ impl Engine {
                 );
                 self.labelled(
                     "async_increment_pipeline",
-                    self.store.increment_many(operations),
+                    self.store.increment_many(&members),
                 )
                 .await;
-                return;
             }
         }
     }

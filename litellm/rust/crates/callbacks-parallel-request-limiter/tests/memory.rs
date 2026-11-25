@@ -12,10 +12,15 @@ use litellm_callbacks_parallel_request_limiter::{
     Policy, PostCallFailureFacts, PreCallFacts, PriorResponse, RateLimitedModel, Settings,
     SocketClose, SuccessFacts, TargetFacts,
 };
-use litellm_redis_store::{
-    Number,
-    rate_limits::{Counter, Entry, Kind, Local, RateLimits, Scope},
+use litellm_redis_client::{
+    Credentials, Namespace, RedisClient, RedisConfig, RedisUrl, Script, Target, Timeouts, commands,
 };
+use litellm_redis_store::{
+    Number, Remote,
+    rate_limits::{Counter, Entry, Increment, Kind, Local, RateLimits, Scope},
+};
+use litellm_redis_testing::RedisServer;
+use litellm_secret_value::SecretValue;
 use rstest::rstest;
 use serde_json::json;
 
@@ -689,4 +694,94 @@ async fn a_socket_refund_after_its_window_rolled_over_leaves_the_next_window_alo
         .close_socket(&socket, SocketClose::RelayFailed)
         .await;
     assert_eq!(key_tokens(&store), before);
+}
+
+fn client_of(server: &RedisServer) -> RedisClient {
+    RedisClient::new(RedisConfig {
+        target: Target::Url(RedisUrl {
+            url: SecretValue::new(server.url().to_owned()),
+            tls: None,
+            db: None,
+            username: None,
+            password: None,
+        }),
+        credentials: Credentials::NONE,
+        namespace: Namespace::default(),
+        timeouts: Timeouts::new(Duration::from_millis(500), None),
+        breaker: None,
+        events: None,
+        health_check: None,
+        keepalive: true,
+    })
+    .unwrap()
+}
+
+fn tokens_of(descriptor: &str, value: &str, amount: i64) -> Increment {
+    Increment {
+        counter: Counter {
+            scope: Scope {
+                descriptor: descriptor.into(),
+                value: value.into(),
+            },
+            kind: Kind::Tokens,
+        },
+        amount: Number::Int(amount),
+        ttl: Some(Duration::from_secs(60)),
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_slot_group_whose_script_fails_does_not_charge_the_groups_before_it_again() {
+    let server = RedisServer::start().await.unwrap();
+    let client = client_of(&server);
+    let sixty = Duration::from_secs(60);
+    client
+        .send(commands::set("{user:poisoned}:window", "1", sixty))
+        .await
+        .unwrap();
+    client
+        .send(commands::eval::<i64>(
+            &Script::new("return redis.call('RPUSH', KEYS[1], 'not a number')"),
+            &["{user:poisoned}:tokens"],
+            Vec::<String>::new(),
+        ))
+        .await
+        .unwrap();
+    let remote = Remote {
+        client: client.clone(),
+        default_ttl: sixty,
+    };
+    let (limiter, store, _) = limiter_over(true, |_| RateLimits::new(Some(remote), None));
+    let charges = [
+        tokens_of("api_key", "charged", 100),
+        tokens_of("user", "poisoned", 100),
+    ];
+    let scopes: Vec<Scope> = charges
+        .iter()
+        .map(|charge| charge.counter.scope.clone())
+        .collect();
+    assert_eq!(store.slot_groups(&scopes, true).len(), 2);
+
+    limiter
+        .engine()
+        .increment_with_ttl_preservation(
+            &charges,
+            Ctx {
+                policy: Policy {
+                    force_grouping: true,
+                    ..Policy::default()
+                },
+                request: None,
+            },
+        )
+        .await;
+
+    assert_eq!(
+        client
+            .send(commands::get::<String>("{api_key:charged}:tokens"))
+            .await
+            .unwrap(),
+        Some("100".to_owned())
+    );
 }
