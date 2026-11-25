@@ -1,13 +1,15 @@
 import asyncio
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.custom_httpx.sse_lines import aiter_sse_lines, iter_sse_lines
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
@@ -84,31 +86,46 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
             EndpointType.GEMINI if custom_llm_provider == litellm.LlmProviders.GEMINI.value else EndpointType.VERTEX_AI
         )
         self._hidden_params: dict[str, object] = hidden_params or {}
+        self._logging_dispatched: bool = False
+        self._stream_failed: bool = False
+        self._logging_task: asyncio.Task[object] | None = None
 
-    async def _handle_async_streaming_logging(
-        self,
-    ):
-        """Handle the logging after all chunks have been collected."""
+    def _should_log_collected_chunks(self) -> bool:
+        if self._logging_dispatched or self._stream_failed:
+            return False
+        return bool(self.collected_chunks) and litellm.disable_streaming_logging is not True
+
+    def _build_async_streaming_logging_coroutine(self) -> Coroutine[object, object, object]:
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
         )
 
         end_time: Final = datetime.now()
-        spawn_logging_task(
+        return PassThroughStreamingHandler.route_streaming_logging_to_handler(
+            litellm_logging_obj=self.litellm_logging_obj,
+            passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
+            url_route="/v1/generateContent",
+            request_body=self.request_body or {},
+            endpoint_type=self.endpoint_type,
+            start_time=self.start_time,
+            raw_bytes=tuple(self.collected_chunks),
+            end_time=end_time,
+            model=self.model,
+        )
+
+    def _schedule_async_streaming_logging(self) -> None:
+        if self._logging_dispatched:
+            return
+        self._logging_dispatched = True
+        self._logging_task = spawn_logging_task(
             asyncio.get_running_loop(),
-            PassThroughStreamingHandler.route_streaming_logging_to_handler(
-                litellm_logging_obj=self.litellm_logging_obj,
-                passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
-                url_route="/v1/generateContent",
-                request_body=self.request_body or {},
-                endpoint_type=self.endpoint_type,
-                start_time=self.start_time,
-                raw_bytes=self.collected_chunks,
-                end_time=end_time,
-                model=self.model,
-            ),
+            self._build_async_streaming_logging_coroutine(),
             task_name="Google GenAI stream success log",
         )
+
+    async def _handle_async_streaming_logging(self) -> None:
+        """Handle the logging after all chunks have been collected."""
+        self._schedule_async_streaming_logging()
 
 
 class GoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateContentStreamingIterator):
@@ -196,7 +213,7 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
     def __aiter__(self):
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> bytes:
         try:
             chunk: Final = await _anext_google_genai_sse_chunk(self.stream_iterator)
             if self.litellm_logging_obj.completion_start_time is None:
@@ -205,4 +222,48 @@ class AsyncGoogleGenAIGenerateContentStreamingIterator(BaseGoogleGenAIGenerateCo
             return chunk
         except StopAsyncIteration:
             await self._handle_async_streaming_logging()
-            raise StopAsyncIteration
+            raise
+        except asyncio.CancelledError:
+            if self._should_log_collected_chunks():
+                self._schedule_async_streaming_logging()
+            raise
+        except Exception:
+            self._stream_failed = True
+            raise
+
+    async def log_collected_chunks_on_disconnect(self) -> bool:
+        """Flush buffered success logging during shielded proxy disconnect cleanup."""
+        if self._logging_dispatched:
+            if self._logging_task is not None and not self._logging_task.done():
+                try:
+                    await self._logging_task
+                except Exception as exc:  # noqa: BLE001  # disconnect cleanup must not fail stream teardown
+                    verbose_logger.debug("Google GenAI stream success logging task failed on disconnect: %s", exc)
+            return bool(self.litellm_logging_obj.model_call_details.get("has_dispatched_final_stream_success"))
+        if not self._should_log_collected_chunks():
+            return False
+        self._logging_dispatched = True
+        try:
+            await self._build_async_streaming_logging_coroutine()
+        except Exception as exc:  # noqa: BLE001  # disconnect cleanup must not fail stream teardown
+            verbose_logger.debug("Google GenAI disconnect logging failed: %s", exc)
+            return False
+        return bool(self.litellm_logging_obj.model_call_details.get("has_dispatched_final_stream_success"))
+
+    async def aclose(self) -> None:
+        """Schedule pending success logging before closing the upstream SSE response."""
+        try:
+            if self._should_log_collected_chunks():
+                self._schedule_async_streaming_logging()
+        finally:
+            try:
+                await aclose_if_supported(self.stream_iterator)
+            finally:
+                await aclose_if_supported(self.response)
+
+
+async def log_google_genai_stream_on_disconnect(response: object) -> bool | None:
+    """Log collected chunks for a disconnected Google GenAI stream if `response` is one."""
+    if not isinstance(response, AsyncGoogleGenAIGenerateContentStreamingIterator):
+        return None
+    return await response.log_collected_chunks_on_disconnect()

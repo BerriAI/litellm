@@ -67,6 +67,7 @@ from litellm.constants import (
     STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
 )
+from litellm.google_genai.streaming_iterator import log_google_genai_stream_on_disconnect
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import subclass_overrides_hook
 from litellm.integrations.custom_logger_v2.enums import Field, Hook
@@ -589,6 +590,9 @@ async def _bill_partial_streamed_spend_on_disconnect(request_data: Mapping[str, 
             sanitize_for_log(logging_obj.litellm_call_id),
         )
         return await _dispatch_disconnect_billing_event(logging_obj, partial_responses_event)
+    google_genai_billed: Final = await log_google_genai_stream_on_disconnect(response)
+    if google_genai_billed is not None:
+        return google_genai_billed
     chunks: Final[object] = getattr(response, "chunks", None)
     chunk_source: Final[object] = chunks
     if not isinstance(chunks, list) or not chunks:
