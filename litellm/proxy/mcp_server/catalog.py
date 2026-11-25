@@ -1400,7 +1400,7 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
                 self._pending.pop(key)
 
     @staticmethod
-    def _observe_completion(task: asyncio.Task[_DiscoveryPage]) -> None:
+    def _observe_completion(task: asyncio.Future[_DiscoveryPage]) -> None:
         if not task.cancelled():
             task.exception()
 
@@ -1433,7 +1433,7 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
         return await self._await_fetch(key, task)
 
     async def _fetch_uncached(self, fetch: Callable[[], Awaitable[_DiscoveryPage]]) -> _DiscoveryPage:
-        task: Final = asyncio.create_task(fetch())
+        task: Final = asyncio.ensure_future(fetch())
         task.add_done_callback(self._observe_completion)
         try:
             return await asyncio.shield(task)
