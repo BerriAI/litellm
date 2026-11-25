@@ -1457,14 +1457,15 @@ class ParallelRequestLimiterHook(CustomLogger):
             native_state: Final = _native_state(self, get_request_stash() if turn else stash)
             if native_state is None and not turn:
                 return
+            provider_billed: Final = is_answer_without_an_image(failed_call.get("exception"))
             await self.native_companion.log_failure(
                 native_state,
                 failed_call,
-                _settlement_resolved(self, failed_call, native_state) if turn else {},
+                _settlement_resolved(self, failed_call, native_state) if turn or provider_billed else {},
                 token_rate_limit_type(),
                 request=post_call_request() if self.rate_limits.has_redis else None,
                 turn=turn,
-                provider_billed=is_answer_without_an_image(failed_call.get("exception")),
+                provider_billed=provider_billed,
             )
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit failure event: %s", e)

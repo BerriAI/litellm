@@ -79,7 +79,9 @@ def billed_deployment_tokens(kwargs: Mapping[str, object]) -> BilledDeploymentTo
     deployment_name: Final = next((name for name in routed if isinstance(name, str)), None)
     deployment_id: Final = logged.get("model_id")
     tokens: Final = logged.get("total_tokens")
-    if deployment_name is None or not isinstance(deployment_id, (str, int)) or not isinstance(tokens, int):
+    if not isinstance(tokens, int) or tokens <= 0:
+        return None
+    if deployment_name is None or not isinstance(deployment_id, (str, int)):
         return None
     return BilledDeploymentTokens(str(deployment_id), deployment_name, tokens)
 

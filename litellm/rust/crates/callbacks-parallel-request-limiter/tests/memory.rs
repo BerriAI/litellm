@@ -7,7 +7,7 @@ use litellm_callbacks::Abort;
 use litellm_callbacks_parallel_request_limiter::{
     Candidate, Code, Descriptor, Engine, FailureFacts, LimiterState, ModelFacts,
     ParallelRequestLimiter, PostCallFailureFacts, PreCallFacts, PriorResponse, RateLimitedModel,
-    Settings, SocketClose, SuccessFacts, TargetFacts, Usage,
+    Settings, SocketClose, SuccessFacts, TargetFacts,
 };
 use litellm_redis_store::{
     Number,
@@ -209,16 +209,30 @@ async fn a_reservation_is_settled_to_actual_usage_and_refunded_on_failure() {
     );
 }
 
+fn key_usage(tokens: i64) -> SuccessFacts {
+    SuccessFacts {
+        call_id: Some("call".into()),
+        total_tokens: tokens,
+        targets: TargetFacts {
+            user_api_key_hash: Some("k".into()),
+            ..TargetFacts::default()
+        },
+        ..SuccessFacts::default()
+    }
+}
+
 #[rstest]
-#[case::outage_then_refusal(0, false, 0)]
-#[case::refusal_then_refusal(777, true, 777)]
+#[case::outage_then_refusal_reserved(true, false, 0)]
+#[case::refusal_then_refusal_reserved(true, true, 777)]
+#[case::outage_then_refusal_unreserved(false, false, 0)]
+#[case::refusal_then_refusal_unreserved(false, true, 777)]
 #[tokio::test]
-async fn a_billed_refusal_after_an_earlier_hop_settled_the_reservation_still_counts_toward_key_tpm(
-    #[case] first_hop_tokens: i64,
+async fn every_billed_refusal_of_a_fallback_chain_counts_toward_key_tpm(
+    #[case] reservation: bool,
     #[case] first_hop_billed: bool,
     #[case] first_hop_charged: i64,
 ) {
-    let (limiter, store, _) = limiter(true);
+    let (limiter, store, _) = limiter(reservation);
     let tpm = descriptors(
         json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 10_000}}]),
     );
@@ -227,43 +241,97 @@ async fn a_billed_refusal_after_an_earlier_hop_settled_the_reservation_still_cou
         limiter.pre_call(&state, facts(tpm, Some(300)), None).await,
         None
     );
-    let refusal = |tokens: i64, billed: bool| FailureFacts {
-        call_id: Some("call".into()),
-        tpm_actual: tokens,
-        partial_usage: billed.then_some(Usage {
-            prompt_tokens: tokens,
-            completion_tokens: 0,
-            cached_tokens: 0,
-        }),
-        provider_billed: billed,
-        ..FailureFacts::default()
-    };
+    let counted_at_admission = i64::from(!reservation);
 
+    if first_hop_billed {
+        limiter
+            .settle_billed_failure(&state, key_usage(777), None)
+            .await;
+    } else {
+        limiter
+            .settle_failure(
+                &state,
+                FailureFacts {
+                    call_id: Some("call".into()),
+                    ..FailureFacts::default()
+                },
+                None,
+            )
+            .await;
+    }
     limiter
-        .settle_failure(&state, refusal(first_hop_tokens, first_hop_billed), None)
+        .settle_billed_failure(&state, key_usage(900), None)
+        .await;
+    limiter.settle_success(&state, key_usage(1000), None).await;
+
+    assert_eq!(
+        count(&store, "api_key", "k", Kind::Tokens),
+        Some(Local::Number(Number::Int(
+            counted_at_admission + first_hop_charged + 900 + 1000
+        )))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_refused_fallback_hop_counts_toward_its_own_model_limit_on_the_key() {
+    let (limiter, store, _) = limiter(true);
+    let tpm = descriptors(json!([
+        {"key": "model_per_key", "value": "k:gpt", "rate_limit": {"tokens_per_unit": 10_000}},
+    ]));
+    let state = LimiterState::default();
+    let reserved = PreCallFacts {
+        reserved_model: Some(RateLimitedModel {
+            requested: "gpt".into(),
+            group: "gpt".into(),
+        }),
+        ..facts(tpm, Some(300))
+    };
+    assert_eq!(limiter.pre_call(&state, reserved, None).await, None);
+    state.stash().fallback_models.insert("hop".into());
+    limiter
+        .settle_failure(
+            &state,
+            FailureFacts {
+                call_id: Some("call".into()),
+                ..FailureFacts::default()
+            },
+            None,
+        )
         .await;
     limiter
-        .settle_failure(&state, refusal(900, true), None)
-        .await;
-    limiter
-        .settle_success(
+        .settle_billed_failure(
             &state,
             SuccessFacts {
-                call_id: Some("call".into()),
-                total_tokens: 1000,
-                targets: TargetFacts {
-                    user_api_key_hash: Some("k".into()),
-                    ..TargetFacts::default()
-                },
-                ..SuccessFacts::default()
+                served_model: Some(RateLimitedModel {
+                    requested: "hop".into(),
+                    group: "hop".into(),
+                }),
+                models: [(
+                    "hop".to_owned(),
+                    ModelFacts {
+                        candidates: vec![Candidate {
+                            group: "hop".into(),
+                            key_owns: false,
+                            counts_cached_tokens: false,
+                        }],
+                        ptu: None,
+                    },
+                )]
+                .into(),
+                ..key_usage(900)
             },
             None,
         )
         .await;
 
     assert_eq!(
-        count(&store, "api_key", "k", Kind::Tokens),
-        Some(Local::Number(Number::Int(first_hop_charged + 900 + 1000)))
+        count(&store, "model_per_key", "k:hop", Kind::Tokens),
+        Some(Local::Number(Number::Int(900)))
+    );
+    assert_eq!(
+        count(&store, "model_per_key", "k:gpt", Kind::Tokens),
+        Some(Local::Number(Number::Int(0)))
     );
 }
 

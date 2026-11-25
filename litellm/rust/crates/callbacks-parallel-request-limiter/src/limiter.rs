@@ -262,8 +262,6 @@ pub struct FailureFacts {
     pub cached_tokens_left_out: i64,
     #[serde(default)]
     pub partial_usage: Option<Usage>,
-    #[serde(default)]
-    pub provider_billed: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
@@ -1263,60 +1261,6 @@ impl ParallelRequestLimiter {
         ]
     }
 
-    fn billed_failure_after_settlement(
-        &self,
-        stash: &Stash,
-        (tpm_actual, cached_tokens_left_out): (i64, i64),
-        partial_usage: Option<&Usage>,
-    ) -> Vec<Settlement> {
-        let nothing_held = BTreeSet::new();
-        let tpm: Vec<Increment> = if stash.reservation_released {
-            let (with_cached, targets) = Self::tpm_settlement_targets(stash);
-            self.engine
-                .reservation_ops(&targets, &nothing_held, tpm_actual, 0)
-                .into_iter()
-                .chain(self.engine.reservation_ops(
-                    &with_cached,
-                    &nothing_held,
-                    tpm_actual.saturating_add(cached_tokens_left_out.max(0)),
-                    0,
-                ))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let io: Vec<Increment> = if stash.io_reservation_released {
-            [
-                (
-                    &stash.itpm,
-                    partial_usage.map_or(0, Usage::billable_input_tokens),
-                ),
-                (
-                    &stash.otpm,
-                    partial_usage.map_or(0, |usage| usage.completion_tokens),
-                ),
-            ]
-            .into_iter()
-            .flat_map(|(reservation, actual)| {
-                let targets: Scopes = reservation.scopes.iter().cloned().collect();
-                self.engine
-                    .reservation_ops(&targets, &nothing_held, actual, 0)
-            })
-            .collect()
-        } else {
-            Vec::new()
-        };
-        let ptu = if stash.reservation_released {
-            self.ptu_failure_ops(stash, tpm_actual, partial_usage, 0)
-        } else {
-            Vec::new()
-        };
-        vec![
-            Settlement::Plain(tpm.into_iter().chain(io).collect()),
-            Settlement::Project(ptu),
-        ]
-    }
-
     fn io_failure_settlement(
         &self,
         reservation: &IoReservation,
@@ -1416,15 +1360,6 @@ impl ParallelRequestLimiter {
         let settlements = {
             let mut stash = state.stash();
             let open = Self::open_reservations(&stash);
-            let billed_after_settlement = if facts.provider_billed {
-                self.billed_failure_after_settlement(
-                    &stash,
-                    (facts.tpm_actual, facts.cached_tokens_left_out),
-                    facts.partial_usage.as_ref(),
-                )
-            } else {
-                Vec::new()
-            };
             let settlements = self.failure_settlements(
                 &stash,
                 (facts.tpm_actual, facts.cached_tokens_left_out),
@@ -1435,13 +1370,39 @@ impl ParallelRequestLimiter {
                 stash.mark_reservation_released();
             }
             settlements
-                .into_iter()
-                .chain(billed_after_settlement)
-                .collect::<Vec<_>>()
         };
         for settlement in settlements {
             self.engine.settle(settlement, ctx, true).await;
         }
+    }
+
+    pub async fn settle_billed_failure(
+        &self,
+        state: &LimiterState,
+        facts: SuccessFacts,
+        request: Option<&RequestRedis>,
+    ) {
+        let ctx = Ctx {
+            policy: facts.policy.into(),
+            request,
+        };
+        {
+            let stash = state.stash();
+            if !stash.owned || !stash.for_call(facts.call_id.as_deref()) {
+                return;
+            }
+        }
+        self.release_stashed(state, true, ctx).await;
+        let (operations, io) = {
+            let mut stash = state.stash();
+            if stash.settles_at_close {
+                return;
+            }
+            let settlement = self.success_settlement(&stash, &facts);
+            stash.mark_reservation_released();
+            settlement
+        };
+        self.apply_success_settlement(&operations, io, ctx).await;
     }
 
     fn tpm_ops(
@@ -1476,16 +1437,36 @@ impl ParallelRequestLimiter {
         }
         let (operations, io) = {
             let mut stash = state.stash();
-            let operations = if facts.exempt {
-                Vec::new()
-            } else {
-                self.success_operations(&stash, &facts)
-            };
-            let io = self.io_success_settlement(&stash, &facts.io_usage);
+            let settlement = self.success_settlement(&stash, &facts);
             stash.clear_reserved_tokens();
-            (operations, io)
+            settlement
         };
-        self.engine.apply_usage(&operations, ctx).await;
+        self.apply_success_settlement(&operations, io, ctx).await;
+    }
+
+    fn success_settlement(
+        &self,
+        stash: &Stash,
+        facts: &SuccessFacts,
+    ) -> (Vec<Op>, Option<Settlement>) {
+        let operations = if facts.exempt {
+            Vec::new()
+        } else {
+            self.success_operations(stash, facts)
+        };
+        (
+            operations,
+            self.io_success_settlement(stash, &facts.io_usage),
+        )
+    }
+
+    async fn apply_success_settlement(
+        &self,
+        operations: &[Op],
+        io: Option<Settlement>,
+        ctx: Ctx<'_>,
+    ) {
+        self.engine.apply_usage(operations, ctx).await;
         match io {
             Some(Settlement::Plain(operations)) if !operations.is_empty() => {
                 self.engine
@@ -1571,6 +1552,16 @@ impl ParallelRequestLimiter {
         request: Option<&RequestRedis>,
     ) {
         match state {
+            Some(state) if !turn && call.provider_billed && call.recovered(kind).0 > 0 => {
+                self.release_for_settlement(state, call.call_id.as_deref(), request)
+                    .await;
+                self.settle_billed_failure(
+                    state,
+                    call.success_facts(resolved, kind, true),
+                    request,
+                )
+                .await;
+            }
             Some(state) if !turn => {
                 self.release_for_settlement(state, call.call_id.as_deref(), request)
                     .await;

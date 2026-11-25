@@ -469,7 +469,6 @@ impl LoggedCall {
             tpm_actual,
             cached_tokens_left_out,
             partial_usage,
-            provider_billed: self.provider_billed,
         }
     }
 
