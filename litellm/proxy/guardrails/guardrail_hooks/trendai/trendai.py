@@ -2,6 +2,7 @@
 # This file has been modified for integration into LiteLLM.
 
 import asyncio
+import contextvars
 import os
 import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
@@ -45,6 +46,8 @@ from ._text import apply_window_redaction, locate_request_prompt, redact_request
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.utils import CallTypesLiteral
 
 GUARDRAIL_NAME: Final = SupportedGuardrailIntegrations.TRENDAI.value
 OPENAI_CHAT_COMPLETION_RESPONSE_V1: Final = "OpenAIChatCompletionResponseV1"
@@ -58,6 +61,9 @@ _TREND_AI_SECURITY_PATH: Final = "/v3.0/aiSecurity"
 _RESPONSE_MODEL: Final = "guardrailed-response"
 _REDACTION_FAILED_MESSAGE: Final = "Trend AI Guard could not apply the requested redaction"
 _NO_ENTITIES: Final[Mapping[str, int]] = MappingProxyType({})
+_during_call_guardrail: Final[contextvars.ContextVar["TrendAIGuardrail | None"]] = contextvars.ContextVar(
+    "trendai_during_call_guardrail", default=None
+)
 
 
 class _AsyncHTTPClient(Protocol):
@@ -73,6 +79,7 @@ class _AsyncHTTPClient(Protocol):
 
 class TrendAIGuardrail(CustomGuardrail):
     records_own_guardrail_information: ClassVar[bool] = True
+    use_native_during_call_hook: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -139,12 +146,48 @@ class TrendAIGuardrail(CustomGuardrail):
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: CustomGuardrail contract
         return [
             GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.during_call,
             GuardrailEventHooks.post_call,
             GuardrailEventHooks.logging_only,
         ]
 
     def supports_scan_only_tool_results(self) -> bool:
         return False
+
+    async def async_moderation_hook(
+        self,
+        data: dict[str, object],  # mutable-ok: CustomLogger.async_moderation_hook contract
+        user_api_key_dict: "UserAPIKeyAuth",
+        call_type: "CallTypesLiteral",
+    ) -> object:
+        from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
+            UnifiedLLMGuardrails,
+        )
+
+        token: Final = _during_call_guardrail.set(self)
+        hook_data: Final[dict[str, object]] = {  # mutable-ok: UnifiedLLMGuardrails pops guardrail_to_apply
+            **data,
+            "guardrail_to_apply": self,
+        }
+        try:
+            return await UnifiedLLMGuardrails().async_moderation_hook(  # pyright: ignore[reportUnknownMemberType]  # UnifiedLLMGuardrails types data as bare dict
+                data=hook_data,
+                user_api_key_dict=user_api_key_dict,
+                call_type=call_type,
+            )
+        finally:
+            if "litellm_metadata" not in data and "litellm_metadata" in hook_data:
+                data["litellm_metadata"] = hook_data[  # rebind-ok: preserve telemetry recorded by UnifiedLLMGuardrails
+                    "litellm_metadata"
+                ]
+            _during_call_guardrail.reset(token)
+
+    def _is_during_call_request(self) -> bool:
+        if _during_call_guardrail.get() is self:
+            return True
+        return self._event_hook_is_event_type(GuardrailEventHooks.during_call) and not self._event_hook_is_event_type(
+            GuardrailEventHooks.pre_call
+        )
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -177,12 +220,18 @@ class TrendAIGuardrail(CustomGuardrail):
         started_at: Final = time.time()
         scans: Final = await self._scan_request_windows(prompt.prompt)
         verdict: Final = _window_verdict(scans)
-        has_redaction: Final = any(_is_redacting(scan.result) for scan in scans)
+        returned_redaction: Final = any(_is_redacting(scan.result) for scan in scans)
+        skip_redaction: Final = self._is_during_call_request()
+        has_redaction: Final = returned_redaction and not skip_redaction
+        if returned_redaction and skip_redaction:
+            verbose_proxy_logger.warning(
+                "Trend AI Guard: skipping request redaction in during_call mode; use pre_call for request redaction"
+            )
         self._record_scan(
             verdict,
             request_data,
             started_at,
-            event_type=None,
+            event_type=GuardrailEventHooks.during_call if skip_redaction else None,
             redacted=has_redaction,
         )
         self._enforce(verdict)
@@ -360,16 +409,16 @@ class TrendAIGuardrail(CustomGuardrail):
                 masked_entity_count=masked_entity_count,
                 detected_categories=detected_categories,
             ):
+                is_redacted: Final = redacted_content is not None if redacted is None else redacted
                 self._record(
-                    _allow_record(
-                        redacted_content is not None if redacted is None else redacted,
-                        detected_categories,
-                    ),
+                    _allow_record(is_redacted, detected_categories),
                     "success",
                     request_data,
                     started_at,
                     event_type=event_type,
-                    masked_entity_count=_merge_entity_counts(_NO_ENTITIES, masked_entity_count),
+                    masked_entity_count=(
+                        _merge_entity_counts(_NO_ENTITIES, masked_entity_count) if is_redacted else _NO_ENTITIES
+                    ),
                 )
             case TrendAIBlock(reason=reason):
                 self._record(

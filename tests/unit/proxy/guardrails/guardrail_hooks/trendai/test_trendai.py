@@ -324,20 +324,86 @@ def test_registry_rejects_tool_result_only_scanning() -> None:
         )
 
 
-def test_registry_rejects_during_call_mode() -> None:
-    with pytest.raises(ValueError, match="during_call"):
-        InMemoryGuardrailHandler().initialize_guardrail(
-            {
-                "guardrail_name": "trendai-during-call",
-                "litellm_params": {
-                    "guardrail": "trendai",
-                    "mode": "during_call",
-                    "api_key": "test-key",
-                    "api_base": "https://guard.example.com",
-                    "timeout": 5.0,
-                },
-            }
+@pytest.mark.asyncio
+async def test_during_call_skips_request_redaction_and_still_enforces_blocks() -> None:
+    respond, _ = _engine(redact={"SECRET": "******"}, block_on="forbidden")
+    user: Final = UserAPIKeyAuth(api_key="test-user-key")
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        guardrail: Final = TrendAIGuardrail(
+            api_key="test-key",
+            api_base="https://guard.example.com/v3.0/aiSecurity",
+            async_handler=client,
+            guardrail_name="trendai",
+            event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.during_call],
+            default_on=True,
         )
+        redact_request: Final[dict[str, object]] = {  # mutable-ok: hook inspects request dict
+            "model": "gpt-5.4",
+            "messages": [{"role": "user", "content": "keep SECRET intact"}],
+            "litellm_metadata": {},
+        }
+        await guardrail.async_moderation_hook(
+            data=redact_request,
+            user_api_key_dict=user,
+            call_type=CallTypes.acompletion.value,
+        )
+        assert redact_request["messages"] == [{"role": "user", "content": "keep SECRET intact"}]
+        assert "guardrail_to_apply" not in redact_request
+        litellm_metadata: Final = redact_request.get("litellm_metadata")
+        assert isinstance(litellm_metadata, dict)
+        during_records: Final = litellm_metadata.get("standard_logging_guardrail_information")
+        assert isinstance(during_records, list)
+        (during_record,) = during_records
+        assert during_record["guardrail_status"] == "success"
+        assert during_record["guardrail_response"]["redacted"] is False
+        assert during_record["masked_entity_count"] is None
+        assert during_record["guardrail_mode"] == GuardrailEventHooks.during_call
+
+        block_request: Final[dict[str, object]] = {  # mutable-ok: hook inspects request dict
+            "model": "gpt-5.4",
+            "messages": [{"role": "user", "content": "this is forbidden"}],
+            "metadata": {},
+        }
+        with pytest.raises(GuardrailRaisedException) as raised:
+            await guardrail.async_moderation_hook(
+                data=block_request,
+                user_api_key_dict=user,
+                call_type=CallTypes.acompletion.value,
+            )
+        assert raised.value.status_code == 400
+        assert raised.value.blocked_content is True
+        block_metadata: Final = block_request.get("litellm_metadata")
+        assert isinstance(block_metadata, dict)
+        block_records: Final = block_metadata.get("standard_logging_guardrail_information")
+        assert isinstance(block_records, list)
+        (block_record,) = block_records
+        assert block_record["guardrail_status"] == "guardrail_intervened"
+        assert block_record["guardrail_mode"] == GuardrailEventHooks.during_call
+
+        pre_call_result, pre_call_request = await _apply(
+            guardrail,
+            {"texts": ["keep SECRET intact"]},
+            "request",
+        )
+        assert pre_call_result["texts"] == ["keep ****** intact"]
+        (pre_record,) = _guardrail_records(pre_call_request)
+        assert pre_record["guardrail_response"]["redacted"] is True
+        assert pre_record["masked_entity_count"] == {"PII": 1}
+
+        during_only: Final = TrendAIGuardrail(
+            api_key="test-key",
+            api_base="https://guard.example.com/v3.0/aiSecurity",
+            async_handler=client,
+            guardrail_name="trendai",
+            event_hook=GuardrailEventHooks.during_call,
+            default_on=True,
+        )
+        direct_inputs: Final[GenericGuardrailAPIInputs] = {"texts": ["keep SECRET intact"]}
+        direct_result, direct_request = await _apply(during_only, direct_inputs, "request")
+        assert direct_result is direct_inputs
+        (direct_record,) = _guardrail_records(direct_request)
+        assert direct_record["guardrail_response"]["redacted"] is False
+        assert direct_record["masked_entity_count"] is None
 
 
 Responder = Callable[[httpx.Request], httpx.Response]
