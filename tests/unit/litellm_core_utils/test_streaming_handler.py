@@ -11497,12 +11497,20 @@ def test_text_completion_stream_carries_the_finish_chunks_choice_fields_only_on_
     ] == [(None, None), *([(None, None)] if final_text else []), ("stop", _UPSTREAM_REASON_FIELDS)]
 
 
-def _continuous_usage_wrapper(
+_CONTINUOUS_USAGE_STREAM_MODES: Final = ("sync", "async", "async-over-sync-iterator")
+
+
+async def _continuous_usage_emitted(
     chunks: Sequence[ModelResponseStream],
     stream_options: Mapping[str, bool],
-) -> CustomStreamWrapper:
-    return CustomStreamWrapper(
-        completion_stream=ModelResponseListIterator(model_responses=chunks),
+    stream_mode: str,
+) -> list[ModelResponseStream]:
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=(
+            iter(chunks)
+            if stream_mode == "async-over-sync-iterator"
+            else ModelResponseListIterator(model_responses=chunks)
+        ),
         model="hosted_vllm/m",
         custom_llm_provider="hosted_vllm",
         stream_options=stream_options,
@@ -11516,15 +11524,16 @@ def _continuous_usage_wrapper(
             function_id="test",
         ),
     )
+    return list(wrapper) if stream_mode == "sync" else [chunk async for chunk in wrapper]
 
 
 def _continuous_usage_chunk(choice: Mapping[str, object], usage: Mapping[str, int]) -> ModelResponseStream:
     return ModelResponseStream(id="c", created=1, model="hosted_vllm/m", choices=[choice], usage=Usage(**usage))
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("stream_mode", _CONTINUOUS_USAGE_STREAM_MODES)
 @pytest.mark.asyncio
-async def test_continuous_usage_stats_keeps_usage_on_every_chunk(sync_mode: bool) -> None:
+async def test_continuous_usage_stats_keeps_usage_on_every_chunk(stream_mode: str) -> None:
     from litellm.proxy.proxy_server import _serialize_streaming_chunk
 
     counts: Final = [
@@ -11537,11 +11546,9 @@ async def test_continuous_usage_stats_keeps_usage_on_every_chunk(sync_mode: bool
         _continuous_usage_chunk({"index": 0, "delta": {}, "finish_reason": "stop"}, usage=counts[1]),
         ModelResponseStream(id="c", created=1, model="hosted_vllm/m", choices=[], usage=Usage(**counts[2])),
     ]
-    wrapper: Final = _continuous_usage_wrapper(
-        chunks, stream_options={"include_usage": True, "continuous_usage_stats": True}
+    emitted: Final = await _continuous_usage_emitted(
+        chunks, stream_options={"include_usage": True, "continuous_usage_stats": True}, stream_mode=stream_mode
     )
-
-    emitted: Final = [chunk async for chunk in wrapper] if not sync_mode else list(wrapper)
 
     assert all(getattr(chunk, "usage", None) is not None for chunk in emitted)
     assert [chunk.usage.total_tokens for chunk in emitted] == [11, 12, 13]
@@ -11550,9 +11557,9 @@ async def test_continuous_usage_stats_keeps_usage_on_every_chunk(sync_mode: bool
     assert [chunk["usage"]["total_tokens"] for chunk in serialized] == [count["total_tokens"] for count in counts]
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("stream_mode", _CONTINUOUS_USAGE_STREAM_MODES)
 @pytest.mark.asyncio
-async def test_continuous_usage_stats_finishes_before_the_final_usage_chunk(sync_mode: bool) -> None:
+async def test_continuous_usage_stats_finishes_before_the_final_usage_chunk(stream_mode: str) -> None:
     content_usage: Final = {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11}
     final_usage: Final = {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13}
     chunks: Final = [
@@ -11560,11 +11567,9 @@ async def test_continuous_usage_stats_finishes_before_the_final_usage_chunk(sync
         _continuous_usage_chunk({"index": 0, "delta": {"content": "!"}, "finish_reason": "length"}, usage=final_usage),
         ModelResponseStream(id="c", created=1, model="hosted_vllm/m", choices=[], usage=Usage(**final_usage)),
     ]
-    wrapper: Final = _continuous_usage_wrapper(
-        chunks, stream_options={"include_usage": True, "continuous_usage_stats": True}
+    emitted: Final = await _continuous_usage_emitted(
+        chunks, stream_options={"include_usage": True, "continuous_usage_stats": True}, stream_mode=stream_mode
     )
-
-    emitted: Final = [chunk async for chunk in wrapper] if not sync_mode else list(wrapper)
 
     finish_indexes: Final = [i for i, chunk in enumerate(emitted) if chunk.choices and chunk.choices[0].finish_reason]
     assert len(finish_indexes) == 1
@@ -11578,11 +11583,11 @@ async def test_continuous_usage_stats_finishes_before_the_final_usage_chunk(sync
     ]
 
 
-@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("stream_mode", _CONTINUOUS_USAGE_STREAM_MODES)
 @pytest.mark.parametrize("continuous_usage_stats", [None, False])
 @pytest.mark.asyncio
 async def test_include_usage_without_continuous_usage_stats_still_emits_only_a_final_usage_chunk(
-    sync_mode: bool,
+    stream_mode: str,
     continuous_usage_stats: bool | None,
 ) -> None:
     counts: Final = [
@@ -11597,9 +11602,7 @@ async def test_include_usage_without_continuous_usage_stats_still_emits_only_a_f
         "include_usage": True,
         **({"continuous_usage_stats": continuous_usage_stats} if continuous_usage_stats is not None else {}),
     }
-    wrapper: Final = _continuous_usage_wrapper(chunks, stream_options=options)
-
-    emitted: Final = [chunk async for chunk in wrapper] if not sync_mode else list(wrapper)
+    emitted: Final = await _continuous_usage_emitted(chunks, stream_options=options, stream_mode=stream_mode)
 
     content_chunks: Final = [chunk for chunk in emitted[:-1] if chunk.choices and chunk.choices[0].delta.content]
     assert content_chunks

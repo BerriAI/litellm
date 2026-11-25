@@ -3099,7 +3099,11 @@ class CustomStreamWrapper:
         return None if is_model_response_stream_empty(model_response=usage_free_chunk) else usage_free_chunk
 
     def _returned_sync_stream_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream | None:
-        if getattr(chunk, "usage", None) is None or (not self.send_stream_usage and chunk.choices):
+        if (
+            getattr(chunk, "usage", None) is None
+            or self._continuous_usage_stats
+            or (not self.send_stream_usage and chunk.choices)
+        ):
             self.chunks.append(chunk)
             return chunk
         return self._record_and_strip_usage_chunk(chunk)
