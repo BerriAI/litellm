@@ -12,6 +12,7 @@ import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import WindowSpendTransaction
@@ -27,7 +28,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 )
 from litellm.router import Router
 from litellm.types.caching import RedisPipelineIncrementOperation
-from litellm.types.utils import LiteLLMBatch, LiteLLMRealtimeStreamLoggingObject, Usage
+from litellm.types.utils import LiteLLMBatch, LiteLLMRealtimeStreamLoggingObject, ModelResponse, Usage
 from litellm.types.videos.main import VideoObject
 from litellm.types.videos.utils import POLLED_VIDEO_STATUS_KWARG
 
@@ -164,6 +165,50 @@ async def test_a_failure_the_provider_billed_uses_up_the_key_model_budget():
         await limiter.is_key_within_model_budget(
             _key({MODEL_GROUP: {"max_budget": 0.0001, "budget_duration": "1d"}}), MODEL_GROUP
         )
+
+
+@pytest.mark.asyncio
+async def test_a_retry_counts_the_follow_up_its_failure_already_billed_once_toward_the_key_model_budget():
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    logging_obj: Final = LitellmLogging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=time.time(),
+        litellm_call_id="key-model-retry",
+        function_id="key-model-retry",
+        dynamic_async_success_callbacks=[limiter],
+        dynamic_async_failure_callbacks=[limiter],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o-mini",
+        user="",
+        optional_params={},
+        litellm_params={
+            "metadata": {
+                "model_group": MODEL_GROUP,
+                "user_api_key_hash": KEY_HASH,
+                "user_api_key_model_max_budget": {MODEL_GROUP: {"budget_limit": 10.0, "time_period": "1d"}},
+            }
+        },
+        custom_llm_provider="openai",
+    )
+    earlier_attempt: Final = (Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500), 0.5)
+    served: Final = ModelResponse(model="gpt-4o-mini", usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15))
+    now: Final = datetime.now()
+
+    logging_obj.record_served_rounds_for_failure((earlier_attempt,))
+    await logging_obj.async_failure_handler(Exception("the agentic follow-up failed"), "", now, now)
+    logging_obj.carry_failed_attempt_usage()
+    await logging_obj.async_success_handler(served, now, now)
+
+    spend_key: Final = model_budget_spend_cache_key(
+        entity_type=Litellm_EntityType.KEY, entity_id=KEY_HASH, budget_model=MODEL_GROUP, budget_duration="1d"
+    )
+    assert await _spend(limiter, spend_key) == pytest.approx(
+        earlier_attempt[1] + litellm.completion_cost(served, model="gpt-4o-mini")
+    )
 
 
 def test_team_member_budget_entity_id_is_unambiguous():
