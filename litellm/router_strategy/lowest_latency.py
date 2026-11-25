@@ -558,7 +558,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
     ):
         # get list of potential deployments
         latency_key: Final = f"{model_group}_map"
@@ -584,7 +584,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         healthy_deployments: list,
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
-        request_kwargs: dict | None = None,
+        request_kwargs: dict[str, object] | None = None,
     ):
         """
         Returns a deployment with the lowest latency

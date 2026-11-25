@@ -42,7 +42,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
         azure_ad_token: str | None = None,
         atranscription: bool = False,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         custom_llm_provider: str = "azure",
     ) -> (
         TranscriptionResponse
@@ -133,7 +133,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         api_base: str | None = None,
         client: AzureOpenAI | AsyncAzureOpenAI | OpenAI | AsyncOpenAI | None = None,
         max_retries: int | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         custom_llm_provider: str = "azure",
     ) -> TranscriptionResponse | AsyncStream[TranscriptionStreamEvent]:
         response = None

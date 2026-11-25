@@ -137,15 +137,16 @@ def _with_the_tool_choice_sent(
 
 
 def _log_full_tool_names(
-    request_kwargs: Mapping[str, object], responses_api_request: ResponsesAPIOptionalRequestParams
+    request_kwargs: Mapping[str, object],
+    responses_api_request: ResponsesAPIOptionalRequestParams,
+    request_input: str | ResponseInputParam,
 ) -> None:
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
-    chat_names: Final = LiteLLMCompletionResponsesConfig.member_chat_names(
-        LiteLLMCompletionResponsesConfig.request_tools(responses_api_request)
+    names: Final = LiteLLMCompletionResponsesConfig.namespace_tool_name_map(
+        LiteLLMCompletionResponsesConfig.request_tools(responses_api_request), request_input
     )
-    shortened: Final = {sent_name: full_name for full_name, sent_name in chat_names.items() if sent_name != full_name}
-    if shortened and isinstance(logging_obj, LiteLLMLoggingObj):
-        logging_obj.record_bridged_tool_names(shortened)
+    if names and isinstance(logging_obj, LiteLLMLoggingObj):
+        logging_obj.record_bridged_tool_names(names)
 
 
 class LiteLLMCompletionTransformationHandler:
@@ -220,7 +221,7 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
-        _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), echoed_request)
+        _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), echoed_request, bridged_input)
         with error_param_named_as_a_responses_field(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), bridged_request):
             litellm_completion_response: Final[ModelResponse | litellm.CustomStreamWrapper] = litellm.completion(
                 **{**kwargs, **litellm_completion_request, "_skip_responses_api_bridge": True},
@@ -326,7 +327,7 @@ class LiteLLMCompletionTransformationHandler:
             **completion_request,
             "_skip_responses_api_bridge": True,
         }
-        _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), responses_api_request)
+        _log_full_tool_names(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs), responses_api_request, request_input)
         with error_param_named_as_a_responses_field(
             _REQUEST_KWARGS_ADAPTER.validate_python(kwargs), responses_api_request
         ):
