@@ -37,7 +37,6 @@ def test_sdk_sends_oruk_multipart_and_parses_json(respx_mock: MockRouter, monkey
         file=_AUDIO,
         api_key="request-key",
         language="en-us",
-        prompt="Oruk Fourier",
         response_format="json",
     )
     request: Final = route.calls.last.request
@@ -47,20 +46,49 @@ def test_sdk_sends_oruk_multipart_and_parses_json(respx_mock: MockRouter, monkey
         "file": _AUDIO[1],
         "model": b"oruk-fourier-2b",
         "language": b"en-US",
-        "prompt": b"Oruk Fourier",
         "response_format": b"json",
     }
     assert isinstance(result, TranscriptionResponse)
     assert result.text == "Hello from Oruk Fourier 2B."
 
 
+@pytest.mark.parametrize(
+    ("raw_language", "expected"),
+    [
+        ("en", b"en"),
+        ("en-us", b"en-US"),
+        ("EN-GB", b"en-GB"),
+        ("English", b"english"),
+        ("AUTO", b"auto"),
+    ],
+)
+def test_supported_language_hints_normalize(
+    raw_language: str, expected: bytes, respx_mock: MockRouter
+) -> None:
+    route: Final = respx_mock.post(f"{_BASE}/audio/transcriptions").respond(json={"text": "ok"})
+    litellm.transcription(model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE, language=raw_language)
+    assert _form(route.calls.last.request)["language"] == expected
+
+
 def test_verbose_json_preserves_duration_language_and_calculates_cost(respx_mock: MockRouter) -> None:
     respx_mock.post(f"{_BASE}/audio/transcriptions").respond(
         json={
+            "id": "tr_01",
+            "object": "audio.transcription",
+            "model": "oruk-fourier-2b",
+            "task": "transcription",
             "text": "Sixty seconds of English speech.",
             "language": "en",
             "duration": 60.0,
-            "usage": {"type": "duration", "seconds": 60},
+            "audio_seconds": 60.0,
+            "usage": {
+                "audio_seconds": 60.0,
+                "billable_seconds": 60.0,
+                "billing_unit": "audio_second",
+                "rate_per_minute_usd": "0.0080",
+                "estimated_cost_usd": "0.0080",
+                "pricing_version": "2026-11",
+            },
             "model_revision": "8c2a8871f1304aa2f634da4fb95e24438c4945b9",
         }
     )
@@ -129,14 +157,17 @@ def test_empty_audio_fails_before_upload(respx_mock: MockRouter) -> None:
     assert not respx_mock.calls
 
 
-@pytest.mark.parametrize("options", [{"language": "fr"}, {"response_format": "srt"}, {"stream": True}])
+@pytest.mark.parametrize(
+    "options",
+    [{"language": "fr"}, {"response_format": "srt"}, {"prompt": "Oruk"}, {"stream": True}],
+)
 def test_unsupported_options_rejected(options: dict[str, object], respx_mock: MockRouter) -> None:
     with pytest.raises(litellm.UnsupportedParamsError):
         litellm.transcription(model=_MODEL, file=_AUDIO, api_key="test", api_base=_BASE, **options)
     assert not respx_mock.calls
 
 
-def test_drop_params_drops_unsupported_language_and_format(respx_mock: MockRouter) -> None:
+def test_drop_params_drops_unsupported_options(respx_mock: MockRouter) -> None:
     route: Final = respx_mock.post(f"{_BASE}/audio/transcriptions").respond(json={"text": "ok"})
     litellm.transcription(
         model=_MODEL,
@@ -145,6 +176,7 @@ def test_drop_params_drops_unsupported_language_and_format(respx_mock: MockRoute
         api_base=_BASE,
         language="fr",
         response_format="srt",
+        prompt="Oruk",
         temperature=0.0,
         stream=True,
         drop_params=True,
@@ -215,7 +247,6 @@ def test_discovery_and_environment_validation(monkeypatch: pytest.MonkeyPatch) -
     assert _MODEL in litellm.get_valid_models(custom_llm_provider="oruk", check_provider_endpoint=False)
     assert litellm.get_supported_openai_params(model=_MODEL, request_type="transcription") == [
         "language",
-        "prompt",
         "response_format",
     ]
     assert json.loads(json.dumps(litellm.model_cost[_MODEL]))["input_cost_per_second"] == pytest.approx(0.0001333333)

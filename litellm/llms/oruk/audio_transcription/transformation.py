@@ -34,6 +34,8 @@ _ENGLISH_LANGUAGES: Final[Mapping[str, str]] = MappingProxyType(
         "en": "en",
         "en-us": "en-US",
         "en-gb": "en-GB",
+        "english": "english",
+        "auto": "auto",
     }
 )
 
@@ -44,13 +46,11 @@ class _OrukTranscript(BaseModel):
     text: str
     language: str | None = None
     duration: float | None = None
-    usage: Mapping[str, object] | None = None
 
 
 class _ResponseFields(TypedDict, total=False):
     language: ReadOnly[str]
     duration: ReadOnly[float]
-    usage: ReadOnly[Mapping[str, object]]
 
 
 def _normalize_language(language: object, model: str, drop_params: bool) -> str | None:
@@ -60,7 +60,8 @@ def _normalize_language(language: object, model: str, drop_params: bool) -> str 
         if drop_params:
             return None
         raise UnsupportedParamsError(
-            message="Oruk transcription requires `language` to be a string ('en', 'en-US', or 'en-GB').",
+            message="Oruk transcription requires `language` to be a string "
+            "('en', 'en-US', 'en-GB', 'english', or 'auto').",
             model=model,
             llm_provider="oruk",
         )
@@ -69,8 +70,8 @@ def _normalize_language(language: object, model: str, drop_params: bool) -> str 
         if drop_params:
             return None
         raise UnsupportedParamsError(
-            message=f"Oruk Fourier 2B supports English languages ('en', 'en-US', 'en-GB'), got language={language!r}. "
-            "To drop unsupported params, set `drop_params=True`.",
+            message="Oruk Fourier 2B supports English languages ('en', 'en-US', 'en-GB', 'english', 'auto'), "
+            f"got language={language!r}. To drop unsupported params, set `drop_params=True`.",
             model=model,
             llm_provider="oruk",
         )
@@ -88,8 +89,7 @@ def _caller_headers(headers: Mapping[str, object]) -> Mapping[str, str]:
 def _response_fields(payload: _OrukTranscript) -> _ResponseFields:
     language: Final[_ResponseFields] = {} if payload.language is None else {"language": payload.language}
     duration: Final[_ResponseFields] = {} if payload.duration is None else {"duration": payload.duration}
-    usage: Final[_ResponseFields] = {} if payload.usage is None else {"usage": payload.usage}
-    return {**language, **duration, **usage}
+    return {**language, **duration}
 
 
 class OrukAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
@@ -98,7 +98,6 @@ class OrukAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> list[OpenAIAudioTranscriptionOptionalParams]:  # mutable-ok: public capability API returns a list
         return [
             "language",
-            "prompt",
             "response_format",
         ]
 
@@ -125,8 +124,6 @@ class OrukAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
                 normalized = _normalize_language(value, model=model, drop_params=drop_params)
                 if normalized is not None:
                     mapped[key] = normalized
-            elif key == "prompt" and value is not None:
-                mapped[key] = str(value)
         return mapped
 
     def validate_environment(
@@ -182,7 +179,7 @@ class OrukAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
             )
 
         form_fields: Final[dict[str, object]] = {"model": model}
-        for key in ("language", "prompt", "response_format"):
+        for key in ("language", "response_format"):
             value = optional_params.get(key)
             if value is not None:
                 form_fields[key] = str(value)
