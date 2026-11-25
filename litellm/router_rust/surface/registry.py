@@ -353,6 +353,25 @@ def _inherited_off_peak_base_rates(
     }
 
 
+def _inherited_base_rates_for_service_tier_only(
+    host: "PythonHost", model_info: Mapping[str, object], backend_model: str, provider: str | None
+) -> Mapping[str, object]:
+    """The whole backend entry copied by an entry whose only prices are service-tier rates."""
+    declared_prices: Final = tuple(
+        field for field in CustomPricingLiteLLMParams.model_fields if model_info.get(field) is not None
+    )
+    if not declared_prices or not all(field.endswith(SERVICE_TIER_COST_KEY_SUFFIXES) for field in declared_prices):
+        return {}
+    backend_entry: Final = _backend_cost_entry(host, backend_model, provider)
+    if backend_entry is None:
+        return {}
+    return {
+        field: copy.deepcopy(value)
+        for field, value in backend_entry.items()
+        if model_info.get(field) is None and value is not None
+    }
+
+
 def _inherited_tiered_output_rate(
     host: "PythonHost", model_info: Mapping[str, object], backend_model: str, provider: str | None
 ) -> Mapping[str, object]:
@@ -455,7 +474,11 @@ def deployment_model_cost_payload(host: "PythonHost", deployment: Deployment) ->
         deployment.litellm_params.model if profile_backend and contains_bedrock_arn(backend_model) else backend_model
     )
     with_profile: Final = {**priced, **profile_pricing}
-    off_peak: Final = {**with_profile, **_inherited_off_peak_base_rates(host, with_profile, rates_model, provider)}
+    tier_only: Final = {
+        **with_profile,
+        **_inherited_base_rates_for_service_tier_only(host, with_profile, rates_model, provider),
+    }
+    off_peak: Final = {**tier_only, **_inherited_off_peak_base_rates(host, tier_only, rates_model, provider)}
     cached: Final = (
         {**off_peak, **_inherited_cache_pricing(host, off_peak, rates_model, provider)}
         if off_peak.get("input_cost_per_token") is not None
