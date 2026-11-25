@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/*"]
+exclude = ["vendor"]
 resolver = "2"
 
 [workspace.package]
@@ -174,6 +175,9 @@ regex = "1.13.1"
 veil = "0.3.0"
 prost = "0.14.4"
 opentelemetry-proto = "0.33"
+
+[patch.crates-io]
+sqlx-postgres = { path = "vendor/sqlx-postgres" }
 
 [profile.release]
 opt-level = 3
