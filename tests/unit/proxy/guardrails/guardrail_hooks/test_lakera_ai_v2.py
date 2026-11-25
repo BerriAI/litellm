@@ -2682,3 +2682,23 @@ async def test_chat_reply_with_nothing_to_inspect_skips_lakera() -> None:
     assert result is chat_response
     assert client.posts == []
 
+
+@pytest.mark.asyncio
+async def test_mask_rewrites_the_chat_reply_in_place() -> None:
+    chat_response: Final = ModelResponse(
+        choices=[
+            {"index": 0, "message": {"role": "assistant", "content": None}},
+            {"index": 1, "message": {"role": "assistant", "content": "Here you go."}},
+            {"index": 2, "message": {"role": "assistant", "content": _CARD_REPLY}},
+        ]
+    )
+    data: Final = {"model": "m", "messages": [{"role": "user", "content": "Which card?"}]}
+
+    result, _ = await _post_call("mask", _card_verdict(2), data, chat_response)
+
+    assert result is chat_response
+    assert [choice.message.content for choice in chat_response.choices] == [
+        None,
+        "Here you go.",
+        "Card [MASKED CREDIT_CARD] is on file.",
+    ]

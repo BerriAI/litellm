@@ -45,7 +45,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
 from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponse
 
 _DECODED_JSON: Final = TypeAdapter(object)
-_RESPONSE_FIELDS: Final = TypeAdapter(Mapping[str, object])
 
 _DETECTOR_CATEGORY_PHRASES: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -270,6 +269,11 @@ def _write_block_text(block: object, text: object) -> None:
         block["text"] = text  # rebind-ok: masking rewrites the served response's text block in place
         return
     setattr(block, "text", text)  # noqa: B010  # block is a Responses or Anthropic SDK model with no shared typed base
+
+
+def _write_choice_text(response: ModelResponse, choice_index: int, text: object) -> None:
+    if isinstance(text, str):
+        response.choices[choice_index].message.content = text  # rebind-ok: masking edits the served reply in place
 
 
 class LakeraAIGuardrail(CustomGuardrail):
@@ -841,14 +845,11 @@ class LakeraAIGuardrail(CustomGuardrail):
                 native_masked: Final = assistant_messages[len(choice_indices) :]
                 for (block, _), masked in zip(native_text_blocks or (), native_masked, strict=True):
                     _write_block_text(block, stream_item_field(masked, "content"))
-                for idx, msg in enumerate(assistant_messages):
-                    if idx < len(choice_indices):
-                        choice_idx = choice_indices[idx]
-                        response_dict["choices"][choice_idx]["message"]["content"] = msg.get("content", "")
+                if isinstance(response, ModelResponse):
+                    for choice_idx, masked_message in zip(choice_indices, assistant_messages, strict=True):
+                        _write_choice_text(response, choice_idx, stream_item_field(masked_message, "content"))
                 add_guardrail_to_applied_guardrails_header(request_data=data, guardrail_name=self.guardrail_name)
-                if native_text_blocks is not None or not isinstance(response, ModelResponse):
-                    return response
-                return ModelResponse(**_RESPONSE_FIELDS.validate_python(response_dict))
+                return response
 
             # inject_system_message has nothing left to inject into once a response
             # already exists, so it is treated the same as monitor: log and allow.

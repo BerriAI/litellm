@@ -160,7 +160,7 @@ def _served_reply_text(endpoint: str, response: httpx.Response) -> JsonValue:
 
 
 def _create_lakera_guardrail(
-    gateway: Gateway, cleanups: ExitStack, api_base: str, mode: str, on_flagged: str | None
+    gateway: Gateway, cleanups: ExitStack, api_base: str, mode: str, on_flagged: str | None, **extra: JsonValue
 ) -> str:
     settings: Final[dict[str, JsonValue]] = {} if on_flagged is None else {"on_flagged": on_flagged}
     created: Final = gateway.request(
@@ -176,6 +176,7 @@ def _create_lakera_guardrail(
                     "api_base": api_base,
                     "api_key": "synthetic-lakera-key",
                     **settings,
+                    **extra,
                 },
             }
         },
@@ -327,6 +328,26 @@ def test_lakera_v2_pii_only_reasoning_summary_follows_on_flagged(gateway: Gatewa
         summary: Final = _first(_first(_JSON_OBJECT.validate_json(response.content)["output"])["summary"])
         assert summary["text"] == _REPLY.replace(_CARD, _MASKED.decode()), response.text
         assert _CARD.encode() not in response.content, response.text
+
+
+def test_lakera_v2_parallel_mask_rewrites_the_chat_reply(gateway: Gateway) -> None:
+    with (
+        wire_server(_provider_reply) as provider,
+        wire_server(_lakera_verdict) as lakera,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(api_base=f"{provider.url}/v1", api_key="synthetic-provider-key")
+        guardrail: Final = _create_lakera_guardrail(
+            gateway, scenario.cleanups, lakera.url, "post_call", "mask", run_in_parallel=True
+        )
+
+        response: Final = _send(gateway, "/v1/chat/completions", model, guardrail, _CLEAN_PROMPT)
+
+        assert len(provider.drain()) == 1
+        assert len(lakera.drain()) == 1
+        assert response.status_code == 200, response.text
+        served: Final = _served_reply_text("/v1/chat/completions", response)
+        assert served == _REPLY.replace(_CARD, _MASKED.decode()), response.text
 
 
 @pytest.mark.parametrize("endpoint", _ENDPOINTS)
