@@ -305,6 +305,38 @@ def _trace_id_from_otel_span(span: "OtelSpan | None") -> str | None:
     return format(trace_id, "032x")
 
 
+def _traceparent_from_otel_span(span: "OtelSpan | None") -> str | None:
+    """Serialize a span's context into a W3C traceparent header value.
+
+    Returns None when the span or its context is missing/invalid so callers can
+    fall back to the incoming header.
+    """
+    if span is None:
+        return None
+    try:
+        from opentelemetry.trace import format_span_id, format_trace_id
+
+        span_context: Final = span.get_span_context()
+        is_valid: Final = span_context.is_valid
+        trace_id: Final = cast(object, span_context.trace_id)
+        span_id: Final = cast(object, span_context.span_id)
+        trace_flags: Final = cast(object, span_context.trace_flags)
+    except AttributeError:
+        return None
+    if (
+        not is_valid
+        or not isinstance(trace_id, int)
+        or not isinstance(span_id, int)
+        or not isinstance(trace_flags, int)
+    ):
+        return None
+    return "00-{}-{}-{:02x}".format(
+        format_trace_id(trace_id),
+        format_span_id(span_id),
+        trace_flags,
+    )
+
+
 def add_otel_trace_id_to_request(
     data: dict[str, object], _metadata_variable_name: str, parent_otel_span: "OtelSpan | None"
 ) -> None:
@@ -5099,13 +5131,23 @@ def _add_otel_traceparent_to_data(data: dict[str, object], request: Request):
         return
 
     if litellm.forward_traceparent_to_llm_provider is True:
-        if request.headers:
-            if "traceparent" in request.headers:
-                # we want to forward this to the LLM Provider
-                # Relevant issue: https://github.com/BerriAI/litellm/issues/4419
-                # pass this in extra_headers
-                if "extra_headers" not in data or (not data["extra_headers"] and data["extra_headers"] != {}):
-                    data["extra_headers"] = {}
-                extra_headers: Final[object] = data["extra_headers"]
-                if isinstance(extra_headers, dict) and "traceparent" not in extra_headers:
-                    extra_headers["traceparent"] = request.headers["traceparent"]
+        incoming: Final[str | None] = (
+            request.headers.get("traceparent") if request.headers else None
+        )
+        # Prefer the proxy's own request span (stashed on request.state by auth)
+        # so provider spans nest under LiteLLM's span instead of becoming
+        # siblings of it. Relevant issue: https://github.com/BerriAI/litellm/issues/39067
+        request_span: Final["OtelSpan | None"] = getattr(
+            getattr(request, "state", None), "parent_otel_span", None
+        )
+        traceparent: Final[str | None] = _traceparent_from_otel_span(request_span) or incoming
+        if traceparent is None:
+            return
+        # we want to forward this to the LLM Provider
+        # Relevant issue: https://github.com/BerriAI/litellm/issues/4419
+        # pass this in extra_headers
+        if "extra_headers" not in data or (not data["extra_headers"] and data["extra_headers"] != {}):
+            data["extra_headers"] = {}
+        extra_headers: Final[object] = data["extra_headers"]
+        if isinstance(extra_headers, dict) and "traceparent" not in extra_headers:
+            extra_headers["traceparent"] = traceparent

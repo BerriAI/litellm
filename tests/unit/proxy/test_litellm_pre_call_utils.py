@@ -7624,6 +7624,84 @@ def test_forwarded_traceparent_shows_in_the_logged_request_body(
     assert data["proxy_server_request"]["body"]["extra_headers"]["traceparent"] == _TRACEPARENT
 
 
+def test_forwarded_traceparent_uses_request_span_as_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The provider must receive LiteLLM's own request span as the traceparent so
+    provider spans nest under the gateway's span (issue #39067) instead of
+    becoming siblings of it under the caller's span."""
+    pytest.importorskip("opentelemetry.sdk")
+
+    from opentelemetry.sdk.trace import TracerProvider
+
+    monkeypatch.setattr(litellm, "forward_traceparent_to_llm_provider", True)
+
+    provider = TracerProvider()
+    tracer = provider.get_tracer("test_forwarded_traceparent")
+
+    with tracer.start_as_current_span("caller"):
+        with tracer.start_as_current_span("litellm-request") as request_span:
+            request_mock = _make_request_mock("/v1/decisions", {"traceparent": _TRACEPARENT})
+            request_mock.state = SimpleNamespace(parent_otel_span=request_span)
+            data: Final = {"model": "decider"}
+            with patch("litellm.proxy.proxy_server.open_telemetry_logger", MagicMock()):
+                _add_otel_traceparent_to_data(data, request=request_mock)
+
+    forwarded = data["extra_headers"]["traceparent"]
+    span_context = request_span.get_span_context()
+    assert forwarded == "00-{}-{}-{:02x}".format(
+        format(span_context.trace_id, "032x"),
+        format(span_context.span_id, "016x"),
+        span_context.trace_flags,
+    )
+    assert forwarded != _TRACEPARENT
+
+
+def test_forwarded_traceparent_without_incoming_header_uses_request_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without an incoming traceparent the request span's context is still
+    forwarded so the provider joins LiteLLM's trace instead of starting a
+    disconnected one (requested in #4419)."""
+    pytest.importorskip("opentelemetry.sdk")
+
+    from opentelemetry.sdk.trace import TracerProvider
+
+    monkeypatch.setattr(litellm, "forward_traceparent_to_llm_provider", True)
+
+    provider = TracerProvider()
+    tracer = provider.get_tracer("test_forwarded_traceparent")
+
+    with tracer.start_as_current_span("litellm-request") as request_span:
+        request_mock = _make_request_mock("/v1/decisions", {})
+        request_mock.state = SimpleNamespace(parent_otel_span=request_span)
+        data: Final = {"model": "decider"}
+        with patch("litellm.proxy.proxy_server.open_telemetry_logger", MagicMock()):
+            _add_otel_traceparent_to_data(data, request=request_mock)
+
+    forwarded = data["extra_headers"]["traceparent"].split("-")
+    span_context = request_span.get_span_context()
+    assert forwarded[1] == format(span_context.trace_id, "032x")
+    assert forwarded[2] == format(span_context.span_id, "016x")
+
+
+def test_forwarded_traceparent_falls_back_to_incoming_header_without_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No request span on request.state keeps the historical behavior: the
+    caller's traceparent is forwarded verbatim."""
+    monkeypatch.setattr(litellm, "forward_traceparent_to_llm_provider", True)
+
+    data: Final = {"model": "decider"}
+    request_mock = _make_request_mock("/v1/decisions", {"traceparent": _TRACEPARENT})
+    request_mock.state = SimpleNamespace()
+
+    with patch("litellm.proxy.proxy_server.open_telemetry_logger", MagicMock()):
+        _add_otel_traceparent_to_data(data, request=request_mock)
+
+    assert data["extra_headers"]["traceparent"] == _TRACEPARENT
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "user_agent, request_drop_params, operator_settings, expected_drop_params",
