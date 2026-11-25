@@ -7,9 +7,10 @@ import contextvars
 import inspect
 import logging
 from collections.abc import Awaitable, Callable, Coroutine, Iterator
+from time import monotonic
 from typing import Final
 
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -21,6 +22,10 @@ from litellm.constants import (
     LOGGING_WORKER_TIMEOUT_SUMMARY_WINDOW_SECONDS,
     MAX_ITERATIONS_TO_CLEAR_QUEUE,
     MAX_TIME_TO_CLEAR_QUEUE,
+)
+from litellm.litellm_core_utils.callback_timing import (
+    logging_worker_dispatch_timing_enabled,
+    observe_logging_worker_dispatch_wait,
 )
 
 _CALLBACK_DEADLINE: Final[contextvars.ContextVar[float | None]] = contextvars.ContextVar(
@@ -53,6 +58,7 @@ class LoggingTask(TypedDict):
 
     coroutine: Coroutine[object, None, object]
     context: contextvars.Context
+    submitted_at: NotRequired[float]
 
 
 class LoggingWorker:
@@ -136,7 +142,13 @@ class LoggingWorker:
     def _create_callback_task(self, task: LoggingTask) -> asyncio.Task[object]:
         context: Final = task["context"].copy()
         context.run(_CALLBACK_DEADLINE.set, asyncio.get_running_loop().time() + self.timeout)
-        return context.run(asyncio.create_task, task["coroutine"])
+        submitted_at: Final = task.get("submitted_at")
+        wait: Final = monotonic() - submitted_at if submitted_at is not None else None
+        callback_task: Final = context.run(asyncio.create_task, task["coroutine"])
+        if wait is not None:
+            task.pop("submitted_at")
+            observe_logging_worker_dispatch_wait(wait)
+        return callback_task
 
     @staticmethod
     def _drain_pending(queue: "asyncio.Queue[LoggingTask]") -> tuple[LoggingTask, ...]:
@@ -293,6 +305,8 @@ class LoggingWorker:
 
         # Capture the current context when enqueueing
         task: Final = LoggingTask(coroutine=coroutine, context=contextvars.copy_context())
+        if logging_worker_dispatch_timing_enabled():
+            task["submitted_at"] = monotonic()
 
         self._enqueue_task(task)
 
