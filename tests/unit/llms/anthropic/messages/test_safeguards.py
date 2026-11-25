@@ -14,10 +14,6 @@ from litellm.caching.dual_cache import DualCache
 from litellm.constants import SESSION_ID_INHERITED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.llms.anthropic.messages.caller_model_checks import (
-    CallerModelVerdict,
-    _caller_within_team_member_model_budget,
-)
 from litellm.llms.anthropic.messages.safeguards import (
     CLASSIFIER_MAX_TOKENS,
     CLASSIFIER_SYSTEM_PROMPT,
@@ -36,6 +32,10 @@ from litellm.llms.anthropic.messages.safeguards import (
 )
 from litellm.llms.anthropic.messages.utils import proxy_sub_call_metadata
 from litellm.proxy._types import LiteLLM_EndUserTable, Litellm_EntityType, UserAPIKeyAuth
+from litellm.proxy.auth.caller_model_checks import (
+    CallerModelVerdict,
+    _caller_within_team_member_model_budget,
+)
 from litellm.proxy.hooks.model_max_budget_limiter import (
     PROXY_VirtualKeyModelMaxBudgetLimiter,
     model_budget_spend_cache_key,
@@ -46,7 +46,7 @@ from litellm.router import Router
 from litellm.types.llms.anthropic import AnthropicResponseContentBlockToolUse
 from litellm.types.router import RouterErrors
 from litellm.types.utils import Choices, Message, ModelResponse
-from tests.unit.llms.anthropic.messages.conftest import ProxyAuthState
+from tests.unit.proxy.proxy_auth_state import ProxyAuthState
 
 DANGEROUS_TOOL_USE_REQUEST: Final = [{"type": "dangerous_tool_use", "classifier_context": {"permission_mode": "auto"}}]
 LS: Final = ToolUseUnderReview(id="call_ls", name="Bash", input={"command": "ls"})

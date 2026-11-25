@@ -11,12 +11,12 @@ from typing_extensions import NotRequired, ReadOnly, Unpack, assert_never
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.anthropic.messages.caller_model_checks import CallerModelVerdict, caller_model_verdict
 from litellm.llms.anthropic.messages.utils import (
     ProxySubCallLoggingKwargs,
     proxy_general_settings,
     proxy_sub_call_metadata,
 )
+from litellm.proxy.auth.caller_model_checks import CallerModelVerdict, caller_model_verdict
 from litellm.types.llms.anthropic import (
     SafeguardResult,
     SafeguardStatusAvailable,

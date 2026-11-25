@@ -20,15 +20,15 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.asyncify import asyncify
-from litellm.llms.anthropic.messages.caller_model_checks import (
-    caller_can_call_model,
-    caller_within_model_budget,
-    caller_within_model_rate_limit,
-)
 from litellm.llms.anthropic.messages.utils import (
     ProxySubCallLoggingKwargs,
     proxy_general_settings,
     proxy_sub_call_metadata,
+)
+from litellm.proxy.auth.caller_model_checks import (
+    caller_can_call_model,
+    caller_within_model_budget,
+    caller_within_model_rate_limit,
 )
 from litellm.types.llms.anthropic import (
     AppliedEdit,

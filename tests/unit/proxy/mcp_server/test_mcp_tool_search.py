@@ -39,10 +39,12 @@ from litellm.proxy.mcp_server.tool_search import (
     ToolSearchResult,
     coerce_top_k,
     get_virtual_tool_definitions,
+    handle_mcp_proxy_tool,
     handle_mcp_tool_search,
     rank_mcp_tools,
     search_mcp_tools,
     search_tools,
+    with_mcp_proxy_identity,
 )
 from litellm.types.mcp import MCPToolSearchSettings, MCPTransport
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -975,6 +977,55 @@ class TestCallToolRestApiVirtualTools:
         assert key_limits.pre_call_hook.await_args.kwargs["data"]["model"] == "emb"
         assert result.is_error is False
         assert [t["name"] for t in json.loads(result.content[0].text)] == [FX_TOOL.name]
+
+    @pytest.mark.parametrize("surface", ("mcp_tool_search", "proxy_search_tools"))
+    @pytest.mark.asyncio
+    async def test_both_search_handlers_hand_the_embedding_call_only_the_callers_redaction_header(
+        self, monkeypatch: pytest.MonkeyPatch, surface: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "mcp_tool_search", {"embedding_model": "emb"})
+        user_api_key_dict = UserAPIKeyAuth(api_key="k", object_permission=_make_perm(mcp_tool_search_enabled=True))
+        raw_headers = {"x-litellm-enable-message-redaction": "true", "authorization": "Bearer sk-caller"}
+        sent: list[Mapping[str, object]] = []  # mutable-ok: test spy recording the embedding metadata
+
+        async def fake_aembedding(model: str, input: list[str], metadata: dict[str, Any]) -> MagicMock:
+            sent.append(metadata)
+            response = MagicMock()
+            response.model_dump.return_value = {"data": [{"embedding": list(FAKE_VECTORS[t])} for t in input]}
+            return response
+
+        router = MagicMock()
+        router.aembedding = AsyncMock(side_effect=fake_aembedding)
+        key_limits = MagicMock()
+        key_limits.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+        tools = tuple(with_mcp_proxy_identity(tool, "srv") for tool in CATALOG)
+        with (
+            patch(  # test-quality-ok: the proxy's router is a module global; the handler reaches it the way production does
+                "litellm.proxy.proxy_server.llm_router", router
+            ),
+            patch(  # test-quality-ok: the proxy's key-limit hooks are a module global; the embedding call runs them like /embeddings does
+                "litellm.proxy.proxy_server.proxy_logging_obj", key_limits
+            ),
+            patch(  # test-quality-ok: the authorized catalog is the seam every virtual tool shares; the ranking under test stays real
+                "litellm.proxy.mcp_server.operations._list_mcp_tools",
+                new_callable=AsyncMock,
+                return_value=AggregateToolListing(tools=list(tools), outcomes={}),
+            ),
+        ):
+            result = (
+                await handle_mcp_tool_search("FX", 5, user_api_key_dict, raw_headers=raw_headers)
+                if surface == "mcp_tool_search"
+                else await handle_mcp_proxy_tool(
+                    name="search_tools",
+                    arguments={"query": "FX"},
+                    user_api_key_dict=user_api_key_dict,
+                    raw_headers=raw_headers,
+                )
+            )
+
+        assert result.is_error is False
+        assert sent
+        assert all(metadata["headers"] == {"x-litellm-enable-message-redaction": "true"} for metadata in sent)
 
     @pytest.mark.asyncio
     async def test_mcp_tool_search_reports_missing_router_as_tool_error(self, monkeypatch: pytest.MonkeyPatch) -> None:

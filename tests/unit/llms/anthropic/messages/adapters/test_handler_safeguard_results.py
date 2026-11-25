@@ -40,7 +40,7 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
-from tests.unit.llms.anthropic.messages.conftest import ProxyAuthState
+from tests.unit.proxy.proxy_auth_state import ProxyAuthState
 
 SAFEGUARDS: Final = [{"type": "dangerous_tool_use", "classifier_context": {"permission_mode": "auto"}}]
 BASH_TOOL: Final = {"name": "Bash", "description": "run", "input_schema": {"type": "object", "properties": {}}}

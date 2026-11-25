@@ -46,7 +46,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import ParallelRequestLimiterHook, RateLimitUnverifiableError
-from tests.unit.llms.anthropic.messages.conftest import ProxyAuthState
+from tests.unit.proxy.proxy_auth_state import ProxyAuthState
 from tests.unit.proxy.rust_auth_stores import FakeTeamMembershipStore, RustAuthStores, install_rust_auth_stores
 
 MODEL = "openai/gpt-4o"
