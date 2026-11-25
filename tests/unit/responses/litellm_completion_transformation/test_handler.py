@@ -12,8 +12,11 @@ capture the forwarded kwargs; if the flag-setting line is removed the captured
 kwargs lack the flag and these tests fail.
 """
 
+import inspect
 import json
+import threading
 from collections.abc import Mapping
+from itertools import chain
 from typing import Final
 from unittest.mock import patch
 
@@ -22,12 +25,15 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.tool_fields import BRIDGED_TOOL_NAMES_KWARG, BridgedToolNames, qualified_member_name
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
-from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD
+from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, ChatCompletionDeltaToolCall, ModelResponseStream
 
 
 _UPSTREAM_PARAM_CASES: Final = [
@@ -379,3 +385,161 @@ async def test_bridged_turn_after_a_client_tool_search_reports_auto_for_an_allow
     assert "tool_choice" not in provider.request_body
     assert isinstance(response, ResponsesAPIResponse)
     assert response.tool_choice == "auto"
+
+
+_LONG_NAMESPACE: Final = "mcp__codex_apps__codex_document_control_handler_test"
+_LONG_MEMBER: Final = "get_document_tool_schemas"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_bridged_turn_logs_the_full_name_of_a_namespace_member_sent_under_a_shortened_name(is_async: bool):
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="gemini/gemini-flash-latest",
+        messages=[],
+        stream=False,
+        call_type="responses",
+        start_time=1.0,
+        litellm_call_id="full-tool-names",
+        function_id="test",
+    )
+    captured: Final[dict[str, object]] = {}
+
+    def fake_completion(**kwargs: object) -> None:
+        captured.update(kwargs)
+        raise _StopForwarding()
+
+    async def fake_acompletion(**kwargs: object) -> None:
+        fake_completion(**kwargs)
+
+    namespace: Final = {
+        "type": "namespace",
+        "name": _LONG_NAMESPACE,
+        "description": "",
+        "tools": [
+            {
+                "type": "function",
+                "name": _LONG_MEMBER,
+                "description": "Reads the document tool schemas.",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+
+    async def forward() -> None:
+        outcome: Final = LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="gemini/gemini-flash-latest",
+            input="Read the document tool schemas",
+            responses_api_request={"tools": [namespace]},
+            custom_llm_provider="gemini",
+            _is_async=is_async,
+            litellm_logging_obj=logging_obj,
+        )
+        if inspect.iscoroutine(outcome):
+            await outcome
+
+    with (
+        patch("litellm.completion", fake_completion),  # test-quality-ok: no DI seam; the file stubs this same boundary
+        patch("litellm.acompletion", fake_acompletion),  # test-quality-ok: no DI seam; the file stubs this same boundary
+        pytest.raises(_StopForwarding),
+    ):
+        await forward()
+
+    full_name: Final = qualified_member_name(_LONG_NAMESPACE, _LONG_MEMBER)
+    sent_names: Final = tuple(tool["function"]["name"] for tool in captured["tools"])
+    logged: Final = logging_obj.model_call_details.get(BRIDGED_TOOL_NAMES_KWARG)
+    assert full_name not in sent_names
+    assert isinstance(logged, BridgedToolNames)
+    assert logged.as_mapping() == {sent_name: full_name for sent_name in sent_names}
+
+
+def _anthropic_streams_a_call_to_the_first_tool(request: httpx.Request) -> httpx.Response:
+    sent_name: Final = json.loads(request.content)["tools"][0]["name"]
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_stream",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-haiku-5-5",
+                "content": [],
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_1", "name": sent_name, "input": {}},
+        },
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": "{}"}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {"output_tokens": 1}},
+        {"type": "message_stop"},
+    )
+    body: Final = b"".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode() for event in events)
+    return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body, request=request)
+
+
+def _chunk_tool_names(chunk: object) -> tuple[str, ...]:
+    if not isinstance(chunk, ModelResponseStream):
+        return ()
+    tool_calls: Final = chain.from_iterable(choice.delta.tool_calls or () for choice in chunk.choices)
+    return tuple(
+        tool_call.function.name
+        for tool_call in tool_calls
+        if isinstance(tool_call, ChatCompletionDeltaToolCall) and tool_call.function.name
+    )
+
+
+class _StreamChunkToolNames(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.names: tuple[str, ...] = ()
+        self.saw_tool_call: Final = threading.Event()
+
+    def _record(self, chunk: object) -> None:
+        names: Final = _chunk_tool_names(chunk)
+        self.names = (*self.names, *names)
+        if names:
+            self.saw_tool_call.set()
+
+    def log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        self._record(response_obj)
+
+    async def async_log_stream_event(self, kwargs, response_obj, start_time, end_time):
+        self._record(response_obj)
+
+
+def test_per_chunk_hooks_of_a_sync_bridged_stream_see_the_full_name_of_a_namespace_member(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    recorder: Final = _StreamChunkToolNames()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    namespace: Final = {
+        "type": "namespace",
+        "name": _LONG_NAMESPACE,
+        "description": "",
+        "tools": [
+            {
+                "type": "function",
+                "name": _LONG_MEMBER,
+                "description": "Reads the document tool schemas.",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+
+    stream: Final = litellm.responses(
+        model="anthropic/claude-haiku-5-5",
+        input="Read the document tool schemas",
+        tools=[namespace],
+        stream=True,
+        api_key="sk-ant-fake",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_anthropic_streams_a_call_to_the_first_tool))),
+    )
+    events: Final = tuple(stream)
+
+    assert events
+    assert recorder.saw_tool_call.wait(timeout=60), "no stream chunk with a tool call reached the per-chunk hooks"
+    assert set(recorder.names) == {qualified_member_name(_LONG_NAMESPACE, _LONG_MEMBER)}

@@ -4,7 +4,7 @@ Handler for the Anthropic v1/messages -> OpenAI Responses API path.
 Used when the target model is an OpenAI or Azure model.
 """
 
-from collections.abc import AsyncIterator, Callable, Coroutine, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from typing import Final, TypeAlias
 
@@ -653,7 +653,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
         **kwargs: object,
     ) -> (
         AnthropicMessagesResponse
-        | AsyncIterator[bytes]
+        | Iterator[bytes]
         | Coroutine[None, None, AnthropicMessagesResponse | AsyncIterator[bytes]]
     ):
         if _is_async:
@@ -708,7 +708,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
             )
-            return wrapper.async_anthropic_sse_wrapper()
+            return wrapper.anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")

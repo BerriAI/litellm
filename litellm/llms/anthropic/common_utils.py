@@ -2033,6 +2033,25 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
     data.pop("thinking", None)
 
 
+_DROP_ANTHROPIC_MESSAGE: Final = object()
+
+
+def _strip_empty_content_blocks_from_message(message: object) -> object:
+    mapping: Final = as_str_mapping(message)
+    content: Final = None if mapping is None else as_object_list(mapping.get("content"))
+    if mapping is None or content is None:
+        return message
+    from_user: Final = mapping.get("role") == "user"
+    filtered: Final = [
+        block
+        for block in content
+        if not _is_empty_text_block(block, from_user) and not is_empty_unsigned_thinking_block(block)
+    ]
+    if len(filtered) == len(content):
+        return message
+    return {**mapping, "content": filtered} if filtered else _DROP_ANTHROPIC_MESSAGE
+
+
 def strip_empty_content_blocks_from_anthropic_messages(
     messages: Sequence[object],
 ) -> list[Any]:
@@ -2067,25 +2086,23 @@ def strip_empty_content_blocks_from_anthropic_messages(
     The caller's list and its content blocks are never mutated; modified
     messages are returned as shallow copies with a fresh content list.
     """
-    out: Final[list[Any]] = []
-    for m in messages:
-        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
-            out.append(m)
-            continue
-        content = m["content"]
-        filtered = [b for b in content if not _is_empty_text_block(b) and not is_empty_unsigned_thinking_block(b)]
-        if len(filtered) == len(content):
-            out.append(m)
-        elif filtered:
-            out.append({**m, "content": filtered})
-    return out
+    return [
+        stripped_message
+        for message in messages
+        if (stripped_message := _strip_empty_content_blocks_from_message(message)) is not _DROP_ANTHROPIC_MESSAGE
+    ]
 
 
-def _is_empty_text_block(block: object) -> bool:
-    if not isinstance(block, dict) or block.get("type") != "text":
-        return False
-    text: Final = block.get("text")
-    return not isinstance(text, str) or not text.strip()
+def _is_empty_text_block(block: object, from_user: bool) -> bool:
+    match block:
+        case {"type": "text", "text": str() as text}:
+            return not text.strip()
+        case {"type": "text", "text": object()}:
+            return not from_user
+        case {"type": "text"}:
+            return True
+        case _:
+            return False
 
 
 def is_empty_thinking_block(block: object) -> bool:

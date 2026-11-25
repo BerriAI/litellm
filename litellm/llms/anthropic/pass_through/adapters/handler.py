@@ -100,6 +100,15 @@ class _ChatTargetReasoning:
     summary: str | None = None
 
 
+def _declared_base_model(kwargs: Mapping[str, object]) -> str | None:
+    base_model: Final = kwargs.get("base_model")
+    if isinstance(base_model, str) and base_model:
+        return base_model
+    model_info: Final = as_str_mapping(kwargs.get("model_info"))
+    info_base_model: Final = None if model_info is None else model_info.get("base_model")
+    return info_base_model if isinstance(info_base_model, str) else None
+
+
 def _provider_error_code(body: object) -> str | None:
     mapping: Final = as_str_mapping(body)
     if mapping is None:
@@ -648,6 +657,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             tools=cast("list[dict[str, object]]", tools) if isinstance(tools, list) else None,
             reasoning_effort=reasoning_effort,
             api_base=resolved_api_base,
+            base_model=_declared_base_model(completion_kwargs),
         )
         return None if model_info.get("mode") == "responses" else _ChatTargetReasoning(effort=effort)
 
@@ -862,6 +872,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             api_base=api_base if isinstance(api_base, str) else None,
             deployment_model_info=as_str_mapping(provider_kwargs.get("model_info")),
             reasoning_summary=peek_reasoning_summary_aliases(provider_kwargs),
+            base_model=_declared_base_model(provider_kwargs),
             drop_params=drop_params,
             translate_bare_output_effort=extra_kwargs.get("reasoning_effort") is None,
         )

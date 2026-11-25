@@ -1137,6 +1137,7 @@ from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the o
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # imported at the old definition site, same as its neighbours
     bridge_reasoning_effort,
+    serves_only_responses,
 )
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     responses_api_bridge_check as responses_api_bridge_check,  # pyright: ignore[reportUnknownVariableType]  # noqa: PLC0414  # re-export of moved function
@@ -5362,6 +5363,40 @@ def _complete_langflow(ctx: CompletionDispatchContext) -> _CompletionDispatchRes
     )
 
 
+def _chat_param_the_responses_api_lacks(optional_params: Mapping[str, object]) -> str | None:
+    n: Final = optional_params.get("n")
+    if isinstance(n, int) and n > 1:
+        return "n"
+    return "seed" if optional_params.get("seed") is not None else None
+
+
+def _raise_if_base_model_bridge_would_drop_a_param(
+    optional_params: Mapping[str, object],
+    *,
+    custom_llm_provider: str,
+    model: str,
+    base_model: str | None,
+    drop_params: bool,
+) -> None:
+    if (
+        drop_params
+        or custom_llm_provider != LlmProviders.AZURE_AI.value
+        or litellm.AzureAIStudioConfig.gpt_5_base_model(model, base_model) is None
+    ):
+        return
+    param: Final = _chat_param_the_responses_api_lacks(optional_params)
+    if param is None:
+        return
+    raise litellm.UnsupportedParamsError(
+        message=f"{custom_llm_provider}/{model} goes to the Responses API because its base_model {base_model} is a "
+        f"gpt-5 model, and the Responses API has no `{param}` field. "
+        "To drop it, set `litellm.drop_params=True`, pass `drop_params=True`, or for proxy: "
+        "`litellm_settings: drop_params: true`.",
+        model=model,
+        llm_provider=custom_llm_provider,
+    )
+
+
 def _complete_databricks_agent(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
     from litellm.llms.databricks.agent.transformation import DatabricksAgentConfig
 
@@ -5518,7 +5553,9 @@ def completion(
     # Set by the responses->completion fallback so completion() does not bridge
     # back to the Responses API: that round-trip mutually recurses forever for a
     # model whose model_cost mode is "responses" but whose provider has no
-    # Responses API config (get_provider_responses_api_config -> None).
+    # Responses API config (get_provider_responses_api_config -> None). A route
+    # with no chat endpoint bridges anyway, since its native Responses config
+    # ends the round-trip.
     skip_responses_api_bridge: Final = kwargs.pop("_skip_responses_api_bridge", False)
 
     control_options: Final = _resolve_control_options(kwargs, model)
@@ -5894,8 +5931,11 @@ def completion(
         if dynamic_api_key is not None:
             api_key = dynamic_api_key
         # check if user passed in any of the OpenAI optional params
+        may_bridge_to_responses_api: Final = not skip_responses_api_bridge or serves_only_responses(
+            model, custom_llm_provider
+        )
         bridges_to_responses_api: Final = (
-            responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge
+            responses_api_model_info.get("mode") == "responses" and may_bridge_to_responses_api
         )
         allowed_openai_params: Final[list[str] | None] = (
             [*allowed_openai_param_names(kwargs.get("allowed_openai_params")), "reasoning_effort"]
@@ -6129,7 +6169,8 @@ def completion(
         # reasoningSummary/reasoning_summary without tools (AI SDK) that the first
         # (early) check doesn't cover.
         _reasoning_summary_for_bridge: Final = peek_reasoning_summary_aliases(optional_params)
-        if responses_api_model_info.get("mode") != "responses":
+        routed_to_responses_without_base_model: Final = responses_api_model_info.get("mode") == "responses"
+        if not routed_to_responses_without_base_model:
             responses_api_model_info, model = responses_api_bridge_check(
                 model=model,
                 custom_llm_provider=custom_llm_provider,
@@ -6138,6 +6179,7 @@ def completion(
                 reasoning_effort=bridge_reasoning_effort(reasoning_effort, optional_params.get("extra_body")),
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
+                base_model=base_model if isinstance(base_model, str) else None,
             )
 
         # Use base_model (the true underlying model) for Azure model-type
@@ -6147,9 +6189,19 @@ def completion(
         replay_as_stream: Final = (
             partial(_replayed_stream, logging_obj=logging, stream_options=stream_options) if replays_stream else None
         )
-        if responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge:
+        if responses_api_model_info.get("mode") == "responses" and may_bridge_to_responses_api:
             from litellm.completion_extras import responses_api_bridge
 
+            if not routed_to_responses_without_base_model:
+                _raise_if_base_model_bridge_would_drop_a_param(
+                    optional_params,
+                    custom_llm_provider=custom_llm_provider,
+                    model=model,
+                    base_model=base_model if isinstance(base_model, str) else None,
+                    drop_params=litellm.drop_params is True
+                    or normalize_drop_params(_REQUEST_KWARGS_ADAPTER.validate_python(kwargs).get("drop_params"))
+                    is True,
+                )
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
 
             if isinstance(reasoning_effort, dict) and "summary" in reasoning_effort:
@@ -6187,7 +6239,7 @@ def completion(
             return _replayed_as_stream(  # pyright: ignore[reportReturnType]  # bridge returns a coroutine on the acompletion path; awaited by the async caller
                 bridged, replay_as_stream
             )
-        elif (custom_llm_provider == "openai" and OpenAIGPT5Config.is_model_gpt_5_model(model)) or (
+        elif (custom_llm_provider == "openai" and OpenAIGPT5Config.is_openai_gpt_5_model(model)) or (
             custom_llm_provider == "azure"
             and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(_azure_detection_model)
         ):
