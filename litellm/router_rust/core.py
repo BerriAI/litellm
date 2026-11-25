@@ -118,6 +118,7 @@ from litellm.router_rust.invoke.endpoints import (
     pinned_request_deployment,
     pinned_video_deployment,
     plan_for,
+    python_handler_name,
     reports_own_success,
     scoped_fallback_fields,
     selection_endpoint,
@@ -542,6 +543,14 @@ _NUMBER_SETTINGS: Final = frozenset(
 )
 # The settings `_core_update_settings` casts with `int(value)`.
 _UPDATE_INT_SETTINGS: Final = frozenset({"timeout", "num_retries", "retry_after", "allowed_fails", "cooldown_time"})
+_LONGEST_CONTEXT_CHAIN: Final = 32
+
+
+def _context_chain(error: BaseException, links_left: int = _LONGEST_CONTEXT_CHAIN) -> tuple[BaseException, ...]:
+    following: Final = error.__context__
+    if following is None or links_left == 0:
+        return (error,)
+    return (error, *_context_chain(following, links_left - 1))
 
 
 def _raised_before_provider(error: BaseException) -> bool:
@@ -3359,7 +3368,9 @@ class RustCore(
         try:
             await await_all(driver.outcomes.take_pending())
             if step["kind"] == "failed":
-                return driver.last_error if driver.last_error is not None else failure
+                return (
+                    driver.last_error if driver.last_error is not None and not driver.raises_stream_origin else failure
+                )
             attempted: Final = step.get("attempted_retries")
             budget: Final = step.get("max_retries")
             return (
@@ -4707,6 +4718,8 @@ class _Driver:
             (stream_failure,) if stream_failure else ()
         )
         self._queue_rejection: QueueRejectedError | None = None
+        self._attempt_errors: Final[dict[tuple[int, str], BaseException]] = {}  # mutable-ok: filled as the call runs
+        self._raises_stream_origin: bool = False
         # The retry counts an exhausted retry loop stamps on the pick error its level then raises.
         self._pending_stamps: Final[dict[int, tuple[object, object]]] = {}  # mutable-ok: filled as the call runs
         # Each level's current hop's first failure, once it retries: the error its retry loop raises
@@ -4743,12 +4756,15 @@ class _Driver:
         # The primary level reached the end of `async_function_with_fallbacks_common_utils`, the
         # only place the outcome message is appended: not its early raises, nor its order path.
         self._explains_failure: bool = False
+        self._fallback_ran: bool = False
 
     def clear_errors(self) -> None:
         self._last_error = None
         self._queue_rejection = None
         self._level_errors.clear()
         self._hop_first.clear()
+        self._attempt_errors.clear()
+        self._raises_stream_origin = False
         self._level_picks.clear()
 
     def _blocked(self, response: object, endpoint_name: str) -> str | None:
@@ -4827,6 +4843,17 @@ class _Driver:
         level: Final = event.get("level")
         self._last_error = raised
         self._level_errors[level if isinstance(level, int) else 0] = raised
+
+    def _context_window_raised(self, event: Mapping[str, object]) -> None:
+        if event.get("stream_origin") is True:
+            self._raises_stream_origin = True
+            return
+        level: Final = event.get("level")
+        at: Final = level if isinstance(level, int) else 0
+        refused: Final = self._attempt_errors.get((at, str(event.get("deployment_id"))))
+        if refused is not None:
+            self._last_error = refused
+            self._level_errors[at] = refused
 
     def _cause_error(self, event: Mapping[str, object]) -> BaseException | None:
         """The error the ``cause`` of a ``retry_logged`` or ``retry_policy_raised`` event names."""
@@ -4946,6 +4973,7 @@ class _Driver:
             self._level_errors[at] = last_hop
         if at == self._base_level:
             self._explains_failure = False
+            self._fallback_ran = True
 
     def _logged_off_the_loop(self) -> bool:
         """Whether litellm logged the attempt's failure on a thread with no running loop. An async
@@ -5010,6 +5038,11 @@ class _Driver:
                 return
             self._explain_no_fallback_group(own, at)
         raised: Final = self._level_errors.get(at + 1, own) if event.get("last_hop") is True else own
+        if raised is not None and raised is not own and self._is_create_that_may_already_exist(raised):
+            self._level_errors[at] = raised
+            if at == self._base_level:
+                self._explains_failure = False
+                self._fallback_ran = True
         self.outcomes.failed_fallbacks(
             RoutingContext(self._core),  # pyright: ignore[reportArgumentType]  # the read uses registry() and health()
             truncate_fallback_error_detail(redact_string(str(raised))),
@@ -5106,6 +5139,9 @@ class _Driver:
                 continue
             if event.get("kind") == "retry_count_raised":
                 self._count_raised(event)
+                continue
+            if event.get("kind") == "context_window_raised":
+                self._context_window_raised(event)
                 continue
             if event.get("kind") == "level_failed":
                 self._level_failed(event)
@@ -5281,6 +5317,10 @@ class _Driver:
     def last_error(self) -> BaseException | None:
         return self._last_error
 
+    @property
+    def raises_stream_origin(self) -> bool:
+        return self._raises_stream_origin
+
     def _stream_attempt(
         self, step: Mapping[str, object], kwargs: Mapping[str, object], slot: "contextlib.ExitStack | None" = None
     ) -> StreamAttempt:
@@ -5303,10 +5343,25 @@ class _Driver:
             deployment_id=deployment_id if isinstance(deployment_id, str) else None,
             attempted_retries=number("retry"),
             routed=routed if isinstance(routed, str) else None,
+            refused_ids=_strings(step.get("refused_ids")),
+            provider_refused_window=step.get("provider_refused_window") is True,
             slot=slot,
             explain_failure=self._hop_failure_explainer(step),
             caller_key_origin=self._caller_key_origin,
         )
+
+    def _is_create_that_may_already_exist(self, error: BaseException) -> bool:
+        from litellm.router_utils.fallback_event_handlers import is_create_that_may_already_exist
+
+        return is_create_that_may_already_exist(python_handler_name(self._plan), error)
+
+    def _create_may_exist(self, error: BaseException, model_group: str) -> bool:
+        from litellm.router_utils.fallback_event_handlers import log_create_not_resent
+
+        if not self._is_create_that_may_already_exist(error):
+            return False
+        log_create_not_resent(model_group)
+        return True
 
     def _failed(
         self,
@@ -5328,6 +5383,9 @@ class _Driver:
         if isinstance(retry, int) and retry > 0:
             self._chain_to_hop_first(error, level if isinstance(level, int) else 0)
         self._level_errors[level if isinstance(level, int) else 0] = error
+        attempted_on: Final = step.get("deployment_id")
+        if isinstance(attempted_on, str):
+            self._attempt_errors[(level if isinstance(level, int) else 0, attempted_on)] = error
         logged: Final = logged_call(
             call.host_op if call is not None else self._plan.host_op,
             served or self._request,  # pyright: ignore[reportUnknownArgumentType]  # see above
@@ -5342,6 +5400,7 @@ class _Driver:
         return {
             **attempt_failure(error),
             "detail": detail,
+            "create_may_exist": self._create_may_exist(error, str(step.get("model"))),
             **exits,
             **({"outside_deployment": True} if request_scoped or _raised_before_provider(error) else {}),
             # `async_deployment_callback_on_failure` does not run for a sync call, and skips a batch retrieve.
@@ -5374,10 +5433,14 @@ class _Driver:
 
     def _chain_to_hop_first(self, error: BaseException, level: int) -> None:
         """A retry's failure is raised while the hop's first failure is handled (the retry loop
-        runs in its ``except`` block), so it chains to it."""
+        runs in its ``except`` block), so the end of its own chain links to it."""
         first: Final = self._hop_first.get(level)
-        if first is not None and first is not error:
-            error.__context__ = first  # rebind-ok: chained as the retry loop's raise chains it
+        if first is None:
+            return
+        chain: Final = _context_chain(error)
+        if any(link is first for link in chain) or chain[-1].__context__ is not None:
+            return
+        chain[-1].__context__ = first
 
     def _succeeded(
         self, call: "AttemptCall", response: object, host_op: str, stream: "StreamAttempt | None" = None
@@ -6003,7 +6066,7 @@ class _Driver:
             )
         if (
             self._base_level == 0
-            and self._explains_failure
+            and (self._explains_failure or (not self._fallback_ran and self._is_create_that_may_already_exist(primary)))
             and self._core._host.dynamic().expose_router_debug_in_errors  # pyright: ignore[reportPrivateUsage]  # see above
             and hasattr(primary, "message")
         ):
@@ -6080,6 +6143,8 @@ class _Driver:
             get_fallback_model_group_for_lookup_groups,
         )
 
+        if self._is_create_that_may_already_exist(primary):
+            return format_fallback_outcome_message(model, None, "")
         walked: Final = self._core._walked_fallbacks  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
         request: Final = self._request
         # The request's own lists replace the router's (`kwargs.get("fallbacks", router)`).

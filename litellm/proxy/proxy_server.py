@@ -5659,6 +5659,8 @@ def _general_settings_row_is_readable(row: _ConfigParamValueRow | None) -> bool:
     return row is None or row.param_value is None or isinstance(row.param_value, Mapping)
 
 
+# The Rust gateway keeps a copy in litellm/rust/crates/config/src/db/settings/keys.rs, which
+# test_rust_gateway_copy_of_db_settings_keys_matches_python in tests/unit/proxy/test_proxy_server.py enforces.
 def _db_managed_general_settings_keys() -> frozenset[str]:
     return frozenset((*ConfigGeneralSettings.model_fields, *_CLEANUP_SCHEDULE_KEYS, "allowed_ips", "email_settings"))
 
@@ -5751,6 +5753,8 @@ def _log_ignored_cost_map_copy(model_id: str, fields: tuple[str, ...]) -> None:
     )
 
 
+# The Rust gateway keeps a copy in litellm/rust/crates/config/src/db/settings/keys.rs, which
+# test_rust_gateway_copy_of_db_settings_keys_matches_python in tests/unit/proxy/test_proxy_server.py enforces.
 _DB_CONFIG_CALLBACK_EVENT_TYPES: Final[Mapping[str, tuple[Literal["success", "failure"], ...]]] = MappingProxyType(
     {"success_callback": ("success",), "failure_callback": ("failure",), "callbacks": ("success", "failure")}
 )
@@ -5971,7 +5975,7 @@ class ProxyConfig:
             config=self._load_yaml_file(config_file_path), config_file_path=os.path.abspath(config_file_path)
         )
 
-    async def _process_includes(self, config: dict, config_file_path: str) -> dict:
+    async def _process_includes(self, config: dict, config_file_path: str) -> dict[str, object]:
         """
         Process includes by appending their contents to the main config
 
@@ -7959,7 +7963,7 @@ class ProxyConfig:
         return added
 
     def decrypt_model_list_from_db(self, new_models: list) -> list:
-        _model_list: Final[list] = []
+        _model_list: Final[list[object]] = []
         for m in new_models:
             _litellm_params = m.litellm_params
             if isinstance(_litellm_params, BaseModel):
@@ -8143,7 +8147,7 @@ class ProxyConfig:
 
     def decrypt_and_set_db_env_variables(
         self, environment_variables: dict, return_original_value: bool = False
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Decrypts a dictionary of environment variables and then sets them in the environment
 
@@ -8208,7 +8212,7 @@ class ProxyConfig:
     _encrypt_env_variables_for_db = encrypt_env_variables_for_db
 
     @staticmethod
-    def _parse_router_settings_value(value: object) -> dict | None:
+    def _parse_router_settings_value(value: object) -> dict[str, object] | None:
         """
         Parse a router_settings value that may be a dict or a JSON/YAML string.
 
@@ -8248,7 +8252,7 @@ class ProxyConfig:
         user_api_key_dict: Optional["UserAPIKeyAuth"],
         prisma_client: PrismaClient | None,
         proxy_logging_obj: Optional["ProxyLogging"] = None,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Get router_settings in priority order: Key > Team
 
@@ -9518,7 +9522,7 @@ class ProxyConfig:
                     prisma_client=prisma_client
                 )
                 verbose_proxy_logger.debug("guardrails from the DB %s", str(guardrails_in_db))
-                db_guardrail_ids: Final[set] = set()
+                db_guardrail_ids: Final[set[str]] = set()
                 for guardrail in guardrails_in_db:
                     guardrail_id = guardrail.get("guardrail_id")
                     if guardrail_id:
@@ -17002,7 +17006,7 @@ async def _check_if_model_is_user_added(
     models: list[dict],
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient | None,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """
     Check if model is in db
 
@@ -17294,7 +17298,7 @@ def get_direct_access_models(
     return tuple(model_id for model_id in user_model_ids if model_id in key_model_ids)
 
 
-def _filter_models_to_user_accessible(all_models: list[dict]) -> list[dict]:
+def _filter_models_to_user_accessible(all_models: list[dict]) -> list[dict[str, object]]:
     """Keep only deployments the caller can use via direct access or team membership."""
     return [
         _model
@@ -17309,7 +17313,7 @@ async def _populate_team_access_on_models(
     prisma_client: PrismaClient,
     llm_router: Router,
     all_models: list[dict],
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """
     Populate `model_info.access_via_team_ids` and `model_info.direct_access`
     without filtering the model list.
@@ -17367,7 +17371,7 @@ async def get_all_team_and_direct_access_models(
     prisma_client: PrismaClient,
     llm_router: Router,
     all_models: list[dict],
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """
     Get all models across all teams user is in.
     """
@@ -19081,7 +19085,7 @@ async def _get_v1_model_info_allowed_model_names_with_access_groups(
 def _filter_v1_model_info_deployments(
     all_models: list[dict[str, object]],
     allowed_model_names: Collection[str] | None,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     if allowed_model_names is None:
         return all_models
     return [model for model in all_models if _deployment_matches_allowed_model_names(model, allowed_model_names)]
@@ -19114,7 +19118,9 @@ def _translate_model_name_for_response(model: dict) -> dict[str, object]:
     return {**model, "model_name": team_public}
 
 
-def _get_proxy_model_info(model: dict[str, object], caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY) -> dict:
+def _get_proxy_model_info(
+    model: dict[str, object], caller_aliases: CallerAliases = GLOBAL_ALIASES_ONLY
+) -> dict[str, object]:
     return _translate_model_name_for_response(
         _enrich_model_info_with_litellm_data(model=model, llm_router=llm_router, caller_aliases=caller_aliases)
     )
@@ -20606,7 +20612,7 @@ async def onboarding(invite_link: str, request: Request):
     }
 
 
-def _get_onboarding_claims_from_request(request: Request) -> dict:
+def _get_onboarding_claims_from_request(request: Request) -> dict[str, object]:
     global master_key, general_settings
 
     if master_key is None:
@@ -22032,7 +22038,7 @@ def _validate_general_settings_ui_litellm_value(field_name: str, value: object) 
 
 async def _persist_general_settings_ui_litellm_field(
     field_name: str, value: object, user_api_key_dict: UserAPIKeyAuth
-) -> dict:
+) -> dict[str, object]:
     validated: Final = _validate_general_settings_ui_litellm_value(field_name, value)
     proxy_config.reject_config_owned_writes(section_name="litellm_settings", changed_keys={field_name: validated})
     config: Final = await proxy_config.get_config()
@@ -22046,7 +22052,9 @@ async def _persist_general_settings_ui_litellm_field(
     return {"message": f"Field {field_name} updated", "status": "success"}
 
 
-async def _reset_general_settings_ui_litellm_field(field_name: str, user_api_key_dict: UserAPIKeyAuth) -> dict:
+async def _reset_general_settings_ui_litellm_field(
+    field_name: str, user_api_key_dict: UserAPIKeyAuth
+) -> dict[str, object]:
     default_value: Final = _general_settings_ui_litellm_default(_GENERAL_SETTINGS_UI_LITELLM_FIELDS[field_name])
     proxy_config.reject_config_owned_writes(section_name="litellm_settings", changed_keys={field_name: default_value})
     config: Final = await proxy_config.get_config()

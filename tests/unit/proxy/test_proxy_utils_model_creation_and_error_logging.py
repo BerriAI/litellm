@@ -257,6 +257,63 @@ async def test_proxy_only_error_log_builds_payload_when_logging_object_has_malfo
     assert 123 not in standard_logging_object["request_tags"]
 
 
+_CHAT_PROMPT: Final[Mapping[str, object]] = {"messages": [{"role": "user", "content": "PROMPT-CANARY"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_logging_object", [False, True], ids=["rejected_before_setup", "rejected_after_setup"])
+@pytest.mark.parametrize(
+    ("route", "prompt_fields", "logged_beside_optional_params"),
+    [
+        ("/v1/chat/completions", _CHAT_PROMPT, _CHAT_PROMPT),
+        ("/v1/chat/completions", {"messages": "PROMPT-CANARY"}, {"messages": "PROMPT-CANARY"}),
+        ("/v1/completions", {"prompt": "PROMPT-CANARY"}, {"prompt": "PROMPT-CANARY"}),
+        ("/v1/completions", {"prompt": ["first", "PROMPT-CANARY"]}, {"prompt": ["first", "PROMPT-CANARY"]}),
+        ("/v1/embeddings", {"input": ["first", "PROMPT-CANARY"]}, {"input": ["first", "PROMPT-CANARY"]}),
+        ("/v1/responses", {"input": "PROMPT-CANARY"}, {"input": ""}),
+        ("/v1/chat/completions", {**_CHAT_PROMPT, "prompt": "second"}, {**_CHAT_PROMPT, "prompt": "second"}),
+    ],
+    ids=["messages", "malformed_messages", "prompt", "prompt_list", "input_list", "input_text", "messages_and_prompt"],
+)
+async def test_proxy_only_error_log_keeps_the_prompt_out_of_optional_params(
+    route: str,
+    prompt_fields: Mapping[str, object],
+    logged_beside_optional_params: Mapping[str, object],
+    with_logging_object: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    body: Final[dict[str, object]] = {"model": "gpt-4o", "stream": True, **prompt_fields}
+    logging_object: Final = (
+        {
+            "litellm_logging_obj": litellm.utils.function_setup(
+                original_function="acompletion",
+                rules_obj=litellm.utils.Rules(),
+                start_time=real_datetime.datetime.now(),
+                model="gpt-4o",
+                litellm_call_id="rejected-after-setup",
+            )[0]
+        }
+        if with_logging_object
+        else {}
+    )
+    request_data: Final[dict[str, object]] = {**body, **logging_object}
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", request_route=route),
+        route=route,
+        original_exception=HTTPException(status_code=429, detail="rate limited"),
+    )
+
+    details: Final = request_data["litellm_logging_obj"].model_call_details
+    assert details["optional_params"] == {"stream": True}
+    assert {key: details[key] for key in prompt_fields} == dict(logged_beside_optional_params)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("route", "prompt_fields", "logged_messages"),

@@ -2630,7 +2630,7 @@ def test_an_attributed_unsupported_param_names_the_provider_and_model(
 ) -> None:
     text: Final = (
         "claude-sonnet-4-5 does not support anthropic-version=latest. "
-        "To drop unsupported params, set `litellm.drop_params = True`."
+        "To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the proxy config."
     )
     rejected: Final = ValueError(text)
     rejected.messages_request_error = True  # pyright: ignore[reportAttributeAccessIssue]  # marker the Rust host sets

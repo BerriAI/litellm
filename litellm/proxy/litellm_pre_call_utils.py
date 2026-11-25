@@ -4444,7 +4444,7 @@ def _extract_credential_from_entry(entry: object, provider: str | None = None) -
 
 
 def _get_enforced_params(general_settings: dict | None, user_api_key_dict: UserAPIKeyAuth) -> list | None:
-    enforced_params: list | None = None
+    enforced_params: list[object] | None = None
     if general_settings is not None:
         enforced_params = general_settings.get("enforced_params")
         if (

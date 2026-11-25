@@ -334,6 +334,39 @@ def test_image_edit_repeated_plain_image_parts_reach_openai_as_two_file_parts(ga
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/images/edits")]
 
 
+@pytest.mark.parametrize("field", ("markup", "markup[]"))
+def test_image_edit_markup_upload_reaches_openai_as_markup_file_part(gateway: Gateway, field: str) -> None:
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST"
+        assert request.target == "/v1/images/edits"
+        assert request.headers["authorization"] == "Bearer synthetic-openai-key"
+        assert request.headers["content-type"].startswith("multipart/form-data; boundary=")
+        parts: Final = _multipart_parts(request)
+        assert _text_parts(parts) == (("model", "gpt-image-2.6-flare"), ("prompt", _PROMPT))
+        assert _file_parts(parts) == (
+            _FilePart("image[]", "image.png", "image/png", _PNG_BYTES),
+            _FilePart("markup", "markup.png", "image/png", _MASK_PNG),
+        )
+        return Reply(body=json.dumps({"created": 1700000000, "data": [{"b64_json": _EDITED_IMAGE_B64}]}).encode())
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/gpt-image-2.6-flare", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        response: Final = _edit(
+            gateway,
+            {"model": model, "prompt": _PROMPT},
+            (
+                ("image", ("red_circle.png", _PNG_BYTES, "image/png")),
+                (field, ("circle-outline.png", _MASK_PNG, "image/png")),
+            ),
+        )
+        assert response.status_code == 200, response.text
+        payload: Final = _ImageResponse.model_validate_json(response.content)
+        assert [image.b64_json for image in payload.data] == [_EDITED_IMAGE_B64], response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/v1/images/edits")]
+
+
 def _sdk_client(gateway: Gateway, model: str, alias: str) -> openai.OpenAI:
     base: Final = str(gateway.client.base_url)
     match alias:
@@ -406,6 +439,15 @@ def test_openai_sdk_image_edit_with_image_list_and_mask_reaches_openai_as_file_p
             ),
             "Cannot specify both 'mask' and 'mask[]'",
             id="mask",
+        ),
+        pytest.param(
+            (
+                ("image", ("red_circle.png", _PNG_BYTES, "image/png")),
+                ("markup", ("markup.png", _MASK_PNG, "image/png")),
+                ("markup[]", ("markup-array.png", _MASK_PNG, "image/png")),
+            ),
+            "Cannot specify both 'markup' and 'markup[]'",
+            id="markup",
         ),
     ),
 )

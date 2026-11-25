@@ -415,7 +415,7 @@ async def test_a_deployment_context_window_is_written_into_the_process_cost_map(
         enable_pre_call_checks=True,
     )
     with pytest.raises(litellm.ContextWindowExceededError, match="Max Input Tokens=5"):
-        await other.select("g", messages=SHORT)
+        await other.select("g", messages=LONG)
     other.retire()
 
 

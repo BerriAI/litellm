@@ -433,7 +433,7 @@ class _PROXY_LiteLLMManagedVectorStores(
         messages: Optional[List] = None,
         request_kwargs: Optional[Dict] = None,
         parent_otel_span: Optional[Span] = None,
-    ) -> List[Dict]:
+    ) -> List[dict[str, object]]:
         """
         Filter deployments based on vector store availability.
         
