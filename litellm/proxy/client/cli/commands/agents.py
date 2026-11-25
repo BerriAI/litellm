@@ -67,9 +67,29 @@ OPENCODE_PROVIDER_NPM: Final = "@ai-sdk/openai-compatible"
 OPENCODE_STANDALONE_FLAG: Final = "--standalone"
 _OPENCODE_SERVER_FLAGS: Final = frozenset({OPENCODE_STANDALONE_FLAG, "--server"})
 _OPENCODE_SESSION_SUBCOMMANDS: Final = frozenset({"run", "mini", "models"})
-_OPENCODE_VERSION: Final = re.compile(r"(?:opencode\s+)?v?(\d+)\.")
-_OPENCODE_FIRST_SERVICE_MAJOR: Final = 2
-_OPENCODE_VERSION_TIMEOUT_SECONDS: Final = 10.0
+_OPENCODE_OTHER_SUBCOMMANDS: Final = frozenset(
+    {
+        "acp",
+        "api",
+        "auth",
+        "debug",
+        "machine",
+        "mcp",
+        "pair",
+        "plugin",
+        "reload",
+        "serve",
+        "service",
+        "session",
+        "stats",
+        "uninstall",
+        "update",
+        "upgrade",
+    }
+)
+_OPENCODE_VALUE_FLAGS: Final = frozenset({"--session", "-s", "--prompt", "--log-level", "--completions"})
+_OPENCODE_HELP_LISTS_STANDALONE: Final = re.compile(rf"^\s+{OPENCODE_STANDALONE_FLAG}\b", re.MULTILINE)
+_OPENCODE_HELP_TIMEOUT_SECONDS: Final = 10.0
 
 _SKIP_VERIFY_FLAG: Final = "--skip-verify"
 
@@ -741,57 +761,70 @@ def opencode_model_sync_env(
     return MappingProxyType({OPENCODE_CONFIG_CONTENT_ENV: opencode_provider_config(base_url, listing, groups)})
 
 
-def _opencode_major_version(
+def _opencode_has_standalone(
     binary: str, env: Mapping[str, str], *, run: Callable[..., subprocess.CompletedProcess[str]]
-) -> int | None:
+) -> bool:
     try:
         completed: Final = run(
-            _windows_command(binary, (binary, "--version")),
+            _windows_command(binary, (binary, "--help")),
             env=dict(env),
             stdin=subprocess.DEVNULL,
             capture_output=True,
             encoding="utf-8",
-            timeout=_OPENCODE_VERSION_TIMEOUT_SECONDS,
+            timeout=_OPENCODE_HELP_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    match: Final = _OPENCODE_VERSION.match(completed.stdout.strip())
-    return int(match.group(1)) if completed.returncode == 0 and match is not None else None
-
-
-def _opencode_launch_uses_a_server(args: Sequence[str]) -> bool:
-    if any(arg.partition("=")[0] in _OPENCODE_SERVER_FLAGS for arg in args):
+    except (OSError, subprocess.TimeoutExpired, UnicodeError):
         return False
-    if not args:
-        return True
-    first: Final = args[0]
-    return first.startswith("-") or first in _OPENCODE_SESSION_SUBCOMMANDS or os.path.isdir(first)
+    return completed.returncode == 0 and _OPENCODE_HELP_LISTS_STANDALONE.search(completed.stdout) is not None
 
 
-def opencode_server_args(
+def _opencode_first_positional(args: Sequence[str]) -> int | None:
+    return next(
+        (
+            index
+            for index, (previous, arg) in enumerate(zip(("", *args), args))
+            if not arg.startswith("-") and previous not in _OPENCODE_VALUE_FLAGS
+        ),
+        None,
+    )
+
+
+def _opencode_standalone_index(args: Sequence[str]) -> int | None:
+    if any(arg.partition("=")[0] in _OPENCODE_SERVER_FLAGS for arg in args):
+        return None
+    index: Final = _opencode_first_positional(args)
+    if index is None:
+        return 0
+    if args[index] in _OPENCODE_SESSION_SUBCOMMANDS:
+        return index + 1
+    if args[index] not in _OPENCODE_OTHER_SUBCOMMANDS and os.path.isdir(args[index]):
+        return 0
+    return None
+
+
+def with_opencode_private_server(
     binary: str,
     args: Sequence[str],
     base_env: Mapping[str, str],
     *,
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> tuple[str, ...]:
-    """`--standalone` for an OpenCode 2+ launch that would otherwise attach to its background service.
+    """The launch args with `--standalone` added where an OpenCode 2+ launch would attach to its background service.
 
     OpenCode 2 keeps a background service running after the TUI exits, and later
     launches reuse it, so the provider config and key exported here never reach
     the server that lists and calls models. A standalone server is a private
     child of this launch with this env. OpenCode 1 and the subcommands that
-    start no session refuse the flag, and a `--server` or `--standalone` the
-    user passed wins.
+    start no session refuse the flag, OpenCode before 2.2 takes it only after a
+    subcommand, and a `--server` or `--standalone` the user passed wins.
     """
+    unchanged: Final = tuple(args)
     if os.path.splitext(os.path.basename(binary))[0] != "opencode":
-        return ()
-    if not _opencode_launch_uses_a_server(args):
-        return ()
-    major: Final = _opencode_major_version(binary, base_env, run=run)
-    if major is None or major < _OPENCODE_FIRST_SERVICE_MAJOR:
-        return ()
-    return (OPENCODE_STANDALONE_FLAG,)
+        return unchanged
+    index: Final = _opencode_standalone_index(args)
+    if index is None or not _opencode_has_standalone(binary, base_env, run=run):
+        return unchanged
+    return (*args[:index], OPENCODE_STANDALONE_FLAG, *args[index:])
 
 
 def _codex_row(
@@ -1152,7 +1185,7 @@ def run_agent(
     verify: Callable[[str, str], None] = verify_proxy_key,
     verify_subscription: Callable[[str, str], None] = verify_subscription_key,
     sync_models: Callable[[str, Mapping[str, str], str, str, bool], ModelSyncResult] = agent_model_sync_env,
-    server_args: Callable[[str, Sequence[str], Mapping[str, str]], Sequence[str]] = opencode_server_args,
+    private_server: Callable[[str, Sequence[str], Mapping[str, str]], Sequence[str]] = with_opencode_private_server,
     warn: Callable[[str], None] = _warn,
     launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _hand_off,
     reattach_terminal: Callable[[], None] | None = None,
@@ -1199,7 +1232,6 @@ def run_agent(
     )
     synced_args: Final = synced.args if isinstance(synced, ModelSyncArgs) else ()
     extra_args: Final = (
-        *server_args(binary, command[1:], env_before_sync),
         *agent_launch_args(command[0], base_url, subscription=subscription),
         *synced_args,
         *prepared_args,
@@ -1219,7 +1251,9 @@ def run_agent(
     )
     if reattach_terminal is not None:
         reattach_terminal()
-    launcher(binary, [command[0], *extra_args, *settings_args, *forwarded], env)
+    launcher(
+        binary, [command[0], *extra_args, *settings_args, *private_server(binary, forwarded, env_before_sync)], env
+    )
 
 
 def _is_interactive() -> bool:
@@ -1340,12 +1374,12 @@ __all__ = [
     "claude_settings_files",
     "opencode_model_sync_env",
     "opencode_provider_config",
-    "opencode_server_args",
     "prepare_pi",
     "resolve_api_key",
     "run_agent",
     "subscription_launch_args",
     "verify_proxy_key",
     "verify_subscription_key",
+    "with_opencode_private_server",
     "write_settings_overlay",
 ]
