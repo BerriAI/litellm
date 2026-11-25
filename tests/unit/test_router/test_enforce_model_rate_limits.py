@@ -7,6 +7,7 @@ regardless of the routing strategy being used.
 
 import asyncio
 from collections.abc import Callable
+from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
 from typing import Final
 
@@ -1072,6 +1073,13 @@ def _refused_request_on_a_shared_logging_object(function: str) -> dict[str, obje
     return {**request, "litellm_logging_obj": logging_obj}
 
 
+class _InlineExecutor:
+    def submit(self, fn: Callable[..., object], /, *args: object, **kwargs: object) -> Future[object]:
+        future: Final = Future[object]()
+        future.set_result(fn(*args, **kwargs))
+        return future
+
+
 async def _served_image_from(router: Router, request: dict[str, object]) -> None:
     await router.aimage_generation(**request)
     await asyncio.sleep(0)
@@ -1102,6 +1110,7 @@ def test_a_sync_fallback_serving_a_refused_image_counts_only_its_own_tokens_towa
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr("litellm.utils.executor", _InlineExecutor())
     router: Final = _refuser_with_a_backup()
 
     try:

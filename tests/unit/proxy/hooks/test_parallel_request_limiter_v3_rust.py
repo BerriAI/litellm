@@ -160,7 +160,8 @@ def _capture_token_increments(fakes: FakeRateLimits) -> list[dict[str, object]]:
     async def token_increment(keys: list[str], args: list[float]) -> list[float]:
         amounts: Final = args[::2]
         captured.extend(
-            {"key": key, "increment_value": amount, "ttl": ttl} for key, amount, ttl in zip(keys, amounts, args[1::2])
+            {"key": key, "increment_value": amount, "ttl": ttl}
+            for key, amount, ttl in zip(keys[1::2], amounts, args[1::2])
         )
         return amounts
 
@@ -1642,6 +1643,30 @@ async def test_multiple_rate_limits_per_descriptor():
     assert exc_info.value.headers.get("rate_limit_type") == "max_parallel_requests"
     assert "retry-after" in exc_info.value.headers
     assert "reset_at" in exc_info.value.headers
+
+
+@pytest.mark.asyncio
+async def test_tokens_charged_before_any_admission_count_against_the_next_request():
+    api_key: Final = hash_token("sk-relay-first")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+
+    await handler.async_log_success_event(
+        {"standard_logging_object": {"metadata": {"user_api_key_hash": api_key}}},
+        ModelResponse(usage=Usage(prompt_tokens=1092, completion_tokens=0, total_tokens=1092)),
+        None,
+        None,
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key=api_key, tpm_limit=1000),
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "hi"}]},
+            call_type="completion",
+        )
+    assert refused.value.status_code == 429
+    assert refused.value.headers.get("rate_limit_type") == "tokens"
 
 
 @pytest.mark.asyncio
