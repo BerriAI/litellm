@@ -2147,6 +2147,7 @@ class _PreCallRun:
     endpoint_type: EndpointType
     raw_request_snapshot: dict[str, object] | None  # mutable-ok: same request-payload shape as latest
     latest: dict[str, object] | None  # mutable-ok: the request as the callbacks have left it so far
+    measure_callback_latency: bool
     pipeline_managed: frozenset[str] = frozenset()
     deferred: SensitiveDataRouteException | None = None
     parallel: list[tuple[CustomGuardrail, list[object]]] = field(  # mutable-ok: parallel results in list order
@@ -3713,6 +3714,9 @@ class ProxyLogging:
                 endpoint_type=endpoint_type,
                 raw_request_snapshot=raw_request_snapshot,
                 latest=data,
+                measure_callback_latency=call_type in (CallTypes.completion.value, CallTypes.acompletion.value)
+                and not guardrails_only
+                and not data.get("stream"),
             )
         )
 
@@ -3814,11 +3818,7 @@ class ProxyLogging:
                 if run.call_type in MCP_GUARDRAIL_CALL_TYPES and run.user_api_key_dict is None:
                     return None
                 callback_name: Final = (
-                    callback._proxy_callback_registration_name
-                    if run.call_type in (CallTypes.completion.value, CallTypes.acompletion.value)
-                    and data is not None
-                    and not data.get("stream")
-                    else None
+                    callback._proxy_callback_registration_name if run.measure_callback_latency else None
                 )
                 with measure_callback_execution(callback_name, "async_pre_call_hook", "request_path"):
                     response: Final[Exception | str | Mapping[str, object] | None] = await callback.async_pre_call_hook(

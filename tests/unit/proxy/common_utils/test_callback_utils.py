@@ -8,11 +8,13 @@ from typing import Final
 from unittest.mock import patch
 
 import pytest
+from prometheus_client import CollectorRegistry, Histogram
 
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.constants import MAX_GUARDRAIL_SCAN_METADATA_HEADER_LENGTH
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils import callback_timing
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_config_validation import logging_metadata_config_error
 from litellm.proxy.common_utils.callback_utils import (
@@ -772,6 +774,54 @@ def test_same_class_proxy_registrations_reach_async_success_list(
         litellm.logging_callback_manager.add_litellm_async_success_callback(callback)
 
     assert [callback._proxy_callback_registration_name for callback in litellm._async_success_callback] == names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("stream", "guardrails_only", "expected"), ((True, False, 0), (False, True, 0), (False, False, 1))
+)
+async def test_pre_call_metrics_use_original_request_scope(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, guardrails_only: bool, expected: int
+) -> None:
+    registry: Final = CollectorRegistry()
+    histogram: Final = Histogram(
+        "litellm_callback_execution_seconds",
+        "Callback hook duration",
+        ("callback_name", "hook", "execution_path"),
+        registry=registry,
+    )
+
+    class RewriteStream(CustomLogger):
+        enforces_request_content = True
+
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            return {**data, "stream": False}
+
+    class SecondHook(RewriteStream):
+        async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+            return {**data, "ran_second_hook": True}
+
+    second: Final = SecondHook()
+    second._proxy_callback_registration_name = "callbacks.second"
+    monkeypatch.setattr(litellm, "callbacks", [RewriteStream(), second])
+    monkeypatch.setattr(ProxyLogging, "_callback_capabilities_cache", {})
+    monkeypatch.setattr(callback_timing, "_callback_timing_enabled", lambda: True)
+    monkeypatch.setattr(callback_timing, "_load_histogram", lambda: histogram)
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+
+    result: Final = await proxy_logging.pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-probe"),
+        data={"model": "chat", "stream": stream},
+        call_type="acompletion",
+        guardrails_only=guardrails_only,
+    )
+
+    assert result["stream"] is False and result["ran_second_hook"] is True
+    count: Final = registry.get_sample_value(
+        "litellm_callback_execution_seconds_count",
+        {"callback_name": "callbacks.second", "hook": "async_pre_call_hook", "execution_path": "request_path"},
+    )
+    assert (count or 0) == expected
 
 
 def test_initialize_callbacks_on_proxy_keeps_known_string_callback(probe_config_path):

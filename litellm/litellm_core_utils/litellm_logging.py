@@ -1132,6 +1132,8 @@ class Logging(LiteLLMLoggingBaseClass):
         log_raw_request_response: bool = False,
         supports_correlation_logging: bool = True,
         raw_request_only: bool = False,
+        *,
+        is_callback_log_replay: bool = False,
     ):
         _input: Final[str | None] = messages  # save original value of messages
         if messages is not None:
@@ -1200,6 +1202,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.sync_streaming_chunks: list[object] = []
         self.log_raw_request_response = log_raw_request_response
         self.raw_request_only = raw_request_only
+        self._is_callback_log_replay: Final = is_callback_log_replay
 
         # Initialize dynamic callbacks
         self.dynamic_input_callbacks: list[str | Callable[..., object] | CustomLogger] | None = dynamic_input_callbacks
@@ -5427,7 +5430,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     hook: Final = callback.async_log_success_event
                     callback_name: Final = (
                         callback._proxy_callback_registration_name
-                        if self.call_type in _CHAT_CALL_TYPES
+                        if not self._is_callback_log_replay
+                        and self.call_type in _CHAT_CALL_TYPES
                         and getattr(hook, "__func__", hook) is not CustomLogger.async_log_success_event
                         else None
                     )

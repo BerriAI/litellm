@@ -1,10 +1,15 @@
 """Unit tests for POST /v1/callbacks/logs (replay logging payloads → callbacks)."""
 
 import time
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
+from prometheus_client import CollectorRegistry, Histogram
 
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils import callback_timing
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
@@ -101,6 +106,39 @@ async def test_success_record_invokes_success_handler(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_replayed_success_delivers_callback_without_observing_live_latency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: Final[list[str]] = []  # mutable-ok: records which payload the callback receives
+    registry: Final = CollectorRegistry()
+    histogram: Final = Histogram(
+        "litellm_callback_execution_seconds",
+        "Callback hook duration",
+        ("callback_name", "hook", "execution_path"),
+        registry=registry,
+    )
+
+    class Recorder(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            calls.append(kwargs["standard_logging_object"]["id"])
+
+    callback: Final = Recorder()
+    callback._proxy_callback_registration_name = "callbacks.recorder"
+    monkeypatch.setattr(litellm, "_async_success_callback", [callback])
+    monkeypatch.setattr(callback_timing, "_callback_timing_enabled", lambda: True)
+    monkeypatch.setattr(callback_timing, "_load_histogram", lambda: histogram)
+
+    result: Final = await ingest_callback_logs(
+        CallbackLogsRequest(records=[CallbackLogRecord(status="success", standard_logging_payload=_sample_payload())]),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert (result.processed, result.failed) == (1, 0)
+    assert calls == [REQ_ID]
+    assert not any(metric.samples for metric in registry.collect())
+
+
+@pytest.mark.asyncio
 async def test_failure_record_invokes_failure_handler(monkeypatch):
     captured = {}
 
@@ -183,8 +221,9 @@ async def test_one_bad_record_does_not_sink_the_batch(monkeypatch):
 
 
 def test_batch_over_limit_is_rejected():
-    from litellm.constants import MAX_CALLBACK_LOG_RECORDS
     from pydantic import ValidationError
+
+    from litellm.constants import MAX_CALLBACK_LOG_RECORDS
 
     # One over the cap must fail validation (422 at the API boundary), bounding
     # the callback/DB fan-out a single POST can trigger.
