@@ -678,6 +678,16 @@ def member_budget_patch(source: BaseModel) -> Mapping[str, object]:
     }
 
 
+def _follows_live_default_cap(default_budget: Mapping[str, object]) -> bool:
+    cap: Final = default_budget.get("max_budget")
+    return (
+        isinstance(cap, (int, float))
+        and not isinstance(cap, bool)
+        and cap > 0
+        and default_budget.get("rollover_max_budget") is None
+    )
+
+
 def _is_set_budget_value(value: object) -> bool:
     if value is None:
         return False
@@ -795,6 +805,7 @@ async def upsert_budget_and_membership(
         team_default_budget_id is not None
         and existing_budget_id == team_default_budget_id
         and frozenset(effective_patch) <= _TEMP_BUDGET_FIELDS
+        and _follows_live_default_cap(source)
     )
     create_data: Final[dict[str, object]] = {  # mutable-ok: Prisma create payloads are dict-shaped
         "created_by": user_api_key_dict.user_id or "",
