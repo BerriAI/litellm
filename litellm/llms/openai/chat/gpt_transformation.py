@@ -16,7 +16,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, map_finish_reason
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     extract_reasoning_content,
     handle_invalid_parallel_tool_calls,
@@ -64,7 +64,7 @@ from litellm.types.utils import (
 )
 from litellm.utils import convert_to_model_response_object
 
-from ..common_utils import OpenAIError
+from ..common_utils import OpenAIError, RelayOnlyBodyOpenAIError
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
 
 if TYPE_CHECKING:
@@ -971,9 +971,10 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             error_details: Final = self._extract_error_from_chunk(chunk)
             if error_details is not None:
                 error_message, error_status_code = error_details
-                raise OpenAIError(
+                raise RelayOnlyBodyOpenAIError(
                     status_code=error_status_code,
                     message=error_message,
+                    body=as_str_mapping(_OBJECT_MAPPING.validate_python(chunk).get("error")),
                 )
             choices: Final = self._map_reasoning_to_reasoning_content(chunk.get("choices") or [])
             fingerprint: Final = _OBJECT_MAPPING.validate_python(chunk).get("system_fingerprint")

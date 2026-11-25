@@ -51,7 +51,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.anthropic.chat.transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY
 from litellm.llms.base_llm.base_utils import map_developer_role_to_system_role
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body
+from litellm.llms.base_llm.files.batch_records import responses_batch_body_to_chat_body, row_or_deployment_drop_params
 from litellm.llms.base_llm.files.transformation import (
     BaseFilesConfig,
     BaseFileUploadStream,
@@ -73,6 +73,7 @@ from litellm.llms.vertex_ai.gemini.transformation import transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VERTEX_SHARED_REQUEST_TIERS,
     VertexGeminiConfig,
+    requests_audio_mime_type,
 )
 from litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_transformation import (
     transform_openai_input_gemini_embed_content,
@@ -1031,7 +1032,11 @@ def _openai_batch_jsonl_entry_to_vertex_rows(
     openai_request_body: Final = openai_entry["body"]
     chat_request_body: Final = (
         {
-            **responses_batch_body_to_chat_body(openai_request_body, custom_llm_provider="vertex_ai"),
+            **responses_batch_body_to_chat_body(
+                openai_request_body,
+                custom_llm_provider="vertex_ai",
+                drop_params=row_or_deployment_drop_params(openai_request_body, deployment_params.get("drop_params")),
+            ),
             **{key: value for key, value in openai_request_body.items() if key == "drop_params" and value is not None},
         }
         if _is_responses_batch_entry(openai_entry)
@@ -1493,6 +1498,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             non_default_params=openai_request_body,
             optional_params={},
             drop_params=drop_params,
+            allow_unsupported_n=True,
         )
         if (
             "service_tier" in vertex_params
@@ -1944,6 +1950,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
 
         # Transform successful response using existing transformation
         vertex_response: Final = vertex_output.get("response", {})
+        vertex_request: Final = vertex_output.get("request")
 
         # Extract model from response
         model = vertex_response.get("modelVersion", "gemini-1.5-flash-001")
@@ -1960,6 +1967,8 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                 model=model,
                 logging_obj=logging_obj,
                 raw_response=mock_httpx_response,
+                keeps_requested_audio_format=isinstance(vertex_request, Mapping)
+                and requests_audio_mime_type(vertex_request),
             )
 
             # Convert ModelResponse to dict

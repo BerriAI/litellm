@@ -63,17 +63,17 @@ class Mapped:
 
 STATUS_TABLE: Final = (
     Mapped(400, "scripted_type", "scripted_param"),
-    Mapped(401, "authentication_error", None),
-    Mapped(403, "permission_error", None),
-    Mapped(404, "invalid_request_error", None),
-    Mapped(408, "invalid_request_error", None),
-    Mapped(409, "invalid_request_error", None),
+    Mapped(401, "authentication_error", "scripted_param"),
+    Mapped(403, "permission_error", "scripted_param"),
+    Mapped(404, "invalid_request_error", "scripted_param"),
+    Mapped(408, "invalid_request_error", "scripted_param"),
+    Mapped(409, "invalid_request_error", "scripted_param"),
     Mapped(422, "scripted_type", "scripted_param"),
     Mapped(429, "throttling_error", "scripted_param"),
     Mapped(500, "internal_server_error", "scripted_param"),
-    Mapped(502, "internal_server_error", None),
-    Mapped(503, "internal_server_error", None),
-    Mapped(504, "internal_server_error", None),
+    Mapped(502, "internal_server_error", "scripted_param"),
+    Mapped(503, "internal_server_error", "scripted_param"),
+    Mapped(504, "internal_server_error", "scripted_param"),
 )
 MAPPED_BY_STATUS: Final = MappingProxyType({mapped.status: mapped for mapped in STATUS_TABLE})
 UNMAPPED_500: Final = Mapped(500, "internal_server_error", None)

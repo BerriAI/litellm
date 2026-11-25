@@ -76,6 +76,8 @@ from litellm.constants import (
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
+from litellm.decisions.call import validate_router_connection
+from litellm.exceptions import UnknownPreviousResponseError, UnresolvablePreviousResponseError
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
@@ -223,10 +225,10 @@ from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments,
     async_get_cooldown_deployments_with_debug_info,
     get_cooldown_deployments,
-    is_advisor_orchestration_failure,
     is_background_response_poll_not_found,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
+    is_failure_outside_selected_deployment,
     is_video_lookup_not_found,
     set_cooldown_deployments,
 )
@@ -299,6 +301,7 @@ from litellm.router_utils.ptu_shares import (
 )
 from litellm.router_utils.reasoning_effort_capability import (
     deployment_is_catalog_mapped,
+    gpt_5_row_refuses_reasoning_effort,
     intersect_supported_reasoning_efforts,
     resolve_supported_reasoning_efforts,
 )
@@ -1398,15 +1401,16 @@ class Router:
         if model_list is not None:
             # set_model_list will build indices automatically
             self.set_model_list(model_list)
-            # Track this router so a price data reload can rebuild its deployments'
-            # cost-map entries from the list it is serving at that moment.
-            _live_routers.add(self)
             self.healthy_deployments: list = self.model_list
             for m in model_list:
                 if "model" in m["litellm_params"]:
                     self.deployment_latency_map[m["litellm_params"]["model"]] = 0
         else:
             self.model_list: list = []  # initialize an empty list - to allow _add_deployment and delete_deployment to work
+        # Track this router so a price data reload can rebuild its deployments'
+        # cost-map entries from the list it is serving at that moment, whether
+        # those deployments came from model_list or were added later from the DB.
+        _live_routers.add(self)
 
         if allowed_fails is not None:
             self.allowed_fails = allowed_fails
@@ -2886,7 +2890,7 @@ class Router:
         """
         if kwargs.get("reasoning_effort") is None or not self._is_classifier_internal_call(kwargs):
             return
-        if self._deployment_accepts_param(deployment, model, "reasoning_effort"):
+        if self._deployment_accepts_param(deployment, model, "reasoning_effort", kwargs.get("reasoning_effort")):
             return
         verbose_router_logger.warning(
             "litellm.router.py: dropping classifier reasoning_effort for model=%s because the selected deployment does not support it",
@@ -5816,6 +5820,13 @@ class Router:
                     return await original_generic_function(model=model, **kwargs)
                 raise e
 
+            if handler_name in {"decisions", "adecisions", "systemone", "asystemone"}:
+                connection_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
+                validate_router_connection(
+                    str(connection_params.get("model")),
+                    provider_for_generic_call(connection_params),
+                    _FALLBACK_HOP_ADAPTER.validate_python(kwargs),
+                )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
 
             data: Final = deployment["litellm_params"].copy()
@@ -6564,6 +6575,13 @@ class Router:
                     input=kwargs.get("input", None),
                     specific_deployment=kwargs.pop("specific_deployment", None),
                     request_kwargs=kwargs,
+                )
+            if handler_name in {"decisions", "adecisions", "systemone", "asystemone"}:
+                connection_params: Final = _LITELLM_PARAMS_ADAPTER.validate_python(deployment["litellm_params"])
+                validate_router_connection(
+                    str(connection_params.get("model")),
+                    provider_for_generic_call(connection_params),
+                    _FALLBACK_HOP_ADAPTER.validate_python(kwargs),
                 )
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name="generic_api_call")
 
@@ -8007,6 +8025,8 @@ class Router:
         }
         try:
             return await run_async_fallback(*args, **failover_kwargs)
+        except UnresolvablePreviousResponseError:
+            raise
         except (openai.APIError, RouterRateLimitError, RouterRateLimitErrorBasic):
             # Expected model-level failure on the retried deployment. All
             # litellm provider errors derive from openai.APIError; if every
@@ -8053,6 +8073,7 @@ class Router:
             disable_fallbacks is True
             or original_model_group is None
             or is_guardrail_intervention(e)
+            or isinstance(e, UnknownPreviousResponseError)
             or unsupported_params_without_fallback
         ):
             raise e
@@ -8268,6 +8289,8 @@ class Router:
                 )
 
                 return response
+        except UnknownPreviousResponseError:
+            raise
         except Exception as new_exception:
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             fallback_failure_exception_str = truncate_fallback_error_detail(redact_string(str(new_exception)))
@@ -8472,7 +8495,7 @@ class Router:
             response = add_retry_headers_to_response(response=response, attempted_retries=0, max_retries=None)
             return response
         except Exception as e:
-            if is_guardrail_intervention(e):
+            if is_guardrail_intervention(e) or isinstance(e, UnresolvablePreviousResponseError):
                 raise
             current_attempt = None
             original_exception = e
@@ -8574,6 +8597,8 @@ class Router:
                     return response
 
                 except Exception as e:
+                    if isinstance(e, UnresolvablePreviousResponseError):
+                        raise
                     # Always track the latest error so we raise the most
                     # recent exception instead of the first one.
                     original_exception = e
@@ -9028,10 +9053,10 @@ class Router:
         try:
             exception: Final = kwargs.get("exception", None)
 
-            if is_advisor_orchestration_failure(exception):
+            if is_failure_outside_selected_deployment(exception):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
-                    "Failure originated from advisor orchestration, not the selected deployment."
+                    "Failure did not come from the selected deployment."
                 )
                 return False
 
@@ -12924,7 +12949,7 @@ class Router:
         return frozenset(allowed_openai_param_names(params.get("allowed_openai_params")))
 
     @staticmethod
-    def _deployment_accepts_param(deployment: DeploymentTypedDict, group: str, param: str) -> bool:
+    def _deployment_accepts_param(deployment: DeploymentTypedDict, group: str, param: str, value: object) -> bool:
         deployment_params: Final = deployment.get("litellm_params")
         if not deployment_params:
             return True
@@ -12934,7 +12959,7 @@ class Router:
             str(deployment_params.get("model") or ""), deployment_params.get("custom_llm_provider")
         ):
             return True
-        return Router._deployment_supports_param(deployment, group, param)
+        return Router._deployment_supports_param(deployment, group, param, value)
 
     @staticmethod
     def _capability_model_and_provider(deployment_params: LiteLLMParamsTypedDict, group: str) -> tuple[str, str]:
@@ -12952,17 +12977,23 @@ class Router:
         return model, custom_llm_provider
 
     @staticmethod
-    def _deployment_supports_param(deployment: DeploymentTypedDict, group: str, param: str) -> bool:
+    def _deployment_supports_param(deployment: DeploymentTypedDict, group: str, param: str, value: object) -> bool:
         deployment_params: Final = deployment.get("litellm_params")
         if not deployment_params:
             return True
-        deployment_model_info: Final = deployment.get("model_info")
-        base_model: Final = (
-            deployment_model_info.get("base_model") if deployment_model_info else None
-        ) or deployment_params.get("base_model")
+        deployment_model_info: Final = _configured_model_info(deployment)
+        base_model: Final = deployment_params.get("base_model") or deployment_model_info.get("base_model")
         try:
             model, custom_llm_provider = Router._capability_model_and_provider(deployment_params, group)
             supported: Final = litellm.get_supported_openai_params(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                base_model=base_model if isinstance(base_model, str) else None,
+            )
+            if supported is not None and param not in supported:
+                return False
+            return param != "reasoning_effort" or not gpt_5_row_refuses_reasoning_effort(
+                value,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
                 base_model=base_model if isinstance(base_model, str) else None,
@@ -12972,7 +13003,6 @@ class Router:
                 "litellm.router.py::_deployment_supports_param: keeping %s for model=%s. Got - %s", param, group, e
             )
             return True
-        return supported is None or param in supported
 
     def _tier_params_the_target_accepts(
         self, model: str, tier_params: Mapping[str, object], request_kwargs: Mapping[str, object]
@@ -13020,7 +13050,10 @@ class Router:
         unsupported: Final = frozenset(
             param
             for param in candidates
-            if not any(self._deployment_accepts_param(deployment, model, param) for deployment in deployments)
+            if not any(
+                self._deployment_accepts_param(deployment, model, param, tier_params.get(param))
+                for deployment in deployments
+            )
         )
         if not unsupported:
             return tier_params
@@ -13525,7 +13558,7 @@ class Router:
 
     @staticmethod
     def _deployment_lacks_params(deployment: DeploymentTypedDict, group: str, params: frozenset[str]) -> bool:
-        return any(not Router._deployment_supports_param(deployment, group, param) for param in params)
+        return any(not Router._deployment_supports_param(deployment, group, param, None) for param in params)
 
     @staticmethod
     def _deployment_rejects_params(

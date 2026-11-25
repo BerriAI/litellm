@@ -382,6 +382,7 @@ GEMINI_3_5_FLASH_TEST_CASE: Final = TranslationTestCase(
     },
     expected_litellm_status_code=200,
     expected_litellm_response={
+        "service_tier": "default",
         "id": "uirEaqqwMc-U9LsPjJTYuQU",
         "created": ANY,
         "model": "vertex_ai/gemini-3.5-flash",
@@ -826,6 +827,7 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
     mock_provider_response={**VERTEX_AI_GEMINI_GENERATE_CONTENT_RESPONSE, "modelVersion": "gemini-3.8-flash"},
     expected_litellm_response={
         **CHAT_COMPLETIONS_RESPONSE,
+        "service_tier": "default",
         "model": "vertex_ai/gemini-3.8-flash",
         "choices": [
             {
@@ -1048,6 +1050,7 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
     },
     expected_litellm_response={
         **CHAT_COMPLETIONS_RESPONSE,
+        "service_tier": "default",
         "model": "vertex_ai/gemini-3.1-pro-preview",
         "choices": [
             {
@@ -1394,6 +1397,7 @@ GEMINI_4_ARGON_TEST_CASE: Final = TranslationTestCase(
     },
     expected_litellm_response={
         **CHAT_COMPLETIONS_RESPONSE,
+        "service_tier": "default",
         "model": "vertex_ai/gemini-4-argon",
         "choices": [
             {

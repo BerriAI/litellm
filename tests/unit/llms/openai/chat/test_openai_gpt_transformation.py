@@ -2405,3 +2405,20 @@ class TestToolSchemaCombinatorFlatteningForOpenAI:
         )
 
         assert request["tools"][0] is tool
+
+
+def test_mid_stream_error_chunk_keeps_the_provider_fields_and_the_logged_code() -> None:
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
+    from litellm.llms.openai.common_utils import OpenAIError
+    from litellm.proxy.common_utils.openai_error_payload import relayed_provider_specific_fields
+
+    handler: Final = OpenAIChatCompletionStreamingHandler(streaming_response=iter(()), sync_stream=True)
+    with pytest.raises(OpenAIError) as raised:
+        handler.chunk_parser({"error": {"message": "bad", "code": 400, "param": "temperature", "detail": "kept"}})
+    with pytest.raises(litellm.BadRequestError) as mapped:
+        exception_type(model="qwen", original_exception=raised.value, custom_llm_provider="hosted_vllm")
+
+    assert mapped.value.param == "temperature"
+    assert relayed_provider_specific_fields(mapped.value) == {"detail": "kept"}
+    assert mapped.value.code is None

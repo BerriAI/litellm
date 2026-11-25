@@ -1,10 +1,10 @@
-import json
 from abc import abstractmethod
 from typing import TYPE_CHECKING, ClassVar, Final, cast
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import loads_json_object
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 if TYPE_CHECKING:
@@ -136,16 +136,9 @@ class BaseModelResponseIterator:
 
     @staticmethod
     def _string_to_dict_parser(str_line: str) -> dict | None:
-        stripped_json_chunk: dict | None = None
         stripped_chunk: Final = litellm.CustomStreamWrapper.strip_sse_data_from_chunk(str_line)
-        try:
-            if stripped_chunk is not None:
-                stripped_json_chunk = json.loads(stripped_chunk)
-            else:
-                stripped_json_chunk = None
-        except json.JSONDecodeError:
-            stripped_json_chunk = None
-        return stripped_json_chunk
+        decoded: Final = None if stripped_chunk is None else loads_json_object(stripped_chunk)
+        return decoded if isinstance(decoded, dict) else None
 
     @classmethod
     def string_to_dict_parser(
@@ -156,7 +149,7 @@ class BaseModelResponseIterator:
 
     def _handle_string_chunk(self, str_line: str) -> GenericStreamingChunk | ModelResponseStream:
         # chunk is a str at this point
-        stripped_json_chunk: Final = BaseModelResponseIterator.string_to_dict_parser(str_line=str_line)
+        stripped_json_chunk: Final = BaseModelResponseIterator._string_to_dict_parser(str_line=str_line)
         if "[DONE]" in str_line:
             return GenericStreamingChunk(
                 text="",

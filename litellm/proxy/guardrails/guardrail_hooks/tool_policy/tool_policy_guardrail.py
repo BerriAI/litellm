@@ -27,7 +27,10 @@ from pydantic import TypeAdapter
 from typing_extensions import TypedDict, Unpack
 
 from litellm._logging import verbose_proxy_logger
-from litellm.completion_extras.litellm_responses_transformation.transformation import replayed_tool_search_tool_names
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    namespace_member_qualified_names,
+    replayed_tool_search_tool_names,
+)
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -157,6 +160,7 @@ class ToolPolicyGuardrail(CustomGuardrail):
                         *function_tool_names,
                         *(extract_request_tool_names(route, request_data) if route else ()),
                         *replayed_tool_search_tool_names(request),
+                        *namespace_member_qualified_names(request),
                     )
                 )
             )
