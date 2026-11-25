@@ -466,7 +466,7 @@ def names_a_response_format_property(encoded_block: str, schema: ResponseFormatS
     return any(isinstance(value, str) and value in schema.declared_names for value in block.values())
 
 
-def _dict_to_response_format_helper(response_format: dict, ref_template: str | None = None) -> dict:
+def _dict_to_response_format_helper(response_format: dict, ref_template: str | None = None) -> dict[str, object]:
     if ref_template is not None and response_format.get("type") == "json_schema":
         # Deep copy to avoid modifying original
         modified_format: Final = copy.deepcopy(response_format)

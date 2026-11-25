@@ -205,7 +205,7 @@ class RouterBudgetLimiting(CustomLogger):
         messages: list[AllMessageValues] | None,
         request_kwargs: dict[str, object] | None = None,
         parent_otel_span: Span | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         """
         Filter out deployments that have exceeded their provider budget limit.
 

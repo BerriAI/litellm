@@ -224,7 +224,7 @@ class GithubCopilotConfig(OpenAIConfig):
         return text_content, tool_calls, thinking_blocks
 
     @staticmethod
-    def _normalize_anthropic_usage(usage: dict) -> dict:
+    def _normalize_anthropic_usage(usage: dict) -> dict[str, object]:
         normalized: Final = dict(usage)
         if "input_tokens" in usage and "prompt_tokens" not in usage:
             normalized["prompt_tokens"] = usage["input_tokens"]
