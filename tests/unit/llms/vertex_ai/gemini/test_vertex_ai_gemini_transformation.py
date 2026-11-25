@@ -1,4 +1,5 @@
 import base64
+import re
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from itertools import chain
@@ -437,46 +438,114 @@ def test_video_url_content_layers_reach_gemini(url: str, media: dict[str, str]) 
     ]
 
 
-def test_vertex_user_media_slices_are_forwarded_for_vertex_to_accept_or_refuse() -> None:
-    messages: Final = cast(
-        list[AllMessageValues],
-        [
+_SOUND_DATA_URL: Final = "data:audio/mpeg;base64,c291bmQ="
+_CLIP_DATA_URL: Final = "data:video/mp4;base64,AAAAGGZ0eXA="
+_SHEET_MIME_TYPE: Final = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_CLIP_SLICE: Final = {"fps": 2, "startOffset": "5s", "endOffset": "30s"}
+_HIGH_RESOLUTION: Final = {"level": "MEDIA_RESOLUTION_HIGH"}
+_TOP_LEVEL_SLICES: Final = pytest.mark.parametrize(
+    ("media", "field", "forwarded", "dropped"),
+    [
+        pytest.param(
+            {"type": "file", "file": {"file_data": _SOUND_DATA_URL, "audio_metadata": _AUDIO_SLICE}},
+            "audio_metadata",
+            {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/mpeg"}, "audio_metadata": _GEMINI_AUDIO_SLICE},
+            {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/mpeg"}},
+            id="audio",
+        ),
+        pytest.param(
             {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "file",
-                        "file": {
-                            "file_id": "gs://media-test/podcast.mp3",
-                            "format": "audio/mpeg",
-                            "audio_metadata": _AUDIO_SLICE,
-                        },
-                    },
-                    {
-                        "type": "video_url",
-                        "video_url": {
-                            "url": "gs://media-test/clip.mp4",
-                            "video_metadata": {"content_layers": ["AUDIO"]},
-                        },
-                    },
-                ],
-            }
-        ],
-    )
-    result: Final = gemini_convert_messages_with_history(
-        messages, model="gemini-3.8-flash", custom_llm_provider="vertex_ai"
-    )
-    assert result[-1]["parts"] == [
-        {
-            "file_data": {"file_uri": "gs://media-test/podcast.mp3", "mime_type": "audio/mpeg"},
-            "audio_metadata": _GEMINI_AUDIO_SLICE,
-        },
-        {
-            "file_data": {"file_uri": "gs://media-test/clip.mp4", "mime_type": "video/mp4"},
-            "video_metadata": {"contentLayers": ["AUDIO"]},
-        },
-        {"text": " "},
-    ]
+                "type": "file",
+                "file": {
+                    "file_data": "data:application/pdf;base64,JVBERg==",
+                    "document_metadata": {"start_page": 2, "end_page": 3},
+                },
+            },
+            "document_metadata",
+            {
+                "inline_data": {"data": "JVBERg==", "mime_type": "application/pdf"},
+                "document_metadata": {"startPage": 2, "endPage": 3},
+            },
+            {"inline_data": {"data": "JVBERg==", "mime_type": "application/pdf"}},
+            id="document",
+        ),
+        pytest.param(
+            {
+                "type": "file",
+                "file": {
+                    "file_data": f"data:{_SHEET_MIME_TYPE};base64,UEsDBA==",
+                    "spreadsheet_metadata": {"sheet_index": 2},
+                },
+            },
+            "spreadsheet_metadata",
+            {
+                "inline_data": {"data": "UEsDBA==", "mime_type": _SHEET_MIME_TYPE},
+                "spreadsheet_metadata": {"sheetIndex": 2},
+            },
+            {"inline_data": {"data": "UEsDBA==", "mime_type": _SHEET_MIME_TYPE}},
+            id="spreadsheet",
+        ),
+        pytest.param(
+            {
+                "type": "video_url",
+                "video_url": {
+                    "url": _CLIP_DATA_URL,
+                    "detail": "high",
+                    "video_metadata": {"fps": 2, "start_offset": "5s", "end_offset": "30s", "content_layers": ["AUDIO"]},
+                },
+            },
+            "video_metadata.content_layers",
+            {
+                "inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"},
+                "media_resolution": _HIGH_RESOLUTION,
+                "video_metadata": {**_CLIP_SLICE, "contentLayers": ["AUDIO"]},
+            },
+            {
+                "inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"},
+                "media_resolution": _HIGH_RESOLUTION,
+                "video_metadata": _CLIP_SLICE,
+            },
+            id="video-content-layers",
+        ),
+    ],
+)
+
+
+def _top_level_parts(media: Mapping[str, object], provider: str, *, drop_params: bool) -> list[PartType]:
+    return gemini_convert_messages_with_history(
+        cast(list[AllMessageValues], [{"role": "user", "content": [media]}]),
+        model="gemini-4-argon",
+        litellm_params={"drop_params": drop_params},
+        custom_llm_provider=provider,
+    )[-1]["parts"]
+
+
+@pytest.mark.parametrize("provider", ["vertex_ai", "vertex_ai_beta"])
+@_TOP_LEVEL_SLICES
+def test_vertex_top_level_slice_fields_are_a_bad_request_since_vertex_ignores_them(
+    provider: str, media: dict[str, object], field: str, forwarded: PartType, dropped: PartType
+) -> None:
+    message: Final = f"Vertex ignores {field} on media. Use a gemini/ model, remove them, or set drop_params=True."
+    with pytest.raises(litellm.BadRequestError, match=re.escape(message)) as excinfo:
+        _top_level_parts(media, provider, drop_params=False)
+
+    assert (excinfo.value.llm_provider, excinfo.value.model) == (provider, "gemini-4-argon")
+
+
+@pytest.mark.parametrize("provider", ["vertex_ai", "vertex_ai_beta"])
+@_TOP_LEVEL_SLICES
+def test_drop_params_sends_vertex_top_level_media_without_only_the_slice_fields_vertex_ignores(
+    provider: str, media: dict[str, object], field: str, forwarded: PartType, dropped: PartType
+) -> None:
+    assert _top_level_parts(media, provider, drop_params=True) == [dropped, {"text": " "}]
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@_TOP_LEVEL_SLICES
+def test_gemini_top_level_slice_fields_reach_gemini_unchanged(
+    drop_params: bool, media: dict[str, object], field: str, forwarded: PartType, dropped: PartType
+) -> None:
+    assert _top_level_parts(media, "gemini", drop_params=drop_params) == [forwarded, {"text": " "}]
 
 
 @pytest.mark.parametrize(

@@ -7,8 +7,9 @@ Why separate file? Make it easy to see how transformation works
 import os
 import re
 from collections.abc import Callable, Collection, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 from urllib.parse import quote
 
@@ -161,15 +162,49 @@ def _convert_detail_to_media_resolution_enum(
     return None
 
 
-def vertex_tool_result_ignored_settings(source: GeminiMediaSource, *, is_video_url: bool) -> tuple[str, ...]:
+def vertex_supported_media_source(
+    source: GeminiMediaSource,
+    *,
+    in_tool_result: bool,
+    is_video_url: bool,
+    model: str | None,
+    custom_llm_provider: str,
+    drop_params: bool,
+) -> GeminiMediaSource:
+    video_metadata: Final = source.video_metadata or {}
     settings: Final = (
-        ("detail", is_video_url and _convert_detail_to_media_resolution_enum(source.detail) is not None),
-        ("video_metadata", bool(gemini_video_metadata_from_openai(source.video_metadata or {}))),
+        (
+            "detail",
+            in_tool_result and is_video_url and _convert_detail_to_media_resolution_enum(source.detail) is not None,
+        ),
+        ("video_metadata", in_tool_result and bool(gemini_video_metadata_from_openai(video_metadata))),
+        ("video_metadata.content_layers", not in_tool_result and bool(video_metadata.get("content_layers"))),
         ("document_metadata", bool(source.document_metadata)),
         ("spreadsheet_metadata", bool(source.spreadsheet_metadata)),
         ("audio_metadata", bool(source.audio_metadata)),
     )
-    return tuple(name for name, ignored in settings if ignored)
+    ignored: Final = tuple(name for name, is_set in settings if is_set)
+    if ignored and not drop_params:
+        location: Final = " inside a tool result" if in_tool_result else ""
+        raise litellm.BadRequestError(
+            message=(
+                f"Vertex ignores {', '.join(ignored)} on media{location}. "
+                "Use a gemini/ model, remove them, or set drop_params=True."
+            ),
+            model=model or "",
+            llm_provider=custom_llm_provider,
+        )
+    kept_video_metadata: Final = MappingProxyType(
+        {key: value for key, value in video_metadata.items() if key != "content_layers"}
+    )
+    return replace(
+        source,
+        detail=None if in_tool_result else source.detail,
+        video_metadata=None if in_tool_result else kept_video_metadata,
+        document_metadata=None,
+        spreadsheet_metadata=None,
+        audio_metadata=None,
+    )
 
 
 def _get_highest_media_resolution(current: str | None, new_detail: str | None) -> str | None:
@@ -1083,9 +1118,21 @@ def _gemini_history_media_part(
                 )
             raise Exception("Unknown file type. Please pass in a file_id or file_data")
         return None
+    sent_source: Final = (
+        vertex_supported_media_source(
+            source,
+            in_tool_result=False,
+            is_video_url=content.get("type") == "video_url",
+            model=model,
+            custom_llm_provider=provider,
+            drop_params=drop_params,
+        )
+        if custom_llm_provider in ("vertex_ai", "vertex_ai_beta")
+        else source
+    )
     try:
         part: Final = encode_gemini_media_source(
-            source, model, vertex_project, vertex_credentials, custom_llm_provider=custom_llm_provider
+            sent_source, model, vertex_project, vertex_credentials, custom_llm_provider=custom_llm_provider
         )
     except litellm.ImageFetchError:
         if content.get("type") != "video_url":

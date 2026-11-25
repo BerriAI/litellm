@@ -1728,7 +1728,7 @@ def _gemini_tool_media_part(
     from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_URI_PREFIXES, gemini_fetches_url_itself
     from litellm.llms.vertex_ai.gemini.transformation import (
         encode_gemini_media_source,
-        vertex_tool_result_ignored_settings,
+        vertex_supported_media_source,
     )
 
     source: Final = gemini_media_source(content)
@@ -1740,21 +1740,20 @@ def _gemini_tool_media_part(
                 llm_provider=custom_llm_provider or "gemini",
             )
         return None
-    vertex_nested: Final = nested and custom_llm_provider in ("vertex_ai", "vertex_ai_beta")
-    ignored_settings: Final = (
-        vertex_tool_result_ignored_settings(source, is_video_url=content.get("type") == "video_url")
-        if vertex_nested
-        else ()
-    )
-    if ignored_settings and not drop_params:
-        raise litellm.BadRequestError(
-            message=(
-                f"Vertex ignores {', '.join(ignored_settings)} on media inside a tool result. "
-                "Move the media to a user message, remove them, or set drop_params=True."
-            ),
-            model=model or "",
-            llm_provider=custom_llm_provider or "vertex_ai",
+    vertex: Final = custom_llm_provider in ("vertex_ai", "vertex_ai_beta")
+    vertex_nested: Final = nested and vertex
+    kept_source: Final = (
+        vertex_supported_media_source(
+            source,
+            in_tool_result=nested,
+            is_video_url=content.get("type") == "video_url",
+            model=model,
+            custom_llm_provider=custom_llm_provider or "vertex_ai",
+            drop_params=drop_params,
         )
+        if vertex
+        else source
+    )
     inline_only: Final = nested and not vertex_nested and not source.url.startswith(GEMINI_FILES_API_URI_PREFIXES)
     if inline_only and (source.url.startswith("gs://") or gemini_fetches_url_itself(source.url)):
         if drop_params:
@@ -1768,18 +1767,6 @@ def _gemini_tool_media_part(
             model=model or "",
             llm_provider=custom_llm_provider or "gemini",
         )
-    kept_source: Final = (
-        replace(
-            source,
-            detail=None,
-            video_metadata=None,
-            document_metadata=None,
-            spreadsheet_metadata=None,
-            audio_metadata=None,
-        )
-        if vertex_nested
-        else source
-    )
     try:
         encoded_source: Final = (
             replace(

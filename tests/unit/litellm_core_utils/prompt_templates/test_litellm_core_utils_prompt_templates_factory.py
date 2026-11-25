@@ -3093,6 +3093,45 @@ def test_drop_params_sends_vertex_tool_result_media_without_its_settings(
     assert delivered == [{"function_response": {"name": "find_clip", "response": {"ok": True}, "parts": [kept]}}]
 
 
+_CLIP_WITH_SLICE_AND_LAYERS: Final = {
+    "type": "video_url",
+    "video_url": {
+        "url": "data:video/mp4;base64,AAAAGGZ0eXA=",
+        "video_metadata": {"start_offset": "5s", "end_offset": "30s", "content_layers": ["AUDIO"]},
+    },
+}
+
+
+def test_vertex_tool_result_media_sent_beside_the_function_response_is_refused_like_user_media() -> None:
+    with pytest.raises(
+        litellm.BadRequestError,
+        match=re.escape("Vertex ignores video_metadata.content_layers on media. Use a gemini/ model"),
+    ):
+        convert_to_gemini_tool_call_result(
+            _tool_result_with(_CLIP_WITH_SLICE_AND_LAYERS),
+            None,
+            custom_llm_provider="vertex_ai",
+            model="gemini-3.8-flash",
+            supports_multimodal_function_responses=False,
+        )
+
+
+def test_drop_params_keeps_the_offsets_vertex_honors_on_tool_result_media_beside_the_function_response() -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _tool_result_with(_CLIP_WITH_SLICE_AND_LAYERS),
+        None,
+        custom_llm_provider="vertex_ai",
+        model="gemini-3.8-flash",
+        supports_multimodal_function_responses=False,
+        drop_params=True,
+    )
+
+    assert delivered == [
+        {"function_response": {"name": "find_clip", "response": {"ok": True}}},
+        {**_INLINE_CLIP, "video_metadata": {"startOffset": "5s", "endOffset": "30s"}},
+    ]
+
+
 def test_gemini_tool_result_image_carries_its_detail_into_the_function_response() -> None:
     delivered: Final = convert_to_gemini_tool_call_result(
         {
