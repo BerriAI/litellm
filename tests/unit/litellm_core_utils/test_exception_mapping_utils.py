@@ -105,7 +105,7 @@ def _image_request_kwargs() -> dict[str, object]:
         ),
         pytest.param(
             lambda: litellm.completion(
-                model="openai/gpt-5.6", messages=[{"role": "user", "content": "hi"}], api_key="sk-test"
+                model="openai/gpt-6.2-sol", messages=[{"role": "user", "content": "hi"}], api_key="sk-test"
             ),
             id="openai_chat",
         ),
