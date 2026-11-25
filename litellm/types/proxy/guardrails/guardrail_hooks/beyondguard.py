@@ -36,6 +36,24 @@ class BeyondGuardConfigModel(GuardrailConfigModel):
         default=None,
         description="Token of the output endpoint, if it differs from api_key.",
     )
+    beyondguard_application: str | None = Field(
+        default=None,
+        description=(
+            "Application name sent as X-Application, so BeyondGuard can apply the per-model policy "
+            "registered for this application."
+        ),
+    )
+    beyondguard_destination_url: str | None = Field(
+        default=None,
+        description=("Model URL sent as X-Destination-Url, matched against the URL of BeyondGuard per-model policies."),
+    )
+    beyondguard_user_email_header: str | None = Field(
+        default=None,
+        description=(
+            "Header that carries the LiteLLM user's email for BeyondGuard group-based policies. "
+            "Must match the Email Header Key of the BeyondGuard organization. Defaults to X-User-Email."
+        ),
+    )
 
     @staticmethod
     def ui_friendly_name() -> str:

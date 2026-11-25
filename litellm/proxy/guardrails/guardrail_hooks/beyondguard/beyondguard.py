@@ -1,6 +1,8 @@
 import asyncio
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, NoReturn, Optional
 
 import httpx
@@ -24,6 +26,10 @@ if TYPE_CHECKING:
 
 GUARDRAIL_NAME: Final = "beyondguard"
 _TOKEN_HEADER: Final = "X-Guard-Token"
+_APPLICATION_HEADER: Final = "X-Application"
+_DESTINATION_URL_HEADER: Final = "X-Destination-Url"
+_DESTINATION_MODEL_HEADER: Final = "X-Destination-Model"
+_DEFAULT_USER_EMAIL_HEADER: Final = "X-User-Email"
 _DEFAULT_TIMEOUT_SECONDS: Final = 10.0
 
 
@@ -84,6 +90,12 @@ _Verdict = TypeAliasType("_Verdict", _Allow | _Block | _Mask | _Failure)
 
 
 @dataclass(frozen=True, slots=True)
+class _RequestContext:
+    model: str
+    headers: Mapping[str, str]
+
+
+@dataclass(frozen=True, slots=True)
 class _Target:
     endpoint_id: str
     api_key: str
@@ -106,6 +118,32 @@ def _masked_text(checks: _ChecksResult) -> str | None:
         if content is not None:
             return content
     return None
+
+
+class _CallerMetadata(TypedDict, total=False):
+    user_api_key_user_email: ReadOnly[str | None]
+
+
+class _PolicyRequestData(TypedDict, total=False):
+    model: ReadOnly[str | None]
+    litellm_metadata: ReadOnly[_CallerMetadata | None]
+    metadata: ReadOnly[_CallerMetadata | None]
+
+
+_POLICY_REQUEST_DATA: Final = TypeAdapter(_PolicyRequestData)
+
+
+def _policy_request_data(request_data: object) -> _PolicyRequestData:
+    try:
+        return _POLICY_REQUEST_DATA.validate_python(request_data)
+    except ValidationError:
+        return {}
+
+
+def _caller_email(data: _PolicyRequestData) -> str:
+    buckets: Final = (data.get("litellm_metadata"), data.get("metadata"))  # new and legacy proxy metadata keys
+    emails: Final = ((bucket or {}).get("user_api_key_user_email") or "" for bucket in buckets)
+    return next((email.strip() for email in emails if email.strip()), "")
 
 
 def _verdict_from_response(body: _ContextGuardResponse) -> _Verdict:
@@ -134,6 +172,9 @@ class BeyondGuardGuardrail(CustomGuardrail):
         beyondguard_endpoint_id: str | None = None,
         beyondguard_output_endpoint_id: str | None = None,
         beyondguard_output_api_key: str | None = None,
+        beyondguard_application: str | None = None,
+        beyondguard_destination_url: str | None = None,
+        beyondguard_user_email_header: str | None = None,
         http_client: AsyncHTTPHandler | None = None,
         **kwargs: Unpack[_GuardrailOptions],  # kwargs-ok: CustomGuardrail options
     ) -> None:
@@ -151,6 +192,9 @@ class BeyondGuardGuardrail(CustomGuardrail):
             endpoint_id=beyondguard_output_endpoint_id or endpoint_id,
             api_key=(beyondguard_output_api_key or "").strip() or key,
         )
+        self.application = (beyondguard_application or "").strip()
+        self.destination_url = (beyondguard_destination_url or "").strip()
+        self.user_email_header = (beyondguard_user_email_header or "").strip() or _DEFAULT_USER_EMAIL_HEADER
         self.http_client = http_client or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
@@ -174,7 +218,7 @@ class BeyondGuardGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict,  # mutable-ok: CustomGuardrail.apply_guardrail signature
+        request_data: Mapping[str, object],
         input_type: Literal["request", "response"],
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
@@ -184,8 +228,9 @@ class BeyondGuardGuardrail(CustomGuardrail):
             return inputs
         target: Final = self.request_target if input_type == "request" else self.response_target
         checked: Final = tuple(texts[index] for index in positions)
+        context: Final = self._request_context(request_data)
 
-        verdict: Final = await self._check(target, "\n".join(checked))
+        verdict: Final = await self._check(target, "\n".join(checked), context)
         match verdict:
             case _Allow():
                 return inputs
@@ -194,13 +239,13 @@ class BeyondGuardGuardrail(CustomGuardrail):
             case _Mask(text=masked) if len(checked) == 1:
                 return self._with_texts(inputs, texts, positions, (masked,))
             case _Mask():
-                masked_each: Final = await self._mask_each(target, checked)
+                masked_each: Final = await self._mask_each(target, checked, context)
                 return self._with_texts(inputs, texts, positions, masked_each)
             case _:
                 assert_never(verdict)
 
-    async def _mask_each(self, target: _Target, texts: tuple[str, ...]) -> tuple[str, ...]:
-        verdicts: Final = await asyncio.gather(*(self._check(target, text) for text in texts))
+    async def _mask_each(self, target: _Target, texts: tuple[str, ...], context: "_RequestContext") -> tuple[str, ...]:
+        verdicts: Final = await asyncio.gather(*(self._check(target, text, context) for text in texts))
         for verdict in verdicts:
             if isinstance(verdict, _Block | _Failure):
                 self._raise(verdict)
@@ -209,13 +254,29 @@ class BeyondGuardGuardrail(CustomGuardrail):
             for verdict, original in zip(verdicts, texts, strict=True)
         )
 
-    async def _check(self, target: _Target, text: str) -> _Verdict:
+    def _request_context(self, request_data: object) -> "_RequestContext":
+        """Policy-selection headers for BeyondGuard: model, model URL, application and caller email."""
+        data: Final = _policy_request_data(request_data)
+        model_name: Final = (data.get("model") or "").strip()
+        email: Final = _caller_email(data)
+        optional: Final = (
+            (_DESTINATION_MODEL_HEADER, model_name),
+            (_DESTINATION_URL_HEADER, self.destination_url),
+            (_APPLICATION_HEADER, self.application),
+            (self.user_email_header, email),
+        )
+        return _RequestContext(
+            model=model_name or GUARDRAIL_NAME,
+            headers=MappingProxyType({name: value for name, value in optional if value}),
+        )
+
+    async def _check(self, target: _Target, text: str, context: "_RequestContext") -> _Verdict:
         url: Final = f"{self.api_base}/{target.endpoint_id}/chat/completions"
         try:
             response: Final = await self.http_client.post(
                 url=url,
-                json={"model": GUARDRAIL_NAME, "messages": [{"role": "user", "content": text}]},
-                headers={_TOKEN_HEADER: target.api_key, "Content-Type": "application/json"},
+                json={"model": context.model, "messages": [{"role": "user", "content": text}]},
+                headers={**context.headers, _TOKEN_HEADER: target.api_key, "Content-Type": "application/json"},
                 timeout=self.timeout if self.timeout is not None else _DEFAULT_TIMEOUT_SECONDS,
             )
             body: Final = _RESPONSE.validate_python(response.json())
@@ -237,6 +298,13 @@ class BeyondGuardGuardrail(CustomGuardrail):
                     message=f"Blocked by BeyondGuard ({', '.join(codes)})",
                     should_wrap_with_default_message=False,
                     blocked_content=True,
+                )
+            case _Failure(reason="http_429"):
+                raise GuardrailRaisedException(
+                    guardrail_name=self.guardrail_name or GUARDRAIL_NAME,
+                    message="BeyondGuard rate limit exceeded",
+                    should_wrap_with_default_message=False,
+                    status_code=429,
                 )
             case _Failure(reason=reason):
                 raise GuardrailRaisedException(

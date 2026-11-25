@@ -55,6 +55,9 @@ def _guardrail(fake: FakeBeyondGuard, **overrides: str) -> BeyondGuardGuardrail:
         beyondguard_endpoint_id="in-endpoint",
         beyondguard_output_endpoint_id=overrides.get("output_endpoint"),
         beyondguard_output_api_key=overrides.get("output_key"),
+        beyondguard_application=overrides.get("application"),
+        beyondguard_destination_url=overrides.get("destination_url"),
+        beyondguard_user_email_header=overrides.get("email_header"),
         http_client=fake,
         guardrail_name="beyondguard-test",
         event_hook="pre_call",
@@ -214,3 +217,60 @@ async def test_transport_errors_fail_closed(error: Exception, reason: str) -> No
         await _guardrail(FakeBeyondGuard(boom)).apply_guardrail({"texts": ["hi"]}, {}, "request")
     assert raised.value.message == f"BeyondGuard unavailable ({reason})"
 
+
+@pytest.mark.asyncio
+async def test_rate_limit_is_returned_as_429() -> None:
+    limited: Final = httpx.Response(429, json={"error": {"code": "rate_limit_exceeded"}})
+    with pytest.raises(GuardrailRaisedException) as raised:
+        await _guardrail(FakeBeyondGuard(lambda _: limited)).apply_guardrail({"texts": ["hi"]}, {}, "request")
+    assert raised.value.blocked_content is False
+    assert raised.value.status_code == 429
+    assert raised.value.message == "BeyondGuard rate limit exceeded"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata_key", ["litellm_metadata", "metadata"])
+async def test_policy_headers_select_beyondguard_policy(metadata_key: str) -> None:
+    fake: Final = FakeBeyondGuard(lambda _: httpx.Response(200, json=_body(passed=True)))
+    guardrail: Final = _guardrail(
+        fake, application=" support-bot ", destination_url="https://api.openai.com/v1", email_header="X-Corp-User"
+    )
+    request_data: Final = {"model": "gpt-4o-mini", metadata_key: {"user_api_key_user_email": "jane@example.com"}}
+    await guardrail.apply_guardrail({"texts": ["hi"]}, request_data, "request")
+    await guardrail.apply_guardrail({"texts": ["hi"]}, request_data, "response")
+    for _, payload, headers in fake.calls:
+        assert payload["model"] == "gpt-4o-mini"
+        assert headers["X-Destination-Model"] == "gpt-4o-mini"
+        assert headers["X-Destination-Url"] == "https://api.openai.com/v1"
+        assert headers["X-Application"] == "support-bot"
+        assert headers["X-Corp-User"] == "jane@example.com"
+        assert "X-User-Email" not in headers
+
+
+@pytest.mark.asyncio
+async def test_policy_headers_default_and_absent_values() -> None:
+    fake: Final = FakeBeyondGuard(lambda _: httpx.Response(200, json=_body(passed=True)))
+    await _guardrail(fake).apply_guardrail(
+        {"texts": ["hi"]}, {"model": "gpt-4o", "metadata": {"user_api_key_user_email": "jane@example.com"}}, "request"
+    )
+    await _guardrail(fake).apply_guardrail(
+        {"texts": ["hi"]}, {"metadata": {"user_api_key_user_email": "  "}}, "request"
+    )
+    with_user, anonymous = fake.calls
+    assert with_user[2]["X-User-Email"] == "jane@example.com"
+    assert with_user[2]["X-Destination-Model"] == "gpt-4o"
+    assert anonymous[1]["model"] == "beyondguard"
+    assert not {"X-User-Email", "X-Destination-Model", "X-Destination-Url", "X-Application"} & set(anonymous[2])
+
+
+@pytest.mark.asyncio
+async def test_policy_headers_are_sent_on_mask_rechecks() -> None:
+    def respond(payload: dict) -> httpx.Response:
+        return httpx.Response(200, json=_body(True, sanitized=True, masked=MASKED))
+
+    fake: Final = FakeBeyondGuard(respond)
+    await _guardrail(fake, application="app").apply_guardrail(
+        {"texts": ["a@example.com", "b@example.com"]}, {"model": "gpt-4o"}, "request"
+    )
+    assert len(fake.calls) == 3
+    assert all(headers["X-Application"] == "app" for _, _, headers in fake.calls)
