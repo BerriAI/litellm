@@ -101,7 +101,7 @@ async fn standalone(
     let Loaded { config, stored } = litellm_gateway::load_config(settings.litellm_config).await?;
     let state = AppState::build(&config, environment).await?;
     scrub_at_the_configs_key_length(key_length, &*state.environment);
-    let admit = Arc::new(Admit::new(&config, environment, &state, stored));
+    let admit = Arc::new(Admit::new(&config, &state, stored));
     let app = alone(native(state.clone(), &config, environment), admit);
     let listener = tokio::net::TcpListener::bind((settings.host.as_str(), settings.port)).await?;
 
@@ -218,7 +218,7 @@ async fn admitted_state(
 ) -> Result<(AppState, Admit), litellm_gateway::Error> {
     let resources = Resources::build(config)?;
     let state = AppState::over(config, environment, &resources).await?;
-    let admit = Admit::new(config, environment, &state, stored);
+    let admit = Admit::new(config, &state, stored);
     Ok((state, admit))
 }
 
