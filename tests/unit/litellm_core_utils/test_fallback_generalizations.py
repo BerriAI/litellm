@@ -581,6 +581,43 @@ def test_shipped_rules_flag_unmapped_claude_5_and_later_as_thinking_by_default(
 
 
 @pytest.mark.parametrize(
+    ("model", "provider", "xhigh"),
+    [
+        ("claude-newfamily-7", "anthropic", True),
+        ("claude-newfamily-7.1", "anthropic", True),
+        ("us.anthropic.claude-newfamily-7-v1:0", "bedrock", True),
+        ("claude-newfamily-7@20270101", "vertex_ai", True),
+        ("claude-newfamily-4-6", "anthropic", None),
+        ("claude-newfamily-41", "anthropic", None),
+    ],
+)
+def test_shipped_rules_let_unmapped_claude_5_and_later_accept_xhigh_effort(
+    shipped_cost_map: None, model: str, provider: str, xhigh: bool | None
+) -> None:
+    assert model not in litellm.model_cost
+    info: Final = litellm.get_model_info(model, custom_llm_provider=provider)
+    assert info.get("supports_xhigh_reasoning_effort") is xhigh
+
+
+@pytest.mark.parametrize(
+    "cost_map_path",
+    ["model_prices_and_context_window.json", "litellm/model_prices_and_context_window_backup.json"],
+)
+def test_shipped_claude_rows_that_declare_xhigh_agree_with_the_xhigh_rule(cost_map_path: str) -> None:
+    document: Final = json.loads((REPO_ROOT / cost_map_path).read_text())
+    rule: Final = next(
+        rule for rule in document["fallback_generalizations"]["rules"] if rule["name"] == "claude-xhigh-effort"
+    )
+    pattern: Final = re.compile(rule["pattern"], re.IGNORECASE)
+    ((flag, granted),) = rule["model_info"].items()
+    declared: Final = {
+        key: row[flag] for key, row in document.items() if isinstance(row, dict) and flag in row and pattern.search(key)
+    }
+    assert declared
+    assert {key: value for key, value in declared.items() if value != granted} == {}
+
+
+@pytest.mark.parametrize(
     "model,provider",
     [
         ("claude-opus-4-9@20260101", "vertex_ai"),

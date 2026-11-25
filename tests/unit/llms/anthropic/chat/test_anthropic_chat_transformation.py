@@ -2826,6 +2826,73 @@ def test_validate_effort_for_model_centralises_per_model_gating(model, effort, e
         assert err is None
 
 
+def _request_for_reasoning_effort(config: AnthropicConfig, model: str, effort: str) -> Mapping[str, object]:
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"reasoning_effort": effort}, optional_params={}, model=model, drop_params=False
+    )
+    return config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize(
+    ("config_class", "model"),
+    [
+        (AnthropicConfig, "claude-newfamily-7"),
+        (AnthropicConfig, "claude-newfamily-7.1"),
+        (AzureAnthropicConfig, "claude-newfamily-7"),
+        (AmazonAnthropicClaudeConfig, "us.anthropic.claude-newfamily-7-v1:0"),
+        (VertexAIAnthropicConfig, "claude-newfamily-7@20270101"),
+    ],
+)
+def test_unmapped_claude_5_and_later_forwards_reasoning_effort_xhigh(
+    local_model_cost_map: None, config_class: type[AnthropicConfig], model: str
+) -> None:
+    assert model not in litellm.model_cost
+    request: Final = _request_for_reasoning_effort(config_class(), model, "xhigh")
+    assert request["output_config"] == {"effort": "xhigh"}
+
+
+def test_unmapped_claude_5_and_later_keeps_its_effort_when_drop_params_is_on(
+    local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", True)
+    request: Final = _request_for_reasoning_effort(AnthropicConfig(), "claude-newfamily-7", "high")
+    assert request["output_config"] == {"effort": "high"}
+
+
+@pytest.mark.parametrize(
+    ("model", "rows"),
+    [
+        ("claude-newfamily-4-6", {}),
+        (
+            "claude-newfamily-8",
+            {
+                "claude-newfamily-8": {
+                    "litellm_provider": "anthropic",
+                    "mode": "chat",
+                    "supports_xhigh_reasoning_effort": False,
+                }
+            },
+        ),
+    ],
+)
+def test_xhigh_stays_rejected_where_the_map_does_not_grant_it(
+    local_model_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+    model: str,
+    rows: Mapping[str, Mapping[str, object]],
+) -> None:
+    monkeypatch.setattr(litellm, "model_cost", {**litellm.model_cost, **rows})
+    litellm.get_model_info.cache_clear()
+    with pytest.raises(litellm.exceptions.BadRequestError, match="effort='xhigh' is not supported"):
+        _request_for_reasoning_effort(AnthropicConfig(), model, "xhigh")
+
+
 def test_transform_request_injects_dummy_tool_without_tools_param():
     """
     Anthropic rejects messages that contain tool turns when ``tools`` is omitted.

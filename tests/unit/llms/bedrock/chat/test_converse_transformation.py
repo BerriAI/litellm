@@ -1761,6 +1761,42 @@ def test_output_config_effort_normalized_for_bedrock_converse_opus(model, expect
 
 
 @pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-newfamily-7-v1:0",
+        "bedrock/converse/global.anthropic.claude-newfamily-7-1",
+    ],
+)
+def test_unmapped_claude_5_and_later_forwards_reasoning_effort_xhigh_converse(
+    local_model_cost_map: None, model: str
+) -> None:
+    config: Final = AmazonConverseConfig()
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"}, optional_params={}, model=model, drop_params=False
+    )
+
+    result: Final = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["additionalModelRequestFields"]["output_config"] == {"effort": "xhigh"}
+
+
+def test_unmapped_claude_4_6_still_rejects_reasoning_effort_xhigh_converse(local_model_cost_map: None) -> None:
+    with pytest.raises(litellm.exceptions.BadRequestError, match="effort='xhigh' is not supported"):
+        AmazonConverseConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "xhigh"},
+            optional_params={},
+            model="bedrock/converse/us.anthropic.claude-newfamily-4-6-v1:0",
+            drop_params=False,
+        )
+
+
+@pytest.mark.parametrize(
     "effort",
     ["disabled", "invalid", ""],
 )

@@ -5,6 +5,7 @@ from typing import Final
 
 import pytest
 
+import litellm
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
@@ -395,7 +396,7 @@ def test_legacy_thinking_translates_to_adaptive_for_opus_48(
     [
         ("claude-sonnet-5", "xhigh"),
         ("claude-opus-5", "xhigh"),
-        ("claude-newfamily-6", "high"),
+        ("claude-newfamily-6", "xhigh"),
     ],
 )
 def test_legacy_thinking_translates_to_adaptive_for_5_and_future_models(
@@ -403,8 +404,7 @@ def test_legacy_thinking_translates_to_adaptive_for_5_and_future_models(
 ):
     """The 5 families reject ``thinking.type=enabled``, so the adaptive translation
     stays the safe default for every adaptive model not flagged
-    ``supports_legacy_thinking``, unmapped future ids included. An unmapped id
-    cannot prove ``xhigh`` support, so its high-budget bucket clamps to ``high``."""
+    ``supports_legacy_thinking``, unmapped future ids included."""
     config = AnthropicMessagesConfig()
     optional_params = {
         "max_tokens": 1024,
@@ -421,6 +421,26 @@ def test_legacy_thinking_translates_to_adaptive_for_5_and_future_models(
 
     assert result.get("thinking") == {"type": "adaptive"}
     assert result.get("output_config") == {"effort": expected_effort}
+
+
+def test_legacy_thinking_clamps_the_xhigh_budget_to_high_where_the_map_does_not_grant_xhigh(
+    local_model_cost_map: None,
+) -> None:
+    model: Final = "claude-newfamily-4-7"
+    assert model not in litellm.model_cost
+    result: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 1024,
+            "thinking": {"type": "enabled", "budget_tokens": DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET},
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("output_config") == {"effort": "high"}
 
 
 @pytest.mark.parametrize(
