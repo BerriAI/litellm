@@ -486,8 +486,9 @@ class LeastBusyLoggingHandler(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
     ) -> None:
-        if request_data.get("call_type") == CallTypes.pass_through.value:
-            await self._async_settle(request_data)
+        if request_data.get("call_type") != CallTypes.pass_through.value or call_id_of(request_data) is None:
+            return
+        await self._async_settle(request_data)
 
     @with_service_target(ROUTER_USAGE_TARGET)
     def get_available_deployments(

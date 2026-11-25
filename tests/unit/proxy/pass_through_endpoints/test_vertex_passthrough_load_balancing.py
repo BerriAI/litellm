@@ -7,6 +7,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from fastapi import HTTPException, Request
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import Router
@@ -790,16 +791,23 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
 
     logging_kwargs = await _vertex_pass_through_logging_kwargs(mock_router, "gemini-3.8-flash", "lit-1761-call-id")
 
-    assert logging_kwargs["litellm_params"]["metadata"]["model_info"]["id"] == "vertex-gemini-38-flash-dep"
+    assert _routed_deployment_id(logging_kwargs) == "vertex-gemini-38-flash-dep"
 
 
 _VERTEX_GROUP: Final = "gemini-3.8-flash"
 _VERTEX_BODY: Final = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
+_MAPPING: Final = TypeAdapter(Mapping[str, object])
+
+
+def _routed_deployment_id(kwargs: Mapping[str, object]) -> object:
+    litellm_params: Final = _MAPPING.validate_python(kwargs["litellm_params"])
+    metadata: Final = _MAPPING.validate_python(litellm_params["metadata"])
+    return _MAPPING.validate_python(metadata["model_info"])["id"]
 
 
 async def _vertex_pass_through_logging_kwargs(
     llm_router: object, url_model: str, call_id: str, body: Mapping[str, object] = _VERTEX_BODY
-) -> dict:
+) -> Mapping[str, object]:
     endpoint: Final = f"v1/projects/p/locations/global/publishers/google/models/{url_model}:generateContent"
     request: Final = Request({
         "type": "http",
@@ -815,7 +823,7 @@ async def _vertex_pass_through_logging_kwargs(
 
     async def relay_returning_logging_kwargs(
         request: Request, fastapi_response: object, user_api_key_dict: UserAPIKeyAuth
-    ) -> dict:
+    ) -> dict[str, object]:
         return HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
             request=request,
             user_api_key_dict=user_api_key_dict,
@@ -843,7 +851,7 @@ async def _vertex_pass_through_logging_kwargs(
         ),
     ):
         mock_pt_router.get_vertex_credentials.return_value = MagicMock()
-        return await _base_vertex_proxy_route(
+        relayed: Final = await _base_vertex_proxy_route(
             endpoint=endpoint,
             request=request,
             fastapi_response=MagicMock(),
@@ -851,6 +859,7 @@ async def _vertex_pass_through_logging_kwargs(
             general_settings={},
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
         )
+    return _MAPPING.validate_python(relayed)
 
 
 def _vertex_deployment(group: str, model: str, deployment_id: str) -> DeploymentTypedDict:
@@ -905,10 +914,7 @@ async def test_a_vertex_passthrough_call_in_flight_keeps_its_deployment_busy_wha
     _least_busy_of(router).log_pre_api_call(model=first_url_model, messages=[], kwargs=first)
     second: Final = await _vertex_pass_through_logging_kwargs(router, second_url_model, "second-call", body)
 
-    assert (
-        second["litellm_params"]["metadata"]["model_info"]["id"]
-        != first["litellm_params"]["metadata"]["model_info"]["id"]
-    )
+    assert _routed_deployment_id(second) != _routed_deployment_id(first)
 
 
 @pytest.mark.asyncio
@@ -950,7 +956,7 @@ async def test_a_vertex_passthrough_call_the_upstream_rejected_leaves_its_deploy
         logging_obj=logging_obj,
     )
 
-    served: Final = kwargs["litellm_params"]["metadata"]["model_info"]["id"]
+    served: Final = _routed_deployment_id(kwargs)
     assert router.health().store.get_cache(f"{_VERTEX_GROUP}_request_count:{served}") == 0
 
 

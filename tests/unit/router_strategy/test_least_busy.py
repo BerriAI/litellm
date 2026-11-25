@@ -911,6 +911,30 @@ async def test_a_pass_through_failure_seen_by_both_failure_paths_frees_only_its_
     assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failed_request",
+    [
+        {"call_type": CallTypes.pass_through.value, "litellm_params": _call_kwargs("dep-a")["litellm_params"]},
+        {**_call_kwargs("dep-a", "never-started"), "call_type": CallTypes.pass_through.value},
+    ],
+    ids=["no call id", "call id that never started"],
+)
+async def test_a_pass_through_failure_for_a_call_that_never_started_leaves_the_running_call_counted(
+    failed_request: dict[str, object],
+) -> None:
+    worker: Final = _worker(None)
+    worker.log_pre_api_call(
+        model="m", messages=[], kwargs={**_call_kwargs("dep-a", "running"), "call_type": CallTypes.pass_through.value}
+    )
+
+    await worker.async_post_call_failure_hook(
+        request_data=failed_request, original_exception=Exception("401"), user_api_key_dict=UserAPIKeyAuth()
+    )
+
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+
 def test_a_call_logged_under_its_callers_group_name_frees_the_pick_made_for_another_group() -> None:
     worker: Final = _worker(None)
     assert worker.get_available_deployments("tier-group", HEALTHY, reserve=True) is DEPLOYMENT_A
