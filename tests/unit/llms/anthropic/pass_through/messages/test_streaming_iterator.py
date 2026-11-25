@@ -255,6 +255,29 @@ def test_decoded_sse_data_line_swallows_invalid_json():
     assert is_provider_error_chunk(malformed_frame) is False
 
 
+@pytest.mark.parametrize(
+    "deep_payload",
+    [b"[" * 100_000 + b"]" * 100_000, b'{"a": ' * 100_000 + b"1" + b"}" * 100_000],
+    ids=["array", "object"],
+)
+def test_a_deeply_nested_data_line_does_not_hide_the_error_event_after_it(deep_payload: bytes):
+    deep_array_frame: Final = b"data: " + deep_payload + b"\n\n"
+    error_frame: Final = (
+        b'event: error\ndata: {"type": "error", "error": {"type": "internal_server_error", "message": "boom"}}\n\n'
+    )
+
+    assert parse_anthropic_error_event(deep_array_frame + error_frame) == ("internal_server_error", "boom", 500)
+    assert is_provider_error_chunk(deep_array_frame) is False
+
+
+def test_parse_anthropic_error_event_from_sse_bytearray():
+    sse_chunk: Final = bytearray(
+        b'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", "message": "Overloaded"}}\n\n'
+    )
+
+    assert parse_anthropic_error_event(sse_chunk) == ("overloaded_error", "Overloaded", 503)
+
+
 class TestIsAnthropicContentDeltaChunk:
     def test_dict_content_block_delta(self):
         assert is_anthropic_content_delta_chunk({"type": "content_block_delta"}) is True
