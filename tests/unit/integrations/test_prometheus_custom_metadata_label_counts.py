@@ -297,14 +297,15 @@ async def test_fallback_metrics_keep_builtin_labels_and_tags_next_to_custom_meta
     assert labels["api_key_alias"] == "key-alias"
     assert labels["team"] == "team-1"
     assert labels["exception_status"] == "429"
+    assert labels["exception_class"] == "Openai.RateLimitError"
 
 
 @pytest.mark.parametrize(
     ("metadata_labels", "tags", "expected_custom_labels"),
     [
         (("metadata.department",), (), {"metadata_department": "None"}),
-        ((), ("prod",), {"tag_prod": "None"}),
-        (("metadata.department",), ("prod",), {"metadata_department": "None", "tag_prod": "None"}),
+        ((), ("prod",), {"tag_prod": "false"}),
+        (("metadata.department",), ("prod",), {"metadata_department": "None", "tag_prod": "false"}),
     ],
     ids=["metadata-only", "tags-only", "metadata-and-tags"],
 )
@@ -337,7 +338,6 @@ def test_cooldown_counter_increments_with_custom_labels(
         _clear_prometheus_registry()
         for collector in previous_collectors:
             REGISTRY.register(collector)
-    assert labels["exception_class"] == "Openai.RateLimitError"
 
 
 @pytest.mark.parametrize(("event", "metric_name"), _FALLBACK_EVENTS)
