@@ -297,6 +297,13 @@ def _tool_call_choice(names: Sequence[str]) -> _ToolCallChoice:
     return choice
 
 
+def _with_billed_usage(response: CompactResponse | None, billed_usage: Usage | None) -> CompactResponse | None:
+    if response is None or billed_usage is None:
+        return response
+    billed: Final[CompactResponse] = {**response, "usage": billed_usage.model_dump()}
+    return billed
+
+
 def _compact_response(response_obj: object, full_names: Mapping[str, str]) -> CompactResponse | None:
     """Usage, identity and tool calls of the response, in chat-completions shape, without the content."""
     dumped: Final = response_obj.model_dump() if isinstance(response_obj, BaseModel) else _mapping_or_none(response_obj)
@@ -356,6 +363,7 @@ def build_spend_event(
     response_cost: Final = sl_object.get("response_cost") if sl_object is not None else kwargs.get("response_cost")
     combined_usage: Final = kwargs.get("combined_usage_object")
     full_names: Final = logged_full_tool_names(raw_kwargs)
+    compact_response: Final = _compact_response(response_obj, full_names)
     event: Final = SpendEvent(
         version=SPEND_EVENT_VERSION,
         litellm_call_id=kwargs.get("litellm_call_id"),
@@ -374,7 +382,9 @@ def build_spend_event(
         litellm_params=_litellm_params_for_event(litellm_params, cache_key, store_bodies),
         standard_logging_object=_standard_logging_for_event(sl_object, store_bodies),
         standard_callback_dynamic_params=kwargs.get("standard_callback_dynamic_params"),
-        response=_compact_response(response_obj, full_names),
+        response=_with_billed_usage(compact_response, combined_usage)
+        if "failed_attempts_billed_on_success" in raw_kwargs
+        else compact_response,
         combined_usage=combined_usage.model_dump() if combined_usage is not None else None,
         realtime_tools=kwargs.get("realtime_tools"),
         realtime_tool_calls=kwargs.get("realtime_tool_calls"),

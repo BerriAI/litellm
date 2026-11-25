@@ -1,8 +1,10 @@
 import asyncio
 import importlib
 import json
+import threading
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta
+from io import BytesIO
 from types import MappingProxyType
 from typing import Any, Final, Literal, NoReturn
 from unittest.mock import MagicMock, patch
@@ -16,9 +18,12 @@ from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import get_llm_provider_logic
 from litellm.exceptions import UnresolvablePreviousResponseError
+from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.gemini.empty_image_response import ImageRefusalError
+from litellm.proxy.utils import _failure_fields_to_lift
 from litellm.responses.litellm_completion_transformation.transformation import previous_response_not_found
 from litellm.responses.utils import ResponsesAPIRequestUtils
-from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
+from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments, mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     PRE_ROUTING_SELECTED_MODEL_KEY,
@@ -43,7 +48,7 @@ from litellm.router_utils.fallback_event_handlers import (
     run_async_fallback,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_failures_for_current_minute
-from litellm.types.router import FallbackSkipReason, SkippedFallbackTarget
+from litellm.types.router import AllowedFailsPolicy, FallbackSkipReason, SkippedFallbackTarget
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 from tests.fake_openai_endpoint import FAKE_OPENAI_API_BASE
 from typing import Dict
@@ -1227,7 +1232,8 @@ class TestRunAsyncFallbackTriggersCooldown:
             raise RuntimeError("fallback model also failed")
 
     def _logging_obj(self, has_logged_async_failure: bool) -> MagicMock:
-        logging_obj = MagicMock()
+        logging_obj = MagicMock(spec=Logging)
+        logging_obj.logs_each_attempt = False
         logging_obj.model_call_details = {"has_logged_async_failure": has_logged_async_failure}
         return logging_obj
 
@@ -2701,3 +2707,447 @@ def test_is_bad_request_without_fallback_only_stops_on_a_real_400_when_the_flag_
 ) -> None:
     assert is_bad_request_without_fallback(exception, fallback_on_unsupported_params=False) is stops_fallbacks
     assert is_bad_request_without_fallback(exception, fallback_on_unsupported_params=True) is False
+
+
+class _FailureBillingCapture(CustomLogger):
+    billed: tuple[object, object] | None = None
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final = asyncio.Event()
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        payload: Final = kwargs.get("standard_logging_object")
+        assert isinstance(payload, dict)
+        self.billed = (payload.get("response_cost"), payload.get("prompt_tokens"))
+        self.logged.set()
+
+
+class _StreamCutAfterFirstEvent(httpx.AsyncByteStream):
+    def __init__(self, first_event: bytes) -> None:
+        self._first_event: Final = first_event
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        yield self._first_event
+        raise httpx.RemoteProtocolError("peer closed connection without sending complete message body")
+
+
+_OPENAI_ROLE_CHUNK: Final = (
+    b'data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"gpt-5.4-mini",'
+    b'"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}\n\n'
+)
+_ANTHROPIC_MESSAGE_START: Final = (
+    b'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1","type":"message",'
+    b'"role":"assistant","model":"claude-sonnet-5-5","content":[],"stop_reason":null,"stop_sequence":null,'
+    b'"usage":{"input_tokens":1000,"output_tokens":1}}}\n\n'
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("broken_model", "broken_api_base", "broken_path", "first_event"),
+    [
+        pytest.param(
+            "openai/gpt-5.4-mini",
+            "https://broken.example/v1",
+            "/chat/completions",
+            _OPENAI_ROLE_CHUNK,
+            id="cut-after-the-first-chunk",
+        ),
+        pytest.param(
+            "anthropic/claude-sonnet-5-5",
+            "https://broken.example",
+            "/v1/messages",
+            _ANTHROPIC_MESSAGE_START,
+            id="cut-before-the-first-chunk",
+        ),
+    ],
+)
+async def test_a_stream_fallback_still_bills_the_broken_stream_on_its_failure_log(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    broken_model: str,
+    broken_api_base: str,
+    broken_path: str,
+    first_event: bytes,
+) -> None:
+    capture: Final = _FailureBillingCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    sse_headers: Final = {"content-type": "text/event-stream"}
+    respx_mock.post(f"{broken_api_base}{broken_path}").mock(
+        return_value=httpx.Response(200, headers=sse_headers, stream=_StreamCutAfterFirstEvent(first_event))
+    )
+    respx_mock.post("https://backup.example/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            headers=sse_headers,
+            content=(
+                b'data: {"id":"c2","object":"chat.completion.chunk","created":1,"model":"gpt-5.4-mini",'
+                b'"choices":[{"index":0,"delta":{"role":"assistant","content":"ready"},"finish_reason":"stop"}]}\n\n'
+                b"data: [DONE]\n\n"
+            ),
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": broken_model, "api_key": "sk-test", "api_base": broken_api_base},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "sk-test",
+                    "api_base": "https://backup.example/v1",
+                },
+            },
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    messages: Final = [{"role": "user", "content": "Reply with the single word: ready"}]
+    request_logging, request = litellm.utils.function_setup(
+        original_function="acompletion",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        messages=messages,
+        stream=True,
+        litellm_call_id="stream-fallback",
+    )
+
+    response: Final = await router.acompletion(**request, litellm_logging_obj=request_logging)
+    content: Final = "".join([chunk.choices[0].delta.content or "" async for chunk in response if chunk is not None])
+    await asyncio.wait_for(capture.logged.wait(), timeout=30)
+
+    assert content == "ready"
+    assert capture.billed is not None
+    billed_cost, billed_prompt_tokens = capture.billed
+    assert isinstance(billed_cost, float) and billed_cost > 0
+    assert isinstance(billed_prompt_tokens, int) and billed_prompt_tokens > 0
+
+
+@pytest.mark.asyncio
+async def test_a_client_disconnect_during_an_image_fallback_still_bills_the_refused_attempt(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    fallback_reached: Final = threading.Event()
+    client_gone: Final = threading.Event()
+
+    def hold_until_the_client_is_gone(_: httpx.Request) -> httpx.Response:
+        fallback_reached.set()
+        client_gone.wait(timeout=30)
+        return httpx.Response(500)
+
+    respx_mock.post(url__startswith="https://primary.example/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "index": 0}],
+                "usageMetadata": {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110},
+            },
+        )
+    )
+    respx_mock.post(url__startswith="https://backup.example/").mock(side_effect=hold_until_the_client_is_gone)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{group}.example",
+                },
+            }
+            for group in ("primary", "backup")
+        ],
+        content_policy_fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        prompt="draw a circle",
+        litellm_call_id="image-fallback-disconnect",
+    )
+    call: Final = asyncio.create_task(
+        router.aimage_generation(
+            model="primary",
+            prompt="draw a circle",
+            litellm_logging_obj=logging_obj,
+            litellm_call_id="image-fallback-disconnect",
+        )
+    )
+    assert await asyncio.to_thread(fallback_reached.wait, 30)
+    call.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await call
+    client_gone.set()
+
+    lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+    lifted_again: Final = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    usage: Final = lifted["combined_usage_object"]
+    assert isinstance(usage, litellm.Usage)
+    assert (usage.prompt_tokens, usage.completion_tokens) == (777, 333)
+    response_cost: Final = lifted["response_cost"]
+    assert isinstance(response_cost, float) and response_cost > 0
+    assert lifted_again["response_cost"] == response_cost
+
+
+def _image_request_logging(call_id: str) -> litellm.litellm_core_utils.litellm_logging.Logging:
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        prompt="draw a circle",
+        litellm_call_id=call_id,
+    )
+    logging_obj.owe_failed_attempt_on_success(
+        litellm.Usage(prompt_tokens=777, completion_tokens=333, total_tokens=1110), 0.25
+    )
+    return logging_obj
+
+
+def test_a_cancelled_request_bills_the_attempt_it_stopped_at_and_the_attempts_it_set_aside() -> None:
+    logging_obj: Final = _image_request_logging("cancelled-with-later-attempt")
+    logging_obj.record_partial_usage_for_failure(
+        litellm.Usage(prompt_tokens=5, completion_tokens=7, total_tokens=12), 0.5
+    )
+
+    lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    usage: Final = lifted["combined_usage_object"]
+    assert isinstance(usage, litellm.Usage)
+    assert (usage.prompt_tokens, usage.completion_tokens) == (782, 340)
+    assert lifted["response_cost"] == 0.75
+
+
+def test_a_request_whose_success_was_logged_does_not_bill_its_set_aside_attempts_again() -> None:
+    logging_obj: Final = _image_request_logging("success-already-logged")
+    logging_obj.mark_async_success_log_enqueued()
+
+    lifted: Final = _failure_fields_to_lift({"litellm_logging_obj": logging_obj}, provider_billed=True)
+
+    assert "combined_usage_object" not in lifted
+    assert "response_cost" not in lifted
+
+
+class _SuccessBillingCapture(CustomLogger):
+    billed_cost: object = None
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged: Final = asyncio.Event()
+
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        payload: Final = kwargs.get("standard_logging_object")
+        assert isinstance(payload, dict)
+        self.billed_cost = payload.get("response_cost")
+        self.logged.set()
+
+
+@pytest.mark.asyncio
+async def test_a_failure_after_a_logged_fallback_success_charges_nothing_the_success_already_billed(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.hooks.proxy_track_cost_callback import failure_row_response_cost
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    capture: Final = _SuccessBillingCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    usage_metadata: Final = {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110}
+    respx_mock.post(url__startswith="https://primary.example/").mock(
+        return_value=httpx.Response(
+            200,
+            json={"candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "index": 0}], "usageMetadata": usage_metadata},
+        )
+    )
+    respx_mock.post(url__startswith="https://backup.example/").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {"content": {"parts": [{"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}}]}}
+                ],
+                "usageMetadata": usage_metadata,
+            },
+        )
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": f"https://{group}.example",
+                },
+            }
+            for group in ("primary", "backup")
+        ],
+        content_policy_fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        prompt="draw a circle",
+        litellm_call_id="served-then-rejected",
+    )
+
+    await router.aimage_generation(
+        model="primary", prompt="draw a circle", litellm_logging_obj=logging_obj, litellm_call_id="served-then-rejected"
+    )
+    await asyncio.wait_for(capture.logged.wait(), timeout=30)
+    request: Final = {"litellm_logging_obj": logging_obj}
+    lifted: Final = _failure_fields_to_lift(request, provider_billed=True)
+
+    assert isinstance(capture.billed_cost, float) and capture.billed_cost > 0
+    assert failure_row_response_cost({**request, **lifted}) == 0
+
+
+class _FailureApiBaseCapture(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.api_base_by_error: Final[dict[str, object]] = {}
+        self.unsupported_logged: Final = asyncio.Event()
+
+    async def async_log_failure_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        payload: Final = kwargs.get("standard_logging_object")
+        assert isinstance(payload, dict)
+        self.api_base_by_error[type(kwargs.get("exception")).__name__] = payload.get("api_base")
+        if isinstance(kwargs.get("exception"), litellm.UnsupportedParamsError):
+            self.unsupported_logged.set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("backup_fields", "logged_api_base"),
+    [({"api_base": "https://backup.example/v1beta"}, "https://backup.example/v1beta"), ({}, "")],
+    ids=["backup_with_its_own_api_base", "backup_that_never_resolved_one"],
+)
+async def test_a_fallback_attempt_that_fails_before_sending_logs_its_own_api_base(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    backup_fields: dict[str, str],
+    logged_api_base: str,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    capture: Final = _FailureApiBaseCapture()
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    respx_mock.post(url__startswith="https://primary.example/").mock(
+        return_value=httpx.Response(200, json={"candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "index": 0}]})
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": "https://primary.example/v1beta",
+                    "drop_params": True,
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "gemini/gemini-3.1-flash-image", "api_key": "test-key", **backup_fields},
+            },
+        ],
+        content_policy_fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+    )
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="aimage_generation",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        prompt="draw a circle",
+        litellm_call_id="stale-api-base",
+    )
+
+    with pytest.raises(ImageRefusalError):
+        await router.aimage_generation(
+            model="primary",
+            prompt="draw a circle",
+            quality="low",
+            litellm_logging_obj=logging_obj,
+            litellm_call_id="stale-api-base",
+        )
+    await asyncio.wait_for(capture.unsupported_logged.wait(), timeout=30)
+
+    assert capture.api_base_by_error.get("UnsupportedParamsError") == logged_api_base
+
+
+async def _backup_cooled_down_after_a_failed_edit(router: Router, attempt: int, no_log: bool) -> bool:
+    call_id: Final = f"failed-edit-{attempt}"
+    logging_obj, _ = litellm.utils.function_setup(
+        original_function="aimage_edit",
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(),
+        model="primary",
+        prompt="draw a circle",
+        litellm_call_id=call_id,
+    )
+    with pytest.raises(litellm.InternalServerError):
+        await router.aimage_edit(
+            model="primary",
+            prompt="draw a circle",
+            image=BytesIO(b"\x89PNG\r\n\x1a\nimage"),
+            litellm_logging_obj=logging_obj,
+            litellm_call_id=call_id,
+            no_log=no_log,
+        )
+    return "backup-id" in await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("no_log", (False, True))
+async def test_a_failed_image_edit_fallback_counts_once_toward_the_backups_allowed_fails(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, no_log: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    respx_mock.post(url__startswith="https://fails.example/").mock(
+        return_value=httpx.Response(500, json={"error": {"code": 500, "message": "upstream failed"}})
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": group,
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": "https://fails.example",
+                },
+                "model_info": {"id": f"{group}-id"},
+            }
+            for group in ("primary", "backup")
+        ],
+        fallbacks=[{"primary": ["backup"]}],
+        num_retries=0,
+        retry_after=0,
+        allowed_fails_policy=AllowedFailsPolicy(InternalServerErrorAllowedFails=1),
+    )
+
+    cooled_after_each_request: Final = [
+        await _backup_cooled_down_after_a_failed_edit(router, attempt, no_log) for attempt in (1, 2)
+    ]
+
+    assert cooled_after_each_request == [False, True]
