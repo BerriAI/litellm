@@ -4796,6 +4796,8 @@ class ProxyLogging:
                 input=input,
                 api_key="",
             )
+            if isinstance(litellm_logging_obj, Logging) and litellm_logging_obj.stream_success_refused:
+                await litellm_logging_obj.mask_refused_stream_failure_log()
 
             await self._dispatch_proxy_only_failure_handlers(
                 litellm_logging_obj=litellm_logging_obj,

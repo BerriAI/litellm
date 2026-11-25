@@ -3290,10 +3290,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self._telemetry_failure_logged_attempt = marker
         callbacks: Final = tuple(
             callback
-            for callback in self.get_combined_callback_list(
-                dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
-                global_callbacks=litellm._async_failure_callback,  # pyright: ignore[reportPrivateUsage]  # Existing registry has no public accessor
-            )
+            for callback in self._async_failure_callbacks()
             if isinstance(callback, CustomLogger) and callback.logs_every_failed_attempt
         )
         if not callbacks:
@@ -3527,6 +3524,12 @@ class Logging(LiteLLMLoggingBaseClass):
     @property
     def stream_success_refused(self) -> bool:
         return self._stream_success_refused
+
+    async def mask_refused_stream_failure_log(self) -> None:
+        prepared: Final = _LogHookRun(details=self.model_call_details, result=None)
+        for callback in self._async_failure_callbacks():
+            if isinstance(callback, CustomGuardrail):
+                await self._async_logging_hook(prepared, callback)
 
     def claim_stream_success(self) -> bool:
         """The stream's success log is about to run, so a later refusal keeps it instead of billing a second row.
@@ -5977,10 +5980,7 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details[FAILED_PROMPT_TOKEN_ESTIMATE_KEY] = await self._offloaded_prompt_token_estimate()
         if self._on_failure_payload_built is not None:
             self._on_failure_payload_built()
-        callbacks: Final = self.get_combined_callback_list(
-            dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
-            global_callbacks=litellm._async_failure_callback,
-        )
+        callbacks: Final = self._async_failure_callbacks()
 
         self._stash_failure_logged = True
         self.mark_logging_complete(event_type="async_failure")
@@ -6215,6 +6215,14 @@ class Logging(LiteLLMLoggingBaseClass):
         return tuple(
             litellm.logging_callback_manager.without_custom_logger_keys(
                 global_callbacks, self.replaced_global_callback_keys
+            )
+        )
+
+    def _async_failure_callbacks(self) -> tuple[str | Callable[..., object] | CustomLogger, ...]:
+        return tuple(
+            self.get_combined_callback_list(
+                dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
+                global_callbacks=litellm._async_failure_callback,
             )
         )
 
