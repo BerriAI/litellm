@@ -88,6 +88,7 @@ async def test_an_unreachable_document_on_a_lone_deployment_spends_its_retries(
 
     assert isinstance(error, litellm.DocumentFetchError)
     assert error.status_code == 400
+    assert str(error).endswith("LiteLLM Retried: 2 times, LiteLLM Max Retries: 2")
     assert host.deployments_called("acompletion") == ["a", "a", "a"]
 
 

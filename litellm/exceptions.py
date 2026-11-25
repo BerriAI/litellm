@@ -1169,6 +1169,7 @@ LITELLM_EXCEPTION_TYPES: Final = [
     UnprocessableEntityError,
     UnsupportedParamsError,
     UnsupportedEndpointError,
+    DocumentFetchError,
     Timeout,
     PermissionDeniedError,
     RateLimitError,

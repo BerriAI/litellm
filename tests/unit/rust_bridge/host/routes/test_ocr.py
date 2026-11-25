@@ -100,4 +100,5 @@ def test_map_failure_reports_an_unreachable_document_as_the_callers_bad_request(
     assert public_error.model == "mistral-ocr-latest"
     assert public_error.llm_provider == "mistral"
     assert public_error.message == "litellm.BadRequestError: media download failed: error sending request"
+    assert "Model: mistral-ocr-latest" in (public_error.litellm_debug_info or "")
     assert public_error.__context__ is error
