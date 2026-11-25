@@ -6,6 +6,7 @@ from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm import verbose_logger
+from litellm.llms.custom_httpx.sse_lines import is_sse_payload_line
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -152,11 +153,8 @@ class ModelResponseIterator:
         raise StopAsyncIteration
 
 
-_SSE_NON_DATA_PREFIXES: Final = ("id:", "event:", "retry:", ":")
-
-
 def _sse_data(raw_chunk: str) -> str:
-    if raw_chunk.startswith(_SSE_NON_DATA_PREFIXES):
+    if not is_sse_payload_line(raw_chunk):
         return ""
     return (litellm.CustomStreamWrapper.strip_sse_data_from_chunk(raw_chunk) or "").strip()
 

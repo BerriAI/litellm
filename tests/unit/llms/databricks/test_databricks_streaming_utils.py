@@ -139,7 +139,12 @@ def test_stream_usage_after_finish_chunk_reaches_the_caller(respx_mock: respx.Mo
 
 
 @pytest.mark.respx(assert_all_called=True)
-def test_stream_usage_survives_sse_id_and_event_fields(respx_mock: respx.MockRouter) -> None:
+@pytest.mark.parametrize(
+    "fields",
+    ["id: {n}\nevent: message\n", "retry: 1000\n", ": ping\n", "x-trace: {n}\n", "id\n"],
+    ids=["id-and-event", "retry", "comment", "unknown-field", "bare-field-name"],
+)
+def test_stream_usage_survives_sse_lines_that_carry_no_data(respx_mock: respx.MockRouter, fields: str) -> None:
     chunk_header: Final = {"id": "chatcmpl-x", "object": "chat.completion.chunk", "created": 1, "model": "m"}
     events: Final = (
         {**chunk_header, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "ok"}}]},
@@ -147,7 +152,7 @@ def test_stream_usage_survives_sse_id_and_event_fields(respx_mock: respx.MockRou
         {**chunk_header, "choices": [], "usage": {"prompt_tokens": 74, "completion_tokens": 52, "total_tokens": 126}},
     )
     stream_body: Final = "".join(
-        f"id: {event_id}\nevent: message\ndata: {json.dumps(event)}\n\n" for event_id, event in enumerate(events, 1)
+        f"{fields.format(n=n)}data: {json.dumps(event)}\n\n" for n, event in enumerate(events, 1)
     ).encode()
     respx_mock.post("http://upstream.test/chat/completions").mock(
         return_value=httpx.Response(200, headers={"content-type": "text/event-stream"}, content=stream_body)

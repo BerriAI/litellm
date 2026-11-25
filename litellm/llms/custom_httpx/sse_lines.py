@@ -14,6 +14,7 @@ from typing import Final
 
 _SSE_LINE_BREAK: Final = re.compile(r"\r\n|\r|\n")
 _SSE_LINE_WITH_BREAK: Final = re.compile(r"[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+")
+_SSE_PAYLOAD_LINE_STARTS: Final = ("data:", "{", "[")
 
 
 def _split_lines(text: str) -> Sequence[str]:
@@ -48,6 +49,10 @@ class _SSELineSplitter:
         rest: Final = self._partial_line.getvalue()
         self._partial_line = io.StringIO()
         return (rest,) if rest else ()
+
+
+def is_sse_payload_line(line: str) -> bool:
+    return line.lstrip().startswith(_SSE_PAYLOAD_LINE_STARTS)
 
 
 def iter_sse_lines(text_chunks: Iterable[str]) -> Iterator[str]:
