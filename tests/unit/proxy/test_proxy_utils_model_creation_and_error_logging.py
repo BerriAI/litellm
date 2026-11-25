@@ -257,6 +257,240 @@ async def test_proxy_only_error_log_builds_payload_when_logging_object_has_malfo
     assert 123 not in standard_logging_object["request_tags"]
 
 
+_CHAT_PROMPT: Final[Mapping[str, object]] = {"messages": [{"role": "user", "content": "PROMPT-CANARY"}]}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_logging_object", [False, True], ids=["rejected_before_setup", "rejected_after_setup"])
+@pytest.mark.parametrize(
+    ("route", "prompt_fields", "logged_beside_optional_params"),
+    [
+        ("/v1/chat/completions", _CHAT_PROMPT, _CHAT_PROMPT),
+        ("/v1/chat/completions", {"messages": "PROMPT-CANARY"}, {"messages": "PROMPT-CANARY"}),
+        ("/v1/completions", {"prompt": "PROMPT-CANARY"}, {"prompt": "PROMPT-CANARY"}),
+        ("/v1/completions", {"prompt": ["first", "PROMPT-CANARY"]}, {"prompt": ["first", "PROMPT-CANARY"]}),
+        ("/v1/embeddings", {"input": ["first", "PROMPT-CANARY"]}, {"input": ["first", "PROMPT-CANARY"]}),
+        ("/v1/responses", {"input": "PROMPT-CANARY"}, {"input": ""}),
+        ("/v1/chat/completions", {**_CHAT_PROMPT, "prompt": "second"}, {**_CHAT_PROMPT, "prompt": "second"}),
+    ],
+    ids=["messages", "malformed_messages", "prompt", "prompt_list", "input_list", "input_text", "messages_and_prompt"],
+)
+async def test_proxy_only_error_log_keeps_the_prompt_out_of_optional_params(
+    route: str,
+    prompt_fields: Mapping[str, object],
+    logged_beside_optional_params: Mapping[str, object],
+    with_logging_object: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    body: Final[dict[str, object]] = {"model": "gpt-4o", "stream": True, **prompt_fields}
+    logging_object: Final = (
+        {
+            "litellm_logging_obj": litellm.utils.function_setup(
+                original_function="acompletion",
+                rules_obj=litellm.utils.Rules(),
+                start_time=real_datetime.datetime.now(),
+                model="gpt-4o",
+                litellm_call_id="rejected-after-setup",
+            )[0]
+        }
+        if with_logging_object
+        else {}
+    )
+    request_data: Final[dict[str, object]] = {**body, **logging_object}
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", request_route=route),
+        route=route,
+        original_exception=HTTPException(status_code=429, detail="rate limited"),
+    )
+
+    details: Final = request_data["litellm_logging_obj"].model_call_details
+    assert details["optional_params"] == {"stream": True}
+    assert {key: details[key] for key in prompt_fields} == dict(logged_beside_optional_params)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "prompt_fields", "logged_messages"),
+    [
+        ("/v1/responses", {"input": "PROMPT-CANARY"}, [{"role": "user", "content": "PROMPT-CANARY"}]),
+        (
+            "/v1/responses",
+            {"input": [{"role": "user", "content": "PROMPT-CANARY"}]},
+            [{"role": "user", "content": "PROMPT-CANARY"}],
+        ),
+        ("/v1/completions", {"prompt": "PROMPT-CANARY"}, [{"role": "user", "content": "PROMPT-CANARY"}]),
+        (
+            "/v1/completions",
+            {"prompt": ["first", "PROMPT-CANARY"]},
+            [{"role": "user", "content": "first"}, {"role": "user", "content": "PROMPT-CANARY"}],
+        ),
+        ("/v1/embeddings", {"input": "PROMPT-CANARY"}, [{"role": "user", "content": "PROMPT-CANARY"}]),
+        (
+            "/embeddings",
+            {"input": ["first", "PROMPT-CANARY"]},
+            [{"role": "user", "content": "first"}, {"role": "user", "content": "PROMPT-CANARY"}],
+        ),
+        ("/v1/responses", {}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/completions", {}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/embeddings", {"input": ""}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/images/generations", {"prompt": "PROMPT-CANARY"}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/responses", {"input": 7}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/embeddings", {"input": {"text": "PROMPT-CANARY"}}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/completions", {"prompt": [15339, 1917]}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/embeddings", {"input": [[15339, 1917], [1]]}, [{"role": "user", "content": "default-message-value"}]),
+        ("/v1/responses", {"input": ["PROMPT-CANARY", 7]}, [{"role": "user", "content": "default-message-value"}]),
+        (
+            "/v1/responses",
+            {"input": "PROMPT-CANARY", "turn_off_message_logging": True},
+            [{"role": "user", "content": "default-message-value"}],
+        ),
+        (
+            "/v1/completions",
+            {"prompt": "PROMPT-CANARY", "metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}},
+            [{"role": "user", "content": "default-message-value"}],
+        ),
+        (
+            "/v1/embeddings",
+            {
+                "input": "PROMPT-CANARY",
+                "proxy_server_request": {"headers": {"litellm-enable-message-redaction": "true"}},
+            },
+            [{"role": "user", "content": "default-message-value"}],
+        ),
+        (
+            "/v1/responses",
+            {"input": "PROMPT-CANARY", "turn_off_message_logging": False},
+            [{"role": "user", "content": "PROMPT-CANARY"}],
+        ),
+        (
+            "/v1/responses",
+            {"input": "PROMPT-CANARY", "turn_off_message_logging": "false"},
+            [{"role": "user", "content": "PROMPT-CANARY"}],
+        ),
+        (
+            "/v1/completions",
+            {"prompt": "PROMPT-CANARY", "turn_off_message_logging": "True"},
+            [{"role": "user", "content": "default-message-value"}],
+        ),
+    ],
+    ids=[
+        "responses_text",
+        "responses_items",
+        "completions_text",
+        "completions_list",
+        "embeddings_text",
+        "embeddings_list",
+        "responses_without_input",
+        "completions_without_prompt",
+        "embeddings_with_empty_input",
+        "image_generation_unchanged",
+        "responses_with_number_input",
+        "embeddings_with_object_input",
+        "completions_with_token_ids",
+        "embeddings_with_token_id_batches",
+        "responses_with_mixed_list",
+        "responses_with_redaction_flag",
+        "completions_with_redaction_header_in_metadata",
+        "embeddings_with_redaction_header_on_the_request",
+        "responses_with_redaction_flag_off",
+        "responses_with_redaction_flag_off_as_text",
+        "completions_with_redaction_flag_as_text",
+    ],
+)
+async def test_proxy_only_error_log_keeps_the_prompt_as_the_logged_messages(
+    route: str,
+    prompt_fields: Mapping[str, object],
+    logged_messages: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    request_data: Final[dict[str, object]] = {"model": "gpt-4o", **prompt_fields}
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", request_route=route),
+        route=route,
+        original_exception=HTTPException(status_code=401, detail="rejected"),
+    )
+
+    assert request_data["litellm_logging_obj"].model_call_details["messages"] == logged_messages
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("route", "prompt_fields"),
+    [
+        ("/v1/completions", {"prompt": [15339, 1917]}),
+        ("/v1/completions", {"prompt": [[15339, 1917], [1]]}),
+        ("/v1/embeddings", {"input": [[15339, 1917]]}),
+        ("/v1/responses", {"input": [15339, 1917]}),
+        ("/v1/responses", {"input": [{"role": "user", "content": "PROMPT-CANARY"}]}),
+        ("/v1/completions", {"prompt": ["first", "PROMPT-CANARY"]}),
+    ],
+    ids=[
+        "completions_token_ids",
+        "completions_token_id_batches",
+        "embeddings_token_id_batches",
+        "responses_token_ids",
+        "responses_items",
+        "completions_list",
+    ],
+)
+async def test_proxy_only_error_log_gives_the_otel_callback_messages_it_can_read(
+    route: str,
+    prompt_fields: Mapping[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
+
+    exporter: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    otel: Final = OpenTelemetry(
+        config=OpenTelemetryConfig(exporter=exporter, skip_set_global=True), tracer_provider=provider
+    )
+    monkeypatch.setattr(litellm, "callbacks", [otel])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "success_callback", [])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    monkeypatch.setattr(litellm, "turn_off_message_logging", False)
+    caplog.set_level("ERROR")
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data={"model": "gpt-4o", **prompt_fields},
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-rejected", request_route=route),
+        route=route,
+        original_exception=HTTPException(status_code=401, detail="rejected"),
+        error_type=ProxyErrorTypes.auth_error,
+    )
+    for _ in range(40):
+        if any(span.name == "litellm_request" for span in exporter.get_finished_spans()):
+            break
+        await asyncio.sleep(0.05)
+
+    request_span: Final = next(span for span in exporter.get_finished_spans() if span.name == "litellm_request")
+    assert request_span.attributes is not None
+    assert "gen_ai.operation.name" in request_span.attributes
+    assert "gen_ai.input.messages" in request_span.attributes
+    assert [record.getMessage() for record in caplog.records if "set_attributes" in record.getMessage()] == []
+
+
 @pytest.mark.asyncio
 async def test_proxy_only_error_log_keeps_the_request_litellm_call_id(monkeypatch: pytest.MonkeyPatch):
     """LIT-7836: a route that already stamped the caller's litellm_call_id must

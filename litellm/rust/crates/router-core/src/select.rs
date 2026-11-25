@@ -136,6 +136,7 @@ pub(crate) struct SelectInputs {
     /// A fallback hop: `run_async_fallback` pops the request's `_target_order`, so only the
     /// hop's own order applies.
     pub fallback_hop: bool,
+    pub refuse_uncertain: bool,
 }
 
 /// `simple_shuffle`: weighted by `_router_weights[group]`, else `weight`, else `rpm`, else
@@ -573,7 +574,7 @@ impl<H: RouterHost> Call<'_, H> {
 
         if listed {
             if settings.enable_pre_call_checks && !resolution.kind.is_single() {
-                healthy = self
+                let filtered = self
                     .pre_call_checks(
                         snapshot,
                         op,
@@ -584,6 +585,12 @@ impl<H: RouterHost> Call<'_, H> {
                         healthy,
                     )
                     .await?;
+                healthy = crate::precall::settle(
+                    &resolution.group,
+                    filtered.kept,
+                    &filtered.uncertain,
+                    inputs.refuse_uncertain,
+                )?;
             }
             // Only a priority group narrows a listed pass-through pick by order.
             let priority = resolution.kind == ResolveKind::RoutingGroup
@@ -625,8 +632,8 @@ impl<H: RouterHost> Call<'_, H> {
                 .await?;
         }
 
-        if settings.enable_pre_call_checks && !resolution.kind.is_single() {
-            healthy = self
+        let uncertain = if settings.enable_pre_call_checks && !resolution.kind.is_single() {
+            let filtered = self
                 .pre_call_checks(
                     snapshot,
                     op,
@@ -637,7 +644,11 @@ impl<H: RouterHost> Call<'_, H> {
                     healthy,
                 )
                 .await?;
-        }
+            healthy = filtered.kept;
+            filtered.uncertain
+        } else {
+            BTreeMap::new()
+        };
 
         if request.filter_tags && !healthy.is_empty() {
             let mut ctx = self.context(
@@ -705,6 +716,13 @@ impl<H: RouterHost> Call<'_, H> {
                 healthy = taking;
             }
         }
+
+        healthy = crate::precall::settle(
+            &resolution.group,
+            healthy,
+            &uncertain,
+            inputs.refuse_uncertain,
+        )?;
 
         // `deployments_admitting_embedding_batch`: an embedding pick keeps the deployments whose
         // input limit admits the batch; when none does, the host keeps what the pick waits for or
@@ -801,7 +819,7 @@ impl<H: RouterHost> Call<'_, H> {
         name: &str,
         pool: &[Arc<Deployment>],
         healthy: Vec<Arc<Deployment>>,
-    ) -> Result<Vec<Arc<Deployment>>, Error> {
+    ) -> Result<crate::precall::Filtered, Error> {
         let mut ctx = self.context(
             snapshot,
             op,

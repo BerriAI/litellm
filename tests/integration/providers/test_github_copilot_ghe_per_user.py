@@ -128,27 +128,28 @@ def test_a_ghe_user_connects_and_chats_with_their_own_token_on_the_tenant_hosts(
         assert chat.status_code == 200, chat.text
         assert set(rv.MARKER.findall(chat.text)) == {marker}, chat.text
 
-    received: Final = rig.peers.auth.drain()
+    stray: Final = rig.peers.api.plain.drain()
+    received: Final = (*rig.peers.auth.drain(), *rig.peers.api.secure.drain())
     outbound: Final = tuple(_outbound(request) for request in received)
     (forwarded,) = (request for request in received if marker.encode() in request.body)
     assert _outbound(forwarded) == (
-        dl.GHE_COPILOT_HOST,
+        dl.GHE_COPILOT_API_HOST,
         "POST",
         "/chat/completions",
-        f"Bearer {dl.GHE_ACCESS}",
+        f"Bearer {dl.COPILOT_GHE_ACCESS}",
     ), outbound
     assert {(host, method, path) for host, method, path, _ in outbound} == {
         (dl.GHE_HOST, "POST", "/login/device/code"),
         (dl.GHE_HOST, "POST", "/login/oauth/access_token"),
         (dl.GHE_API_HOST, "GET", "/copilot_internal/user"),
-        (dl.GHE_COPILOT_HOST, "GET", "/models"),
+        (dl.GHE_COPILOT_API_HOST, "GET", "/models"),
         (dl.GHE_API_HOST, "GET", "/user"),
-        (dl.GHE_COPILOT_HOST, "POST", "/chat/completions"),
+        (dl.GHE_COPILOT_API_HOST, "POST", "/chat/completions"),
     }, outbound
     assert {authorization for host, _, _, authorization in outbound if host == dl.GHE_API_HOST} == {
-        f"token {dl.GHE_ACCESS}"
+        f"token {dl.COPILOT_GHE_ACCESS}"
     }, outbound
-    assert {authorization for host, _, _, authorization in outbound if host == dl.GHE_COPILOT_HOST} == {
-        f"Bearer {dl.GHE_ACCESS}"
+    assert {authorization for host, _, _, authorization in outbound if host == dl.GHE_COPILOT_API_HOST} == {
+        f"Bearer {dl.COPILOT_GHE_ACCESS}"
     }, outbound
-    assert rig.peers.api.drain() == (), "the github.com GITHUB_COPILOT_API_BASE took a ghe.com call"
+    assert stray == (), "the github.com GITHUB_COPILOT_API_BASE took a ghe.com call"

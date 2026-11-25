@@ -7,7 +7,8 @@ use litellm_framer::sse;
 use litellm_host::call::CallOutput;
 use litellm_host_http::Sse;
 use litellm_inference_messages::{
-    MessagesBody, MessagesCall, MessagesRoute, MessagesShaping, messages_body, route::Messages,
+    MessagesBody, MessagesCall, MessagesRoute, MessagesSettings, MessagesShaping, messages_body,
+    route::Messages,
 };
 use litellm_llms_types::formats::chat_completions::ChatCompletionsUsage;
 use litellm_llms_types::formats::messages::{
@@ -15,6 +16,7 @@ use litellm_llms_types::formats::messages::{
     streaming::{MessagesStreamEvent, MessagesStreamUsage},
 };
 use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_python_compat::{flags::lax_bool, json::from_json};
 use litellm_router_core::{Attempt, Deployment, Op};
 use serde::Deserialize;
 use serde_json::{Map, Value};
@@ -40,6 +42,9 @@ const OPENROUTER_API_HEADERS: [&str; 2] = [
 const ANTHROPIC_API_HEADER_PROVIDERS: &str =
     "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter,deepseek";
 const TOOLS: &str = "tools";
+/// The keys a request sets its own messages settings by. Python reads them from the call's kwargs
+/// and never sends them on.
+pub const REQUEST_SETTINGS: [&str; 2] = ["drop_params", "additional_drop_params"];
 
 pub async fn create<H: Host>(call: Call<H>, body: Result<JsonObject, Error>) -> Response {
     serve::run(&call, body.map(|JsonObject(body)| body), |body| {
@@ -110,6 +115,23 @@ impl<H: Host> Endpoint for MessagesAttempt<'_, H> {
         Some(counts.messages_usage())
     }
 
+    fn response_id((ran, _): &Self::Outcome) -> Option<String> {
+        match ran {
+            CallOutput::Complete(MessagesBody::Message(message)) => Some(message.id.clone()),
+            CallOutput::Complete(MessagesBody::Unchecked(fields)) => {
+                fields.get("id").and_then(Value::as_str).map(str::to_owned)
+            }
+            CallOutput::Stream { .. } => None,
+        }
+    }
+
+    fn stream_response_id(data: &str) -> Option<String> {
+        match serde_json::from_str(data) {
+            Ok(MessagesStreamEvent::MessageStart { message }) => message.id,
+            _ => None,
+        }
+    }
+
     fn render((ran, cache): Self::Outcome, reported: ReportedModel<'_>) -> Result<Response, Error> {
         let stream =
             Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
@@ -128,11 +150,16 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
 
     async fn run(&self, attempt: &Attempt) -> Result<Self::Outcome, Error> {
         let deployment = &attempt.deployment;
+        let shaping = self.gateway.shaping(&deployment.id);
         let call = MessagesCall {
-            timeout: routing::timeout(attempt, routing::streamed(&self.body)),
+            timeout: routing::timeout(
+                attempt,
+                routing::streamed(&self.body),
+                shaping.settings.request_timeout(),
+            ),
             ..project(
                 deployment,
-                self.gateway.shaping(&deployment.id),
+                shaping,
                 routing::attempt_body(&self.body, attempt),
                 self.headers,
             )?
@@ -164,16 +191,20 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
 
 fn project(
     deployment: &Deployment,
-    shaping: MessagesShaping,
+    deployment_shaping: MessagesShaping,
     body: Map<String, Value>,
     headers: &HeaderMap,
 ) -> Result<MessagesCall, Error> {
+    let shaping = requested(deployment_shaping, &body);
     let tools = merged_tools(deployment, body.get(TOOLS)).map(|tools| (TOOLS.to_owned(), tools));
     let params = &deployment.params;
-    let client_params = body.into_iter().map(|(name, value)| match name.as_str() {
-        "model" => (name, Value::from(params.model.as_str())),
-        _ => (name, value),
-    });
+    let client_params = body
+        .into_iter()
+        .filter(|(name, _)| !REQUEST_SETTINGS.contains(&name.as_str()))
+        .map(|(name, value)| match name.as_str() {
+            "model" => (name, Value::from(params.model.as_str())),
+            _ => (name, value),
+        });
     let body = deployment_default_params(deployment)
         .chain(client_params)
         .chain(tools)
@@ -189,6 +220,47 @@ fn project(
         timeout: None,
         shaping,
     })
+}
+
+/// The deployment's settings with the request's own laid over them, as Python lays a call's
+/// kwargs over the deployment's (`{**deployment, **request}`). The request's `drop_params` turns
+/// dropping on or off for its call, and `litellm_settings.drop_params` keeps it on whatever the
+/// request says (`litellm.drop_params or drop_params`).
+fn requested(shaping: MessagesShaping, body: &Map<String, Value>) -> MessagesShaping {
+    let settings = shaping.settings;
+    let drops = body
+        .get("drop_params")
+        .map(|requested| settings.global_drop_params || is_on(requested));
+    let additional_drop_params = body.get("additional_drop_params").map(drop_paths);
+    MessagesShaping {
+        settings: MessagesSettings {
+            drop_params: drops.unwrap_or(settings.drop_params),
+            drops_unsupported_params: drops.unwrap_or(settings.drops_unsupported_params),
+            additional_drop_params: additional_drop_params
+                .unwrap_or(settings.additional_drop_params),
+            ..settings
+        },
+        ..shaping
+    }
+}
+
+/// `lax_bool(value) is True`, the rule Python reads a call's `drop_params` by.
+fn is_on(value: &Value) -> bool {
+    lax_bool(&from_json(value.clone())) == Some(true)
+}
+
+/// `additional_drop_paths`: the text entries of a list, and none for any other value.
+pub fn drop_paths(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn deployment_default_params(
@@ -297,8 +369,71 @@ impl From<MessagesStreamUsage> for Counts {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
+    use serde_json::json;
 
     use super::*;
+
+    fn deployment_shaping(global: bool, drop_params: bool) -> MessagesShaping {
+        MessagesShaping {
+            settings: MessagesSettings {
+                global_drop_params: global,
+                drop_params,
+                drops_unsupported_params: drop_params,
+                additional_drop_params: vec!["deployment".to_owned()],
+                ..MessagesSettings::default()
+            },
+            ..MessagesShaping::default()
+        }
+    }
+
+    #[rstest]
+    #[case::the_deployments_when_the_request_names_none(json!({}), false, true, true)]
+    #[case::a_request_turning_it_on(json!({"drop_params": true}), false, false, true)]
+    #[case::a_flag_word(json!({"drop_params": " yes "}), false, false, true)]
+    #[case::a_number_that_is_no_flag(json!({"drop_params": 2}), false, true, false)]
+    #[case::a_request_turning_it_off(json!({"drop_params": false}), false, true, false)]
+    #[case::null_turning_it_off(json!({"drop_params": null}), false, true, false)]
+    #[case::the_config_over_a_request_turning_it_off(
+        json!({"drop_params": false}),
+        true,
+        true,
+        true
+    )]
+    fn a_requests_drop_params_lays_over_the_deployments(
+        #[case] body: Value,
+        #[case] global: bool,
+        #[case] deployment: bool,
+        #[case] expected: bool,
+    ) {
+        let settings = requested(
+            deployment_shaping(global, deployment),
+            body.as_object().unwrap(),
+        )
+        .settings;
+
+        assert_eq!(
+            (settings.drop_params, settings.drops_unsupported_params),
+            (expected, expected)
+        );
+    }
+
+    #[rstest]
+    #[case::the_deployments_when_the_request_names_none(json!({}), &["deployment"])]
+    #[case::the_requests_in_its_place(
+        json!({"additional_drop_params": ["request", 1, "nested.path"]}),
+        &["request", "nested.path"]
+    )]
+    #[case::none_for_null(json!({"additional_drop_params": null}), &[])]
+    #[case::none_for_text(json!({"additional_drop_params": "request"}), &[])]
+    fn a_requests_additional_drop_params_replace_the_deployments(
+        #[case] body: Value,
+        #[case] expected: &[&str],
+    ) {
+        let settings =
+            requested(deployment_shaping(false, false), body.as_object().unwrap()).settings;
+
+        assert_eq!(settings.additional_drop_params, expected);
+    }
 
     const CACHED_USAGE: &str = r#""usage":{"input_tokens":7,"output_tokens":5,"cache_creation_input_tokens":100,"cache_read_input_tokens":20}"#;
 

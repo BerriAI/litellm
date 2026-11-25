@@ -58,6 +58,7 @@ _IN_MEMORY_ONLY_CALLERS: Final = frozenset(
         "litellm/llms/azure/common_utils.py",
         "litellm/llms/base_llm/auth/provider_oauth.py",
         "litellm/llms/bedrock/base_aws_llm.py",
+        "litellm/llms/bedrock/model_listing.py",
         "litellm/llms/custom_httpx/http_handler.py",
         "litellm/llms/databricks/common_utils.py",
         "litellm/llms/gigachat/authenticator.py",

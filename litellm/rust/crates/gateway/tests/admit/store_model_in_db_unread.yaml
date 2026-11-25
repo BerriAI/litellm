@@ -1,0 +1,21 @@
+# With store_model_in_db on and a database boot could not read, the gateway runs the YAML alone,
+# which may lack models and settings Python serves, so Python answers every request.
+stored: unread
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    store_model_in_db: true
+    supported_db_objects: [models]
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: db_config_not_loaded
+    over: store_model_in_db

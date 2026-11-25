@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import os
 from collections.abc import Callable, Mapping, MutableMapping
+from dataclasses import replace
 from functools import partial
 from types import MappingProxyType
 from typing import (
@@ -25,7 +26,12 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import GITHUB_COPILOT_DEFAULT_HOST, GITHUB_COPILOT_USER_SESSION_TTL_SECONDS
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
-from .github_host import DEFAULT_GITHUB_CLIENT_ID, GithubHostEndpoints, github_host_endpoints
+from .github_host import (
+    DEFAULT_GITHUB_CLIENT_ID,
+    GithubHostEndpoints,
+    github_host_endpoints,
+    shared_login_github_host,
+)
 
 COPILOT_VERSION: Final = "0.26.7"
 EDITOR_PLUGIN_VERSION: Final = f"copilot-chat/{COPILOT_VERSION}"
@@ -335,14 +341,20 @@ async def _alookup_plan_api_base(github_token: str, endpoints: GithubHostEndpoin
     return _plan_api_base_from(response, endpoints)
 
 
-def _default_host_endpoints() -> GithubHostEndpoints:
-    return github_host_endpoints(GITHUB_COPILOT_DEFAULT_HOST)
+def _shared_login_endpoints() -> GithubHostEndpoints:
+    endpoints: Final = github_host_endpoints(shared_login_github_host())
+    if endpoints.host == GITHUB_COPILOT_DEFAULT_HOST:
+        return endpoints
+    return replace(
+        endpoints,
+        default_copilot_api_base=os.getenv("GITHUB_COPILOT_API_BASE") or endpoints.default_copilot_api_base,
+    )
 
 
 def prefetch_copilot_plan_api_base(
     github_token: str, api_base: str | None = None, endpoints: GithubHostEndpoints | None = None
 ) -> None:
-    host_endpoints: Final = endpoints or _default_host_endpoints()
+    host_endpoints: Final = endpoints or _shared_login_endpoints()
     if _plan_api_base_is_needed(github_token, api_base, host_endpoints):
         _remember_plan_api_base(
             _plan_api_base_key(github_token, host_endpoints), _lookup_plan_api_base(github_token, host_endpoints)
@@ -372,7 +384,7 @@ def _plan_api_base_lookup(key: str, github_token: str, endpoints: GithubHostEndp
 async def aprefetch_copilot_plan_api_base(
     github_token: str, api_base: str | None = None, endpoints: GithubHostEndpoints | None = None
 ) -> None:
-    host_endpoints: Final = endpoints or _default_host_endpoints()
+    host_endpoints: Final = endpoints or _shared_login_endpoints()
     if _plan_api_base_is_needed(github_token, api_base, host_endpoints):
         key: Final = _plan_api_base_key(github_token, host_endpoints)
         await asyncio.shield(_plan_api_base_lookup(key, github_token, host_endpoints))
@@ -383,7 +395,7 @@ def get_copilot_api_base(
     github_token: Callable[[], str | None] | None = None,
     endpoints: GithubHostEndpoints | None = None,
 ) -> str:
-    host_endpoints: Final = endpoints or _default_host_endpoints()
+    host_endpoints: Final = endpoints or _shared_login_endpoints()
     configured_api_base: Final = _configured_copilot_api_base(api_base, host_endpoints)
     if configured_api_base is not None:
         return configured_api_base

@@ -436,7 +436,6 @@ class LiteLLMRoutes(enum.Enum):
         "/tinyfish",
         "/vllm",
         "/mistral",
-        "/typesafe",
         "/laya",
         "/bespoke",
         "/openrouter",
@@ -2069,6 +2068,7 @@ class NewTeamRequest(TeamBase):
     )
 
     model_tpm_limit: dict[str, int] | None = None
+    model_tpm_limit_counts_cached_tokens: Mapping[str, bool] | None = None
     default_estimated_output_tokens: PositiveInt | None = None
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
@@ -2149,6 +2149,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     prompts: list[str] | None = None
     model_rpm_limit: dict[str, int] | None = None
     model_tpm_limit: dict[str, int] | None = None
+    model_tpm_limit_counts_cached_tokens: Mapping[str, bool] | None = None
     default_estimated_output_tokens: PositiveInt | None = None
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
@@ -3245,6 +3246,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     mcp_require_explicit_server_scope: bool = Field(
         default=False,
         description="Require aggregate MCP requests to include x-mcp-servers unless a toolset or gateway OAuth session already scopes the server. Off by default.",
+    )
+    require_key_mcp_access_defined: bool | None = Field(
+        None,
+        description="When true, a virtual key that grants no MCP servers of its own inherits none from its team, so the team acts as a ceiling rather than a default and the key reaches no MCP servers until it grants some explicitly or through an access group. Keyless subjects admitted through a gateway or the dashboard are unaffected, since team membership is their only access path. Default false: such a key inherits every MCP server its team holds.",
     )
     mcp_client_id_header: str | None = Field(
         None,
@@ -4934,6 +4939,7 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "model_tpm_limit_counts_cached_tokens",
     "model_itpm_limit",
     "model_otpm_limit",
     "default_estimated_output_tokens",

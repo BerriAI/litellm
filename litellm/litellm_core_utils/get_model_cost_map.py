@@ -495,7 +495,7 @@ def fetch_registration_document(url: str) -> dict[str, dict[str, object]] | None
 
 def _finalize_model_cost_map(  # pyright: ignore[reportUnusedFunction]  # main's private name, downstream code calls it
     model_cost: dict[str, object],  # mutable-ok: main's signature, pops the rules block
-) -> dict:
+) -> dict[str, object]:
     """Compat for main's callers. Use ``model_cost_inputs.install``."""
     match NativeModelCostMap.finalize(json.dumps(model_cost).encode()):
         case NativeRejected(reason=reason):

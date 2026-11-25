@@ -1335,7 +1335,7 @@ def test_requests_use_the_default_host_when_github_reports_no_usable_plan_host(t
 @pytest.mark.parametrize("surface", ["completion", "embedding", "responses"])
 def test_enterprise_token_exchange_url_without_a_copilot_base_sends_nothing(tmp_path, monkeypatch, surface):
     _shared_login(tmp_path, monkeypatch)
-    monkeypatch.setenv("GITHUB_COPILOT_API_KEY_URL", "https://api.octo.ghe.com/copilot_internal/v2/token")
+    monkeypatch.setenv("GITHUB_COPILOT_API_KEY_URL", "https://github.example.com/api/v3/copilot_internal/v2/token")
     lookups: list[httpx.Request] = []
     with (
         github_http(

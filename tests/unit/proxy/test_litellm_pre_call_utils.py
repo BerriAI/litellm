@@ -8552,8 +8552,8 @@ async def test_key_level_callback_vars_survive_the_strip():
     [
         pytest.param(
             {"ttl": 600},
-            {"use-cache": True, "namespace": "team-a"},
-            {"use-cache": True, "namespace": "team-a", "ttl": 600},
+            {"use-cache": True},
+            {"use-cache": True, "ttl": 600},
             True,
             id="key-control-added-to-request-opt-in",
         ),
@@ -8634,6 +8634,13 @@ async def test_key_level_callback_vars_survive_the_strip():
             {"use-cache": True, "s-max-age": 5, "ttl": 600},
             True,
             id="request-s-max-age-kept-when-the-key-has-no-s-maxage",
+        ),
+        pytest.param(
+            {"ttl": 600},
+            {"use-cache": True, "namespace": "litellm:another-key-hash:acompletion"},
+            {"use-cache": True, "ttl": 600},
+            True,
+            id="request-namespace-is-dropped-so-the-key-stays-in-its-own-partition",
         ),
     ],
 )

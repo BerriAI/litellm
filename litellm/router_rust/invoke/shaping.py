@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterable, Mapping, MutableMapping, Sequenc
 from functools import partial
 from itertools import product
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -92,6 +92,8 @@ _BEDROCK_MANTLE_ROUTE_DESTINATION: Final = (
     ("BEDROCK_MANTLE_API_BASE",),
 )
 _BEDROCK_MANTLE_DESTINATION: Final = (("api_base", "base_url"), ("BEDROCK_MANTLE_API_BASE",))
+_OPENAI_DESTINATION: Final = (("api_base", "base_url"), ("OPENAI_BASE_URL", "OPENAI_API_BASE"))
+_ANTHROPIC_API_KEY_PREFIX: Final = "sk-ant-"
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
 # Generic handlers whose stream timeout is split from the request timeout.
 STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS: Final = frozenset({"anthropic_messages", "aresponses", "responses"})
@@ -529,27 +531,50 @@ def leaves_caller_key_behind(
     deployment_params: Mapping[str, object],
     router_defaults: Mapping[str, object],
 ) -> bool:
-    """Whether an attempt onto ``deployment_params`` must not send the caller's ``api_key``: the key was meant for
-    Anthropic and the deployment authenticates with AWS IAM credentials on its default endpoint. A deployment with a
-    bearer of its own (its ``api_key``, a router default one, or the provider's env bearer), a blank caller key (which
-    already turns off the env bearer), a fallback target that sets its own key, an explicit ``Authorization`` header,
-    and a call sent to an endpoint of its own keep today's behavior. The checks read the call as the provider gets it:
-    the request and target over the router's non-None defaults over the deployment's params."""
+    """Whether an attempt onto ``deployment_params`` must not send the caller's ``api_key``, a key meant for
+    Anthropic, because the deployment has auth of its own on its provider's default endpoint: AWS IAM credentials
+    for any caller key, or, for a recognizable Anthropic key only, an AWS bearer or an OpenAI key the deployment
+    resolves itself. A blank caller key (which already turns off the env bearer), a fallback target that sets its
+    own key, an explicit ``Authorization`` header, and a call sent to an endpoint of its own keep today's behavior.
+    The checks read the call as the provider gets it: the request and target over the router's non-None defaults
+    over the deployment's params."""
     caller_key: Final = request.get("api_key")
+    if caller_key in (None, "") or "api_key" in target_params:
+        return False
     deployment: Final = {
         **deployment_params,
         **{key: value for key, value in router_defaults.items() if value is not None},
     }
-    destination: Final = _aws_destination(deployment)
-    return (
-        caller_key not in (None, "")
-        and "api_key" not in target_params
-        and destination is not None
-        and not _sets_authorization_header(request, target_params, deployment)
-        and owner_provider() in _CALLER_KEY_ORIGIN_PROVIDERS
-        and not _targets_a_custom_endpoint({**deployment, **request, **target_params}, destination)
-        and _signs_with_aws_credentials(deployment)
+    if _sets_authorization_header(request, target_params, deployment):
+        return False
+    anthropic_key: Final = isinstance(caller_key, str) and caller_key.startswith(_ANTHROPIC_API_KEY_PREFIX)
+    aws: Final = _aws_destination(deployment)
+    reaches_openai: Final = (
+        anthropic_key and aws is None and deployment_provider(deployment) == LlmProviders.OPENAI.value
     )
+    if (aws is None and not reaches_openai) or owner_provider() not in _CALLER_KEY_ORIGIN_PROVIDERS:
+        return False
+    call: Final = {**deployment, **request, **target_params}
+    if aws is None:
+        return (
+            not litellm.api_base
+            and not _targets_a_custom_endpoint(call, _OPENAI_DESTINATION)
+            and _resolves_its_own_openai_key(deployment)
+        )
+    if _targets_a_custom_endpoint(call, aws):
+        return False
+    auth: Final = _aws_auth(deployment)
+    return auth == "sigv4" or (anthropic_key and auth == "bearer")
+
+
+def _resolves_its_own_openai_key(deployment: Mapping[str, object]) -> bool:
+    """Whether the OpenAI deployment has a static key without the caller's, as the OpenAI handlers resolve one."""
+    from litellm.llms.openai.workload_identity import openai_static_api_key
+
+    key: Final = deployment.get("api_key")
+    if key is not None and not isinstance(key, str):
+        return False
+    return bool(openai_static_api_key(key))
 
 
 def _aws_destination(
@@ -592,21 +617,21 @@ def _sets_authorization_header(*sources: Mapping[str, object]) -> bool:
     return any("authorization" in {name.lower() for name in headers} for headers in carriers)
 
 
-def _signs_with_aws_credentials(deployment_params: Mapping[str, object]) -> bool:
-    """Whether the AWS deployment, left to its own auth, signs with SigV4: its provider's bearer resolver finds no
-    bearer in its ``api_key`` (with that provider's empty and missing key rules) or the provider's env bearer."""
+def _aws_auth(deployment_params: Mapping[str, object]) -> Literal["sigv4", "bearer", "unknown"]:
+    """How the AWS deployment, left to its own auth, authenticates: with the bearer its provider's resolver finds in
+    its ``api_key`` (with that provider's empty and missing key rules) or the provider's env bearer, else SigV4."""
     from litellm.llms.bedrock.base_aws_llm import bedrock_bearer_token
     from litellm.llms.bedrock_mantle.common_utils import resolve_mantle_bearer_token
 
     key: Final = deployment_params.get("api_key")
     if key is not None and not isinstance(key, str):
-        return False
+        return "unknown"
     resolve: Final = (
         resolve_mantle_bearer_token
         if deployment_provider(deployment_params) == LlmProviders.BEDROCK_MANTLE.value
         else bedrock_bearer_token
     )
-    return resolve(key) is None
+    return "sigv4" if resolve(key) is None else "bearer"
 
 
 def forwarded_client_headers(request: Mapping[str, object]) -> ForwardedClientHeaders | None:
@@ -666,9 +691,10 @@ def attempt_inherited_request(
     header_forwarding_admits: Callable[[], bool],
 ) -> Mapping[str, object]:
     """The caller's request as an attempt inherits it, before a fallback target's own params apply: without a caller
-    key meant for Anthropic on an AWS-signed deployment, and without the client headers the proxy forwarded (still
-    holding the forwarded value) when the attempt's group is outside their forwarding scope, or, for ``x-api-key``,
-    when the key is left behind. A target that sets its own ``headers`` replaces them, so they are left alone."""
+    key meant for Anthropic on a deployment with auth of its own, and without the client headers the proxy forwarded
+    (still holding the forwarded value) when the attempt's group is outside their forwarding scope, or, for
+    ``x-api-key``, when the key is left behind. A target that sets its own ``headers`` replaces them, so they are
+    left alone."""
     drops_key: Final = leaves_caller_key_behind(
         request, target_params, owner_provider, deployment_params, router_defaults
     )
