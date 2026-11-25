@@ -29,7 +29,7 @@ from litellm.repositories.table_repositories import (
     DailyGuardrailUsageUnitsRepository,
     SpendLogGuardrailIndexRepository,
 )
-from litellm.types.utils import GUARDRAIL_ACTION_BLOCK, GUARDRAIL_ACTION_MASK
+from litellm.types.utils import GUARDRAIL_ACTION_BLOCK, GUARDRAIL_ACTION_FLAG, GUARDRAIL_ACTION_MASK
 
 if TYPE_CHECKING:
     from prisma import types as prisma_types
@@ -220,13 +220,15 @@ def guardrail_status_to_action(status: object) -> str:
 
 # The `guardrail_action` values of a run that acted while its status reads as passed: the shared
 # guardrail logging's own for a masked run and for a rejection message returned by a pre_call hook,
-# and a provider's action for a request it anonymized.
-_ACTED_WITH_A_PASSED_STATUS: Final = frozenset({GUARDRAIL_ACTION_MASK, GUARDRAIL_ACTION_BLOCK, "guardrail_intervened"})
+# a detected violation that was let through, and a provider's action for a request it anonymized.
+_ACTED_WITH_A_PASSED_STATUS: Final = frozenset(
+    {GUARDRAIL_ACTION_MASK, GUARDRAIL_ACTION_BLOCK, GUARDRAIL_ACTION_FLAG, "guardrail_intervened"}
+)
 
 
 def guardrail_ran_without_acting(entry: Mapping[str, object]) -> bool:
     """True for a run `general_settings.guardrail_log_skip_passed` drops from the request log: the guardrail
-    passed or did not run, reported no masked entity and logged no masking or blocking action."""
+    passed or did not run, reported no masked entity and logged no masking, blocking or flagging action."""
     if guardrail_status_to_action(entry.get("guardrail_status")) not in ("passed", "not_run"):
         return False
     action: Final = entry.get("guardrail_action")

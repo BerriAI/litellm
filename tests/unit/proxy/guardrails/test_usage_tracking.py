@@ -758,12 +758,13 @@ async def test_guardrail_log_skip_passed_keeps_index_rows_only_for_runs_that_act
 @pytest.mark.parametrize(
     ("skip_passed", "kept"),
     [
-        (True, ["anonymized", "masked-no-counts", "masked-prompts-not-stored", "rejected"]),
+        (True, ["anonymized", "let-through", "masked-no-counts", "masked-prompts-not-stored", "rejected"]),
         (
             None,
             [
                 "allowed",
                 "anonymized",
+                "let-through",
                 "masked-no-counts",
                 "masked-prompts-not-stored",
                 "no-action",
@@ -786,6 +787,7 @@ async def test_guardrail_log_skip_passed_keeps_a_run_that_acted_with_a_passed_st
         ),
         _entries_payload("anonymized", [{**passed, "guardrail_action": "GUARDRAIL_INTERVENED"}]),
         _entries_payload("rejected", [{**passed, "guardrail_response": None, "guardrail_action": "block"}]),
+        _entries_payload("let-through", [{**passed, "guardrail_response": None, "guardrail_action": "flag"}]),
         _entries_payload("no-action", [{**passed, "guardrail_action": "NONE"}]),
         _entries_payload("allowed", [{**passed, "guardrail_response": "allow", "guardrail_action": "allow"}]),
         _entries_payload("not-text", [{**passed, "guardrail_action": ["mask"]}]),

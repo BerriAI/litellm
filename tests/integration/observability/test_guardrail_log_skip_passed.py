@@ -32,6 +32,7 @@ REWRITES: Final = "skip-passed-rewrites"
 EDITS_IN_PLACE: Final = "skip-passed-edits-in-place"
 REWRITES_RESPONSE: Final = "skip-passed-rewrites-response"
 VENDOR_BLOCKS: Final = "skip-passed-vendor-blocks"
+VENDOR_MONITORS: Final = "skip-passed-vendor-monitors"
 UNSET: Final = "unset"
 CHAT: Final = "chat"
 CHAT_STREAM: Final = "chat-stream"
@@ -163,8 +164,8 @@ def _vendor(request: Request) -> Reply:
     return Reply(body=json.dumps({"flagged": flagged, "breakdown": breakdown, "payload": []}).encode())
 
 
-def _vendor_guardrail(name: str, api_base: str) -> dict[str, object]:
-    """A guardrail that logs its verdict with a success status and then rejects the request."""
+def _vendor_guardrail(name: str, api_base: str, on_flagged: str = "block") -> dict[str, object]:
+    """A guardrail that logs its verdict with a success status and then acts on it as `on_flagged` says."""
     return {
         "guardrail_name": name,
         "litellm_params": {
@@ -173,7 +174,7 @@ def _vendor_guardrail(name: str, api_base: str) -> dict[str, object]:
             "default_on": False,
             "api_key": "synthetic-lakera-key",
             "api_base": api_base,
-            "on_flagged": "block",
+            "on_flagged": on_flagged,
         },
     }
 
@@ -193,6 +194,7 @@ def _config(root: Path, name: str, skip_passed: bool | None, spend_log_writer: s
         _hook_guardrail(EDITS_IN_PLACE, "EditsInPlace", "pre_call"),
         _hook_guardrail(REWRITES_RESPONSE, "RewritesResponse", "post_call"),
         _vendor_guardrail(VENDOR_BLOCKS, vendor_url),
+        _vendor_guardrail(VENDOR_MONITORS, vendor_url, on_flagged="monitor"),
     ]
     (root / f"{_HOOKS_MODULE}.py").write_text(_HOOKS_CODE)
     path: Final = root / name
@@ -375,6 +377,15 @@ def test_a_vendor_block_logged_with_a_success_status_keeps_its_index_row(rig: Ri
     """The vendor guardrail logs a success status before it rejects, so the daily counters read both runs as passed."""
     texts: Final = ("clean prompt", f"the key is {AWS_KEY}")
     added: Final = rig.index_rows_added(VENDOR_BLOCKS, texts, (200, 400), Counters(2, 2, 0, 0), logged_as=VENDOR_BLOCKS)
+    assert added == 1
+
+
+@skips_passed
+def test_a_vendor_violation_that_is_let_through_keeps_its_index_row(rig: Rig) -> None:
+    texts: Final = ("clean prompt", f"the key is {AWS_KEY}")
+    added: Final = rig.index_rows_added(
+        VENDOR_MONITORS, texts, (200, 200), Counters(2, 2, 0, 0), logged_as=VENDOR_MONITORS
+    )
     assert added == 1
 
 

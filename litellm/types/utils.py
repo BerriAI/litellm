@@ -3891,10 +3891,12 @@ class StandardLoggingEvalInformation(TypedDict, total=False):
 
 
 # The `guardrail_action` a run logs when it acted while its status reads as success: it changed the
-# content and let the request through, or its pre_call hook returned a rejection message. Spend-log
-# redaction keeps `guardrail_action`, so such a run stays recognizable when prompts are not stored.
+# content and let the request through, its pre_call hook returned a rejection message, or it detected
+# a violation and let the request through. Spend-log redaction keeps `guardrail_action`, so such a
+# run stays recognizable when prompts are not stored.
 GUARDRAIL_ACTION_MASK: Final = "mask"
 GUARDRAIL_ACTION_BLOCK: Final = "block"
+GUARDRAIL_ACTION_FLAG: Final = "flag"
 
 
 class GuardrailTracingDetail(TypedDict, total=False):

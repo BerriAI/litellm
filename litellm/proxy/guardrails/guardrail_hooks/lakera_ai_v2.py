@@ -39,7 +39,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIRequest,
     LakeraAIResponse,
 )
-from litellm.types.utils import CallTypesLiteral, GuardrailStatus, ModelResponse
+from litellm.types.utils import GUARDRAIL_ACTION_FLAG, CallTypesLiteral, GuardrailStatus, ModelResponse
 
 if TYPE_CHECKING:
     from litellm.types.utils import LLMResponseTypes
@@ -446,6 +446,11 @@ class LakeraAIGuardrail(CustomGuardrail):
                 duration=(datetime.now() - start_time).total_seconds(),
                 masked_entity_count=masked_entity_count,
                 event_type=event_type,
+                tracing_detail=(
+                    {"guardrail_action": GUARDRAIL_ACTION_FLAG}
+                    if lakera_response is not None and lakera_response.get("flagged") is True
+                    else None
+                ),
             )
 
     def _mask_pii_in_messages(
