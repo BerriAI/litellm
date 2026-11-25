@@ -4955,6 +4955,7 @@ class LlmProviders(str, Enum):
     REKA = "reka"
     STREAMLAKE = "streamlake"
     WALLY = "wally"
+    WEFLAYR = "weflayr"
     HUAWEI_MAAS = "huawei_maas"
     SARVAM = "sarvam"
     LITELLM_AGENT = "litellm_agent"
