@@ -830,6 +830,9 @@ impl<H: RouterHost> Call<'_, H> {
         );
         ctx.pool = pool;
         let facts = self.host.pre_call_facts(&ctx, &healthy).await?;
+        // OCR fallback candidates must declare OCR capability. Run this even
+        // when the request has no countable messages or input.
+        let healthy = filter_ocr_deployments(op, healthy);
         crate::precall::filter(model_group, healthy, pool, &facts)
     }
 
@@ -924,6 +927,22 @@ impl<H: RouterHost> Call<'_, H> {
     }
 }
 
+/// Only OCR-capable deployments may serve OCR requests; other routes are unchanged.
+fn filter_ocr_deployments(
+    op: &Op,
+    candidates: Vec<Arc<Deployment>>,
+) -> Vec<Arc<Deployment>> {
+    if !matches!(op.as_str(), "ocr" | "aocr") {
+        return candidates;
+    }
+    candidates
+        .into_iter()
+        .filter(|deployment| {
+            deployment.model_info.raw.get("mode").and_then(|mode| mode.as_str()) == Some("ocr")
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -946,6 +965,45 @@ mod tests {
         }))
         .unwrap();
         Arc::new(Deployment::from_spec(spec).unwrap())
+    }
+
+
+    fn deployment_with_mode(id: &str, mode: &str) -> Arc<Deployment> {
+        let spec: DeploymentSpec = serde_json::from_value(json!({
+            "model_name": "g",
+            "litellm_params": {"model": format!("openai/{id}")},
+            "model_info": {"id": id, "mode": mode},
+        }))
+        .unwrap();
+        Arc::new(Deployment::from_spec(spec).unwrap())
+    }
+
+    #[rstest]
+    #[case::sync("ocr")]
+    #[case::async_call("aocr")]
+    fn ocr_filters_non_ocr_fallbacks(#[case] operation: &str) {
+        let ocr = deployment_with_mode("ocr", "ocr");
+        let chat = deployment_with_mode("chat", "chat");
+        let unspecified = deployment("unspecified", json!({"model": "openai/u"}));
+        let kept = filter_ocr_deployments(
+            &Op::from(operation),
+            vec![ocr, chat, unspecified],
+        );
+        assert_eq!(
+            kept.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
+            ["ocr"]
+        );
+    }
+
+    #[rstest]
+    fn non_ocr_selection_retains_mixed_deployments() {
+        let ocr = deployment_with_mode("ocr", "ocr");
+        let chat = deployment_with_mode("chat", "chat");
+        let kept = filter_ocr_deployments(&Op::from("acompletion"), vec![ocr, chat]);
+        assert_eq!(
+            kept.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
+            ["ocr", "chat"]
+        );
     }
 
     #[rstest]
