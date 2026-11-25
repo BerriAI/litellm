@@ -15362,12 +15362,12 @@ from litellm.responses.litellm_completion_transformation.count_request import (
 _PROVIDERS_WITH_LISTING_ONLY_MODEL_INFO: Final = frozenset({LlmProviders.OPENROUTER})
 
 
-def _with_client_oauth_token(
-    counter: BaseTokenCounter | None, client_oauth_token: str | None
+def _with_anthropic_count_headers(
+    counter: BaseTokenCounter | None, client_oauth_token: str | None, client_betas: Sequence[str]
 ) -> BaseTokenCounter | None:
-    if client_oauth_token is None or not isinstance(counter, AnthropicTokenCounter):
+    if not isinstance(counter, AnthropicTokenCounter) or (client_oauth_token is None and not client_betas):
         return counter
-    return AnthropicTokenCounter(client_oauth_token=client_oauth_token)
+    return AnthropicTokenCounter(client_oauth_token=client_oauth_token, client_betas=client_betas)
 
 
 def _get_provider_token_counter(
@@ -16408,6 +16408,7 @@ async def count_request_tokens(
     count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     caller: UserAPIKeyAuth | None = None,
     request_routing: Mapping[str, object] = MappingProxyType({}),
+    client_betas: Sequence[str] = (),
 ) -> TokenCountResponse:
     call_id: Final = resolve_litellm_call_id(litellm_call_id)
     if request.prompt is None and request.messages is None and request.contents is None:
@@ -16427,6 +16428,7 @@ async def count_request_tokens(
         request_litellm_params=request_litellm_params,
         responses_request=responses_request,
         client_oauth_token=client_oauth_token,
+        client_betas=client_betas,
         count_options=count_options,
     )
     return await logged_token_count(
@@ -16569,6 +16571,7 @@ async def _count_request_tokens(
     responses_request: Mapping[str, object] | None,
     client_oauth_token: str | None,
     count_options: Mapping[str, JsonValue],
+    client_betas: Sequence[str],
 ) -> TokenCountResponse:
     prompt: Final = request.prompt
     messages: Final = request.messages
@@ -16611,7 +16614,7 @@ async def _count_request_tokens(
     if call_endpoint is True and deployment is not None:
         # Auto-route to the correct provider based on model
         routed_counter, _model, custom_llm_provider = _get_provider_token_counter(deployment, model_to_use)
-        provider_counter = _with_client_oauth_token(routed_counter, client_oauth_token)
+        provider_counter = _with_anthropic_count_headers(routed_counter, client_oauth_token, client_betas)
         if _model is not None:
             model_to_use = _model
 

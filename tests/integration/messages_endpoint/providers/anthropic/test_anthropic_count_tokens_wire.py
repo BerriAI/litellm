@@ -11,6 +11,7 @@ from pydantic import JsonValue, TypeAdapter
 
 _BACKEND: Final = "claude-sonnet-4-6"
 _API_KEY: Final = "synthetic-anthropic-key"
+_OAUTH_KEY: Final = "sk-ant-oat01-scripted-count-token"
 _COUNT_BETA: Final = "token-counting-2024-11-01"
 _CLIENT_BETA: Final = "client-future-beta-2099-01-01"
 _MERGED_BETA: Final = f"{_CLIENT_BETA},{_COUNT_BETA}"
@@ -45,11 +46,15 @@ def _client(gateway: Gateway, key: str) -> anthropic.Anthropic:
 
 
 def _count_peer(
-    expected_body: dict[str, JsonValue], result: Reply, expected_beta: str = _COUNT_BETA
+    expected_body: dict[str, JsonValue],
+    result: Reply,
+    expected_beta: str = _COUNT_BETA,
+    expected_auth: tuple[str, str] = ("x-api-key", _API_KEY),
 ) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         assert request.method == "POST" and request.target == "/v1/messages/count_tokens", request.target
-        assert request.headers["x-api-key"] == _API_KEY, request.headers
+        auth_name, auth_value = expected_auth
+        assert request.headers[auth_name] == auth_value, request.headers
         assert request.headers["anthropic-version"] == "2023-06-01", request.headers
         assert request.headers["anthropic-beta"] == expected_beta, request.headers
         assert _JSON_OBJECT.validate_json(request.body) == expected_body, request.body
@@ -58,14 +63,14 @@ def _count_peer(
     return respond
 
 
-def _sdk_count(client: anthropic.Anthropic, model: str, spelling: str, beta: str) -> MessageTokensCount:
+def _sdk_count(client: anthropic.Anthropic, model: str, spelling: str, *betas: str) -> MessageTokensCount:
     if spelling == "beta":
         beta_result: Final = client.beta.messages.count_tokens(
             model=model,
             messages=_MESSAGES,
             system=_SYSTEM,
             tools=_TOOLS,
-            betas=[beta],
+            betas=list(betas),
         )
         return MessageTokensCount.model_validate(beta_result.model_dump(exclude_none=True))
     return client.messages.count_tokens(
@@ -73,7 +78,7 @@ def _sdk_count(client: anthropic.Anthropic, model: str, spelling: str, beta: str
         messages=_MESSAGES,
         system=_SYSTEM,
         tools=_TOOLS,
-        extra_headers={"anthropic-beta": beta},
+        extra_headers={"anthropic-beta": ",".join(betas)} if betas else {},
     )
 
 
@@ -212,25 +217,36 @@ def test_anthropic_count_tokens_preserves_thinking_tool_choice_and_output_config
 
 
 @pytest.mark.parametrize("spelling", ["messages", "beta"], ids=["messages_count_tokens", "beta_messages_count_tokens"])
+@pytest.mark.parametrize(
+    ("betas", "expected_beta", "oauth"),
+    [
+        ((), _COUNT_BETA, False),
+        ((_CLIENT_BETA,), _MERGED_BETA, False),
+        ((_COUNT_BETA, _CLIENT_BETA, _CLIENT_BETA), _MERGED_BETA, False),
+        ((_CLIENT_BETA,), f"{_CLIENT_BETA},oauth-2025-04-20,{_COUNT_BETA}", True),
+    ],
+    ids=["no-client-beta", "client-beta", "repeated-betas", "oauth-deployment"],
+)
 def test_anthropic_count_tokens_merges_the_client_beta_with_the_token_counting_beta(
-    gateway: Gateway, spelling: str
+    gateway: Gateway, spelling: str, betas: tuple[str, ...], expected_beta: str, oauth: bool
 ) -> None:
-    pytest.skip("BUG: /v1/messages/count_tokens drops the client's anthropic-beta before the provider count call")
-
+    deployment_key: Final = _OAUTH_KEY if oauth else _API_KEY
+    expected_auth: Final = ("authorization", f"Bearer {deployment_key}") if oauth else ("x-api-key", deployment_key)
     with gateway.scenario() as scenario:
         with wire_server(
             _count_peer(
                 {"model": _BACKEND, "messages": _MESSAGES, "system": _SYSTEM, "tools": _TOOLS},
                 Reply(body=json.dumps({"input_tokens": _COUNTED_INPUT_TOKENS}).encode()),
-                _MERGED_BETA,
+                expected_beta,
+                expected_auth,
             )
         ) as wire:
             model: Final = scenario.model(
                 model=f"anthropic/{_BACKEND}",
                 api_base=wire.url,
-                api_key=_API_KEY,
+                api_key=deployment_key,
                 num_retries=0,
             )
-            result: Final = _sdk_count(_client(gateway, gateway.key), model, spelling, _CLIENT_BETA)
+            result: Final = _sdk_count(_client(gateway, gateway.key), model, spelling, *betas)
             assert result.model_dump() == {"input_tokens": _COUNTED_INPUT_TOKENS, "litellm_count_source": "provider"}
             assert len(wire.drain()) == 1

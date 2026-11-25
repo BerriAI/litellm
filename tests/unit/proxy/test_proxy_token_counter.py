@@ -28,6 +28,7 @@ import respx
 import tiktoken
 from dotenv import load_dotenv
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
+from starlette.datastructures import Headers
 from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.pre_tokenizers import Whitespace
@@ -797,7 +798,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
 
     # Mock request object
     mock_request = MagicMock(spec=Request)
-    mock_request.headers = {}
+    mock_request.headers = Headers()
     mock_request_data = {
         "model": "claude-3-sonnet-20240229",
         "messages": [{"role": "user", "content": "Hello Claude!"}],
@@ -829,6 +830,7 @@ async def test_anthropic_messages_count_tokens_endpoint():
         count_options=None,
         caller=None,
         request_routing=None,
+        client_betas=(),
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "claude-3-sonnet-20240229"
@@ -882,7 +884,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
 
     # Mock request object
     mock_request = MagicMock(spec=Request)
-    mock_request.headers = {}
+    mock_request.headers = Headers()
     mock_request_data = {
         "model": "gpt-4",
         "messages": [{"role": "user", "content": "Hello GPT!"}],
@@ -914,6 +916,7 @@ async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
         count_options=None,
         caller=None,
         request_routing=None,
+        client_betas=(),
     ):
         assert call_endpoint == True, "Should be called with call_endpoint=True for Anthropic endpoint"
         assert request.model == "gpt-4"
@@ -1025,7 +1028,7 @@ async def test_anthropic_endpoint_error_handling():
 
     # Mock request object
     mock_request = MagicMock(spec=Request)
-    mock_request.headers = {}
+    mock_request.headers = Headers()
     mock_request.scope = {}
     mock_user_api_key_dict = MagicMock()
 
@@ -1716,7 +1719,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
 
     # Mock request object
     mock_request = MagicMock(spec=Request)
-    mock_request.headers = {}
+    mock_request.headers = Headers()
     mock_request_data = {
         "model": "claude-bedrock",
         "messages": [{"role": "user", "content": "Hello!"}],
@@ -1745,6 +1748,7 @@ async def test_anthropic_endpoint_returns_anthropic_error_format():
         count_options=None,
         caller=None,
         request_routing=None,
+        client_betas=(),
     ):
         raise ProxyException(
             message='{"detail":{"message":"Input is too long for requested model."}}',
@@ -1778,7 +1782,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
     import litellm.proxy.proxy_server as proxy_server
 
     mock_request = MagicMock(spec=Request)
-    mock_request.headers = {}
+    mock_request.headers = Headers()
     mock_request_data = {
         "model": "claude-bedrock",
         "messages": [{"role": "user", "content": "Hello!"}],
@@ -1807,6 +1811,7 @@ async def test_anthropic_endpoint_403_permission_error_format():
         count_options=None,
         caller=None,
         request_routing=None,
+        client_betas=(),
     ):
         raise ProxyException(
             message='{"Message":"Bearer Token has expired"}',
@@ -1840,7 +1845,7 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     import litellm.proxy.proxy_server as proxy_server
 
     mock_request = MagicMock(spec=Request)
-    mock_request.headers = {}
+    mock_request.headers = Headers()
     mock_request_data = {
         "model": "claude-bedrock",
         "messages": [{"role": "user", "content": "Hello!"}],
@@ -1869,6 +1874,7 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         count_options=None,
         caller=None,
         request_routing=None,
+        client_betas=(),
     ):
         raise ProxyException(
             message="Rate limit exceeded",
@@ -4909,7 +4915,7 @@ async def _count_through_the_messages_endpoint(
         **request_options,
     }
     mock_request: Final = MagicMock(spec=Request)
-    mock_request.headers = {}
+    mock_request.headers = Headers()
 
     with (
         patch.object(proxy_server, "llm_router", router),
@@ -5317,7 +5323,7 @@ async def _messages_endpoint_count(router: Router, request_body: Mapping[str, Js
     import litellm.proxy.proxy_server as proxy_server
 
     mock_request: Final = MagicMock(spec=Request)
-    mock_request.headers = {}
+    mock_request.headers = Headers()
     with (
         patch.object(proxy_server, "llm_router", router),
         patch.object(anthropic_endpoints, "read_request_body", AsyncMock(return_value=dict(request_body))),
@@ -7927,6 +7933,7 @@ async def _count_messages_body(
     body: Mapping[str, JsonValue],
     count_route: str,
     provider_reply: httpx.Response,
+    headers: Mapping[str, str] = MappingProxyType({}),
 ) -> tuple[object, respx.Route]:
     import litellm.proxy.proxy_server as proxy_server
 
@@ -7942,9 +7949,40 @@ async def _count_messages_body(
     with respx.mock:
         route: Final = respx.post(count_route).mock(return_value=provider_reply)
         response: Final = await anthropic_count_tokens(
-            _json_request({"model": "counted", **body}, "python-httpx/0.28.1"), Response(), UserAPIKeyAuth()
+            _json_request({"model": "counted", **body}, "python-httpx/0.28.1", headers), Response(), UserAPIKeyAuth()
         )
     return response, route
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider", "prefix", "expected_beta"),
+    [
+        ("anthropic", "/anthropic", "context-1m-2025-08-07,interleaved-thinking-2025-05-14,token-counting-2024-11-01"),
+        ("azure_ai", "", "token-counting-2024-11-01"),
+    ],
+)
+async def test_messages_count_tokens_filters_caller_betas_on_native_anthropic_deployments_hosted_by_foundry(
+    monkeypatch: pytest.MonkeyPatch, provider: str, prefix: str, expected_beta: str
+) -> None:
+    host: Final = "https://count-test.services.ai.azure.com"
+    response, route = await _count_messages_body(
+        monkeypatch,
+        {"model": f"{provider}/claude-sonnet-4-6", "api_base": f"{host}{prefix}", "api_key": "synthetic-count-key"},
+        {"messages": [{"role": "user", "content": "Count this."}]},
+        f"{host}/anthropic/v1/messages/count_tokens",
+        httpx.Response(200, json={"input_tokens": 19}),
+        headers=Headers(
+            raw=[
+                (b"anthropic-beta", b"client-future-beta-2099-01-01,context-1m-2025-08-07"),
+                (b"anthropic-beta", b"interleaved-thinking-2025-05-14"),
+            ]
+        ),
+    )
+
+    assert response == {"input_tokens": 19, "litellm_count_source": "provider"}
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["anthropic-beta"] == expected_beta
 
 
 @pytest.mark.asyncio

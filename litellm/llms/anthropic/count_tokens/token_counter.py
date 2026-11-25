@@ -36,8 +36,9 @@ anthropic_count_tokens_handler: Final = AnthropicCountTokensHandler()
 class AnthropicTokenCounter(BaseTokenCounter):
     """Token counter implementation for Anthropic provider using the CountTokens API."""
 
-    def __init__(self, client_oauth_token: str | None = None) -> None:
+    def __init__(self, client_oauth_token: str | None = None, client_betas: Sequence[str] = ()) -> None:
         self.client_oauth_token: Final = client_oauth_token
+        self.client_betas: Final = tuple(client_betas)
 
     def should_use_token_counting_api(
         self,
@@ -168,6 +169,7 @@ class AnthropicTokenCounter(BaseTokenCounter):
                 model=model_to_use,
                 messages=[dict(message) for message in messages],
                 auth_header=auth_header,
+                client_betas=self.client_betas,
                 api_base=api_base,
                 tools=None if tools is None else [dict(tool) for tool in tools],
                 system=system,
