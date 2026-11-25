@@ -17,6 +17,7 @@ serde.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
+jsonwebtoken = { workspace = true, features = ["rust_crypto", "use_pem"] }
 litellm-config.workspace = true
 rstest.workspace = true
 serde_json.workspace = true

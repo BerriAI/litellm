@@ -6,7 +6,7 @@ Axum wiring for `gateway-auth-core`, and nothing else: it reads a credential off
 
 - No domain type, key column or rule lives here. Who the caller is, what role it has and what it may reach are `gateway-auth-core`'s, and the rows are the host's. A type that describes a caller, a key or a permission does not belong in this crate
 - There is one authenticator trait, `Authenticator<R>`, with one result type, the core's `Caller<R>`. `Auth<R>` holds one behind an extractor, and `Authenticated<R>` is that caller as a handler extracts it. Never add a second trait, a second result type or a wrapper that carries facts the core did not decide
-- `KeyAuthenticator<H>` is the one implementation. It hands the credential to the core's `authenticate_key` over the `AuthHost` it was built with, so the master key is verified by the core, never by a comparison here. Every route this crate guards is an inference route, which is what the request it hands the core says
+- `CoreAuthenticator<H>` is the one implementation. It asks the core's `plan` which path the request takes, hands the credential to `authenticate_key` or `authenticate_jwt` over the `AuthHost` it was built with, and answers `NotNative` for a plan this server does not serve. The master key and a JWT are verified by the core, never by a comparison here. Every route this crate guards is an inference route, which is what the request it hands the core says
 - `From<gateway_auth_core::Error>` and `From<NotACaller>` in `error.rs` are the only place a core answer becomes this server's `Error`. The core's own text is the proxy's, which answers instead wherever one stands behind this server
 
 ## Credentials
