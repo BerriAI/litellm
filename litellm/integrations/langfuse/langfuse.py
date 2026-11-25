@@ -397,6 +397,7 @@ class LangFuseLogger:
             langfuse_host=langfuse_host,
             allow_env_credentials=allow_env_credentials,
         )
+        self.tenant_host: Final = allow_env_credentials is False and langfuse_host is not None
         _env_override: Final = str(langfuse_environment).strip() if langfuse_environment is not None else None
         if _env_override:
             validate_langfuse_environment_value(_env_override)
@@ -458,6 +459,7 @@ class LangFuseLogger:
             release=self.langfuse_release,
             flush_interval=self.langfuse_flush_interval,
             mock_mode=self.is_mock_mode,
+            tenant_host=self.tenant_host,
         )
         try:
             api_client: Final = build_langfuse_client(

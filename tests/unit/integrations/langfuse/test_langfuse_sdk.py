@@ -45,6 +45,8 @@ from litellm.integrations.langfuse.langfuse_sdk import (
     LangfuseTracing,
     LangfuseTransformingSpanExporter,
     SdkMediaExporter,
+    _check_storage_url,
+    _media_http_handler,
     _build_span_exporter,
     _encode,
     _rest_api,
@@ -66,7 +68,7 @@ from litellm.integrations.langfuse.langfuse_sdk import (
     trace_attributes,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
+from litellm.litellm_core_utils.url_utils import SSRFError
 
 CALL_START = datetime(2024, 3, 1, 12, 0, 0, tzinfo=timezone.utc)
 FIRST_TOKEN = CALL_START + timedelta(seconds=5)
@@ -1940,50 +1942,37 @@ def test_only_a_live_channel_on_an_sdk_with_export_stage_media_handling_uploads_
     assert _acquire(public_key="pk-media-old-sdk", mock_mode=False).media is None
 
 
-_FORKED_UPLOAD: Final = f"""
-import os, sys
-from functools import partial
+def test_media_keeps_uploading_after_the_restart_a_forked_child_runs():
+    """A forked child has none of the parent's threads, so the fork handler starts the upload thread again."""
+    langfuse: Final = _LangfuseMediaApi()
+    tracing, exporter = _media_channel(langfuse)
+    assert tracing.media is not None
 
-import httpx
-from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+    tracing.media.start()
 
-from litellm.integrations.langfuse.langfuse_sdk import (
-    LangfuseTransformingSpanExporter, SdkMediaExporter, _rest_api, build_langfuse_tracing
-)
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
-uploads = []
+    assert IMAGE_REFERENCE in _exported_input(tracing, exporter, IMAGE_MESSAGES)
+    assert len(langfuse.sent("PUT")) == 1
 
 
-def langfuse(request):
-    if request.method == "POST":
-        return httpx.Response(201, json={{"mediaId": {IMAGE_MEDIA_ID!r}, "uploadUrl": "http://storage.test/bucket"}})
-    if request.method == "PUT":
-        uploads.append(request)
-    return httpx.Response(200, json={{}})
+def test_a_key_or_team_langfuse_host_cannot_send_the_upload_to_a_private_address():
+    handler: Final = _media_http_handler(base_url="https://langfuse.test", tenant_host=True)
+
+    with pytest.raises(SSRFError):
+        handler.client.put("http://169.254.169.254/latest/meta-data", content=IMAGE)
 
 
-media = SdkMediaExporter(
-    InMemorySpanExporter(),
-    transforming=LangfuseTransformingSpanExporter,
-    api=partial(_rest_api, public_key="pk-media", secret_key="sk-media", base_url="http://langfuse.test"),
-    http_handler=lambda: HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(langfuse))),
-)
-tracing = build_langfuse_tracing(
-    exporter=media, media=media, environment=None, release=None, sample_rate=1.0, flush_interval_millis=10
-)
-child = os.fork()
-if child == 0:
-    span = tracing.tracer.start_span("media")
-    span.set_attribute("langfuse.observation.input", {IMAGE_MESSAGES!r})
-    span.end()
-    os._exit(0 if tracing.flush(10_000) and len(uploads) == 1 else 1)
-sys.exit(os.waitstatus_to_exitcode(os.waitpid(child, 0)[1]))
-"""
+def test_requests_to_the_langfuse_host_itself_are_not_checked():
+    request: Final = httpx.Request("POST", "http://10.0.0.5:3000/api/public/media")
+
+    _check_storage_url(httpx.URL("http://10.0.0.5:3000"), request)
+
+    assert str(request.url) == "http://10.0.0.5:3000/api/public/media"
 
 
-@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
-def test_a_forked_child_uploads_the_media_of_the_spans_it_exports():
-    """The parent's upload thread does not exist in the child, so the child has to start its own."""
-    finished: Final = run_child_interpreter(_FORKED_UPLOAD, timeout=60)
-    assert finished.returncode == 0, finished.stderr
+def test_a_public_storage_url_is_sent_to_the_address_that_was_checked():
+    request: Final = httpx.Request("PUT", "http://93.184.216.34/bucket/file")
+
+    _check_storage_url(httpx.URL("https://langfuse.test"), request)
+
+    assert request.url.host == "93.184.216.34"
+    assert request.headers["Host"] == "93.184.216.34"

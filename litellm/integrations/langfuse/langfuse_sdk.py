@@ -56,6 +56,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.langfuse.langfuse import PROMPT_CACHE_TTL_ENV, parse_langfuse_debug, whole_number
 from litellm.integrations.langfuse.langfuse_otel_attributes import serialize_langfuse_datetime
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.url_utils import validate_url
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, get_httpx_client
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -924,10 +925,41 @@ if hasattr(os, "register_at_fork"):
     os.register_at_fork(after_in_child=_restart_media_uploads_in_child)
 
 
-def _media_http_handler() -> HTTPHandler:
+def _sdk_media_exporter() -> Callable[..., SpanExporter] | None:
+    if LangfuseTransformingSpanExporter is None:
+        verbose_logger.warning(
+            "langfuse %s has no export-stage media handling, so base64 media stays inline in traces. "
+            "Install langfuse>=4.9 to have it uploaded to Langfuse media storage.",
+            version("langfuse"),
+        )
+    return LangfuseTransformingSpanExporter
+
+
+def _check_storage_url(langfuse: httpx.URL, request: httpx.Request) -> None:
+    """Anything that is not the Langfuse host itself, such as the storage URL it returned or a redirect target,
+    goes through ``validate_url``, and the request is pointed at the address that was checked."""
+    if (request.url.scheme, request.url.host, request.url.port) == (langfuse.scheme, langfuse.host, langfuse.port):
+        return
+    url, host = validate_url(str(request.url))
+    request.url = httpx.URL(url)  # rebind-ok: an httpx request hook edits the request it is given
+    request.headers["Host"] = host  # rebind-ok: an httpx request hook edits the request it is given
+
+
+def _media_http_handler(*, base_url: str, tenant_host: bool) -> HTTPHandler:
     """The channel's own client: litellm closes a pooled one when its cache entry expires, and the SDK's upload
-    thread keeps the client it was built with."""
-    return HTTPHandler(timeout=configured_timeout(), follow_redirects=False)
+    thread keeps the client it was built with.
+
+    A host the operator configured is trusted to name its own storage. One that came with a key's or team's
+    callback settings is not, so every other destination its answers lead to is checked first.
+    """
+    handler: Final = HTTPHandler(timeout=configured_timeout())
+    if tenant_host:
+        hooks: Final = handler.client.event_hooks
+        handler.client.event_hooks = {
+            **hooks,
+            "request": [*hooks["request"], partial(_check_storage_url, httpx.URL(base_url))],
+        }
+    return handler
 
 
 @dataclass(frozen=True, slots=True)
@@ -967,6 +999,7 @@ class _TracingKey:
     flush_at: int
     flush_interval_millis: int
     mock_mode: bool
+    tenant_host: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -989,6 +1022,7 @@ def acquire_langfuse_tracing(
     release: str | None,
     flush_interval: float,
     mock_mode: bool,
+    tenant_host: bool = False,
 ) -> LangfuseTracing:
     """One export channel per credential set, shared by every logger built for it.
 
@@ -1007,6 +1041,7 @@ def acquire_langfuse_tracing(
         flush_at=configured_flush_at(),
         flush_interval_millis=int(flush_interval * 1000),
         mock_mode=mock_mode,
+        tenant_host=tenant_host,
     )
     with _TRACING_LOCK:
         cached: Final = _TRACING.get(key)
@@ -1020,14 +1055,15 @@ def acquire_langfuse_tracing(
             if mock_mode
             else _build_span_exporter(public_key=public_key, secret_key=secret_key, base_url=base_url)
         )
+        transforming: Final = None if mock_mode else _sdk_media_exporter()
         media: Final = (
             None
-            if mock_mode or LangfuseTransformingSpanExporter is None
+            if transforming is None
             else SdkMediaExporter(
                 exporter,
-                transforming=LangfuseTransformingSpanExporter,
+                transforming=transforming,
                 api=partial(_rest_api, public_key=public_key, secret_key=secret_key, base_url=base_url),
-                http_handler=_media_http_handler,
+                http_handler=partial(_media_http_handler, base_url=base_url, tenant_host=tenant_host),
             )
         )
         created: Final = build_langfuse_tracing(
