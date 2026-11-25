@@ -21,6 +21,7 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
     proxy_exception_for,
     relayed_provider_specific_fields,
+    status_typed_proxy_exception,
     with_litellm_call_id,
 )
 from litellm.types.router import RouterErrors
@@ -288,6 +289,21 @@ def test_an_http_exceptions_detail_survives_the_wrapping() -> None:
     )
 
     assert "Invalid budget_duration" in wrapped.message
+
+
+@pytest.mark.parametrize(
+    "wrap",
+    [status_typed_proxy_exception, functools.partial(proxy_exception_for, default_status_code=500)],
+)
+def test_an_http_exceptions_headers_survive_the_wrapping_without_touching_the_raised_ones(
+    wrap: Callable[[HTTPException], ProxyException],
+) -> None:
+    raised: Final = HTTPException(status_code=429, detail="busy, retry later", headers={"Retry-After": "3"})
+
+    answered: Final = with_litellm_call_id(wrap(raised), "call-1")
+
+    assert answered.headers == {"Retry-After": "3", "x-litellm-call-id": "call-1"}, answered.headers
+    assert raised.headers == {"Retry-After": "3"}, raised.headers
 
 
 def test_a_carried_type_survives_the_wrapping() -> None:

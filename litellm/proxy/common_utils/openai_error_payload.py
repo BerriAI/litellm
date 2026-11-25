@@ -270,7 +270,13 @@ def status_typed_proxy_exception(exc: HTTPException) -> ProxyException:
 
 
 def _proxy_exception(exc: Exception, message: str, answered_status: int, error_type: str) -> ProxyException:
-    return ProxyException(message=message, type=error_type, param=openai_error_param(exc), code=answered_status)
+    return ProxyException(
+        message=message,
+        type=error_type,
+        param=openai_error_param(exc),
+        code=answered_status,
+        headers=dict(exc.headers) if isinstance(exc, HTTPException) and exc.headers else None,
+    )
 
 
 def _catch_all_error_type(exc: Exception, status_code: int) -> str:
