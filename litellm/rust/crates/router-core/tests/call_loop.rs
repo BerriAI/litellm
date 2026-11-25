@@ -1948,7 +1948,10 @@ async fn a_context_window_error_without_pre_call_checks_runs_the_callback_filter
     let router = router(config, json!({"num_retries": 2}), host.clone());
     let refused = router.call(Op::from("acompletion"), request()).await;
     assert!(refused.is_err());
-    assert_eq!((host.selected().len(), *host.callback_filter_runs.lock()), (1, 1));
+    assert_eq!(
+        (host.selected().len(), *host.callback_filter_runs.lock()),
+        (1, 1)
+    );
 }
 
 #[rstest]
