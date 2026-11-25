@@ -3,6 +3,8 @@
 
 use std::fmt;
 
+use super::names::{Names, Reading};
+
 /// The prefixes `get_secret` resolves: an environment variable, and an OIDC token the proxy mints.
 const SECRET_REFERENCE_PREFIXES: [&str; 2] = ["os.environ/", OIDC_REFERENCE_PREFIX];
 pub(crate) const OIDC_REFERENCE_PREFIX: &str = "oidc/";
@@ -138,6 +140,27 @@ impl Params {
             Some(held) => *held = value,
             None => self.0.push((key.to_owned(), value)),
         }
+    }
+}
+
+impl Params {
+    /// A request body parsed as JSON, read as far as [`Names::reading`] says a rule looks: a key
+    /// no rule reads is kept as [`CallerValue::Other`], so message content is never copied.
+    pub fn read(body: &serde_json::Map<String, serde_json::Value>, names: &Names) -> Self {
+        body.iter()
+            .map(|(key, value)| {
+                let read = match names.reading(key) {
+                    Reading::Unread => CallerValue::Other,
+                    Reading::Shallow => match value {
+                        serde_json::Value::Null => CallerValue::Null,
+                        serde_json::Value::String(text) => CallerValue::Text(text.clone()),
+                        _ => CallerValue::Other,
+                    },
+                    Reading::Deep => CallerValue::from(value),
+                };
+                (key.clone(), read)
+            })
+            .collect()
     }
 }
 

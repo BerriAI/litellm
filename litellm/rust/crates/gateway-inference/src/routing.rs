@@ -6,7 +6,7 @@
 //! renders it once. A served stream is held until it sends content, so one the provider fails
 //! before that is answered by a retry or a fallback instead.
 
-use std::{future::Future, time::Duration};
+use std::{collections::BTreeSet, future::Future, time::Duration};
 
 use futures_util::{StreamExt, stream};
 use litellm_config::LitellmRole;
@@ -14,6 +14,7 @@ use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{
     AuthzDenial, Rows, StoredKey,
     authz::{self, Layer, ModelAsk},
+    body::Credentials,
 };
 use litellm_inference::Error as InferenceError;
 use litellm_router_core::{
@@ -55,6 +56,13 @@ pub trait Host: Send + Sync + Sized + 'static {
         &self,
         identity: &'a Authenticated<Self::Rows>,
     ) -> impl Iterator<Item = Layer<'a>>;
+
+    /// The stored credentials a request body names, read through the host's auth store, which
+    /// the request body check reads before it decides.
+    fn credentials(
+        &self,
+        names: &BTreeSet<String>,
+    ) -> impl Future<Output = Result<Credentials, litellm_gateway_auth_core::Error>> + Send;
 
     /// The callback hooks of one call `identity` makes, which read and write the call's record.
     fn hooks(&self, identity: &Authenticated<Self::Rows>) -> Self::Hooks;
