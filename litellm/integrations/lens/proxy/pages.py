@@ -8,14 +8,13 @@ and lives in `litellm.integrations.lens.exporter` and `tracing_endpoints`; none 
 import time
 from collections.abc import Awaitable, Callable
 from types import MappingProxyType
-from typing import Annotated, Final
+from typing import Final
 from urllib.parse import quote
 
 import httpx
-from fastapi import APIRouter, Body, HTTPException, Request, Response
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict
+from fastapi import APIRouter, HTTPException, Request, Response
+from pydantic import AnyHttpUrl
 from starlette.responses import JSONResponse, RedirectResponse
-from starlette.types import Message
 
 from litellm.integrations.lens.proxy.adapter import (
     PUBLIC_CONTRACT,
@@ -36,13 +35,10 @@ from litellm.integrations.lens.proxy.buffering import (
 )
 from litellm.integrations.lens.proxy.model_gateway import GatewaySetupRequest, GatewayStatus, SetupFailure, setup
 from litellm.integrations.lens.remote import MAX_RESPONSE_BYTES, LensConnection, bounded_response
-from litellm.proxy._types import LitellmUserRoles, ProxyException, SpecialHeaders, UserAPIKeyAuth
-from litellm.proxy.auth.auth_exception_handler import DB_UNAVAILABLE_FALLBACK_USER_ID
+from litellm.proxy._types import LitellmUserRoles, SpecialHeaders, UserAPIKeyAuth
 from litellm.proxy.auth.authorization_dependencies import LogTeamLookupDependency
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.http_parsing_utils import safe_set_request_parsed_body
-from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 
 router: Final = APIRouter(prefix="/lens", tags=["Lens"], route_class=LensRoute)
 
@@ -50,7 +46,7 @@ _REQUEST_HEADERS: Final = frozenset({"content-type", "x-lens-contract", "idempot
 _RESPONSE_HEADERS: Final = frozenset({"content-type", "content-disposition", "retry-after", "x-lens-contract"})
 _PRIVATE: Final = MappingProxyType({"cache-control": "private, no-store"})
 _UI_MOUNT_HEADER: Final = "x-lens-ui-mount"
-_UI_RESPONSE_HEADERS: Final = frozenset({"content-type", "cache-control", "x-content-type-options"})
+_UI_RESPONSE_HEADERS: Final = frozenset({"content-type", "cache-control", "x-content-type-options", "x-lens-ui-auth"})
 _UI_FRAME: Final = "frame-ancestors 'self'"
 
 
@@ -201,58 +197,9 @@ async def dashboard_session(
         return None
     try:
         auth: Final = await key(request, f"Bearer {session_key}")
-    except (HTTPException, ProxyException) as error:
-        status: Final = error.code if isinstance(error, ProxyException) else error.status_code
-        if str(status) not in ("401", "403"):
-            raise
-        if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(error):
-            raise HTTPException(503, "Unable to verify the dashboard session. Please retry.") from error
-        if str(status) == "403":
-            raise
+    except Exception:  # noqa: BLE001  # any rejected dashboard session means the browser signs in again
         return None
-    if auth.user_id == DB_UNAVAILABLE_FALLBACK_USER_ID:
-        raise HTTPException(503, "Unable to verify the dashboard session. Please retry.")
     return auth if auth.user_id == user_id else None
-
-
-class DashboardSessionResponse(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    token: str
-
-
-@router.post("/session", include_in_schema=False)
-async def restore_dashboard_session(
-    request: Request, response: Response, token: Annotated[str | None, Body(embed=True)] = None
-) -> DashboardSessionResponse:
-    from litellm.proxy.management_endpoints.ui_sso import (  # noqa: PLC0415  # proxy startup cycle
-        set_session_token_cookie,
-    )
-    from litellm.proxy.mcp_server.byok_oauth_endpoints import (  # noqa: PLC0415  # proxy startup cycle
-        session_identity_from_token,
-    )
-
-    if not same_origin(request):
-        raise HTTPException(403, "Lens changes must come from the LiteLLM dashboard")
-    if any(request.headers.get(name) for name in (*_KEY_HEADERS, *_configured_key_header())):
-        raise HTTPException(400, "Send only the dashboard session token")
-
-    async def receive() -> Message:
-        return {"type": "http.request", "body": b"{}", "more_body": False}
-
-    validation_request: Final = Request(dict(request.scope), receive)
-    safe_set_request_parsed_body(validation_request, {})
-    response.headers.update(_PRIVATE)
-    cookie_token: Final = request.cookies.get("token")
-    if cookie_token and await dashboard_session(validation_request) is not None:
-        return DashboardSessionResponse(token=cookie_token)
-    if (
-        token is None
-        or await dashboard_session(validation_request, cookie=lambda _: session_identity_from_token(token)) is None
-    ):
-        raise HTTPException(401, "Sign in to LiteLLM to use Lens")
-    set_session_token_cookie(response, request, token)
-    return DashboardSessionResponse(token=token)
 
 
 async def page_auth(

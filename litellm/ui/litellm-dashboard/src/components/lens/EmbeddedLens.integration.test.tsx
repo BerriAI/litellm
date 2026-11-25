@@ -38,13 +38,12 @@ afterEach(() => {
 const render = (key = accessToken, headerName = "Authorization") =>
   renderWithProviders(<EmbeddedLens accessToken={key} headerName={headerName} />);
 
-it("frames the connected Lens at the tab in the dashboard URL", async () => {
+it("marks the connected frame for bearer auth without adding to the dashboard query", async () => {
   ready();
   render();
-  expect(await screen.findByTitle("Lens")).toHaveAttribute(
-    "src",
-    `${window.location.origin}/lens/ui/?tab=traces&gateway-auth=bearer-v1`,
-  );
+  const iframe = await screen.findByTitle("Lens");
+  expect(iframe).toHaveAttribute("src", `${window.location.origin}/lens/ui/?tab=traces`);
+  expect(iframe).toHaveAttribute("data-lens-auth", "bearer-v1");
 });
 
 it("checks the public capability before service status using the supplied dashboard bearer", async () => {
@@ -263,8 +262,9 @@ it("sends the access key only to the ready iframe and leaves browser credentials
     window.location.origin,
   );
   const frameUrl = new URL(iframe.src);
-  expect(frameUrl.searchParams.get("tab")).toBe("traces");
-  expect(frameUrl.searchParams.getAll("gateway-auth")).toEqual(["bearer-v1"]);
+  expect(frameUrl.search).toBe(window.location.search);
+  expect(frameUrl.searchParams.getAll("gateway-auth")).toEqual(["cookie", "other"]);
+  expect(iframe).toHaveAttribute("data-lens-auth", "bearer-v1");
   expect(iframe.src).not.toContain(bridgeKey);
   expect(network.mock.calls.map(([input, init]) => new Request(input, init).url).join(" ")).not.toContain(bridgeKey);
   expect(cookieWrites).not.toHaveBeenCalled();
@@ -292,6 +292,7 @@ it.each([
   expect(screen.queryByTitle("Lens")).not.toBeInTheDocument();
   const currentFrame = await screen.findByTitle<HTMLIFrameElement>("Lens");
   expect(currentFrame).not.toBe(previousFrame);
+  expect(currentFrame).toHaveAttribute("data-lens-auth", "bearer-v1");
   const currentChild = currentFrame.contentWindow!;
   const postMessage = vi.spyOn(currentChild, "postMessage").mockImplementation(() => {});
   const message = { channel: "litellm-lens:v1", type: "auth-ready" };
@@ -409,7 +410,7 @@ it("uses the deployment prefix once for the UI probe, service check and iframe",
 
   expect(await screen.findByTitle("Lens")).toHaveAttribute(
     "src",
-    `${window.location.origin}/gateway/lens/ui/?tab=traces&gateway-auth=bearer-v1`,
+    `${window.location.origin}/gateway/lens/ui/?tab=traces`,
   );
   expect(
     network.mock.calls.map(([input]) => new URL(input instanceof Request ? input.url : String(input)).pathname),

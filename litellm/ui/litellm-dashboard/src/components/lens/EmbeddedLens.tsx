@@ -65,7 +65,13 @@ function LensFrame({ source, accessToken, headerName }: LensCredentials & { sour
   }, [sendTheme]);
 
   return (
-    <iframe ref={iframe} title={t("lensWorkspace.frameTitle")} src={source} className="h-full w-full flex-1 border-0" />
+    <iframe
+      ref={iframe}
+      title={t("lensWorkspace.frameTitle")}
+      src={source}
+      data-lens-auth={LENS_UI_AUTH}
+      className="h-full w-full flex-1 border-0"
+    />
   );
 }
 
@@ -82,7 +88,6 @@ function LensConnection({ accessToken, headerName }: LensCredentials) {
   const [source] = useState(() => {
     const url = new URL(gatewayUrl("/lens/ui/"), window.location.href);
     url.search = window.location.search;
-    url.searchParams.set("gateway-auth", LENS_UI_AUTH);
     return url.href;
   });
   const retry = () => {
