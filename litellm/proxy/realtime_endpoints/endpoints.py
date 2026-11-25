@@ -127,48 +127,52 @@ def _append_model_candidate(candidates: list[str], model: object) -> None:
         candidates.append(model)
 
 
-def _transcription_model_candidates_from_session(session: dict) -> list[str]:
+def _dict_or_none(value: object) -> Mapping[str, object] | None:
+    return value if isinstance(value, dict) else None
+
+
+def _transcription_model_candidates_from_session(session: Mapping[str, object]) -> list[str]:
     candidates: Final[list[str]] = []
 
-    audio: Final = session.get("audio")
-    if isinstance(audio, dict):
-        audio_input: Final = audio.get("input")
-        if isinstance(audio_input, dict):
-            nested_transcription: Final = audio_input.get("transcription")
-            if isinstance(nested_transcription, dict):
+    audio: Final = _dict_or_none(session.get("audio"))
+    if audio is not None:
+        audio_input: Final = _dict_or_none(audio.get("input"))
+        if audio_input is not None:
+            nested_transcription: Final = _dict_or_none(audio_input.get("transcription"))
+            if nested_transcription is not None:
                 _append_model_candidate(
                     candidates,
                     nested_transcription.get("model"),
                 )
 
-    flat_transcription: Final = session.get("input_audio_transcription")
-    if isinstance(flat_transcription, dict):
+    flat_transcription: Final = _dict_or_none(session.get("input_audio_transcription"))
+    if flat_transcription is not None:
         _append_model_candidate(candidates, flat_transcription.get("model"))
 
     return candidates
 
 
 def _set_transcription_model_on_session(
-    session: dict,
+    session: dict[str, object],
     model: str,
     create_if_missing: bool = False,
 ) -> None:
     updated_existing_config = False
 
-    flat_transcription: Final = session.get("input_audio_transcription")
-    if isinstance(flat_transcription, dict):
+    flat_transcription: Final = _dict_or_none(session.get("input_audio_transcription"))
+    if flat_transcription is not None:
         session["input_audio_transcription"] = {
             **flat_transcription,
             "model": model,
         }
         updated_existing_config = True
 
-    audio = session.get("audio")
-    if isinstance(audio, dict):
-        audio_input = audio.get("input")
-        if isinstance(audio_input, dict):
-            nested_transcription: Final = audio_input.get("transcription")
-            if isinstance(nested_transcription, dict):
+    audio = _dict_or_none(session.get("audio"))
+    if audio is not None:
+        audio_input = _dict_or_none(audio.get("input"))
+        if audio_input is not None:
+            nested_transcription: Final = _dict_or_none(audio_input.get("transcription"))
+            if nested_transcription is not None:
                 session["audio"] = {
                     **audio,
                     "input": {
@@ -184,9 +188,9 @@ def _set_transcription_model_on_session(
     if updated_existing_config or not create_if_missing:
         return
 
-    audio = audio if isinstance(audio, dict) else {}
-    audio_input = audio.get("input")
-    audio_input = audio_input if isinstance(audio_input, dict) else {}
+    audio = audio if audio is not None else dict[str, object]()
+    audio_input = _dict_or_none(audio.get("input"))
+    audio_input = audio_input if audio_input is not None else dict[str, object]()
     session["audio"] = {
         **audio,
         "input": {
@@ -209,9 +213,9 @@ def nested_transcription_upstream_model(model: str, team_id: str | None, llm_rou
 
 
 async def _authorize_and_bind_nested_transcription_models(
-    session_data: dict,  # mutable-ok: session payload is rewritten in place for provider serialization
+    session_data: dict[str, object],  # mutable-ok: session payload is rewritten in place for provider serialization
     user_api_key_dict: UserAPIKeyAuth,
-    llm_model_list: list | None,  # mutable-ok: inherited auth helper accepts the proxy model list
+    llm_model_list: list[object] | None,  # mutable-ok: inherited auth helper accepts the proxy model list
     llm_router: "Router | None",
 ) -> None:
     nested_models: Final = tuple(_transcription_model_candidates_from_session(session_data))
@@ -232,15 +236,15 @@ async def _authorize_and_bind_nested_transcription_models(
 async def _prepare_client_secret_session(
     req: RealtimeClientSecretRequest,
     user_api_key_dict: UserAPIKeyAuth,
-    llm_model_list: list | None,
+    llm_model_list: list[object] | None,
     llm_router: "Router | None",
     forced_session_type: str | None = None,
-) -> tuple[str, dict | None, str]:
+) -> tuple[str, dict[str, object] | None, str]:
     requested_session_type: Final = req.session.type if req.session else None
     if forced_session_type is None and requested_session_type == "translation":
         raise HTTPException(status_code=400, detail="Translation sessions require the translations endpoint")
     session_type: Final = forced_session_type or _coerce_realtime_session_type(requested_session_type)
-    session_data: Final[dict | None] = (
+    session_data: Final[dict[str, object] | None] = (
         req.session.model_dump(exclude_unset=True) if req.session else ({} if session_type == "translation" else None)
     )
     if session_data is not None:
@@ -516,7 +520,7 @@ async def create_realtime_client_secret(
         version,
     )
 
-    data: dict = {}
+    data: dict[str, object] = {}
     try:
         body: Final = await read_request_body(request=request)
         with _invalid_request_body_answers_400():
@@ -765,9 +769,9 @@ async def proxy_realtime_calls(
     raw_deployment_id: Final = None if decoded_payload is None else decoded_payload.get("deployment_id")
     token_deployment_id: Final = raw_deployment_id if isinstance(raw_deployment_id, str) else None
 
-    data: dict = {}
+    data: dict[str, object] = {}
     try:
-        session_config: Final = {
+        session_config: Final[dict[str, object]] = {
             "type": session_type,
         }
         if session_type == "transcription":
@@ -904,7 +908,7 @@ async def create_realtime_transcription_session(
         version,
     )
 
-    data: dict = {}
+    data: dict[str, object] = {}
     try:
         body: Final = await read_request_body(request=request)
         with _invalid_request_body_answers_400():

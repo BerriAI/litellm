@@ -42,7 +42,10 @@ def validate_budget_duration(budget_duration: str | None, status_code: int = 400
         raise HTTPException(status_code=status_code, detail={"error": error})
 
 
+import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import SEMANTIC_CACHE_PARAMS_KEY
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.models.budget import active_rollover_credit
 from litellm.proxy._types import (  # re-exported
     CommonProxyErrors,
@@ -67,6 +70,8 @@ from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
     premium_user_check,
 )
 from litellm.repositories.team_repository import TeamRepository
+from litellm.types.caching import LiteLLMCacheType
+from litellm.types.semantic_cache import SemanticCacheParams
 from litellm.types.utils import BudgetConfig
 
 if TYPE_CHECKING:
@@ -81,6 +86,41 @@ _is_user_team_admin: Final = is_team_admin
 ROLLOVER_BUDGET_FIELDS: Final = frozenset({"max_budget", "budget_duration", "rollover_max_budget"})
 _ROLLOVER_AMOUNT: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
 _ROLLOVER_DURATION: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+
+
+def semantic_cache_metadata_changed(requested: object, stored: object) -> bool:
+    return _cache_params_json(requested) != _cache_params_json(stored)
+
+
+def _cache_params_json(metadata: object) -> str:
+    fields: Final = as_str_mapping(metadata)
+    return json.dumps(
+        {SEMANTIC_CACHE_PARAMS_KEY: fields[SEMANTIC_CACHE_PARAMS_KEY]}
+        if fields is not None and SEMANTIC_CACHE_PARAMS_KEY in fields
+        else {},
+        sort_keys=True,
+    )
+
+
+def validate_semantic_cache_metadata(metadata: object, stored: object = None) -> None:
+    fields: Final = as_str_mapping(metadata)
+    raw: Final = fields.get(SEMANTIC_CACHE_PARAMS_KEY) if fields is not None else None
+    if raw is None:
+        return
+    try:
+        params: Final = SemanticCacheParams.model_validate(raw)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail={"error": "Invalid metadata.cache_params."}) from exc
+    cache: Final = litellm.cache
+    if params.ttl is None or cache is None or cache.type != LiteLLMCacheType.QDRANT_SEMANTIC:
+        return
+    stored_fields: Final = as_str_mapping(stored)
+    stored_params: Final = as_str_mapping(stored_fields.get(SEMANTIC_CACHE_PARAMS_KEY) if stored_fields else None)
+    stored_ttl: Final = stored_params.get("ttl") if stored_params is not None else None
+    if type(stored_ttl) is not int or stored_ttl != params.ttl:
+        raise HTTPException(
+            status_code=400, detail={"error": "Qdrant semantic cache does not support metadata.cache_params.ttl."}
+        )
 
 
 def validate_rollover_budget_patch(
@@ -181,7 +221,7 @@ def require_caller_user_id_for_non_admin(
     return user_api_key_dict.user_id
 
 
-_ROUTE_LIST: Final = TypeAdapter(list[str] | None)
+_ROUTE_LIST: Final[TypeAdapter[list[str] | None]] = TypeAdapter(list[str] | None)
 
 
 def _passthrough_routes_permission_error(field: str, entity: str) -> HTTPException:
@@ -595,6 +635,8 @@ _TEAM_MEMBER_BUDGET_LIMIT_FIELDS: Final = (
 )
 
 
+_TEMP_BUDGET_FIELDS: Final = frozenset({"temp_budget_increase", "temp_budget_expiry"})
+_BUDGET_CAP_FIELDS: Final = frozenset({"max_budget", "rollover_max_budget"})
 _BUDGET_COLUMNS: Final = TypeAdapter(dict[str, object])
 
 MEMBER_BUDGET_PATCH_FIELDS: Final = MappingProxyType(
@@ -634,6 +676,16 @@ def member_budget_patch(source: BaseModel) -> Mapping[str, object]:
         for request_field, column in MEMBER_BUDGET_PATCH_FIELDS.items()
         if request_field in provided
     }
+
+
+def _follows_live_default_cap(default_budget: Mapping[str, object]) -> bool:
+    cap: Final = default_budget.get("max_budget")
+    return (
+        isinstance(cap, (int, float))
+        and not isinstance(cap, bool)
+        and cap > 0
+        and default_budget.get("rollover_max_budget") is None
+    )
 
 
 def _is_set_budget_value(value: object) -> bool:
@@ -749,6 +801,12 @@ async def upsert_budget_and_membership(
     if is_shared_default and all(source.get(field) == value for field, value in effective_patch.items()):
         return
 
+    inherits_team_default_cap: Final = (
+        team_default_budget_id is not None
+        and existing_budget_id == team_default_budget_id
+        and frozenset(effective_patch) <= _TEMP_BUDGET_FIELDS
+        and _follows_live_default_cap(source)
+    )
     create_data: Final[dict[str, object]] = {  # mutable-ok: Prisma create payloads are dict-shaped
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
@@ -763,6 +821,7 @@ async def upsert_budget_and_membership(
                     or source.get("budget_id") != team_default_budget_id
                 )
                 and _is_set_budget_value(source.get(f))
+                and not (inherits_team_default_cap and f in _BUDGET_CAP_FIELDS)
             }
         ),
         **write_data,

@@ -76,7 +76,7 @@ class FireworksAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         headers: Mapping[str, str],
         model: str,
         litellm_params: GenericLiteLLMParams | None,
-    ) -> dict:  # mutable-ok: overrides the base class signature
+    ) -> dict[str, str]:  # mutable-ok: overrides the base class signature
         params: Final = litellm_params or GenericLiteLLMParams()
         api_key: Final = resolve_fireworks_api_key(params.api_key)
         if api_key is None:

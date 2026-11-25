@@ -1479,6 +1479,29 @@ impl Engine {
         ))
     }
 
+    pub async fn settle_io_tokens(
+        &self,
+        descriptors: &[Descriptor],
+        input_tokens: i64,
+        output_tokens: i64,
+        ctx: Ctx<'_>,
+    ) {
+        let unreserved = BTreeSet::new();
+        let operations: Vec<Increment> =
+            [(PROJECT_ITPM, input_tokens), (PROJECT_OTPM, output_tokens)]
+                .into_iter()
+                .flat_map(|(key, amount)| {
+                    let targets: Vec<(String, String)> = descriptors
+                        .iter()
+                        .filter(|descriptor| descriptor.key == key)
+                        .map(|descriptor| (descriptor.key.clone(), descriptor.value.clone()))
+                        .collect();
+                    self.reservation_ops(&targets, &unreserved, amount, 0)
+                })
+                .collect();
+        self.increment_with_ttl_preservation(&operations, ctx).await;
+    }
+
     pub async fn refund_reserved(
         &self,
         scopes: &[(String, String)],
@@ -1742,7 +1765,9 @@ impl Engine {
                 };
                 self.set_local(
                     Entry::Counter(counter.clone()),
-                    Local::Number(Number::Float(current + operation.increment.amount.as_f64())),
+                    Local::Number(Number::Float(
+                        (current + operation.increment.amount.as_f64()).max(0.0),
+                    )),
                     operation.increment.ttl,
                 );
             }

@@ -72,7 +72,7 @@ class BraintrustLogger(CustomLogger):
 
         in the environment
         """
-        missing_keys: Final = []
+        missing_keys: Final[list[str]] = []
         if api_key is None and os.getenv("BRAINTRUST_API_KEY", None) is None:
             missing_keys.append("BRAINTRUST_API_KEY")
 
@@ -132,7 +132,7 @@ class BraintrustLogger(CustomLogger):
 
         self.default_project_id = _project_id(project)
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
         try:
             litellm_call_id: Final = kwargs.get("litellm_call_id")
@@ -168,7 +168,7 @@ class BraintrustLogger(CustomLogger):
                     self.create_sync_default_project_and_experiment()
                 project_id = self.default_project_id
 
-            tags: Final = []
+            tags: Final[list[str]] = []
 
             if isinstance(dynamic_metadata, dict):
                 for key, value in dynamic_metadata.items():
@@ -187,7 +187,7 @@ class BraintrustLogger(CustomLogger):
 
             cost: Final = kwargs.get("response_cost", None)
 
-            metrics: dict | None = None
+            metrics: dict[str, object] | None = None
             usage_obj: Final = getattr(response_obj, "usage", None)
             if usage_obj and isinstance(usage_obj, litellm.Usage):
                 litellm.utils.get_logging_id(start_time, response_obj)
@@ -258,7 +258,7 @@ class BraintrustLogger(CustomLogger):
         except Exception as e:
             raise e  # don't use verbose_logger.exception, if exception is raised
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
         verbose_logger.debug("REACHES BRAINTRUST SUCCESS")
         try:
             litellm_call_id: Final = kwargs.get("litellm_call_id")
@@ -293,7 +293,7 @@ class BraintrustLogger(CustomLogger):
                     await self.create_default_project_and_experiment()
                 project_id = self.default_project_id
 
-            tags: Final = []
+            tags: Final[list[str]] = []
 
             if isinstance(dynamic_metadata, dict):
                 for key, value in dynamic_metadata.items():
@@ -312,7 +312,7 @@ class BraintrustLogger(CustomLogger):
 
             cost: Final = kwargs.get("response_cost", None)
 
-            metrics: dict | None = None
+            metrics: dict[str, object] | None = None
             usage_obj: Final = getattr(response_obj, "usage", None)
             if usage_obj and isinstance(usage_obj, litellm.Usage):
                 litellm.utils.get_logging_id(start_time, response_obj)
@@ -383,5 +383,5 @@ class BraintrustLogger(CustomLogger):
         except Exception as e:
             raise e  # don't use verbose_logger.exception, if exception is raised
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         return super().log_failure_event(kwargs, response_obj, start_time, end_time)

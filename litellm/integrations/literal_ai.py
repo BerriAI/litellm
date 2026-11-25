@@ -2,7 +2,8 @@
 # This file contains the LiteralAILogger class which is used to log steps to the LiteralAI observability platform.
 import asyncio
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from datetime import datetime
 from typing import Final
 
 import httpx
@@ -21,9 +22,9 @@ from litellm.types.utils import StandardLoggingPayload
 class LiteralAILogger(CustomBatchLogger):
     def __init__(
         self,
-        literalai_api_key=None,
-        literalai_api_url="https://cloud.getliteral.ai",
-        env=None,
+        literalai_api_key: str | None = None,
+        literalai_api_url: str = "https://cloud.getliteral.ai",
+        env: str | None = None,
         **kwargs,
     ):
         self.literalai_api_url = os.getenv("LITERAL_API_URL") or literalai_api_url
@@ -44,7 +45,7 @@ class LiteralAILogger(CustomBatchLogger):
             batch_size=int(batch_size) if batch_size else None,
         )
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(self, kwargs: object, response_obj: object, start_time: datetime, end_time: datetime):
         try:
             verbose_logger.debug(
                 "Literal AI Layer Logging - kwargs: %s, response_obj: %s",
@@ -63,7 +64,7 @@ class LiteralAILogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Literal AI Layer Error - error logging success event.")
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: datetime, end_time: datetime):
         verbose_logger.info("Literal AI Failure Event Logging!")
         try:
             data: Final = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
@@ -102,7 +103,9 @@ class LiteralAILogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Literal AI Layer Error")
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: object, response_obj: object, start_time: datetime, end_time: datetime
+    ):
         try:
             verbose_logger.debug(
                 "Literal AI Async Layer Logging - kwargs: %s, response_obj: %s",
@@ -121,7 +124,9 @@ class LiteralAILogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Literal AI Layer Error - error logging async success event.")
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: object, response_obj: object, start_time: datetime, end_time: datetime
+    ):
         verbose_logger.info("Literal AI Failure Event Logging!")
         try:
             data: Final = self._prepare_log_data(kwargs, response_obj, start_time, end_time)
@@ -162,7 +167,9 @@ class LiteralAILogger(CustomBatchLogger):
         except Exception:
             verbose_logger.exception("Literal AI Layer Error")
 
-    def _prepare_log_data(self, kwargs, response_obj, start_time, end_time) -> dict:
+    def _prepare_log_data(
+        self, kwargs, response_obj: object, start_time: datetime, end_time: datetime
+    ) -> Mapping[str, object]:
         logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
         if logging_payload is None:
@@ -191,7 +198,7 @@ class LiteralAILogger(CustomBatchLogger):
 
         tools: Final = settings.pop("tools", None)
 
-        step: Final = {
+        step: Final[dict[str, object]] = {
             "id": metadata.get("step_id", str(uuid.uuid4())),
             "error": logging_payload["error_str"],
             "name": kwargs.get("model", ""),
@@ -222,7 +229,7 @@ class LiteralAILogger(CustomBatchLogger):
         }
         return step
 
-    def _steps_query_variables_builder(self, steps):
+    def _steps_query_variables_builder(self, steps: Sequence[Mapping[str, object]]) -> str:
         generated = ""
         for id in range(len(steps)):
             generated += f"""$id_{id}: String!
@@ -244,7 +251,7 @@ class LiteralAILogger(CustomBatchLogger):
             """
         return generated
 
-    def _steps_ingest_steps_builder(self, steps):
+    def _steps_ingest_steps_builder(self, steps: Sequence[Mapping[str, object]]) -> str:
         generated = ""
         for id in range(len(steps)):
             generated += f"""
@@ -272,16 +279,16 @@ class LiteralAILogger(CustomBatchLogger):
     """
         return generated
 
-    def _steps_query_builder(self, steps):
+    def _steps_query_builder(self, steps: Sequence[Mapping[str, object]]) -> str:
         return f"""
         mutation AddStep({self._steps_query_variables_builder(steps)}) {{
         {self._steps_ingest_steps_builder(steps)}
         }}
         """
 
-    def _steps_variables_builder(self, steps):
-        def serialize_step(event, id):
-            result: Final = {}
+    def _steps_variables_builder(self, steps: Sequence[Mapping[str, object]]) -> dict[str, object]:
+        def serialize_step(event: Mapping[str, object], id: int) -> Mapping[str, object]:
+            result: Final[dict[str, object]] = {}
 
             for key, value in event.items():
                 # Only keep the keys that are not None to avoid overriding existing values
@@ -290,7 +297,7 @@ class LiteralAILogger(CustomBatchLogger):
 
             return result
 
-        variables: Final = {}
+        variables: Final[dict[str, object]] = {}
         for i in range(len(steps)):
             step = steps[i]
             variables.update(serialize_step(step, i))

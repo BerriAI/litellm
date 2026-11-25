@@ -1,11 +1,19 @@
+from collections.abc import Mapping
 from typing import Final
+from unittest.mock import Mock
 
 import httpx
 import pytest
 import respx
 
 import litellm
-from litellm.llms.openrouter.common_utils import OpenRouterModelInfo
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.openrouter.common_utils import (
+    OpenRouterModelInfo,
+    aget_openrouter_catalog_limits,
+    openrouter_catalog_limits_for_model,
+)
 
 DEFAULT_BASE: Final = "https://openrouter.ai/api/v1"
 KEY_SOURCES: Final = ("api_key", "litellm.api_key", "litellm.openrouter_key", "OPENROUTER_API_KEY", "OR_API_KEY")
@@ -19,6 +27,25 @@ def _no_ambient_openrouter_settings(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "api_key", None)
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.setattr(litellm, "openrouter_key", None)
+
+
+@pytest.mark.parametrize(
+    ("catalog_api_base", "sent_key"),
+    (
+        (DEFAULT_BASE, "sk-or-proxy-wide"),
+        ("https://eu.openrouter.ai/api/v1", "sk-or-proxy-wide"),
+        ("https://openrouter.ai.attacker.test/api/v1", None),
+        ("https://notopenrouter.ai/api/v1", None),
+        ("http://127.0.0.1:8080/api/v1", None),
+    ),
+)
+def test_only_an_openrouter_host_gets_the_proxy_wide_key_for_the_catalog(
+    monkeypatch: pytest.MonkeyPatch, catalog_api_base: str, sent_key: str | None
+):
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-proxy-wide")
+
+    assert OpenRouterModelInfo.get_catalog_api_key(None, catalog_api_base) == sent_key
+    assert OpenRouterModelInfo.get_catalog_api_key("sk-or-own", catalog_api_base) == "sk-or-own"
 
 
 def _catalog(*model_ids: str) -> httpx.Response:
@@ -157,3 +184,106 @@ def test_validate_environment_without_any_key_sends_no_authorization():
 )
 def test_get_base_model_drops_only_the_openrouter_prefix(model: str, base_model: str):
     assert OpenRouterModelInfo.get_base_model(model) == base_model
+
+
+@respx.mock
+def test_get_models_keeps_listing_when_a_catalog_row_carries_unusable_limits():
+    respx.get(f"{DEFAULT_BASE}/models/user").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": "vendor/junk-limits", "context_length": "many", "top_provider": "none"},
+                    {"id": "vendor/junk-cap", "top_provider": {"max_completion_tokens": "many"}},
+                    {"id": "vendor/no-limits"},
+                ]
+            },
+        )
+    )
+
+    assert OpenRouterModelInfo().get_models(api_key="sk-or-test") == [
+        "openrouter/vendor/junk-limits",
+        "openrouter/vendor/junk-cap",
+        "openrouter/vendor/no-limits",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("row", "expected"),
+    (
+        (
+            {"context_length": 4096, "top_provider": {"max_completion_tokens": 1024}},
+            {"max_tokens": 1024, "max_input_tokens": 4096, "max_output_tokens": 1024},
+        ),
+        (
+            {"context_length": 4096, "top_provider": {"max_completion_tokens": None}},
+            {"max_tokens": 4096, "max_input_tokens": 4096},
+        ),
+        ({"context_length": 4096}, {"max_tokens": 4096, "max_input_tokens": 4096}),
+        (
+            {"context_length": 4096, "top_provider": {"context_length": 8192, "max_completion_tokens": 1024}},
+            {"max_tokens": 1024, "max_input_tokens": 4096, "max_output_tokens": 1024},
+        ),
+        ({"top_provider": {"max_completion_tokens": 1024}}, {"max_tokens": 1024, "max_output_tokens": 1024}),
+        ({"context_length": 0, "top_provider": {"max_completion_tokens": True}}, {}),
+        ({"context_length": "many", "top_provider": "none"}, {}),
+    ),
+)
+async def test_catalog_row_becomes_the_published_limits_and_never_invents_an_output_cap(
+    row: Mapping[str, object], expected: Mapping[str, int]
+) -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == f"{DEFAULT_BASE}/models/user"
+        assert request.headers["authorization"] == "Bearer sk-or-test"
+        return httpx.Response(200, json={"data": [{"id": "vendor/model", **row}]})
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler.client = client
+        catalog: Final = await aget_openrouter_catalog_limits(
+            api_base=DEFAULT_BASE,
+            headers={"Authorization": "Bearer sk-or-test"},
+            client=handler,
+            cache=InMemoryCache(),
+        )
+    assert catalog == {"vendor/model": expected}
+
+
+async def test_a_failed_catalog_fetch_is_cached_so_the_next_refresh_does_not_call_again() -> None:
+    responder: Final = Mock(return_value=httpx.Response(503))
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(responder)) as client:
+        handler.client = client
+        cache: Final = InMemoryCache()
+        for _ in range(2):
+            assert (
+                await aget_openrouter_catalog_limits(api_base=DEFAULT_BASE, headers={}, client=handler, cache=cache)
+                is None
+            )
+    assert responder.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    (
+        ("openrouter/vendor/model", {"max_input_tokens": 1}),
+        ("vendor/model", {"max_input_tokens": 1}),
+        ("openrouter/vendor/model:nitro", {"max_input_tokens": 1}),
+        ("openrouter/vendor/model:free", {"max_input_tokens": 2}),
+        ("openrouter/auto", {"max_input_tokens": 3}),
+        ("openrouter/vendor/unlisted", {}),
+        ("openrouter/vendor/unlisted:nitro", {}),
+    ),
+)
+def test_catalog_lookup_finds_a_model_by_its_id_then_by_the_id_without_its_variant(
+    model: str, expected: Mapping[str, int]
+) -> None:
+    catalog: Final = {
+        "vendor/model": {"max_input_tokens": 1},
+        "vendor/model:free": {"max_input_tokens": 2},
+        "openrouter/auto": {"max_input_tokens": 3},
+    }
+
+    assert openrouter_catalog_limits_for_model(catalog, model) == expected

@@ -26,6 +26,7 @@ const responseFor = (url: string): object | object[] => {
   if (url.includes("/policies/list")) return { policies: [] };
   if (url.includes("/organization/list")) return { organizations: [] };
   if (url.includes("/team/new")) return { team_id: "new-team-1" };
+  if (url.includes("/lens/service")) return { configured: true };
   if (url.includes("/default")) return { values: {} };
   if (url.includes("/litellm-ui-config")) return { server_root_path: "", proxy_base_url: "" };
   return {};
@@ -36,7 +37,9 @@ beforeEach(() => {
   sessionCookie();
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => Response.json(responseFor(String(input)))),
+    vi.fn(async (input: RequestInfo | URL) =>
+      Response.json(responseFor(input instanceof Request ? input.url : String(input))),
+    ),
   );
 });
 
@@ -47,6 +50,38 @@ afterEach(() => {
 });
 
 describe("Teams creation integration", () => {
+  it("defaults Lens tracing on without stamping a team override", async () => {
+    renderWithProviders(<Teams accessToken="sk-session-test" userID="test-admin" userRole="Admin" premiumUser />);
+    fireEvent.click(screen.getAllByRole("button", { name: /create team/i })[0]);
+    const toggle = screen.getByRole("switch", { name: "Lens" });
+    await waitFor(() => expect(toggle).not.toHaveAttribute("aria-disabled", "true"));
+    expect(toggle).toBeChecked();
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Tracing team" } });
+    fireEvent.click(screen.getAllByRole("button", { name: /create team/i }).at(-1)!);
+    await waitFor(() =>
+      expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/team/new"))).toBe(true),
+    );
+    const request = vi.mocked(fetch).mock.calls.find(([url]) => String(url).includes("/team/new"));
+    const payload = JSON.parse(String(request?.[1]?.body)) as { metadata?: Record<string, unknown> };
+    expect(payload.metadata).toBeUndefined();
+  });
+
+  it("sends an explicit Lens tracing opt-out in team metadata", async () => {
+    renderWithProviders(<Teams accessToken="sk-session-test" userID="test-admin" userRole="Admin" premiumUser />);
+    fireEvent.click(screen.getAllByRole("button", { name: /create team/i })[0]);
+    const toggle = screen.getByRole("switch", { name: "Lens" });
+    await waitFor(() => expect(toggle).not.toHaveAttribute("aria-disabled", "true"));
+    fireEvent.click(toggle);
+    fireEvent.change(screen.getByLabelText(/team name/i), { target: { value: "Tracing off team" } });
+    fireEvent.click(screen.getAllByRole("button", { name: /create team/i }).at(-1)!);
+    await waitFor(() =>
+      expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes("/team/new"))).toBe(true),
+    );
+    const request = vi.mocked(fetch).mock.calls.find(([url]) => String(url).includes("/team/new"));
+    const payload = JSON.parse(String(request?.[1]?.body)) as { metadata: Record<string, unknown> };
+    expect(payload.metadata.lens_enabled).toBe(false);
+  });
+
   it("sends the prompt storage restriction in team metadata", async () => {
     renderWithProviders(<Teams accessToken="sk-session-test" userID="test-admin" userRole="Admin" premiumUser />);
     fireEvent.click(screen.getAllByRole("button", { name: /create team/i })[0]);

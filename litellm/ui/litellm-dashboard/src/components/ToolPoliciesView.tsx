@@ -1,6 +1,5 @@
 "use client";
 
-import { Page } from "@/components/shared/Page";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import { ShieldCheck } from "lucide-react";
 
@@ -31,25 +30,19 @@ export default function ToolPoliciesView({ accessToken }: ToolPoliciesViewProps)
 
   if (!canViewToolPolicies) {
     return (
-      <Page>
-        <PageHeader>
-          <PageHeaderTitle>
-            <ShieldCheck />
-            {t("toolPolicies.view.adminOnly.title")}
-          </PageHeaderTitle>
-          <PageHeaderDescription>{t("toolPolicies.view.adminOnly.message")}</PageHeaderDescription>
-        </PageHeader>
-      </Page>
+      <PageHeader>
+        <PageHeaderTitle>
+          <ShieldCheck />
+          {t("toolPolicies.view.adminOnly.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("toolPolicies.view.adminOnly.message")}</PageHeaderDescription>
+      </PageHeader>
     );
   }
 
-  return (
-    <Page>
-      {view.type === "detail" ? (
-        <ToolDetail toolName={view.toolName} onBack={handleBack} accessToken={accessToken} />
-      ) : (
-        <ToolPoliciesPanel accessToken={accessToken} onSelectTool={handleSelectTool} />
-      )}
-    </Page>
+  return view.type === "detail" ? (
+    <ToolDetail toolName={view.toolName} onBack={handleBack} accessToken={accessToken} />
+  ) : (
+    <ToolPoliciesPanel accessToken={accessToken} onSelectTool={handleSelectTool} />
   );
 }

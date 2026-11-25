@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -400,7 +400,7 @@ async def vantage_dry_run_export(
         data: Final = await database.get_usage_data(limit=request.limit)
         normalized: Final = transformer.transform(data)
 
-        def _to_json_safe_dicts(frame: pl.DataFrame) -> list:
+        def _to_json_safe_dicts(frame: pl.DataFrame) -> Sequence[Mapping[str, object]]:
             """Cast Decimal columns to Float64 so .to_dicts() produces
             JSON-serializable float values instead of decimal.Decimal."""
             decimal_cols = [col for col, dtype in zip(frame.columns, frame.dtypes) if isinstance(dtype, pl.Decimal)]

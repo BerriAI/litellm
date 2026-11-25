@@ -11,9 +11,9 @@ use serde_json::{Map, Value};
 use tracing::warn;
 
 use crate::{
-    Call, RouterStateSnapshot,
+    Call, FailureReport, RouterStateSnapshot,
     config::Op,
-    error::{AttemptError, Error, FailureKind},
+    error::{AttemptError, Error, FailureKind, RaisedBy},
     fallback::{FallbackKeys, FallbackTarget, Fallbacks},
     health::{GroupShape, should_retry_status, team_model_has_alternatives},
     host::{
@@ -27,7 +27,7 @@ use crate::{
     prerouting::{PreRoute, PreRouted},
     registry::{ResolveKind, ResolveScope},
     retry::{RetryContext, RetryState, RetryStep, resolve_retry_policy, retry_step},
-    select::{Candidates, SelectInputs},
+    select::{Candidates, SelectInputs, skips_batch_only},
 };
 
 mod stream;
@@ -90,6 +90,7 @@ struct FallbackHop {
 struct FallbackChain {
     attempted: Vec<Tried>,
     scopes: u32,
+    provider_refused_window: bool,
 }
 
 /// What one level of the chain serves: a group, or the same group at a later `order`, with the
@@ -106,6 +107,7 @@ struct Target {
     failover_excluded: Arc<[String]>,
     /// The group a pre-routing hook selected for the level's failed attempt, if it rewrote it.
     routed: Option<String>,
+    last_resort: bool,
 }
 
 /// One level of the fallback chain as every step of it sees it: the call it belongs to, the
@@ -208,6 +210,55 @@ fn unattempted_chain(
         })
 }
 
+fn refused_by_provider(error: &Error) -> bool {
+    error
+        .attempt()
+        .is_some_and(|failure| failure.is_a("ContextWindowExceededError"))
+}
+
+fn context_window_fallback_resolves(level: &Level<'_>) -> bool {
+    let Level {
+        snapshot,
+        request,
+        target,
+        at,
+        chain,
+        ..
+    } = level;
+    let max_fallbacks = request
+        .max_fallbacks
+        .unwrap_or(snapshot.settings.max_fallbacks);
+    if request.disable_fallbacks || at.depth >= max_fallbacks {
+        return false;
+    }
+    let lists = Lists::of(snapshot, request);
+    let failed = target.routed.as_deref().unwrap_or(&target.group);
+    let mut lookup: Vec<&str> = Vec::new();
+    for group in target
+        .routed
+        .as_deref()
+        .into_iter()
+        .chain([target.group.as_str(), request.model.as_str()])
+    {
+        if !lookup.contains(&group) {
+            lookup.push(group);
+        }
+    }
+    lists
+        .context_window
+        .and_then(|list| list.lookup_groups(&lookup, lists.keys))
+        .is_some_and(|targets| {
+            targets
+                .iter()
+                .map(FallbackTarget::identity)
+                .any(|identity| match identity {
+                    FallbackTarget::Name(ref name) if name == failed => false,
+                    FallbackTarget::Params(_) => true,
+                    identity => !chain.attempted.contains(&Tried::Target(identity)),
+                })
+        })
+}
+
 /// The deployments `_core_get_model_list(model_name=group, team_id=team_id)` lists: the name's own
 /// (a team's public name among them), an alias's target's, a routing group's members, and only
 /// when none of those serve it, the wildcard routes (`_get_wildcard_deployments`), the proxy-wide
@@ -305,6 +356,10 @@ fn ends_call(error: &Error) -> bool {
         || retried_failure(error).is_some_and(|failure| failure.queue_rejected())
 }
 
+fn may_have_created(error: &Error) -> bool {
+    retried_failure(error).is_some_and(|failure| failure.create_may_exist)
+}
+
 impl<H: RouterHost> Call<'_, H> {
     pub(crate) async fn call(
         &self,
@@ -320,6 +375,7 @@ impl<H: RouterHost> Call<'_, H> {
             excluded: Arc::from([]),
             failover_excluded: Arc::from([]),
             routed: None,
+            last_resort: false,
         };
         let level = Level {
             snapshot: &snapshot,
@@ -341,10 +397,10 @@ impl<H: RouterHost> Call<'_, H> {
     /// fallbacks if every attempt failed.
     fn with_fallbacks<'a>(
         &'a self,
-        level: Level<'a>,
+        mut level: Level<'a>,
     ) -> BoxFuture<'a, Result<RouterResponse<H::Response>, Error>> {
         Box::pin(async move {
-            let failed = match self.with_retries(&level).await {
+            let failed = match self.with_retries(&mut level).await {
                 Ok(response) => return Ok(response),
                 Err(failed) => failed,
             };
@@ -370,6 +426,17 @@ impl<H: RouterHost> Call<'_, H> {
             served_as,
         } = failed;
         let error = *error;
+        let last_resort = matches!(
+            error,
+            Error::ContextWindowExceeded {
+                held_for_fallback: true,
+                ..
+            }
+        )
+        .then(|| Target {
+            last_resort: true,
+            ..level.target.clone()
+        });
         let (snapshot, request, at) = (level.snapshot, level.request, level.at);
         self.level_failed(&level, &error, false);
         if self.raises_without_fallback(snapshot, request, &error) {
@@ -421,7 +488,9 @@ impl<H: RouterHost> Call<'_, H> {
             match self.run_fallbacks(&mut level, vec![failover]).await {
                 Ok(response) => return Ok(response),
                 Err(Some(raised)) if ends_call(&raised) => return Err(raised),
-                Err(raised) if defers_to_regular_fallbacks(raised.as_ref().unwrap_or(&error)) => {}
+                Err(raised)
+                    if !raised.as_ref().is_some_and(may_have_created)
+                        && defers_to_regular_fallbacks(raised.as_ref().unwrap_or(&error)) => {}
                 // Outside the `try` around the regular fallbacks: the level raises it as it is.
                 Err(raised) => {
                     self.host.observe(&RouterEvent::OrderChainFailed {
@@ -446,12 +515,22 @@ impl<H: RouterHost> Call<'_, H> {
             Err(raised) => raised,
         };
         if !order_path {
+            let error = match last_resort.filter(|_| !level.chain.provider_refused_window) {
+                Some(last_resort) => {
+                    level.target = last_resort;
+                    match self.with_retries(&mut level).await {
+                        Ok(response) => return Ok(response),
+                        Err(failed) => *failed.error,
+                    }
+                }
+                None => error,
+            };
             self.host.observe(&RouterEvent::FallbacksFailed {
                 level: at.level,
                 chain: true,
                 last_hop: last_hop_error.is_some(),
             });
-            return Err(error);
+            return Err(last_hop_error.filter(may_have_created).unwrap_or(error));
         }
         // The order path's `raise`, outside the `try` that re-raises the original error: only a
         // context window or content policy error stays the one the caller sees.
@@ -617,6 +696,7 @@ impl<H: RouterHost> Call<'_, H> {
                     excluded,
                     failover_excluded: target.failover_excluded.clone(),
                     routed: None,
+                    last_resort: false,
                 };
                 let parent = at;
                 let at = FallbackHop {
@@ -655,7 +735,9 @@ impl<H: RouterHost> Call<'_, H> {
                         response.attempted_fallbacks = hop;
                         return Ok(response);
                     }
-                    Err(raised) if ends_call(&raised) => return Err(Some(raised)),
+                    Err(raised) if ends_call(&raised) || may_have_created(&raised) => {
+                        return Err(Some(raised));
+                    }
                     Err(raised) => last_hop_error = Some(raised),
                 }
             }
@@ -715,14 +797,19 @@ impl<H: RouterHost> Call<'_, H> {
             excluded.push(failed_id.to_owned());
         }
         let listing_team = request.listing_team_id.as_deref();
-        let ids: Vec<String> = group_members(snapshot, &target.group, listing_team)
-            .iter()
+        let members: Vec<_> = group_members(snapshot, &target.group, listing_team)
+            .into_iter()
             .filter(|d| d.listed_for_team(listing_team))
+            .collect();
+        let skip_batch_only = skips_batch_only(request, &members);
+        let ids: Vec<String> = members
+            .iter()
+            .filter(|d| !skip_batch_only || !d.serves_only_batches())
             .map(|d| d.id.clone())
             .collect();
         let cooling = self
             .health()
-            .active_cooldowns(&ids)
+            .cooling(&ids, !skip_batch_only)
             .await
             .unwrap_or_default();
         let remaining = ids
@@ -748,6 +835,7 @@ impl<H: RouterHost> Call<'_, H> {
         // pick raises (no Python exception stands behind it) has no fallback.
         retried_failure(error).is_none_or(|failure| {
             failure.kind == FailureKind::GuardrailIntervention
+                || failure.create_may_exist
                 || failure.queue_rejected()
                 || (!snapshot.settings.fallback_on_unsupported_params
                     && is_bad_request_without_fallback(&failure))
@@ -817,9 +905,11 @@ impl<H: RouterHost> Call<'_, H> {
                 .collect();
             let batch_levels_only =
                 request.batch_create && members.iter().any(|d| d.is_batch_capable());
+            let skips_batch_only = skips_batch_only(request, &members);
             let mut orders: Vec<i64> = members
                 .iter()
                 .filter(|d| !batch_levels_only || !d.cannot_run_batches())
+                .filter(|d| !skips_batch_only || !d.serves_only_batches())
                 .filter_map(|d| d.order())
                 .collect();
             orders.sort_unstable();
@@ -876,15 +966,24 @@ impl<H: RouterHost> Call<'_, H> {
             .snapshot
             .registry
             .group(&level.target.group)
-            .filter(|group| group.len() == 1)
-            .and_then(|group| group[0].raw_params.get("num_retries")?.as_u64())
+            .and_then(|group| {
+                let skips_batch_only = skips_batch_only(level.request, &group);
+                let mut usable = group
+                    .into_iter()
+                    .filter(|d| !skips_batch_only || !d.serves_only_batches());
+                usable.next().filter(|_| usable.next().is_none())
+            })
+            .and_then(|deployment| deployment.raw_params.get("num_retries")?.as_u64())
             .and_then(|retries| u32::try_from(retries).ok());
         Err(self.mock_failed(MockFailure::RateLimit, level, lone).into())
     }
 
     /// `async_function_with_retries` for one level: the first attempt, then a retry while
     /// [`retry_step`] grants one. The loop sleeps, attempts and reports. The step decides.
-    async fn with_retries(&self, level: &Level<'_>) -> Result<RouterResponse<H::Response>, Failed> {
+    async fn with_retries(
+        &self,
+        level: &mut Level<'_>,
+    ) -> Result<RouterResponse<H::Response>, Failed> {
         let (snapshot, op, request, at) = (level.snapshot, level.op, level.request, level.at);
         let target = &level.target;
         let mut inputs = SelectInputs {
@@ -892,6 +991,7 @@ impl<H: RouterHost> Call<'_, H> {
             excluded_ids: target.excluded.clone(),
             requested: Some(target.group.clone()),
             fallback_hop: at.level > 0,
+            refuse_uncertain: level.refuses_uncertain(),
             ..SelectInputs::default()
         };
         let counting = counting();
@@ -906,13 +1006,17 @@ impl<H: RouterHost> Call<'_, H> {
             Ok(response) => return Ok(response),
             Err(failed) => failed,
         };
+        level.chain.provider_refused_window |= refused_by_provider(&failed.error);
         self.pick_failed(level, &failed.error);
-        // A guardrail's block and a failure no retry can clear are re-raised as they are, before
-        // anything else looks at them (`async_function_with_retries`).
+        // A guardrail's block, a failure no retry can clear and a create the provider may already
+        // hold are re-raised as they are, before anything else looks at them
+        // (`async_function_with_retries`).
         if matches!(
             &*failed.error,
             Error::Attempt { failure, .. }
-                if failure.kind == FailureKind::GuardrailIntervention || failure.ends_retries()
+                if failure.kind == FailureKind::GuardrailIntervention
+                    || failure.ends_retries()
+                    || failure.create_may_exist
         ) {
             return Err(failed);
         }
@@ -936,7 +1040,7 @@ impl<H: RouterHost> Call<'_, H> {
         let all = self
             .candidates(snapshot, op, request, &target.group, &counting)
             .await
-            .map(|c| counted(&c, c.all.len()))
+            .map(|c| counted(&c, c.routable()))
             .unwrap_or(0);
 
         for retry in 0..=num_retries {
@@ -993,6 +1097,9 @@ impl<H: RouterHost> Call<'_, H> {
             {
                 inputs.skipped_ids.push(id.clone());
             }
+            let provider_refused_window =
+                failure.is_a("ContextWindowExceededError") && failed.error.attempt().is_some();
+            inputs.refuse_uncertain |= provider_refused_window;
             // An endpoint a deployment does not serve is retried on the others, until every
             // one refused (`_every_deployment_refused`).
             if failure.is_a("UnsupportedEndpointError")
@@ -1022,10 +1129,22 @@ impl<H: RouterHost> Call<'_, H> {
                     response.max_retries = Some(num_retries);
                     return Ok(response);
                 }
-                Err(next) if next.error.attempt().is_some_and(AttemptError::ends_retries) => {
+                Err(next)
+                    if next
+                        .error
+                        .attempt()
+                        .is_some_and(|f| f.ends_retries() || f.create_may_exist) =>
+                {
                     return Err(next);
                 }
+                Err(next)
+                    if provider_refused_window
+                        && matches!(*next.error, Error::ContextWindowExceeded { .. }) =>
+                {
+                    return Err(failed);
+                }
                 Err(next) => {
+                    level.chain.provider_refused_window |= refused_by_provider(&next.error);
                     self.pick_failed(level, &next.error);
                     failed = next;
                 }
@@ -1194,8 +1313,30 @@ impl<H: RouterHost> Call<'_, H> {
         // request's `OutcomeCallbacks` reach, except a deferred stream's: its request counts now
         // (`increment_deployment_usage_for_response`), its success or failure when the host reports
         // the stream's end.
-        match self.host.attempt(&attempt).await {
+        let checks = &self.core.config.pre_call_checks;
+        let admitted = checks
+            .admit(self.host.cache(), &deployment, self.core.clock.now())
+            .await;
+        let ran = match admitted {
+            Err(refusal) => Err(refusal),
+            Ok(()) => self
+                .host
+                .attempt(&attempt)
+                .await
+                .map_err(|failure| self.failed(failure, Some(&deployment.id))),
+        };
+        match ran {
             Ok(output) => {
+                if !output.deferred {
+                    checks
+                        .succeeded(
+                            self.host.cache(),
+                            &deployment,
+                            output.total_tokens,
+                            self.core.clock.now(),
+                        )
+                        .await;
+                }
                 // `_should_raise_content_policy_error`: a blocked response is raised only when
                 // a content-policy fallback would serve it, and counts as no failure.
                 let routed = routed_name(target, &candidates);
@@ -1273,19 +1414,35 @@ impl<H: RouterHost> Call<'_, H> {
                     ),
                 })
             }
-            Err(failure) => {
-                let error = self.failed(failure, Some(&deployment.id));
-                let failed_deployment = match &error {
-                    Error::Attempt { failure, .. } => {
-                        if !failure.recorded && !failure.queue_rejected() {
-                            self.record_failure(
-                                snapshot,
-                                request,
-                                &candidates,
-                                &deployment,
-                                failure,
-                            )
-                            .await;
+            Err(mut error) => {
+                let failed_deployment = match &mut error {
+                    Error::Attempt { failure, raised_by } => {
+                        match raised_by {
+                            // A refused deployment that cooled down is retried as Python's loop
+                            // retries it, on a healthy sibling at once. One that stayed healthy (a
+                            // lone deployment) would be retried after its `retry-after`, a minute,
+                            // so its refusal is answered now.
+                            RaisedBy::PreCallCheck(_) => {
+                                let cooled = self
+                                    .cool_down_refused(snapshot, request, &deployment, failure)
+                                    .await;
+                                if !cooled {
+                                    failure.num_retries = Some(0);
+                                }
+                            }
+                            RaisedBy::Host(_) | RaisedBy::Core
+                                if !failure.recorded && !failure.queue_rejected() =>
+                            {
+                                self.record_failure(
+                                    snapshot,
+                                    request,
+                                    &candidates,
+                                    &deployment,
+                                    failure,
+                                )
+                                .await;
+                            }
+                            RaisedBy::Host(_) | RaisedBy::Core => {}
                         }
                         Some(deployment.id.clone())
                     }
@@ -1360,6 +1517,7 @@ impl<H: RouterHost> Call<'_, H> {
                     kind: ResolveKind::Group,
                     all: vec![deployment.clone()],
                     healthy: vec![deployment.clone()],
+                    skips_batch_only: skips_batch_only(request, std::slice::from_ref(&deployment)),
                     wildcard_request: None,
                     served_as: None,
                 };
@@ -1452,6 +1610,47 @@ impl<H: RouterHost> Call<'_, H> {
         }
     }
 
+    /// `async_routing_strategy_pre_call_checks`' cooldown for a deployment a pre-call check
+    /// refused: `set_cooldown_deployments` alone, as the Python host reports its own refusal.
+    /// Returns whether the deployment was cooled down.
+    async fn cool_down_refused(
+        &self,
+        snapshot: &RouterStateSnapshot,
+        request: &RouterRequest,
+        deployment: &crate::registry::Deployment,
+        failure: &AttemptError,
+    ) -> bool {
+        let report = FailureReport {
+            uncounted: true,
+            batch_api: request.batch_api,
+            ..FailureReport::default()
+        };
+        let cooled = self
+            .core
+            .reported_failure(
+                snapshot,
+                self.host.cache(),
+                &deployment.id,
+                failure,
+                &report,
+            )
+            .await;
+        match cooled {
+            Ok(Some(cooldown)) => {
+                self.host.observe(&RouterEvent::CooldownSet {
+                    deployment_id: deployment.id.clone(),
+                    cooldown,
+                });
+                true
+            }
+            Ok(None) => false,
+            Err(error) => {
+                warn!(deployment_id = %deployment.id, error = %error, "cooldown was not recorded");
+                false
+            }
+        }
+    }
+
     async fn record_failure(
         &self,
         snapshot: &RouterStateSnapshot,
@@ -1501,24 +1700,28 @@ impl<H: RouterHost> Call<'_, H> {
         } else {
             deployment
         };
-        let shape = GroupShape {
+        let has_fallback_group = snapshot
+            .settings
+            .dynamic
+            .fallback_targets(&[candidates.model_group.as_str()])
+            .is_some();
+        let batch_call = !candidates.skips_batch_only;
+        let shape = GroupShape::of_failure(batch_call, has_fallback_group, |batch_call| {
             // The deployment's own group decides, also when the call named the deployment by id.
-            single_deployment: snapshot
+            snapshot
                 .registry
                 .group(&deployment.model_name)
-                .map_or(candidates.all.len() == 1, |group| group.len() == 1)
+                .map_or(deployment.peers_in(&candidates.all, batch_call) == 1, |group| {
+                    deployment.peers_in(&group, batch_call) == 1
+                })
                 // A routing group call with alternatives cools its member down so selection
                 // moves on (`routing_group_alternatives`).
-                && !(candidates.kind == ResolveKind::RoutingGroup && candidates.all.len() > 1)
+                && !(candidates.kind == ResolveKind::RoutingGroup
+                    && deployment.peers_in(&candidates.all, batch_call) > 1)
                 // As does a team deployment with a sibling under its public name
                 // (`team_model_alternatives`).
-                && !team_model_has_alternatives(&snapshot.registry, deployment),
-            has_fallback_group: snapshot
-                .settings
-                .dynamic
-                .fallback_targets(&[candidates.model_group.as_str()])
-                .is_some(),
-        };
+                && !team_model_has_alternatives(&snapshot.registry, deployment, batch_call)
+        });
         self.count_failed_request(deployment, failure).await;
         match self
             .health()
@@ -1617,6 +1820,11 @@ fn unary_retry_budget(level: &Level<'_>, failure: &AttemptError) -> (u32, bool) 
 }
 
 impl Level<'_> {
+    fn refuses_uncertain(&self) -> bool {
+        self.chain.provider_refused_window
+            || (!self.target.last_resort && context_window_fallback_resolves(self))
+    }
+
     /// [`retry_step`] for a failure in this level's group, with the fallback lists the request
     /// reads and the router's `retry_after`.
     fn retry_step(

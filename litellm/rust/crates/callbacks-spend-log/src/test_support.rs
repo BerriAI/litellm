@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use litellm_python_compat::{Value, json};
-use litellm_tracing::TokenRedactor;
+use litellm_redaction::TokenRedactor;
 
 use crate::py::get;
 

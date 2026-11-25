@@ -1,5 +1,6 @@
-//! The limiter's Lua, byte for byte as `main`'s Python registered it, except `TOKEN_INCREMENT`, which also opens a
-//! window for a scope that has none.
+//! The limiter's Lua, byte for byte as `main`'s Python registered it, so both share one script SHA.
+//! The exceptions are the window-guarded increment, which only Rust runs and which floors its counter at zero,
+//! and `TOKEN_INCREMENT`, which also opens a window for a scope that has none.
 
 pub(super) const BATCH_RATE_LIMITER: &str = r#"
 local results = {}
@@ -156,6 +157,9 @@ for i = 1, #KEYS, 2 do
 
     if active_window_start and active_window_start == expected_window_start then
         local new_counter = redis.call('INCRBY', counter_key, increment)
+        if new_counter < 0 then
+            new_counter = redis.call('INCRBY', counter_key, -new_counter)
+        end
         local current_ttl = redis.call('TTL', counter_key)
         if current_ttl == -1 and ttl > 0 then
             redis.call('EXPIRE', counter_key, ttl)

@@ -54,9 +54,9 @@ class TestProvenanceSeparatesUnknownFromNonReasoning:
 
 class TestResolveSupportedReasoningEfforts:
     def test_a_reasoning_model_with_no_flags_at_all_resolves_to_unknown(self):
-        # 689 of the map's 854 reasoning entries carry no effort flag, and the o-series, xai and
-        # bedrock nova entries among them accept neither none nor minimal, so composing a set out of
-        # the opt-out defaults alone would advertise levels those providers reject.
+        # Most of the map's reasoning entries carry no effort flag, and the o1, o3-mini, o4-mini, xai
+        # and bedrock nova entries among them accept neither none nor minimal, so composing a set out
+        # of the opt-out defaults alone would advertise levels those providers reject.
         assert resolve_supported_reasoning_efforts({"supports_reasoning": True}, deployment_is_mapped=True) is None
 
     def test_explicit_false_removes_an_opt_out_level(self):
@@ -160,12 +160,12 @@ class TestNoneLevelPolarity:
 
     def test_none_stays_opt_out_on_an_azure_model_outside_the_gpt_5_family(self):
         """AzureOpenAIGPT5Config is selected by is_model_gpt_5_model, so an azure o-series or
-        anthropic deployment never reaches the gate that refuses none and must keep the level."""
+        anthropic deployment never reaches the gate that refuses none unless its row turns none off."""
         resolved = resolve_supported_reasoning_efforts(
             {
                 "supports_reasoning": True,
                 "litellm_provider": "azure",
-                "key": "azure/o3",
+                "key": "azure/o-series-deployment",
                 "supports_max_reasoning_effort": True,
             },
             deployment_is_mapped=True,

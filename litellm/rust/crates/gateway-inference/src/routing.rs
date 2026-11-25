@@ -1,15 +1,20 @@
-//! How a route is served through router-core. [`call`] authorizes the name the request asks for,
-//! then runs it through [`litellm_router_core::Router::call`], where the core picks a deployment,
-//! retries and falls back, and each attempt runs the request's own [`RouteAttempt`]. Every other
-//! hostcall the core makes is answered by the [`Host`] the gateway was built with. The route's
-//! typed outcome comes back with the routing facts, and the route renders it once. A served
-//! stream is held until it sends content, so one the provider fails before that is answered by
-//! a retry or a fallback instead.
+//! How a route is served through router-core. [`call`] checks the name the request asks for is
+//! one the router knows, has the auth core decide whether the caller's model lists reach it, then
+//! runs it through [`litellm_router_core::Router::call`], where the core picks a deployment, retries and falls back, and each attempt runs the request's own
+//! [`RouteAttempt`]. Every other hostcall the core makes is answered by the [`Host`] the gateway
+//! was built with. The route's typed outcome comes back with the routing facts, and the route
+//! renders it once. A served stream is held until it sends content, so one the provider fails
+//! before that is answered by a retry or a fallback instead.
 
 use std::{future::Future, time::Duration};
 
 use futures_util::{StreamExt, stream};
-use litellm_gateway_auth::{AccessRequest, AuthenticatedRequest, Permissions};
+use litellm_config::LitellmRole;
+use litellm_gateway_auth::Authenticated;
+use litellm_gateway_auth_core::{
+    Rows, StoredKey,
+    authz::{self, Denied, Layer, ModelAsk},
+};
 use litellm_inference::Error as InferenceError;
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, CallError, Deployment, FailureKind, Op, Router,
@@ -22,8 +27,9 @@ use crate::{
     Error, Gateway,
     error::{Ended, NoDeployments},
     headers::Routing,
-    hooks::{CallHooks, CallType},
-    stream_event::Read,
+    hooks::CallHooks,
+    record,
+    stream_event::{Counts, Read},
     stream_hold::{self, Cause, Chunks, Held},
     stream_outcome,
 };
@@ -40,14 +46,25 @@ pub trait Host: Send + Sync + Sized + 'static {
 
     type Hooks: CallHooks;
 
-    /// The callback hooks of one call `identity` makes on the `call_type` route.
-    fn hooks(&self, identity: &AuthenticatedRequest, call_type: CallType) -> Self::Hooks;
+    /// The rows of the callers this host authenticates.
+    type Rows: Rows<Key: StoredKey>;
 
-    /// router-core's host for one call that runs `route` on each attempt for `identity`.
+    /// The model lists this host read for `identity`, which the auth core decides access on. A
+    /// list the host did not read belongs to a key it declined when it authenticated it.
+    fn layers<'a>(
+        &self,
+        identity: &'a Authenticated<Self::Rows>,
+    ) -> impl Iterator<Item = Layer<'a>>;
+
+    /// The callback hooks of one call `identity` makes, which read and write the call's record.
+    fn hooks(&self, identity: &Authenticated<Self::Rows>) -> Self::Hooks;
+
+    /// router-core's host for one call that runs `route` on each attempt for `identity`. The host
+    /// counts `route`'s [`RouteAttempt::prompt`] for the pre-call checks.
     fn router_host<'a, A: RouteAttempt>(
         &'a self,
         gateway: &'a Gateway<Self>,
-        identity: &'a AuthenticatedRequest,
+        identity: &'a Authenticated<Self::Rows>,
         route: &'a A,
     ) -> Self::RouterHost<'a, A>;
 }
@@ -59,8 +76,14 @@ pub trait RouteAttempt: Send + Sync {
 
     fn run(&self, attempt: &Attempt) -> impl Future<Output = Result<Self::Outcome, Error>> + Send;
 
-    /// The tokens a complete outcome used. A stream's are counted as it is read.
-    fn total_tokens(outcome: &Self::Outcome) -> u64;
+    /// What a complete outcome counted, which the router counts against the deployment. A
+    /// stream's counts are read from its events.
+    /// Required, so a new route says what it counts rather than counting nothing by default.
+    fn counts(outcome: &Self::Outcome) -> Option<Counts>;
+
+    /// The request's prompt, which the host counts for the pre-call checks. `None` holds the
+    /// route's calls to no context window, so each route says so itself.
+    fn prompt(&self) -> Option<Prompt<'_>>;
 
     /// The stream of an outcome and the reader of its format: its outcome is reported to the
     /// router as it is read, and another attempt may answer in its place while it has sent no
@@ -69,6 +92,14 @@ pub trait RouteAttempt: Send + Sync {
         let _ = outcome;
         None
     }
+}
+
+/// The prompt a request carries, in the format its route reads it in. A route only hands it over,
+/// and the host decides how it is counted.
+#[derive(Clone, Copy)]
+pub enum Prompt<'a> {
+    /// A Messages body: its `system`, its `messages` and its `tools`.
+    Messages(&'a Map<String, Value>),
 }
 
 /// One attempt of `route` as router-core hears it. A complete outcome is served with the tokens
@@ -87,7 +118,7 @@ pub async fn attempt<H: Host, A: RouteAttempt>(
         .await
         .map_err(|error| attempt_failure(attempt, error))?;
     let Some((chunks, read)) = A::held(&mut outcome) else {
-        let total_tokens = A::total_tokens(&outcome);
+        let total_tokens = A::counts(&outcome).map_or(0, Counts::total);
         return Ok(Served::new(outcome, total_tokens));
     };
     let unreported = std::mem::replace(chunks, stream::empty().boxed());
@@ -98,9 +129,8 @@ pub async fn attempt<H: Host, A: RouteAttempt>(
     })
 }
 
-/// The litellm model of the first deployment the request's name resolves to for its caller,
-/// default targets included, which main authorizes the name against.
-fn first_model<H: Host>(gateway: &Gateway<H>, request: &RouterRequest) -> Option<String> {
+/// Whether the request's name resolves to a deployment for its caller, default targets included.
+fn known<H: Host>(gateway: &Gateway<H>, request: &RouterRequest) -> bool {
     let settings = gateway.router.settings();
     let routable = resolve::routable(
         &gateway.router.registry(),
@@ -108,23 +138,27 @@ fn first_model<H: Host>(gateway: &Gateway<H>, request: &RouterRequest) -> Option
         request,
         settings.enable_cross_model_group_collision_check,
     );
-    Some(routable.first()?.params.model.clone())
+    !routable.is_empty()
 }
 
-async fn authorize(
-    identity: &AuthenticatedRequest,
+/// Whether the model lists the host read for `identity` reach `name`, which the auth core
+/// decides. The route only says what the router resolves the name to: its model group and the
+/// access groups of that group's deployments, as `can_key_call_model` reads them.
+fn authorize<H: Host>(
+    gateway: &Gateway<H>,
+    identity: &Authenticated<H::Rows>,
     name: &str,
-    model: String,
-) -> Result<(), Error> {
-    let access = AccessRequest::Model {
-        name: name.to_owned(),
-        deployment: model,
+) -> Result<(), Denied> {
+    let registry = gateway.router.registry();
+    let access_groups: Vec<String> = resolve::model_access_groups(&registry, name, None)
+        .into_iter()
+        .collect();
+    let ask = ModelAsk {
+        name,
+        group: registry.alias_of(name).unwrap_or(name),
+        access_groups: &access_groups,
     };
-    identity
-        .authorize(access.clone())
-        .await?
-        .consume(identity.caller(), &access)?;
-    Ok(())
+    authz::authorize(gateway.host.layers(identity), &ask)
 }
 
 fn retry_after(headers: &[(String, String)]) -> Option<Duration> {
@@ -187,59 +221,56 @@ pub fn attempt_failure(attempt: &Attempt, error: Error) -> AttemptFailure<Error>
     }
 }
 
-/// Whether `identity` may be served `target`, which a fallback is only taken to when it may.
-pub async fn allows<H: Host>(
+/// Whether `identity` may be served `target`, which a fallback is only taken to when it may. A
+/// target the router does not know is not refused here.
+pub fn allows<H: Host>(
     gateway: &Gateway<H>,
-    identity: &AuthenticatedRequest,
+    identity: &Authenticated<H::Rows>,
     target: &str,
 ) -> bool {
-    match first_model(gateway, &caller_request(identity, target)) {
-        Some(model) => authorize(identity, target, model).await.is_ok(),
-        None => true,
-    }
+    let request = caller_request(identity, gateway.host.layers(identity), target);
+    !known(gateway, &request) || authorize(gateway, identity, target).is_ok()
 }
 
-/// The model names a caller's grants name, which the core narrows access groups by.
-fn allowed_models(identity: &AuthenticatedRequest) -> Vec<String> {
-    match identity.caller().permissions() {
-        Permissions::Only(grants) => grants
-            .iter()
-            .filter_map(|grant| match grant {
-                AccessRequest::Model { name, .. } => Some(name.clone()),
-                _ => None,
-            })
-            .collect(),
-        Permissions::All | Permissions::None => Vec::new(),
-    }
-}
-
-/// A request for `model` carrying what the caller's grants say.
-fn caller_request(identity: &AuthenticatedRequest, model: &str) -> RouterRequest {
+/// A request for `model` by `identity`: an admin by the role the auth core gives it, never by
+/// the kind of credential it presented, with the names its `layers` hold, which the router
+/// narrows access groups by as Python's reads the key's `models`.
+fn caller_request<'a, R: Rows<Key: StoredKey>>(
+    identity: &Authenticated<R>,
+    layers: impl Iterator<Item = Layer<'a>>,
+    model: &str,
+) -> RouterRequest {
     RouterRequest {
         model: model.to_owned(),
-        proxy_admin: matches!(identity.caller().permissions(), Permissions::All),
-        allowed_models: allowed_models(identity),
+        proxy_admin: identity.role() == LitellmRole::ProxyAdmin,
+        allowed_models: layers
+            .flat_map(|layer| match layer {
+                Layer::Key(models) => models.iter().cloned(),
+            })
+            .collect(),
         ..RouterRequest::default()
     }
 }
 
-/// Authorize `model`, then serve it through the router: pick, run `route` on each attempt,
-/// retry and fall back. A call that ends on an attempt's error names the deployment the router
-/// says raised it.
+/// Serve `model` through the router: pick, run `route` on each attempt, retry and fall back. A
+/// call that ends on an attempt's error names the deployment the router says raised it.
 pub(crate) async fn call<H: Host, A: RouteAttempt>(
     gateway: &Gateway<H>,
-    identity: &AuthenticatedRequest,
+    identity: &Authenticated<H::Rows>,
     op: Op,
     path: &'static str,
     model: &str,
     route: &A,
 ) -> Result<RouterResponse<A::Outcome>, Ended> {
-    let request = caller_request(identity, model);
-    let first = first_model(gateway, &request).ok_or_else(|| Error::UnknownModel {
-        route: path,
-        model: model.to_owned(),
-    })?;
-    authorize(identity, model, first).await?;
+    let request = caller_request(identity, gateway.host.layers(identity), model);
+    if !known(gateway, &request) {
+        return Err(Error::UnknownModel {
+            route: path,
+            model: model.to_owned(),
+        }
+        .into());
+    }
+    authorize(gateway, identity, model).map_err(Error::from)?;
     let host = gateway.host.router_host(gateway, identity, route);
     let ended = gateway
         .router
@@ -275,7 +306,12 @@ async fn answered<H: Host, O>(
             error: litellm_router_core::Error::NoHealthyDeployments { model, .. },
             ..
         } => no_deployments(gateway, model).await.into(),
-        CallError { error, .. } => Error::Routing(error).into(),
+        CallError { error, .. } => Ended {
+            routing: error
+                .refused()
+                .map(|refused| Routing::failed_on(&refused.deployment_id)),
+            error: Box::new(Error::Routing(error)),
+        },
     })
 }
 
@@ -313,7 +349,10 @@ where
         }
         let unsent = std::mem::replace(chunks, stream::empty().boxed());
         let failed = match stream_hold::hold(unsent, read, stream_hold::HELD).await {
-            Held::Committed(sent) => {
+            Held::Committed(sent, first_event) => {
+                if let Some(at) = first_event {
+                    record::write(|entries| entries.see_first_event(at));
+                }
                 *chunks = sent;
                 return Ok(routed);
             }
@@ -415,21 +454,28 @@ pub(crate) fn streamed(body: &Map<String, Value>) -> bool {
 }
 
 /// `resolve_llm_passthrough_timeout` over the settings the gateway reads: a streamed call's
-/// `stream_timeout` on the deployment, then the deployment's `timeout`, then the router's.
-pub(crate) fn timeout(attempt: &Attempt, streamed: bool) -> Option<Duration> {
-    let seconds = |written: &Option<Spelled<f64>>| {
-        let seconds = match written.as_ref()? {
-            Spelled::Value(seconds) => *seconds,
-            Spelled::Text(text) => text.trim().parse().ok()?,
-        };
+/// `stream_timeout` on the deployment, then the deployment's `timeout` and `request_timeout`, then
+/// the router's, then `configured`, the process `request_timeout`. As the Python router does, a
+/// `configured` timeout stands in for the router's own, and a stream reads it right after the
+/// deployment's `stream_timeout`.
+pub(crate) fn timeout(
+    attempt: &Attempt,
+    streamed: bool,
+    configured: Option<Duration>,
+) -> Option<Duration> {
+    let seconds =
+        |written: &Option<Spelled<f64>>| Duration::try_from_secs_f64(written.as_ref()?.lax()?).ok();
+    let params = &attempt.deployment.params;
+    let request_timeout = || {
+        let seconds = params.extra.get("request_timeout")?.as_f64()?;
         Duration::try_from_secs_f64(seconds).ok()
     };
-    let params = &attempt.deployment.params;
     streamed
-        .then(|| seconds(&params.stream_timeout))
+        .then(|| seconds(&params.stream_timeout).or(attempt.timeout.and(configured)))
         .flatten()
         .or_else(|| seconds(&params.timeout))
-        .or(attempt.timeout)
+        .or_else(request_timeout)
+        .or(configured.or(attempt.timeout))
 }
 
 pub(crate) fn api_key(deployment: &Deployment) -> Option<String> {
@@ -440,32 +486,40 @@ pub(crate) fn api_key(deployment: &Deployment) -> Option<String> {
         .map(|key| key.expose().to_owned())
 }
 
-/// The tokens a response's `usage` counts: its `total_tokens`, else its input plus output.
-pub(crate) fn total_tokens(usage: Option<&Value>) -> u64 {
-    let count = |name: &str| {
-        usage
-            .and_then(|usage| usage.get(name))
-            .and_then(Value::as_u64)
-    };
-    count("total_tokens").unwrap_or_else(|| {
-        count("input_tokens")
-            .or(count("prompt_tokens"))
-            .unwrap_or(0)
-            + count("output_tokens")
-                .or(count("completion_tokens"))
-                .unwrap_or(0)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
 
+    use litellm_gateway_auth_core::Caller;
     use litellm_router_core::DeploymentSpec;
     use rstest::rstest;
     use serde_json::json;
 
     use super::*;
+    use crate::test_support::{Held, key};
+
+    #[rstest]
+    #[case::the_master_key(Caller::MasterKey, true)]
+    #[case::a_key_its_row_calls_an_admin(key("stored", true), true)]
+    #[case::any_other_key(key("stored", false), false)]
+    fn only_a_caller_with_the_admin_role_is_routed_as_a_proxy_admin(
+        #[case] caller: Caller<Held>,
+        #[case] proxy_admin: bool,
+    ) {
+        let request = caller_request(&Authenticated::from(caller), [].into_iter(), "public/model");
+
+        assert_eq!(request.proxy_admin, proxy_admin);
+    }
+
+    #[rstest]
+    fn the_router_narrows_access_groups_by_the_names_the_key_layer_holds() {
+        let models = ["claude".to_owned(), "fast".to_owned()];
+        let caller = Authenticated::from(key("stored", false));
+
+        let request = caller_request(&caller, [Layer::Key(&models)].into_iter(), "claude");
+
+        assert_eq!(request.allowed_models, models);
+    }
 
     fn attempt(params: Value, router_timeout: Option<u64>) -> Attempt {
         let spec: DeploymentSpec = serde_json::from_value(json!({
@@ -502,6 +556,12 @@ mod tests {
     #[case::a_stream_without_its_own_timeout_takes_the_deployments(
         json!({"model": "a/b", "timeout": 30}), Some(600), true, Some(30)
     )]
+    #[case::the_deployments_request_timeout_after_its_timeout(
+        json!({"model": "a/b", "timeout": 30, "request_timeout": 20}), Some(600), false, Some(30)
+    )]
+    #[case::the_deployments_request_timeout_before_the_routers(
+        json!({"model": "a/b", "request_timeout": 20}), Some(600), true, Some(20)
+    )]
     #[case::the_router_timeout_is_last(json!({"model": "a/b"}), Some(600), true, Some(600))]
     #[case::a_timeout_written_as_text_is_read(
         json!({"model": "a/b", "timeout": "45"}), Some(600), false, Some(45)
@@ -514,7 +574,40 @@ mod tests {
         #[case] expected: Option<u64>,
     ) {
         assert_eq!(
-            timeout(&attempt(params, router_timeout), streamed),
+            timeout(&attempt(params, router_timeout), streamed, None),
+            expected.map(Duration::from_secs)
+        );
+    }
+
+    #[rstest]
+    #[case::the_configured_timeout_without_a_routers(json!({"model": "a/b"}), None, false, Some(2))]
+    #[case::the_configured_timeout_in_place_of_the_routers(
+        json!({"model": "a/b"}), Some(600), false, Some(2)
+    )]
+    #[case::the_deployments_timeout_before_the_configured(
+        json!({"model": "a/b", "timeout": 30}), Some(600), false, Some(30)
+    )]
+    #[case::a_stream_reads_the_configured_timeout_before_the_deployments_when_the_router_has_one(
+        json!({"model": "a/b", "timeout": 30}), Some(600), true, Some(2)
+    )]
+    #[case::a_stream_reads_the_deployments_timeout_first_when_the_router_has_none(
+        json!({"model": "a/b", "timeout": 30}), None, true, Some(30)
+    )]
+    #[case::a_stream_reads_its_own_stream_timeout_first(
+        json!({"model": "a/b", "stream_timeout": 5}), Some(600), true, Some(5)
+    )]
+    fn a_configured_request_timeout_is_read_where_python_reads_it(
+        #[case] params: Value,
+        #[case] router_timeout: Option<u64>,
+        #[case] streamed: bool,
+        #[case] expected: Option<u64>,
+    ) {
+        assert_eq!(
+            timeout(
+                &attempt(params, router_timeout),
+                streamed,
+                Some(Duration::from_secs(2))
+            ),
             expected.map(Duration::from_secs)
         );
     }
@@ -552,8 +645,13 @@ mod tests {
             Ok(litellm_framer::sse::blocks(sent).boxed())
         }
 
-        fn total_tokens(_outcome: &RouteChunks) -> u64 {
-            0
+        /// Only ever a stream, whose counts are read from its events.
+        fn counts(_outcome: &RouteChunks) -> Option<Counts> {
+            None
+        }
+
+        fn prompt(&self) -> Option<Prompt<'_>> {
+            None
         }
 
         fn held(outcome: &mut RouteChunks) -> Option<(&mut RouteChunks, Read)> {
@@ -645,7 +743,8 @@ mod tests {
             .call(&host, op.clone(), request.clone())
             .await
             .unwrap();
-        taken_over_while_held::<Failing, _>(router, &host, &op, &request, first).await
+        let held = taken_over_while_held::<Failing, _>(router, &host, &op, &request, first);
+        record::scope(record::CallRecord::new(), held).await
     }
 
     /// Python closes the attempt a take-over supersedes before the take-over runs, so a retry

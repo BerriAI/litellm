@@ -604,7 +604,7 @@ async def spend_key_fn(
         )
 
 
-def _strip_password_from_users(users) -> None:
+def _strip_password_from_users(users: object) -> None:
     """Strip password field from a list of user objects."""
     for user in users if isinstance(users, list) else [users]:
         if user and hasattr(user, "__dict__"):
@@ -897,7 +897,7 @@ async def get_global_activity(
 
         sum_api_requests = 0
         sum_total_tokens = 0
-        daily_data = []
+        daily_data: list[_ActivityRow] = []
         for row in db_response:
             # cast date to datetime
             _date_obj = datetime.fromisoformat(row["date"])
@@ -1337,7 +1337,7 @@ async def get_global_activity_exceptions(
             return []
 
         sum_num_rate_limit_exceptions = 0
-        daily_data = []
+        daily_data: list[_ExceptionsRow] = []
         for row in db_response:
             # cast date to datetime
             _date_obj = datetime.fromisoformat(row["date"])
@@ -4563,7 +4563,7 @@ async def ui_get_spend_by_tags(
     end_date: str,
     prisma_client: PrismaClient | None = None,
     tags_str: str | None = None,
-):
+) -> Mapping[str, object]:
     """
     Should cover 2 cases:
     1. When user is getting spend for all_tags. "all_tags" in tags_list
@@ -4573,7 +4573,7 @@ async def ui_get_spend_by_tags(
     # tags_str is a list of strings csv of tags
     # tags_str = tag1,tag2,tag3
     # convert to list if it's not None
-    tags_list: list[str] | None = None
+    tags_list: Sequence[str] | None = None
     if tags_str is not None and len(tags_str) > 0:
         tags_list = tags_str.split(",")
 
@@ -4624,7 +4624,7 @@ async def ui_get_spend_by_tags(
     # print(response)
     # Bar Chart 1 - Spend per tag - Top 10 tags by spend
     total_spend_per_tag: Final[collections.defaultdict] = collections.defaultdict(float)
-    total_requests_per_tag: Final[collections.defaultdict] = collections.defaultdict(int)
+    total_requests_per_tag: Final[collections.defaultdict[object, int]] = collections.defaultdict(int)
     for row in response:
         tag_name = row["individual_request_tag"]
         tag_spend = row["total_spend"]
@@ -4903,7 +4903,7 @@ async def _build_ui_spend_logs_response(
             )
 
     if enrich_session_counts:
-        enriched: Final[list[dict]] = []
+        enriched: Final[list[dict[str, object]]] = []
         for row in data:
             row_dict = dict(row) if isinstance(row, dict) else row.model_dump()
             sid = row_dict.get("session_id")

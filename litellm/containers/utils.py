@@ -49,7 +49,7 @@ _NO_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
 class ContainerRequestUtils:
     @staticmethod
     def get_requested_container_create_optional_param(
-        passed_params: dict,
+        passed_params: Mapping[str, object],
     ) -> ContainerCreateOptionalRequestParams:
         """Extract only valid container creation parameters from the passed parameters."""
         container_create_optional_params: Final = ContainerCreateOptionalRequestParams()
@@ -71,7 +71,7 @@ class ContainerRequestUtils:
     def get_optional_params_container_create(
         container_provider_config: BaseContainerConfig,
         container_create_optional_params: ContainerCreateOptionalRequestParams,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Get the optional parameters for container creation."""
         supported_params: Final = container_provider_config.get_supported_openai_params()
 
@@ -85,7 +85,7 @@ class ContainerRequestUtils:
 
     @staticmethod
     def get_requested_container_list_optional_param(
-        passed_params: dict,
+        passed_params: Mapping[str, object],
     ) -> ContainerListOptionalRequestParams:
         """Extract only valid container list parameters from the passed parameters."""
         container_list_optional_params: Final = ContainerListOptionalRequestParams()

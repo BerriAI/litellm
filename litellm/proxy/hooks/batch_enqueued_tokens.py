@@ -143,14 +143,14 @@ class _StoredReservation:
         )
 
 
-_LIMIT_ADAPTER: Final = TypeAdapter(Annotated[int, Field(gt=0)])
+_LIMIT_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field(gt=0)])
 _MODEL_LIMITS_ADAPTER: Final[TypeAdapter[Mapping[str, int]]] = TypeAdapter(
     Mapping[str, Annotated[StrictInt, Field(gt=0)]]
 )
 _NO_MODEL_LIMITS: Final[Mapping[str, int]] = MappingProxyType({})
 _RESERVE_RESULT_ADAPTER: Final = TypeAdapter(tuple[int, int])
-_POPPED_VALUE_ADAPTER: Final = TypeAdapter(str | bytes | None)
-_STORED_COUNTER_ADAPTER: Final = TypeAdapter(int | None)
+_POPPED_VALUE_ADAPTER: Final[TypeAdapter[str | bytes | None]] = TypeAdapter(str | bytes | None)
+_STORED_COUNTER_ADAPTER: Final[TypeAdapter[int | None]] = TypeAdapter(int | None)
 _RESERVATION_ADAPTER: Final = TypeAdapter(_StoredReservation)
 _LOCAL_RECORD_ADAPTER: Final = TypeAdapter(object)
 

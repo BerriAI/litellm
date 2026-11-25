@@ -5,8 +5,9 @@ use std::sync::{
 
 use litellm_callbacks::Abort;
 use litellm_callbacks_parallel_request_limiter::{
-    Code, Ctx, Descriptor, Engine, LimiterState, ParallelRequestLimiter, Policy,
-    PostCallFailureFacts, PreCallFacts, PriorResponse, Settings, SuccessFacts, TargetFacts,
+    Candidate, Code, Ctx, Descriptor, Engine, LimiterState, ModelFacts, ParallelRequestLimiter,
+    Policy, PostCallFailureFacts, PreCallFacts, PriorResponse, RateLimitedModel, Settings,
+    SocketClose, SuccessFacts, TargetFacts,
 };
 use litellm_redis_store::{
     Number,
@@ -298,6 +299,124 @@ async fn a_refund_into_no_window_cannot_offset_a_later_charge() {
 }
 
 #[rstest]
+#[case::cached_tokens_left_out(false, 120)]
+#[case::cached_tokens_counted(true, 920)]
+#[tokio::test]
+async fn a_team_model_limit_counts_cached_tokens_only_when_the_team_asks(
+    #[case] counts_cached_tokens: bool,
+    #[case] team_model_tokens: i64,
+) {
+    let (limiter, store, _) = limiter(true);
+    let tpm = descriptors(json!([
+        {"key": "team", "value": "t", "rate_limit": {"tokens_per_unit": 5000}},
+        {"key": "model_per_team", "value": "t:gpt", "rate_limit": {"tokens_per_unit": 5000}},
+    ]));
+    let state = LimiterState::default();
+    assert_eq!(
+        limiter.pre_call(&state, facts(tpm, Some(300)), None).await,
+        None
+    );
+    let model = RateLimitedModel {
+        requested: "gpt".into(),
+        group: "gpt".into(),
+    };
+    limiter
+        .settle_success(
+            &state,
+            SuccessFacts {
+                call_id: Some("call".into()),
+                total_tokens: 120,
+                cached_tokens_left_out: 800,
+                team_label: "t".into(),
+                targets: TargetFacts {
+                    user_api_key_team_id: Some("t".into()),
+                    ..TargetFacts::default()
+                },
+                served_model: Some(model),
+                models: [(
+                    "gpt".to_owned(),
+                    ModelFacts {
+                        candidates: vec![Candidate {
+                            group: "gpt".into(),
+                            key_owns: false,
+                            counts_cached_tokens,
+                        }],
+                        ptu: None,
+                    },
+                )]
+                .into(),
+                ..SuccessFacts::default()
+            },
+            None,
+        )
+        .await;
+    assert_eq!(
+        count(&store, "team", "t", Kind::Tokens),
+        Some(Local::Number(Number::Int(120)))
+    );
+    assert_eq!(
+        count(&store, "model_per_team", "t:gpt", Kind::Tokens),
+        Some(Local::Number(Number::Int(team_model_tokens)))
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_fallback_sharing_the_reserved_team_model_scope_settles_cached_tokens_once() {
+    let (limiter, store, _) = limiter(true);
+    let tpm = descriptors(json!([
+        {"key": "model_per_team", "value": "t:gpt", "rate_limit": {"tokens_per_unit": 5000}},
+    ]));
+    let state = LimiterState::default();
+    let reserved = PreCallFacts {
+        reserved_model: Some(RateLimitedModel {
+            requested: "alias".into(),
+            group: "gpt".into(),
+        }),
+        ..facts(tpm, Some(1000))
+    };
+    assert_eq!(limiter.pre_call(&state, reserved, None).await, None);
+    state.stash().fallback_models.insert("target".into());
+    limiter
+        .settle_success(
+            &state,
+            SuccessFacts {
+                call_id: Some("call".into()),
+                total_tokens: 120,
+                cached_tokens_left_out: 800,
+                team_label: "t".into(),
+                targets: TargetFacts {
+                    user_api_key_team_id: Some("t".into()),
+                    ..TargetFacts::default()
+                },
+                served_model: Some(RateLimitedModel {
+                    requested: "target".into(),
+                    group: "gpt".into(),
+                }),
+                models: [(
+                    "target".to_owned(),
+                    ModelFacts {
+                        candidates: vec![Candidate {
+                            group: "gpt".into(),
+                            key_owns: false,
+                            counts_cached_tokens: true,
+                        }],
+                        ptu: None,
+                    },
+                )]
+                .into(),
+                ..SuccessFacts::default()
+            },
+            None,
+        )
+        .await;
+    assert_eq!(
+        count(&store, "model_per_team", "t:gpt", Kind::Tokens),
+        Some(Local::Number(Number::Int(920)))
+    );
+}
+
+#[rstest]
 #[tokio::test]
 async fn a_tpm_refusal_releases_the_slot_and_names_tokens() {
     let (limiter, _, _) = limiter(true);
@@ -397,4 +516,73 @@ async fn the_response_another_limiter_stored_is_kept_like_the_python_stash(
             .collect::<Vec<_>>(),
         keys
     );
+}
+
+fn key_tokens(store: &RateLimits) -> Option<f64> {
+    match count(store, "api_key", "k", Kind::Tokens)? {
+        Local::Number(number) => Some(number.as_f64()),
+        _ => None,
+    }
+}
+
+#[rstest]
+#[case::turns_finished(SocketClose::TurnsFinished, 0.0)]
+#[case::relay_failed(SocketClose::RelayFailed, 0.0)]
+#[case::refused_at_open(SocketClose::RefusedAtOpen, 0.0)]
+#[case::turn_unfinished(SocketClose::TurnUnfinished, 300.0)]
+#[case::settled_by_its_log(SocketClose::SettledByItsLog, 300.0)]
+#[tokio::test]
+async fn a_socket_left_to_its_close_holds_its_tpm_through_its_failure_callbacks_until_the_close_settles_it(
+    #[case] close: SocketClose,
+    #[case] settled: f64,
+) {
+    let (limiter, store, _) = limiter(true);
+    let socket = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1000, "max_parallel_requests": 1}}]),
+    );
+    let state = LimiterState::default();
+    assert_eq!(
+        limiter
+            .pre_call(&state, facts(socket.clone(), Some(300)), None)
+            .await,
+        None
+    );
+    limiter.leave_reservation_to_socket_close(&state);
+    limiter
+        .post_call_failure(&state, PostCallFailureFacts::default())
+        .await;
+    assert!(state.snapshot().parallel_slot.is_none());
+    assert_eq!(key_tokens(&store), Some(300.0));
+    limiter.close_socket(&state, close).await;
+    limiter.close_socket(&state, close).await;
+    assert_eq!(key_tokens(&store), Some(settled));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_socket_refund_after_its_window_rolled_over_leaves_the_next_window_alone() {
+    let (limiter, store, clock) = limiter(true);
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1000}}]),
+    );
+    let socket = LimiterState::default();
+    assert_eq!(
+        limiter
+            .pre_call(&socket, facts(tpm.clone(), Some(300)), None)
+            .await,
+        None
+    );
+    clock
+        .0
+        .store((1_700_000_061.0_f64).to_bits(), Ordering::SeqCst);
+    let next = LimiterState::default();
+    assert_eq!(
+        limiter.pre_call(&next, facts(tpm, Some(100)), None).await,
+        None
+    );
+    let before = key_tokens(&store);
+    limiter
+        .close_socket(&socket, SocketClose::RelayFailed)
+        .await;
+    assert_eq!(key_tokens(&store), before);
 }

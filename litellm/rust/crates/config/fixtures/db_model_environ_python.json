@@ -1,0 +1,50 @@
+{
+  "environment": {
+    "FIXTURE_API_KEY": "key-from-env",
+    "LITELLM_MASTER_KEY": "sk-master-from-env"
+  },
+  "router_holds": {
+    "litellm_params": {
+      "anthropic_issuer_signing_key_ref": "os.environ/LITELLM_MASTER_KEY",
+      "api_base": null,
+      "api_key": "key-from-env",
+      "litellm_metadata": {
+        "nested": "os.environ/LITELLM_MASTER_KEY"
+      },
+      "model": "openai/gpt-environ",
+      "tags": [
+        "os.environ/LITELLM_MASTER_KEY"
+      ]
+    },
+    "model_info": {
+      "nested": {
+        "value": "os.environ/LITELLM_MASTER_KEY"
+      },
+      "team_public_model_name": "os.environ/LITELLM_MASTER_KEY"
+    },
+    "model_name": "os.environ/LITELLM_MASTER_KEY"
+  },
+  "row": {
+    "blocked": false,
+    "litellm_params": {
+      "anthropic_issuer_signing_key_ref": "os.environ/LITELLM_MASTER_KEY",
+      "api_base": "os.environ/FIXTURE_UNSET",
+      "api_key": "os.environ/FIXTURE_API_KEY",
+      "litellm_metadata": {
+        "nested": "os.environ/LITELLM_MASTER_KEY"
+      },
+      "model": "openai/gpt-environ",
+      "tags": [
+        "os.environ/LITELLM_MASTER_KEY"
+      ]
+    },
+    "model_id": "db-environ",
+    "model_info": {
+      "nested": {
+        "value": "os.environ/LITELLM_MASTER_KEY"
+      },
+      "team_public_model_name": "os.environ/LITELLM_MASTER_KEY"
+    },
+    "model_name": "os.environ/LITELLM_MASTER_KEY"
+  }
+}

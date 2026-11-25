@@ -6,7 +6,7 @@ the team's shared default included, is cloned before it is written, so raising o
 cap never moves another member's.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -55,7 +55,7 @@ if TYPE_CHECKING:
     from litellm.repositories.prisma_protocols import TableActions
 
 _BATCH_TX_TIMEOUT: Final = timedelta(seconds=60)
-_NO_METADATA: Final = MappingProxyType({})
+_NO_METADATA: Final[Mapping[str, object]] = MappingProxyType({})
 _WITH_BUDGET: Final = MappingProxyType({"litellm_budget_table": True})
 
 
