@@ -5001,3 +5001,20 @@ def test_explicit_model_max_budget_on_a_new_user_wins_over_the_default(mock_prox
     params = _new_user_params_after_saving_defaults(monkeypatch, {"model_max_budget": own})
 
     assert params["model_max_budget"] == own
+
+
+def test_unlicensed_proxy_leaves_a_config_default_model_max_budget_off_new_users(monkeypatch):
+    import litellm
+    from litellm.proxy._types import NewUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_internal_new_user_params
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
+    monkeypatch.setattr(
+        litellm, "default_internal_user_params", {"max_budget": 5.0, "model_max_budget": {"gpt-4o": {"max_budget": 1.0}}}
+    )
+    data = NewUserRequest(user_role=LitellmUserRoles.INTERNAL_USER)
+
+    params = _update_internal_new_user_params(data.model_dump(), data)
+
+    assert params["model_max_budget"] == {}
+    assert params["max_budget"] == 5.0
