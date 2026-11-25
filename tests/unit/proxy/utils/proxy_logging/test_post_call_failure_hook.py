@@ -78,6 +78,11 @@ def test_is_proxy_only_llm_api_truth_table(proxy_logging):
             original_exception=BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="g"),
             route="/v1/messages",
         ),
+        "presidio_block_of_a_refused_stream": proxy_logging._is_proxy_only_llm_api_error(
+            original_exception=BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="g"),
+            route="/v1/messages",
+            stream_refused=True,
+        ),
         "reply_block_on_llm_route": proxy_logging._is_proxy_only_llm_api_error(
             original_exception=_reply_block(log_as_failure=False),
             route="/chat/completions",
@@ -98,7 +103,8 @@ def test_is_proxy_only_llm_api_truth_table(proxy_logging):
         "auth_short_circuit": True,
         "auth_short_circuit_on_queued_route": True,
         "guardrail_raised_on_llm_route": True,
-        "presidio_block_on_llm_route": True,
+        "presidio_block_on_llm_route": False,
+        "presidio_block_of_a_refused_stream": True,
         "reply_block_on_llm_route": False,
         "reply_block_asking_to_be_logged_on_llm_route": True,
         "reply_block_asking_to_be_logged_on_non_llm_route": False,

@@ -224,6 +224,7 @@ from litellm.litellm_core_utils.total_deadline import TotalTimeoutExpired
 from litellm.llms import load_guardrail_translation_mappings
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field, stream_item_items
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.stream_close import aclose_if_supported
 from litellm.proxy._types import (
     CLAUDE_CODE_GATEWAY_PREFIX,
     AlertType,
@@ -855,6 +856,9 @@ class _ReadBytesTap(Generic[_T]):
         if isinstance(chunk, bytes):
             self.read.append(chunk)
         return chunk
+
+    async def aclose(self) -> None:
+        await aclose_if_supported(self._source)
 
 
 def _pipelines_stream_live(pipelines: Sequence[tuple[str, "GuardrailPipeline"]]) -> bool:
@@ -1900,7 +1904,8 @@ GUARDRAIL_ENDPOINT_FAILURE: Final = object()
 """Stored under ``GUARDRAIL_ENDPOINT_FAILURE_KEY`` by ``/apply_guardrail`` when a request it had set up fails, so the
 spend logs keep that failure although the route is not an LLM API route. A sentinel for the same reason as above."""
 
-_PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException, BlockedPiiEntityError)
+_PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
+_STREAM_REFUSAL_ERRORS: Final = (*_PROXY_ONLY_LLM_API_ERRORS, BlockedPiiEntityError)
 _PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
     {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}
 )
@@ -4533,6 +4538,7 @@ class ProxyLogging:
             error_type=error_type,
             route=user_api_key_dict.request_route,
             team_id=user_api_key_dict.team_id,
+            stream_refused=isinstance(logging_obj, Logging) and logging_obj.stream_success_refused,
         ):
             await self._handle_logging_proxy_only_error(
                 request_data=request_data,
@@ -4618,6 +4624,7 @@ class ProxyLogging:
         error_type: ProxyErrorTypes | None = None,
         route: str | None = None,
         team_id: str | None = None,
+        stream_refused: bool = False,
     ) -> bool:
         """
         Return True if the error is a Proxy Only LLM API Error
@@ -4649,6 +4656,7 @@ class ProxyLogging:
 
         return (
             isinstance(original_exception, _PROXY_ONLY_LLM_API_ERRORS)
+            or (stream_refused and isinstance(original_exception, BlockedPiiEntityError))
             or (error_type == ProxyErrorTypes.auth_error)
             or (isinstance(original_exception, ModifyResponseException) and original_exception.log_as_failure)
         )
@@ -5446,7 +5454,7 @@ class ProxyLogging:
         except Exception as e:
             await ProxyLogging._record_served_stream_output(request_data, served_chunks)
             refused_messages: Final = read_tap is not None and await ProxyLogging._refuse_messages_stream(
-                request_data, e, tuple(read_tap.read)
+                request_data, e, read_tap
             )
             if not refused_messages and not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
                 ProxyLogging.fire_deferred_stream_logging(request_data)
@@ -5786,7 +5794,7 @@ class ProxyLogging:
         if not isinstance(logging_obj, Logging):
             return False
         _args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
-        if not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS):
+        if not isinstance(error, _STREAM_REFUSAL_ERRORS):
             return False
         match _args:
             case (ModelResponse(), *_) if (held := held_round_spend(logging_obj)) is not None:
@@ -5798,26 +5806,29 @@ class ProxyLogging:
                 logging_obj.record_billed_rounds_for_failure(billed.spend)
             case _:
                 return False
+        logging_obj.refuse_stream_success()
         logging_obj._on_deferred_stream_complete = None
         logging_obj._deferred_stream_complete_args = None
         return True
 
     @staticmethod
     async def _refuse_messages_stream(
-        request_data: Mapping[str, object], error: Exception, read: tuple[bytes, ...]
+        request_data: Mapping[str, object], error: Exception, read_tap: "_ReadBytesTap[object]"
     ) -> bool:
         """Drop the success log of a /v1/messages byte stream that ends in an error ``post_call_failure_hook`` logs
-        as a failure, parked or still to come at teardown, and bill the stream on the failure row instead: a native
-        provider stream is stopped and billed for every chunk it sent, any other for the bytes the hooks read.
-        Returns False when the error is not one, or when the stream parked an assembled chat response instead,
-        so the caller handles it as a chat stream."""
+        as a failure, parked or still to come at teardown, and bill the stream on the failure row instead: the
+        provider stream is stopped, a native one billed for every chunk it sent and any other for the bytes the hooks
+        read. Returns False when the error is not one, when the stream's success log already ran, or when the stream
+        parked an assembled chat response instead, so the caller handles it as a chat stream."""
         from litellm.litellm_core_utils.asyncify import asyncify
         from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
             AnthropicPassthroughLoggingHandler,
         )
 
         logging_obj: Final = request_data.get("litellm_logging_obj")
-        if not isinstance(logging_obj, Logging) or not isinstance(error, _PROXY_ONLY_LLM_API_ERRORS):
+        if not isinstance(logging_obj, Logging) or not isinstance(error, _STREAM_REFUSAL_ERRORS):
+            return False
+        if logging_obj.stream_success_claimed:
             return False
         parked_args: Final[tuple[object, ...] | None] = getattr(logging_obj, "_deferred_stream_complete_args", None)
         match parked_args:
@@ -5835,10 +5846,16 @@ class ProxyLogging:
         if stop_provider_stream is not None:
             await stop_provider_stream()
             return True
+        try:
+            await read_tap.aclose()
+        except Exception as exc:  # noqa: BLE001  # closing is best-effort, so the refusal still reaches the client
+            verbose_proxy_logger.warning(
+                "Closing a refused /v1/messages stream failed: %s(%s)", type(exc).__name__, exc
+            )
         pricing_request: Final[Mapping[str, object]] = (
             {"speed": request_data["speed"]} if "speed" in request_data else {}
         )
-        read_text: Final = b"".join(read).decode("utf-8", errors="replace")
+        read_text: Final = b"".join(read_tap.read).decode("utf-8", errors="replace")
         await asyncify(AnthropicPassthroughLoggingHandler.record_partial_usage_for_failure)(
             litellm_logging_obj=logging_obj, request_body=pricing_request, all_chunks=(read_text,) if read_text else ()
         )

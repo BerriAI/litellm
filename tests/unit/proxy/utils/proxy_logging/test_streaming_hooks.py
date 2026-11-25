@@ -709,31 +709,46 @@ async def test_chat_stream_guardrail_block_after_stream_end_logs_failure_not_suc
     events: list[str] = []
     request_data: dict[str, object] = {"metadata": {}}
     logging_obj, upstream = _armed_chat_stream("test_chat_stream_guardrail_block", request_data, events)
-    monkeypatch.setattr(litellm, "callbacks", [_raising_at_end_of_stream(block)])
+    failures: Final[list[dict[str, object]]] = []
 
-    with pytest.raises(type(block)):
+    class _FailureRecorder(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            failures.append(kwargs["standard_logging_object"])
+
+    monkeypatch.setattr(litellm, "callbacks", [_raising_at_end_of_stream(block)])
+    logging_obj.dynamic_async_failure_callbacks = [_FailureRecorder()]
+    proxy_logging.alert_types = []
+    user_api_key_dict: Final = make_user_api_key_auth(request_route=route)
+
+    with pytest.raises(type(block)) as raised:
         async for _ in proxy_logging.async_post_call_streaming_iterator_hook(
             response=upstream,
-            user_api_key_dict=make_user_api_key_auth(request_route=route),
+            user_api_key_dict=user_api_key_dict,
             request_data=request_data,
         ):
             pass
     await asyncio.sleep(0)
     await asyncio.sleep(0)
+    await proxy_logging.post_call_failure_hook(
+        request_data=request_data,
+        original_exception=raised.value,
+        user_api_key_dict=user_api_key_dict,
+        route=route,
+    )
 
     snapshot = {
         "events": events,
         "callback_cleared": logging_obj._on_deferred_stream_complete is None,
         "args_cleared": logging_obj._deferred_stream_complete_args is None,
-        "combined_usage_total_tokens": logging_obj.model_call_details["combined_usage_object"].total_tokens,
-        "response_cost_positive": logging_obj.model_call_details["response_cost"] > 0,
+        "failure_rows_total_tokens": [row["total_tokens"] for row in failures],
+        "failure_billed": all(row["response_cost"] > 0 for row in failures),
     }
     assert snapshot == {
         "events": [],
         "callback_cleared": True,
         "args_cleared": True,
-        "combined_usage_total_tokens": 8,
-        "response_cost_positive": True,
+        "failure_rows_total_tokens": [8],
+        "failure_billed": True,
     }
 
 
@@ -743,7 +758,8 @@ async def test_chat_stream_generic_callback_error_after_stream_end_still_flushes
 ):
     """
     ``post_call_failure_hook`` only routes proxy-level errors (HTTPException,
-    ProxyException, GuardrailRaisedException, BlockedPiiEntityError) through failure logging. A
+    ProxyException, GuardrailRaisedException, or a BlockedPiiEntityError that refused a stream) through failure
+    logging. A
     callback that dies with any other exception after the stream completed
     must keep flushing the parked success dispatch, or the request ends with
     no terminal log at all.

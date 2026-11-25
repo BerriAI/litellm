@@ -443,7 +443,7 @@ class PassThroughStreamingHandler:
         - Vertex AI
         - OpenAI
         """
-        if litellm_logging_obj.stream_success_refused is True:
+        if not litellm_logging_obj.claim_stream_success():
             return
         from litellm.llms.anthropic.messages.native.streaming_iterator import (
             is_message_stop_chunk,  # pyright: ignore[reportPrivateUsage]  # both native stream paths share terminal-event detection

@@ -1291,6 +1291,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.on_stream_refused: Callable[[], Awaitable[None]] | None = None
         self._stream_failure_claimed: bool = False
         self._stream_success_refused: bool = False
+        self._stream_success_claimed: bool = False
         self._holding_stream_failure: bool = False
         self._held_stream_failure: Exception | None = None
         self._stash_owed_on_success: bool = False
@@ -3514,6 +3515,18 @@ class Logging(LiteLLMLoggingBaseClass):
     @property
     def stream_success_refused(self) -> bool:
         return self._stream_success_refused
+
+    def claim_stream_success(self) -> bool:
+        """The stream's success log is about to run, so a later refusal keeps it instead of billing a second row.
+        Returns False when a post-call hook already refused the stream."""
+        if self._stream_success_refused:
+            return False
+        self._stream_success_claimed = True
+        return True
+
+    @property
+    def stream_success_claimed(self) -> bool:
+        return self._stream_success_claimed
 
     def served_round(self, response: object) -> ServedRound | None:
         usage: Final = get_usage_object(completion_response=response)
