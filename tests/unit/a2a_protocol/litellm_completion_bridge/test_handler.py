@@ -200,3 +200,22 @@ async def test_priced_agent_call_reports_the_agents_token_price_to_callbacks(
     assert usage["prompt_tokens"] > 0
     assert cost == pytest.approx(usage["prompt_tokens"] * 0.0001 + usage["completion_tokens"] * 0.0002)
     assert litellm.model_cost.get("databricks_agent/my-agent", {}).get("input_cost_per_token") != 0.0001
+
+
+@respx.mock
+async def test_agent_with_a_price_that_is_not_a_number_still_returns_its_reply(httpx_transport: None) -> None:
+    respx.post(INVOCATIONS_URL).mock(
+        return_value=httpx.Response(200, json={"object": "response", "output": [MESSAGE_ITEM]})
+    )
+    response: Final = await A2ACompletionBridgeHandler.handle_non_streaming(
+        request_id="req-1",
+        params=_a2a_params(),
+        litellm_params={
+            "custom_llm_provider": "databricks_agent",
+            "model": "my-agent",
+            "api_base": WORKSPACE,
+            "api_key": "pat-1",
+            "input_cost_per_token": "abc",
+        },
+    )
+    assert response["result"]["parts"] == [{"kind": "text", "text": "pong"}]
