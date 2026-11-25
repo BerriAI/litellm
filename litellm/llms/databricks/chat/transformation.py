@@ -5,7 +5,7 @@ Translates from OpenAI's `/v1/chat/completions` to Databricks' `/chat/completion
 import os
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast, overload
 
 import httpx
 from pydantic import BaseModel, TypeAdapter
@@ -27,6 +27,8 @@ from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.base_utils import (
     type_to_response_format_param,  # pyright: ignore[reportUnknownVariableType]  # base_utils helper returns an untyped dict
 )
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.llms.openai.common_utils import OpenAIError
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.databricks import (
     AllDatabricksContentValues,
@@ -773,6 +775,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
 
 class DatabricksChatResponseIterator(BaseModelResponseIterator):
+    upstream_abort_error: ClassVar[type[BaseLLMException]] = OpenAIError
+
     def __init__(
         self,
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,

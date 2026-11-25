@@ -2,6 +2,7 @@ import asyncio
 import datetime
 import json
 import logging
+import queue
 import threading
 import time
 from collections import OrderedDict, defaultdict
@@ -19,9 +20,11 @@ from openai.types.chat import ChatCompletionChunk, ChatCompletionStreamOptionsPa
 from pydantic import BaseModel, ConfigDict
 
 import litellm
-from litellm import verbose_logger
+from litellm import LlmProviders, verbose_logger
 from litellm._logging import session_id_var, trace_id_var
 from litellm.exceptions import MidStreamFallbackError
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.streaming_handler import (
     CustomStreamWrapper,
@@ -46,7 +49,7 @@ from litellm.types.utils import (
     StreamingChoices,
     Usage,
 )
-from litellm.utils import ModelResponseListIterator
+from litellm.utils import ModelResponseListIterator, ProviderConfigManager
 from litellm import completion
 from typing import Tuple
 
@@ -1646,8 +1649,88 @@ async def test_stream_with_null_choices_chunk_finishes_normally(
     assert [choice.finish_reason for choice in streamed_choices if choice.finish_reason] == ["stop"]
 
 
+class _FailureErrorClassRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.error_classes: Final = queue.SimpleQueue[object]()
+
+    def _record(self, kwargs: object) -> None:
+        standard_logging_object: Final = cast(Mapping[str, Mapping[str, Mapping[str, object]]], kwargs)[
+            "standard_logging_object"
+        ]
+        self.error_classes.put(standard_logging_object["error_information"]["error_class"])
+
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object) -> None:
+        self._record(kwargs)
+
+    async def async_log_failure_event(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record(kwargs)
+
+
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("transport", ["http_handler", "azure_ai", "databricks"])
+async def test_aborted_stream_logs_the_error_class_of_the_providers_http_errors(
+    async_stream: bool, transport: str
+) -> None:
+    provider: Final = _RAW_SSE_ITERATORS[transport][0]
+    provider_config: Final = ProviderConfigManager.get_provider_chat_config(
+        model="test-model", provider=LlmProviders(provider)
+    )
+    assert provider_config is not None
+    recorder: Final = _FailureErrorClassRecorder()
+    call_type: Final = "acompletion" if async_stream else "completion"
+    logging_obj: Final = Logging(
+        model="test-model",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type=call_type,
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id=f"aborted-error-class-{call_type}",
+        function_id=f"aborted-error-class-{call_type}",
+        dynamic_failure_callbacks=[recorder],
+        dynamic_async_failure_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="test-model",
+        optional_params={},
+        litellm_params=get_litellm_params(custom_llm_provider=provider, acompletion=async_stream),
+    )
+    sse_events: Final = (
+        {
+            "id": "chatcmpl-aborted",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "test-model",
+            "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
+        }
+        for delta, finish_reason in (({"role": "assistant", "content": "Partial answer"}, None), ({}, "abort"))
+    )
+    raw_response: Final = httpx.Response(
+        200,
+        content="".join(f"data: {json.dumps(event)}\n\n" for event in sse_events) + "data: [DONE]\n\n",
+        headers={"content-type": "text/event-stream"},
+        request=httpx.Request("POST", "https://provider.example/v1/chat/completions"),
+    )
+    client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
+    response: Final = _chat_stream_wrapper(transport, raw_response, client, logging_obj)
+
+    try:
+        with pytest.raises(MidStreamFallbackError, match="abort"):
+            _chunks: Final = [chunk async for chunk in response] if async_stream else list(response)
+    finally:
+        if isinstance(client, AsyncOpenAI):
+            await client.close()
+        else:
+            client.close()
+
+    error_class: Final = await asyncio.to_thread(recorder.error_classes.get, timeout=5)
+    assert error_class == type(provider_config.get_error_class("", 500, {})).__name__
+
+
 def _text_completion_stream_wrapper(
-    final_finish_reason: str, client: OpenAI | AsyncOpenAI, logging_obj: Logging
+    provider: str, final_finish_reason: str, client: OpenAI | AsyncOpenAI, logging_obj: Logging
 ) -> CustomStreamWrapper:
     body: Final = (
         "".join(
@@ -1680,14 +1763,15 @@ def _text_completion_stream_wrapper(
         ),
         model="test-model",
         logging_obj=logging_obj,
-        custom_llm_provider="text-completion-openai",
+        custom_llm_provider=provider,
     )
 
 
 @pytest.mark.parametrize("async_stream", [False, True])
-async def test_aborted_text_completion_stream_raises(async_stream: bool, logging_obj: Logging) -> None:
+@pytest.mark.parametrize("provider", ["text-completion-openai", "azure_text"])
+async def test_aborted_text_completion_stream_raises(async_stream: bool, provider: str, logging_obj: Logging) -> None:
     client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
-    response: Final = _text_completion_stream_wrapper("abort", client, logging_obj)
+    response: Final = _text_completion_stream_wrapper(provider, "abort", client, logging_obj)
 
     try:
         with pytest.raises(MidStreamFallbackError, match="abort") as excinfo:
@@ -1703,9 +1787,10 @@ async def test_aborted_text_completion_stream_raises(async_stream: bool, logging
 
 
 @pytest.mark.parametrize("async_stream", [False, True])
-async def test_stopped_text_completion_stream_finishes_normally(async_stream: bool, logging_obj: Logging) -> None:
+@pytest.mark.parametrize("provider", ["text-completion-openai", "azure_text"])
+async def test_stopped_text_completion_stream_finishes_normally(async_stream: bool, provider: str, logging_obj: Logging) -> None:
     client: Final = AsyncOpenAI(api_key="unused") if async_stream else OpenAI(api_key="unused")
-    response: Final = _text_completion_stream_wrapper("stop", client, logging_obj)
+    response: Final = _text_completion_stream_wrapper(provider, "stop", client, logging_obj)
 
     try:
         chunks: Final = [chunk async for chunk in response] if async_stream else list(response)
