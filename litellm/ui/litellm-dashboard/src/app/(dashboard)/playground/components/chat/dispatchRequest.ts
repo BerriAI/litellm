@@ -132,7 +132,7 @@ export async function dispatchRequest(context: DispatchContext): Promise<void> {
         onHeaders,
       );
     case EndpointType.RESPONSES: {
-      const continuing = chat.useApiSessionManagement && chat.responsesSessionId;
+      const continuing = chat.previousResponseId !== null;
       return makeOpenAIResponsesRequest(
         (continuing ? [userMessage] : [...textHistory(history), userMessage]) as MessageType[],
         (role, delta, servedModel) => chat.updateTextUI(role, delta, servedModel),
@@ -148,7 +148,7 @@ export async function dispatchRequest(context: DispatchContext): Promise<void> {
         guardrails,
         policies,
         mcpSelection,
-        chat.useApiSessionManagement ? chat.responsesSessionId : null,
+        chat.previousResponseId,
         context.onResponseId,
         chat.handleMCPEvent,
         context.codeInterpreter.enabled,
@@ -161,6 +161,14 @@ export async function dispatchRequest(context: DispatchContext): Promise<void> {
         chat.updateTotalLatency,
         headers,
         onHeaders,
+        undefined,
+        undefined,
+        continuing
+          ? () => {
+              chat.handleHistoryResent();
+              return [...textHistory(history), userMessage] as MessageType[];
+            }
+          : undefined,
       );
     }
     case EndpointType.ANTHROPIC_MESSAGES:
