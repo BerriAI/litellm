@@ -54,7 +54,7 @@ describe("EmailEventSettings", () => {
     renderWithProviders(<EmailEventSettings accessToken="sk-test" />);
 
     expect(
-      await screen.findByText(/An email will be sent to the user when a new virtual key is created/),
+      await screen.findByText(/An email will be sent to the user when a new Virtual Key is created/),
     ).toBeInTheDocument();
     expect(
       screen.getByText(/An email will be sent to the email address of the user when a new user is created/),

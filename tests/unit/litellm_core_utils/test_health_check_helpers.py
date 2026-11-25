@@ -28,6 +28,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.base import HiddenParams
 from litellm.types.utils import (
     LIST_BATCHES_SUPPORTED_PROVIDERS,
+    AdminApiKeySecretReference,
     TextChoices,
     TextCompletionResponse,
     Usage,
@@ -808,6 +809,36 @@ def test_native_health_check_mode_routes_mantle_claude_to_messages_and_soniox_re
     model: str, custom_llm_provider: str | None, expected: str | None
 ) -> None:
     assert native_health_check_mode(model=model, custom_llm_provider=custom_llm_provider) == expected
+
+
+@pytest.mark.parametrize(
+    ("requested_model", "model", "expected"),
+    (
+        ("elevenlabs/scribe_v2_realtime", "scribe_v2_realtime", "realtime"),
+        ("elevenlabs/scribe_v2_realtime", "elevenlabs/scribe_v2_realtime", "realtime"),
+        ("elevenlabs/scribe_v9_realtime", "scribe_v9_realtime", "realtime"),
+        ("elevenlabs/scribe_v2", "scribe_v2", "audio_transcription"),
+        ("elevenlabs/eleven_v3", "eleven_v3", "audio_speech"),
+    ),
+)
+def test_elevenlabs_health_checks_use_the_websocket_for_models_the_cost_map_lists_as_realtime(
+    requested_model: str, model: str, expected: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "elevenlabs/scribe_v2_realtime": {"mode": "audio_transcription", "supported_endpoints": ["/v1/realtime"]},
+            "elevenlabs/scribe_v9_realtime": {"mode": "audio_transcription", "supported_endpoints": ["/v1/realtime"]},
+            "elevenlabs/scribe_v2": {"mode": "audio_transcription", "supported_endpoints": ["/v1/audio/transcriptions"]},
+            "elevenlabs/eleven_v3": {"mode": "audio_speech"},
+        },
+    )
+
+    assert (
+        default_health_check_mode(requested_model=requested_model, model=model, custom_llm_provider="elevenlabs")
+        == expected
+    )
 
 
 def test_default_health_check_mode_prefers_the_native_surface_over_the_cost_map(
@@ -1887,6 +1918,60 @@ async def test_ahealth_check_probes_extraction_models_through_the_extraction_api
     sent: Final = json.loads(upstream.calls[0].request.content)
     assert sent["state"] == "health check"
     assert sent["fields"]["reachable"]["type"] == "text"
+
+
+
+@pytest.mark.parametrize(
+    ("mode", "model", "upstream_url", "answer"),
+    (
+        (
+            "decisions",
+            "perplexity/pplx-decider-v1-27b",
+            "https://api.perplexity.ai/v1/decisions",
+            {
+                "model": "perplexity/pplx-decider-v1-27b",
+                "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+                "usage": {"input_tokens": 12, "output_tokens": 1},
+            },
+        ),
+        (
+            "extraction",
+            "cloudflare/clairic",
+            "https://api.cloudflare.com/client/v4/accounts/acct-1/ai/run/@cf/cloudflare/clairic",
+            {
+                "result": {
+                    "model": "clairic",
+                    "answers": {"reachable": {"type": "text", "value": "health"}},
+                    "truncated": False,
+                    "usage": {"input_tokens": 20, "output_tokens": 0},
+                },
+                "success": True,
+                "errors": [],
+                "messages": [],
+            },
+        ),
+    ),
+)
+async def test_ahealth_check_sends_the_secret_an_admin_oidc_reference_points_to(
+    mode: str,
+    model: str,
+    upstream_url: str,
+    answer: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct-1")
+    monkeypatch.delenv("CLOUDFLARE_API_BASE", raising=False)
+    monkeypatch.setenv("QA_HEALTH_OIDC_KEY", "resolved-health-key")
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(upstream_url).respond(json=answer)
+    reference: Final = AdminApiKeySecretReference("oidc/env/QA_HEALTH_OIDC_KEY", frozenset())
+
+    result: Final = await ahealth_check({"model": model, "api_key": reference}, mode=mode)
+
+    assert "error" not in result, result
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer resolved-health-key"
 
 
 VERTEX_AUTHORIZED_USER: Final = json.dumps(

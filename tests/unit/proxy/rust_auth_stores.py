@@ -21,15 +21,18 @@ from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
     LiteLLM_VerificationTokenView,
+    UserAPIKeyAuth,
 )
 from litellm.repositories import rust_database
 from litellm.rust_bridge._native import (
+    NativeDatabaseFailure,
     RustAccessGroupRepository,
     RustAgentIdentityRepository,
     RustAuditLogRepository,
     RustBudgetRepository,
     RustEndUserRepository,
     RustJwtKeyMappingRepository,
+    RustKeyOwnersRepository,
     RustKeyRepository,
     RustModelAccessGroupRepository,
     RustObjectPermissionRepository,
@@ -41,6 +44,14 @@ from litellm.rust_bridge._native import (
     RustTeamRepository,
     RustUserRepository,
 )
+
+
+def native_database_failure(kind: Literal["unreachable", "capacity", "other"]) -> NativeDatabaseFailure:
+    failure: Final = NativeDatabaseFailure(f"database query failed: {kind}")
+    failure.kind = kind
+    failure.unavailable = kind != "other"
+    failure.requeue_safe = False
+    return failure
 
 
 @dataclass
@@ -629,6 +640,23 @@ class FakeObjectPermissionStore(FakeFindStore):
         return await self._find(object_permission_id, use_writer=use_writer)
 
 
+class FakeKeyReader:
+    """The Rust key repository over the fake key rows: the row shaped into the fields of ``UserAPIKeyAuth`` the way
+    the repository shapes it, with no object permission nested. The repository's own shaping is tested in Rust
+    against Postgres, and pinned to this one in ``tests/unit/redis/stores/test_auth_cache_key.py``."""
+
+    def __init__(self, keys: FakeKeyStore) -> None:
+        self._keys: Final = keys
+
+    async def find(self, token: str, *, use_writer: bool = False) -> object:
+        row: Final = await self._keys.find(token, use_writer=use_writer)
+        if row is None:
+            return None
+        return UserAPIKeyAuth.model_validate(
+            LiteLLM_VerificationTokenView.model_validate_json(row).model_dump(exclude_none=True)
+        ).model_dump(mode="json")
+
+
 class FakeProjectStore:
     def __init__(self, rows: RustStoreRows) -> None:
         self._rows: Final = rows
@@ -679,8 +707,35 @@ class FakeSpendLogStore:
 
 
 @dataclass
+class FakeKeyOwnersStore:
+    """The auth prefetch's one-statement read: answers ``rows`` (a missing key reads as no row) and logs the ids
+    each call asked for, in ``(user, team, membership user, organization, project)`` order."""
+
+    rows: Mapping[str, object] = field(default_factory=dict)
+    lookups: list[tuple[str | None, ...]] = field(default_factory=list)
+
+    async def find(
+        self,
+        *,
+        user_id: str | None,
+        team_id: str | None,
+        membership_user_id: str | None,
+        organization_id: str | None,
+        project_id: str | None,
+    ) -> str:
+        self.lookups.append((user_id, team_id, membership_user_id, organization_id, project_id))
+        return json.dumps(
+            {
+                kind: self.rows.get(kind)
+                for kind in ("user_row", "team_row", "membership_row", "organization_row", "project_row")
+            }
+        )
+
+
+@dataclass
 class RustAuthStores:
     key: FakeKeyStore = field(default_factory=FakeKeyStore)
+    key_owners: FakeKeyOwnersStore = field(default_factory=FakeKeyOwnersStore)
     jwt_key_mapping: FakeJwtKeyMappingStore = field(default_factory=FakeJwtKeyMappingStore)
     agent_identity: FakeAgentIdentityStore = field(default_factory=FakeAgentIdentityStore)
     audit_log: FakeAuditLogStore = field(default_factory=FakeAuditLogStore)
@@ -699,7 +754,8 @@ class RustAuthStores:
 
     def by_kind(self) -> Mapping[Callable[..., object], object]:
         return {
-            RustKeyRepository: self.key,
+            RustKeyRepository: FakeKeyReader(self.key),
+            RustKeyOwnersRepository: self.key_owners,
             RustJwtKeyMappingRepository: self.jwt_key_mapping,
             RustAgentIdentityRepository: self.agent_identity,
             RustAuditLogRepository: self.audit_log,

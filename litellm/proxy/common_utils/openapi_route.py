@@ -12,8 +12,15 @@ from starlette.routing import BaseRoute, Route
 from litellm.proxy.common_utils.custom_openapi_spec import JsonObject
 
 OpenAPISchema: TypeAlias = JsonObject
-Inputs: Final = TypeVar("Inputs")
+Inputs = TypeVar("Inputs")
 _SERVERS: Final = TypeAdapter(list[dict[str, object]])
+_DOCUMENTATION_ROUTE_NAMES: Final = frozenset({"openapi", "scalar_reference", "swagger_ui_html", "swagger_ui_redirect"})
+
+
+def proxy_documentation_route_name(route: object) -> str | None:
+    if isinstance(route, Route) and not route.include_in_schema and route.name in _DOCUMENTATION_ROUTE_NAMES:
+        return route.name
+    return None
 
 
 @dataclass(frozen=True, slots=True, eq=False)

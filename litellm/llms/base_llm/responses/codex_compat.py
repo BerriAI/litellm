@@ -60,12 +60,18 @@ class _RewrittenFunctionCallItem(TypedDict):
     arguments: ReadOnly[str]
 
 
+def _json_object(value: object) -> "Mapping[str, object] | None":
+    return value if isinstance(value, dict) else None
+
+
 def _agent_message_text(item: "Mapping[str, object]") -> str:
-    content: Final = item.get("content")
-    if not isinstance(content, list):
+    content: Final = as_object_list(item.get("content"))
+    if content is None:
         return ""
     return "".join(
-        str(block.get("text") or block.get("encrypted_content") or "") for block in content if isinstance(block, dict)
+        str(block.get("text") or block.get("encrypted_content") or "")
+        for block in map(_json_object, content)
+        if block is not None
     )
 
 
@@ -163,13 +169,17 @@ def drop_unsupported_tools(
 
     Returns the kept tools and the sorted set of dropped types.
     """
-    kept: Final = tuple(tool for tool in tools if not isinstance(tool, dict) or tool.get("type") in supported_types)
+    kept: Final = tuple(
+        tool
+        for tool in tools
+        if (tool_object := _json_object(tool)) is None or tool_object.get("type") in supported_types
+    )
     dropped_types: Final = tuple(
         sorted(
             frozenset(
-                str(tool.get("type"))
-                for tool in tools
-                if isinstance(tool, dict) and tool.get("type") not in supported_types
+                str(tool_object.get("type"))
+                for tool_object in map(_json_object, tools)
+                if tool_object is not None and tool_object.get("type") not in supported_types
             )
         )
     )

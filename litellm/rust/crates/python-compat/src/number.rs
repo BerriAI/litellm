@@ -1,3 +1,6 @@
+//! Python number semantics: `int()` and `float()` parsing of text, Neumaier-compensated float
+//! sums, and the float and duration forms the proxy reads from settings.
+
 use std::{str::FromStr, time::Duration};
 
 use num_bigint::BigInt;

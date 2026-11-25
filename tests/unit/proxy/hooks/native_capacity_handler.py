@@ -51,6 +51,7 @@ from litellm.proxy.v2_proxy_fields import (
 from litellm.redis.stores.rate_limits import RateLimitCounter, RateLimitScope, RateLimitStore
 from litellm.types.integrations.custom_logger_v2 import Outcome as AttemptOutcome
 from litellm.types.router import ModelGroupInfo
+from litellm.types.utils import Usage
 
 
 @dataclass(frozen=True, slots=True)
@@ -460,6 +461,14 @@ class NativeDynamicRateLimitHandler:
             user_api_key_dict=user_api_key_dict, requested_model=requested_model
         )
 
+    async def charge_realtime_capacity_turn(
+        self, user_api_key_dict: UserAPIKeyAuth, requested_model: str | None, usage: Usage
+    ) -> None:
+        self._touched = True  # rebind-ok: the handler has counted on its store
+        await self.logger.charge_realtime_capacity_turn(
+            user_api_key_dict=user_api_key_dict, requested_model=requested_model, usage=usage
+        )
+
 
 def _resp_command(buffer: bytes) -> tuple[tuple[bytes, ...], bytes] | None:
     lines: Final = buffer.split(b"\r\n", 1)
@@ -749,6 +758,7 @@ def fake_redis(
         yield redis
     finally:
         stopped.set()
+        socket.create_connection(("127.0.0.1", port)).close()
         servers.close()
         server.join(timeout=5)
 

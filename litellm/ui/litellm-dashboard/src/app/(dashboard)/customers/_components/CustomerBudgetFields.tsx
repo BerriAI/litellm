@@ -1,11 +1,12 @@
 import { useTranslation } from "react-i18next";
-import { Input } from "@/components/ui/input";
+import type { ReactNode } from "react";
 import { Label } from "@/components/ui/label";
 import type { BudgetFields } from "./customerBudgetForm";
 import CustomerAllowedModelsSelect from "./CustomerAllowedModelsSelect";
+import type { CustomerModelScope } from "./customerModelOptions";
 import CustomerBudgetAmountInput from "./CustomerBudgetAmountInput";
 import CustomerBudgetPeriodSelect from "./CustomerBudgetPeriodSelect";
-import { CustomerRateLimitControls, CustomerRateLimitFields } from "./CustomerRateLimits";
+import { CustomerRateLimitControls } from "./CustomerRateLimits";
 
 interface Props {
   fields: BudgetFields;
@@ -15,6 +16,8 @@ interface Props {
   };
   idPrefix: string;
   disabled?: boolean;
+  modelScope?: CustomerModelScope;
+  unavailablePeriods?: readonly string[];
 }
 
 function AmountField({ fields, onChange, idPrefix, disabled, name }: Props & { name: "maxBudget" | "softBudget" }) {
@@ -36,7 +39,7 @@ function AmountField({ fields, onChange, idPrefix, disabled, name }: Props & { n
   );
 }
 
-function ModelsField({ fields, onChange, idPrefix, disabled }: Props) {
+function ModelsField({ fields, onChange, idPrefix, disabled, modelScope }: Props) {
   const { t } = useTranslation();
   return (
     <div className="space-y-2">
@@ -48,8 +51,8 @@ function ModelsField({ fields, onChange, idPrefix, disabled }: Props) {
         disabled={disabled}
         value={fields.allowedModels}
         onChange={(models) => onChange("allowedModels", models)}
+        modelScope={modelScope}
       />
-      <p className="text-xs text-muted-foreground">{t("customerPortal.hierarchy.allowedModelsHint")}</p>
     </div>
   );
 }
@@ -68,13 +71,13 @@ export function CustomerBudgetLimitFields({
   onChange,
   idPrefix,
   disabled = false,
-  period = "custom",
+  unavailablePeriods,
 }: {
   fields: Pick<BudgetFields, "maxBudget" | "budgetDuration" | "tpm" | "rpm">;
   onChange: (key: "maxBudget" | "budgetDuration" | "tpm" | "rpm", value: string) => void;
   idPrefix: string;
   disabled?: boolean;
-  period?: "standard" | "custom";
+  unavailablePeriods?: readonly string[];
 }) {
   const { t } = useTranslation();
   return (
@@ -93,7 +96,7 @@ export function CustomerBudgetLimitFields({
           <CustomerBudgetPeriodSelect
             value={fields.budgetDuration}
             disabled={disabled}
-            standardOnly={period === "standard"}
+            unavailablePeriods={unavailablePeriods}
             onChange={(value) => onChange("budgetDuration", value)}
           />
         </CustomerBudgetAmountInput>
@@ -109,45 +112,14 @@ export function CustomerBudgetLimitFields({
   );
 }
 
-export function CustomerBudgetFields({ layout = "detailed", ...props }: Props & { layout?: "scalar" | "detailed" }) {
-  const { t } = useTranslation();
-  const { fields, onChange, idPrefix, disabled = false } = props;
-  if (layout === "scalar")
-    return (
-      <div className="space-y-5">
-        <CustomerBudgetLimitFields {...props} />
-        <div className="border-t pt-5">
-          <CustomerBudgetAdvancedFields {...props} />
-        </div>
-      </div>
-    );
+export function CustomerBudgetFields({ children, ...props }: Props & { children?: ReactNode }) {
   return (
-    <div className="space-y-4">
-      <div className="grid gap-4 sm:grid-cols-2">
-        <AmountField {...props} name="maxBudget" />
-        <AmountField {...props} name="softBudget" />
-        <div className="space-y-1.5">
-          <Label htmlFor={`${idPrefix}-duration`}>{t("customerPortal.hierarchy.budgetDuration")}</Label>
-          <Input
-            id={`${idPrefix}-duration`}
-            disabled={disabled}
-            value={fields.budgetDuration}
-            onChange={(event) => onChange("budgetDuration", event.target.value)}
-            aria-describedby={`${idPrefix}-duration-hint`}
-          />
-          <p id={`${idPrefix}-duration-hint`} className="text-xs text-muted-foreground">
-            {t("customerPortal.hierarchy.budgetDurationHint")}
-          </p>
-        </div>
+    <div className="space-y-5">
+      <CustomerBudgetLimitFields {...props} />
+      {children}
+      <div className="border-t pt-5">
+        <CustomerBudgetAdvancedFields {...props} />
       </div>
-      <CustomerRateLimitFields
-        id={idPrefix}
-        tpm={fields.tpm}
-        rpm={fields.rpm}
-        disabled={disabled}
-        onChange={onChange}
-      />
-      <ModelsField {...props} />
     </div>
   );
 }

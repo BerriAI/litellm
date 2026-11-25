@@ -357,6 +357,54 @@ class TestShortCircuitEntryPoint:
         assert result is None
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("text", (None, 5))
+    async def test_non_string_user_text_is_left_for_the_route_to_reject_or_drop(
+        self, monkeypatch: pytest.MonkeyPatch, text: object
+    ) -> None:
+        from litellm.llms.anthropic.messages.native.handler import (
+            _try_websearch_short_circuit,
+        )
+
+        monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["github_copilot"])])
+        with respx.mock:
+            result: Final = await _try_websearch_short_circuit(
+                model="github_copilot/claude-sonnet-5.5",
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": "search query"}, {"type": "text", "text": text}],
+                    }
+                ],
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                custom_llm_provider="github_copilot",
+                stream=False,
+            )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_non_string_tool_result_text_still_runs_the_search(self) -> None:
+        from litellm.llms.anthropic.messages.native.handler import (
+            _try_websearch_short_circuit,
+        )
+
+        logger: Final = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+        tool_result: Final = {"type": "tool_result", "tool_use_id": "toolu_1", "content": [{"type": "text", "text": None}]}
+        with patch.object(logger, "_execute_search", new_callable=AsyncMock) as mock_search:
+            mock_search.return_value = ("results", None)
+            with patch("litellm.callbacks", [logger]):
+                result: Final = await _try_websearch_short_circuit(
+                    model="github_copilot/claude-sonnet-5.5",
+                    messages=[{"role": "user", "content": [tool_result, {"type": "text", "text": "search query"}]}],
+                    tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                    custom_llm_provider="github_copilot",
+                    stream=False,
+                )
+
+        assert isinstance(result, dict)
+        mock_search.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_returns_dict_when_not_streaming(self):
         """Non-streaming short-circuit → returns dict"""
         from litellm.llms.anthropic.messages.native.handler import (
@@ -364,9 +412,7 @@ class TestShortCircuitEntryPoint:
         )
 
         logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
-        with patch.object(
-            logger, "_execute_search", new_callable=AsyncMock
-        ) as mock_search:
+        with patch.object(logger, "_execute_search", new_callable=AsyncMock) as mock_search:
             mock_search.return_value = ("results", None)
             with patch("litellm.callbacks", [logger]):
                 result = await _try_websearch_short_circuit(
@@ -392,9 +438,7 @@ class TestShortCircuitEntryPoint:
         )
 
         logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
-        with patch.object(
-            logger, "_execute_search", new_callable=AsyncMock
-        ) as mock_search:
+        with patch.object(logger, "_execute_search", new_callable=AsyncMock) as mock_search:
             mock_search.return_value = ("streaming results", None)
             with patch("litellm.callbacks", [logger]):
                 result = await _try_websearch_short_circuit(
@@ -457,9 +501,7 @@ class TestShortCircuitEntryPoint:
         )
 
         logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
-        with patch.object(
-            logger, "_execute_search", new_callable=AsyncMock
-        ) as mock_search:
+        with patch.object(logger, "_execute_search", new_callable=AsyncMock) as mock_search:
             mock_search.return_value = ("streaming results", None)
             with patch("litellm.callbacks", [logger]):
                 # Simulate what anthropic_messages() does: original_stream=True
@@ -487,9 +529,7 @@ class TestShortCircuitEntryPoint:
         )
 
         logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
-        with patch.object(
-            logger, "_execute_search", new_callable=AsyncMock
-        ) as mock_search:
+        with patch.object(logger, "_execute_search", new_callable=AsyncMock) as mock_search:
             mock_search.return_value = ("results", None)
             with patch("litellm.callbacks", [logger]):
                 # Simulate the caller having derived custom_llm_provider from

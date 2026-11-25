@@ -17,18 +17,26 @@ from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_batch import request_redis_batch_scope
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
-from litellm.models.team import LiteLLM_TeamTableCachedObj
+from litellm.models.team import LiteLLM_TeamTableCachedObj, Member
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy import proxy_server
 from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
 from litellm.proxy.auth import core
 from litellm.proxy.auth import denial as auth_denial
 from litellm.proxy.auth import jwt as proxy_jwt
-from litellm.proxy.auth.host.facts import AliasMissing, EndUserRow, RegisteredAgentFacts, TeamMissing
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+from litellm.proxy.auth.host.facts import (
+    AliasMissing,
+    EndUserRow,
+    FoundTeam,
+    RegisteredAgentFacts,
+    TeamMissing,
+)
 from litellm.proxy.auth.host.python import AgentLookup, HttpCall, NoRegisteredAgents, PythonAuthHost, SharedFetches
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.router_cooldowns import RouterCooldownStore
 from litellm.router_utils.cooldown_cache import CooldownCache
 from litellm.rust_bridge._native import RustAuth, RustAuthSettings, RustIdentity
@@ -54,6 +62,7 @@ def _host(
     route: str = "/chat/completions",
     request_data: dict[str, object] | None = None,  # mutable-ok: the host takes the request body it rewrites
     cache: UserApiKeyCache | None = None,
+    jwks_cache: DualCache | None = None,
     http_handler: HTTPHandler | None = None,
     shared_fetches: SharedFetches | None = None,
     api_key: str | None = None,
@@ -74,6 +83,7 @@ def _host(
         else None,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
+        jwks_cache=jwks_cache or DualCache(),
         proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
         llm_router=None,
         llm_model_list=None,
@@ -110,10 +120,27 @@ async def test_a_role_change_is_stored_and_the_stored_user_is_cached_and_returne
         stale, "proxy_admin"
     )
 
-    cached: Final = await cache.async_get_cache(key="u1", model_type=LiteLLM_UserTable)
+    cached: Final = await cache.async_get_cache(key=AuthObject.user("u1"), model_type=LiteLLM_UserTable)
     assert rust_auth_stores.user.rows["u1"]["user_role"] == "proxy_admin"
     assert (updated.user_role, updated.user_email) == ("proxy_admin", "stored@example.com")
     assert cached == updated
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_role", ["proxy_admin", "internal_user"])
+async def test_a_session_token_carries_the_email_on_its_user_row(
+    rust_auth_stores: RustAuthStores, monkeypatch: pytest.MonkeyPatch, user_role: str
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-session-email")
+    rust_auth_stores.user.rows["u1"] = {"user_id": "u1", "user_role": user_role, "user_email": "stored@example.com"}
+    minted: Final = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
+        user_info=LiteLLM_UserTable(user_id="u1", user_role=user_role)
+    )
+
+    key: Final = await _host(prisma_client=MagicMock(spec=PrismaClient)).ui_key(minted)
+
+    assert key is not None
+    assert (key.user_id, key.user_role, key.user_email) == ("u1", user_role, "stored@example.com")
 
 
 @pytest.mark.asyncio
@@ -189,7 +216,12 @@ def _token(claims: dict[str, object]) -> str:
 
 
 async def _authorize(
-    token: str, route: str, cache: UserApiKeyCache, jwks: _Jwks, shared_fetches: SharedFetches | None = None
+    token: str,
+    route: str,
+    cache: UserApiKeyCache,
+    jwks: _Jwks,
+    shared_fetches: SharedFetches | None = None,
+    jwks_cache: DualCache | None = None,
 ):
     settings: Final = RustAuthSettings(
         {"enable_jwt_auth": True},
@@ -199,6 +231,7 @@ async def _authorize(
     host: Final = _host(
         route=route,
         cache=cache,
+        jwks_cache=jwks_cache,
         http_handler=jwks,  # pyright: ignore[reportArgumentType]  # serves only the GET the host makes
         shared_fetches=shared_fetches,
         api_key=token,
@@ -234,10 +267,11 @@ async def test_admin_scope_authorizes_a_proxy_admin_from_the_fetched_jwks() -> N
 async def test_a_cached_jwks_is_not_fetched_again() -> None:
     jwks: Final = _Jwks()
     cache: Final = UserApiKeyCache()
+    jwks_cache: Final = DualCache()
     token: Final = _token({"sub": "admin-1", "scope": "litellm_proxy_admin"})
 
-    _ = await _authorize(token, "/key/generate", cache, jwks)
-    _ = await _authorize(token, "/key/generate", cache, jwks)
+    _ = await _authorize(token, "/key/generate", cache, jwks, jwks_cache=jwks_cache)
+    _ = await _authorize(token, "/key/generate", cache, jwks, jwks_cache=jwks_cache)
 
     assert jwks.fetches == 1
 
@@ -313,7 +347,7 @@ async def test_a_caller_sharing_a_cancelled_fetch_takes_it_over() -> None:
 async def test_a_user_token_takes_its_role_from_the_user_row_the_core_returns() -> None:
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key="user-1",
+        key=AuthObject.user("user-1"),
         value=LiteLLM_UserTable(user_id="user-1", user_role="internal_user_viewer"),
         model_type=LiteLLM_UserTable,
     )
@@ -458,6 +492,34 @@ async def test_a_refused_userinfo_call_fails_with_the_endpoints_status() -> None
 @pytest.mark.asyncio
 async def test_a_team_alias_cannot_be_resolved_without_a_database() -> None:
     assert await _host().team_by_alias("platform") == AliasMissing.NO_DB
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("by_alias", [False, True], ids=["team-id", "team-alias"])
+async def test_jwt_projects_only_the_effective_member_from_the_team_it_read(by_alias: bool) -> None:
+    cache: Final = UserApiKeyCache()
+    key: Final = AuthObject.team_alias("platform") if by_alias else AuthObject.team("team-a")
+    caller: Final = Member(user_id="canonical-user", role="admin")
+    roster: Final = [Member(user_id="claim-subject", role="user"), caller]
+    team: Final = LiteLLM_TeamTableCachedObj(team_id="team-a", team_alias="platform", members_with_roles=roster)
+    await cache.async_set_cache(key, team, model_type=LiteLLM_TeamTableCachedObj)
+    host: Final = _host(cache=cache, prisma_client=MagicMock(spec=PrismaClient))
+
+    result: Final = await host.team_by_alias("platform") if by_alias else await host.team("team-a", upsert=False)
+    assert isinstance(result, FoundTeam)
+    assert (result.row.members_with_roles, result.facts.members) == ([], ())
+    assert result.facts.roster is not None
+    cache.delete_local(key.key)
+    replacement: Final = team.model_copy(update={"members_with_roles": roster[:1]})
+    await cache.async_set_cache(key, replacement, model_type=LiteLLM_TeamTableCachedObj)
+
+    first: Final = await host.bind_team_member(result.row, result.facts.roster, "canonical-user")
+    assert (first.row.members_with_roles, first.facts.members) == ([caller], ("canonical-user",))
+    first.row.members_with_roles[0].role = "user"
+    second: Final = await host.bind_team_member(result.row, result.facts.roster, "canonical-user")
+    missing: Final = await host.bind_team_member(result.row, result.facts.roster, "nonmember")
+    assert second.row.members_with_roles == [caller]
+    assert missing.facts.members == ()
 
 
 @pytest.mark.asyncio

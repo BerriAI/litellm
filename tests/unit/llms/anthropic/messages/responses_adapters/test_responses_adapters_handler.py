@@ -2,10 +2,10 @@ import datetime
 import json
 import os
 import sys
-from collections.abc import AsyncIterable, AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Callable, Iterator, Mapping
 from contextlib import nullcontext
 from itertools import chain
-from typing import Final, Protocol, cast, runtime_checkable
+from typing import Final, Literal, Protocol, cast, runtime_checkable
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -25,9 +25,13 @@ from litellm.llms.anthropic.messages.responses_adapters.handler import (
     LiteLLMMessagesToResponsesAPIHandler,
     _build_responses_kwargs,
 )
+from litellm.llms.anthropic.messages.utils import model_reasoning_efforts
 from litellm.llms.openai.responses.count_tokens.token_counter import OpenAITokenCounter
 from litellm.router import Router
+from litellm.utils import is_generalized_model_info
+from litellm.litellm_core_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS, converted_stream_requested
+from litellm.types.llms.anthropic import AnthropicOutputConfig
 
 MESSAGES = [{"role": "user", "content": "hello"}]
 CLAUDE_CODE_USER_ID = json.dumps({"device_id": "d" * 64, "account_uuid": "", "session_id": "session-abc"})
@@ -53,9 +57,9 @@ CHAT_COMPLETIONS_SSE_BODY = (
 )
 
 
-@pytest.mark.parametrize("continuation", [{"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}])
 @pytest.mark.parametrize("nested", [False, True])
-def test_chained_turn_keeps_system_out_of_stored_input(continuation: dict[str, str], nested: bool) -> None:
+def test_chained_turn_keeps_system_out_of_stored_input(nested: bool) -> None:
+    continuation: Final = {"conversation": "conv_prior"}
     forwarded: Final = {"extra_body": continuation} if nested else continuation
     kwargs: Final = _build_responses_kwargs(
         max_tokens=1024,
@@ -89,7 +93,7 @@ def test_auto_truncation_keeps_system_prompt_in_instructions(nested: bool) -> No
 
 @pytest.mark.parametrize(
     "request_params",
-    [{}, {"previous_response_id": "resp_prior"}, {"conversation": "conv_prior"}, {"truncation": "auto"}],
+    [{}, {"conversation": "conv_prior"}, {"truncation": "auto"}],
 )
 @pytest.mark.parametrize("nested", [False, True])
 def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
@@ -116,6 +120,15 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
     ]
 
 
+def _messages_history(history: tuple[tuple[str, str], ...]) -> tuple[dict[str, str], ...]:
+    return tuple(
+        chain.from_iterable(
+            ({"role": "user", "content": question}, {"role": "assistant", "content": answer})
+            for question, answer in history
+        )
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_params,wire_controls,preserve_instructions",
@@ -140,11 +153,6 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
         ({"store": True, "extra_body": {"store": False}}, {"store": False}, False),
         ({"store": False, "conversation": "conv_prior"}, {"store": False}, True),
         (
-            {"store": False, "previous_response_id": "resp_prior"},
-            {"store": False, "previous_response_id": "resp_prior"},
-            True,
-        ),
-        (
             {"store": False, "previous_response_id": "resp_prior", "additional_drop_params": ["previous_response_id"]},
             {"store": False},
             False,
@@ -153,15 +161,6 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
             {"store": False, "truncation": "auto", "additional_drop_params": ["truncation"]},
             {"store": False},
             False,
-        ),
-        (
-            {
-                "store": False,
-                "extra_body": {"previous_response_id": "resp_prior"},
-                "additional_drop_params": ["previous_response_id"],
-            },
-            {"store": False, "previous_response_id": "resp_prior"},
-            True,
         ),
         ({"store": False, "truncation": "auto"}, {"store": False, "truncation": "auto"}, True),
         (
@@ -185,21 +184,18 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
             False,
         ),
         (
-            {"store": False, "previous_response_id": None, "extra_body": {"previous_response_id": "resp_prior"}},
-            {"store": False, "previous_response_id": "resp_prior"},
-            True,
-        ),
-        (
             {"store": False, "conversation": None, "extra_body": {"conversation": "conv_prior"}},
             {"store": False, "conversation": "conv_prior"},
             True,
         ),
     ],
 )
-async def test_messages_system_goes_in_input_unless_the_request_continues_a_chain(
+@pytest.mark.parametrize("history", [(), (("earlier", "answer"),)], ids=["first_turn", "continued_turn"])
+async def test_messages_system_goes_in_input_unless_a_conversation_or_truncation_holds_it(
     request_params: dict[str, object],
     wire_controls: dict[str, object],
     preserve_instructions: bool,
+    history: tuple[tuple[str, str], ...],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -231,14 +227,14 @@ async def test_messages_system_goes_in_input_unless_the_request_continues_a_chai
             model="openai/responses/gpt-6.2-sol",
             max_tokens=16,
             system="Stable prefix",
-            messages=[{"role": "user", "content": "hi"}],
+            messages=[*_messages_history(history), {"role": "user", "content": "hi"}],
             api_key="sk-test",
             cache={"no-cache": True},
             **request_params,
         )
         await OpenAITokenCounter().count_tokens(
             model_to_use="gpt-6.2-sol",
-            messages=[{"role": "user", "content": "hi"}],
+            messages=[*_messages_history(history), {"role": "user", "content": "hi"}],
             contents=None,
             system="Stable prefix",
             messages_format="anthropic",
@@ -256,75 +252,58 @@ async def test_messages_system_goes_in_input_unless_the_request_continues_a_chai
         if key in request_body
     } == wire_controls
     user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    earlier_input: Final = tuple(
+        chain.from_iterable(
+            (
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": question}]},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": answer}]},
+            )
+            for question, answer in history
+        )
+    )
     if preserve_instructions:
         assert request_body["instructions"] == "Stable prefix"
-        assert request_body["input"] == [user_input]
+        assert request_body["input"] == [*earlier_input, user_input]
     else:
         assert "instructions" not in request_body
         assert request_body["input"] == [
             {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Stable prefix"}]},
+            *earlier_input,
             user_input,
         ]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("stored_prefix", "sent_instructions"), [("Stable prefix", None), ("Older prefix", "Stable prefix")]
+    "request_params",
+    [
+        {"previous_response_id": "resp_prior"},
+        {"extra_body": {"previous_response_id": "resp_prior"}},
+        {"previous_response_id": "resp_prior", "drop_params": True},
+        {"extra_body": {"previous_response_id": "resp_prior"}, "additional_drop_params": ["previous_response_id"]},
+        {"previous_response_id": None, "extra_body": {"previous_response_id": "resp_prior"}},
+        {"previous_response_id": ""},
+    ],
 )
-async def test_messages_follow_up_sends_the_system_prompt_only_when_the_stored_chain_lacks_it(
-    stored_prefix: str, sent_instructions: str | None, monkeypatch: pytest.MonkeyPatch
+async def test_messages_rejects_previous_response_id_before_calling_the_provider(
+    request_params: dict[str, object], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    response_body: Final = {
-        "id": "resp_wire",
-        "object": "response",
-        "created_at": 1789788253,
-        "status": "completed",
-        "model": "gpt-6.2-sol",
-        "output": [
-            {
-                "type": "message",
-                "id": "msg_wire",
-                "status": "completed",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": "ok", "annotations": []}],
-            }
-        ],
-        "usage": {"input_tokens": 10, "output_tokens": 1, "total_tokens": 11},
-    }
-    stored_chain: Final = {
-        "object": "list",
-        "data": [
-            {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": stored_prefix}]},
-            {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "first"}]},
-        ],
-        "first_id": "msg_1",
-        "last_id": "msg_2",
-        "has_more": False,
-    }
-    with respx.mock(assert_all_called=True) as router:
-        router.get("https://api.openai.com/v1/responses/resp_prior/input_items").mock(
-            return_value=httpx.Response(200, json=stored_chain)
-        )
-        upstream: Final = router.post("https://api.openai.com/v1/responses").mock(
-            return_value=httpx.Response(200, json=response_body)
-        )
-        response: Final = await litellm.anthropic.messages.acreate(
-            model="openai/responses/gpt-6.2-sol",
-            max_tokens=16,
-            system="Stable prefix",
-            messages=[{"role": "user", "content": "again"}],
-            api_key="sk-test",
-            cache={"no-cache": True},
-            previous_response_id="resp_prior",
-        )
-    request_body: Final = json.loads(upstream.calls[0].request.content)
-    assert request_body.get("instructions") == sent_instructions
-    assert request_body["previous_response_id"] == "resp_prior"
-    assert request_body["input"] == [
-        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "again"}]}
-    ]
-    assert response["content"] == [{"type": "text", "text": "ok"}]
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.route().mock(return_value=httpx.Response(500))
+        with pytest.raises(litellm.UnsupportedParamsError) as rejected:
+            await litellm.anthropic.messages.acreate(
+                model="openai/responses/gpt-6.2-sol",
+                max_tokens=16,
+                system="Stable prefix",
+                messages=[{"role": "user", "content": "again"}],
+                api_key="sk-test",
+                cache={"no-cache": True},
+                **request_params,
+            )
+    assert not upstream.called
+    assert rejected.value.status_code == 400
+    assert "/v1/responses" in rejected.value.message
 
 
 def test_build_responses_kwargs_never_asks_the_nested_call_to_replay_a_stream():
@@ -417,6 +396,308 @@ def test_build_responses_kwargs_auto_summary_asks_each_target_for_a_level_it_acc
         extra_kwargs={"custom_llm_provider": provider},
     )
     assert cast(Mapping[str, object], responses_kwargs["reasoning"])["summary"] == summary
+
+
+OFF_SWITCH_MODELS: Final = [
+    "gpt-5",
+    "gpt-5-mini",
+    "gpt-5-nano",
+    "gpt-6.1-sol",
+    "gpt-6-luna",
+    "gpt-5.1",
+    "chat-latest",
+    "o3",
+    "gpt-4.1",
+    "gpt-bridge-unmapped",
+]
+OFF_THINKING: Final = [{"type": "disabled"}, {"type": "between_tools"}]
+OFF_THINKING_IDS: Final = ["disabled", "between_tools-first-turn"]
+
+
+def _leaves_reasoning_to_the_model(model: str, thinking: dict[str, object]) -> bool:
+    return thinking["type"] == "between_tools" and model_reasoning_efforts(model, "openai") is None
+
+
+def _lowest_listed_off_switch(model: str) -> str:
+    levels: Final = model_reasoning_efforts(model, "openai") or ()
+    return next((level for level in ("none", "minimal", "low") if level in levels), "none")
+
+
+@pytest.mark.parametrize("thinking", OFF_THINKING, ids=OFF_THINKING_IDS)
+@pytest.mark.parametrize("model", OFF_SWITCH_MODELS)
+def test_build_responses_kwargs_turns_reasoning_off_at_the_lowest_level_the_model_lists_unless_it_never_reasons(
+    model: str, thinking: dict[str, object]
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=f"openai/{model}",
+        thinking=thinking,
+        extra_kwargs={"custom_llm_provider": "openai"},
+    )
+
+    map_row: Final = litellm.model_cost.get(model)
+    never_reasons: Final = map_row is not None and not map_row.get("supports_reasoning")
+    sends_no_reasoning: Final = never_reasons or _leaves_reasoning_to_the_model(model, thinking)
+    assert responses_kwargs.get("reasoning") == (
+        None if sends_no_reasoning else {"effort": _lowest_listed_off_switch(model)}
+    )
+
+
+@pytest.mark.parametrize("thinking", OFF_THINKING, ids=OFF_THINKING_IDS)
+@pytest.mark.parametrize("model", OFF_SWITCH_MODELS)
+def test_build_responses_kwargs_under_drop_params_keeps_a_listed_lower_tier_and_drops_an_unconfirmed_none(
+    model: str, thinking: dict[str, object]
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=f"openai/{model}",
+        thinking=thinking,
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": True},
+    )
+
+    off_switch: Final = _lowest_listed_off_switch(model)
+    map_row: Final = litellm.model_cost.get(model)
+    confirms_none: Final = map_row is not None and map_row.get("supports_none_reasoning_effort") is True
+    keeps_none: Final = map_row is None or (bool(map_row.get("supports_reasoning")) and confirms_none)
+    sends_off_switch: Final = (off_switch != "none" or keeps_none) and not _leaves_reasoning_to_the_model(
+        model, thinking
+    )
+    assert responses_kwargs.get("reasoning") == ({"effort": off_switch} if sends_off_switch else None)
+
+
+@pytest.mark.parametrize("model", ["gpt-5.4-mini", "gpt-5.1", "gpt-6-luna", "gpt-bridge-unmapped"])
+@pytest.mark.parametrize("thinking", [None, {"type": "adaptive"}], ids=["thinking-left-out", "adaptive"])
+def test_build_responses_kwargs_never_turns_on_reasoning_the_client_left_off(
+    model: str, thinking: dict[str, object] | None
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=f"openai/{model}",
+        output_config={"effort": "high"},
+        thinking=thinking,
+        extra_kwargs={"custom_llm_provider": "openai"},
+    )
+
+    map_row: Final = litellm.model_cost.get(model)
+    reasons_unasked: Final = map_row is not None and map_row.get("default_reasoning_effort") != "none"
+    reasoning: Final = responses_kwargs.get("reasoning")
+    assert (reasoning is None) == (thinking is None and not reasons_unasked)
+    assert reasoning is None or cast(Mapping[str, object], reasoning)["effort"] != "none"
+
+
+@pytest.mark.parametrize("model_info", [None, {"id": "router-deployment"}], ids=["sdk", "router"])
+@pytest.mark.parametrize(
+    "thinking, output_config, reasoning",
+    [
+        pytest.param({"type": "disabled"}, None, {"effort": "none"}, id="disabled"),
+        pytest.param(None, {"effort": "high"}, None, id="bare-effort"),
+    ],
+)
+def test_build_responses_kwargs_treats_a_name_only_the_family_rule_matches_as_unlisted_on_every_path(
+    model_info: dict[str, object] | None,
+    thinking: dict[str, object] | None,
+    output_config: AnthropicOutputConfig | None,
+    reasoning: dict[str, object] | None,
+) -> None:
+    model: Final = "openai/gpt-9.97-unlisted"
+    assert is_generalized_model_info(litellm.get_model_info(model))
+
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model=model,
+        thinking=thinking,
+        output_config=output_config,
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": True, "model_info": model_info},
+    )
+
+    assert responses_kwargs.get("reasoning") == reasoning
+
+
+@pytest.mark.parametrize("thinking", [None, {"type": "adaptive"}], ids=["thinking-left-out", "adaptive"])
+def test_build_responses_kwargs_leaves_a_bare_output_effort_to_an_explicit_reasoning_effort(
+    thinking: dict[str, object] | None,
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5-mini",
+        output_config={"effort": "high"},
+        thinking=thinking,
+        extra_kwargs={"custom_llm_provider": "openai", "reasoning_effort": "minimal"},
+    )
+
+    assert responses_kwargs["reasoning_effort"] == "minimal"
+    assert ("reasoning" in responses_kwargs) == (thinking is not None)
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+@pytest.mark.parametrize("thinking", [None, {"type": "adaptive"}], ids=["thinking-left-out", "adaptive"])
+def test_build_responses_kwargs_drops_an_effort_no_reasoning_api_defines_only_under_drop_params(
+    drop_params: bool, thinking: dict[str, object] | None
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-6-luna",
+        output_config=cast(AnthropicOutputConfig, {"effort": "turbo"}),
+        thinking=thinking,
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": drop_params},
+    )
+
+    assert responses_kwargs.get("reasoning") == (None if drop_params else {"effort": "turbo"})
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+@pytest.mark.parametrize("thinking", [None, {"type": "adaptive"}], ids=["thinking-left-out", "adaptive"])
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_build_responses_kwargs_drops_an_effort_the_model_does_not_list_only_under_drop_params(
+    effort: Literal["low", "medium", "high"], thinking: dict[str, object] | None, drop_params: bool
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/chat-latest",
+        output_config={"effort": effort},
+        thinking=thinking,
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": drop_params},
+    )
+
+    listed: Final = effort in (model_reasoning_efforts("chat-latest", "openai") or ())
+    assert responses_kwargs.get("reasoning") == ({"effort": effort} if listed or not drop_params else None)
+
+
+REASONS_WITHOUT_CONFIRMING_NONE: Final = {"supports_reasoning": True}
+TOOL_RESULT_TURN: Final = [
+    {"role": "user", "content": "multiply 6 by 7"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "multiply", "input": {"a": 6, "b": 7}}],
+    },
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "42"}]},
+]
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+@pytest.mark.parametrize(
+    "thinking, messages",
+    [({"type": "adaptive"}, MESSAGES), ({"type": "between_tools"}, TOOL_RESULT_TURN)],
+    ids=["adaptive", "between_tools-after-a-tool-result"],
+)
+def test_build_responses_kwargs_drops_a_client_none_a_reasoning_deployment_never_confirmed_only_under_drop_params(
+    drop_params: bool, thinking: dict[str, object], messages: list[dict[str, object]]
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=messages,
+        model="openai/reasoner-without-levels",
+        output_config=cast(AnthropicOutputConfig, {"effort": "none"}),
+        thinking=thinking,
+        extra_kwargs={
+            "custom_llm_provider": "openai",
+            "drop_params": drop_params,
+            "model_info": REASONS_WITHOUT_CONFIRMING_NONE,
+        },
+    )
+
+    assert responses_kwargs.get("reasoning") == (None if drop_params else {"effort": "none"})
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+def test_build_responses_kwargs_drops_a_bare_client_none_on_o3_only_under_drop_params(drop_params: bool) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/o3",
+        output_config=cast(AnthropicOutputConfig, {"effort": "none"}),
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": drop_params},
+    )
+
+    o3_row: Final = litellm.model_cost["o3"]
+    o3_levels: Final = model_reasoning_efforts("o3", "openai")
+    refuses_none: Final = (
+        "none" not in o3_levels
+        if o3_levels is not None
+        else o3_row.get("supports_reasoning") is True and o3_row.get("supports_none_reasoning_effort") is not True
+    )
+    assert responses_kwargs.get("reasoning") == (None if drop_params and refuses_none else {"effort": "none"})
+
+
+def test_build_responses_kwargs_keeps_a_pinned_effort_out_when_drop_params_drops_the_client_effort() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5-mini",
+        output_config=cast(AnthropicOutputConfig, {"effort": "none"}),
+        thinking={"type": "adaptive"},
+        extra_kwargs={"custom_llm_provider": "openai", "drop_params": True, "reasoning_effort": "low"},
+    )
+
+    listed_levels: Final = model_reasoning_efforts("gpt-5-mini", "openai") or ()
+    assert listed_levels and "none" not in listed_levels
+    assert "reasoning" not in responses_kwargs
+    assert "reasoning_effort" not in responses_kwargs
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no-drop_params"])
+def test_build_responses_kwargs_keeps_a_pinned_effort_out_when_drop_params_drops_disabled(drop_params: bool) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/reasoner-without-levels",
+        thinking={"type": "disabled"},
+        extra_kwargs={
+            "custom_llm_provider": "openai",
+            "drop_params": drop_params,
+            "reasoning_effort": "high",
+            "model_info": REASONS_WITHOUT_CONFIRMING_NONE,
+        },
+    )
+
+    sent: Final = {key: responses_kwargs.get(key) for key in ("reasoning", "reasoning_effort")}
+    assert sent == (
+        {"reasoning": None, "reasoning_effort": None}
+        if drop_params
+        else {"reasoning": {"effort": "none"}, "reasoning_effort": "high"}
+    )
+
+
+def test_build_responses_kwargs_under_drop_params_leaves_an_unlisted_effort_to_a_deployment_that_rounds_it() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/chat-latest",
+        output_config={"effort": "high"},
+        thinking={"type": "adaptive"},
+        extra_kwargs={
+            "custom_llm_provider": "openai",
+            "drop_params": True,
+            "model_info": {"reasoning_effort_levels": ["low", "high"]},
+        },
+    )
+
+    assert responses_kwargs.get("reasoning") == {"effort": "high"}
+
+
+@pytest.mark.parametrize("effort", ["max", "xhigh"])
+def test_build_responses_kwargs_forwards_an_output_effort_the_model_accepts(effort: Literal["max", "xhigh"]) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        output_config={"effort": effort},
+        extra_kwargs={"custom_llm_provider": "openai"},
+    )
+
+    forwarded: Final = cast(Mapping[str, object], responses_kwargs["reasoning"])["effort"]
+    accepted: Final = resolve_supported_reasoning_efforts(
+        litellm.get_model_info(model="gpt-5.6-luna", custom_llm_provider="openai"), deployment_is_mapped=True
+    )
+    assert accepted is not None and forwarded in accepted
+    assert (forwarded == effort) == (effort in accepted)
 
 
 def test_build_responses_kwargs_keeps_the_deployment_include_next_to_encrypted_reasoning():
@@ -691,6 +972,9 @@ OTHER_HOST: Final = {"custom_llm_provider": "openai", "api_base": "https://gatew
 EPHEMERAL: Final = {"type": "ephemeral"}
 
 
+LOOKUP_SCHEMA: Final = {"type": "object", "properties": {}}
+
+
 def _request_with_client_cache_marks(cache_control: dict[str, str] | None) -> dict[str, object]:
     mark: Final = {} if cache_control is None else {"cache_control": cache_control}
     return {
@@ -699,9 +983,18 @@ def _request_with_client_cache_marks(cache_control: dict[str, str] | None) -> di
         "messages": [
             {"role": "user", "content": [{"type": "text", "text": "look", **mark}, {"type": "text", "text": "now"}]}
         ],
+        "tools": [{"name": "lookup", "input_schema": LOOKUP_SCHEMA, **mark}],
     }
 
 
+@pytest.mark.parametrize(
+    ("cache_control", "breakpoint"),
+    [
+        pytest.param({**EPHEMERAL, "ttl": "1h"}, {"mode": "explicit", "ttl": "12h"}, id="1h-asks-for-12h"),
+        pytest.param({**EPHEMERAL, "ttl": "5m"}, {"mode": "explicit"}, id="5m-keeps-the-request-ttl"),
+        pytest.param(EPHEMERAL, {"mode": "explicit"}, id="no-ttl-keeps-the-request-ttl"),
+    ],
+)
 @pytest.mark.parametrize(
     "extra_kwargs",
     [
@@ -710,15 +1003,134 @@ def _request_with_client_cache_marks(cache_control: dict[str, str] | None) -> di
     ],
 )
 def test_client_cache_control_reaches_gpt_5_6_as_a_prompt_cache_breakpoint_on_the_same_block(
-    extra_kwargs: dict[str, object],
+    extra_kwargs: dict[str, object], cache_control: dict[str, str], breakpoint: dict[str, str]
 ) -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         model="openai/gpt-5.6",
         extra_kwargs=extra_kwargs,
-        **_request_with_client_cache_marks({**EPHEMERAL, "ttl": "1h"}),
+        **_request_with_client_cache_marks(cache_control),
     )
 
     assert "instructions" not in responses_kwargs
+    assert responses_kwargs["input"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "Be concise."},
+                {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": breakpoint},
+            ],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "look", "prompt_cache_breakpoint": breakpoint},
+                {"type": "input_text", "text": "now"},
+            ],
+        },
+    ]
+    assert responses_kwargs["tools"] == [
+        {
+            "type": "function",
+            "name": "lookup",
+            "strict": False,
+            "parameters": LOOKUP_SCHEMA,
+            "prompt_cache_breakpoint": breakpoint,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("last_message", "marked_content"),
+    [
+        pytest.param(
+            {"role": "user", "content": [{"type": "text", "text": "look"}, {"type": "text", "text": "now"}]},
+            [{"type": "input_text", "text": "look"}, {"type": "input_text", "text": "now", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "12h"}}],
+            id="block-list",
+        ),
+        pytest.param(
+            {"role": "user", "content": "now"},
+            [{"type": "input_text", "text": "now", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "12h"}}],
+            id="string-content",
+        ),
+    ],
+)
+def test_top_level_cache_control_marks_the_last_block_of_the_conversation(
+    last_message: dict[str, object], marked_content: list[dict[str, object]]
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "earlier"}, {"role": "assistant", "content": "ok"}, last_message],
+        extra_kwargs={**OPENAI_API, "cache_control": {**EPHEMERAL, "ttl": "1h"}},
+    )
+
+    assert "cache_control" not in responses_kwargs
+    assert responses_kwargs["input"][0]["content"] == [{"type": "input_text", "text": "earlier"}]
+    assert responses_kwargs["input"][-1] == {"type": "message", "role": "user", "content": marked_content}
+
+
+def test_top_level_cache_control_marks_the_turn_before_an_assistant_prefill() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "now"}, {"role": "assistant", "content": "Sure,"}],
+        extra_kwargs={**OPENAI_API, "cache_control": {**EPHEMERAL, "ttl": "1h"}},
+    )
+
+    assert responses_kwargs["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "now", "prompt_cache_breakpoint": {"mode": "explicit", "ttl": "12h"}}
+            ],
+        },
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Sure,"}]},
+    ]
+
+
+def test_top_level_cache_control_marks_nothing_when_the_deployment_drops_it() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "now"}],
+        extra_kwargs={
+            **OPENAI_API,
+            "cache_control": {**EPHEMERAL, "ttl": "1h"},
+            "additional_drop_params": ["cache_control"],
+        },
+    )
+
+    assert responses_kwargs["input"][-1] == {
+        "type": "message",
+        "role": "user",
+        "content": [{"type": "input_text", "text": "now"}],
+    }
+
+
+def test_top_level_cache_control_keeps_the_mark_the_last_block_already_carries() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": [{"type": "text", "text": "now", "cache_control": EPHEMERAL}]}],
+        extra_kwargs={**OPENAI_API, "cache_control": {**EPHEMERAL, "ttl": "1h"}},
+    )
+
+    assert responses_kwargs["input"][-1]["content"] == [
+        {"type": "input_text", "text": "now", "prompt_cache_breakpoint": {"mode": "explicit"}}
+    ]
+
+
+def test_a_1h_cache_control_reaches_azure_ai_without_the_12h_ttl_only_openai_takes() -> None:
+    """Azure AI Foundry Responses answered 400 for a 12h breakpoint ttl on 2026-10-30."""
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="gpt-6.1-sol",
+        extra_kwargs={"custom_llm_provider": "azure_ai"},
+        **_request_with_client_cache_marks({**EPHEMERAL, "ttl": "1h"}),
+    )
+
     assert responses_kwargs["input"] == [
         {
             "type": "message",
@@ -787,17 +1199,20 @@ RAW_BREAKPOINT: Final = {"mode": "explicit"}
 
 RAW_LOG_OUTPUT: Final = [{"type": "input_text", "text": "build ok", "prompt_cache_breakpoint": RAW_BREAKPOINT}]
 RAW_QUESTION: Final = {"type": "input_text", "text": "q", "prompt_cache_breakpoint": RAW_BREAKPOINT}
+LOOKUP_FUNCTION: Final = {"type": "function", "name": "lookup", "strict": False, "parameters": LOOKUP_SCHEMA}
+RAW_LOOKUP_FUNCTION: Final = {**LOOKUP_FUNCTION, "prompt_cache_breakpoint": RAW_BREAKPOINT}
 
 
 @pytest.mark.parametrize(
-    ("model", "extra_kwargs", "log_output", "question"),
+    ("model", "extra_kwargs", "log_output", "question", "tool"),
     [
-        pytest.param("openai/gpt-5.5", OPENAI_API, RAW_LOG_OUTPUT, RAW_QUESTION, id="sent-as-is"),
+        pytest.param("openai/gpt-5.5", OPENAI_API, RAW_LOG_OUTPUT, RAW_QUESTION, RAW_LOOKUP_FUNCTION, id="sent-as-is"),
         pytest.param(
             "openai/gpt-5.5",
             {**OPENAI_API, "drop_params": True},
             "build ok",
             {"type": "input_text", "text": "q"},
+            LOOKUP_FUNCTION,
             id="dropped-under-drop-params",
         ),
         pytest.param(
@@ -805,6 +1220,7 @@ RAW_QUESTION: Final = {"type": "input_text", "text": "q", "prompt_cache_breakpoi
             {**OTHER_HOST, "drop_params": True},
             RAW_LOG_OUTPUT,
             RAW_QUESTION,
+            RAW_LOOKUP_FUNCTION,
             id="kept-under-drop-params-for-a-model-that-takes-them",
         ),
         pytest.param(
@@ -812,16 +1228,18 @@ RAW_QUESTION: Final = {"type": "input_text", "text": "q", "prompt_cache_breakpoi
             {**OTHER_HOST, "drop_params": True, "base_model": "gpt-5.6"},
             RAW_LOG_OUTPUT,
             RAW_QUESTION,
+            RAW_LOOKUP_FUNCTION,
             id="kept-under-drop-params-for-a-base-model-that-takes-them",
         ),
     ],
 )
 def test_raw_prompt_cache_breakpoints_reach_a_deployment_unless_drop_params_drops_them_for_a_model_that_takes_none(
-    model: str, extra_kwargs: dict[str, object], log_output: object, question: dict[str, object]
+    model: str, extra_kwargs: dict[str, object], log_output: object, question: dict[str, object], tool: object
 ) -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         model=model,
         extra_kwargs=extra_kwargs,
+        tools=[{"name": "lookup", "input_schema": LOOKUP_SCHEMA, "prompt_cache_breakpoint": RAW_BREAKPOINT}],
         max_tokens=1024,
         messages=[
             {
@@ -842,6 +1260,7 @@ def test_raw_prompt_cache_breakpoints_reach_a_deployment_unless_drop_params_drop
         {"type": "function_call_output", "call_id": "toolu_log", "output": log_output},
         {"type": "message", "role": "user", "content": [question]},
     ]
+    assert responses_kwargs["tools"] == [tool]
 
 
 def _gpt_5_6_input_for_a_cached_block(drop_params: bool, raw_mark: Mapping[str, object]) -> object:
@@ -960,6 +1379,24 @@ def test_drop_params_drops_a_malformed_tool_result_text(text_block: Mapping[str,
     ]
 
 
+@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
+def test_non_string_user_text_answers_400_naming_its_field(text_block: Mapping[str, object]) -> None:
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        _build_responses_kwargs(
+            model="openai/gpt-5.6",
+            extra_kwargs=OPENAI_API,
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": "run the build"},
+                {"role": "assistant", "content": "on it"},
+                {"role": "user", "content": [{"type": "text", "text": "and test"}, dict(text_block)]},
+            ],
+        )
+
+    assert rejected.value.status_code == 400
+    assert "messages.2.content.1.text: Input should be a valid string" in rejected.value.message
+
+
 def test_tool_result_text_block_without_text_still_reaches_the_model_as_empty_text() -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         model="openai/gpt-5.6",
@@ -1053,55 +1490,225 @@ async def test_recomputed_cost_of_a_served_bridge_response_prices_the_reasoning_
     assert logging_obj.cost_breakdown["reasoning_cost"] == pytest.approx(expected_reasoning)
 
 
-_DEEPWIKI_SERVER: Final = {"type": "url", "url": "https://mcp.deepwiki.com/mcp", "name": "deepwiki"}
-
-
-def test_mcp_servers_the_responses_bridge_cannot_run_answer_400(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(litellm, "drop_params", False)
-    with pytest.raises(litellm.UnsupportedParamsError) as rejected:
-        _build_responses_kwargs(
-            model="gpt-5.6",
-            extra_kwargs={**OPENAI_API, "mcp_servers": [_DEEPWIKI_SERVER]},
-            max_tokens=1024,
-            messages=MESSAGES,
-        )
-
-    assert rejected.value.status_code == 400
-    assert "to gpt-5.6 on openai, so the MCP server `deepwiki` would not run" in rejected.value.message
+DOCS_SERVER: Final = {"type": "url", "name": "docs", "url": "https://mcp.example.com/sse"}
 
 
 @pytest.mark.parametrize(
-    "drop_form",
-    [{"drop_params": True}, {"additional_drop_params": ["mcp_servers"]}],
-    ids=["drop_params", "additional_drop_params"],
+    ("speed", "extra_kwargs", "service_tier"),
+    [
+        pytest.param("fast", OPENAI_API, "priority", id="fast"),
+        pytest.param("fast", {**OPENAI_API, "service_tier": "flex"}, "flex", id="forwarded-tier-wins-over-fast"),
+        pytest.param("fast", {**OPENAI_API, "service_tier": "auto"}, "priority", id="fast-wins-over-auto"),
+        pytest.param(None, {**OPENAI_API, "service_tier": "flex"}, "flex", id="forwarded-tier"),
+        pytest.param(None, {**OPENAI_API, "service_tier": "auto"}, "auto", id="forwarded-auto"),
+    ],
 )
-def test_drop_params_keeps_mcp_servers_off_the_responses_request(
-    monkeypatch: pytest.MonkeyPatch, drop_form: Mapping[str, object]
+def test_speed_fast_asks_for_the_priority_tier_unless_a_specific_service_tier_is_forwarded(
+    speed: str | None, extra_kwargs: dict[str, object], service_tier: str
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6", max_tokens=1024, messages=MESSAGES, speed=speed, extra_kwargs=extra_kwargs
+    )
+    assert responses_kwargs["service_tier"] == service_tier
+
+
+CONTAINERS: Final = (
+    pytest.param("container_abc", id="container-id"),
+    pytest.param({"id": "container_abc"}, id="container-params"),
+)
+
+
+@pytest.mark.parametrize("container", CONTAINERS)
+def test_speed_mcp_servers_and_container_never_reach_the_responses_call_raw(
+    container: str | dict[str, object],
+) -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        max_tokens=1024,
+        messages=MESSAGES,
+        speed="fast",
+        mcp_servers=[DOCS_SERVER],
+        container=container,
+        top_k=40,
+        extra_kwargs={**OPENAI_API, "drop_params": True, "inference_geo": "us"},
+    )
+    assert {"speed", "mcp_servers", "container", "top_k", "inference_geo"}.isdisjoint(responses_kwargs)
+    assert responses_kwargs["tools"] == [
+        {
+            "type": "mcp",
+            "server_label": "docs",
+            "server_url": "https://mcp.example.com/sse",
+            "require_approval": "never",
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "request_fields"),
+    [
+        pytest.param("container", {"container": "container_abc"}, id="container-id"),
+        pytest.param("container", {"container": {"id": "container_abc"}}, id="container-params"),
+        pytest.param("top_k", {"top_k": 40}, id="top-k"),
+        pytest.param("inference_geo", {"extra_kwargs": {**OPENAI_API, "inference_geo": "us"}}, id="inference-geo"),
+    ],
+)
+def test_a_field_without_a_responses_equivalent_answers_400_without_drop_params(
+    field: str, request_fields: dict[str, object]
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as rejected:
+        _build_responses_kwargs(
+            model="openai/gpt-5.6", max_tokens=1024, messages=MESSAGES, **{"extra_kwargs": OPENAI_API, **request_fields}
+        )
+
+    assert rejected.value.status_code == 400
+    assert f"no equivalent for {field}" in rejected.value.message
+
+
+@pytest.mark.parametrize("container", CONTAINERS)
+def test_additional_drop_params_leaves_out_a_listed_speed_and_container(
+    monkeypatch: pytest.MonkeyPatch, container: str | dict[str, object]
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     responses_kwargs: Final = _build_responses_kwargs(
-        model="gpt-5.6",
-        extra_kwargs={**OPENAI_API, "mcp_servers": [_DEEPWIKI_SERVER], **drop_form},
+        model="openai/gpt-5.6",
         max_tokens=1024,
         messages=MESSAGES,
+        speed="fast",
+        container=container,
+        top_k=40,
+        extra_kwargs={
+            **OPENAI_API,
+            "inference_geo": "us",
+            "additional_drop_params": ["speed", "container", "top_k", "inference_geo"],
+        },
     )
 
-    assert "mcp_servers" not in responses_kwargs
-    assert responses_kwargs["input"]
+    assert {"service_tier", "speed", "container", "top_k", "inference_geo"}.isdisjoint(responses_kwargs)
 
 
-def test_drop_params_drops_the_mcp_toolset_tools_of_dropped_mcp_servers(monkeypatch: pytest.MonkeyPatch) -> None:
+WIRE_RESPONSE: Final = {
+    "id": "resp_fields",
+    "object": "response",
+    "created_at": 1,
+    "status": "completed",
+    "model": "gpt-5.6",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "{}", "annotations": []}],
+        }
+    ],
+    "parallel_tool_calls": False,
+    "tool_choice": "auto",
+    "tools": [],
+    "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
+}
+
+
+@pytest.mark.parametrize(
+    ("request_fields", "wire_fields"),
+    [
+        pytest.param(
+            {
+                "tools": [
+                    dict(BASH_TOOL),
+                    {
+                        "type": "web_search_20250305",
+                        "name": "web_search",
+                        "max_uses": 2,
+                        "allowed_domains": ["docs.python.org"],
+                    },
+                ],
+                "tool_choice": {"type": "auto", "disable_parallel_tool_use": True},
+                "speed": "fast",
+                "output_format": {"type": "json_schema", "schema": {"type": "object", "properties": {}}},
+            },
+            {
+                "parallel_tool_calls": False,
+                "service_tier": "priority",
+                "max_tool_calls": 2,
+                "web_search": {"type": "web_search", "filters": {"allowed_domains": ["docs.python.org"]}},
+                "text": {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "structured_output",
+                        "schema": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+                        "strict": True,
+                    }
+                },
+            },
+            id="parallel-speed-web-search-structured-output",
+        ),
+        pytest.param(
+            {
+                "mcp_servers": [{**DOCS_SERVER, "authorization_token": "tok"}],
+                "tools": [
+                    {
+                        "type": "mcp_toolset",
+                        "mcp_server_name": "docs",
+                        "default_config": {"enabled": False},
+                        "configs": {"search": {"enabled": True}},
+                    }
+                ],
+            },
+            {
+                "mcp": {
+                    "type": "mcp",
+                    "server_label": "docs",
+                    "server_url": "https://mcp.example.com/sse",
+                    "require_approval": "never",
+                    "authorization": "tok",
+                    "allowed_tools": ["search"],
+                }
+            },
+            id="mcp-server",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_messages_fields_reach_the_openai_responses_request_body(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    request_fields: dict[str, object],
+    wire_fields: dict[str, object],
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fields-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/responses").respond(
+        status_code=200, json=WIRE_RESPONSE
+    )
+
+    await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=1024, messages=MESSAGES, model="openai/gpt-5.6", custom_llm_provider="openai", **request_fields
+    )
+
+    body: Final = json.loads(upstream.calls.last.request.content)
+    tools_by_type: Final = {tool["type"]: tool for tool in body.get("tools", [])}
+    sent: Final = {**body, **tools_by_type}
+    assert {key: sent.get(key) for key in wire_fields} == wire_fields
+    assert {"speed", "mcp_servers", "output_format"}.isdisjoint(body)
+
+
+def test_additional_drop_params_drops_mcp_servers_and_their_mcp_toolset_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     weather_tool: Final = {"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}
     responses_kwargs: Final = _build_responses_kwargs(
-        model="gpt-5.6",
-        extra_kwargs={**OPENAI_API, "mcp_servers": [_DEEPWIKI_SERVER], "drop_params": True},
+        model="openai/gpt-5.6",
         max_tokens=1024,
         messages=MESSAGES,
-        tools=[{"type": "mcp_toolset", "mcp_server_name": "deepwiki"}, weather_tool],
+        mcp_servers=[DOCS_SERVER],
+        tools=[{"type": "mcp_toolset", "mcp_server_name": "docs"}, weather_tool],
+        extra_kwargs={**OPENAI_API, "additional_drop_params": ["mcp_servers"]},
     )
 
-    assert [tool["name"] for tool in responses_kwargs["tools"]] == ["get_weather"]
+    assert [(tool["type"], tool.get("name")) for tool in responses_kwargs["tools"]] == [("function", "get_weather")]
+    assert "mcp_servers" not in responses_kwargs
 
 
 TEXT_RESPONSE: Final = {
@@ -1124,6 +1731,8 @@ TEXT_RESPONSE: Final = {
     "tools": [],
     "usage": {"input_tokens": 3, "output_tokens": 4, "total_tokens": 7},
 }
+
+
 CLEAR_EDIT: Final = {
     "type": "clear_tool_uses_20250919",
     "trigger": {"type": "tool_uses", "value": 1},
@@ -1423,6 +2032,322 @@ def test_the_sync_path_reports_its_edits_on_the_streamed_message_delta(
     assert message_delta["context_management"]["applied_edits"][0]["cleared_tool_uses"] == 2
 
 
+MODE_REFUSING_MODEL: Final = "gpt-6.1-standard-only"
+REFUSED_REASONING: Final = {"effort": "low", "mode": "pro"}
+
+
+async def _body_sent_upstream(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    model: str = MODE_REFUSING_MODEL,
+    upstream_url: str = "https://api.openai.com/v1/responses",
+    **request_fields: object,
+) -> Mapping[str, object]:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-reasoning-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    monkeypatch.delenv("LITELLM_REASONING_AUTO_SUMMARY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        MODE_REFUSING_MODEL,
+        {
+            "litellm_provider": "openai",
+            "mode": "responses",
+            "supports_reasoning": True,
+            "supports_minimal_reasoning_effort": False,
+            "reasoning_modes": ["standard"],
+            "reasoning_contexts": ["auto", "current_turn"],
+            "input_cost_per_token": 0.0,
+            "output_cost_per_token": 0.0,
+        },
+    )
+    monkeypatch.setattr(
+        litellm, "open_ai_chat_completion_models", {*litellm.open_ai_chat_completion_models, MODE_REFUSING_MODEL}
+    )
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post(upstream_url).respond(status_code=200, json=TEXT_RESPONSE)
+    await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=64,
+        messages=MESSAGES,
+        model=f"openai/{model}",
+        custom_llm_provider="openai",
+        **request_fields,
+    )
+    return json.loads(upstream.calls[0].request.content)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "request_fields",
+    [
+        {"reasoning_effort": REFUSED_REASONING},
+        {"extra_body": {"reasoning": REFUSED_REASONING}},
+        {"extra_body": {"reasoning_effort": REFUSED_REASONING}},
+        {"reasoning": REFUSED_REASONING},
+    ],
+    ids=("top-level", "extra_body.reasoning", "extra_body.reasoning_effort", "sdk-merged-reasoning"),
+)
+async def test_messages_drops_a_refused_reasoning_mode_and_keeps_the_effort_under_drop_params(
+    request_fields: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(respx_mock, monkeypatch, drop_params=True, **request_fields)
+
+    assert body["reasoning"] == {"effort": "low"}
+    assert "reasoning_effort" not in body
+
+
+@pytest.mark.asyncio
+async def test_messages_leaves_a_refused_reasoning_mode_to_openai_without_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(respx_mock, monkeypatch, reasoning_effort=REFUSED_REASONING)
+
+    assert body["reasoning"] == REFUSED_REASONING
+
+
+@pytest.mark.asyncio
+async def test_messages_leaves_extra_body_reasoning_to_openai_without_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(respx_mock, monkeypatch, extra_body={"reasoning": REFUSED_REASONING})
+
+    assert body["reasoning"] == REFUSED_REASONING
+
+
+@pytest.mark.asyncio
+async def test_messages_sends_no_reasoning_for_an_object_with_no_effort_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(respx_mock, monkeypatch, drop_params=True, reasoning_effort={"mode": "pro"})
+
+    assert body.get("reasoning") is None
+    assert "reasoning_effort" not in body
+
+
+@pytest.mark.asyncio
+async def test_messages_keeps_a_reasoning_mode_the_model_declares_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    accepted: Final = {"effort": "low", "mode": "standard"}
+
+    body: Final = await _body_sent_upstream(respx_mock, monkeypatch, drop_params=True, reasoning_effort=accepted)
+
+    assert body["reasoning"] == accepted
+
+
+@pytest.mark.asyncio
+async def test_messages_keeps_a_reasoning_mode_the_deployment_declares_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        drop_params=True,
+        reasoning_effort=REFUSED_REASONING,
+        model_info={"reasoning_modes": ["pro"]},
+    )
+
+    assert body["reasoning"] == REFUSED_REASONING
+
+
+@pytest.mark.asyncio
+async def test_messages_reads_the_reasoning_catalog_row_of_the_base_model(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        model="my-mini-alias",
+        drop_params=True,
+        reasoning_effort=REFUSED_REASONING,
+        base_model=MODE_REFUSING_MODEL,
+    )
+
+    assert body["reasoning"] == {"effort": "low"}
+
+
+@pytest.mark.asyncio
+async def test_messages_applies_additional_drop_params_to_a_reasoning_object(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        drop_params=True,
+        reasoning_effort={"effort": "low", "context": "current_turn"},
+        additional_drop_params=["reasoning_effort.context"],
+    )
+
+    assert body["reasoning"] == {"effort": "low"}
+
+
+@pytest.mark.asyncio
+async def test_messages_lets_extra_body_reasoning_override_a_string_effort_without_its_refused_mode(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        drop_params=True,
+        reasoning_effort="high",
+        extra_body={"reasoning": REFUSED_REASONING, "safety_identifier": "user-1"},
+    )
+
+    assert body["reasoning"] == {"effort": "low"}
+    assert body["safety_identifier"] == "user-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reasoning_key", ["reasoning", "reasoning_effort"])
+async def test_messages_keeps_an_extra_body_effort_over_the_one_thinking_translates_to_under_drop_params(
+    reasoning_key: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        drop_params=True,
+        thinking={"type": "adaptive"},
+        extra_body={reasoning_key: {"effort": "high", "mode": "pro"}},
+    )
+
+    assert body["reasoning"] == {"effort": "high"}
+    assert "reasoning_effort" not in body
+
+
+@pytest.mark.asyncio
+async def test_messages_prefers_extra_body_reasoning_over_a_reasoning_effort_object_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        drop_params=True,
+        extra_body={"reasoning": {"effort": "high"}, "reasoning_effort": REFUSED_REASONING},
+    )
+
+    assert body["reasoning"] == {"effort": "high"}
+    assert "reasoning_effort" not in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", [MODE_REFUSING_MODEL, f"responses/{MODE_REFUSING_MODEL}"], ids=["bare", "responses-prefix"])
+@pytest.mark.parametrize(
+    "effort, expected_reasoning",
+    [("minimal", {"summary": "detailed"}), ("xhigh", {"effort": "xhigh", "summary": "detailed"})],
+    ids=["level-the-row-disables", "opt-in-level-the-row-omits"],
+)
+async def test_messages_drops_an_extra_body_effort_the_model_refuses_under_drop_params(
+    model: str,
+    effort: str,
+    expected_reasoning: dict[str, str],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        model=model,
+        drop_params=True,
+        extra_body={"reasoning": {"effort": effort, "summary": "detailed", "mode": "pro"}},
+    )
+
+    assert body["reasoning"] == expected_reasoning
+
+
+@pytest.mark.asyncio
+async def test_messages_does_not_judge_reasoning_fields_for_a_compatible_backend(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        upstream_url="https://gateway.example/v1/responses",
+        api_base="https://gateway.example/v1",
+        drop_params=True,
+        reasoning_effort=REFUSED_REASONING,
+    )
+
+    assert body["reasoning"] == REFUSED_REASONING
+
+
+@pytest.mark.asyncio
+async def test_messages_keeps_a_reasoning_mode_the_provider_row_declares_under_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        f"openai/{MODE_REFUSING_MODEL}",
+        {"litellm_provider": "openai", "mode": "responses", "reasoning_modes": ["pro"]},
+    )
+
+    body: Final = await _body_sent_upstream(
+        respx_mock, monkeypatch, drop_params=True, reasoning_effort=REFUSED_REASONING
+    )
+
+    assert body["reasoning"] == REFUSED_REASONING
+
+
+@pytest.mark.asyncio
+async def test_messages_judges_a_reasoning_mode_by_a_provider_row_outside_the_openai_catalog(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "openai/my-standard-only-finetune",
+        {
+            "litellm_provider": "openai",
+            "mode": "responses",
+            "supports_reasoning": True,
+            "reasoning_modes": ["standard"],
+        },
+    )
+
+    body: Final = await _body_sent_upstream(
+        respx_mock,
+        monkeypatch,
+        model="my-standard-only-finetune",
+        drop_params=True,
+        reasoning_effort=REFUSED_REASONING,
+    )
+
+    assert body["reasoning"] == {"effort": "low"}
+
+
+def test_build_responses_kwargs_leaves_another_providers_reasoning_object_as_sent():
+    responses_kwargs: Final = _build_responses_kwargs(
+        max_tokens=64,
+        messages=MESSAGES,
+        model="azure/gpt-5.4-mini",
+        extra_kwargs={"custom_llm_provider": "azure", "drop_params": True, "reasoning_effort": REFUSED_REASONING},
+    )
+
+    assert responses_kwargs["reasoning_effort"] == REFUSED_REASONING
+
+
+SUMMARY_REFUSAL: Final = {
+    "error": {
+        "message": (
+            "Your organization must be verified to generate reasoning summaries. Please go to: "
+            "https://platform.openai.com/settings/organization/general and click on Verify Organization. "
+            "If you just verified, it can take up to 15 minutes for access to propagate."
+        ),
+        "type": "invalid_request_error",
+        "param": "reasoning.summary",
+        "code": "unsupported_value",
+    }
+}
+OTHER_SUMMARY_400: Final = {
+    "error": {
+        "message": "Unsupported value: 'reasoning.summary' does not support 'auto' with this model.",
+        "type": "invalid_request_error",
+        "param": "reasoning.summary",
+        "code": "unsupported_value",
+    }
+}
+
+
 class _RecordingSSEBody(httpx.SyncByteStream):
     def __init__(self, sse_body: bytes = RESPONSES_SSE_BODY) -> None:
         self.sse_body: Final = sse_body
@@ -1651,6 +2576,39 @@ async def test_openai_turn_is_sent_again_once_without_replayed_reasoning_the_bac
     assert events[-1]["type"] in ("message", "message_stop")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "The encrypted content for item rs_1 could not be verified.",
+        "Encrypted content could not be decrypted or parsed.",
+    ],
+)
+async def test_openai_turn_is_sent_again_when_only_the_error_code_names_the_rejected_reasoning(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, message: str
+) -> None:
+    rejection: Final = {
+        "error": {
+            "message": message,
+            "type": "invalid_request_error",
+            "param": None,
+            "code": "invalid_encrypted_content",
+        }
+    }
+    upstream: Final = _upstream(respx_mock, monkeypatch, httpx.Response(400, json=rejection), False)
+
+    await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=64,
+        messages=_history(replayed_reasoning=True),
+        model="openai/gpt-5.6-luna",
+        tools=[dict(BASH_TOOL)],
+        stream=False,
+        custom_llm_provider="openai",
+    )
+
+    assert _replayed_reasoning_counts(upstream) == [1, 0]
+
+
 def test_sync_openai_turn_is_sent_again_once_without_replayed_reasoning_the_backend_cannot_decrypt(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1861,3 +2819,324 @@ async def test_openai_turn_is_not_sent_again_for_other_rejections(
         )
 
     assert upstream.call_count == 1
+
+
+def _upstream_answering_400_then_200(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, *, refusal: Mapping[str, object], stream: bool
+) -> respx.Route:
+    return _upstream_after(respx_mock, monkeypatch, (httpx.Response(400, json=refusal),), stream)
+
+
+async def _summarized_turn(*, sync: bool, stream: bool, drop_params: bool) -> object:
+    if sync:
+        return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+            max_tokens=1024,
+            messages=MESSAGES,
+            model="openai/gpt-5.6-luna",
+            stream=stream,
+            custom_llm_provider="openai",
+            thinking={"type": "adaptive", "display": "summarized"},
+            output_config={"effort": "high"},
+            drop_params=drop_params,
+        )
+    return await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        stream=stream,
+        custom_llm_provider="openai",
+        thinking={"type": "adaptive", "display": "summarized"},
+        output_config={"effort": "high"},
+        drop_params=drop_params,
+    )
+
+
+async def _reply_types(served: object, *, stream: bool) -> list[object]:
+    if not stream:
+        return [cast(Mapping[str, object], served)["type"]]
+    return [
+        json.loads(chunk.decode().split("data: ", 1)[1])["type"]
+        async for chunk in cast(AsyncIterator[bytes], served)
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_under_drop_params_an_unverified_organization_gets_the_turn_again_without_the_summary(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool, stream: bool
+) -> None:
+    upstream: Final = _upstream_answering_400_then_200(respx_mock, monkeypatch, refusal=SUMMARY_REFUSAL, stream=stream)
+
+    reply_types: Final = await _reply_types(
+        await _summarized_turn(sync=sync, stream=stream, drop_params=True), stream=stream
+    )
+
+    first, second = (json.loads(call.request.content) for call in upstream.calls)
+    assert first["reasoning"]["summary"]
+    assert second["reasoning"] == {"effort": first["reasoning"]["effort"]}
+    assert {key: value for key, value in second.items() if key != "reasoning"} == {
+        key: value for key, value in first.items() if key != "reasoning"
+    }
+    assert (reply_types[0], reply_types[-1]) == (("message_start", "message_stop") if stream else ("message",) * 2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_without_drop_params_an_unverified_organization_gets_the_400_after_one_request(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool, stream: bool
+) -> None:
+    upstream: Final = _upstream_answering_400_then_200(respx_mock, monkeypatch, refusal=SUMMARY_REFUSAL, stream=stream)
+
+    with pytest.raises(litellm.BadRequestError, match="must be verified to generate reasoning summaries"):
+        await _reply_types(await _summarized_turn(sync=sync, stream=stream, drop_params=False), stream=stream)
+
+    assert upstream.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_under_drop_params_another_400_about_the_summary_is_not_retried(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    upstream: Final = _upstream_answering_400_then_200(respx_mock, monkeypatch, refusal=OTHER_SUMMARY_400, stream=False)
+
+    with pytest.raises(litellm.BadRequestError, match="does not support 'auto' with this model"):
+        await _summarized_turn(sync=sync, stream=False, drop_params=True)
+
+    assert upstream.call_count == 1
+
+
+def _refuse_a_summary(request: httpx.Request) -> httpx.Response:
+    if "summary" in json.loads(request.content).get("reasoning", {}):
+        return httpx.Response(400, json=SUMMARY_REFUSAL)
+    return httpx.Response(200, json=TEXT_RESPONSE)
+
+
+def _refuse_a_summary_then_replayed_reasoning(request: httpx.Request) -> httpx.Response:
+    body: Final = json.loads(request.content)
+    replays_reasoning: Final = any(item.get("type") == "reasoning" for item in body["input"])
+    if replays_reasoning and "summary" not in body.get("reasoning", {}):
+        return httpx.Response(400, json=REJECTED_REPLAYED_REASONING)
+    return _refuse_a_summary(request)
+
+
+def _upstream_refusing_every_summary(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    answer: Callable[[httpx.Request], httpx.Response] = _refuse_a_summary,
+) -> respx.Route:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-replay-test")
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return respx_mock.post("https://api.openai.com/v1/responses").mock(side_effect=answer)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_under_drop_params_a_refused_summary_is_sent_again_once_and_not_logged_as_the_turn_failing(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    upstream: Final = _upstream_refusing_every_summary(respx_mock, monkeypatch)
+
+    if sync:
+        litellm.anthropic.messages.create(
+            max_tokens=1024,
+            messages=MESSAGES,
+            model="openai/gpt-5.6-luna",
+            thinking={"type": "adaptive", "display": "summarized"},
+            output_config={"effort": "high"},
+            drop_params=True,
+            num_retries=2,
+        )
+    else:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=1024,
+            messages=MESSAGES,
+            model="openai/gpt-5.6-luna",
+            thinking={"type": "adaptive", "display": "summarized"},
+            output_config={"effort": "high"},
+            drop_params=True,
+            num_retries=2,
+        )
+
+    assert ["summary" in json.loads(call.request.content)["reasoning"] for call in upstream.calls] == [True, False]
+    assert failure_log.rejections == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_a_summarized_turn_sent_again_without_replayed_reasoning_logs_only_its_outcome(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    _rejected_then(respx_mock, monkeypatch, httpx.Response(200, json=TEXT_RESPONSE))
+
+    if sync:
+        litellm.anthropic.messages.create(
+            max_tokens=1024,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+            thinking={"type": "adaptive", "display": "summarized"},
+            drop_params=True,
+        )
+    else:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=1024,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+            thinking={"type": "adaptive", "display": "summarized"},
+            drop_params=True,
+        )
+
+    assert failure_log.rejections == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_a_summary_refused_while_replayed_reasoning_is_resent_is_not_logged_as_the_turn_failing(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    upstream: Final = _upstream_refusing_every_summary(
+        respx_mock, monkeypatch, answer=_refuse_a_summary_then_replayed_reasoning
+    )
+
+    if sync:
+        litellm.anthropic.messages.create(
+            max_tokens=1024,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+            thinking={"type": "adaptive", "display": "summarized"},
+            drop_params=True,
+        )
+    else:
+        await litellm.anthropic.messages.acreate(
+            max_tokens=1024,
+            messages=_history(replayed_reasoning=True),
+            model="openai/gpt-5.6-luna",
+            tools=[dict(BASH_TOOL)],
+            thinking={"type": "adaptive", "display": "summarized"},
+            drop_params=True,
+        )
+
+    answered: Final = json.loads(upstream.calls[-1].request.content)
+    assert "summary" not in answered.get("reasoning", {})
+    assert _replayed_reasoning_counts(upstream)[-1] == 0
+    assert failure_log.rejections == ()
+
+
+WEB_SEARCH_FILTERS_REFUSAL: Final = {
+    "error": {
+        "message": "Parameter 'filters' not supported with model 'gpt-4o-mini'",
+        "type": "invalid_request_error",
+        "param": "tools",
+        "code": None,
+    }
+}
+FILTERED_WEB_SEARCH: Final = {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "allowed_domains": ["docs.litellm.ai"],
+    "user_location": {"type": "approximate", "city": "San Francisco", "country": "US"},
+}
+
+
+def _sends_filters(tools: list[dict[str, object]]) -> bool:
+    return any("filters" in tool for tool in tools)
+
+
+def _refuse_web_search_filters(request: httpx.Request) -> httpx.Response:
+    if _sends_filters(json.loads(request.content)["tools"]):
+        return httpx.Response(400, json=WEB_SEARCH_FILTERS_REFUSAL)
+    return httpx.Response(200, json=TEXT_RESPONSE)
+
+
+async def _filtered_search_turn(*, sync: bool, drop_params: bool) -> None:
+    if sync:
+        litellm.anthropic.messages.create(
+            max_tokens=64,
+            messages=MESSAGES,
+            model="openai/gpt-4o-mini",
+            tools=[dict(FILTERED_WEB_SEARCH)],
+            drop_params=drop_params,
+            num_retries=2,
+        )
+        return
+    await litellm.anthropic.messages.acreate(
+        max_tokens=64,
+        messages=MESSAGES,
+        model="openai/gpt-4o-mini",
+        tools=[dict(FILTERED_WEB_SEARCH)],
+        drop_params=drop_params,
+        num_retries=2,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_under_drop_params_web_search_filters_the_model_refuses_are_sent_again_once_without_them(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    failure_log: Final = _FailureLog()
+    monkeypatch.setattr(litellm, "callbacks", [failure_log])
+    upstream: Final = _upstream_refusing_every_summary(respx_mock, monkeypatch, answer=_refuse_web_search_filters)
+
+    await _filtered_search_turn(sync=sync, drop_params=True)
+
+    first, second = (json.loads(call.request.content) for call in upstream.calls)
+    (search,) = first["tools"]
+    assert search["filters"] == {"allowed_domains": ["docs.litellm.ai"]}
+    assert second == {**first, "tools": [{key: value for key, value in search.items() if key != "filters"}]}
+    assert failure_log.rejections == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True], ids=["async", "sync"])
+async def test_without_drop_params_web_search_filters_the_model_refuses_are_never_dropped(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync: bool
+) -> None:
+    upstream: Final = _upstream_refusing_every_summary(respx_mock, monkeypatch, answer=_refuse_web_search_filters)
+
+    with pytest.raises(litellm.BadRequestError, match="Parameter 'filters' not supported"):
+        await _filtered_search_turn(sync=sync, drop_params=False)
+
+    assert all(_sends_filters(json.loads(call.request.content)["tools"]) for call in upstream.calls)
+
+
+@pytest.mark.asyncio
+async def test_under_drop_params_a_turn_refused_for_its_summary_then_its_web_search_filters_is_sent_without_both(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    upstream: Final = _upstream_after(
+        respx_mock,
+        monkeypatch,
+        (httpx.Response(400, json=SUMMARY_REFUSAL), httpx.Response(400, json=WEB_SEARCH_FILTERS_REFUSAL)),
+        False,
+    )
+
+    await LiteLLMMessagesToResponsesAPIHandler.async_anthropic_messages_handler(
+        max_tokens=1024,
+        messages=MESSAGES,
+        model="openai/gpt-5.6-luna",
+        custom_llm_provider="openai",
+        thinking={"type": "adaptive", "display": "summarized"},
+        output_config={"effort": "high"},
+        tools=[dict(FILTERED_WEB_SEARCH)],
+        drop_params=True,
+    )
+
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert [("summary" in body["reasoning"], _sends_filters(body["tools"])) for body in bodies] == [
+        (True, True),
+        (False, True),
+        (False, False),
+    ]

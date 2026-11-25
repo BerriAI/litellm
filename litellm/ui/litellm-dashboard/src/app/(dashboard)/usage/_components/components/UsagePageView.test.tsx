@@ -815,7 +815,7 @@ describe("UsagePage", () => {
     const errorsTab = within(await screen.findByTestId("usage-errors-tab"));
     expect(await errorsTab.findByText("10.0%")).toBeInTheDocument();
     expect(errorsTab.getByRole("list", { name: "Failed requests by status code" })).toHaveTextContent("429");
-    const keys = errorsTab.getByRole("table", { name: "Virtual keys ranked by failed requests" });
+    const keys = errorsTab.getByRole("table", { name: "Virtual Keys ranked by failed requests" });
     expect(within(keys).getAllByRole("row")[1]).toHaveTextContent("prod-key");
   });
 

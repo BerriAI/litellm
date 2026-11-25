@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Final, Literal
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 if TYPE_CHECKING:
+    from litellm.router_rust.core import Resolved
     from litellm.router_rust.steps.callbacks import OptionalChecks
     from litellm.router_rust.surface.registry import HostRegistry
     from litellm.router_utils.cooldown_cache import CooldownCache
@@ -142,6 +143,7 @@ class RustHealthCallbacks:
 
     _handle: "RouterCoreHandle"
     _cooldown_given: object
+    _resolved: "Resolved"
 
     def _drive_sync_steps(self, call: "RouterCall[_FailureReportSteps | _SuccessReportSteps]") -> Mapping[str, object]:
         raise NotImplementedError
@@ -266,11 +268,30 @@ class RustHealthCallbacks:
             and self._deployment_of(logged_id) is None
         )
 
+    def _caller_credential_failure(self, exception: object, sent: Mapping[str, object], deployment_id: object) -> bool:
+        """The call ran under a credential or target the caller sent in place of the deployment's own,
+        so the failure is the caller's. ``sent`` holds the request's own values."""
+        from litellm.router_utils.cooldown_handlers import (
+            is_caller_credential_failure,
+            is_caller_entra_credential_failure,
+        )
+
+        deployment: Final = self._deployment_of(deployment_id)
+        if deployment is None or not isinstance(exception, BaseException):
+            return False
+        defaults: Final = {k: v for k, v in self._resolved.default_litellm_params.items() if v is not None}
+        details: Final = {"litellm_params": sent}
+        status: Final[object] = getattr(exception, "status_code", "")
+        if is_caller_credential_failure(deployment, defaults, details, status):
+            return True
+        return is_caller_entra_credential_failure(deployment, defaults, details, status, exception)  # pyright: ignore[reportArgumentType]  # the status as raised
+
     def failure_exits(
-        self, exception: object, logged: Mapping[str, object], deployment_id: object
+        self, exception: object, logged: Mapping[str, object], deployment_id: object, sent: Mapping[str, object]
     ) -> Mapping[str, bool]:
         """What the Python router does not hold against the deployment, for every failure it logs.
-        ``outside_deployment``: ``deployment_callback_on_failure``'s early exits, counting nothing.
+        ``outside_deployment``: ``deployment_callback_on_failure``'s early exits, counting nothing,
+        and a failure under a credential the caller ``sent``.
         ``caller_scoped``: ``_should_run_cooldown_logic``'s per-caller exits, counted but not cooled;
         its exits on the exception's class are router-core's (``FailureKind``)."""
         from litellm.router_utils.cooldown_handlers import (
@@ -294,6 +315,7 @@ class RustHealthCallbacks:
             or is_message_thread_not_found(exception)
             or is_caller_timeout_408(logged, status)  # pyright: ignore[reportArgumentType]  # the status as raised
             or is_caller_scoped_auth_failure(self._deployment_of(deployment_id), status)  # pyright: ignore[reportArgumentType]  # see above
+            or self._caller_credential_failure(exception, sent, deployment_id)
         )
         return {
             "outside_deployment": outside,
@@ -366,7 +388,9 @@ class RustHealthCallbacks:
     ) -> "RouterCall[_FailureReportSteps] | None":
         """The Rust call recording a failed hop, or None past the exits of
         ``_trigger_cooldown_for_failed_deployment``: another list than ``failure_exits``, checked per
-        failed hop. The selection tag is not on it; a stream stall and a generic call's 404 are."""
+        failed hop. The selection tag is not on it; a stream stall, a refused ``previous_response_id``
+        and a generic call's 404 are."""
+        from litellm.litellm_core_utils.batch_utils import is_batch_api_call_type
         from litellm.router_rust.core import attempt_failure
         from litellm.router_utils.cooldown_handlers import (
             _is_per_user_provider_request,  # pyright: ignore[reportPrivateUsage]  # the cooldown check's own rule
@@ -374,6 +398,7 @@ class RustHealthCallbacks:
             is_advisor_orchestration_failure,
             is_caller_scoped_auth_failure,
             is_caller_timeout_408,
+            is_previous_response_rejected,
             is_stream_stall,
         )
         from litellm.router_utils.fallback_event_handlers import (
@@ -384,6 +409,7 @@ class RustHealthCallbacks:
         exception_status: Final[object] = getattr(exception, "status_code", "")
         if (
             is_advisor_orchestration_failure(exception)
+            or is_previous_response_rejected(exception)
             or is_stream_stall(exception)
             or (generic and cast_exception_status_to_int(exception_status) in _REQUEST_SCOPED_STATUS_CODES)  # pyright: ignore[reportArgumentType]  # the status as raised
             or is_caller_timeout_408(model_call_details, exception_status, ended=datetime.now())  # pyright: ignore[reportArgumentType]  # noqa: DTZ005  # see logged_call
@@ -395,6 +421,8 @@ class RustHealthCallbacks:
         deployment: Final = self._deployment_of(deployment_id)
         if is_caller_scoped_auth_failure(deployment, exception_status):  # pyright: ignore[reportArgumentType]  # see above
             return None
+        if self._caller_credential_failure(exception, kwargs, deployment_id):
+            return None
         return self._handle.report_failure(
             deployment_id,
             {
@@ -405,6 +433,7 @@ class RustHealthCallbacks:
             deployment_cooldown=True,
             count_only=exception_status == "",
             cooldown_time=None if deployment is None else _deployment_cooldown(deployment.model_dump()),
+            batch_api=is_batch_api_call_type(model_call_details.get("call_type")),
         )
 
     def deployment_callback_on_failure(
@@ -415,8 +444,8 @@ class RustHealthCallbacks:
         end_time: object,
     ) -> bool:
         """Count the failure and cool the deployment down when the rules say so."""
-        call: Final = self._failure_call(kwargs)
         litellm_params: Final = as_str_mapping(kwargs.get("litellm_params")) or {}
+        call: Final = self._failure_call(kwargs, sent=litellm_params)
         return call is not None and self.cooled_down(
             self._drive_sync_steps(call),
             _logged_deployment_id(kwargs),
@@ -426,24 +455,24 @@ class RustHealthCallbacks:
         )
 
     async def report_stream_failure(
-        self, kwargs: Mapping[str, object], callbacks: Mapping[str, bool] | None = None
+        self, kwargs: Mapping[str, object], callbacks: Mapping[str, bool] | None = None, *, sent: Mapping[str, object]
     ) -> None:
         """A stream's failure after its attempt returned it, as an async call's failure callbacks
         record it: counted, cooled down by the rules, and one more request this minute
         (``async_deployment_callback_on_failure``). No cooldown event: the stream logs its failure
         through ``dispatch_failure_handlers``, whose sync callbacks run in an executor thread, where
         ``set_cooldown_deployments`` has no loop to schedule one on."""
-        call: Final = self._failure_call(kwargs, counts_request=True, callbacks=callbacks)
+        call: Final = self._failure_call(kwargs, counts_request=True, callbacks=callbacks, sent=sent)
         if call is not None:
             _ = await self._drive_cache_steps(call)
 
     def report_stream_failure_sync(
-        self, kwargs: Mapping[str, object], callbacks: Mapping[str, bool] | None = None
+        self, kwargs: Mapping[str, object], callbacks: Mapping[str, bool] | None = None, *, sent: Mapping[str, object]
     ) -> None:
         """``report_stream_failure`` for a sync stream: a sync call's failure callback counts no request.
         No cooldown event: the stream logs its failure in a ``threading.Thread`` of its own, which
         has no running loop whatever the consumer's thread has."""
-        call: Final = self._failure_call(kwargs, callbacks=callbacks)
+        call: Final = self._failure_call(kwargs, callbacks=callbacks, sent=sent)
         if call is not None:
             _ = self._drive_sync_steps(call)
 
@@ -452,11 +481,14 @@ class RustHealthCallbacks:
         kwargs: Mapping[str, object],
         counts_request: bool = False,
         callbacks: Mapping[str, bool] | None = None,
+        *,
+        sent: Mapping[str, object],
     ) -> "RouterCall[_FailureReportSteps] | None":
         """The Rust call recording a logged failure, or None when it records nothing: one the Python
         router does not hold against the deployment is still a request of the minute
         (``async_deployment_callback_on_failure`` makes none of the failure callback's exits)."""
         from litellm.litellm_core_utils import core_helpers
+        from litellm.litellm_core_utils.batch_utils import is_batch_api_call_type
         from litellm.router_rust.core import attempt_failure
 
         self._sync_allowed_fails()
@@ -467,7 +499,7 @@ class RustHealthCallbacks:
         deployment_id: Final = info.get("id") if info is not None else None
         if deployment_id is None:
             return None
-        exits: Final = self.failure_exits(exception, kwargs, deployment_id)
+        exits: Final = self.failure_exits(exception, kwargs, deployment_id, sent)
         if exits["outside_deployment"] and not counts_request:
             return None
         exception_status: Final[object] = getattr(exception, "status_code", "")
@@ -488,6 +520,7 @@ class RustHealthCallbacks:
             counts_request=counts_request,
             usage_model=usage_model if isinstance(usage_model, str) else None,
             callbacks=callbacks,
+            batch_api=is_batch_api_call_type(kwargs.get("call_type")),
         )
 
     def sync_deployment_callback_on_success(
@@ -596,11 +629,13 @@ class RustHealthCallbacks:
         except Exception as e:  # noqa: BLE001  # as the Rust call loop treats a success it could not record
             verbose_router_logger.debug("count_realtime_session_success: not recorded. Got - %s", e)
 
-    async def count_realtime_session_refusal(self, kwargs: Mapping[str, object], callbacks: Mapping[str, bool]) -> None:
+    async def count_realtime_session_refusal(
+        self, kwargs: Mapping[str, object], callbacks: Mapping[str, bool], *, sent: Mapping[str, object]
+    ) -> None:
         from litellm._logging import verbose_router_logger
 
         try:
-            await self.report_stream_failure(kwargs, callbacks)
+            await self.report_stream_failure(kwargs, callbacks, sent=sent)
         except Exception as e:  # noqa: BLE001  # the refused session already ended, as count_realtime_session_success
             verbose_router_logger.debug("count_realtime_session_refusal: not recorded. Got - %s", e)
 
