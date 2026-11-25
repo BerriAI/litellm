@@ -14014,6 +14014,16 @@ def _form_fields_without_file(form_data: Mapping[str, object]) -> Mapping[str, o
 PLAIN_TEXT_TRANSCRIPTION_FORMATS: Final = frozenset({"text", "srt", "vtt"})
 
 
+class _PostCallSuccessHook(Protocol):
+    @property
+    def post_call_success_hook(self) -> Callable[..., Awaitable[object]]: ...
+
+
+def _post_call_success_hook_of(proxy_logging: _PostCallSuccessHook) -> Callable[..., Awaitable[object]]:
+    # `LLMResponseTypes` does not list `TranscriptionResponse`; the hook handles it like the image routes' responses.
+    return proxy_logging.post_call_success_hook
+
+
 @router.post(
     "/v1/audio/transcriptions",
     dependencies=[Depends(user_api_key_auth)],
@@ -14114,7 +14124,16 @@ async def audio_transcriptions(
                 llm_router=llm_router,
                 user_model=user_model,
             )
-            response: Final = _UNTYPED_VALUE.validate_python(await llm_call)
+            transcribed: Final = _UNTYPED_VALUE.validate_python(await llm_call)
+            ### CALL HOOKS ### - guardrails and callbacks screen the transcript before it is returned
+            # Only the finished transcript: a stream, or the replay of one a guardrail already screened, is not one.
+            response: Final = (
+                await _post_call_success_hook_of(proxy_logging_obj)(
+                    data=data, user_api_key_dict=user_api_key_dict, response=transcribed
+                )
+                if isinstance(transcribed, TranscriptionResponse)
+                else transcribed
+            )
         except Exception as e:
             raise e
         finally:
