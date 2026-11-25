@@ -1127,6 +1127,30 @@ async def test_retries_that_waited_behind_a_failed_turn_each_try_again_once_the_
 
 
 @pytest.mark.asyncio
+async def test_a_retry_queued_behind_a_batch_whose_retry_timed_out_still_tries_its_own_insert(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+) -> None:
+    audit_log_store.during_attempt = _RetryOverlap(first_attempts=2, hold_seconds=0.05).during_attempt
+    audit_log_store.next_errors.extend(
+        _database_failure("canceling statement due to statement timeout", requeue_safe=True) for _ in range(3)
+    )
+    batch: Final = tuple(
+        _audit_log(datetime.now(timezone.utc), {"n": n}).model_copy(update={"id": f"batch-{n}"}) for n in range(2)
+    )
+
+    with patch("litellm.proxy.management_helpers.audit_logs._AUDIT_WRITE_RETRY_DELAYS_SECONDS", (0.01,)):
+        await create_audit_logs_for_updates(batch)
+        await create_audit_log_for_update(
+            _audit_log(datetime.now(timezone.utc), {"n": 2}).model_copy(update={"id": "single"})
+        )
+        await _wait_for_audit_retries()
+
+    assert [row["id"] for row in audit_log_store.rows] == ["single"]
+    assert audit_failure_metric.callback_names == ["audit_log_database"] * 2
+
+
+@pytest.mark.asyncio
 async def test_a_shutdown_during_a_slow_failure_counts_every_queued_retry_once_one_last_attempt_fails(
     audit_log_store: FakeAuditLogStore,
     audit_failure_metric: _RecordedFailureMetric,

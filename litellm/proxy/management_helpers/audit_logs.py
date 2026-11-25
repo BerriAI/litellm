@@ -180,28 +180,28 @@ _T = TypeVar("_T")
 
 
 class AuditTaskRegistry:
-    __slots__ = ("_drain_signals", "_pending_tasks", "_retry_failures", "_retry_locks")
+    __slots__ = ("_database_unavailable_at", "_drain_signals", "_pending_tasks", "_retry_locks")
 
     def __init__(self) -> None:
         self._pending_tasks: Final[set[asyncio.Task[object]]] = set()  # mutable-ok: background task tracking
         self._retry_locks: Final[WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]] = WeakKeyDictionary()
         self._drain_signals: Final[WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Event]] = WeakKeyDictionary()
-        self._retry_failures: Final[WeakKeyDictionary[asyncio.AbstractEventLoop, float]] = WeakKeyDictionary()
+        self._database_unavailable_at: Final[WeakKeyDictionary[asyncio.AbstractEventLoop, float]] = WeakKeyDictionary()
 
     def retry_lock(self) -> asyncio.Lock:
         return self._retry_locks.setdefault(asyncio.get_running_loop(), asyncio.Lock())
 
-    def retry_failed_since(self, moment: float) -> bool:
-        failed_at: Final = self._retry_failures.get(asyncio.get_running_loop())
-        return failed_at is not None and failed_at >= moment
+    def database_unavailable_since(self, moment: float) -> bool:
+        unavailable_at: Final = self._database_unavailable_at.get(asyncio.get_running_loop())
+        return unavailable_at is not None and unavailable_at >= moment
 
     def end_retry_attempt(self, attempt: asyncio.Task[Exception | None]) -> None:
         self.retry_lock().release()
         failure: Final = None if attempt.cancelled() else attempt.result()
-        if failure is None or not _is_retryable_audit_failure(failure):
+        if not (isinstance(failure, NativeDatabaseFailure) and failure.unavailable):
             return
         loop: Final = asyncio.get_running_loop()
-        self._retry_failures[loop] = loop.time()
+        self._database_unavailable_at[loop] = loop.time()
 
     def _drain_signal(self) -> asyncio.Event:
         return self._drain_signals.setdefault(asyncio.get_running_loop(), asyncio.Event())
@@ -401,7 +401,7 @@ async def _attempt_audit_retry(write: _AuditWrite, failure: Exception, deadline:
         await asyncio.wait_for(lock.acquire(), timeout=max(_seconds_left(deadline), 0.0))
     except asyncio.TimeoutError:
         return failure
-    if _seconds_left(deadline) <= 0 or _audit_task_registry.retry_failed_since(queued_at):
+    if _seconds_left(deadline) <= 0 or _audit_task_registry.database_unavailable_since(queued_at):
         lock.release()
         return failure
     attempt: Final = track_audit_task(
