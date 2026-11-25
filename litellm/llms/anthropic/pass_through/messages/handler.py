@@ -45,7 +45,11 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes, LlmProviders
 from litellm.utils import ProviderConfigManager, client
 
-from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler, request_safeguards_evaluator
+from ..adapters.handler import (
+    LiteLLMMessagesToCompletionTransformationHandler,
+    model_info_with_request_base_model,
+    request_safeguards_evaluator,
+)
 from ..deferred_tools import (
     native_messages_deferred_tools_refusal,
     native_tool_search_name,
@@ -664,11 +668,12 @@ def anthropic_messages_handler(
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
         request_tools: Final = cast("list[dict[str, object]] | None", tools)  # cast-ok: the handler takes untyped dicts
+        route_model_info: Final = model_info_with_request_base_model(kwargs)
         _refuse_deferred_tools(
-            unusable_deferred_tools_refusal(deployment_model_info, custom_llm_provider, model),
+            unusable_deferred_tools_refusal(route_model_info, custom_llm_provider, model, api_base),
             drops_deferred_tools_setting,
         )
-        deferred_tools: Final = routed_deferred_tools_mode(deployment_model_info, custom_llm_provider, model)
+        deferred_tools: Final = routed_deferred_tools_mode(route_model_info, custom_llm_provider, model, api_base)
         native_deferred_tools: Final = deferred_tools == "native"
         request_messages: Final = cast("list[dict[str, object]]", messages)  # cast-ok: the handler takes untyped dicts
         request_tool_choice: Final = cast(  # cast-ok: the handler takes untyped dicts
