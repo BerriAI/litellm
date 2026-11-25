@@ -2106,7 +2106,7 @@ class LiteLLMCompletionResponsesConfig:
         nothing else, so a reasoning item never reaches the provider as visible
         assistant ``content``.
         """
-        message: Final = ChatCompletionResponseMessage(role="assistant", content=None)
+        message: Final = ChatCompletionResponseMessage(role="assistant", content="")
         if reasoning_text:
             message["reasoning_content"] = reasoning_text
         if thinking_blocks:
