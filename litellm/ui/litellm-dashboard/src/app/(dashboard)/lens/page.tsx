@@ -2,11 +2,10 @@
 
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { EmbeddedLens } from "@/components/lens/EmbeddedLens";
-import { useAuth } from "@/contexts/AuthContext";
+import { getGlobalLitellmHeaderName } from "@/components/networking";
 
 export default function LensPage() {
-  const { accessToken } = useAuthorized();
-  const { token } = useAuth();
-  if (!accessToken) return null;
-  return <EmbeddedLens dashboardToken={token} />;
+  const { accessToken, isAuthorized } = useAuthorized();
+  if (!isAuthorized || !accessToken) return null;
+  return <EmbeddedLens accessToken={accessToken} headerName={getGlobalLitellmHeaderName()} />;
 }

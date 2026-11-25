@@ -1,11 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useLayoutEffect, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { useTranslation } from "react-i18next";
 import { getProxyBaseUrl } from "@/components/networking";
 import { Button, buttonVariants } from "@/components/ui/button";
-import { lensWorkspaceAvailability, type LensWorkspaceAvailability } from "@/lib/http/lensWorkspace";
+import {
+  LENS_UI_AUTH,
+  lensWorkspaceAvailability,
+  type LensCredentials,
+  type LensWorkspaceAvailability,
+} from "@/lib/http/lensWorkspace";
 import { serverRootPath } from "@/lib/serverRootPath";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
 import { LensIntroduction } from "./LensIntroduction";
@@ -16,7 +21,7 @@ type Workspace = { state: "checking" } | LensWorkspaceAvailability;
 const gatewayUrl = (path: string): string =>
   `${resolveApiBase({ explicitBase: getProxyBaseUrl(), serverRootPath })}${path}`;
 
-function LensFrame({ source }: { source: string }) {
+function LensFrame({ source, accessToken, headerName }: LensCredentials & { source: string }) {
   const { t } = useTranslation();
   const { resolvedTheme } = useTheme();
   const iframe = useRef<HTMLIFrameElement>(null);
@@ -30,11 +35,14 @@ function LensFrame({ source }: { source: string }) {
     );
   }, [origin, theme]);
   const receive = useEffectEvent((event: MessageEvent<unknown>) => {
+    if (origin !== window.location.origin) return;
     const child = iframe.current?.contentWindow;
     if (!child || event.source !== child || event.origin !== origin) return;
     const parsed = lensFrameMessage.safeParse(event.data);
     if (!parsed.success) return;
-    if (parsed.data.type === "ready") {
+    if (parsed.data.type === "auth-ready") {
+      child.postMessage({ channel: LENS_FRAME_CHANNEL, command: { type: "auth", accessToken, headerName } }, origin);
+    } else if (parsed.data.type === "ready") {
       setNavigation(null);
       sendTheme();
     } else {
@@ -44,7 +52,7 @@ function LensFrame({ source }: { source: string }) {
       });
     }
   });
-  useEffect(() => {
+  useLayoutEffect(() => {
     const listener = (event: MessageEvent<unknown>) => receive(event);
     window.addEventListener("message", listener);
     return () => {
@@ -61,12 +69,22 @@ function LensFrame({ source }: { source: string }) {
   );
 }
 
-export function EmbeddedLens({ dashboardToken }: { dashboardToken: string | null }) {
+export function EmbeddedLens({ accessToken, headerName }: LensCredentials) {
+  return (
+    <LensConnection key={JSON.stringify([accessToken, headerName])} accessToken={accessToken} headerName={headerName} />
+  );
+}
+
+function LensConnection({ accessToken, headerName }: LensCredentials) {
   const { t } = useTranslation();
   const [workspace, setWorkspace] = useState<Workspace>({ state: "checking" });
   const [attempt, setAttempt] = useState(0);
-  const [source] = useState(() => gatewayUrl("/lens/ui/") + window.location.search);
-  const reloading = useRef(false);
+  const [source] = useState(() => {
+    const url = new URL(gatewayUrl("/lens/ui/"), window.location.href);
+    url.search = window.location.search;
+    url.searchParams.set("gateway-auth", LENS_UI_AUTH);
+    return url.href;
+  });
   const retry = () => {
     setWorkspace({ state: "checking" });
     setAttempt((current) => current + 1);
@@ -74,24 +92,23 @@ export function EmbeddedLens({ dashboardToken }: { dashboardToken: string | null
 
   useEffect(() => {
     const controller = new AbortController();
-    void lensWorkspaceAvailability(gatewayUrl("/lens/ui/"), dashboardToken, controller.signal).then((availability) => {
-      if (controller.signal.aborted) return;
-      setWorkspace(availability);
-      if (availability.state === "session-changed" && !reloading.current) {
-        reloading.current = true;
-        window.location.reload();
-      }
-    });
+    void lensWorkspaceAvailability(gatewayUrl("/lens/ui/"), { accessToken, headerName }, controller.signal).then(
+      (availability) => {
+        if (controller.signal.aborted) return;
+        setWorkspace(availability);
+      },
+    );
     return () => controller.abort();
-  }, [attempt, dashboardToken]);
+  }, [attempt, accessToken, headerName]);
 
-  if (workspace.state === "checking" || workspace.state === "session-changed")
+  if (workspace.state === "checking")
     return (
       <p role="status" className="p-8 text-sm text-muted-foreground">
         {t("lensWorkspace.opening")}
       </p>
     );
-  if (workspace.state === "served") return <LensFrame source={source} />;
+  if (workspace.state === "served")
+    return <LensFrame source={source} accessToken={accessToken} headerName={headerName} />;
   if (workspace.state === "unconfigured") return <LensIntroduction onRetry={retry} />;
   return (
     <div className="flex min-h-96 flex-1 items-center justify-center px-6 py-16 sm:px-10">

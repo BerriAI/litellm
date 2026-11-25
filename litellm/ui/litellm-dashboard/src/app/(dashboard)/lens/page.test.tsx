@@ -2,12 +2,12 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import LensPage from "./page";
 
-const { auth, session, workspace } = vi.hoisted(() => ({ auth: vi.fn(), session: vi.fn(), workspace: vi.fn() }));
+const { auth, header, workspace } = vi.hoisted(() => ({ auth: vi.fn(), header: vi.fn(), workspace: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: auth }));
-vi.mock("@/contexts/AuthContext", () => ({ useAuth: session }));
+vi.mock("@/components/networking", () => ({ getGlobalLitellmHeaderName: header }));
 vi.mock("@/components/lens/EmbeddedLens", () => ({
-  EmbeddedLens: ({ dashboardToken }: { dashboardToken: string | null }) => {
-    workspace(dashboardToken);
+  EmbeddedLens: (credentials: { accessToken: string; headerName: string }) => {
+    workspace(credentials);
     return <div>Lens workspace</div>;
   },
 }));
@@ -15,20 +15,34 @@ vi.mock("@/components/lens/EmbeddedLens", () => ({
 describe("Lens route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    session.mockReturnValue({ token: "mounted-dashboard-token" });
+    header.mockReturnValue("X-Gateway-Key");
+    auth.mockReturnValue({ accessToken: "dashboard-key", isAuthorized: true });
   });
 
-  it("waits for an access token", () => {
-    auth.mockReturnValue({ accessToken: null, userRole: "Admin", isViewOnly: false });
+  it.each([
+    { accessToken: null, isAuthorized: true },
+    { accessToken: "expired-key", isAuthorized: false },
+  ])("does not mount Lens without authorized credentials %j", (credentials) => {
+    auth.mockReturnValue(credentials);
     render(<LensPage />);
     expect(screen.queryByText("Lens workspace")).not.toBeInTheDocument();
     expect(workspace).not.toHaveBeenCalled();
   });
 
-  it("passes the mounted dashboard session to Lens after authorization", () => {
-    auth.mockReturnValue({ token: "cookie-token", accessToken: "test-key" });
+  it("passes the dashboard access key and configured header to Lens", () => {
     render(<LensPage />);
     expect(screen.getByText("Lens workspace")).toBeVisible();
-    expect(workspace).toHaveBeenCalledWith("mounted-dashboard-token");
+    expect(workspace).toHaveBeenCalledWith({ accessToken: "dashboard-key", headerName: "X-Gateway-Key" });
+  });
+
+  it("immediately removes Lens when the route guard rejects a previously decoded key", () => {
+    const { rerender } = render(<LensPage />);
+    expect(screen.getByText("Lens workspace")).toBeVisible();
+
+    auth.mockReturnValue({ accessToken: "dashboard-key", isAuthorized: false });
+    rerender(<LensPage />);
+
+    expect(screen.queryByText("Lens workspace")).not.toBeInTheDocument();
+    expect(workspace).toHaveBeenCalledTimes(1);
   });
 });

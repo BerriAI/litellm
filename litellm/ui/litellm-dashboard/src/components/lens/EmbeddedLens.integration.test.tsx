@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ThemeProvider, useTheme } from "next-themes";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -6,19 +6,17 @@ import { renderWithProviders } from "../../../tests/test-utils";
 import { EmbeddedLens } from "./EmbeddedLens";
 import { GatewayLensNavigation, GatewayLensNavigationProvider } from "./GatewayLensNavigation";
 import { SidebarProvider } from "@/components/ui/sidebar";
-import { switchToWorkerUrl } from "@/components/networking";
+import { setGlobalLitellmHeaderName, switchToWorkerUrl } from "@/components/networking";
 import { setServerRootPath } from "@/lib/serverRootPath";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 
 const network = vi.fn<typeof fetch>();
+const accessToken = "sk-dashboard-session";
 const token = `header.${btoa(JSON.stringify({ key: "sk-dashboard-session" }))}.signature`;
 const connection = (configured = true, connected = true, browserUrl = "https://lens.example.test") =>
   Response.json({ configured, connected, browser_url: browserUrl });
-const ready = () =>
-  network
-    .mockResolvedValueOnce(new Response("<html></html>"))
-    .mockResolvedValueOnce(Response.json({ token }))
-    .mockResolvedValueOnce(connection());
+const ui = () => new Response("<html></html>", { headers: { "X-Lens-UI-Auth": "bearer-v1" } });
+const ready = () => network.mockResolvedValueOnce(ui()).mockResolvedValueOnce(connection());
 
 beforeEach(() => {
   network.mockReset();
@@ -32,62 +30,44 @@ afterEach(() => {
   vi.restoreAllMocks();
   clearTokenCookies();
   switchToWorkerUrl(null);
+  setGlobalLitellmHeaderName("Authorization");
   setServerRootPath("/");
   vi.unstubAllGlobals();
 });
 
-const render = (dashboardToken: string | null = token) =>
-  renderWithProviders(<EmbeddedLens dashboardToken={dashboardToken} />);
+const render = (key = accessToken, headerName = "Authorization") =>
+  renderWithProviders(<EmbeddedLens accessToken={key} headerName={headerName} />);
 
 it("frames the connected Lens at the tab in the dashboard URL", async () => {
   ready();
   render();
-  expect(await screen.findByTitle("Lens")).toHaveAttribute("src", `${window.location.origin}/lens/ui/?tab=traces`);
+  expect(await screen.findByTitle("Lens")).toHaveAttribute(
+    "src",
+    `${window.location.origin}/lens/ui/?tab=traces&gateway-auth=bearer-v1`,
+  );
 });
 
-it("restores the dashboard's storage fallback before opening Lens", async () => {
-  window.sessionStorage.setItem("token", token);
+it("checks the public capability before service status using the supplied dashboard bearer", async () => {
+  const otherToken = `header.${btoa(JSON.stringify({ key: "sk-other-session" }))}.signature`;
+  document.cookie = `token=${otherToken}; Path=/`;
+  setGlobalLitellmHeaderName("X-Gateway-Key");
   const requests: Request[] = [];
   network.mockImplementation(async (input, init) => {
     const request = new Request(input, init);
     requests.push(request);
     if (new URL(request.url).pathname === "/lens/service") return connection();
-    if (new URL(request.url).pathname === "/lens/session") return Response.json({ token });
-    return new Response("<html></html>");
+    return ui();
   });
-  try {
-    render();
-    expect(await screen.findByTitle("Lens")).toHaveAttribute("src", `${window.location.origin}/lens/ui/?tab=traces`);
-    expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
-      "/lens/ui/",
-      "/lens/session",
-      "/lens/service",
-    ]);
-    expect(requests[0].headers.get("Authorization")).toBeNull();
-    expect(requests[2].headers.get("Authorization")).toBe("Bearer sk-dashboard-session");
-    expect(requests[1].method).toBe("POST");
-    expect(requests[1].credentials).toBe("include");
-    expect(requests[1].redirect).toBe("error");
-    expect(requests[1].headers.get("Authorization")).toBeNull();
-    expect(await requests[1].json()).toEqual({ token });
-  } finally {
-    window.sessionStorage.removeItem("token");
-  }
-});
+  render(accessToken, "X-Gateway-Key");
 
-it.each([401, 403, 503])("does not open Lens when the dashboard session handoff fails (%s)", async (status) => {
-  window.sessionStorage.setItem("token", "dashboard-session-fixture");
-  network
-    .mockResolvedValueOnce(new Response("<html></html>"))
-    .mockResolvedValueOnce(Response.json({ detail: "Sign in again" }, { status }));
-  try {
-    render();
-    expect(await screen.findByRole("heading", { name: "Could not connect to Lens" })).toBeVisible();
-    expect(screen.queryByTitle("Lens")).not.toBeInTheDocument();
-    expect(network).toHaveBeenCalledTimes(2);
-  } finally {
-    window.sessionStorage.removeItem("token");
-  }
+  expect(await screen.findByTitle("Lens")).toBeVisible();
+  expect(requests.map((request) => new URL(request.url).pathname)).toEqual(["/lens/ui/", "/lens/service"]);
+  expect(requests.every((request) => request.method === "GET")).toBe(true);
+  expect(requests[0].headers.get("X-Gateway-Key")).toBeNull();
+  expect(requests[0].headers.get("Authorization")).toBeNull();
+  expect(requests[1].headers.get("X-Gateway-Key")).toBe(`Bearer ${accessToken}`);
+  expect(requests[1].headers.get("Authorization")).toBeNull();
+  expect(getCookie("token")).toBe(otherToken);
 });
 
 it("renders the connected frame's Lens navigation in the gateway sidebar and keeps the theme in sync", async () => {
@@ -105,7 +85,7 @@ it("renders the connected frame's Lens navigation in the gateway sidebar and kee
           <aside aria-label="Gateway navigation">
             <GatewayLensNavigation collapsed={false} />
           </aside>
-          <EmbeddedLens dashboardToken={token} />
+          <EmbeddedLens accessToken={accessToken} headerName="Authorization" />
         </GatewayLensNavigationProvider>
       </SidebarProvider>
     </ThemeProvider>,
@@ -199,8 +179,7 @@ it("opens the workspace after setup succeeds and the user checks the connection 
   network
     .mockResolvedValueOnce(new Response(null, { status: 404 }))
     .mockResolvedValueOnce(connection(false, false))
-    .mockResolvedValueOnce(new Response("<html></html>"))
-    .mockResolvedValueOnce(Response.json({ token }))
+    .mockResolvedValueOnce(ui())
     .mockResolvedValueOnce(connection());
   render();
   fireEvent.click(await screen.findByRole("button", { name: "Check connection" }));
@@ -245,12 +224,11 @@ it.each([401, 403, 404, 503])("does not mistake a failed connection check (%s) f
   expect(screen.queryByRole("link", { name: "Set up Lens" })).not.toBeInTheDocument();
 });
 
-it.each(["UI probe", "session handoff"])("can retry a failed %s without reloading the dashboard", async (step) => {
-  if (step === "session handoff") network.mockResolvedValueOnce(new Response("<html></html>"));
+it.each(["UI probe", "service check"])("can retry a failed %s without reloading the dashboard", async (step) => {
+  if (step === "service check") network.mockResolvedValueOnce(ui());
   network
     .mockRejectedValueOnce(new TypeError("network"))
-    .mockResolvedValueOnce(new Response("<html></html>"))
-    .mockResolvedValueOnce(Response.json({ token }))
+    .mockResolvedValueOnce(ui())
     .mockResolvedValueOnce(connection());
   render();
   expect(await screen.findByRole("heading", { name: "Could not connect to Lens" })).toBeVisible();
@@ -258,104 +236,145 @@ it.each(["UI probe", "session handoff"])("can retry a failed %s without reloadin
   expect(await screen.findByTitle("Lens")).toBeVisible();
 });
 
-it.each(["stale", "canonical"])(
-  "reloads once when the root login differs from the mounted dashboard with a %s readable cookie",
-  async (readableCookie) => {
-    const canonical = `header.${btoa(JSON.stringify({ key: "sk-current-session" }))}.signature`;
-    const cookieToken = readableCookie === "stale" ? token : canonical;
-    document.cookie = `token=${canonical}; Path=/`;
-    document.cookie = `token=${cookieToken}; Path=/ui`;
-    expect(getCookie("token")).toBe(cookieToken);
-    const cookieWrites = vi.spyOn(document, "cookie", "set");
-    const reload = vi.fn();
-    vi.stubGlobal("location", { ...window.location, reload });
-    const requests: Request[] = [];
-    network.mockImplementation(async (input, init) => {
-      const request = new Request(input, init);
-      requests.push(request);
-      const path = new URL(request.url).pathname;
-      if (path === "/lens/session") return Response.json({ token: canonical });
-      if (path === "/lens/service") return connection();
-      return new Response("<html></html>");
-    });
-    const firstDocument = render(token);
-
-    await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
-    expect(requests.map((request) => new URL(request.url).pathname)).toEqual(["/lens/ui/", "/lens/session"]);
-    expect(await requests[1].json()).toEqual({ token });
-    expect(screen.queryByTitle("Lens")).not.toBeInTheDocument();
-    expect(getCookie("token")).toBe(canonical);
-    expect(sessionStorage.getItem("token")).toBe(canonical);
-    expect(cookieWrites).toHaveBeenCalledTimes(1);
-    expect(cookieWrites).toHaveBeenCalledWith(expect.stringContaining("path=/ui;"));
-
-    firstDocument.unmount();
-    render(canonical);
-
-    expect(await screen.findByTitle("Lens")).toBeVisible();
-    expect(requests.at(-1)?.headers.get("Authorization")).toBe("Bearer sk-current-session");
-    expect(reload).toHaveBeenCalledTimes(1);
-  },
-);
-
-it("repairs stale client credentials without reloading when the mounted dashboard already has the canonical login", async () => {
-  document.cookie = "token=stale-session; Path=/ui";
+it("sends the access key only to the ready iframe and leaves browser credentials unchanged", async () => {
+  window.history.replaceState(null, "", "/ui/lens/?tab=traces&gateway-auth=cookie&gateway-auth=other");
+  const bridgeKey = "sk-bridge-fixture";
+  const cookieWrites = vi.spyOn(document, "cookie", "set");
   const reload = vi.fn();
   vi.stubGlobal("location", { ...window.location, reload });
   ready();
-  render(token);
+  render(bridgeKey, "X-Gateway-Key");
+  const iframe = await screen.findByTitle<HTMLIFrameElement>("Lens");
+  const child = iframe.contentWindow!;
+  const postMessage = vi.spyOn(child, "postMessage").mockImplementation(() => {});
+  const send = (source: Window, origin: string, channel = "litellm-lens:v1") => {
+    act(() => {
+      window.dispatchEvent(new MessageEvent("message", { source, origin, data: { channel, type: "auth-ready" } }));
+    });
+  };
 
-  expect(await screen.findByTitle("Lens")).toBeVisible();
-  expect(network.mock.calls[1][1]?.body).toBe(JSON.stringify({ token }));
-  const [input, init] = network.mock.calls[2];
-  expect(new Request(input, init).headers.get("Authorization")).toBe("Bearer sk-dashboard-session");
-  expect(getCookie("token")).toBe(token);
+  send(window, window.location.origin);
+  send(child, "https://other.example.test");
+  send(child, window.location.origin, "other-channel");
+  expect(postMessage).not.toHaveBeenCalled();
+  send(child, window.location.origin);
+  expect(postMessage).toHaveBeenCalledExactlyOnceWith(
+    { channel: "litellm-lens:v1", command: { type: "auth", accessToken: bridgeKey, headerName: "X-Gateway-Key" } },
+    window.location.origin,
+  );
+  const frameUrl = new URL(iframe.src);
+  expect(frameUrl.searchParams.get("tab")).toBe("traces");
+  expect(frameUrl.searchParams.getAll("gateway-auth")).toEqual(["bearer-v1"]);
+  expect(iframe.src).not.toContain(bridgeKey);
+  expect(network.mock.calls.map(([input, init]) => new Request(input, init).url).join(" ")).not.toContain(bridgeKey);
+  expect(cookieWrites).not.toHaveBeenCalled();
+  expect(sessionStorage.getItem("token")).toBe(token);
+  for (const storage of [sessionStorage, localStorage]) {
+    const values = Array.from({ length: storage.length }, (_, index) => storage.getItem(storage.key(index) ?? ""));
+    expect(values.join(" ")).not.toContain(bridgeKey);
+  }
   expect(reload).not.toHaveBeenCalled();
 });
 
-it("hands off a null token when the root session is not readable and persists the returned login", async () => {
-  clearTokenCookies();
-  const reload = vi.fn();
-  vi.stubGlobal("location", { ...window.location, reload });
-  network.mockResolvedValueOnce(new Response("<html></html>")).mockResolvedValueOnce(Response.json({ token }));
-  render(null);
+it.each([
+  { accessToken: "sk-replacement-session", headerName: "Authorization" },
+  { accessToken, headerName: "X-Alternate-Key" },
+])("immediately replaces the iframe when its credentials change to %j", async (credentials) => {
+  ready();
+  const { rerender } = render();
+  const previousFrame = await screen.findByTitle<HTMLIFrameElement>("Lens");
+  const previousChild = previousFrame.contentWindow!;
+  ready();
+  setGlobalLitellmHeaderName(credentials.headerName);
+  rerender(<EmbeddedLens {...credentials} />);
 
-  await waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
-  expect(network.mock.calls[1][1]?.body).toBe(JSON.stringify({ token: null }));
-  expect(network.mock.calls[1][1]?.credentials).toBe("include");
-  expect(getCookie("token")).toBe(token);
-  expect(network).toHaveBeenCalledTimes(2);
-});
-
-it("shows a retryable error without reloading when neither cookie nor storage can retain the selected login", async () => {
-  const reload = vi.fn();
-  vi.stubGlobal("location", { ...window.location, reload });
-  vi.spyOn(document, "cookie", "set").mockImplementation(() => {});
-  vi.stubGlobal("sessionStorage", {
-    getItem: (key: string) => (key === "token" ? token : null),
-    setItem: () => {
-      throw new DOMException("Storage denied", "SecurityError");
-    },
-    removeItem: () => {},
+  expect(previousFrame).not.toBeInTheDocument();
+  expect(screen.queryByTitle("Lens")).not.toBeInTheDocument();
+  const currentFrame = await screen.findByTitle<HTMLIFrameElement>("Lens");
+  expect(currentFrame).not.toBe(previousFrame);
+  const currentChild = currentFrame.contentWindow!;
+  const postMessage = vi.spyOn(currentChild, "postMessage").mockImplementation(() => {});
+  const message = { channel: "litellm-lens:v1", type: "auth-ready" };
+  act(() => {
+    window.dispatchEvent(
+      new MessageEvent("message", { source: previousChild, origin: window.location.origin, data: message }),
+    );
   });
-  network
-    .mockResolvedValueOnce(new Response("<html></html>"))
-    .mockResolvedValueOnce(Response.json({ token: "canonical-session" }));
-  render();
-
-  expect(await screen.findByRole("heading", { name: "Could not connect to Lens" })).toBeVisible();
-  expect(screen.getByRole("button", { name: "Check connection" })).toBeVisible();
-  expect(reload).not.toHaveBeenCalled();
-  expect(getCookie("token")).toBe(token);
-  expect(network).toHaveBeenCalledTimes(2);
+  expect(postMessage).not.toHaveBeenCalled();
+  act(() => {
+    window.dispatchEvent(
+      new MessageEvent("message", { source: currentChild, origin: window.location.origin, data: message }),
+    );
+  });
+  expect(postMessage).toHaveBeenCalledExactlyOnceWith(
+    { channel: "litellm-lens:v1", command: { type: "auth", ...credentials } },
+    window.location.origin,
+  );
+  const [input, init] = network.mock.calls[3];
+  expect(new Request(input, init).headers.get(credentials.headerName)).toBe(`Bearer ${credentials.accessToken}`);
 });
 
-it.each([{}, { token: "" }, { token: 42 }])("refuses malformed canonical session data %j", async (body) => {
-  network.mockResolvedValueOnce(new Response("<html></html>")).mockResolvedValueOnce(Response.json(body));
+it("bounds a stalled capability probe and opens Lens after retry", async () => {
+  network.mockImplementationOnce(
+    (_input, options) =>
+      new Promise<Response>((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {
+          once: true,
+        });
+      }),
+  );
   render();
 
-  expect(await screen.findByRole("heading", { name: "Could not connect to Lens" })).toBeVisible();
-  expect(getCookie("token")).toBe(token);
+  expect(await screen.findByRole("heading", { name: "Could not connect to Lens" }, { timeout: 7000 })).toBeVisible();
+  expect(network).toHaveBeenCalledTimes(1);
+  expect(network.mock.calls[0][1]?.signal?.aborted).toBe(true);
+  ready();
+  fireEvent.click(screen.getByRole("button", { name: "Check connection" }));
+  expect(await screen.findByTitle("Lens")).toBeVisible();
+  expect(network).toHaveBeenCalledTimes(3);
+});
+
+it("cancels the capability probe on unmount without starting protected requests", async () => {
+  network.mockImplementationOnce(
+    (_input, options) =>
+      new Promise<Response>((_resolve, reject) => {
+        options?.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {
+          once: true,
+        });
+      }),
+  );
+  const { unmount } = render();
+  const signal = network.mock.calls[0][1]?.signal;
+  expect(signal?.aborted).toBe(false);
+  unmount();
+  expect(signal?.aborted).toBe(true);
+  await act(async () => {});
+  expect(network).toHaveBeenCalledTimes(1);
+});
+
+it.each([null, "cookie-v1", "bearer-v2"])(
+  "offers standalone Lens when the UI lacks the supported bearer capability (%s)",
+  async (capability) => {
+    const headers = capability ? { "X-Lens-UI-Auth": capability } : undefined;
+    network.mockResolvedValueOnce(new Response("<html></html>", { headers })).mockResolvedValueOnce(connection());
+    render();
+
+    expect(await screen.findByRole("link", { name: "Open Lens" })).toHaveAttribute(
+      "href",
+      `${window.location.origin}/lens/login`,
+    );
+    expect(screen.queryByTitle("Lens")).not.toBeInTheDocument();
+    expect(network).toHaveBeenCalledTimes(2);
+  },
+);
+
+it("does not frame a capability response redirected to another origin", async () => {
+  const response = ui();
+  Object.defineProperty(response, "url", { value: "https://other.example.test/lens/ui/" });
+  network.mockResolvedValueOnce(response).mockResolvedValueOnce(connection());
+  render();
+
+  expect(await screen.findByRole("link", { name: "Open Lens" })).toBeVisible();
   expect(screen.queryByTitle("Lens")).not.toBeInTheDocument();
   expect(network).toHaveBeenCalledTimes(2);
 });
@@ -364,7 +383,9 @@ it.each([404, 200])(
   "preserves the split-origin standalone fallback without handing off credentials (UI %s)",
   async (status) => {
     switchToWorkerUrl("https://api.example.test");
-    network.mockResolvedValueOnce(new Response(null, { status })).mockResolvedValueOnce(connection());
+    network
+      .mockResolvedValueOnce(new Response(null, { status, headers: { "X-Lens-UI-Auth": "bearer-v1" } }))
+      .mockResolvedValueOnce(connection());
     render();
 
     expect(await screen.findByRole("link", { name: "Open Lens" })).toHaveAttribute(
@@ -380,7 +401,7 @@ it.each([404, 200])(
   },
 );
 
-it("uses the deployment prefix once for the UI probe, handoff and iframe", async () => {
+it("uses the deployment prefix once for the UI probe, service check and iframe", async () => {
   setServerRootPath("/gateway");
   switchToWorkerUrl(`${window.location.origin}/gateway`);
   ready();
@@ -388,9 +409,9 @@ it("uses the deployment prefix once for the UI probe, handoff and iframe", async
 
   expect(await screen.findByTitle("Lens")).toHaveAttribute(
     "src",
-    `${window.location.origin}/gateway/lens/ui/?tab=traces`,
+    `${window.location.origin}/gateway/lens/ui/?tab=traces&gateway-auth=bearer-v1`,
   );
   expect(
     network.mock.calls.map(([input]) => new URL(input instanceof Request ? input.url : String(input)).pathname),
-  ).toEqual(["/gateway/lens/ui/", "/gateway/lens/session", "/gateway/lens/service"]);
+  ).toEqual(["/gateway/lens/ui/", "/gateway/lens/service"]);
 });
