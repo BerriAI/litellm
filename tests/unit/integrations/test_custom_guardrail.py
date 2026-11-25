@@ -4,6 +4,7 @@ import datetime as dt
 import json
 import pickle
 import threading
+from itertools import chain
 from typing import TYPE_CHECKING, ClassVar, Final, Literal, Optional
 from unittest.mock import AsyncMock
 
@@ -2982,6 +2983,24 @@ class TestLoggingOnlyApplyGuardrail:
         assert [e["guardrail_status"] for e in entries] == expected_statuses
 
     @pytest.mark.asyncio
+    async def test_a_request_rewrite_the_endpoint_cannot_apply_keeps_the_response_scan(self):
+        class _ExtraTextObserver(_ApplyOnlyObserver):
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                texts = list(inputs.get("texts") or [])
+                self.calls.append((input_type, texts))
+                return GenericGuardrailAPIInputs(texts=[*texts, "extra"] if input_type == "request" else texts)
+
+        guardrail: Final = _ExtraTextObserver()
+        kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
+        entries: Final = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [entry["guardrail_status"] for entry in entries] == ["success", "success"]
+
+    @pytest.mark.asyncio
     async def test_call_type_without_translation_is_skipped(self):
         guardrail = _ApplyOnlyObserver()
         kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
@@ -3786,3 +3805,28 @@ def test_default_on_guardrail() -> None:
         )
         is True
     )
+
+def test_responses_guardrail_messages_name_namespaced_calls_by_their_full_name() -> None:
+    namespace: Final = "mcp__codex_apps__github_enterprise_connector_prod"
+    data: Final = {
+        "input": [
+            {"type": "message", "role": "user", "content": "find the open issues"},
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "namespace": namespace,
+                "name": "search_issues_in_repository",
+                "arguments": "{}",
+            },
+            {"type": "function_call_output", "call_id": "call_1", "output": "[]"},
+        ]
+    }
+
+    messages: Final = CustomGuardrail(guardrail_name="g").get_guardrails_messages_for_call_type(
+        call_type=CallTypes.aresponses, data=data
+    )
+    tool_calls: Final = tuple(chain.from_iterable(message.get("tool_calls") or () for message in messages))
+
+    assert [call["function"]["name"] for call in tool_calls] == [
+        "mcp__codex_apps__github_enterprise_connector_prod__search_issues_in_repository"
+    ]

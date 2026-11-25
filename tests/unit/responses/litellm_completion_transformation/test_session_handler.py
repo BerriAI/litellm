@@ -1,10 +1,12 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from itertools import chain
 from typing import Final
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+import respx
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
@@ -13,6 +15,7 @@ import litellm
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD
 from litellm.litellm_core_utils.prompt_templates.factory import THOUGHT_SIGNATURE_SEPARATOR
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field
+from litellm.litellm_core_utils.tool_fields import chat_member_name, truncate_tool_name
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
@@ -1125,3 +1128,404 @@ async def test_reasoning_a_client_sent_back_in_a_stored_request_replays_only_whe
     blocks: Final = [message_field(message, "thinking_blocks") for message in session["messages"]]
     assert [block for block in blocks if block] == ([[sent_block]] if replayed else [])
     assert [content for _, content in map(_role_and_content, session["messages"])][-1] == "955"
+
+
+GEMINI_URL_PATTERN: Final = r"https://generativelanguage\.googleapis\.com/v1[a-z]*/models/gemini-3\.5-flash:.*"
+
+
+def _gemini_answer() -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "candidates": [
+                {"content": {"role": "model", "parts": [{"text": "Sunny"}]}, "finishReason": "STOP", "index": 0}
+            ],
+            "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 1, "totalTokenCount": 10},
+        },
+    )
+
+
+LONG_NAMESPACE_TOOL: Final = {
+    "type": "namespace",
+    "name": "mcp__codex_apps__codex_document_control",
+    "description": "Docs tools",
+    "tools": [
+        {
+            "type": "function",
+            "name": "_get_document_tool_schemas",
+            "parameters": {"type": "object", "properties": {"doc_id": {"type": "string"}}},
+        }
+    ],
+}
+LONG_MEMBER_FULL_NAME: Final = "mcp__codex_apps__codex_document_control___get_document_tool_schemas"
+
+
+def _additional_tools_item(tool: Mapping[str, object]) -> dict[str, object]:
+    return {"type": "additional_tools", "id": "at_1", "role": "developer", "tools": [tool]}
+
+
+SentTools = tuple[list[Mapping[str, object]], list[Mapping[str, object]]]
+
+
+def _sent_as_tools(tool: Mapping[str, object]) -> SentTools:
+    return [tool], []
+
+
+def _sent_in_additional_tools(tool: Mapping[str, object]) -> SentTools:
+    return [], [_additional_tools_item(tool)]
+
+
+SENT_TOOL_PLACEMENTS: Final = pytest.mark.parametrize(
+    "placement", [_sent_as_tools, _sent_in_additional_tools], ids=["tools", "additional_tools"]
+)
+
+
+def _stored_long_member_call_turn(
+    response_id: str,
+    placement: Callable[[Mapping[str, object]], SentTools],
+    earlier_input: tuple[Mapping[str, object], ...] = (),
+) -> dict[str, object]:
+    tools, input_items = placement(LONG_NAMESPACE_TOOL)
+    return {
+        "request_id": response_id,
+        "call_type": "aresponses",
+        "session_id": "long-member-session",
+        "proxy_server_request": {
+            "input": [*input_items, *earlier_input, {"role": "user", "content": "Fetch document N-42"}],
+            "model": "gemini-flash",
+            "tools": tools,
+        },
+        "response": {
+            "id": "chatcmpl-long-member",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": LONG_MEMBER_FULL_NAME, "arguments": '{"doc_id": "N-42"}'},
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    }
+
+
+def _long_member_response_id() -> str:
+    return ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="gemini", model_id=None, response_id="chatcmpl-long-member"
+    )
+
+
+async def _names_sent_to_gemini(
+    stored_turn: Mapping[str, object],
+    response_id: str,
+    tools: list[Mapping[str, object]],
+    request_input: list[Mapping[str, object]],
+) -> tuple[list[str], list[str], list[str]]:
+    fake_prisma_client: Final = _FakePrismaClient(results=[[stored_turn]])
+
+    with patch("litellm.proxy.proxy_server.prisma_client", fake_prisma_client), respx.mock:
+        route: Final = respx.post(url__regex=GEMINI_URL_PATTERN).mock(return_value=_gemini_answer())
+        await litellm.aresponses(
+            model="gemini/gemini-3.5-flash",
+            input=request_input,
+            previous_response_id=response_id,
+            tools=tools,
+            api_key="test-gemini-key",
+        )
+        sent_body: Final = json.loads(route.calls.last.request.content)
+
+    declared: Final = [
+        declaration["name"]
+        for declaration in chain.from_iterable(tool["function_declarations"] for tool in sent_body["tools"])
+    ]
+    parts: Final = list(chain.from_iterable(turn["parts"] for turn in sent_body["contents"]))
+    called: Final = [part["function_call"]["name"] for part in parts if "function_call" in part]
+    answered: Final = [part["function_response"]["name"] for part in parts if "function_response" in part]
+    return declared, called, answered
+
+
+async def _sent_tool_names(
+    stored_turn: Mapping[str, object], response_id: str, placement: Callable[[Mapping[str, object]], SentTools]
+) -> tuple[list[str], list[str], list[str]]:
+    tools, input_items = placement(LONG_NAMESPACE_TOOL)
+    return await _names_sent_to_gemini(
+        stored_turn,
+        response_id,
+        tools,
+        [*input_items, {"type": "function_call_output", "call_id": "call_1", "output": "schema for N-42"}],
+    )
+
+
+async def _answer_the_long_member_call(
+    stored_turn: Mapping[str, object], response_id: str, placement: Callable[[Mapping[str, object]], SentTools]
+) -> None:
+    declared, called, answered = await _sent_tool_names(stored_turn, response_id, placement)
+    assert declared == called == answered == [truncate_tool_name(LONG_MEMBER_FULL_NAME)]
+
+
+@SENT_TOOL_PLACEMENTS
+async def test_previous_response_replays_a_long_member_call_under_the_name_the_provider_was_sent(
+    monkeypatch: pytest.MonkeyPatch, placement: Callable[[Mapping[str, object]], SentTools]
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_id: Final = _long_member_response_id()
+
+    await _answer_the_long_member_call(_stored_long_member_call_turn(response_id, placement), response_id, placement)
+
+
+JOINED_MEMBER_CALL_REPLAY: Final = (
+    {"type": "function_call", "call_id": "call_0", "name": LONG_MEMBER_FULL_NAME, "arguments": '{"doc_id": "N-41"}'},
+    {"type": "function_call_output", "call_id": "call_0", "output": "schema for N-41"},
+)
+
+
+@SENT_TOOL_PLACEMENTS
+async def test_previous_response_replays_a_stored_input_call_under_the_name_the_provider_was_sent(
+    monkeypatch: pytest.MonkeyPatch, placement: Callable[[Mapping[str, object]], SentTools]
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    response_id: Final = _long_member_response_id()
+    stored_turn: Final = _stored_long_member_call_turn(response_id, placement, JOINED_MEMBER_CALL_REPLAY)
+
+    declared, called, answered = await _sent_tool_names(stored_turn, response_id, placement)
+
+    sent_name: Final = truncate_tool_name(LONG_MEMBER_FULL_NAME)
+    assert declared == [sent_name]
+    assert called == answered == [sent_name, sent_name]
+
+
+TRUNCATED_ROW: Final = json.dumps({LITELLM_TRUNCATED_PAYLOAD_FIELD: True})
+STORED_ROWS: Final = (
+    pytest.param(TRUNCATED_ROW, id="truncated_row"),
+    pytest.param("{}", id="prompts_not_stored"),
+)
+
+
+def _kept_in_cold_storage(stored_turn: Mapping[str, object], stored_request: str = TRUNCATED_ROW) -> dict[str, object]:
+    return {
+        **stored_turn,
+        "metadata": json.dumps({"cold_storage_object_key": "cold/long-member-turn.json"}),
+        "proxy_server_request": stored_request,
+    }
+
+
+def _cold_storage_object(
+    declared_name: str, earlier_input: tuple[Mapping[str, object], ...] = ()
+) -> dict[str, object]:
+    return {
+        "messages": [*earlier_input, {"role": "user", "content": "Fetch document N-42"}],
+        "model_parameters": {
+            "tools": [{"type": "function", "function": {"name": declared_name, "parameters": {"type": "object"}}}]
+        },
+    }
+
+
+@pytest.mark.parametrize("stored_request", STORED_ROWS)
+async def test_previous_response_replays_a_long_member_call_from_a_turn_kept_in_cold_storage(
+    monkeypatch: pytest.MonkeyPatch, stored_request: str
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
+    response_id: Final = _long_member_response_id()
+
+    with patch.object(session_handler, "COLD_STORAGE_HANDLER") as cold_storage:
+        cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = AsyncMock(
+            return_value=_cold_storage_object(truncate_tool_name(LONG_MEMBER_FULL_NAME))
+        )
+        await _answer_the_long_member_call(
+            _kept_in_cold_storage(_stored_long_member_call_turn(response_id, _sent_as_tools), stored_request),
+            response_id,
+            _sent_as_tools,
+        )
+
+
+@pytest.mark.parametrize("stored_request", STORED_ROWS)
+async def test_previous_response_replays_a_stored_input_call_from_a_turn_kept_in_cold_storage(
+    monkeypatch: pytest.MonkeyPatch, stored_request: str
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
+    response_id: Final = _long_member_response_id()
+    sent_name: Final = truncate_tool_name(LONG_MEMBER_FULL_NAME)
+
+    with patch.object(session_handler, "COLD_STORAGE_HANDLER") as cold_storage:
+        cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = AsyncMock(
+            return_value=_cold_storage_object(sent_name, JOINED_MEMBER_CALL_REPLAY)
+        )
+        declared, called, answered = await _sent_tool_names(
+            _kept_in_cold_storage(_stored_long_member_call_turn(response_id, _sent_as_tools), stored_request),
+            response_id,
+            _sent_as_tools,
+        )
+
+    assert declared == [sent_name]
+    assert called == answered == [sent_name, sent_name]
+
+
+SELF_NAMED_NAMESPACE_TOOL: Final = {
+    "type": "namespace",
+    "name": "lookup_document",
+    "description": "Document lookup",
+    "tools": [{"type": "function", "name": "lookup_document", "parameters": {"type": "object"}}],
+}
+SELF_NAMED_MEMBER_CALL_REPLAY: Final = (
+    {
+        "type": "function_call",
+        "call_id": "call_0",
+        "name": "lookup_document",
+        "namespace": "lookup_document",
+        "arguments": '{"doc_id": "N-41"}',
+    },
+    {"type": "function_call_output", "call_id": "call_0", "output": "document N-41"},
+)
+
+
+async def test_previous_response_replays_a_stored_self_named_member_call_from_a_turn_kept_in_cold_storage(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
+    response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="gemini", model_id=None, response_id="chatcmpl-self-named-cold"
+    )
+    stored_turn: Final = _kept_in_cold_storage(
+        {
+            "request_id": response_id,
+            "call_type": "aresponses",
+            "session_id": "self-named-cold-session",
+            "response": {
+                "id": "chatcmpl-self-named-cold",
+                "object": "chat.completion",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "Document N-41 is a lease."},
+                    }
+                ],
+            },
+        }
+    )
+    sent_name: Final = chat_member_name("lookup_document", "lookup_document")
+
+    with patch.object(session_handler, "COLD_STORAGE_HANDLER") as cold_storage:
+        cold_storage.get_proxy_server_request_from_cold_storage_with_object_key = AsyncMock(
+            return_value=_cold_storage_object(sent_name, SELF_NAMED_MEMBER_CALL_REPLAY)
+        )
+        declared, called, answered = await _names_sent_to_gemini(
+            stored_turn, response_id, [SELF_NAMED_NAMESPACE_TOOL], [{"role": "user", "content": "Summarize it"}]
+        )
+
+    assert sent_name in declared
+    assert called == answered == [sent_name]
+
+
+LONG_FUNCTION: Final = "lookup_" + "document_tool_schema_" * 4
+
+
+@pytest.mark.parametrize(
+    "cold_object",
+    [
+        pytest.param(_cold_storage_object(LONG_FUNCTION), id="sent_in_full"),
+        pytest.param({"messages": [{"role": "user", "content": "Fetch document N-42"}]}, id="no_tools_recorded"),
+    ],
+)
+def test_cold_storage_turn_keeps_a_long_call_name_its_provider_was_not_sent_shortened(
+    cold_object: dict[str, object],
+):
+    assert _replayed_call_names(_kept_in_cold_storage(_long_function_call_turn()), cold_object) == [LONG_FUNCTION]
+
+
+def _long_function_call_turn() -> dict[str, object]:
+    return {
+        "request_id": "long-function-turn",
+        "call_type": "aresponses",
+        "session_id": "long-function-session",
+        "response": {
+            "id": "chatcmpl-long-function",
+            "object": "chat.completion",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": LONG_FUNCTION, "arguments": '{"doc_id": "N-42"}'},
+                            }
+                        ],
+                    },
+                }
+            ],
+        },
+    }
+
+
+def _replayed_call_names(stored_turn: Mapping[str, object], stored_request: Mapping[str, object]) -> list[str]:
+    history: Final = ResponsesSessionHandler.extend_chat_completion_message_with_spend_log_payload(
+        stored_turn, stored_request, []
+    )
+    replayed: Final = history[-1]
+    assert isinstance(replayed, Message)
+    assert len(LONG_FUNCTION) > 64
+    return [str(tool_call.function.name) for tool_call in replayed.tool_calls or []]
+
+
+def test_cold_storage_turn_replays_a_long_call_under_the_shortened_name_its_provider_was_sent():
+    stored_turn: Final = _kept_in_cold_storage(_long_function_call_turn())
+
+    assert _replayed_call_names(stored_turn, _cold_storage_object(truncate_tool_name(LONG_FUNCTION))) == [
+        truncate_tool_name(LONG_FUNCTION)
+    ]
+
+
+@pytest.mark.parametrize(
+    "stored_request",
+    [
+        pytest.param(
+            {
+                "model": "gemini-flash",
+                "input": [{"role": "user", "content": "Fetch document N-42"}],
+                "tools": [{"type": "function", "name": LONG_FUNCTION, "parameters": {"type": "object"}}],
+            },
+            id="responses_request",
+        ),
+        pytest.param(
+            {
+                "model": "gemini-flash",
+                "input": [{"role": "user", "content": "Fetch document N-42"}],
+                LITELLM_TRUNCATED_PAYLOAD_FIELD: True,
+            },
+            id="truncated_responses_request_without_cold_storage",
+        ),
+        pytest.param({"messages": [{"role": "user", "content": "Fetch document N-42"}]}, id="messages_request"),
+    ],
+)
+def test_hot_turn_keeps_its_stored_call_name_when_the_client_sent_model_parameters(
+    stored_request: dict[str, object],
+):
+    request_with_client_model_parameters: Final = {
+        **stored_request,
+        "model_parameters": _cold_storage_object(truncate_tool_name(LONG_FUNCTION))["model_parameters"],
+    }
+    stored_turn: Final = {
+        **_long_function_call_turn(),
+        "metadata": json.dumps({"cold_storage_object_key": "cold/long-function-turn.json"}),
+        "proxy_server_request": json.dumps(request_with_client_model_parameters),
+    }
+
+    assert _replayed_call_names(stored_turn, request_with_client_model_parameters) == [LONG_FUNCTION]

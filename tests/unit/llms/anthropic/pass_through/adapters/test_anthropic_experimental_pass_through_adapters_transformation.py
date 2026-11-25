@@ -21,11 +21,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     _bedrock_converse_messages_pt,
 )
+from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH
 from litellm.llms.anthropic.pass_through.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
-    OPENAI_MAX_TOOL_NAME_LENGTH,
     AnthropicAdapter,
     LiteLLMAnthropicMessagesAdapter,
     create_tool_name_mapping,
@@ -516,6 +516,41 @@ def test_translate_anthropic_messages_to_openai_drops_bridge_encrypted_reasoning
     assert [b["signature"] for b in result[2]["thinking_blocks"]] == ["EqQBCkYIAxgCIkA_signed"]
 
 
+@pytest.mark.parametrize(
+    ("model", "expected_reply"),
+    [
+        ("converse/us.anthropic.claude-sonnet-4-5-20250929-v1:0", [{"text": "Seven."}]),
+        ("converse/us.amazon.nova-pro-v1:0", [{"text": "Gemini reasoning"}, {"text": "Seven."}]),
+    ],
+)
+@pytest.mark.parametrize("signature", ["", None])
+def test_converse_claude_never_reads_an_unsigned_thought_from_another_provider_as_its_own_reply(
+    model: str, expected_reply: list[dict[str, str]], signature: str | None
+):
+    completion_kwargs, _ = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=64,
+        messages=[
+            {"role": "user", "content": "Pick a number."},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Gemini reasoning", "signature": signature},
+                    {"type": "text", "text": "Seven."},
+                ],
+            },
+            {"role": "user", "content": "Double it."},
+        ],
+        model=model,
+        extra_kwargs={"custom_llm_provider": "bedrock"},
+    )
+
+    converse_messages: Final = _bedrock_converse_messages_pt(
+        messages=completion_kwargs["messages"], model=model.removeprefix("converse/"), llm_provider="bedrock_converse"
+    )
+
+    assert converse_messages[1]["content"] == expected_reply
+
+
 def test_chatgpt_messages_keep_encrypted_reasoning_and_replay_it():
     """chatgpt /v1/messages ends in the Responses API, so the signed block has to survive into the next request."""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
@@ -698,6 +733,69 @@ def test_encrypted_reasoning_is_kept_when_the_request_tools_route_it_to_response
 
     assistant: Final = openai_request["messages"][1]
     assert bool(assistant.get("thinking_blocks")) is kept
+
+
+@pytest.mark.parametrize(
+    ("base_model", "kept"),
+    [
+        pytest.param("azure_ai/gpt-5.6-terra", True, id="gpt_5_6_base_model_bridges_to_responses"),
+        pytest.param("azure_ai/gpt-5.5", False, id="gpt_5_5_base_model_stays_on_chat"),
+        pytest.param(None, False, id="no_base_model_stays_on_chat"),
+    ],
+)
+def test_encrypted_reasoning_is_kept_when_a_custom_foundry_name_base_model_routes_it_to_responses(
+    base_model: str | None, kept: bool
+) -> None:
+    request: Final = AnthropicMessagesRequest(
+        **{**_replayed_reasoning_request([{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}]),
+           "model": "azure_ai/qa-prod-reasoner", "thinking": {"type": "enabled", "budget_tokens": 2048}}
+    )
+    openai_request, _mapping = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        request,
+        custom_llm_provider="azure_ai",
+        api_base="https://myproject.services.ai.azure.com",
+        base_model=base_model,
+    )
+
+    assistant: Final = openai_request["messages"][1]
+    assert bool(assistant.get("thinking_blocks")) is kept
+
+
+@pytest.mark.parametrize(
+    "base_model_source",
+    [
+        {"model_info": {"base_model": "azure_ai/gpt-5.6-terra"}},
+        {"base_model": "azure_ai/gpt-5.6-terra"},
+        {"model_info": {"base_model": "azure_ai/Phi-4"}, "base_model": "azure_ai/gpt-5.6-terra"},
+        {"model_info": {"base_model": "azure_ai/gpt-5.6-terra"}, "base_model": ""},
+    ],
+    ids=["model_info", "litellm_params", "litellm_params_over_model_info", "empty_litellm_params"],
+)
+def test_a_custom_foundry_name_keeps_replayed_reasoning_and_its_summary_wherever_its_base_model_is_set(
+    base_model_source: Mapping[str, object],
+) -> None:
+    from litellm.llms.anthropic.pass_through.adapters.handler import (
+        LiteLLMMessagesToCompletionTransformationHandler,
+    )
+
+    tools: Final = [{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}]
+    request: Final = _replayed_reasoning_request(tools)
+    completion_kwargs, _mapping = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=64,
+        messages=cast(list[dict[str, object]], request["messages"]),
+        model="azure_ai/qa-prod-reasoner",
+        thinking={"type": "enabled", "budget_tokens": 2048, "summary": "auto"},
+        tools=tools,
+        extra_kwargs={
+            "custom_llm_provider": "azure_ai",
+            "api_base": "https://myproject.services.ai.azure.com",
+            **base_model_source,
+        },
+    )
+
+    assistant: Final = cast(list[Mapping[str, object]], completion_kwargs["messages"])[1]
+    assert assistant.get("thinking_blocks")
+    assert cast(Mapping[str, object], completion_kwargs["reasoning_effort"]).get("summary") == "auto"
 
 
 @pytest.mark.parametrize(
@@ -6134,6 +6232,24 @@ async def test_an_empty_trailing_user_message_reaches_gemini_as_a_user_turn(
         {"role": "model", "parts": [{"text": "Hello!"}]},
         {"role": "user", "parts": [{"text": " "}]},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("blank_text", ("", " "), ids=("empty", "blank"))
+async def test_a_request_with_only_blank_user_text_reaches_gemini_as_a_user_turn(
+    respx_mock: respx.MockRouter, blank_text: str
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+
+    await litellm.anthropic.messages.acreate(
+        model=_GEMINI_MODEL,
+        api_key="test-key",
+        max_tokens=64,
+        messages=[{"role": "user", "content": [{"type": "text", "text": blank_text}]}],
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [{"role": "user", "parts": [{"text": " "}]}]
 
 
 @pytest.mark.asyncio

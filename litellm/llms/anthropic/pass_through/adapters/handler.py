@@ -100,6 +100,15 @@ class _ChatTargetReasoning:
     summary: str | None = None
 
 
+def _declared_base_model(kwargs: Mapping[str, object]) -> str | None:
+    base_model: Final = kwargs.get("base_model")
+    if isinstance(base_model, str) and base_model:
+        return base_model
+    model_info: Final = as_str_mapping(kwargs.get("model_info"))
+    info_base_model: Final = None if model_info is None else model_info.get("base_model")
+    return info_base_model if isinstance(info_base_model, str) else None
+
+
 def _provider_error_code(body: object) -> str | None:
     mapping: Final = as_str_mapping(body)
     if mapping is None:
@@ -648,6 +657,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             tools=cast("list[dict[str, object]]", tools) if isinstance(tools, list) else None,
             reasoning_effort=reasoning_effort,
             api_base=resolved_api_base,
+            base_model=_declared_base_model(completion_kwargs),
         )
         return None if model_info.get("mode") == "responses" else _ChatTargetReasoning(effort=effort)
 
@@ -795,6 +805,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         base_model: Final = provider_kwargs.get("base_model")
         custom_llm_provider: Final = provider_kwargs.get("custom_llm_provider")
         target_provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+        api_base: Final = provider_kwargs.get("api_base")
         drop_params: Final = drops_unsupported_params(provider_kwargs.get("drop_params"))
         strips_mcp_servers: Final = target_provider in ROUTES_WITHOUT_MCP_SERVERS
         request_tools: Final = (
@@ -812,7 +823,11 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         request_data: Final[dict[str, object]] = {
             "model": model,
             "messages": strip_unsignable_thinking_blocks_for_claude(
-                messages, model, base_model if isinstance(base_model, str) else None
+                messages,
+                model,
+                base_model if isinstance(base_model, str) else None,
+                custom_llm_provider=target_provider,
+                api_base=api_base if isinstance(api_base, str) else None,
             ),
             "max_tokens": max_tokens,
         }
@@ -848,7 +863,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if "output_config" in extra_kwargs:
             request_data["output_config"] = extra_kwargs["output_config"]
 
-        api_base: Final = provider_kwargs.get("api_base")
         (
             openai_request,
             tool_name_mapping,
@@ -858,6 +872,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             api_base=api_base if isinstance(api_base, str) else None,
             deployment_model_info=as_str_mapping(provider_kwargs.get("model_info")),
             reasoning_summary=peek_reasoning_summary_aliases(provider_kwargs),
+            base_model=_declared_base_model(provider_kwargs),
             drop_params=drop_params,
             translate_bare_output_effort=extra_kwargs.get("reasoning_effort") is None,
         )

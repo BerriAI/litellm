@@ -21,6 +21,7 @@ from pydantic import TypeAdapter
 
 from litellm.batches.batch_utils import batch_cost_is_final
 from litellm.constants import MAX_FILE_LIST_LIMIT
+from litellm.llms.vertex_ai.common_utils import GEMINI_FILES_API_V1_URI_PREFIX
 from litellm.proxy._types import ProxyException
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
@@ -376,6 +377,7 @@ def _iter_stored_forms(bare_ids: Sequence[str]) -> Iterator[str]:
         yield bare_id
         yield f"files/{bare_id}"
         yield f"{_GEMINI_FILES_URL}{bare_id}"
+        yield f"{GEMINI_FILES_API_V1_URI_PREFIX}{bare_id}"
 
 
 def provider_file_id_spellings(file_id: str) -> tuple[str, ...]:
@@ -1552,6 +1554,13 @@ def batch_cost_poller_is_active() -> bool:
         return getattr(poller, "batch_processed_support_confirmed", False) is True
     except Exception:  # noqa: BLE001  # scheduler backends raise varied types from get_job; an unreadable scheduler means the poller cannot be relied on
         return False
+
+
+def created_batch_endpoint(provider_batch: "LiteLLMBatch", stored_batch: "LiteLLMBatch | None") -> str:
+    if stored_batch is None or not stored_batch.endpoint:
+        return provider_batch.endpoint
+    provider_named_the_endpoint: Final = provider_batch.endpoint not in ("", "/v1/chat/completions")
+    return provider_batch.endpoint if provider_named_the_endpoint else stored_batch.endpoint
 
 
 def _completed_batch_safe_to_retire(response: "LiteLLMBatch") -> bool:
