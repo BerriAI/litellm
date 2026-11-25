@@ -398,7 +398,8 @@ class ElevenLabsEventTransformer:
         return error_event(error.message, "invalid_request_error" if error.status_code < 500 else "server_error")
 
     def _partial(self, text: str) -> tuple[OpenAIRealtimeEvents, ...]:
-        if not text or True in self._pending_commit_discards:
+        # ElevenLabs answers commits in order, so partials before the oldest answer belong to that commit
+        if not text or self._pending_commit_discards[:1] == (True,):
             return ()
         turn: Final = self._turn
         current: Final = turn if turn is not None else _Turn(item_id=self._new_item_id(), emitted="", previous=None)

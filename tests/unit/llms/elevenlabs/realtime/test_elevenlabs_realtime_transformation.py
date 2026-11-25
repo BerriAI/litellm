@@ -815,6 +815,27 @@ async def test_a_clear_after_a_commit_discards_only_the_cleared_audio_transcript
     assert [event["type"] for event in cleared] == ["input_audio_buffer.cleared"]
 
 
+async def test_a_clear_queued_behind_a_kept_commit_keeps_streaming_that_commits_deltas():
+    config, backend = await _audio_session()
+    await _send_audio(config, backend, b"\x00\x00" * 2_400)
+    config.transform_realtime_request(json.dumps({"type": "input_audio_buffer.commit"}), SCRIBE_REALTIME_MODEL)
+    await _send_audio(config, backend, b"\x00\x00" * 2_400)
+    config.transform_realtime_request(json.dumps({"type": "input_audio_buffer.clear"}), SCRIBE_REALTIME_MODEL)
+    live: Final = [
+        *_response(config, _frame("partial_transcript", text="Kept words")),
+        *_response(config, _frame("partial_transcript", text="Kept words here")),
+    ]
+    committed: Final = _response(config, _frame("committed_transcript", text="Kept words here."))
+    cleared: Final = [
+        *_response(config, _frame("partial_transcript", text="Cleared words")),
+        *_response(config, _frame("committed_transcript", text="Cleared words.")),
+    ]
+
+    assert [event.get("delta") for event in live if "delta" in event] == ["Kept", " words"]
+    assert committed[-1]["transcript"] == "Kept words here."
+    assert [event["type"] for event in cleared] == ["input_audio_buffer.cleared"]
+
+
 def test_a_realtime_model_the_cost_map_lists_streams_under_its_own_id(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
         litellm,
