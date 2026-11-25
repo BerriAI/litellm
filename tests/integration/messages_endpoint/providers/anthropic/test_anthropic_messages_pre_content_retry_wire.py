@@ -193,14 +193,17 @@ def _assert_completed_by_retry(
     *,
     attempts: int = 2,
 ) -> None:
+    shown: Final = _shown_attempt(failure, attempts)
     assert status == 200, events
     assert event_types(events) == LIFECYCLE, events
-    assert message_id(events) == _served_id(prompt, _shown_attempt(failure, attempts)), events
+    assert message_id(events) == _served_id(prompt, shown), events
     assert delta_text(events) == _TEXT, events
     assert [request.target for request in wire.drain()] == ["/v1/messages"] * attempts
-    assert _success_rows(gateway, _served_id(prompt, attempts)) == [{"status": "success", "model_group": model}]
-    superseded_rows: Final = {attempt: _rows(gateway, _served_id(prompt, attempt)) for attempt in range(1, attempts)}
-    assert not any(superseded_rows.values()), superseded_rows
+    assert _success_rows(gateway, _served_id(prompt, shown)) == [{"status": "success", "model_group": model}]
+    unshown_rows: Final = {
+        attempt: _rows(gateway, _served_id(prompt, attempt)) for attempt in range(1, attempts + 1) if attempt != shown
+    }
+    assert not any(unshown_rows.values()), unshown_rows
 
 
 def _assert_rejected_before_content(
@@ -289,7 +292,7 @@ def test_anthropic_sdk_sync_stream_completes_after_a_drop_following_message_star
         assert final.id == _served_id(prompt, 1), final
         assert [block.text for block in final.content if block.type == "text"] == [_TEXT], final
         assert [request.target for request in wire.drain()] == ["/v1/messages"] * 2
-        assert _success_rows(gateway, _served_id(prompt, 2)) == [{"status": "success", "model_group": model}]
+        assert _success_rows(gateway, _served_id(prompt, 1)) == [{"status": "success", "model_group": model}]
 
 
 async def test_anthropic_sdk_async_stream_completes_after_a_drop_following_message_start(gateway: Gateway) -> None:

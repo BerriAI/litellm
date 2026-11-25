@@ -573,7 +573,7 @@ async def test_a_threaded_request_gets_the_message_start_of_the_retry_that_answe
 @pytest.mark.parametrize(
     ("router_arguments", "request_kwargs", "live", "held"),
     [
-        ({"num_retries": 2}, {}, MESSAGE_START + PING, THINKING_START),
+        ({"num_retries": 2}, {}, MESSAGE_START, THINKING_START + PING),
         ({"fallbacks": [{"a": ["b"]}], "num_retries": 2}, {}, b"", MESSAGE_START + THINKING_START + PING),
         ({"num_retries": 2}, {"thread": {"type": "create"}}, b"", MESSAGE_START + THINKING_START + PING),
     ],
@@ -595,6 +595,20 @@ async def test_a_ping_sharing_a_chunk_with_message_start_goes_out_before_content
     await read_into(await open_stream(core, **request_kwargs), received)
     assert b"".join(reads[frames.index(SIGNATURE_DELTA)]) == live
     assert b"".join(received) == live + held + SIGNATURE_DELTA + BLOCK_STOP + MESSAGE_STOP
+
+
+async def test_a_retry_after_a_live_message_start_keeps_a_ping_that_shares_a_read_with_a_held_block_start(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    host.answer(
+        "openai/a",
+        anthropic_stream(MESSAGE_START + THINKING_START + PING, error_frame()),
+        anthropic_stream(RETRY_MESSAGE_START + THINKING_START + PING, SIGNATURE_DELTA, BLOCK_STOP, MESSAGE_STOP),
+    )
+    core = make_core(model_list=[deployment("a", "a")], num_retries=1)
+    frames = await collect_bytes(await open_stream(core))
+    assert b"".join(frames) == MESSAGE_START + THINKING_START + PING + SIGNATURE_DELTA + BLOCK_STOP + MESSAGE_STOP
+    assert host.deployments_called() == ["a", "a"]
 
 
 @pytest.mark.parametrize(
@@ -653,6 +667,37 @@ async def test_a_retry_after_a_live_message_start_drops_its_own_and_sends_its_bl
     frames = await collect_bytes(await open_stream(core))
     assert b"".join(frames) == MESSAGE_START + PING + PING + retry_block + delta + BLOCK_STOP + MESSAGE_STOP
     assert host.deployments_called() == ["a", "a"]
+
+
+@pytest.mark.parametrize("retry_records_its_own_id", [False, True], ids=["native", "bridged"])
+@pytest.mark.parametrize("cut_attempts", [1, 2], ids=["one-retry", "two-retries"])
+async def test_a_retry_after_a_live_message_start_logs_the_message_id_the_client_saw(
+    make_core: MakeCore, host: ScriptedHost, retry_records_its_own_id: bool, cut_attempts: int
+) -> None:
+    logging_obj: Final = request_logging()
+
+    def opened_as(minted_id: str, answer: Callable[..., ByteStream]) -> Callable[..., ByteStream]:
+        def record_then_answer(**kwargs: object) -> ByteStream:  # kwargs-ok: the request
+            if retry_records_its_own_id:
+                logging_obj.record_streamed_anthropic_message_id(minted_id)
+            return answer(**kwargs)
+
+        return record_then_answer
+
+    cut_retries: Final = [
+        opened_as(f"msg_cut_{n}", anthropic_stream(RETRY_MESSAGE_START, THINKING_START, error_frame()))
+        for n in range(1, cut_attempts)
+    ]
+    host.answer(
+        "openai/a",
+        anthropic_stream(MESSAGE_START, THINKING_START, error_frame()),
+        *cut_retries,
+        opened_as("msg_answered", anthropic_stream(RETRY_MESSAGE_START, text_delta("A"), MESSAGE_STOP)),
+    )
+    core = make_core(model_list=[deployment("a", "a")], num_retries=cut_attempts)
+    frames = await collect_bytes(await open_stream(core, litellm_logging_obj=logging_obj))
+    assert frames == [MESSAGE_START, text_delta("A"), MESSAGE_STOP]
+    assert logging_obj.streamed_anthropic_message_id == "msg_1"
 
 
 async def test_a_keepalive_sharing_a_chunk_with_the_retrys_message_start_still_reaches_the_client(

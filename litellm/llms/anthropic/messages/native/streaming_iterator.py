@@ -494,15 +494,15 @@ async def _stamped_sse_frames(
         yield await _stamped_sse_frame(bytes(open_frame), safeguard_results)
 
 
-async def sse_frames(stream: AsyncIterator[bytes]) -> AsyncGenerator[bytes, None]:
+async def sse_frames_by_read(stream: AsyncIterator[bytes]) -> AsyncGenerator[tuple[bytes, ...], None]:
     open_frame: Final = bytearray()
     try:
         async for chunk in stream:
             if not isinstance(chunk, (bytes, bytearray)):  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes
                 if open_frame:
-                    yield bytes(open_frame)
+                    yield (bytes(open_frame),)
                     open_frame.clear()
-                yield chunk
+                yield (chunk,)
                 continue
             scan_from = max(len(open_frame) - _SSE_TERMINATOR_OVERLAP, 0)
             open_frame.extend(chunk)
@@ -510,14 +510,23 @@ async def sse_frames(stream: AsyncIterator[bytes]) -> AsyncGenerator[bytes, None
                 continue
             *frames, unterminated = _SSE_FRAME_END.split(open_frame)
             open_frame[:] = unterminated
-            for frame in frames:
-                yield bytes(frame)
+            yield tuple(bytes(frame) for frame in frames)
     except Exception:
         if open_frame:
-            yield bytes(open_frame)
+            yield (bytes(open_frame),)
         raise
     if open_frame:
-        yield bytes(open_frame)
+        yield (bytes(open_frame),)
+
+
+async def sse_frames(stream: AsyncIterator[bytes]) -> AsyncGenerator[bytes, None]:
+    reads: Final = sse_frames_by_read(stream)
+    try:
+        async for frames in reads:
+            for frame in frames:
+                yield frame
+    finally:
+        await reads.aclose()
 
 
 class SafeguardedAnthropicSSEStream:
