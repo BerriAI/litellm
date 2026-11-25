@@ -4216,6 +4216,14 @@ def _placed_ahead(routes: Sequence[BaseRoute], moving: BaseRoute, before: BaseRo
     return (*kept[:at], moving, *kept[at:])
 
 
+def _is_pass_through_route(route: Route) -> bool:
+    return getattr(route.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
+
+
+def _method_set(methods: Iterable[str]) -> frozenset[str]:
+    return frozenset(method.upper() for method in methods)
+
+
 class SafeRouteAdder:
     """
     Wrapper class for adding routes to FastAPI app.
@@ -4226,7 +4234,7 @@ class SafeRouteAdder:
 
     @staticmethod
     def _colliding_routes(app: FastAPI, path: str, methods: Sequence[str]) -> tuple[Route, ...]:
-        wanted: Final = frozenset(methods)
+        wanted: Final = _method_set(methods)
         return tuple(
             route
             for route in app.routes
@@ -4235,9 +4243,18 @@ class SafeRouteAdder:
 
     @staticmethod
     def _is_path_registered(app: FastAPI, path: str, methods: list[str]) -> bool:
-        """True when a route the app itself defines already serves the path with one of the methods."""
+        """
+        True when a route the app itself defines already serves the path with one of the methods, or a
+        pass-through route serves it with exactly these methods. A pass-through route with other methods
+        is an edited endpoint's old route, so the new one goes ahead of it.
+        """
         lazy_owned: Final = lazy_owned_routes(app)
-        return any(id(route) not in lazy_owned for route in SafeRouteAdder._colliding_routes(app, path, methods))
+        wanted: Final = _method_set(methods)
+        return any(
+            id(route) not in lazy_owned
+            and (not _is_pass_through_route(route) or _method_set(route.methods or ()) == wanted)
+            for route in SafeRouteAdder._colliding_routes(app, path, methods)
+        )
 
     @staticmethod
     def remove_unregistered_routes(app: FastAPI) -> None:
@@ -4252,23 +4269,23 @@ class SafeRouteAdder:
                 return f"{path}/{{subpath:path}}"
             return None
 
-        def registered_route_methods(route_info: _RegisteredPassThroughRoute) -> tuple[tuple[str, str], ...]:
+        def registered_routes(route_info: _RegisteredPassThroughRoute) -> tuple[tuple[str, frozenset[str]], ...]:
             starlette_path: Final = registered_route_path(route_info)
             methods: Final = route_info.get("methods")
             if starlette_path is None or not isinstance(methods, (list, tuple)):
                 return ()
-            return tuple((starlette_path, method.upper()) for method in methods)
+            return ((starlette_path, _method_set(methods)),)
 
         registered: Final = frozenset(
-            chain.from_iterable(map(registered_route_methods, _registered_pass_through_routes.values()))
+            chain.from_iterable(map(registered_routes, _registered_pass_through_routes.values()))
         )
         app.router.routes[:] = [  # rebind-ok: the app owns its route table
             route
             for route in app.router.routes
             if not (
                 isinstance(route, Route)
-                and getattr(route.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
-                and not any((route.path, method) in registered for method in (route.methods or ()))
+                and _is_pass_through_route(route)
+                and (route.path, _method_set(route.methods or ())) not in registered
             )
         ]
 

@@ -1117,6 +1117,45 @@ async def test_sync_drops_the_route_of_an_endpoint_that_left_the_config(monkeypa
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("include_subpath", "served_path"), [(False, "/edited"), (True, "/edited/v1/items")])
+async def test_sync_serves_the_methods_an_edited_endpoint_now_has(
+    monkeypatch: pytest.MonkeyPatch, include_subpath: bool, served_path: str
+) -> None:
+    from fastapi import FastAPI
+
+    from litellm.proxy import proxy_server
+
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    try:
+        _registered_pass_through_routes.clear()
+        app: Final = FastAPI()
+        monkeypatch.setattr(proxy_server, "app", app)
+        monkeypatch.setattr(proxy_server, "premium_user", True)
+        monkeypatch.setattr(proxy_server, "config_passthrough_endpoints", None)
+
+        def stored(methods: list[str] | None) -> dict[str, object]:
+            return {
+                "id": "test-sync-edited-endpoint",
+                "path": "/edited",
+                "target": "http://example.com",
+                "include_subpath": include_subpath,
+                "methods": methods,
+            }
+
+        await initialize_pass_through_endpoints([stored(["POST"])])
+        assert _methods_served_by_pass_through(app, served_path) == frozenset({"POST"})
+
+        await initialize_pass_through_endpoints([stored(None)])
+        assert _methods_served_by_pass_through(app, served_path) == frozenset({"GET", "POST", "PUT", "DELETE", "PATCH"})
+
+        await initialize_pass_through_endpoints([stored(["PUT"])])
+        assert _methods_served_by_pass_through(app, served_path) == frozenset({"PUT"})
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+
+
+@pytest.mark.asyncio
 async def test_sync_keeps_a_departed_route_when_builtin_routes_come_first(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1159,6 +1198,32 @@ async def test_sync_keeps_a_departed_route_when_builtin_routes_come_first(
     finally:
         _registered_pass_through_routes.clear()
         _registered_pass_through_routes.update(saved_registry)
+
+
+def _methods_served_by_pass_through(app: FastAPI, path: str) -> frozenset[str]:
+    from starlette.routing import Match
+
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    )
+
+    def first_full_match(method: str) -> object:
+        scope: Final = {
+            "type": "http",
+            "method": method,
+            "path": path,
+            "root_path": "",
+            "headers": [],
+            "query_string": b"",
+        }
+        return next((route for route in app.router.routes if route.matches(scope)[0] is Match.FULL), None)
+
+    return frozenset(
+        method
+        for method in ("GET", "POST", "PUT", "DELETE", "PATCH")
+        if getattr(getattr(first_full_match(method), "endpoint", None), LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False)
+        is True
+    )
 
 
 def test_remove_unregistered_routes_keeps_routes_still_backed_by_the_registry() -> None:
@@ -1292,70 +1357,39 @@ def test_remove_unregistered_routes_drops_unregistered_methods() -> None:
         LiteLLMRoutes.openai_routes.value[:] = saved_openai_routes
 
 
-def test_remove_unregistered_routes_keeps_overlapping_method_route() -> None:
+def test_remove_unregistered_routes_keeps_serving_a_method_another_endpoint_still_has() -> None:
     from fastapi import FastAPI
-    from starlette.routing import Route
 
     from litellm.proxy._types import LiteLLMRoutes
-    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
-    )
 
     saved_registry: Final = dict(_registered_pass_through_routes)
     saved_openai_routes: Final = tuple(LiteLLMRoutes.openai_routes.value)
     try:
         _registered_pass_through_routes.clear()
         app: Final = FastAPI()
-        InitPassThroughEndpointHelpers.add_exact_path_route(
-            app=app,
-            path="/x",
-            target="http://example.com",
-            custom_headers=None,
-            forward_headers=None,
-            merge_query_params=None,
-            dependencies=None,
-            cost_per_request=None,
-            endpoint_id="a",
-            methods=["GET", "POST"],
-        )
-        InitPassThroughEndpointHelpers.add_exact_path_route(
-            app=app,
-            path="/x",
-            target="http://example.com",
-            custom_headers=None,
-            forward_headers=None,
-            merge_query_params=None,
-            dependencies=None,
-            cost_per_request=None,
-            endpoint_id="b",
-            methods=["POST"],
-        )
-        routes_before: Final = tuple(
-            route
-            for route in app.router.routes
-            if isinstance(route, Route)
-            and route.path == "/x"
-            and getattr(route.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
-        )
-        assert len(routes_before) == 1
+        for endpoint_id, methods in (("a", ["GET", "POST"]), ("b", ["POST"])):
+            InitPassThroughEndpointHelpers.add_exact_path_route(
+                app=app,
+                path="/x",
+                target="http://example.com",
+                custom_headers=None,
+                forward_headers=None,
+                merge_query_params=None,
+                dependencies=None,
+                cost_per_request=None,
+                endpoint_id=endpoint_id,
+                methods=methods,
+            )
+        assert _methods_served_by_pass_through(app, "/x") == frozenset({"GET", "POST"})
 
         InitPassThroughEndpointHelpers.remove_endpoint_routes("a")
         SafeRouteAdder.remove_unregistered_routes(app)
 
-        marked_routes: Final = tuple(
-            route
-            for route in app.router.routes
-            if isinstance(route, Route)
-            and route.path == "/x"
-            and getattr(route.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
-        )
-        assert marked_routes == routes_before
-        assert "POST" in (marked_routes[0].methods or ())
+        assert _methods_served_by_pass_through(app, "/x") == frozenset({"POST"})
     finally:
         _registered_pass_through_routes.clear()
         _registered_pass_through_routes.update(saved_registry)
         LiteLLMRoutes.openai_routes.value[:] = saved_openai_routes
-
 
 def test_add_subpath_route_for_an_unrelated_prefix_leaves_the_route_order_untouched():
     """
