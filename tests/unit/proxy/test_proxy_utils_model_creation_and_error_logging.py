@@ -2992,7 +2992,9 @@ def test_a_failed_rerank_on_a_deployment_priced_per_token_bills_the_estimated_to
     assert _rerank_failure_input_cost("dep-rerank-own-token-rate") == pytest.approx(40 * 0.001)
 
 
-def test_a_failed_rerank_bills_its_deployments_per_query_rate_when_the_id_is_another_providers_model(monkeypatch):
+def test_a_failed_rerank_bills_its_deployments_per_query_rate_when_the_id_is_another_providers_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
     monkeypatch.setattr(litellm, "anthropic_models", {*litellm.anthropic_models, "pinned-anthropic-rerank"})
