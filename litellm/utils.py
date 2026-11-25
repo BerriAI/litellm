@@ -8620,6 +8620,15 @@ def create_proxy_transport_and_mounts():
     return sync_proxy_mounts, async_proxy_mounts
 
 
+_ALTERNATE_KEY_ENV_VARS: Final = {
+    "COHERE_API_KEY": ("CO_API_KEY",),
+    "FEATHERLESS_AI_API_KEY": ("FEATHERLESS_API_KEY",),
+    "PERPLEXITYAI_API_KEY": ("PERPLEXITY_API_KEY",),
+    "REPLICATE_API_KEY": ("REPLICATE_API_TOKEN",),
+    "VOLCENGINE_API_KEY": ("ARK_API_KEY",),
+}
+
+
 def validate_environment(
     model: str | None = None,
     api_key: str | None = None,
@@ -9032,6 +9041,10 @@ def validate_environment(
     def filter_missing_keys(keys: list[str], exclude_pattern: str) -> list[str]:
         """Filter out keys that contain the exclude_pattern (case insensitive)."""
         return [key for key in keys if exclude_pattern not in key.lower()]
+
+    missing_keys = [  # rebind-ok: narrows the list like the filters below
+        key for key in missing_keys if not any(name in os.environ for name in _ALTERNATE_KEY_ENV_VARS.get(key, ()))
+    ]
 
     if api_key is not None:
         missing_keys = filter_missing_keys(missing_keys, "api_key")

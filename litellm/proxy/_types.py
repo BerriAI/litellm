@@ -436,7 +436,6 @@ class LiteLLMRoutes(enum.Enum):
         "/tinyfish",
         "/vllm",
         "/mistral",
-        "/typesafe",
         "/laya",
         "/bespoke",
         "/openrouter",

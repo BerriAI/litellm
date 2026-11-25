@@ -406,6 +406,39 @@ async def test_list_user_batches_limit_zero_returns_empty_page_without_db_query(
 
 
 @pytest.mark.asyncio
+async def test_forget_unified_file_id_drops_the_cached_and_stored_owner_row() -> None:
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
+    prisma_client.db.litellm_managedfiletable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(unified_file_id="file-team-a", flat_model_file_ids=["file-team-a"]),
+            MagicMock(unified_file_id="managed-two-copies", flat_model_file_ids=["file-team-a", "file-b"]),
+        ]
+    )
+    prisma_client.db.litellm_managedfiletable.delete_many = AsyncMock(return_value=1)
+    proxy_managed_files: Final = PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=prisma_client)
+    await proxy_managed_files.internal_usage_cache.async_set_cache(
+        key="file-team-a",
+        value=LiteLLM_ManagedFileTable(
+            unified_file_id="file-team-a",
+            model_mappings={"_provider_upload_openai": "file-team-a"},
+            flat_model_file_ids=["file-team-a"],
+            created_by="user-a",
+            team_id="team-a",
+        ).model_dump(),
+    )
+    cached_before: Final = await proxy_managed_files.get_unified_file_id("file-team-a")
+
+    await proxy_managed_files.forget_unified_file_id(file_id="file-team-a", litellm_parent_otel_span=None)
+
+    assert cached_before is not None and cached_before.team_id == "team-a"
+    assert await proxy_managed_files.get_unified_file_id("file-team-a") is None
+    prisma_client.db.litellm_managedfiletable.delete_many.assert_awaited_once_with(
+        where={"unified_file_id": {"in": ["file-team-a"]}}
+    )
+
+
+@pytest.mark.asyncio
 async def test_async_pre_call_deployment_hook_resolves_model_id_from_litellm_metadata():
     """
     For batch operations the router stores model_info under
