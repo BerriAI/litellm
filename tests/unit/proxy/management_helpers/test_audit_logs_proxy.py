@@ -1126,6 +1126,41 @@ async def test_a_retry_that_hangs_past_its_time_budget_is_counted_with_the_retry
     assert audit_failure_metric.callback_names == ["audit_log_database"] * 2
 
 
+@dataclass
+class _SlowRetry:
+    hold_seconds: float
+    seen: int = 0
+
+    async def during_attempt(self) -> None:
+        self.seen += 1
+        if self.seen > 1:
+            await asyncio.sleep(self.hold_seconds)
+
+
+@pytest.mark.asyncio
+async def test_a_retry_still_running_when_its_time_budget_ends_is_counted_and_left_to_finish(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+) -> None:
+    audit_log_store.during_attempt = _SlowRetry(hold_seconds=0.5).during_attempt
+    audit_log_store.next_errors.append(_database_failure(unavailable=True))
+
+    with (
+        patch("litellm.proxy.management_helpers.audit_logs._AUDIT_WRITE_RETRY_DELAYS_SECONDS", (0.05,)),
+        patch("litellm.proxy.management_helpers.audit_logs._AUDIT_WRITE_RETRY_BUDGET_SECONDS", 0.2),
+    ):
+        await create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"members": ["u1"]}))
+        await asyncio.wait_for(_wait_for_audit_retries(), timeout=0.4)
+        counted_at_the_limit: Final = list(audit_failure_metric.callback_names)
+        stored_at_the_limit: Final = len(audit_log_store.rows)
+        await asyncio.wait_for(drain_audit_tasks(timeout=2.0), timeout=2.0)
+
+    assert counted_at_the_limit == ["audit_log_database"]
+    assert stored_at_the_limit == 0
+    assert [row["id"] for row in audit_log_store.rows] == ["audit-1"]
+    assert audit_log_store.attempts == 2
+
+
 @pytest.mark.asyncio
 async def test_a_retry_whose_time_budget_runs_out_is_counted_without_waiting_out_its_remaining_delays(
     audit_log_store: FakeAuditLogStore,

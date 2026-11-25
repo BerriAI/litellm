@@ -366,17 +366,25 @@ def _report_failed_audit_write(write: _AuditWrite, failure: Exception) -> None:
         reporter.handle_callback_failure(callback_name=_AUDIT_DATABASE_CALLBACK_NAME)
 
 
-async def _locked_audit_write(write: _AuditWrite) -> Exception | None:
-    async with _audit_task_registry.retry_lock():
-        return await _attempt_audit_write(write)
+def _seconds_left(deadline: float) -> float:
+    return deadline - asyncio.get_running_loop().time()
 
 
 async def _attempt_audit_retry(write: _AuditWrite, failure: Exception, deadline: float) -> Exception | None:
-    remaining: Final = deadline - asyncio.get_running_loop().time()
-    if remaining <= 0:
-        return failure
+    lock: Final = _audit_task_registry.retry_lock()
     try:
-        return await asyncio.wait_for(_locked_audit_write(write), timeout=remaining)
+        await asyncio.wait_for(lock.acquire(), timeout=max(_seconds_left(deadline), 0.0))
+    except asyncio.TimeoutError:
+        return failure
+    if _seconds_left(deadline) <= 0:
+        lock.release()
+        return failure
+    attempt: Final = track_audit_task(
+        asyncio.create_task(_attempt_audit_write(write), name=f"attempt of {_audit_write_label(write)} to the database")
+    )
+    attempt.add_done_callback(lambda _: lock.release())
+    try:
+        return await asyncio.wait_for(asyncio.shield(attempt), timeout=_seconds_left(deadline))
     except asyncio.TimeoutError:
         return failure
 
