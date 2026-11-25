@@ -6,15 +6,32 @@ interface KeyRow {
   token: string;
 }
 
-const { mockReplace, mockUseKeys, mockUiHref, state } = vi.hoisted(() => {
+const { mockReplace, mockUseKeys, mockUiHref, state, uiSettingsState, menuState } = vi.hoisted(() => {
   const state = {
     search: "login=success",
     userRole: "Internal User",
     keys: [] as KeyRow[],
     returnUrl: null as string | null,
   };
+  const uiSettingsState = {
+    isLoading: false,
+    enabledPages: null as string[] | null,
+  };
+  const menuState = {
+    groups: [
+      {
+        groupLabel: "AI GATEWAY",
+        items: [
+          { key: "home", page: "home", label: "Home" },
+          { key: "api-keys", page: "api-keys", label: "Virtual Keys" },
+        ],
+      },
+    ],
+  };
   return {
     state,
+    uiSettingsState,
+    menuState,
     mockReplace: vi.fn(),
     mockUiHref: vi.fn((segment: string) => `/mocked-ui/${segment}`),
     mockUseKeys: vi.fn(() => ({
@@ -35,6 +52,23 @@ vi.mock("@/contexts/AuthContext", () => ({
     userRole: state.userRole,
     userID: "user-1",
   }),
+}));
+vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
+  useUISettings: () => ({
+    isLoading: uiSettingsState.isLoading,
+    data: { values: { enabled_ui_pages_internal_users: uiSettingsState.enabledPages } },
+  }),
+}));
+vi.mock("@/components/CommandPalette/useVisibleMenuGroups", () => ({
+  useVisibleMenuGroups: () => menuState.groups,
+}));
+vi.mock("@/components/CommandPalette/utils", () => ({
+  flattenNavItems: (groups: typeof menuState.groups) =>
+    groups.flatMap((group) =>
+      group.items.map((item) => ({
+        route: item.key === "llm-playground" ? "playground" : item.key,
+      })),
+    ),
 }));
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({ useKeys: mockUseKeys }));
 vi.mock("@/app/(dashboard)/home/_components/HomePage", () => ({
@@ -83,6 +117,17 @@ describe("dashboard landing", () => {
     state.userRole = "Internal User";
     state.keys = [];
     state.returnUrl = null;
+    uiSettingsState.isLoading = false;
+    uiSettingsState.enabledPages = null;
+    menuState.groups = [
+      {
+        groupLabel: "AI GATEWAY",
+        items: [
+          { key: "home", page: "home", label: "Home" },
+          { key: "api-keys", page: "api-keys", label: "Virtual Keys" },
+        ],
+      },
+    ];
     mockReplace.mockClear();
     mockUseKeys.mockClear();
     mockUiHref.mockClear();
@@ -105,6 +150,32 @@ describe("dashboard landing", () => {
     state.keys = [{ token: "sk-abc" }];
     render(<CreateKeyPage />);
     expect(screen.getByTestId("home-page")).toBeInTheDocument();
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
+
+  it("redirects an internal user to an enabled page when Home is hidden", () => {
+    uiSettingsState.enabledPages = ["api-keys"];
+    menuState.groups = [
+      {
+        groupLabel: "AI GATEWAY",
+        items: [{ key: "api-keys", page: "api-keys", label: "Virtual Keys" }],
+      },
+    ];
+
+    render(<CreateKeyPage />);
+
+    expect(mockReplace).toHaveBeenCalledWith("/mocked-ui/api-keys");
+    expect(screen.getByTestId("loading-screen")).toBeInTheDocument();
+    expect(screen.queryByTestId("home-page")).not.toBeInTheDocument();
+  });
+
+  it("does not render Home while internal-user page visibility is loading", () => {
+    uiSettingsState.isLoading = true;
+
+    render(<CreateKeyPage />);
+
+    expect(screen.getByTestId("loading-screen")).toBeInTheDocument();
+    expect(screen.queryByTestId("home-page")).not.toBeInTheDocument();
     expect(mockReplace).not.toHaveBeenCalled();
   });
 
