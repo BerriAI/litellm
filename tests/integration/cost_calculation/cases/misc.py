@@ -33,6 +33,15 @@ from integration.cost_calculation.cases.anthropic import (
     CLAUDE_FABLE_5_1_STREAM,
     CLAUDE_FABLE_5_1_THINKING,
     CLAUDE_FABLE_5_1_TOOL_CALL,
+    CLAUDE_FABLE_5_2_CACHE_READ,
+    CLAUDE_FABLE_5_2_CACHE_WRITE_1H,
+    CLAUDE_FABLE_5_2_CACHE_WRITE_5M,
+    CLAUDE_FABLE_5_2_INPUT_TEXT,
+    CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT,
+    CLAUDE_FABLE_5_2_MESSAGES_STREAM,
+    CLAUDE_FABLE_5_2_STREAM,
+    CLAUDE_FABLE_5_2_THINKING,
+    CLAUDE_FABLE_5_2_TOOL_CALL,
     CLAUDE_HAIKU_5_5_CACHE_READ,
     CLAUDE_HAIKU_5_5_CACHE_WRITE_1H,
     CLAUDE_HAIKU_5_5_CACHE_WRITE_5M,
@@ -51,6 +60,15 @@ from integration.cost_calculation.cases.anthropic import (
     CLAUDE_OPUS_5_5_STREAM,
     CLAUDE_OPUS_5_5_THINKING,
     CLAUDE_OPUS_5_5_TOOL_CALL,
+    CLAUDE_SONNET_5_5_CACHE_READ,
+    CLAUDE_SONNET_5_5_CACHE_WRITE_1H,
+    CLAUDE_SONNET_5_5_CACHE_WRITE_5M,
+    CLAUDE_SONNET_5_5_INPUT_TEXT,
+    CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT,
+    CLAUDE_SONNET_5_5_MESSAGES_STREAM,
+    CLAUDE_SONNET_5_5_STREAM,
+    CLAUDE_SONNET_5_5_THINKING,
+    CLAUDE_SONNET_5_5_TOOL_CALL,
 )
 
 
@@ -2316,6 +2334,330 @@ AZURE_AI_CLAUDE_OPUS_5_5_ROUTE_BRIDGES: Final = bridge_pairs(
     (AZURE_AI_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT, AZURE_AI_CLAUDE_OPUS_5_5_MESSAGES_STREAM),
     ("/v1/responses",),
 )
+AZURE_AI_CLAUDE_FABLE_5_2_INPUT_TEXT: Final = CLAUDE_FABLE_5_2_INPUT_TEXT.model_copy(
+    update={
+        "name": "azure_ai/claude-fable-5-2-input_text",
+        "model": "azure_ai/claude-fable-5-2",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "model": "claude-fable-5-2",
+                "id": "msg_$REQUEST_ID",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "scripted answer for cost fixtures"}],
+                "container": None,
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "stop_details": None,
+                "usage": {
+                    "input_tokens": 1840,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                    "output_tokens": 412,
+                    "output_tokens_details": {"thinking_tokens": 0},
+                    "service_tier": "standard",
+                    "inference_geo": "global",
+                    "speed": "standard",
+                },
+                "diagnostics": None,
+            },
+        ),
+        "expected": ExactExpected(spend=0.0468, input_cost=0.02208, output_cost=0.02472, prompt_tokens=1840, completion_tokens=412),
+    }
+)
+AZURE_AI_CLAUDE_FABLE_5_2_STREAM: Final = CLAUDE_FABLE_5_2_STREAM.model_copy(
+    update={
+        "name": "azure_ai/claude-fable-5-2-stream",
+        "model": "azure_ai/claude-fable-5-2",
+        "response": SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "model": "claude-fable-5-2",
+                        "id": "msg_$REQUEST_ID",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [],
+                        "container": None,
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "stop_details": None,
+                        "usage": {
+                            "input_tokens": 1840,
+                            "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 0,
+                            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                            "output_tokens": 1,
+                            "service_tier": "standard",
+                            "inference_geo": "global",
+                            "speed": "standard",
+                        },
+                        "diagnostics": None,
+                    },
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "ping"},
+                *(
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}
+                    for text in ("scripted ", "answer for ", "cost fixtures")
+                ),
+                {"type": "content_block_stop", "index": 0},
+                {
+                    "type": "message_delta",
+                    "delta": {
+                        "stop_reason": "end_turn",
+                        "stop_sequence": None,
+                        "stop_details": None,
+                        "container": None,
+                    },
+                    "usage": {
+                        "input_tokens": 1840,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "output_tokens": 412,
+                        "output_tokens_details": {"thinking_tokens": 0},
+                    },
+                },
+                {"type": "message_stop"},
+            ),
+        ),
+        "expected": AZURE_AI_CLAUDE_FABLE_5_2_INPUT_TEXT.expected,
+    }
+)
+AZURE_AI_CLAUDE_FABLE_5_2_CACHE_READ: Final = _azure_ai_claude_shape_case(
+    CLAUDE_FABLE_5_2_CACHE_READ,
+    "azure_ai/claude-fable-5-2-cache_read",
+    "azure_ai/claude-fable-5-2",
+    _azure_ai_claude_usage(input_tokens=13, output_tokens=4, inference_geo="global", cache_read_input_tokens=40013),
+    ExactExpected(spend=0.0123999, input_cost=0.0121599, output_cost=0.00024, prompt_tokens=40026, completion_tokens=4),
+)
+AZURE_AI_CLAUDE_FABLE_5_2_CACHE_WRITE_5M: Final = _azure_ai_claude_shape_case(
+    CLAUDE_FABLE_5_2_CACHE_WRITE_5M,
+    "azure_ai/claude-fable-5-2-cache_write_5m",
+    "azure_ai/claude-fable-5-2",
+    _azure_ai_claude_usage(
+        input_tokens=13,
+        output_tokens=4,
+        inference_geo="global",
+        cache_creation_input_tokens=40013,
+        ephemeral_5m_input_tokens=40013,
+    ),
+    ExactExpected(spend=0.600591, input_cost=0.600351, output_cost=0.00024, prompt_tokens=40026, completion_tokens=4),
+)
+AZURE_AI_CLAUDE_FABLE_5_2_CACHE_WRITE_1H: Final = _azure_ai_claude_shape_case(
+    CLAUDE_FABLE_5_2_CACHE_WRITE_1H,
+    "azure_ai/claude-fable-5-2-cache_write_1h",
+    "azure_ai/claude-fable-5-2",
+    _azure_ai_claude_usage(
+        input_tokens=13,
+        output_tokens=4,
+        inference_geo="global",
+        cache_creation_input_tokens=40013,
+        ephemeral_1h_input_tokens=40013,
+    ),
+    ExactExpected(spend=0.960708, input_cost=0.960468, output_cost=0.00024, prompt_tokens=40026, completion_tokens=4),
+)
+AZURE_AI_CLAUDE_FABLE_5_2_THINKING: Final = _azure_ai_claude_shape_case(
+    CLAUDE_FABLE_5_2_THINKING,
+    "azure_ai/claude-fable-5-2-thinking",
+    "azure_ai/claude-fable-5-2",
+    _azure_ai_claude_usage(input_tokens=63, output_tokens=75, inference_geo="global", thinking_tokens=45),
+    ExactExpected(spend=0.005256, input_cost=0.000756, output_cost=0.0045, prompt_tokens=63, completion_tokens=75),
+    [
+        {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
+        {"type": "text", "text": "scripted answer for cost fixtures"},
+    ],
+    adaptive_thinking=True,
+)
+AZURE_AI_CLAUDE_FABLE_5_2_TOOL_CALL: Final = _azure_ai_claude_shape_case(
+    CLAUDE_FABLE_5_2_TOOL_CALL,
+    "azure_ai/claude-fable-5-2-tool_call",
+    "azure_ai/claude-fable-5-2",
+    _azure_ai_claude_usage(input_tokens=388, output_tokens=52, inference_geo="global"),
+    ExactExpected(spend=0.007776, input_cost=0.004656, output_cost=0.00312, prompt_tokens=388, completion_tokens=52),
+)
+AZURE_AI_CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT: Final = _azure_ai_claude_messages_case(
+    AZURE_AI_CLAUDE_FABLE_5_2_INPUT_TEXT,
+    CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT,
+    "azure_ai/claude-fable-5-2-messages_input_text",
+    "azure_ai/claude-fable-5-2",
+)
+AZURE_AI_CLAUDE_FABLE_5_2_MESSAGES_STREAM: Final = _azure_ai_claude_messages_case(
+    AZURE_AI_CLAUDE_FABLE_5_2_STREAM,
+    CLAUDE_FABLE_5_2_MESSAGES_STREAM,
+    "azure_ai/claude-fable-5-2-messages_stream",
+    "azure_ai/claude-fable-5-2",
+)
+AZURE_AI_CLAUDE_FABLE_5_2_ROUTE_BRIDGES: Final = bridge_pairs(
+    (AZURE_AI_CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT, AZURE_AI_CLAUDE_FABLE_5_2_MESSAGES_STREAM),
+    ("/v1/responses",),
+)
+AZURE_AI_CLAUDE_SONNET_5_5_INPUT_TEXT: Final = CLAUDE_SONNET_5_5_INPUT_TEXT.model_copy(
+    update={
+        "name": "azure_ai/claude-sonnet-5-5-input_text",
+        "model": "azure_ai/claude-sonnet-5-5",
+        "response": JsonResponse(
+            content_type="application/json",
+            body={
+                "model": "claude-sonnet-5-5",
+                "id": "msg_$REQUEST_ID",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "scripted answer for cost fixtures"}],
+                "container": None,
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "stop_details": None,
+                "usage": {
+                    "input_tokens": 1840,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                    "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                    "output_tokens": 412,
+                    "output_tokens_details": {"thinking_tokens": 0},
+                    "service_tier": "standard",
+                    "inference_geo": "global",
+                    "speed": "standard",
+                },
+                "diagnostics": None,
+            },
+        ),
+        "expected": ExactExpected(spend=0.01638, input_cost=0.007728, output_cost=0.008652, prompt_tokens=1840, completion_tokens=412),
+    }
+)
+AZURE_AI_CLAUDE_SONNET_5_5_STREAM: Final = CLAUDE_SONNET_5_5_STREAM.model_copy(
+    update={
+        "name": "azure_ai/claude-sonnet-5-5-stream",
+        "model": "azure_ai/claude-sonnet-5-5",
+        "response": SseResponse(
+            content_type="text/event-stream",
+            frames=sse_frames(
+                {
+                    "type": "message_start",
+                    "message": {
+                        "model": "claude-sonnet-5-5",
+                        "id": "msg_$REQUEST_ID",
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [],
+                        "container": None,
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "stop_details": None,
+                        "usage": {
+                            "input_tokens": 1840,
+                            "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 0,
+                            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 0},
+                            "output_tokens": 1,
+                            "service_tier": "standard",
+                            "inference_geo": "global",
+                            "speed": "standard",
+                        },
+                        "diagnostics": None,
+                    },
+                },
+                {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                {"type": "ping"},
+                *(
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}
+                    for text in ("scripted ", "answer for ", "cost fixtures")
+                ),
+                {"type": "content_block_stop", "index": 0},
+                {
+                    "type": "message_delta",
+                    "delta": {
+                        "stop_reason": "end_turn",
+                        "stop_sequence": None,
+                        "stop_details": None,
+                        "container": None,
+                    },
+                    "usage": {
+                        "input_tokens": 1840,
+                        "cache_creation_input_tokens": 0,
+                        "cache_read_input_tokens": 0,
+                        "output_tokens": 412,
+                        "output_tokens_details": {"thinking_tokens": 0},
+                    },
+                },
+                {"type": "message_stop"},
+            ),
+        ),
+        "expected": AZURE_AI_CLAUDE_SONNET_5_5_INPUT_TEXT.expected,
+    }
+)
+AZURE_AI_CLAUDE_SONNET_5_5_CACHE_READ: Final = _azure_ai_claude_shape_case(
+    CLAUDE_SONNET_5_5_CACHE_READ,
+    "azure_ai/claude-sonnet-5-5-cache_read",
+    "azure_ai/claude-sonnet-5-5",
+    _azure_ai_claude_usage(input_tokens=13, output_tokens=4, inference_geo="global", cache_read_input_tokens=40013),
+    ExactExpected(spend=0.00854133, input_cost=0.00845733, output_cost=8.4e-05, prompt_tokens=40026, completion_tokens=4),
+)
+AZURE_AI_CLAUDE_SONNET_5_5_CACHE_WRITE_5M: Final = _azure_ai_claude_shape_case(
+    CLAUDE_SONNET_5_5_CACHE_WRITE_5M,
+    "azure_ai/claude-sonnet-5-5-cache_write_5m",
+    "azure_ai/claude-sonnet-5-5",
+    _azure_ai_claude_usage(
+        input_tokens=13,
+        output_tokens=4,
+        inference_geo="global",
+        cache_creation_input_tokens=40013,
+        ephemeral_5m_input_tokens=40013,
+    ),
+    ExactExpected(spend=0.21020685, input_cost=0.21012285, output_cost=8.4e-05, prompt_tokens=40026, completion_tokens=4),
+)
+AZURE_AI_CLAUDE_SONNET_5_5_CACHE_WRITE_1H: Final = _azure_ai_claude_shape_case(
+    CLAUDE_SONNET_5_5_CACHE_WRITE_1H,
+    "azure_ai/claude-sonnet-5-5-cache_write_1h",
+    "azure_ai/claude-sonnet-5-5",
+    _azure_ai_claude_usage(
+        input_tokens=13,
+        output_tokens=4,
+        inference_geo="global",
+        cache_creation_input_tokens=40013,
+        ephemeral_1h_input_tokens=40013,
+    ),
+    ExactExpected(spend=0.3362478, input_cost=0.3361638, output_cost=8.4e-05, prompt_tokens=40026, completion_tokens=4),
+)
+AZURE_AI_CLAUDE_SONNET_5_5_THINKING: Final = _azure_ai_claude_shape_case(
+    CLAUDE_SONNET_5_5_THINKING,
+    "azure_ai/claude-sonnet-5-5-thinking",
+    "azure_ai/claude-sonnet-5-5",
+    _azure_ai_claude_usage(input_tokens=63, output_tokens=75, inference_geo="global", thinking_tokens=45),
+    ExactExpected(spend=0.0018396, input_cost=0.0002646, output_cost=0.001575, prompt_tokens=63, completion_tokens=75),
+    [
+        {"type": "thinking", "thinking": "scripted thought", "signature": "scripted signature"},
+        {"type": "text", "text": "scripted answer for cost fixtures"},
+    ],
+    adaptive_thinking=True,
+)
+AZURE_AI_CLAUDE_SONNET_5_5_TOOL_CALL: Final = _azure_ai_claude_shape_case(
+    CLAUDE_SONNET_5_5_TOOL_CALL,
+    "azure_ai/claude-sonnet-5-5-tool_call",
+    "azure_ai/claude-sonnet-5-5",
+    _azure_ai_claude_usage(input_tokens=388, output_tokens=52, inference_geo="global"),
+    ExactExpected(spend=0.0027216, input_cost=0.0016296, output_cost=0.001092, prompt_tokens=388, completion_tokens=52),
+)
+AZURE_AI_CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT: Final = _azure_ai_claude_messages_case(
+    AZURE_AI_CLAUDE_SONNET_5_5_INPUT_TEXT,
+    CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT,
+    "azure_ai/claude-sonnet-5-5-messages_input_text",
+    "azure_ai/claude-sonnet-5-5",
+)
+AZURE_AI_CLAUDE_SONNET_5_5_MESSAGES_STREAM: Final = _azure_ai_claude_messages_case(
+    AZURE_AI_CLAUDE_SONNET_5_5_STREAM,
+    CLAUDE_SONNET_5_5_MESSAGES_STREAM,
+    "azure_ai/claude-sonnet-5-5-messages_stream",
+    "azure_ai/claude-sonnet-5-5",
+)
+AZURE_AI_CLAUDE_SONNET_5_5_ROUTE_BRIDGES: Final = bridge_pairs(
+    (AZURE_AI_CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT, AZURE_AI_CLAUDE_SONNET_5_5_MESSAGES_STREAM),
+    ("/v1/responses",),
+)
 
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     PERPLEXITY_SONAR_NEXT_OFF_PEAK,
@@ -2403,6 +2745,26 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     AZURE_AI_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT,
     AZURE_AI_CLAUDE_OPUS_5_5_MESSAGES_STREAM,
     *(pair.bridged for pair in AZURE_AI_CLAUDE_OPUS_5_5_ROUTE_BRIDGES),
+    AZURE_AI_CLAUDE_FABLE_5_2_INPUT_TEXT,
+    AZURE_AI_CLAUDE_FABLE_5_2_STREAM,
+    AZURE_AI_CLAUDE_FABLE_5_2_CACHE_READ,
+    AZURE_AI_CLAUDE_FABLE_5_2_CACHE_WRITE_5M,
+    AZURE_AI_CLAUDE_FABLE_5_2_CACHE_WRITE_1H,
+    AZURE_AI_CLAUDE_FABLE_5_2_THINKING,
+    AZURE_AI_CLAUDE_FABLE_5_2_TOOL_CALL,
+    AZURE_AI_CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT,
+    AZURE_AI_CLAUDE_FABLE_5_2_MESSAGES_STREAM,
+    *(pair.bridged for pair in AZURE_AI_CLAUDE_FABLE_5_2_ROUTE_BRIDGES),
+    AZURE_AI_CLAUDE_SONNET_5_5_INPUT_TEXT,
+    AZURE_AI_CLAUDE_SONNET_5_5_STREAM,
+    AZURE_AI_CLAUDE_SONNET_5_5_CACHE_READ,
+    AZURE_AI_CLAUDE_SONNET_5_5_CACHE_WRITE_5M,
+    AZURE_AI_CLAUDE_SONNET_5_5_CACHE_WRITE_1H,
+    AZURE_AI_CLAUDE_SONNET_5_5_THINKING,
+    AZURE_AI_CLAUDE_SONNET_5_5_TOOL_CALL,
+    AZURE_AI_CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT,
+    AZURE_AI_CLAUDE_SONNET_5_5_MESSAGES_STREAM,
+    *(pair.bridged for pair in AZURE_AI_CLAUDE_SONNET_5_5_ROUTE_BRIDGES),
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
@@ -2432,10 +2794,34 @@ PARITY: Final[tuple[StreamParityTestCase, ...]] = (
     StreamParityTestCase(plain=AZURE_AI_CLAUDE_OPUS_5_5_INPUT_TEXT, streamed=AZURE_AI_CLAUDE_OPUS_5_5_STREAM),
     StreamParityTestCase(plain=AZURE_AI_CLAUDE_OPUS_5_5_MESSAGES_INPUT_TEXT, streamed=AZURE_AI_CLAUDE_OPUS_5_5_MESSAGES_STREAM),
     StreamParityTestCase(plain=AZURE_AI_CLAUDE_OPUS_5_5_ROUTE_BRIDGES[0].bridged, streamed=AZURE_AI_CLAUDE_OPUS_5_5_ROUTE_BRIDGES[1].bridged),
+    StreamParityTestCase(
+        plain=AZURE_AI_CLAUDE_FABLE_5_2_INPUT_TEXT, streamed=AZURE_AI_CLAUDE_FABLE_5_2_STREAM
+    ),
+    StreamParityTestCase(
+        plain=AZURE_AI_CLAUDE_FABLE_5_2_MESSAGES_INPUT_TEXT,
+        streamed=AZURE_AI_CLAUDE_FABLE_5_2_MESSAGES_STREAM,
+    ),
+    StreamParityTestCase(
+        plain=AZURE_AI_CLAUDE_FABLE_5_2_ROUTE_BRIDGES[0].bridged,
+        streamed=AZURE_AI_CLAUDE_FABLE_5_2_ROUTE_BRIDGES[1].bridged,
+    ),
+    StreamParityTestCase(
+        plain=AZURE_AI_CLAUDE_SONNET_5_5_INPUT_TEXT, streamed=AZURE_AI_CLAUDE_SONNET_5_5_STREAM
+    ),
+    StreamParityTestCase(
+        plain=AZURE_AI_CLAUDE_SONNET_5_5_MESSAGES_INPUT_TEXT,
+        streamed=AZURE_AI_CLAUDE_SONNET_5_5_MESSAGES_STREAM,
+    ),
+    StreamParityTestCase(
+        plain=AZURE_AI_CLAUDE_SONNET_5_5_ROUTE_BRIDGES[0].bridged,
+        streamed=AZURE_AI_CLAUDE_SONNET_5_5_ROUTE_BRIDGES[1].bridged,
+    ),
 )
 
 BRIDGE_COST_PARITY: Final[tuple[BridgeCostParityTestCase, ...]] = (
     *AZURE_AI_CLAUDE_FABLE_5_1_ROUTE_BRIDGES,
     *AZURE_AI_CLAUDE_HAIKU_5_5_ROUTE_BRIDGES,
     *AZURE_AI_CLAUDE_OPUS_5_5_ROUTE_BRIDGES,
+    *AZURE_AI_CLAUDE_FABLE_5_2_ROUTE_BRIDGES,
+    *AZURE_AI_CLAUDE_SONNET_5_5_ROUTE_BRIDGES,
 )
