@@ -1549,13 +1549,24 @@ def _gemini_files_api_tool_part(file: Mapping[str, object], model: str | None) -
 
 
 def _gemini_tool_file_options(
-    content: Mapping[str, object], *, allow_gemini_file_references: bool, model: str | None
+    content: Mapping[str, object],
+    *,
+    allow_gemini_file_references: bool,
+    model: str | None,
+    custom_llm_provider: str | None,
+    drop_params: bool,
 ) -> tuple[Mapping[str, object], GeminiFileInspectionMetadata]:
-    from litellm.llms.vertex_ai.gemini.transformation import encode_gemini_file_inspection_metadata
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        encode_gemini_file_inspection_metadata,
+        refuse_vertex_ignored_media_fields,
+    )
 
-    if not allow_gemini_file_references:
-        return {}, GeminiFileInspectionMetadata()
     fields: Final = {**content, **(as_str_mapping(content.get("file")) or {})}
+    if not allow_gemini_file_references:
+        refuse_vertex_ignored_media_fields(
+            fields, in_tool_result=True, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+        )
+        return {}, GeminiFileInspectionMetadata()
     return fields, encode_gemini_file_inspection_metadata(fields, model=model, custom_llm_provider="gemini")
 
 
@@ -1771,7 +1782,11 @@ def convert_to_gemini_tool_call_result(
                 elif content_type in ("file", "input_file"):  # pyright: ignore[reportUnnecessaryContains]  # loose runtime dict
                     # Vertex function response parts do not support Gemini file inspection fields.
                     file_fields, metadata = _gemini_tool_file_options(
-                        content, allow_gemini_file_references=allow_gemini_file_references, model=model
+                        content,
+                        allow_gemini_file_references=allow_gemini_file_references,
+                        model=model,
+                        custom_llm_provider=custom_llm_provider,
+                        drop_params=drop_params,
                     )
                     if (
                         allow_gemini_file_references

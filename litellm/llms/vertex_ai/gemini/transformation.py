@@ -156,6 +156,53 @@ def changes_gemini_media_settings(detail: str | None, video_metadata: Mapping[st
     )
 
 
+_VERTEX_AI_PROVIDERS: Final = ("vertex_ai", "vertex_ai_beta")
+_VERTEX_IGNORED_FILE_INSPECTION_FIELDS: Final = ("document_metadata", "spreadsheet_metadata", "audio_metadata")
+
+
+def refuse_vertex_ignored_media_fields(
+    fields: Mapping[str, object],
+    *,
+    in_tool_result: bool,
+    model: str | None,
+    custom_llm_provider: str | None,
+    drop_params: bool,
+) -> None:
+    if custom_llm_provider not in _VERTEX_AI_PROVIDERS or drop_params:
+        return
+    video_metadata: Final = as_str_mapping(fields.get("video_metadata")) or {}
+    content_layers: Final = (
+        ("video_metadata.content_layers",) if not in_tool_result and video_metadata.get("content_layers") else ()
+    )
+    ignored: Final = (*content_layers, *(name for name in _VERTEX_IGNORED_FILE_INSPECTION_FIELDS if fields.get(name)))
+    if not ignored:
+        return
+    location: Final = " inside a tool result" if in_tool_result else ""
+    raise litellm.BadRequestError(
+        message=(
+            f"Vertex ignores {', '.join(ignored)} on media{location}. "
+            "Use a gemini/ model, remove them, or set drop_params=True."
+        ),
+        model=model or "",
+        llm_provider=custom_llm_provider,
+    )
+
+
+def _vertex_supported_media_fields(
+    fields: Mapping[str, object], *, model: str | None, custom_llm_provider: str | None, drop_params: bool
+) -> Mapping[str, object]:
+    if custom_llm_provider not in _VERTEX_AI_PROVIDERS:
+        return fields
+    refuse_vertex_ignored_media_fields(
+        fields, in_tool_result=False, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+    )
+    kept: Final = {key: value for key, value in fields.items() if key not in _VERTEX_IGNORED_FILE_INSPECTION_FIELDS}
+    video_metadata: Final = as_str_mapping(fields.get("video_metadata"))
+    if video_metadata is None:
+        return kept
+    return {**kept, "video_metadata": {key: value for key, value in video_metadata.items() if key != "content_layers"}}
+
+
 def _get_highest_media_resolution(current: str | None, new_detail: str | None) -> str | None:
     """
     Compare two media resolution values and return the highest one.
@@ -653,8 +700,9 @@ def _process_gemini_video_url(
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
     *,
     drop_params: bool,
-    custom_llm_provider: str,
+    custom_llm_provider: str | None,
 ) -> PartType | None:
+    provider: Final = custom_llm_provider or "vertex_ai"
     video_fields: Final = as_str_mapping(video_url) or {}
     url: Final = video_url if isinstance(video_url, str) else _str_field(video_fields, "url")
     if not url and drop_params:
@@ -663,19 +711,22 @@ def _process_gemini_video_url(
         raise litellm.BadRequestError(
             message="Invalid message content: element type is 'video_url' but it has no 'url'",
             model=model or "",
-            llm_provider=custom_llm_provider,
+            llm_provider=provider,
         )
+    sent_fields: Final = _vertex_supported_media_fields(
+        video_fields, model=model, custom_llm_provider=custom_llm_provider, drop_params=drop_params
+    )
     try:
         part: Final = _process_gemini_media(
             image_url=url,
             format=_str_field(video_fields, "format", "mime_type", "content_type"),
             media_resolution_enum=_convert_detail_to_media_resolution_enum(_str_field(video_fields, "detail")),
             model=model,
-            video_metadata=as_str_mapping(video_fields.get("video_metadata")),
+            video_metadata=as_str_mapping(sent_fields.get("video_metadata")),
             vertex_project=vertex_project,
             vertex_credentials=vertex_credentials,
             max_download_bytes=MAX_VIDEO_DOWNLOAD_BYTES,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=provider,
         )
     except litellm.ImageFetchError:
         return skip_unfetched_video(
@@ -683,13 +734,13 @@ def _process_gemini_video_url(
             location="a message",
             drop_params=drop_params,
             model=model,
-            custom_llm_provider=custom_llm_provider,
+            custom_llm_provider=provider,
         )
     media: Final = part.get("inline_data") or part.get("file_data")
     holds_video: Final = keeps_gemini_video(
         media.get("mime_type") if media is not None else None,
         model=model,
-        custom_llm_provider=custom_llm_provider,
+        custom_llm_provider=provider,
         drop_params=drop_params,
     )
     return part if holds_video else None
@@ -711,26 +762,33 @@ def snake_to_camel(snake_str: str) -> str:
 _snake_to_camel = snake_to_camel
 
 
+def _camel_case_keys(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return {snake_to_camel(key): value for key, value in metadata.items()}
+
+
+def _encode_gemini_audio_metadata(fields: Mapping[str, object]) -> GeminiFileInspectionMetadata:
+    audio_metadata: Final = as_str_mapping(fields.get("audio_metadata"))
+    if audio_metadata is None:
+        return GeminiFileInspectionMetadata()
+    return GeminiFileInspectionMetadata(audio_metadata=_camel_case_keys(audio_metadata))
+
+
 def encode_gemini_file_inspection_metadata(
     file: Mapping[str, object], *, model: str | None = None, custom_llm_provider: str | None = None
 ) -> GeminiFileInspectionMetadata:
     document_metadata: Final = as_str_mapping(file.get("document_metadata"))
     spreadsheet_metadata: Final = as_str_mapping(file.get("spreadsheet_metadata"))
     document: Final = (
-        GeminiFileInspectionMetadata(
-            document_metadata={snake_to_camel(key): value for key, value in document_metadata.items()}
-        )
+        GeminiFileInspectionMetadata(document_metadata=_camel_case_keys(document_metadata))
         if document_metadata is not None
         else GeminiFileInspectionMetadata()
     )
-    selection: Final[GeminiFileInspectionMetadata] = (
-        {
-            **document,
-            "spreadsheet_metadata": {snake_to_camel(key): value for key, value in spreadsheet_metadata.items()},
-        }
+    spreadsheet: Final = (
+        GeminiFileInspectionMetadata(spreadsheet_metadata=_camel_case_keys(spreadsheet_metadata))
         if spreadsheet_metadata is not None
-        else document
+        else GeminiFileInspectionMetadata()
     )
+    selection: Final = document | spreadsheet | _encode_gemini_audio_metadata(file)
     detail: Final = file.get("resolution") or file.get("detail")
     resolution: Final = gemini_part_media_resolution(
         model, detail if isinstance(detail, str) else None, custom_llm_provider=custom_llm_provider
@@ -1112,7 +1170,7 @@ def gemini_convert_messages_with_history(
         vertex_project=vertex_project,
         vertex_credentials=vertex_credentials,
         drop_params=drop_params,
-        custom_llm_provider=custom_llm_provider or "vertex_ai",
+        custom_llm_provider=custom_llm_provider,
     )
 
     from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
@@ -1165,6 +1223,12 @@ def gemini_convert_messages_with_history(
                                 media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
                             else:
                                 image_url = raw_image_url
+                            image_fields = _vertex_supported_media_fields(
+                                as_str_mapping(raw_image_url) or {},
+                                model=model,
+                                custom_llm_provider=custom_llm_provider,
+                                drop_params=drop_params,
+                            )
                             _part = _process_gemini_media(
                                 image_url=image_url,
                                 format=format,
@@ -1174,12 +1238,18 @@ def gemini_convert_messages_with_history(
                                 vertex_credentials=vertex_credentials,
                                 custom_llm_provider=custom_llm_provider,
                             )
-                            _parts.append(_part)
+                            _parts.append({**_part, **_encode_gemini_audio_metadata(image_fields)})
                         elif element["type"] == "video_url":
                             if (video_part := video_url_part(element.get("video_url"))) is not None:
                                 _parts.append(video_part)
                         elif element["type"] == "input_audio":
                             audio_element = cast(ChatCompletionAudioObject, element)
+                            audio_fields = _vertex_supported_media_fields(
+                                {**audio_element, **audio_element["input_audio"]},
+                                model=model,
+                                custom_llm_provider=custom_llm_provider,
+                                drop_params=drop_params,
+                            )
                             audio_data = audio_element["input_audio"].get("data")
                             audio_format = audio_element["input_audio"].get("format")
                             if audio_data is not None and audio_format is not None:
@@ -1202,7 +1272,7 @@ def gemini_convert_messages_with_history(
                                     vertex_project=vertex_project,
                                     vertex_credentials=vertex_credentials,
                                 )
-                                _parts.append(_part)
+                                _parts.append({**_part, **_encode_gemini_audio_metadata(audio_fields)})
                         elif element["type"] == "file":
                             file_element = cast(ChatCompletionFileObject, element)
                             _file_field = file_element.get("file")
@@ -1221,10 +1291,15 @@ def gemini_convert_messages_with_history(
                             )
                             file_data = file_dict.get("file_data")
                             detail = file_dict.get("resolution") or file_dict.get("detail")
-                            video_metadata = file_dict.get("video_metadata")
                             passed_file = file_id or file_data
                             if passed_file is None:
                                 raise Exception("Unknown file type. Please pass in a file_id or file_data")
+                            sent_file = _vertex_supported_media_fields(
+                                file_dict,
+                                model=model,
+                                custom_llm_provider=custom_llm_provider,
+                                drop_params=drop_params,
+                            )
 
                             # Convert detail to media_resolution_enum
                             media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
@@ -1235,12 +1310,12 @@ def gemini_convert_messages_with_history(
                                     format=format,
                                     model=model,
                                     media_resolution_enum=media_resolution_enum,
-                                    video_metadata=video_metadata,
+                                    video_metadata=as_str_mapping(sent_file.get("video_metadata")),
                                     vertex_project=vertex_project,
                                     vertex_credentials=vertex_credentials,
                                     custom_llm_provider=custom_llm_provider,
                                 )
-                                _parts.append({**_part, **encode_gemini_file_inspection_metadata(file_dict)})
+                                _parts.append({**_part, **encode_gemini_file_inspection_metadata(sent_file)})
                             except litellm.BadRequestError:
                                 raise
                             except Exception as e:

@@ -46640,8 +46640,13 @@
         },
         "ChatCompletionAudioObject": {
           "properties": {
+            "audio_metadata": {
+              "additionalProperties": true,
+              "title": "Audio Metadata",
+              "type": "object"
+            },
             "input_audio": {
-              "$ref": "#/components/schemas/InputAudio"
+              "$ref": "#/components/schemas/ChatCompletionInputAudio"
             },
             "type": {
               "const": "input_audio",
@@ -46650,8 +46655,8 @@
             }
           },
           "required": [
-            "input_audio",
-            "type"
+            "type",
+            "input_audio"
           ],
           "title": "ChatCompletionAudioObject",
           "type": "object"
@@ -46877,6 +46882,11 @@
         },
         "ChatCompletionImageUrlObject": {
           "properties": {
+            "audio_metadata": {
+              "additionalProperties": true,
+              "title": "Audio Metadata",
+              "type": "object"
+            },
             "detail": {
               "title": "Detail",
               "type": "string"
@@ -46894,6 +46904,33 @@
             "url"
           ],
           "title": "ChatCompletionImageUrlObject",
+          "type": "object"
+        },
+        "ChatCompletionInputAudio": {
+          "properties": {
+            "audio_metadata": {
+              "additionalProperties": true,
+              "title": "Audio Metadata",
+              "type": "object"
+            },
+            "data": {
+              "title": "Data",
+              "type": "string"
+            },
+            "format": {
+              "enum": [
+                "wav",
+                "mp3"
+              ],
+              "title": "Format",
+              "type": "string"
+            }
+          },
+          "required": [
+            "data",
+            "format"
+          ],
+          "title": "ChatCompletionInputAudio",
           "type": "object"
         },
         "ChatCompletionMessageToolCall": {
@@ -47619,28 +47656,6 @@
             }
           },
           "title": "HTTPValidationError",
-          "type": "object"
-        },
-        "InputAudio": {
-          "properties": {
-            "data": {
-              "title": "Data",
-              "type": "string"
-            },
-            "format": {
-              "enum": [
-                "wav",
-                "mp3"
-              ],
-              "title": "Format",
-              "type": "string"
-            }
-          },
-          "required": [
-            "data",
-            "format"
-          ],
-          "title": "InputAudio",
           "type": "object"
         },
         "PolicyGuardrailsResponse": {

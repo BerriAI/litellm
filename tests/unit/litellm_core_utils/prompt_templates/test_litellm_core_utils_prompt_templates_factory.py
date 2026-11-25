@@ -1831,16 +1831,20 @@ _FIND_CLIP_CALL: Final = {
 }
 
 
+def _find_clip_result_with(media: Mapping[str, object]) -> Mapping[str, object]:
+    return {"role": "tool", "tool_call_id": "call_1", "content": [{"type": "text", "text": '{"ok":true}'}, media]}
+
+
 def _find_clip_result(video_url: Mapping[str, object]) -> Mapping[str, object]:
-    return {
-        "role": "tool",
-        "tool_call_id": "call_1",
-        "content": [{"type": "text", "text": '{"ok":true}'}, {"type": "video_url", "video_url": video_url}],
-    }
+    return _find_clip_result_with({"type": "video_url", "video_url": video_url})
 
 
 _TOOL_OUTPUT_ONLY: Final = {"function_response": {"name": "find_clip", "response": {"ok": True}}}
-_CLIP_SETTINGS: Final = ({"video_metadata": {"fps": 2}}, {"detail": "high"})
+_CLIP_SETTINGS: Final = (
+    {"video_metadata": {"fps": 2}},
+    {"detail": "high"},
+    {"video_metadata": {"content_layers": ["AUDIO"]}},
+)
 
 
 def test_gemini_tool_result_video_url_reaches_gemini_as_inline_video() -> None:
@@ -2069,6 +2073,77 @@ def test_drop_params_sends_a_tool_result_video_without_its_settings(settings: Ma
             }
         }
     ]
+
+
+_SHEET_MIME: Final = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_VERTEX_IGNORED_TOOL_FILE_SETTINGS: Final = pytest.mark.parametrize(
+    ("media", "ignored", "kept"),
+    [
+        pytest.param(
+            {
+                "type": "file",
+                "file": {
+                    "file_data": "data:audio/mpeg;base64,c291bmQ=",
+                    "audio_metadata": {"start_offset": "60s", "end_offset": "90s"},
+                },
+            },
+            "audio_metadata",
+            {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/mpeg"}},
+            id="file-audio-slice",
+        ),
+        pytest.param(
+            {
+                "type": "file",
+                "file": {
+                    "file_data": "data:application/pdf;base64,JVBERg==",
+                    "detail": "high",
+                    "document_metadata": {"start_page": 2},
+                },
+            },
+            "document_metadata",
+            {"inline_data": {"data": "JVBERg==", "mime_type": "application/pdf"}},
+            id="document-pages-beside-detail",
+        ),
+        pytest.param(
+            {
+                "type": "input_file",
+                "file_data": f"data:{_SHEET_MIME};base64,UEsDBA==",
+                "spreadsheet_metadata": {"sheet_index": 2},
+            },
+            "spreadsheet_metadata",
+            {"inline_data": {"data": "UEsDBA==", "mime_type": _SHEET_MIME}},
+            id="input_file-spreadsheet-sheet",
+        ),
+    ],
+)
+
+
+@_VERTEX_IGNORED_TOOL_FILE_SETTINGS
+def test_vertex_tool_result_file_settings_are_a_bad_request_since_vertex_ignores_them(
+    media: Mapping[str, object], ignored: str, kept: Mapping[str, object]
+) -> None:
+    message: Final = f"Vertex ignores {ignored} on media inside a tool result. Use a gemini/ model"
+    with pytest.raises(litellm.BadRequestError, match=re.escape(message)) as excinfo:
+        convert_to_gemini_tool_call_result(
+            _find_clip_result_with(media), _FIND_CLIP_CALL, custom_llm_provider="vertex_ai", model="gemini-3.8-flash"
+        )
+
+    assert (excinfo.value.llm_provider, excinfo.value.model) == ("vertex_ai", "gemini-3.8-flash")
+
+
+@_VERTEX_IGNORED_TOOL_FILE_SETTINGS
+def test_drop_params_sends_vertex_tool_result_files_without_their_settings(
+    media: Mapping[str, object], ignored: str, kept: Mapping[str, object]
+) -> None:
+    delivered: Final = convert_to_gemini_tool_call_result(
+        _find_clip_result_with(media),
+        _FIND_CLIP_CALL,
+        custom_llm_provider="vertex_ai",
+        model="gemini-3.8-flash",
+        drop_params=True,
+    )
+
+    assert delivered == [{"function_response": {"name": "find_clip", "response": {"ok": True}, "parts": [kept]}}]
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])

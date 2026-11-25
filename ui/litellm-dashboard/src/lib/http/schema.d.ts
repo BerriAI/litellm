@@ -28640,7 +28640,11 @@ export interface components {
         };
         /** ChatCompletionAudioObject */
         ChatCompletionAudioObject: {
-            input_audio: components["schemas"]["InputAudio"];
+            /** Audio Metadata */
+            audio_metadata?: {
+                [key: string]: unknown;
+            };
+            input_audio: components["schemas"]["ChatCompletionInputAudio"];
             /**
              * Type
              * @constant
@@ -28763,12 +28767,30 @@ export interface components {
         };
         /** ChatCompletionImageUrlObject */
         ChatCompletionImageUrlObject: {
+            /** Audio Metadata */
+            audio_metadata?: {
+                [key: string]: unknown;
+            };
             /** Detail */
             detail?: string;
             /** Format */
             format?: string;
             /** Url */
             url: string;
+        };
+        /** ChatCompletionInputAudio */
+        ChatCompletionInputAudio: {
+            /** Audio Metadata */
+            audio_metadata?: {
+                [key: string]: unknown;
+            };
+            /** Data */
+            data: string;
+            /**
+             * Format
+             * @enum {string}
+             */
+            format: "wav" | "mp3";
         };
         /** ChatCompletionMessageCustomToolCall */
         ChatCompletionMessageCustomToolCall: {
@@ -33421,16 +33443,6 @@ export interface components {
              * @constant
              */
             type: "base64";
-        };
-        /** InputAudio */
-        InputAudio: {
-            /** Data */
-            data: string;
-            /**
-             * Format
-             * @enum {string}
-             */
-            format: "wav" | "mp3";
         };
         /** InputTokensDetails */
         InputTokensDetails: {

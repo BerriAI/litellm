@@ -45,7 +45,7 @@ from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_
 from litellm.exceptions import UnknownPreviousResponseError, UnresolvablePreviousResponseError
 from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.cloud_storage_security import is_s3_uri
-from litellm.litellm_core_utils.core_helpers import drops_unsupported_params, normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params, normalize_drop_params
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
@@ -75,9 +75,9 @@ from litellm.types.llms.bedrock import S3MediaImageUrlObject
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantMessage,
+    ChatCompletionAudioObject,
     ChatCompletionCachedContent,
     ChatCompletionImageObject,
-    ChatCompletionImageUrlObject,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
@@ -239,6 +239,8 @@ _ANY_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[object, object])
 _STR_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _OBJECT_ADAPTER: Final = TypeAdapter(object)
+_RESPONSES_FILE_INSPECTION_KEYS: Final = ("document_metadata", "spreadsheet_metadata", "audio_metadata")
+_AUDIO_PART_ADAPTER: Final = TypeAdapter(ChatCompletionAudioObject)
 
 
 _CONTENT_TYPE_ADAPTER: Final[TypeAdapter[ValidChatCompletionMessageContentTypesLiteral]] = TypeAdapter(
@@ -261,6 +263,17 @@ _RESPONSES_API_TOOL_CHOICE_ADAPTER: Final = TypeAdapter(ToolChoice)
 
 def _is_s3_url(url: object) -> bool:
     return isinstance(url, str) and is_s3_uri(url)
+
+
+def _responses_audio_part(item: Mapping[str, object]) -> ChatCompletionAudioObject:
+    try:
+        return _AUDIO_PART_ADAPTER.validate_python(item)
+    except ValidationError as exc:
+        raise litellm.BadRequestError(
+            message="Invalid Responses input_audio part: send input_audio.data and input_audio.format (wav or mp3).",
+            model="",
+            llm_provider="",
+        ) from exc
 
 
 def _tool_mappings(raw_tools: object) -> tuple[Mapping[str, object], ...]:
@@ -2379,6 +2392,7 @@ class LiteLLMCompletionResponsesConfig:
             file_dict["file_data"] = item["file_data"]
         if item.get("filename"):
             file_dict["filename"] = item["filename"]
+        file_dict.update({key: item[key] for key in _RESPONSES_FILE_INSPECTION_KEYS if item.get(key)})
         media_format: Final = item.get("format")
         if media_format is not None:
             file_dict["format"] = media_format
@@ -2404,13 +2418,17 @@ class LiteLLMCompletionResponsesConfig:
         image_url_obj: Final = (
             S3MediaImageUrlObject(url=url, detail=detail, bucket_owner=bucket_owner)
             if bucket_owner is not None and _is_s3_url(url)
-            else ChatCompletionImageUrlObject(url=url, detail=detail)
+            else S3MediaImageUrlObject(url=url, detail=detail)
         )
         media_format: Final = item.get("format")
         if media_format is not None:
             image_url_obj["format"] = media_format
+        audio_metadata: Final = as_str_mapping(item.get("audio_metadata"))
+        sent_image_url: Final[S3MediaImageUrlObject] = (
+            image_url_obj if audio_metadata is None else {**image_url_obj, "audio_metadata": audio_metadata}
+        )
 
-        return ChatCompletionImageObject(type="image_url", image_url=image_url_obj)
+        return ChatCompletionImageObject(type="image_url", image_url=sent_image_url)
 
     @staticmethod
     def _transform_responses_api_content_to_chat_completion_content(
@@ -2445,11 +2463,16 @@ class LiteLLMCompletionResponsesConfig:
                         if "cache_control" in item:
                             image_block["cache_control"] = item["cache_control"]
                         content_list.append(image_block)
+                    elif (
+                        "input_audio" in item
+                        and (fields := _STR_KEY_DICT_ADAPTER.validate_python(item)).get("type") == "input_audio"
+                    ):
+                        content_list.append(dict(_responses_audio_part(fields)))
                     elif item.get("type") == "encrypted_content":
                         encrypted_content = item.get("encrypted_content")
                         if encrypted_content is not None:
                             content_list.append(
-                                OpenAIChatCompletionTextObject(type="text", text=str(encrypted_content))
+                                dict(OpenAIChatCompletionTextObject(type="text", text=str(encrypted_content)))
                             )
                     else:
                         # Skip text blocks with None text to avoid downstream errors

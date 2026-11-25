@@ -111,6 +111,32 @@ class TestLiteLLMCompletionResponsesConfig:
                 headers={},
             )
 
+    def test_responses_input_audio_reaches_chat_as_input_audio_with_its_slice(self) -> None:
+        audio: Final = {
+            "type": "input_audio",
+            "input_audio": {
+                "data": "c291bmQ=",
+                "format": "mp3",
+                "audio_metadata": {"start_offset": "60s", "end_offset": "90s"},
+            },
+        }
+        messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=[{"role": "user", "content": [{"type": "input_text", "text": "Transcribe this"}, audio]}],
+            responses_api_request={},
+        )
+
+        assert messages == [{"role": "user", "content": [{"type": "text", "text": "Transcribe this"}, audio]}]
+
+    @pytest.mark.parametrize("input_audio", [{"data": "c291bmQ="}, "c291bmQ="], ids=["no-format", "not-an-object"])
+    def test_malformed_responses_input_audio_is_a_bad_request_instead_of_a_silent_drop(
+        self, input_audio: object
+    ) -> None:
+        with pytest.raises(litellm.BadRequestError, match="Invalid Responses input_audio part"):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+                input=[{"role": "user", "content": [{"type": "input_audio", "input_audio": input_audio}]}],
+                responses_api_request={},
+            )
+
     def test_transform_input_file_item_to_file_item_with_file_id(self):
         """Test transformation of input_file item with file_id to Chat Completion file format"""
         # Setup

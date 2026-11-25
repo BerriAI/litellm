@@ -44,7 +44,7 @@ from litellm.types.utils import CountContextManagement, TokenCountMessagesFormat
 from litellm.utils import supports_response_schema, supports_system_messages
 
 GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
-    {"fps": "fps", "start_offset": "startOffset", "end_offset": "endOffset"}
+    {"fps": "fps", "start_offset": "startOffset", "end_offset": "endOffset", "content_layers": "contentLayers"}
 )
 
 

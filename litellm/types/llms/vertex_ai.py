@@ -59,6 +59,7 @@ class BlobType(TypedDict, total=False):
 class GeminiFileInspectionMetadata(TypedDict, total=False):
     document_metadata: ReadOnly[Mapping[str, object]]
     spreadsheet_metadata: ReadOnly[Mapping[str, object]]
+    audio_metadata: ReadOnly[Mapping[str, object]]
     media_resolution: ReadOnly[Mapping[str, str]]
 
 
@@ -71,6 +72,7 @@ class VideoMetadataType(TypedDict, total=False):
     fps: ReadOnly[float]
     startOffset: ReadOnly[str]
     endOffset: ReadOnly[str]
+    contentLayers: ReadOnly[Sequence[str]]
 
 
 class PartType(GeminiFileInspectionMetadata, total=False):

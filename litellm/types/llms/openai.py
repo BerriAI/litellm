@@ -29,9 +29,7 @@ from openai.types.beta.threads.message_content import MessageContent
 from openai.types.beta.threads.run import Run
 from openai.types.chat import ChatCompletionChunk
 from openai.types.chat.chat_completion_audio_param import ChatCompletionAudioParam
-from openai.types.chat.chat_completion_content_part_input_audio_param import (
-    ChatCompletionContentPartInputAudioParam,
-)
+from openai.types.chat.chat_completion_content_part_input_audio_param import InputAudio
 from openai.types.chat.chat_completion_modality import ChatCompletionModality
 from openai.types.chat.chat_completion_prediction_content_param import (
     ChatCompletionPredictionContentParam,
@@ -804,6 +802,7 @@ class ChatCompletionImageUrlObject(TypedDict, total=False):
     url: Required[str]
     detail: str
     format: str
+    audio_metadata: ReadOnly[Mapping[str, object]]
 
 
 class ChatCompletionImageObject(TypedDict):
@@ -821,8 +820,14 @@ class ChatCompletionVideoObject(TypedDict):
     video_url: str | ChatCompletionVideoUrlObject
 
 
-class ChatCompletionAudioObject(ChatCompletionContentPartInputAudioParam):
-    pass
+class ChatCompletionInputAudio(InputAudio):
+    audio_metadata: NotRequired[ReadOnly[Mapping[str, object]]]
+
+
+class ChatCompletionAudioObject(TypedDict):
+    type: ReadOnly[Literal["input_audio"]]
+    input_audio: ReadOnly[ChatCompletionInputAudio]
+    audio_metadata: NotRequired[ReadOnly[Mapping[str, object]]]
 
 
 class DocumentObject(TypedDict):

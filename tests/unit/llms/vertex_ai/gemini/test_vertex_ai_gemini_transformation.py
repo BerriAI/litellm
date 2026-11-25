@@ -1,14 +1,16 @@
 import base64
+import re
 from collections.abc import Mapping, Sequence
 from itertools import chain
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
 
 import httpx
 import pytest
 import respx
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import update_messages_with_model_file_ids
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
@@ -20,44 +22,55 @@ from litellm.llms.vertex_ai.gemini.transformation import (
     gemini_convert_messages_with_history,
     transform_request_body,
 )
+from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import BlobType, ContentType, PartType
 from litellm.types.utils import Message
 
 
-@pytest.mark.parametrize("version", ["v1", "v1beta"])
+@pytest.mark.parametrize("source", ["inline", "v1", "v1beta"])
 @pytest.mark.parametrize(
-    "file_options, expected_metadata",
+    "mime_type, file_options, expected_metadata",
     [
         (
+            "application/pdf",
             {"document_metadata": {"start_page": 2, "end_page": 4}},
             {"document_metadata": {"startPage": 2, "endPage": 4}},
         ),
         (
+            "application/pdf",
             {"spreadsheet_metadata": {"sheet_index": 2, "visible_cells": "A2:D4"}, "resolution": "high"},
             {
                 "spreadsheet_metadata": {"sheetIndex": 2, "visibleCells": "A2:D4"},
                 "media_resolution": {"level": "MEDIA_RESOLUTION_HIGH"},
             },
         ),
+        (
+            "audio/mpeg",
+            {"audio_metadata": {"start_offset": "60s", "end_offset": "90s"}},
+            {"audio_metadata": {"startOffset": "60s", "endOffset": "90s"}},
+        ),
+        (
+            "video/mp4",
+            {"video_metadata": {"fps": 1, "start_offset": "5s", "end_offset": "30s", "content_layers": ["FRAMES"]}},
+            {"video_metadata": {"fps": 1, "startOffset": "5s", "endOffset": "30s", "contentLayers": ["FRAMES"]}},
+        ),
     ],
 )
 def test_extended_file_inspection(
-    version: str, file_options: Mapping[str, object], expected_metadata: Mapping[str, object]
+    source: str, mime_type: str, file_options: Mapping[str, object], expected_metadata: Mapping[str, object]
 ) -> None:
-    uri: Final = f"https://generativelanguage.googleapis.com/{version}/files/report"
-    file_part: Final = {"file_id": uri, "format": "application/pdf", **file_options}
+    uri: Final = f"https://generativelanguage.googleapis.com/{source}/files/report"
+    file: Final = {"file_data": f"data:{mime_type};base64,cGRm"} if source == "inline" else {"file_id": uri}
+    media: Final = (
+        {"inline_data": {"data": "cGRm", "mime_type": mime_type}}
+        if source == "inline"
+        else {"file_data": {"file_uri": uri, "mime_type": mime_type}}
+    )
+    file_part: Final = {**file, "format": mime_type, **file_options}
     messages: Final = [{"role": "user", "content": [{"type": "file", "file": file_part}]}]
     result: Final = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-4-argon")
-    assert result == [
-        {
-            "role": "user",
-            "parts": [
-                {"file_data": {"file_uri": uri, "mime_type": "application/pdf"}, **expected_metadata},
-                {"text": " "},
-            ],
-        }
-    ]
+    assert result == [{"role": "user", "parts": [{**media, **expected_metadata}, {"text": " "}]}]
 
 
 @pytest.mark.parametrize("version", ["v1", "v1beta"])
@@ -197,14 +210,19 @@ def test_vertex_media_uses_its_own_cost_map_flags(monkeypatch: pytest.MonkeyPatc
             {"spreadsheet_metadata": {"sheet_index": 2}},
             {"spreadsheet_metadata": {"sheetIndex": 2}},
         ),
+        (
+            "audio/mpeg",
+            {"audio_metadata": {"start_offset": "60s", "end_offset": "90s"}},
+            {"audio_metadata": {"startOffset": "60s", "endOffset": "90s"}},
+        ),
     ],
 )
 def test_chat_tool_file_inspection_preserves_selection(
     source: str,
     model: str,
     mime_type: str,
-    selection: Mapping[str, Mapping[str, int]],
-    expected_selection: Mapping[str, Mapping[str, int]],
+    selection: Mapping[str, Mapping[str, object]],
+    expected_selection: Mapping[str, Mapping[str, object]],
 ) -> None:
     uri: Final = f"https://generativelanguage.googleapis.com/{source}/files/report"
     file: Final = {"file_data": f"data:{mime_type};base64,cGRm"} if source == "inline" else {"file_id": uri}
@@ -248,6 +266,412 @@ def test_chat_tool_file_inspection_preserves_selection(
         else [{"function_response": function_response}, selected_part]
     )
     assert result[-1]["parts"] == expected
+
+
+_AUDIO_SLICE: Final = {"start_offset": "60s", "end_offset": "90s"}
+_GEMINI_AUDIO_SLICE: Final = {"startOffset": "60s", "endOffset": "90s"}
+_MEDIA_TOOL_CALL: Final = {
+    "role": "assistant",
+    "tool_calls": [{"id": "call_media", "type": "function", "function": {"name": "get_media", "arguments": "{}"}}],
+}
+
+
+@pytest.mark.parametrize(
+    "audio_part",
+    [
+        pytest.param(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "c291bmQ=", "format": "wav", "audio_metadata": _AUDIO_SLICE},
+            },
+            id="inside-input_audio",
+        ),
+        pytest.param(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "c291bmQ=", "format": "wav"},
+                "audio_metadata": _AUDIO_SLICE,
+            },
+            id="beside-input_audio",
+        ),
+        pytest.param(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "c291bmQ=", "format": "wav", "audio_metadata": _AUDIO_SLICE},
+                "audio_metadata": {"start_offset": "0s", "end_offset": "5s"},
+            },
+            id="inside-wins-over-beside",
+        ),
+    ],
+)
+def test_input_audio_slice_reaches_gemini(audio_part: dict[str, object]) -> None:
+    messages: Final = cast(list[AllMessageValues], [{"role": "user", "content": [audio_part]}])
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-4-argon")
+    assert result[-1]["parts"] == [
+        {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/wav"}, "audio_metadata": _GEMINI_AUDIO_SLICE},
+        {"text": " "},
+    ]
+
+
+@pytest.mark.parametrize(
+    ("url", "media"),
+    [
+        (
+            "https://generativelanguage.googleapis.com/v1beta/files/clip",
+            {"file_uri": "https://generativelanguage.googleapis.com/v1beta/files/clip"},
+        ),
+        (
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+            {"file_uri": "https://www.youtube.com/watch?v=dQw4w9WgXcQ", "mime_type": "video/mp4"},
+        ),
+    ],
+)
+def test_video_url_content_layers_reach_gemini(url: str, media: dict[str, str]) -> None:
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "video_url", "video_url": {"url": url, "video_metadata": {"content_layers": ["AUDIO"]}}}
+                ],
+            }
+        ],
+    )
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-4-argon")
+    assert result == [
+        {
+            "role": "user",
+            "parts": [{"file_data": media, "video_metadata": {"contentLayers": ["AUDIO"]}}, {"text": " "}],
+        }
+    ]
+
+
+_SOUND_DATA_URL: Final = "data:audio/mpeg;base64,c291bmQ="
+_CLIP_DATA_URL: Final = "data:video/mp4;base64,AAAAGGZ0eXA="
+_SHEET_MIME_TYPE: Final = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_CLIP_SLICE: Final = {"fps": 2, "startOffset": "5s", "endOffset": "30s"}
+_HIGH_RESOLUTION: Final = {"level": "MEDIA_RESOLUTION_HIGH"}
+_TOP_LEVEL_SLICES: Final = pytest.mark.parametrize(
+    ("media", "field", "forwarded", "dropped"),
+    [
+        pytest.param(
+            {"type": "file", "file": {"file_data": _SOUND_DATA_URL, "audio_metadata": _AUDIO_SLICE}},
+            "audio_metadata",
+            {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/mpeg"}, "audio_metadata": _GEMINI_AUDIO_SLICE},
+            {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/mpeg"}},
+            id="audio",
+        ),
+        pytest.param(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "c291bmQ=", "format": "mpeg"},
+                "audio_metadata": _AUDIO_SLICE,
+            },
+            "audio_metadata",
+            {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/mpeg"}, "audio_metadata": _GEMINI_AUDIO_SLICE},
+            {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/mpeg"}},
+            id="input_audio",
+        ),
+        pytest.param(
+            {"type": "image_url", "image_url": {"url": _SOUND_DATA_URL, "audio_metadata": _AUDIO_SLICE}},
+            "audio_metadata",
+            {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/mpeg"}, "audio_metadata": _GEMINI_AUDIO_SLICE},
+            {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/mpeg"}},
+            id="image_url-audio",
+        ),
+        pytest.param(
+            {
+                "type": "file",
+                "file": {
+                    "file_data": "data:application/pdf;base64,JVBERg==",
+                    "document_metadata": {"start_page": 2, "end_page": 3},
+                },
+            },
+            "document_metadata",
+            {
+                "inline_data": {"data": "JVBERg==", "mime_type": "application/pdf"},
+                "document_metadata": {"startPage": 2, "endPage": 3},
+            },
+            {"inline_data": {"data": "JVBERg==", "mime_type": "application/pdf"}},
+            id="document",
+        ),
+        pytest.param(
+            {
+                "type": "file",
+                "file": {
+                    "file_data": f"data:{_SHEET_MIME_TYPE};base64,UEsDBA==",
+                    "spreadsheet_metadata": {"sheet_index": 2},
+                },
+            },
+            "spreadsheet_metadata",
+            {
+                "inline_data": {"data": "UEsDBA==", "mime_type": _SHEET_MIME_TYPE},
+                "spreadsheet_metadata": {"sheetIndex": 2},
+            },
+            {"inline_data": {"data": "UEsDBA==", "mime_type": _SHEET_MIME_TYPE}},
+            id="spreadsheet",
+        ),
+        pytest.param(
+            {
+                "type": "video_url",
+                "video_url": {
+                    "url": _CLIP_DATA_URL,
+                    "detail": "high",
+                    "video_metadata": {
+                        "fps": 2,
+                        "start_offset": "5s",
+                        "end_offset": "30s",
+                        "content_layers": ["AUDIO"],
+                    },
+                },
+            },
+            "video_metadata.content_layers",
+            {
+                "inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"},
+                "media_resolution": _HIGH_RESOLUTION,
+                "video_metadata": {**_CLIP_SLICE, "contentLayers": ["AUDIO"]},
+            },
+            {
+                "inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"},
+                "media_resolution": _HIGH_RESOLUTION,
+                "video_metadata": _CLIP_SLICE,
+            },
+            id="video-content-layers",
+        ),
+        pytest.param(
+            {
+                "type": "file",
+                "file": {
+                    "file_data": _CLIP_DATA_URL,
+                    "video_metadata": {"start_offset": "5s", "end_offset": "30s", "content_layers": ["AUDIO"]},
+                },
+            },
+            "video_metadata.content_layers",
+            {
+                "inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"},
+                "video_metadata": {"startOffset": "5s", "endOffset": "30s", "contentLayers": ["AUDIO"]},
+            },
+            {
+                "inline_data": {"data": "AAAAGGZ0eXA=", "mime_type": "video/mp4"},
+                "video_metadata": {"startOffset": "5s", "endOffset": "30s"},
+            },
+            id="file-video-content-layers",
+        ),
+    ],
+)
+
+
+def _top_level_parts(media: Mapping[str, object], provider: str, *, drop_params: bool) -> list[PartType]:
+    return gemini_convert_messages_with_history(
+        cast(list[AllMessageValues], [{"role": "user", "content": [media]}]),
+        model="gemini-4-argon",
+        litellm_params={"drop_params": drop_params},
+        custom_llm_provider=provider,
+    )[-1]["parts"]
+
+
+@pytest.mark.parametrize("provider", ["vertex_ai", "vertex_ai_beta"])
+@_TOP_LEVEL_SLICES
+def test_vertex_top_level_slice_fields_are_a_bad_request_since_vertex_ignores_them(
+    provider: str, media: dict[str, object], field: str, forwarded: PartType, dropped: PartType
+) -> None:
+    message: Final = f"Vertex ignores {field} on media. Use a gemini/ model, remove them, or set drop_params=True."
+    with pytest.raises(litellm.BadRequestError, match=re.escape(message)) as excinfo:
+        _top_level_parts(media, provider, drop_params=False)
+
+    assert (excinfo.value.llm_provider, excinfo.value.model) == (provider, "gemini-4-argon")
+
+
+@pytest.mark.parametrize("provider", ["vertex_ai", "vertex_ai_beta"])
+@_TOP_LEVEL_SLICES
+def test_drop_params_sends_vertex_top_level_media_without_only_the_slice_fields_vertex_ignores(
+    provider: str, media: dict[str, object], field: str, forwarded: PartType, dropped: PartType
+) -> None:
+    assert _top_level_parts(media, provider, drop_params=True) == [dropped, {"text": " "}]
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@_TOP_LEVEL_SLICES
+def test_gemini_top_level_slice_fields_reach_gemini_unchanged(
+    drop_params: bool, media: dict[str, object], field: str, forwarded: PartType, dropped: PartType
+) -> None:
+    assert _top_level_parts(media, "gemini", drop_params=drop_params) == [forwarded, {"text": " "}]
+
+
+@pytest.mark.parametrize(
+    ("provider", "reported"), [(None, "vertex_ai"), ("gemini", "gemini"), ("vertex_ai", "vertex_ai")]
+)
+def test_user_video_that_fails_to_download_names_its_provider_in_the_bad_request(
+    provider: str | None, reported: str
+) -> None:
+    link: Final = "https://8.8.8.8/missing-clip"
+    messages: Final = cast(
+        list[AllMessageValues], [{"role": "user", "content": [{"type": "video_url", "video_url": {"url": link}}]}]
+    )
+    with respx.mock as router:
+        router.get(link).respond(404)
+        with pytest.raises(litellm.BadRequestError, match="Could not download the video in a message") as excinfo:
+            gemini_convert_messages_with_history(messages, model="gemini-3.8-flash", custom_llm_provider=provider)
+
+    assert excinfo.value.llm_provider == reported
+
+
+def test_responses_input_image_audio_slice_reaches_gemini() -> None:
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        [
+            {
+                "role": "user",
+                "content": [{"type": "input_image", "image_url": _SOUND_DATA_URL, "audio_metadata": _AUDIO_SLICE}],
+            }
+        ],
+        {},
+    )
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(messages, model="gemini-4-argon")
+    assert result[-1]["parts"] == [
+        {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/mpeg"}, "audio_metadata": _GEMINI_AUDIO_SLICE},
+        {"text": " "},
+    ]
+
+
+@pytest.mark.parametrize(
+    "file",
+    [
+        pytest.param({"file_data": _SOUND_DATA_URL}, id="file"),
+        pytest.param(None, id="input_file"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("provider", "drop_params", "forwarded"), [("gemini", False, True), ("vertex_ai", True, False)]
+)
+def test_tool_result_audio_slice_reaches_gemini_and_is_dropped_on_vertex_under_drop_params(
+    file: dict[str, str] | None, provider: str, drop_params: bool, forwarded: bool
+) -> None:
+    media: Final = (
+        {"type": "file", "file": {**file, "format": "audio/mpeg", "audio_metadata": _AUDIO_SLICE}}
+        if file is not None
+        else {
+            "type": "input_file",
+            "file_data": _SOUND_DATA_URL,
+            "format": "audio/mpeg",
+            "audio_metadata": _AUDIO_SLICE,
+        }
+    )
+    messages: Final = cast(
+        list[AllMessageValues],
+        [_MEDIA_TOOL_CALL, {"role": "tool", "tool_call_id": "call_media", "content": [media]}],
+    )
+    result: Final = gemini_convert_messages_with_history(
+        messages, model="gemini-4-argon", litellm_params={"drop_params": drop_params}, custom_llm_provider=provider
+    )
+    audio: Final = {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/mpeg"}}
+    assert result[-1]["parts"] == [
+        {
+            "function_response": {
+                "id": "call_media",
+                "name": "get_media",
+                "response": {"content": ""},
+                "parts": [{**audio, "audio_metadata": _GEMINI_AUDIO_SLICE} if forwarded else audio],
+            }
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("media", "expected"),
+    [
+        pytest.param(
+            {
+                "type": "input_file",
+                "file_data": "data:application/pdf;base64,JVBERg==",
+                "document_metadata": {"start_page": 2, "end_page": 4},
+            },
+            {
+                "inline_data": {"data": "JVBERg==", "mime_type": "application/pdf"},
+                "document_metadata": {"startPage": 2, "endPage": 4},
+            },
+            id="document",
+        ),
+        pytest.param(
+            {
+                "type": "input_file",
+                "file_data": f"data:{_SHEET_MIME_TYPE};base64,UEsDBA==",
+                "spreadsheet_metadata": {"sheet_index": 2},
+            },
+            {
+                "inline_data": {"data": "UEsDBA==", "mime_type": _SHEET_MIME_TYPE},
+                "spreadsheet_metadata": {"sheetIndex": 2},
+            },
+            id="spreadsheet",
+        ),
+        pytest.param(
+            {"type": "input_file", "file_data": "data:audio/wav;base64,c291bmQ=", "audio_metadata": _AUDIO_SLICE},
+            {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/wav"}, "audio_metadata": _GEMINI_AUDIO_SLICE},
+            id="audio",
+        ),
+        pytest.param(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "c291bmQ=", "format": "wav", "audio_metadata": _AUDIO_SLICE},
+            },
+            {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/wav"}, "audio_metadata": _GEMINI_AUDIO_SLICE},
+            id="input_audio-inside",
+        ),
+        pytest.param(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "c291bmQ=", "format": "wav"},
+                "audio_metadata": _AUDIO_SLICE,
+            },
+            {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/wav"}, "audio_metadata": _GEMINI_AUDIO_SLICE},
+            id="input_audio-beside",
+        ),
+        pytest.param(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "c291bmQ=", "format": "wav", "audio_metadata": _AUDIO_SLICE},
+                "audio_metadata": {"start_offset": "0s", "end_offset": "5s"},
+            },
+            {"inline_data": {"data": "c291bmQ=", "mime_type": "audio/wav"}, "audio_metadata": _GEMINI_AUDIO_SLICE},
+            id="input_audio-inside-wins",
+        ),
+    ],
+)
+def test_responses_slice_fields_reach_gemini(media: dict[str, object], expected: dict[str, object]) -> None:
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        [{"role": "user", "content": [{"type": "input_text", "text": '{"ok":true}'}, media]}], {}
+    )
+    result: Final = gemini_convert_messages_with_history(messages, model="gemini-4-argon", custom_llm_provider="gemini")
+    assert result[-1] == {"role": "user", "parts": [{"text": '{"ok":true}'}, expected]}
+
+
+def test_managed_file_audio_slice_survives_the_provider_file_id_rewrite() -> None:
+    managed_file_id: Final = base64.urlsafe_b64encode(
+        b"litellm_proxy:audio/mpeg;unified_id,4f6d1c2e;target_model_names,gemini-4-argon"
+    ).decode()
+    uri: Final = "https://generativelanguage.googleapis.com/v1beta/files/podcast"
+    messages: Final = cast(
+        list[AllMessageValues],
+        [
+            {
+                "role": "user",
+                "content": [{"type": "file", "file": {"file_id": managed_file_id, "audio_metadata": _AUDIO_SLICE}}],
+            }
+        ],
+    )
+    rewritten: Final = update_messages_with_model_file_ids(
+        messages, "deployment-1", {managed_file_id: {"deployment-1": uri}}
+    )
+    result: Final = GoogleAIStudioGeminiConfig()._transform_messages(rewritten, model="gemini-4-argon")
+    assert result == [
+        {
+            "role": "user",
+            "parts": [
+                {"file_data": {"file_uri": uri, "mime_type": "audio/mpeg"}, "audio_metadata": _GEMINI_AUDIO_SLICE},
+                {"text": " "},
+            ],
+        }
+    ]
 
 
 def test_check_if_part_exists_in_parts():
