@@ -209,12 +209,18 @@ def _with_automatic_cache_mark(
     messages: AnthropicRequestMessages, cache_control: object
 ) -> Sequence[Mapping[str, object]]:
     """Anthropic's top-level ``cache_control`` caches the conversation up to its last block, so it becomes that
-    block's own mark and maps like any client mark."""
-    blocks: Final = _content_blocks(messages[-1].get("content")) if messages else ()
-    if cache_control is None or not blocks or "cache_control" in blocks[-1]:
+    block's own mark and maps like any client mark. An assistant prefill's blocks carry no breakpoint on the
+    Responses API, so the mark goes on the last block of the turn before it."""
+    marked: Final = next(
+        (index for index in reversed(range(len(messages))) if messages[index].get("role") != "assistant"), None
+    )
+    if marked is None or cache_control is None:
+        return messages
+    blocks: Final = _content_blocks(messages[marked].get("content"))
+    if not blocks or "cache_control" in blocks[-1]:
         return messages
     marked_content: Final = (*blocks[:-1], {**blocks[-1], "cache_control": cache_control})
-    return (*messages[:-1], {**messages[-1], "content": marked_content})
+    return (*messages[:marked], {**messages[marked], "content": marked_content}, *messages[marked + 1 :])
 
 
 def _reasoning_for_target(

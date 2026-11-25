@@ -1003,6 +1003,26 @@ def test_top_level_cache_control_marks_the_last_block_of_the_conversation(
     assert responses_kwargs["input"][-1] == {"type": "message", "role": "user", "content": marked_content}
 
 
+def test_top_level_cache_control_marks_the_turn_before_an_assistant_prefill() -> None:
+    responses_kwargs: Final = _build_responses_kwargs(
+        model="openai/gpt-5.6",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": "now"}, {"role": "assistant", "content": "Sure,"}],
+        extra_kwargs={**OPENAI_API, "cache_control": {**EPHEMERAL, "ttl": "1h"}},
+    )
+
+    assert responses_kwargs["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "now", "prompt_cache_breakpoint": {"mode": "explicit"}}
+            ],
+        },
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "Sure,"}]},
+    ]
+
+
 def test_top_level_cache_control_marks_nothing_when_the_deployment_drops_it() -> None:
     responses_kwargs: Final = _build_responses_kwargs(
         model="openai/gpt-5.6",
