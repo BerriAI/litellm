@@ -7,6 +7,7 @@ with guardrail transformations, specifically testing edge cases with empty choic
 
 import json
 import logging
+from collections.abc import Callable
 from typing import Any, Literal, Optional, Final
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +24,8 @@ from litellm.llms.anthropic.chat.guardrail_translation.handler import (
 )
 from litellm.llms.anthropic.pass_through.adapters.transformation import truncate_tool_name
 from litellm.types.utils import GenericGuardrailAPIInputs
+
+CLAUDE_CODE_BILLING_HEADER: Final = "x-anthropic-billing-header: cc_version=2.1.299.e4f; cc_entrypoint=cli; cch=7c1d2;"
 
 
 class MockPassThroughGuardrail(CustomGuardrail):
@@ -2418,6 +2421,77 @@ class TestAnthropicMessagesTopLevelSystemAndToolUseInputs:
         assert data["system"] == [
             {"type": "text", "text": "first block [BLOCKED]"},
             {"type": "text", "text": "second block", "cache_control": {"type": "ephemeral"}},
+        ]
+
+    @staticmethod
+    def _claude_code_system_blocks(last_block: str) -> list[dict[str, Any]]:
+        return [
+            {"type": "text", "text": CLAUDE_CODE_BILLING_HEADER},
+            {"type": "text", "text": "You are Claude Code, Anthropic's official CLI for Claude."},
+            {"type": "text", "text": last_block, "cache_control": {"type": "ephemeral"}},
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("guardrail_factory", "expected_last_block"),
+        [
+            (lambda: MockPassThroughGuardrail(guardrail_name="no-op"), "The deploy key is POISON."),
+            (MockCanaryMaskingGuardrail, "The deploy key is [BLOCKED]."),
+            (StructuredMessagesRewritingGuardrail, "The deploy key is [BLOCKED]."),
+        ],
+        ids=["no-op", "masking", "structured-rewrite"],
+    )
+    async def test_claude_code_billing_header_block_keeps_every_system_block_in_its_own_slot(
+        self, guardrail_factory: Callable[[], CustomGuardrail], expected_last_block: str
+    ):
+        handler = AnthropicMessagesHandler()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "system": self._claude_code_system_blocks("The deploy key is POISON."),
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail_factory())
+
+        assert data["system"] == self._claude_code_system_blocks(expected_last_block)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("guardrail_factory", "expected_prompt"),
+        [
+            (lambda: MockPassThroughGuardrail(guardrail_name="no-op"), "You are Claude Code. The deploy key is POISON."),
+            (MockCanaryMaskingGuardrail, "You are Claude Code. The deploy key is [BLOCKED]."),
+        ],
+        ids=["no-op", "masking"],
+    )
+    async def test_claude_code_billing_header_line_stays_first_in_a_string_system(
+        self, guardrail_factory: Callable[[], CustomGuardrail], expected_prompt: str
+    ):
+        handler = AnthropicMessagesHandler()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "system": f"{CLAUDE_CODE_BILLING_HEADER}\nYou are Claude Code. The deploy key is POISON.",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail_factory())
+
+        assert data["system"] == f"{CLAUDE_CODE_BILLING_HEADER}\n{expected_prompt}"
+
+    @pytest.mark.asyncio
+    async def test_structured_rewrite_of_a_string_system_keeps_the_billing_header_first(self):
+        handler = AnthropicMessagesHandler()
+        data = {
+            "model": "claude-sonnet-4-5",
+            "system": f"{CLAUDE_CODE_BILLING_HEADER}\nYou are Claude Code. The deploy key is POISON.",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=StructuredMessagesRewritingGuardrail())
+
+        assert data["system"] == [
+            {"type": "text", "text": CLAUDE_CODE_BILLING_HEADER},
+            {"type": "text", "text": "You are Claude Code. The deploy key is [BLOCKED]."},
         ]
 
     @pytest.mark.asyncio

@@ -26,9 +26,18 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, is_undecodable_json_object, loads_json_object
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    is_undecodable_json_object,
+    loads_json_object,
+)
 from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH, truncate_tool_name
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+from litellm.llms.anthropic.common_utils import (
+    claude_code_billing_header_text,
+    system_without_claude_code_billing_header,
+)
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
@@ -278,11 +287,27 @@ def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[s
 
 
 def _write_back_system_block(system: object, block_idx: int, response: str) -> None:
-    if not isinstance(system, list):
+    scanned_blocks: Final = system_without_claude_code_billing_header(system)
+    if not isinstance(scanned_blocks, list):
         return
-    text_blocks: Final = tuple(block for block in system if isinstance(block, dict) and block.get("type") == "text")
+    text_blocks: Final = tuple(
+        block for block in scanned_blocks if isinstance(block, dict) and block.get("type") == "text"
+    )
     if block_idx < len(text_blocks):
         text_blocks[block_idx]["text"] = response
+
+
+def _claude_code_billing_header_only(system: object) -> str | Sequence[object] | None:
+    billing_header: Final = claude_code_billing_header_text(system)
+    blocks: Final = as_object_list(system)
+    if billing_header is None:
+        return None
+    return billing_header if blocks is None else blocks[:1]
+
+
+def _system_string_after_guardrail(system: str, guardrail_response: str) -> str:
+    billing_header: Final = claude_code_billing_header_text(system)
+    return guardrail_response if billing_header is None else f"{billing_header}\n{guardrail_response}"
 
 
 def _write_back_message_text(message: _WritableMessage, target: MessageTextTarget, response: str) -> None:
@@ -906,7 +931,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         include_existing_system: bool,
     ) -> None:
         """Deliver leading system rows through Anthropic's top-level system param, which rejects them in messages."""
-        existing: Final = data.get("system") if include_existing_system else None
+        system: Final = data.get("system")
+        existing: Final = system if include_existing_system else _claude_code_billing_header_only(system)
         existing_blocks: Final[list[object]] = (  # mutable-ok: API message payload
             [{"type": "text", "text": existing}]
             if isinstance(existing, str) and existing
@@ -1244,8 +1270,8 @@ class AnthropicMessagesHandler(BaseTranslation):
         for item, guardrail_response in zip(scanned, responses):
             match item.target:
                 case SystemStringTarget():
-                    if isinstance(data.get("system"), str):
-                        data["system"] = guardrail_response
+                    if isinstance(system := data.get("system"), str):
+                        data["system"] = _system_string_after_guardrail(system, guardrail_response)
                 case SystemBlockTextTarget(block_idx=block_idx):
                     _write_back_system_block(data.get("system"), block_idx, guardrail_response)
                 case (
