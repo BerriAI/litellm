@@ -11,6 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 import psycopg
 import pytest
 import pytest_asyncio
+from litellm_proxy_extras.request_log_indexes import REQUEST_LOG_INDEXES, ensure_request_log_indexes
 from prisma import Prisma
 
 from litellm.repositories.accounting_delivery_repository import (
@@ -329,12 +330,35 @@ async def delivery_client(delivery_database: psycopg.Connection[tuple[object, ..
         await client.disconnect()
 
 
+_RETRY_INDEX_NAME: Final = "LiteLLM_SpendLogDelivery_retry_due_idx"
+_RETRY_INDEXES: Final = tuple(index for index in REQUEST_LOG_INDEXES if index.name == _RETRY_INDEX_NAME)
+
+
+def _ensure_retry_index(connection: psycopg.Connection[tuple[object, ...]]) -> bool:
+    url: Final = urlunsplit(urlsplit(os.environ["DATABASE_URL"])._replace(path=f"/{connection.info.dbname}"))
+    schema: Final = connection.execute("SELECT current_schema()").fetchone()
+    assert schema is not None
+    return ensure_request_log_indexes(url, str(schema[0]), indexes=_RETRY_INDEXES)
+
+
+def _partial_retry_indexes(connection: psycopg.Connection[tuple[object, ...]]) -> tuple[tuple[object, ...], ...]:
+    return tuple(
+        connection.execute(
+            "SELECT c.relname, x.indexrelid::int FROM pg_index x JOIN pg_class c ON c.oid = x.indexrelid "
+            "WHERE x.indrelid = '\"LiteLLM_SpendLogDelivery\"'::regclass AND x.indpred IS NOT NULL"
+        ).fetchall()
+    )
+
+
+@pytest.mark.parametrize("attempts", [0, 1], ids=["fresh", "retry"])
 @pytest.mark.asyncio
 async def test_two_workers_claim_disjoint_rows_and_apply_once(
     delivery_database: psycopg.Connection[tuple[object, ...]],
     delivery_client: Prisma,
+    attempts: int,
 ) -> None:
     _insert(delivery_database, (_row("first"), _row("second")))
+    delivery_database.execute('UPDATE "LiteLLM_SpendLogDelivery" SET attempts = %s', (attempts,))
     entered: Final[asyncio.Queue[str]] = asyncio.Queue()
     release: Final = asyncio.Event()
 
@@ -359,6 +383,96 @@ async def test_two_workers_claim_disjoint_rows_and_apply_once(
     assert delivery_database.execute(
         "SELECT COUNT(*) FROM \"LiteLLM_SpendLogDelivery\" WHERE state = 'applied'"
     ).fetchone() == (2,)
+
+
+@pytest.mark.asyncio
+async def test_retries_are_claimed_one_at_a_time_before_fresh_work_and_each_lane_keeps_its_order(
+    delivery_database: psycopg.Connection[tuple[object, ...]], delivery_client: Prisma
+) -> None:
+    due: Final = {
+        "retry-b": (2, "2026-01-01 00:00:01"),
+        "retry-a": (2, "2026-01-01 00:00:02"),
+        "fresh-b": (0, "2026-01-01 00:00:03"),
+        "negative": (-1, "2026-01-01 00:00:03"),
+        "fresh-a": (0, "2026-01-01 00:00:04"),
+        "retry-later": (1, "2999-01-01 00:00:00"),
+    }
+    _insert(delivery_database, tuple(_row(request_id) for request_id in due))
+    for request_id, (attempts, next_attempt_at) in due.items():
+        delivery_database.execute(
+            'UPDATE "LiteLLM_SpendLogDelivery" SET attempts = %s, next_attempt_at = %s WHERE delivery_id = %s',
+            (attempts, next_attempt_at, request_id),
+        )
+    claimed: Final[asyncio.Queue[tuple[str, ...]]] = asyncio.Queue()
+
+    async def apply(transaction: LedgerTransaction, rows: tuple[DeliveryProjection, ...]) -> None:
+        claimed.put_nowait(tuple(str(row.row["request_id"]) for row in rows))
+
+    repository: Final = AccountingDeliveryRepository(delivery_client)
+    await repository.apply_pending(apply, batch_size=2)
+    assert claimed.get_nowait() == ("retry-b",)
+    await repository.apply_pending(apply, batch_size=2, retry_only=False)
+    assert claimed.get_nowait() == ("fresh-b", "negative")
+    await repository.apply_pending(apply, batch_size=2, retry_only=True)
+    assert claimed.get_nowait() == ("retry-a",)
+    assert (await repository.apply_pending(apply, batch_size=2, retry_only=True)).applied == 0
+    assert claimed.empty()
+    await repository.apply_pending(apply, batch_size=2)
+    assert claimed.get_nowait() == ("fresh-a",)
+    assert delivery_database.execute(
+        "SELECT delivery_id FROM \"LiteLLM_SpendLogDelivery\" WHERE state = 'pending'"
+    ).fetchall() == [("retry-later",)]
+
+
+@pytest.mark.parametrize("delivery_database", ["public", "ledger_tenant"], indirect=True)
+def test_a_hand_built_due_retry_index_is_adopted_in_its_own_schema_and_a_rerun_builds_nothing(
+    delivery_database: psycopg.Connection[tuple[object, ...]],
+) -> None:
+    delivery_database.execute(
+        'CREATE INDEX retry_due_by_hand ON "LiteLLM_SpendLogDelivery" (next_attempt_at, delivery_id) '
+        "WHERE state = 'pending' AND attempts > 0"
+    )
+    ((_, hand_built),) = _partial_retry_indexes(delivery_database)
+
+    assert _ensure_retry_index(delivery_database) is True
+    assert _partial_retry_indexes(delivery_database) == ((_RETRY_INDEX_NAME, hand_built),)
+    assert _ensure_retry_index(delivery_database) is True
+    assert _partial_retry_indexes(delivery_database) == ((_RETRY_INDEX_NAME, hand_built),)
+
+
+@pytest.mark.parametrize("plan_cache_mode", ["force_generic_plan", "force_custom_plan"])
+@pytest.mark.parametrize("delivery_database", ["public", "ledger_tenant"], indirect=True)
+def test_a_retry_claim_reads_only_due_retries_behind_a_large_fresh_backlog(
+    delivery_database: psycopg.Connection[tuple[object, ...]], plan_cache_mode: str
+) -> None:
+    from litellm.repositories.accounting_delivery_repository import _CLAIM_RETRY
+
+    delivery_database.execute(
+        'INSERT INTO "LiteLLM_SpendLogDelivery" (delivery_id, request_id, accounting_payload, is_batch, next_attempt_at) '
+        "SELECT 'fresh-' || n, 'fresh-' || n, jsonb_build_object('payload', repeat(md5(n::text), 32)), false, "
+        "TIMESTAMP '2026-01-01' FROM generate_series(1, 20000) AS n"
+    )
+    assert _ensure_retry_index(delivery_database) is True
+    delivery_database.execute('ANALYZE "LiteLLM_SpendLogDelivery"')
+    table_pages: Final = delivery_database.execute(
+        "SELECT relpages FROM pg_class WHERE oid = '\"LiteLLM_SpendLogDelivery\"'::regclass"
+    ).fetchone()
+    assert table_pages is not None and table_pages[0] > 1000
+    delivery_database.execute(f"SET plan_cache_mode = {plan_cache_mode}")
+    delivery_database.execute(f"PREPARE retry_claim(integer) AS {_CLAIM_RETRY}")
+
+    for due_retries in (0, 2):
+        delivery_database.execute(
+            'UPDATE "LiteLLM_SpendLogDelivery" SET attempts = 1 WHERE delivery_id = ANY(%s::text[])',
+            ([f"fresh-{n}" for n in range(1, due_retries + 1)],),
+        )
+        explained = delivery_database.execute(
+            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) EXECUTE retry_claim(1)"
+        ).fetchone()
+        assert explained is not None
+        plan = explained[0][0]["Plan"]
+        assert plan["Actual Rows"] == min(due_retries, 1), plan
+        assert plan["Shared Hit Blocks"] + plan["Shared Read Blocks"] < table_pages[0] / 20, plan
 
 
 @pytest.mark.asyncio
