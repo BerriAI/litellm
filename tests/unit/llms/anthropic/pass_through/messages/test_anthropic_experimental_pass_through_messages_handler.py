@@ -2354,6 +2354,37 @@ def test_native_messages_tool_config_point_marks_last_tool_and_drops_the_key(mon
     assert tools == tools_before
 
 
+def test_native_messages_tool_config_point_marks_the_last_tool_that_is_not_deferred(monkeypatch):
+    from litellm.llms.anthropic.pass_through.messages import handler
+
+    captured = {}
+
+    def fake_native(**kwargs):
+        captured["params"] = kwargs["anthropic_messages_optional_request_params"]
+        return "native-passthrough"
+
+    monkeypatch.setattr(handler.base_llm_http_handler, "anthropic_messages_handler", fake_native)
+    loaded = {"name": "Read", "description": "Reads a file", "input_schema": {"type": "object"}}
+    deferred = {
+        "name": "mcp__weather__get_alerts",
+        "description": "Gets weather alerts",
+        "input_schema": {"type": "object"},
+        "defer_loading": True,
+    }
+
+    handler.anthropic_messages_handler(
+        max_tokens=100,
+        messages=[{"role": "user", "content": "Hello"}],
+        model="anthropic/claude-opus-4-6",
+        api_key="sk-test",
+        tools=[loaded, deferred],
+        litellm_metadata={},
+        cache_control_injection_points=[{"location": "tool_config"}],
+    )
+
+    assert captured["params"]["tools"] == [{**loaded, "cache_control": {"type": "ephemeral"}}, deferred]
+
+
 _CLAUDE_CODE_TOOL_SEARCH_TOOLS: Final = [
     {"name": "Read", "description": "Read a file", "input_schema": {"type": "object", "properties": {}}},
     {
@@ -2758,8 +2789,12 @@ async def test_native_deferred_tools_keep_openai_stop_sequences_requests_on_resp
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "tools",
-    [None, [tool for tool in _CLAUDE_CODE_TOOL_SEARCH_TOOLS if tool["name"] != "ToolSearch"]],
-    ids=["no_tools", "deferred_tools_without_tool_search"],
+    [
+        None,
+        [tool for tool in _CLAUDE_CODE_TOOL_SEARCH_TOOLS if tool["name"] != "ToolSearch"],
+        [tool for tool in _CLAUDE_CODE_TOOL_SEARCH_TOOLS if not tool.get("defer_loading")],
+    ],
+    ids=["no_tools", "deferred_tools_without_tool_search", "tool_search_with_nothing_deferred"],
 )
 async def test_native_deferred_tools_send_azure_stop_sequences_requests_without_tool_search_to_chat_completions(
     tools: list[dict[str, object]] | None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture

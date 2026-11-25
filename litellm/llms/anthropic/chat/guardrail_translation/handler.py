@@ -33,7 +33,7 @@ from litellm.llms.anthropic.pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
 )
-from litellm.llms.anthropic.pass_through.deferred_tools import is_deferred
+from litellm.llms.anthropic.pass_through.deferred_tools import client_tool_search_name, is_deferred
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     build_complete_streaming_response,
     build_usage_only_response_from_chunks,
@@ -280,17 +280,22 @@ def _with_request_deferral(tool: AllAnthropicToolsValues, deferred_names: frozen
     return cast(AllAnthropicToolsValues, {**tool, "defer_loading": True})  # cast-ok: same tool, one more field
 
 
-def _loaded_up_front(tools: Sequence[object]) -> Sequence[object]:
+def _without_deferral(tool: object) -> object:
+    fields: Final = as_str_mapping(tool)
+    if fields is None:
+        return tool
+    return {key: value for key, value in fields.items() if key != "defer_loading"}
+
+
+def _loaded_up_front(tools: Sequence[object], removed_tool_search: bool) -> Sequence[object]:
     """
-    Anthropic rejects a request whose tools are all deferred, so when a guardrail removed the
-    tools that were not, the ones it kept are sent without `defer_loading`.
+    Deferred tools load only through the tool search tool, and Anthropic rejects a request whose tools
+    are all deferred, so when a guardrail removed the search tool or every tool that was not deferred,
+    the ones it kept are sent without `defer_loading`.
     """
-    if not tools or not all(is_deferred(as_str_mapping(tool) or {}) for tool in tools):
+    if not tools or not (removed_tool_search or all(is_deferred(as_str_mapping(tool) or {}) for tool in tools)):
         return tools
-    return tuple(
-        {key: value for key, value in fields.items() if key != "defer_loading"}
-        for fields in filter(None, map(as_str_mapping, tools))
-    )
+    return tuple(map(_without_deferral, tools))
 
 
 def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[str, str]) -> ChatCompletionToolParam:
@@ -823,7 +828,9 @@ class AnthropicMessagesHandler(BaseTranslation):
                             [
                                 *(tool for tool in data.get("tools") or [] if is_provider_native_tool_dict(tool)),
                                 *(_with_request_deferral(tool, request_deferred_names) for tool in anthropic_tools),
-                            ]
+                            ],
+                            client_tool_search_name(list_field(data, "tools")) is not None
+                            and client_tool_search_name(anthropic_tools) is None,
                         )
                     )
                 )

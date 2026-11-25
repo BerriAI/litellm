@@ -2776,6 +2776,37 @@ class TestNativeDeferredTools:
 
         assert [tool["name"] for tool in request["input"][2]["tools"]] == ["mcp__weather__get_forecast"]
 
+    def test_a_tool_an_earlier_search_result_loaded_is_not_loaded_again(self):
+        def search(call_id: str) -> list[dict[str, object]]:
+            return [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "tool_use", "id": call_id, "name": "ToolSearch", "input": {"query": "weather"}}],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": call_id,
+                            "content": [{"type": "tool_reference", "tool_name": "mcp__weather__get_forecast"}],
+                        }
+                    ],
+                },
+            ]
+
+        request: Final = _translated(
+            [*_FIRST_TURN, *search("toolu_first"), *search("toolu_again")],
+            _claude_code_tools("mcp__weather__get_forecast"),
+            "native",
+        )
+
+        outputs: Final = [item for item in request["input"] if item["type"] == "tool_search_output"]
+        assert [(item["call_id"], [tool["name"] for tool in item["tools"]]) for item in outputs] == [
+            ("toolu_first", ["mcp__weather__get_forecast"]),
+            ("toolu_again", []),
+        ]
+
     @pytest.mark.parametrize(
         "result_fields, status, texts",
         [

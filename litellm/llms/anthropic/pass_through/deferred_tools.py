@@ -127,7 +127,10 @@ def unusable_deferred_tools_refusal(
 def native_stop_sequences_refusal(
     mode: DeferredToolsMode, stop_sequences: Sequence[str] | None, tools: Iterable[object] | None
 ) -> str | None:
-    if mode != "native" or not stop_sequences or client_tool_search_name(tools) is None:
+    tool_list: Final = tuple(tools or ())
+    if mode != "native" or not stop_sequences or client_tool_search_name(tool_list) is None:
+        return None
+    if not any(is_deferred(as_str_mapping(tool) or {}) for tool in tool_list):
         return None
     return (
         "model_info.deferred_tools native sends requests to the Responses API, which has no stop_sequences, so this "

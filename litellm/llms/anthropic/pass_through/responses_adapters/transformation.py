@@ -8,7 +8,7 @@ path used for OpenAI and Azure models.
 import json
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import groupby
+from itertools import accumulate, groupby
 from types import MappingProxyType
 from typing import Any, Final, cast
 
@@ -91,6 +91,27 @@ def _assistant_tool_uses(messages: Iterable[AllAnthropicPassThroughMessageValues
                 yield block
 
 
+def _user_tool_results(messages: Iterable[AllAnthropicPassThroughMessageValues]) -> Iterator[Mapping[str, object]]:
+    for message in messages:
+        if message["role"] != "user":
+            continue
+        for block in _content_dicts(message.get("content")):
+            if block.get("type") == "tool_result":
+                yield block
+
+
+def _union(left: frozenset[str], right: frozenset[str]) -> frozenset[str]:
+    return left | right
+
+
+def _search_results(
+    messages: Iterable[AllAnthropicPassThroughMessageValues], call_ids: frozenset[str]
+) -> Iterator[tuple[str, tuple[str, ...]]]:
+    for block in _user_tool_results(messages):
+        if isinstance(call_id := block.get("tool_use_id"), str) and call_id in call_ids:
+            yield call_id, tuple(dict.fromkeys(_tool_reference_names(block)))
+
+
 def _tool_reference_names(tool_result: Mapping[str, object]) -> Iterator[str]:
     for block in _content_dicts(tool_result.get("content")):
         if block.get("type") == "tool_reference" and isinstance(name := block.get("tool_name"), str):
@@ -116,6 +137,7 @@ def _tool_result_texts(tool_result: Mapping[str, object]) -> Iterator[str]:
 class ToolSearchReplay:
     call_ids: frozenset[str]
     loadable: Mapping[str, Mapping[str, object]]
+    first_loads: Mapping[str, tuple[str, ...]]
 
     def replays(self, tool_use_id: object) -> bool:
         return isinstance(tool_use_id, str) and tool_use_id in self.call_ids
@@ -148,7 +170,7 @@ class ToolSearchReplay:
             "status": "incomplete" if tool_result.get("is_error") is True else "completed",
             "tools": [
                 self.loadable[name]
-                for name in dict.fromkeys(_tool_reference_names(tool_result))
+                for name in self.first_loads.get(str(tool_result.get("tool_use_id", "")), ())
                 if name in self.loadable
             ],
         }
@@ -625,12 +647,21 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
     ) -> ToolSearchReplay:
         searches: Final = (block for block in _assistant_tool_uses(messages) if block.get("name") == tool_search_name)
         loadable: Final = (tool for tool in tools if tool.get("name") != tool_search_name)
+        call_ids: Final = frozenset(
+            call_id for call_id in (block.get("id") for block in searches) if isinstance(call_id, str)
+        )
+        results: Final = tuple(_search_results(messages, call_ids))
+        loaded_before: Final = accumulate((frozenset(names) for _, names in results), _union, initial=frozenset[str]())
         return ToolSearchReplay(
-            call_ids=frozenset(
-                call_id for call_id in (block.get("id") for block in searches) if isinstance(call_id, str)
-            ),
+            call_ids=call_ids,
             loadable=MappingProxyType(
                 {str(tool.get("name")): cls._translate_tool_to_responses_api(tool) for tool in loadable}
+            ),
+            first_loads=MappingProxyType(
+                {
+                    call_id: tuple(name for name in names if name not in loaded)
+                    for (call_id, names), loaded in zip(results, loaded_before)
+                }
             ),
         )
 

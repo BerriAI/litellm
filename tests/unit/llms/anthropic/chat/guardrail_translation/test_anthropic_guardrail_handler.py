@@ -174,6 +174,22 @@ class OnlyDeferredToolsGuardrail(CustomGuardrail):
         }
 
 
+class ToolDroppingGuardrail(CustomGuardrail):
+    def __init__(self, tool_name: str) -> None:
+        super().__init__(guardrail_name="test")
+        self._tool_name: Final = tool_name
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[LiteLLMLoggingObj] = None,
+    ) -> GenericGuardrailAPIInputs:
+        kept: Final = [tool for tool in inputs.get("tools") or [] if tool["function"]["name"] != self._tool_name]
+        return {**inputs, "tools": kept}
+
+
 _DEFERRED_TOOL_REQUEST_TOOLS: Final = (
     {"name": "Read", "description": "Read a file", "input_schema": {"type": "object", "properties": {}}},
     {"name": "ToolSearch", "description": "Search tools", "input_schema": {"type": "object", "properties": {}}},
@@ -696,6 +712,30 @@ class TestAnthropicMessagesHandlerInputProcessing:
 
         assert [(tool["name"], tool.get("defer_loading")) for tool in data["tools"]] == [
             ("mcp__weather__get_forecast", None)
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("dropped", "expected_deferral"),
+        [("ToolSearch", None), ("Read", True)],
+        ids=["tool-search-removed", "tool-search-kept"],
+    )
+    async def test_deferred_tools_load_up_front_only_once_the_guardrail_removed_tool_search(
+        self, dropped: str, expected_deferral: bool | None
+    ):
+        data = {
+            "model": "claude-sonnet-5-5",
+            "messages": [{"role": "user", "content": "What is the forecast for Paris?"}],
+            "tools": [dict(tool) for tool in _DEFERRED_TOOL_REQUEST_TOOLS],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=ToolDroppingGuardrail(tool_name=dropped)
+        )
+
+        assert [(tool["name"], tool.get("defer_loading")) for tool in data["tools"]] == [
+            *((str(tool["name"]), None) for tool in _DEFERRED_TOOL_REQUEST_TOOLS[:2] if tool["name"] != dropped),
+            ("mcp__weather__get_forecast", expected_deferral),
         ]
 
     @pytest.mark.asyncio
