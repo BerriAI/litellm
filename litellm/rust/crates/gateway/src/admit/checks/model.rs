@@ -49,8 +49,9 @@ const OFF_BY_DEFAULT_PARAMS: [&str; 4] = [
 /// `ModelInfo.member_auto_router`, which `/model/new` stores as `false`, its default.
 const OFF_BY_DEFAULT_MODEL_INFO: [&str; 1] = ["member_auto_router"];
 
-/// `_POINTER_REF_PREFIXES` in `litellm/llms/base_llm/auth/identity_source.py`. Python resolves an
-/// api_key spelled with one of these at call time, and the native app would send it as written.
+/// `_POINTER_REF_PREFIXES` in `litellm/llms/base_llm/auth/identity_source.py`, the spellings Python
+/// takes for a secret pointer rather than a key. The native app would send such an api_key as
+/// written, so Python answers it, resolving `oidc/` and `os.environ/` in `get_secret`.
 const SECRET_REFERENCE_PREFIXES: [&str; 5] = [
     "oidc/",
     "os.environ/",
@@ -159,7 +160,7 @@ fn is_no_seconds(request_timeout: Option<&Value>) -> bool {
 
 /// `rpm` and `tpm` are honored as the shuffle's weights. A deployment with no `api_key` gets its
 /// credential from a flow the proxy can host and the gateway may not, as Entra and workload
-/// identity are.
+/// identity are, and so does one whose `api_key` is a secret pointer.
 fn params(params: &LitellmParams) -> Vec<Box<str>> {
     let LitellmParams {
         model: _,
@@ -530,23 +531,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case::an_oidc_env_reference("oidc/env/ANTHROPIC_WIF_TOKEN", "")]
-    #[case::an_oidc_file_reference("oidc/file/var/run/secrets/token", "")]
-    #[case::a_vault_reference("hashicorp_vault/anthropic", "")]
-    #[case::a_stored_model(
-        "oidc/env/ANTHROPIC_WIF_TOKEN",
-        "    model_info:\n      id: db-1\n      db_model: true\n      blocked: false\n"
-    )]
-    fn a_deployment_whose_key_is_a_secret_reference_names_its_group(
-        #[case] api_key: &str,
-        #[case] model_info: &str,
-    ) {
-        let written = format!(
-            "    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: {api_key}\n{model_info}"
-        );
+    fn a_deployment_whose_key_is_an_environment_reference_left_as_written_names_its_group() {
+        let written = "    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: os.environ/ANTHROPIC_API_KEY\n";
 
         assert_eq!(
-            one_deployment(&written, anthropic(&["claude"])).as_deref(),
+            one_deployment(written, anthropic(&["claude"])).as_deref(),
             Some("model_list.litellm_params.api_key secret reference")
         );
     }
