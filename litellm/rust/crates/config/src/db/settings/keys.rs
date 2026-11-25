@@ -62,6 +62,7 @@ pub(super) const MANAGED_GENERAL_SETTINGS: &[&str] = &[
     "failed_login_window_seconds",
     "forward_client_headers_to_llm_api",
     "global_max_parallel_requests",
+    "guardrail_log_skip_passed",
     "health_check_concurrency",
     "health_check_interval",
     "health_check_skip_blocked_background_models",
