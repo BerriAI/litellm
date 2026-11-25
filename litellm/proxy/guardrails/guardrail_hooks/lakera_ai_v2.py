@@ -1,11 +1,12 @@
 import copy
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
+from functools import partial
 from itertools import chain
 from string import Formatter
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter
@@ -33,6 +34,10 @@ from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
     has_non_string_content,
+)
+from litellm.responses.litellm_completion_transformation.reasoning_items import (
+    thinking_block_texts,
+    with_thinking_text,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
@@ -239,36 +244,53 @@ def _build_lakera_inspection_messages(data: Mapping[str, object]) -> Sequence[Ma
     ]
 
 
-def _present_texts(blocks: Sequence[object]) -> tuple[tuple[object, str], ...]:
-    texts: Final = tuple((block, stream_item_field(block, "text")) for block in blocks)
-    return tuple((block, text) for block, text in texts if isinstance(text, str) and text)
+_NativeText: TypeAlias = tuple[Callable[[object], None], str]
 
 
-def _text_blocks(container: object, text_type: str) -> tuple[tuple[object, str], ...]:
+def _write_field(block: object, field: str, text: object) -> None:
+    if isinstance(block, dict):
+        block[field] = text  # rebind-ok: masking rewrites the served response's text block in place
+        return
+    setattr(block, field, text)
+
+
+def _write_thinking_text(item: object, block_index: int, text: object) -> None:
+    encrypted_content: Final = stream_item_field(item, "encrypted_content")
+    if isinstance(encrypted_content, str) and isinstance(text, str):
+        _write_field(item, "encrypted_content", with_thinking_text(encrypted_content, block_index, text))
+
+
+def _present_texts(blocks: Sequence[object], field: str) -> tuple[_NativeText, ...]:
+    texts: Final = tuple((block, stream_item_field(block, field)) for block in blocks)
+    return tuple((partial(_write_field, block, field), text) for block, text in texts if isinstance(text, str) and text)
+
+
+def _text_blocks(container: object, text_type: str) -> tuple[_NativeText, ...]:
     blocks: Final = stream_item_items(container, "content")
-    return _present_texts(tuple(block for block in blocks if stream_item_field(block, "type") == text_type))
+    return _present_texts(tuple(block for block in blocks if stream_item_field(block, "type") == text_type), "text")
 
 
-def _output_item_text_blocks(item: object) -> tuple[tuple[object, str], ...]:
+def _thinking_texts(item: object) -> tuple[_NativeText, ...]:
+    texts: Final = thinking_block_texts(stream_item_field(item, "encrypted_content"))
+    return tuple((partial(_write_thinking_text, item, index), text) for index, text in texts.items())
+
+
+def _output_item_text_blocks(item: object) -> tuple[_NativeText, ...]:
     if stream_item_field(item, "type") == "reasoning":
-        return _present_texts((*stream_item_items(item, "summary"), *stream_item_items(item, "content")))
+        parts: Final = (*stream_item_items(item, "summary"), *stream_item_items(item, "content"))
+        return (*_present_texts(parts, "text"), *_thinking_texts(item))
     return _text_blocks(item, "output_text")
 
 
-def _native_output_text_blocks(response: object) -> tuple[tuple[object, str], ...] | None:
+def _native_output_text_blocks(response: object) -> tuple[_NativeText, ...] | None:
     if isinstance(response, ResponsesAPIResponse) or stream_item_field(response, "object") == "response":
         output: Final = stream_item_items(response, "output")
-        return tuple(chain.from_iterable(_output_item_text_blocks(item) for item in output))
+        item_texts: Final = tuple(chain.from_iterable(_output_item_text_blocks(item) for item in output))
+        provider_fields: Final = stream_item_field(response, "provider_specific_fields")
+        return (*item_texts, *_present_texts(stream_item_items(provider_fields, "thinking_blocks"), "thinking"))
     if stream_item_field(response, "type") == "message":
         return _text_blocks(response, "text")
     return None
-
-
-def _write_block_text(block: object, text: object) -> None:
-    if isinstance(block, dict):
-        block["text"] = text  # rebind-ok: masking rewrites the served response's text block in place
-        return
-    setattr(block, "text", text)  # noqa: B010  # block is a Responses or Anthropic SDK model with no shared typed base
 
 
 def _write_choice_text(response: ModelResponse, choice_index: int, text: object) -> None:
@@ -843,8 +865,8 @@ class LakeraAIGuardrail(CustomGuardrail):
                 )
                 assistant_messages: Final = masked_messages[len(original_messages) :]
                 native_masked: Final = assistant_messages[len(choice_indices) :]
-                for (block, _), masked in zip(native_text_blocks or (), native_masked, strict=True):
-                    _write_block_text(block, stream_item_field(masked, "content"))
+                for (write_text, _), masked in zip(native_text_blocks or (), native_masked, strict=True):
+                    write_text(stream_item_field(masked, "content"))
                 if isinstance(response, ModelResponse):
                     for choice_idx, masked_message in zip(choice_indices, assistant_messages, strict=True):
                         _write_choice_text(response, choice_idx, stream_item_field(masked_message, "content"))

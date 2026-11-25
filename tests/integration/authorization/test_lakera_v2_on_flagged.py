@@ -39,6 +39,13 @@ _ANTHROPIC_REPLY: Final = {
     "stop_reason": "end_turn",
     "usage": {"input_tokens": 1, "output_tokens": 1},
 }
+_ANTHROPIC_THINKING_REPLY: Final = {
+    **_ANTHROPIC_REPLY,
+    "content": [
+        {"type": "thinking", "thinking": _REPLY, "signature": "sig-lakera"},
+        {"type": "text", "text": _BENIGN_REPLY},
+    ],
+}
 _EMBEDDING_REPLY: Final = {
     "object": "list",
     "model": "gpt-4o-mini",
@@ -130,6 +137,8 @@ def _reasoning_response() -> JsonValue:
 def _provider_reply(request: Request) -> Reply:
     if request.target.endswith("/embeddings"):
         return Reply(body=json.dumps(_EMBEDDING_REPLY).encode())
+    if request.target.endswith("/messages") and _REASONING_PROMPT.encode() in request.body:
+        return Reply(body=json.dumps(_ANTHROPIC_THINKING_REPLY).encode())
     if request.target.endswith("/messages"):
         return Reply(body=json.dumps(_ANTHROPIC_REPLY).encode())
     streaming: Final = _JSON_OBJECT.validate_json(request.body).get("stream") is True
@@ -327,6 +336,30 @@ def test_lakera_v2_pii_only_reasoning_summary_follows_on_flagged(gateway: Gatewa
         assert response.status_code == 200, response.text
         summary: Final = _first(_first(_JSON_OBJECT.validate_json(response.content)["output"])["summary"])
         assert summary["text"] == _REPLY.replace(_CARD, _MASKED.decode()), response.text
+        assert _CARD.encode() not in response.content, response.text
+
+
+def test_lakera_v2_mask_removes_the_card_from_bridged_thinking(gateway: Gateway) -> None:
+    with (
+        wire_server(_provider_reply) as provider,
+        wire_server(_lakera_verdict) as lakera,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model="anthropic/claude-sonnet-5-5", api_base=provider.url, api_key="synthetic-provider-key"
+        )
+        guardrail: Final = _create_lakera_guardrail(gateway, scenario.cleanups, lakera.url, "post_call", "mask")
+
+        response: Final = gateway.request(
+            "POST",
+            "/v1/responses",
+            {"model": model, "input": _REASONING_PROMPT, "reasoning": {"effort": "low"}, "guardrails": [guardrail]},
+        )
+
+        assert len(provider.drain()) == 1
+        assert len(lakera.drain()) == 1
+        assert response.status_code == 200, response.text
+        assert _MASKED in response.content, response.text
         assert _CARD.encode() not in response.content, response.text
 
 

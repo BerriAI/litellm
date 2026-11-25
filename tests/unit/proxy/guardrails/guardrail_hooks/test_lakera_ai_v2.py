@@ -20,6 +20,10 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     filter_messages_by_skip_flags,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.responses.litellm_completion_transformation.reasoning_items import (
+    encode_thinking_blocks,
+    thinking_block_texts,
+)
 from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIGuardrail,
     _build_lakera_inspection_messages,
@@ -2638,6 +2642,44 @@ class TestPostCallResponsesReasoning:
 
         assert result is response
         assert _reasoning_texts(result) == ("Card [MASKED CREDIT_CARD] is on file.", "C.")
+
+
+    async def test_mask_rewrites_every_copy_of_bridged_thinking_text(self):
+        encrypted: Final = encode_thinking_blocks([{"type": "thinking", "thinking": _CARD_REPLY, "signature": "sig"}])
+        reasoning: Final = {
+            "type": "reasoning",
+            "id": "rs_1",
+            "summary": [],
+            "content": [{"type": "output_text", "text": _CARD_REPLY, "annotations": []}],
+            "encrypted_content": encrypted,
+        }
+        response = ResponsesAPIResponse(id="resp_1", created_at=1, output=[reasoning])
+        response.provider_specific_fields = {"thinking_blocks": [{"type": "thinking", "thinking": _CARD_REPLY}]}
+        verdict: Final = {
+            "flagged": True,
+            "breakdown": [
+                {"detector_type": "pii/credit_card", "detected": True, "message_id": message_id}
+                for message_id in (1, 2, 3)
+            ],
+            "payload": [
+                {"detector_type": "pii/credit_card", "start": 5, "end": 5 + len(_CARD), "message_id": message_id}
+                for message_id in (1, 2, 3)
+            ],
+        }
+
+        result, client = await _post_call("mask", verdict, {"model": "m", "input": "Which card?"}, response)
+
+        assert [message["content"] for message in client.posts[0]["json"]["messages"]] == [
+            "Which card?",
+            _CARD_REPLY,
+            _CARD_REPLY,
+            _CARD_REPLY,
+        ]
+        assert result is response
+        assert _CARD not in response.model_dump_json()
+        assert thinking_block_texts(response.output[0]["encrypted_content"]) == {
+            0: "Card [MASKED CREDIT_CARD] is on file."
+        }
 
 
 @pytest.mark.asyncio
