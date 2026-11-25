@@ -1,4 +1,5 @@
 mod admission;
+mod affiliation;
 pub mod authn;
 pub mod authz;
 pub mod body;
@@ -12,6 +13,7 @@ mod outcome;
 mod pipeline;
 pub mod plan;
 mod public;
+pub mod record;
 mod request;
 pub mod routes;
 mod settings;
@@ -22,7 +24,8 @@ mod testing;
 mod token;
 mod value;
 
-pub use caller::{Caller, NotACaller, StoredKey};
+pub use affiliation::{Affiliation, Holder, Named, Team, TeamCopy};
+pub use caller::{Caller, Credential, NotACaller, StoredKey};
 pub use error::{
     AddressNotAllowed, AgentIdentityFailure, AssertionRejection, AuthzDenial, BudgetExceeded,
     ClaimDenial, DeniedList, Error, JwtDenial, KeyDenial, KeyError, KeyFailure, ModelAccessDenied,
@@ -43,7 +46,7 @@ pub use settings::{Allowlists, HostFacts, Settings};
 pub use token::{KeyHash, MasterKey, Token};
 
 use crate::{
-    authn::key::Credential,
+    authn::key::KeySource,
     client_address::Origin,
     identity::{
         jwt::{ClaimIdentity, JwtIdentity, JwtMapping, JwtOutcome, Provisioning},
@@ -80,7 +83,7 @@ pub async fn authenticate_key<H: AuthHost>(
     key: Option<&Token>,
     settings: &Settings,
 ) -> Authenticated<H> {
-    let credential = Credential::Presented(key);
+    let credential = KeySource::Presented(key);
     key_outcome(
         pipeline::key::authenticate(
             host,
@@ -113,7 +116,7 @@ pub async fn authenticate_jwt<H: AuthHost>(
         )))),
         JwtOutcome::Finished(token) => Ok(Outcome::Authenticated(Identity::FinishedJwt(token))),
         JwtOutcome::MappedKey(key, jwt) => {
-            let credential = Credential::Resolved {
+            let credential = KeySource::Resolved {
                 key,
                 end_user_id: jwt.end_user_id.as_deref(),
             };

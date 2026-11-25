@@ -23,7 +23,7 @@ use std::{collections::BTreeSet, sync::Arc};
 
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{
-    Caller,
+    Credential,
     authz::Layer,
     body::{self, Credentials},
 };
@@ -36,9 +36,9 @@ use crate::{Gateway, callbacks, callbacks::Callbacks};
 /// key. A key that names a team, an owner or anything else that carries a list was declined when
 /// it was authenticated.
 pub(crate) fn layers(identity: &Authenticated<NativeRows>) -> impl Iterator<Item = Layer<'_>> {
-    let key = match &**identity {
-        Caller::MasterKey => None,
-        Caller::Key(key) => Some(Layer::Key(key.key.models())),
+    let key = match &identity.credential {
+        Credential::MasterKey => None,
+        Credential::Key { key } => Some(Layer::Key(key.models())),
     };
     key.into_iter()
 }

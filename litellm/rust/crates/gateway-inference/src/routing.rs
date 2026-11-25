@@ -544,7 +544,7 @@ mod tests {
     use crate::test_support::{Held, key};
 
     #[rstest]
-    #[case::the_master_key(Caller::MasterKey, true)]
+    #[case::the_master_key(Caller::master_key(()), true)]
     #[case::a_key_its_row_calls_an_admin(key("stored", true), true)]
     #[case::any_other_key(key("stored", false), false)]
     fn only_a_caller_with_the_admin_role_is_routed_as_a_proxy_admin(
