@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Final, TypedDict
 
 import requests
 from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
-from opentelemetry.metrics import Counter, Observation
+from opentelemetry.metrics import Counter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
@@ -48,7 +48,6 @@ _TOKEN_REFRESH_SKEW_SECONDS: Final = 60
 _METRICS_PATH: Final = "/v1/metrics"
 
 METRIC_NAME: Final = "litellm.enterprise.billable_requests"
-HEARTBEAT_NAME: Final = "litellm.enterprise.heartbeat"
 METER_NAME: Final = "litellm.enterprise.billing"
 
 AttributeValue = str | int
@@ -85,7 +84,10 @@ def resource_attributes(config: BillingMetricsConfig) -> dict[str, AttributeValu
         "litellm.version": config.litellm_version,
     }
     license_attr: dict[str, AttributeValue] = {"litellm.license.id": config.license_id} if config.license_id else {}
-    return {**base, **license_attr}
+    deployment_attr: dict[str, AttributeValue] = (
+        {"litellm.deployment.id": config.deployment_id} if config.deployment_id else {}
+    )
+    return {**base, **license_attr, **deployment_attr}
 
 
 def billable_attributes(
@@ -179,7 +181,7 @@ class _BillingMetricsBearerSession(requests.Session):
         return response
 
 
-def build_bearer_meter_provider(config: BillingMetricsConfig, *, heartbeat: bool = False) -> MeterProvider:
+def build_bearer_meter_provider(config: BillingMetricsConfig) -> MeterProvider:
     auth: Final = BillingMetricsBearerAuth(
         client_id=config.client_id,
         client_secret=config.client_secret,
@@ -188,16 +190,7 @@ def build_bearer_meter_provider(config: BillingMetricsConfig, *, heartbeat: bool
     session: Final = _BillingMetricsBearerSession(auth)
     exporter: Final = OTLPMetricExporter(endpoint=_metrics_endpoint(config.endpoint), session=session)
     reader: Final = PeriodicExportingMetricReader(exporter, export_interval_millis=config.export_interval_ms)
-    attributes: Final = (
-        {
-            "service.name": "litellm-proxy",
-            "litellm.version": config.litellm_version,
-            "litellm.deployment.id": config.deployment_id,
-        }
-        if heartbeat and config.deployment_id
-        else resource_attributes(config)
-    )
-    return MeterProvider(metric_readers=[reader], resource=Resource(attributes))
+    return MeterProvider(metric_readers=[reader], resource=Resource(resource_attributes(config)))
 
 
 class BillingMetricsRecorder:
@@ -205,17 +198,10 @@ class BillingMetricsRecorder:
 
     def __init__(self, provider: MeterProvider) -> None:
         self._provider = provider
-        self._heartbeat_provider: MeterProvider | None = None
         self._counter: Counter = provider.get_meter(METER_NAME).create_counter(
             name=METRIC_NAME,
             unit="{request}",
             description="Count of 2xx HTTP requests to billable LLM/MCP/A2A endpoints",
-        )
-
-    def enable_heartbeat(self, provider: MeterProvider) -> None:
-        self._heartbeat_provider = provider
-        provider.get_meter(METER_NAME).create_observable_gauge(
-            name=HEARTBEAT_NAME, callbacks=(lambda _: (Observation(1),),), unit="1"
         )
 
     def record(self, *, category: BillableCategory, route: str, status_code: int, model_id: str | None) -> None:
@@ -224,11 +210,7 @@ class BillingMetricsRecorder:
     def shutdown(self) -> None:
         """Final flush + exporter-thread stop. Without this, up to one export
         interval of billable counts is dropped on every proxy restart."""
-        try:
-            self._provider.shutdown(timeout_millis=SHUTDOWN_FLUSH_TIMEOUT_MS)
-        finally:
-            if self._heartbeat_provider is not None:
-                self._heartbeat_provider.shutdown(timeout_millis=SHUTDOWN_FLUSH_TIMEOUT_MS)
+        self._provider.shutdown(timeout_millis=SHUTDOWN_FLUSH_TIMEOUT_MS)
 
 
 def _export_interval_ms() -> int:
@@ -290,9 +272,6 @@ class _ActiveRecorderRegistry:
     def set(self, recorder: BillingMetricsRecorder) -> None:
         self._recorder = recorder
 
-    def get(self) -> BillingMetricsRecorder | None:
-        return self._recorder
-
     def pop(self) -> BillingMetricsRecorder | None:
         recorder: Final = self._recorder
         self._recorder = None
@@ -303,24 +282,15 @@ _ACTIVE_RECORDER: Final = _ActiveRecorderRegistry()
 
 
 def build_billing_metrics_recorder(
-    *,
-    premium: bool,
-    license_data: "EnterpriseLicenseData | None",
-    litellm_version: str,
-    heartbeat_only: bool = False,
+    *, premium: bool, license_data: "EnterpriseLicenseData | None", litellm_version: str
 ) -> BillingMetricsRecorder | None:
     """Build the recorder, or None when the deployment is not licensed or metering is unconfigured."""
-    if heartbeat_only and not os.getenv(DEPLOYMENT_ID_ENV):
-        return None
     if not premium:
         # Debug, not warning: unlicensed is the common case and a warning here
         # would be noise on every OSS proxy. Every other disable path warns.
         verbose_proxy_logger.debug("Enterprise billing metrics disabled: deployment is not licensed")
         return None
 
-    active: Final = _ACTIVE_RECORDER.get()
-    if active is not None:
-        return active
     config: Final = load_billing_metrics_config(license_data=license_data, litellm_version=litellm_version)
     if config is None:
         return None
@@ -328,8 +298,6 @@ def build_billing_metrics_recorder(
     try:
         provider: Final = build_bearer_meter_provider(config)
         recorder: Final = BillingMetricsRecorder(provider)
-        if config.deployment_id:
-            recorder.enable_heartbeat(build_bearer_meter_provider(config, heartbeat=True))
     except Exception as exc:  # noqa: BLE001 -- metering must never break proxy startup
         verbose_proxy_logger.warning("Enterprise billing metrics disabled: failed to initialize exporter: %s", exc)
         return None

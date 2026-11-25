@@ -160,7 +160,10 @@ def test_premium_builds_recorder_and_logs_enabled(
             premium=True, license_data={"user_id": "org-1"}, litellm_version="1.0"
         )
         assert recorder is not None
-        assert "Enterprise billing metrics enabled: exporting to https://collector.example:4318 every 60000 ms" in caplog.text
+        assert (
+            "Enterprise billing metrics enabled: exporting to https://collector.example:4318 every 60000 ms"
+            in caplog.text
+        )
         bm.shutdown_billing_metrics_recorder()
 
 
@@ -291,7 +294,7 @@ def test_bearer_export_sets_authorization_header() -> None:
     assert all(request.headers["Authorization"] == "Bearer export-token" for request in export_requests)
 
 
-def test_idle_heartbeat_exports_only_approved_deployment_attributes(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_billable_export_contains_only_approved_attributes(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_full_env(monkeypatch)
     monkeypatch.setenv(bm.DEPLOYMENT_ID_ENV, "t-example-litellm-prod")
     markers: Final = ("private-prompt", "private@example.invalid", "private-user-id", "sk-private-key")
@@ -305,9 +308,10 @@ def test_idle_heartbeat_exports_only_approved_deployment_attributes(monkeypatch:
         http.post("https://auth.example/oauth2/token", json={"access_token": "test-token", "expires_in": 3600})
         http.post(export_url, status_code=200)
         recorder: Final = bm.build_billing_metrics_recorder(
-            premium=True, license_data={"user_id": markers[2]}, litellm_version="1.2.3"
+            premium=True, license_data={"user_id": "org-7"}, litellm_version="1.2.3"
         )
         assert recorder is not None
+        recorder.record(category=BillableCategory.LLM, route="/chat/completions", status_code=200, model_id="deploy-3")
         bm.shutdown_billing_metrics_recorder()
         raw: Final = next(request.body for request in _request_history(http) if request.url == export_url)
 
@@ -318,14 +322,23 @@ def test_idle_heartbeat_exports_only_approved_deployment_attributes(monkeypatch:
     assert {attr.key: attr.value.string_value for attr in resource.resource.attributes} == {
         "service.name": "litellm-proxy",
         "litellm.version": "1.2.3",
+        "litellm.license.id": "org-7",
         "litellm.deployment.id": "t-example-litellm-prod",
     }
     (scope,) = resource.scope_metrics
     (metric,) = scope.metrics
-    assert metric.name == "litellm.enterprise.heartbeat"
-    (point,) = metric.gauge.data_points
+    assert metric.name == "litellm.enterprise.billable_requests"
+    (point,) = metric.sum.data_points
     assert point.as_int == 1
-    assert not point.attributes
+    assert {
+        attr.key: attr.value.int_value if attr.value.HasField("int_value") else attr.value.string_value
+        for attr in point.attributes
+    } == {
+        "litellm.endpoint.category": "llm",
+        "http.route": "/chat/completions",
+        "http.response.status_code": 200,
+        "litellm.model_id": "deploy-3",
+    }
 
 
 def test_unauthorized_export_refetches_token_before_next_export() -> None:
@@ -410,9 +423,7 @@ def test_resource_attributes_omit_license_id_when_absent() -> None:
 
 
 def test_billable_attributes_include_model_id() -> None:
-    assert bm.billable_attributes(
-        BillableCategory.LLM, "/chat/completions", 200, "deploy-3"
-    ) == {
+    assert bm.billable_attributes(BillableCategory.LLM, "/chat/completions", 200, "deploy-3") == {
         "litellm.endpoint.category": "llm",
         "http.route": "/chat/completions",
         "http.response.status_code": 200,
@@ -421,9 +432,7 @@ def test_billable_attributes_include_model_id() -> None:
 
 
 def test_billable_attributes_omit_model_id_when_none() -> None:
-    attributes: Final = bm.billable_attributes(
-        BillableCategory.MCP, "/mcp", 200, None
-    )
+    attributes: Final = bm.billable_attributes(BillableCategory.MCP, "/mcp", 200, None)
     assert "litellm.model_id" not in attributes
 
 
