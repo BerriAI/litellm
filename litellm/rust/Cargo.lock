@@ -5030,6 +5030,7 @@ dependencies = [
  "parking_lot",
  "rstest",
  "serde",
+ "serde_json",
  "sha2 0.10.9",
  "strum",
  "thiserror 2.0.21",

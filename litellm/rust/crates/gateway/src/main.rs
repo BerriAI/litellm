@@ -284,9 +284,9 @@ async fn in_front_of_python(
     Ok(ran?)
 }
 
-/// Reads the config stored in the database again on the interval `config` sets, when boot read it
-/// from a database, and swaps `live` to each config that changed. Both modes start it here, so
-/// they reload alike.
+/// Reads the config stored in the database again on the interval `config` sets, and on every
+/// change the proxy announces on Redis, when boot read it from a database, and swaps `live` to each
+/// config that changed. Both modes start it here, so they reload alike.
 fn polled(
     source: Option<Source>,
     config: &Config,
@@ -296,7 +296,7 @@ fn polled(
 ) -> Option<Poller> {
     let environment = environment.clone();
     let in_flight = in_flight.clone();
-    Some(source?.poll_every(
+    Some(source?.reload_on(
         litellm_gateway::reload_every(config),
         live.clone(),
         move |config, stored, current| {
