@@ -95,7 +95,7 @@ class AmazonMantleConfig(AmazonAnthropicClaudeConfig):
         optional_params: dict[str, object],
         litellm_params: dict[str, object],
         headers: dict[str, object],
-    ) -> dict:
+    ) -> dict[str, object]:
         # Strip the "mantle/" routing prefix to get the real model ID
         model_id: Final = model.replace("mantle/", "", 1)
 

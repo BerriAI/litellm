@@ -125,7 +125,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         litellm_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    ) -> dict[str, object]:  # mutable-ok: mirrors the sync validate_environment contract this overrides
         """Async counterpart of validate_environment: the WIF tier can block on a token
         exchange POST, so async callers await it off the event loop."""
         params_mapping, resolved_api_base = self._resolve_params(litellm_params, api_base)
@@ -168,7 +168,7 @@ class AnthropicFilesConfig(BaseFilesConfig):
         optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return optional_params
 
     def transform_create_file_request(

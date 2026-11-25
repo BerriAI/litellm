@@ -26,6 +26,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+    DROP_UNSUPPORTED_PARAMS_HINT,
 )
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import (
@@ -1087,10 +1088,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         elif not (litellm.drop_params or drop_params):
             supported_hint: Final = "Only temperature=1 is supported. " if param == "temperature" else ""
             raise litellm.utils.UnsupportedParamsError(
-                message=(
-                    f"{model} does not support {param}={value}. {supported_hint}"
-                    "To drop unsupported params, set `litellm.drop_params = True`."
-                ),
+                message=(f"{model} does not support {param}={value}. {supported_hint}{DROP_UNSUPPORTED_PARAMS_HINT}"),
                 status_code=400,
             )
 
@@ -2464,8 +2462,11 @@ def _strip_empty_content_blocks_from_message(message: object) -> object:
     if not isinstance(message, dict) or not isinstance(message.get("content"), list):
         return message
     content: Final = message["content"]
+    from_user: Final = message.get("role") in ("user",)
     filtered: Final = [
-        block for block in content if not _is_empty_text_block(block) and not is_empty_unsigned_thinking_block(block)
+        block
+        for block in content
+        if not _is_empty_text_block(block, from_user) and not is_empty_unsigned_thinking_block(block)
     ]
     if len(filtered) == len(content):
         return message
@@ -2513,11 +2514,16 @@ def strip_empty_content_blocks_from_anthropic_messages(
     ]
 
 
-def _is_empty_text_block(block: object) -> bool:
-    if not isinstance(block, dict) or block.get("type") != "text":
-        return False
-    text: Final = block.get("text")
-    return not isinstance(text, str) or not text.strip()
+def _is_empty_text_block(block: object, from_user: bool) -> bool:
+    match block:
+        case {"type": "text", "text": str() as text}:
+            return not text.strip()
+        case {"type": "text", "text": object()}:
+            return not from_user
+        case {"type": "text"}:
+            return True
+        case _:
+            return False
 
 
 def is_empty_thinking_block(block: object) -> bool:
@@ -2716,12 +2722,12 @@ def _raw_server_tool_use_call(block: object) -> ChatCompletionAssistantToolCall 
 
 
 def write_raw_server_tool_use_inputs(message: object, arguments_by_block: Mapping[int, str]) -> None:
-    content: Final = message_field(message, "content")
-    if not arguments_by_block or not isinstance(message, dict) or not isinstance(content, list):
+    content: Final = as_object_list(message_field(message, "content"))
+    if not arguments_by_block or not isinstance(message, dict) or content is None:
         return
     message["content"] = [  # rebind-ok: a guardrail rewrite must land on the request it scanned
         _with_raw_server_tool_use_input(block, arguments_by_block.get(block_idx))
-        for block_idx, block in enumerate(parts_of(content))
+        for block_idx, block in enumerate(content)
     ]
 
 
@@ -2734,13 +2740,14 @@ def is_raw_server_tool_use_input(arguments: str) -> bool:
 
 
 def _with_raw_server_tool_use_input(block: object, arguments: str | None) -> object:
-    if arguments is None or not isinstance(block, dict):
+    fields: Final = validated_object_mapping(block) if arguments is not None else None
+    if arguments is None or fields is None:
         return block
     try:
         rewritten_input: Final = _JSON_OBJECT.validate_json(arguments)
     except ValidationError:
         return block
-    return block if block.get("input") == rewritten_input else {**block, "input": rewritten_input}
+    return block if fields.get("input") == rewritten_input else {**fields, "input": rewritten_input}
 
 
 def anthropic_server_tool_calls(message: object) -> tuple[ChatCompletionMessageToolCall, ...]:

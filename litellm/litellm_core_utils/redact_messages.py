@@ -1074,7 +1074,7 @@ def _get_turn_off_message_logging_from_dynamic_params(
     return None
 
 
-def redact_user_api_key_info(metadata: dict) -> dict:
+def redact_user_api_key_info(metadata: dict) -> dict[str, object]:
     """
     removes any user_api_key_info before passing to logging object, if flag set
 

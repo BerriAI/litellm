@@ -2601,6 +2601,52 @@ class TestPerMessageTextWriteBack:
         assert data["messages"] == original_messages, "a rejected rewrite must leave the request untouched"
 
 
+class _LegacyFunctionCallRewriter(CustomGuardrail):
+    def __init__(self, returned_tool_calls: list[object]) -> None:
+        super().__init__(guardrail_name="legacy-function-call-rewriter")
+        self.scan_tool_calls_as_text = True
+        self.returned_tool_calls: Final = returned_tool_calls
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {**inputs, "tool_calls": self.returned_tool_calls}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "returned_tool_calls",
+    [
+        pytest.param(
+            [{"type": "function", "function": {"name": "send_payment", "arguments": "{}"}}] * 2, id="call-count-changed"
+        ),
+        pytest.param([{"type": "function", "function": "send_payment(card=<masked>)"}], id="function-not-an-object"),
+        pytest.param([], id="call-dropped"),
+    ],
+)
+async def test_legacy_function_call_rewrite_the_request_cannot_carry_is_rejected(
+    returned_tool_calls: list[object],
+) -> None:
+    from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+
+    original_messages: Final = [
+        {"role": "user", "content": "pay the invoice"},
+        {"role": "assistant", "content": None, "function_call": {"name": "send_payment", "arguments": "{}"}},
+    ]
+    data: Final = {"messages": json.loads(json.dumps(original_messages))}
+
+    with pytest.raises(UnappliableRequestRewrite):
+        await OpenAIChatCompletionsHandler().process_input_messages(
+            data=data, guardrail_to_apply=_LegacyFunctionCallRewriter(returned_tool_calls)
+        )
+
+    assert data["messages"] == original_messages
+
+
 class TestBuildBlockSseChunks:
     """build_block_sse_chunks turns a streaming ModifyResponseException into 200 SSE chunks"""
 
@@ -3142,18 +3188,32 @@ class TestGuardrailToolCallListsAlongsideClaudeMcpCalls:
         assert message.provider_specific_fields["server_tool_calls"] == [_mcp_server_call()]
 
     @pytest.mark.asyncio
-    async def test_input_masks_from_a_guardrail_that_returns_only_client_calls_still_apply(self):
+    async def test_input_rewrite_from_a_guardrail_that_returns_only_client_calls_is_rejected(self):
+        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+
         data = _request_with_client_and_mcp_calls(client_count=1)
+        original_messages = json.loads(json.dumps(data["messages"]))
 
-        await OpenAIChatCompletionsHandler().process_input_messages(
-            data, McpUnawareSecretMaskingGuardrail(guardrail_name="mask-secrets")
-        )
+        with pytest.raises(UnappliableRequestRewrite):
+            await OpenAIChatCompletionsHandler().process_input_messages(
+                data, McpUnawareSecretMaskingGuardrail(guardrail_name="mask-secrets")
+            )
 
-        assistant = data["messages"][1]
-        assert [(call["id"], json.loads(call["function"]["arguments"])) for call in assistant["tool_calls"]] == [
-            ("call_0", {"api_key": "[MASKED]-secret-123"})
-        ]
-        assert assistant["provider_specific_fields"]["server_tool_calls"] == [_mcp_server_call()]
+        assert data["messages"] == original_messages
+
+    @pytest.mark.asyncio
+    async def test_input_rewrite_that_drops_a_raw_mcp_call_is_rejected(self):
+        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+
+        data = _request_with_a_raw_mcp_call()
+        original_messages = json.loads(json.dumps(data["messages"]))
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await OpenAIChatCompletionsHandler().process_input_messages(
+                data, McpUnawareSecretMaskingGuardrail(guardrail_name="mask-secrets")
+            )
+
+        assert data["messages"] == original_messages
 
     @pytest.mark.asyncio
     async def test_input_masks_from_a_guardrail_object_without_a_name_apply_alongside_mcp_calls(self):

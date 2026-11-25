@@ -15,7 +15,7 @@ class PlanetScaleDetector(RegexBasedDetector):
         return "PlanetScale API Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # the PlanetScale API token
             re.compile(

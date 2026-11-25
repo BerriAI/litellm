@@ -189,7 +189,7 @@ class SkillsInjectionHook(CustomLogger):
         cache: DualCache,
         data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """
         Process skills from container.skills before the LLM call.
 
@@ -254,7 +254,7 @@ class SkillsInjectionHook(CustomLogger):
         data: dict,
         litellm_skills: Sequence[LiteLLM_SkillsTable],
         use_anthropic_format: bool = True,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Process skills for messages API (Anthropic format tools).
 
@@ -325,7 +325,7 @@ class SkillsInjectionHook(CustomLogger):
         self,
         data: dict,
         litellm_skills: Sequence[LiteLLM_SkillsTable],
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Process skills for non-Anthropic models (OpenAI format tools).
 
