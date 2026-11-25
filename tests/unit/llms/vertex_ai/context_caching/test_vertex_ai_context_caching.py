@@ -2923,11 +2923,12 @@ async def test_a_system_image_is_inlined_into_the_gemini_cache_when_the_system_p
     }
 
 
+@pytest.mark.parametrize("api_version", ["v1beta", "v1"])
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 async def test_a_files_api_file_before_the_mark_reaches_the_gemini_cache_as_a_link(
-    local_model_cost_map: None, served_images: list[str], use_async: bool
+    local_model_cost_map: None, served_images: list[str], use_async: bool, api_version: str
 ) -> None:
-    file_uri: Final = f"https://generativelanguage.googleapis.com/v1beta/files/button-{use_async}"
+    file_uri: Final = f"https://generativelanguage.googleapis.com/{api_version}/files/button-{use_async}"
     calls: Final = await _gemini_calls(
         _conversation_cached_through_notes(
             _button_question({"url": file_uri, "format": "image/png"}), {"role": "assistant", "content": "Deploy."}

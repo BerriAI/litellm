@@ -28,7 +28,12 @@ from litellm.llms.openai.openai import AllMessageValues
 from litellm.types.llms.openai import ChatCompletionToolParam
 from litellm.utils import get_prompt_cache_min_tokens, is_prompt_caching_valid_prompt
 
-from ..common_utils import GEMINI_FILES_API_URI_PREFIX, VertexAIError, get_supports_system_message, get_vertex_base_url
+from ..common_utils import (
+    GEMINI_FILES_API_URI_PREFIXES,
+    VertexAIError,
+    get_supports_system_message,
+    get_vertex_base_url,
+)
 from ..gemini.transformation import reject_system_message_videos, should_inline_remote_media
 from ..vertex_llm_base import VertexBase, publisher_model_location
 from .known_cached_contents import KnownCachedContents, known_cached_contents
@@ -165,7 +170,7 @@ def _links_web_media_vertex_fetches(
     turns_start: Final = _conversation_turns_start(cached_messages, model, custom_llm_provider)
     return has_remote_media(
         cached_messages[turns_start:],
-        lambda media: not should_inline(media) and not media.url.startswith(GEMINI_FILES_API_URI_PREFIX),
+        lambda media: not should_inline(media) and not media.url.startswith(GEMINI_FILES_API_URI_PREFIXES),
     )
 
 
