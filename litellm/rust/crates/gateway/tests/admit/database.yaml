@@ -1,0 +1,17 @@
+# A database alone keeps a request native: the master key is checked before any key is read.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+  environment_variables:
+    DATABASE_URL: postgresql://user:pass@localhost:5432/litellm
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust

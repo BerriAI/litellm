@@ -101,7 +101,8 @@ ROUTE_DENY_LIST: Final = MappingProxyType(
         "/sso/saml/login": "starts an external SAML redirect flow",
         "/sso/debug/login": "starts an external SSO redirect flow",
         "/sso/debug/callback": "external SSO redirect target",
-        "/fallback/login": "HTML login page",
+        "/fallback/login": "redirects to the dashboard login page",
+        "/login/resume": "redirects a signed-in browser to its stored return_to",
         "/plugin-proxy/{plugin_name}/{path:path}": "reverse proxy to a plugin process",
         "/openai_passthrough/{endpoint:path}": "forwards to a provider, not a proxy read",
         "/get/latest_release_info": "fetches the latest release from api.github.com",
@@ -134,6 +135,9 @@ PARAMETER_ALIASES: Final = MappingProxyType(
     {
         "/models/{model_id}": {"model_id": "model"},
         "/v1/models/{model_id}": {"model_id": "model"},
+        "/management/v1/customer_budget_increase_requests/{request_id}": {
+            "request_id": "budget_increase_request_id"
+        },
     }
 )
 NOT_FOUND_EXPECTED: Final = MappingProxyType(
@@ -371,7 +375,10 @@ def get_routes() -> tuple[str, ...]:
 def _route_ids(route: str, ids: Mapping[str, str]) -> Mapping[str, str]:
     """``ids`` with the route's ``PARAMETER_ALIASES`` applied (``/v1/models/{model_id}`` takes a model name)."""
     aliases: Final = PARAMETER_ALIASES.get(route, {})
-    return {**ids, **{name: ids[source] for name, source in aliases.items() if source in ids}}
+    return {
+        **{name: value for name, value in ids.items() if name not in aliases},
+        **{name: ids[source] for name, source in aliases.items() if source in ids},
+    }
 
 
 def _filled(route: str, ids: Mapping[str, str]) -> tuple[str, bool]:

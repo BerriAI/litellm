@@ -9,6 +9,7 @@ import pytest
 import litellm
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.llms.anthropic.messages.utils import proxy_sub_call_logging_kwargs, proxy_sub_call_metadata
 from litellm.router_api import ChangeSet
 from litellm.router_strategy.switchyard_router.config import SwitchyardRouterConfig, build_algorithm
 from litellm.router_strategy.switchyard_router.switchyard_router import SwitchyardRouter
@@ -228,6 +229,23 @@ async def test_a_session_hold_never_crosses_api_keys() -> None:
     assert await pick(switchyard, owner, ("CUDA out of memory",)) == "strong"
     assert await pick(switchyard, other, ("All tests passed",) * 2) == "fast"
     assert await pick(switchyard, owner, ("All tests passed",) * 2) == "strong"
+
+
+@pytest.mark.asyncio
+async def test_a_sub_call_carrying_its_parents_session_neither_joins_nor_spends_the_parents_capable_hold() -> None:
+    switchyard: Final = router(config())
+    parent_metadata: Final = {"user_api_key_hash": "owner"}
+    parent: Final = {"litellm_session_id": "s1", "litellm_metadata": parent_metadata}
+    sub_call: Final = {
+        **proxy_sub_call_logging_kwargs(parent),
+        "litellm_metadata": proxy_sub_call_metadata(parent_metadata),
+    }
+    assert sub_call["litellm_session_id"] == "s1"
+    assert await pick(switchyard, parent, ("CUDA out of memory",)) == "strong"
+    assert await pick(switchyard, sub_call, ("All tests passed",) * 2) == "fast"
+    assert await pick(switchyard, parent, ("All tests passed",) * 2) == "strong"
+    assert await pick(switchyard, parent, ("All tests passed",) * 3) == "strong"
+    assert await pick(switchyard, parent, ("All tests passed",) * 4) == "fast"
 
 
 @pytest.mark.asyncio

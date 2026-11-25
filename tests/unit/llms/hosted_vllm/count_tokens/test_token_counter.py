@@ -1,8 +1,12 @@
+import json
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 import httpx
 import pytest
 import respx
+from pydantic import JsonValue
 
 import litellm
 from litellm.llms.hosted_vllm.count_tokens.token_counter import HostedVLLMTokenCounter
@@ -17,6 +21,7 @@ async def _async_count(
     monkeypatch: pytest.MonkeyPatch,
     response: httpx.Response,
     api_key: object = None,
+    count_options: Mapping[str, JsonValue] = MappingProxyType({}),
 ) -> tuple[TokenCountResponse | None, respx.Route]:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm_params: Final[dict[str, object]] = {"api_base": API_BASE}
@@ -30,6 +35,7 @@ async def _async_count(
             contents=None,
             deployment={"litellm_params": litellm_params},
             request_model="vllm-counted",
+            count_options=count_options,
         )
         return result, route
 
@@ -66,6 +72,15 @@ async def test_keeps_the_backend_payload_and_model_fields(monkeypatch: pytest.Mo
     assert result.request_model == "vllm-counted"
     assert result.model_used == "Qwen/Qwen3-0.6B"
     assert result.original_response == payload
+
+
+@pytest.mark.asyncio
+async def test_forwards_the_options_generation_would_send(monkeypatch: pytest.MonkeyPatch) -> None:
+    options: Final = {"thinking": {"type": "enabled", "budget_tokens": 1024}, "tool_choice": {"type": "none"}}
+    _, route = await _async_count(monkeypatch, httpx.Response(200, json={"input_tokens": 3}), count_options=options)
+
+    sent: Final = json.loads(route.calls[0].request.content)
+    assert {name: sent.get(name) for name in options} == options
 
 
 @pytest.mark.asyncio

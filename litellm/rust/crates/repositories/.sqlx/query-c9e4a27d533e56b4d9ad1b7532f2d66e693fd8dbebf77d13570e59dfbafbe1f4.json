@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT jwt_issuer,\n       jwt_claim_name,\n       jwt_claim_value\nFROM \"LiteLLM_JWTKeyMapping\"\nWHERE token = ANY($1)\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "jwt_issuer",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_JWTKeyMapping\"",
+            "name": "jwt_issuer"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "jwt_claim_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_JWTKeyMapping\"",
+            "name": "jwt_claim_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "jwt_claim_value",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_JWTKeyMapping\"",
+            "name": "jwt_claim_value"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c9e4a27d533e56b4d9ad1b7532f2d66e693fd8dbebf77d13570e59dfbafbe1f4"
+}

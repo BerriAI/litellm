@@ -1,8 +1,10 @@
 import json
+import re
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from itertools import chain
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -19,7 +21,7 @@ from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call, make_sync_call
-from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
+from litellm.llms.anthropic.common_utils import AnthropicError, anthropic_server_tool_call_params
 from litellm.llms.base_llm.base_utils import response_format_schema, unwrap_response_format_envelope
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
@@ -33,8 +35,14 @@ from tests.unit.llms.anthropic.anthropic_docs_refusal import ANTHROPIC_DOCS_REFU
 
 def _text_delta_stream(text: str) -> bytes:
     events: Final = (
-        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
-        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}),
+        (
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+        ),
     )
     return "".join(
         f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n" for name, payload in events
@@ -138,6 +146,285 @@ def test_anthropic_completion_does_not_send_deployment_default_limits():
     request_body = json.loads(captured_requests[0].content)
     assert "default_api_key_rpm_limit" not in request_body
     assert "default_api_key_tpm_limit" not in request_body
+
+
+def test_anthropic_completion_sends_extra_body_fields_top_level_and_drops_guarded_keys_under_drop_params() -> None:
+    captured_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_extra_body",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            max_tokens=16,
+            drop_params=True,
+            extra_body={
+                "stop_sequences": ["5"],
+                "model": "claude-opus-5-5",
+                "messages": [{"role": "user", "content": "unchecked"}],
+                "system": "unchecked",
+                "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
+                "stream": True,
+            },
+        )
+    finally:
+        client.close()
+
+    request_body: Final = json.loads(captured_requests[0].content)
+    assert request_body == {
+        "model": "claude-sonnet-5-5",
+        "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        "max_tokens": 16,
+        "stop_sequences": ["5"],
+    }, request_body
+
+
+@pytest.mark.parametrize(
+    ("max_tokens", "extra_body_max_tokens", "drop_params", "sent_max_tokens"),
+    [(16, 4096, True, 16), (16, 5, False, 5), (None, 5, False, 5)],
+)
+def test_anthropic_completion_lets_extra_body_lower_max_tokens_and_caps_a_raise_under_drop_params(
+    max_tokens: int | None,
+    extra_body_max_tokens: int,
+    drop_params: bool,
+    sent_max_tokens: int,
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_max_tokens",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+
+    litellm.completion(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_key="test-key",
+        max_tokens=max_tokens,
+        drop_params=drop_params,
+        extra_body={"max_tokens": extra_body_max_tokens},
+    )
+
+    assert json.loads(route.calls.last.request.content)["max_tokens"] == sent_max_tokens
+
+
+def test_anthropic_completion_answers_400_when_extra_body_raises_max_tokens_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=httpx.Response(500))
+
+    with pytest.raises(
+        litellm.BadRequestError, match=re.escape("extra_body can't raise max_tokens above the request's max_tokens (16)")
+    ):
+        litellm.completion(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            max_tokens=16,
+            extra_body={"max_tokens": 4096},
+        )
+
+    assert not route.called
+
+
+def test_anthropic_completion_answers_400_for_guarded_extra_body_keys_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(return_value=httpx.Response(500))
+
+    with pytest.raises(litellm.BadRequestError, match="extra_body can't set messages, model, stream, system, tools"):
+        litellm.completion(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            max_tokens=16,
+            extra_body={
+                "model": "claude-opus-5-5",
+                "messages": [{"role": "user", "content": "unchecked"}],
+                "system": "unchecked",
+                "tools": [{"name": "unchecked", "input_schema": {"type": "object"}}],
+                "stream": True,
+                "stop_sequences": ["5"],
+            },
+        )
+
+    assert not route.called
+
+
+def _anthropic_beta_header_sent(
+    respx_mock: respx.MockRouter, request_fields: Mapping[str, object]
+) -> tuple[str, Mapping[str, object]]:
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_beta",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+    )
+    litellm.completion(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_key="test-key",
+        max_tokens=16,
+        **request_fields,
+    )
+    sent: Final = route.calls.last.request
+    return sent.headers.get("anthropic-beta", ""), json.loads(sent.content)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("context_management", {"edits": [{"type": "clear_tool_uses_20250919"}]}),
+        ("mcp_servers", [{"type": "url", "url": "https://mcp.example.com/sse", "name": "example"}]),
+        ("container", {"skills": [{"type": "anthropic", "skill_id": "pptx", "version": "latest"}]}),
+    ],
+)
+def test_anthropic_completion_adds_the_same_beta_header_for_a_field_in_extra_body(
+    field: str, value: object, respx_mock: respx.MockRouter
+) -> None:
+    plain_beta, _ = _anthropic_beta_header_sent(respx_mock, {})
+    top_level_beta, top_level_body = _anthropic_beta_header_sent(respx_mock, {field: value})
+    extra_body_beta, extra_body_body = _anthropic_beta_header_sent(respx_mock, {"extra_body": {field: value}})
+
+    assert set(top_level_beta.split(",")) - set(plain_beta.split(","))
+    assert extra_body_beta == top_level_beta
+    assert extra_body_body[field] == top_level_body[field]
+
+
+def test_anthropic_completion_sends_the_extra_body_output_config_over_the_mapped_reasoning_effort(
+    respx_mock: respx.MockRouter,
+) -> None:
+    _, sent_body = _anthropic_beta_header_sent(
+        respx_mock, {"reasoning_effort": "low", "extra_body": {"output_config": {"effort": "high"}}}
+    )
+
+    assert sent_body["output_config"] == {"effort": "high"}
+
+
+def test_anthropic_completion_rejects_a_non_object_extra_body_before_calling_anthropic() -> None:
+    captured_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(500)
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        with pytest.raises(litellm.BadRequestError, match="Invalid type for 'extra_body': expected an object, got str"):
+            litellm.completion(
+                model="anthropic/claude-sonnet-5-5",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="test-key",
+                client=client,
+                max_tokens=16,
+                extra_body='{"top_k": 5}',
+            )
+    finally:
+        client.close()
+
+    assert captured_requests == []
+
+
+def _anthropic_request_with_fallbacks(extra_headers: dict[str, str] | None, drop_params: bool) -> httpx.Request:
+    captured_requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_fallbacks",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [{"type": "text", "text": "Hello"}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond)))
+    try:
+        litellm.completion(
+            model="anthropic/claude-sonnet-5-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            api_key="test-key",
+            client=client,
+            max_tokens=16,
+            extra_body={"fallbacks": [{"model": "claude-opus-5-5"}]},
+            extra_headers=extra_headers,
+            drop_params=drop_params,
+        )
+    finally:
+        client.close()
+    return captured_requests[0]
+
+
+@pytest.mark.parametrize(
+    ("fallback_beta", "drop_params", "fallbacks_kept"),
+    [
+        ("server-side-fallback-2026-07-01", True, True),
+        ("server-side-fallback-2026-06-01", True, True),
+        (None, False, True),
+        (None, True, False),
+    ],
+)
+def test_anthropic_chat_drops_fallbacks_under_drop_params_only_when_the_request_lacks_a_fallback_beta(
+    fallback_beta: str | None,
+    drop_params: bool,
+    fallbacks_kept: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both betas unlock ``fallbacks`` per https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback
+    (fetched 2026-11-03)"""
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "true")
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _anthropic_request_with_fallbacks(
+        None if fallback_beta is None else {"anthropic-beta": fallback_beta}, drop_params
+    )
+    sent_betas: Final = request.headers.get("anthropic-beta", "").split(",")
+    assert json.loads(request.content).get("fallbacks") == ([{"model": "claude-opus-5-5"}] if fallbacks_kept else None)
+    assert fallback_beta is None or fallback_beta in sent_betas
 
 
 def test_anthropic_tool_history_without_tools_injects_a_dummy_tool(
@@ -460,7 +747,9 @@ def test_anthropic_sync_completion_sends_a_link_that_serves_a_pdf_as_a_url_docum
     def serve(client: object, url: str, **kwargs: object) -> httpx.Response:
         if url == pdf_link:
             return _served_pdf_slice(url)
-        return httpx.Response(200, content=b"\x89PNG", headers={"content-type": "image/png"}, request=httpx.Request("GET", url))
+        return httpx.Response(
+            200, content=b"\x89PNG", headers={"content-type": "image/png"}, request=httpx.Request("GET", url)
+        )
 
     monkeypatch.setattr(image_handling, "safe_get", serve)
     client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_anthropic_reply(captured))))
@@ -1186,6 +1475,73 @@ async def test_anthropic_stream_options_return_usage_after_the_finish_chunk(
     assert usage_chunk.usage.cache_read_input_tokens == 12
     assert usage_chunk.usage.cache_creation_input_tokens == 4
     assert json.loads(route.calls[0].request.content)["stream"] is True
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "non_object_frame",
+    [
+        "data: 5\n\n",
+        "event: ping\ndata: null\n\n",
+        "data: [1]\n\n",
+        "data: " + '{"a": ' * 100_000 + "1" + "}" * 100_000 + "\n\n",
+        'event: ping\ndata: {"type": "ping", "n": ' + "9" * 5000 + "}\n\n",
+        "data: " + "9" * 5000 + "\n\n",
+    ],
+    ids=["number", "null", "array", "deep-object", "huge-number-in-object", "huge-number"],
+)
+@pytest.mark.parametrize("split_block_start", [False, True], ids=["whole-frames", "after-a-split-frame"])
+async def test_anthropic_chat_stream_skips_a_data_line_it_cannot_read_as_an_object(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    sync_mode: bool,
+    non_object_frame: str,
+    split_block_start: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_non_object",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [],
+                "usage": {"input_tokens": 3, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Blue sky."}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 2}},
+        {"type": "message_stop"},
+    )
+    frames: Final = tuple(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+    block_start: Final = (
+        'event: content_block_start\ndata: {"type": "content_block_start", "index": 0,\n'
+        'data: "content_block": {"type": "text", "text": ""}}\n\n'
+        if split_block_start
+        else frames[1]
+    )
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            text="".join((frames[0], block_start, non_object_frame, *frames[2:])),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    chunks: Final = await _collect_anthropic_stream(
+        sync_mode,
+        model="anthropic/claude-sonnet-5-5",
+        api_key="test-key",
+        messages=[{"role": "user", "content": "Describe the weather"}],
+        stream=True,
+    )
+
+    assert _streamed_text(list(chunks)) == "Blue sky."
+    assert chunks[-1].choices[0].finish_reason == "stop"
 
 
 _SNOOZE_TOOL: Final = {
@@ -3210,6 +3566,81 @@ def _streamed_json_mode_contents(
     return tuple(chunk.choices[0].delta.content or "" for chunk in chunks)
 
 
+def _schemaless_streamed_json_mode_contents(fragments: tuple[str, ...]) -> str:
+    iterator: Final = ModelResponseIterator(streaming_response=iter(()), sync_stream=True, json_mode=True)
+    chunks: Final = tuple(iterator.chunk_parser(event) for event in _json_tool_events(fragments))
+    assert all(chunk.choices[0].delta.tool_calls is None for chunk in chunks)
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    return "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+@pytest.mark.parametrize(
+    "fragments",
+    [
+        ('{"summary":"', "48420083852775e76508", '"}'),
+        ('{"summary":"', "1e5", '"}'),
+        ('{"outer":', '{"values": [3, 5]}', "}"),
+    ],
+)
+def test_streamed_json_mode_without_schema_preserves_argument_fragments(fragments: tuple[str, ...]) -> None:
+    assert _schemaless_streamed_json_mode_contents(fragments) == "".join(fragments)
+
+
+_DIGITS_PAST_THE_INT_LIMIT: Final = "1" * (sys.get_int_max_str_digits() + 1)
+
+
+@pytest.mark.parametrize(
+    ("fragments", "expected"),
+    [
+        (('{"values": [3, 5]}',), "[3, 5]"),
+        ((" ", '{"values": [3, 5]}', " "), " [3, 5] "),
+        (('{"count": 1e400}',), '{"count": 1e400}'),
+        (('{"values": [1e400]}',), "[1e400]"),
+        pytest.param(
+            ('{"values": [' + _DIGITS_PAST_THE_INT_LIMIT + "]}",),
+            "[" + _DIGITS_PAST_THE_INT_LIMIT + "]",
+            id="values-int-over-digit-limit",
+        ),
+        pytest.param(
+            ('{"n": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",),
+            '{"n": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="int-over-digit-limit",
+        ),
+        (('{"n": 1e5}',), '{"n": 1e5}'),
+        (('{"values": false}',), "false"),
+        (('{"values": null}',), '{"values": null}'),
+        (("[1, 2]",), "[1, 2]"),
+        (('"x"',), '"x"'),
+        (("5",), "5"),
+        pytest.param(
+            ('{"values": ' + "[" * 300 + "]" * 300 + "}",),
+            "[" * 300 + "]" * 300,
+            id="values-nested-300-levels",
+        ),
+        pytest.param(
+            ('{"values": ' + "[" * 100000 + "]" * 100000 + "}",),
+            '{"values": ' + "[" * 100000 + "]" * 100000 + "}",
+            id="nesting-over-recursion-limit",
+        ),
+    ],
+)
+def test_streamed_json_mode_without_schema_unwraps_values_only_from_a_one_piece_input(
+    fragments: tuple[str, ...], expected: str
+) -> None:
+    assert _schemaless_streamed_json_mode_contents(fragments) == expected
+
+
+def test_streamed_json_mode_without_schema_unwraps_each_json_tool_blocks_one_piece_input() -> None:
+    json_tool_block: Final = {"type": "tool_use", "id": "toolu_1", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {}}
+    events: Final = _message_events(
+        (json_tool_block, ({"type": "input_json_delta", "partial_json": '{"values": [1]}'},)),
+        ({**json_tool_block, "id": "toolu_2"}, ({"type": "input_json_delta", "partial_json": '{"values": [2]}'},)),
+    )
+    iterator: Final = ModelResponseIterator(streaming_response=iter(()), sync_stream=True, json_mode=True)
+    chunks: Final = tuple(iterator.chunk_parser(event) for event in events)
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "[1][2]"
+
+
 def test_streamed_json_mode_envelope_is_unwrapped_when_the_block_ends():
     envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_RISK_OBJECT})
     fragments = (envelope[:9], envelope[9:40], envelope[40:])
@@ -3532,6 +3963,36 @@ def test_streamed_json_mode_held_answer_without_an_envelope_keeps_the_model_text
     assert contents[:-2] == ("",) * (len(contents) - 2)
 
 
+@pytest.mark.parametrize(
+    ("answer", "expected"),
+    [
+        pytest.param(
+            '{"name":"json_tool_call","parameters":{"tier":1e400,"summary":"x"}}',
+            '{"tier": 1e400, "summary": "x"}',
+            id="number_past_a_float",
+        ),
+        pytest.param(
+            '{"name":"json_tool_call","parameters":{"tier":-' + _DIGITS_PAST_THE_INT_LIMIT + ',"summary":"x"}}',
+            '{"tier": -' + _DIGITS_PAST_THE_INT_LIMIT + ', "summary": "x"}',
+            id="negative_integer_past_the_digit_limit",
+        ),
+        pytest.param('{"values":[1e400, 2.5]}', "[1e400, 2.5]", id="values_number_past_a_float"),
+        pytest.param(
+            '{"name":"json_tool_call","parameters":{"tier":1e-400,"summary":"x"}}',
+            '{"tier": 1e-400, "summary": "x"}',
+            id="number_below_a_float",
+        ),
+        pytest.param(
+            '{"values":[1e400, 1e-400, 0.0e5]}', "[1e400, 1e-400, 0.0]", id="values_numbers_past_a_float_both_ways"
+        ),
+    ],
+)
+def test_streamed_json_mode_held_answer_keeps_out_of_range_numbers_as_the_model_wrote_them(answer: str, expected: str):
+    contents = _streamed_json_mode_contents((answer[:9], answer[9:30], answer[30:]))
+
+    assert "".join(contents) == expected
+
+
 def test_envelope_verdict_holds_a_prefix_that_stays_undecided_past_the_limit():
     schema = response_format_schema(_STREAMED_RISK_SCHEMA)
     assert schema is not None
@@ -3731,6 +4192,41 @@ def test_streamed_json_mode_answer_split_into_one_partial_object_per_field_arriv
 
     assert json.loads("".join(contents)) == answer
     assert contents[3] == blocks[0][:-1]
+
+
+@pytest.mark.parametrize(
+    ("blocks", "expected"),
+    [
+        pytest.param(
+            ('{"tier": 1e400}', '{"summary": "x"}'), '{"tier": 1e400, "summary": "x"}', id="number_past_a_float_first"
+        ),
+        pytest.param(
+            ('{"summary": "x"}', '{"tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}"),
+            '{"summary": "x", "tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="integer_past_the_digit_limit_last",
+        ),
+        pytest.param(
+            (
+                '{"$PARAMETER_NAME": "tier", "$PARAMETER_VALUE": 1e400}',
+                '{"$PARAMETER_NAME": "summary", "$PARAMETER_VALUE": "x"}',
+            ),
+            '{"tier": 1e400, "summary": "x"}',
+            id="named_field_number_past_a_float_first",
+        ),
+        pytest.param(
+            (
+                ' {"$PARAMETER_NAME":"summary","$PARAMETER_VALUE":"Jos\u00e9"} ',
+                '{"$PARAMETER_NAME":"tier","$PARAMETER_VALUE":' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            ),
+            '{"summary": "Jos\u00e9", "tier": ' + _DIGITS_PAST_THE_INT_LIMIT + "}",
+            id="compact_named_field_integer_past_the_digit_limit_last",
+        ),
+    ],
+)
+def test_streamed_json_mode_split_fields_keep_out_of_range_numbers_as_the_model_wrote_them(
+    blocks: tuple[str, ...], expected: str
+):
+    assert "".join(_streamed_json_tool_blocks(blocks)) == expected
 
 
 @pytest.mark.parametrize(
@@ -4280,3 +4776,91 @@ def test_anthropic_chat_completion_picks_the_beta_row_by_api_base(
         client.close()
 
     assert frozenset(",".join(upstream.anthropic_beta).split(",")) == forwarded_betas
+
+
+_ANTHROPIC_WIRE_REJECTION: Final = (
+    b'{"type":"error","error":{"type":"invalid_request_error","message":"wire says no"},"request_id":"req_wire"}'
+)
+_ANTHROPIC_WIRE_SECRET: Final = "sk-ant-wire-secret-value"
+
+
+class _UnreadAnthropicBody(httpx.SyncByteStream, httpx.AsyncByteStream):
+    def __iter__(self):
+        yield _ANTHROPIC_WIRE_REJECTION
+
+    async def __aiter__(self):
+        yield _ANTHROPIC_WIRE_REJECTION
+
+
+def _anthropic_rejection(stream: bool) -> httpx.MockTransport:
+    return httpx.MockTransport(
+        lambda _request: (
+            httpx.Response(400, stream=_UnreadAnthropicBody())
+            if stream
+            else httpx.Response(400, content=_ANTHROPIC_WIRE_REJECTION)
+        )
+    )
+
+
+def _assert_exposes_anthropic_rejection(error: litellm.BadRequestError) -> None:
+    assert error.response.status_code == 400
+    assert error.response.text == _ANTHROPIC_WIRE_REJECTION.decode()
+    assert error.response.json() == json.loads(_ANTHROPIC_WIRE_REJECTION)
+    assert "x-api-key" not in error.response.request.headers
+    assert _ANTHROPIC_WIRE_SECRET not in repr(error.response.request.headers.raw)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_completion_error_exposes_the_anthropic_reply(stream: bool):
+    client: Final = HTTPHandler()
+    client.client = httpx.Client(transport=_anthropic_rejection(stream))
+
+    with pytest.raises(litellm.BadRequestError) as caught:
+        litellm.completion(
+            model="anthropic/claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key=_ANTHROPIC_WIRE_SECRET,
+            stream=stream,
+            client=client,
+        )
+
+    _assert_exposes_anthropic_rejection(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_acompletion_error_exposes_the_anthropic_reply(stream: bool):
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=_anthropic_rejection(stream))
+
+    with pytest.raises(litellm.BadRequestError) as caught:
+        await litellm.acompletion(
+            model="anthropic/claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key=_ANTHROPIC_WIRE_SECRET,
+            stream=stream,
+            client=client,
+        )
+
+    _assert_exposes_anthropic_rejection(caught.value)
+
+
+def test_make_sync_call_exposes_a_rejection_the_client_returned_without_raising():
+    request: Final = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    client: Final = MagicMock()
+    client.post.return_value = httpx.Response(400, content=_ANTHROPIC_WIRE_REJECTION, request=request)
+
+    with pytest.raises(AnthropicError) as caught:
+        make_sync_call(
+            client=client,
+            api_base="https://api.anthropic.com/v1/messages",
+            headers={},
+            data="{}",
+            model="claude-sonnet-4-5",
+            messages=[],
+            logging_obj=MagicMock(),
+            timeout=None,
+            json_mode=False,
+        )
+
+    assert caught.value.response.json() == json.loads(_ANTHROPIC_WIRE_REJECTION)

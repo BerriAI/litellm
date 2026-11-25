@@ -78,6 +78,7 @@ class HostedVLLMTokenCounter(BaseTokenCounter):
         output_format: JsonValue = None,
         context_management: CountContextManagement | None = None,
         chat_params: Mapping[str, JsonValue] = MappingProxyType({}),
+        count_options: Mapping[str, JsonValue] = MappingProxyType({}),
     ) -> TokenCountResponse | None:
         if not messages:
             return None
@@ -96,7 +97,7 @@ class HostedVLLMTokenCounter(BaseTokenCounter):
                 messages=tuple(messages),
                 system=system,
                 tools=None if tools is None else tuple(tools),
-                options=MappingProxyType({}),
+                options=count_options,
             )
         )
 

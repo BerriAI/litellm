@@ -237,3 +237,28 @@ async def test_deepinfra_request_stringifies_tool_content_without_touching_the_c
 
     assert body["messages"][2]["content"] == "20"
     assert messages == messages_before
+
+
+@pytest.mark.parametrize(
+    "model",
+    (
+        "deepseek-ai/DeepSeek-V4-Pro",
+        "deepseek-ai/DeepSeek-V4-Pro-0813",
+        "moonshotai/Kimi-K3",
+    ),
+)
+def test_deepinfra_reasoning_models_support_and_forward_reasoning_effort(
+    model: str, local_model_cost_map: None
+) -> None:
+    from litellm.llms.deepinfra.chat.transformation import DeepInfraConfig
+
+    config: Final = DeepInfraConfig()
+    assert litellm.supports_reasoning(model=model, custom_llm_provider="deepinfra") is True
+    assert "reasoning_effort" in config.get_supported_openai_params(model=model)
+    mapped: Final = config.map_openai_params(
+        non_default_params={"reasoning_effort": "low"},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert mapped == {"reasoning_effort": "low"}

@@ -15,6 +15,7 @@ from litellm.llms.vertex_ai.common_utils import (
     pop_vertex_request_labels,
 )
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
+from litellm.llms.vertex_ai.request_labels import caller_labels_header_names
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -57,13 +58,13 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
-        mapped_params: Final = {}
+        mapped_params: Final[dict[str, object]] = {}
 
         for k, v in non_default_params.items():
             if k not in optional_params:
@@ -113,8 +114,8 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -144,14 +145,14 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         headers = headers or {}
 
         # If a custom api_base is provided, skip credential validation
@@ -175,15 +176,17 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, str],
+    ) -> dict[str, object]:
         """
         Transform the image generation request to Imagen format
 
         Uses predict API with instances and parameters
         """
+        for name in caller_labels_header_names(headers):
+            del headers[name]  # rebind-ok: the handler posts this dict, so a caller-set labels header must go
         # Default parameters
         default_params: Final = {
             "sampleCount": 1,
@@ -193,7 +196,7 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         # Merge with optional params (after popping labels so they are not sent as Imagen parameters)
         parameters: Final = {**default_params, **optional_params}
 
-        request_body: Final[dict] = {
+        request_body: Final[dict[str, object]] = {
             "instances": [{"prompt": prompt}],
             "parameters": parameters,
         }
@@ -208,9 +211,9 @@ class VertexAIImagenImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

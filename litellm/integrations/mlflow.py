@@ -1,16 +1,12 @@
 import json
 import threading
-from collections.abc import Sequence
-from typing import TYPE_CHECKING, Any, Final, Protocol
+from collections.abc import Mapping, Sequence
+from datetime import datetime
+from typing import Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import attribute_or_none, iter_items, require_attributes
-
-if TYPE_CHECKING:
-    from litellm.types.utils import StandardLoggingPayload
-else:
-    StandardLoggingPayload = Any
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, iter_items, require_attributes, require_get
 
 
 class _ChoiceWithMessage(Protocol):
@@ -32,22 +28,91 @@ def _output_messages(response_obj: object) -> Sequence[object]:
     return [_dumped_choice_message(c) for c in iter_items(choices)]
 
 
+class _HasChoices(Protocol):
+    @property
+    def choices(self) -> object: ...
+
+
+class _ChoiceWithDelta(Protocol):
+    @property
+    def delta(self) -> object: ...
+
+
+class _HasModelDump(Protocol):
+    @property
+    def model_dump(self) -> object: ...
+
+
+class _Poppable(Protocol):
+    def pop(self, key: str, default: None, /) -> object: ...
+
+
+class _MlflowSpan(Protocol):
+    @property
+    def parent_id(self) -> object: ...
+
+    @property
+    def request_id(self) -> object: ...
+
+    @property
+    def span_id(self) -> object: ...
+
+    def add_event(self, event: object, /) -> object: ...
+
+
+class _MlflowClient(Protocol):
+    def start_span(
+        self,
+        *,
+        name: str,
+        trace_id: object,
+        parent_id: object,
+        span_type: str,
+        inputs: object,
+        attributes: object,
+        start_time_ns: int,
+    ) -> _MlflowSpan: ...
+
+    def start_trace(
+        self,
+        *,
+        name: str,
+        span_type: str,
+        inputs: object,
+        attributes: object,
+        tags: object,
+        start_time_ns: int,
+    ) -> _MlflowSpan: ...
+
+    def end_trace(self, request_id: object, /, *, outputs: object, status: object, end_time_ns: int) -> object: ...
+
+    def end_span(
+        self, request_id: object, span_id: object, /, *, outputs: object, status: object, end_time_ns: int
+    ) -> object: ...
+
+
 class MlflowLogger(CustomLogger):
-    def __init__(self):
+    def __init__(self) -> None:
         from mlflow.tracking import MlflowClient
 
-        self._client = MlflowClient()
+        self._client: _MlflowClient = MlflowClient()
 
-        self._stream_id_to_span = {}
+        self._stream_id_to_span: dict[object, _MlflowSpan] = {}
         self._lock = threading.Lock()  # lock for _stream_id_to_span
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         self._handle_success(kwargs, response_obj, start_time, end_time)
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         self._handle_success(kwargs, response_obj, start_time, end_time)
 
-    def _handle_success(self, kwargs, response_obj, start_time, end_time):
+    def _handle_success(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         """
         Log the success event as an MLflow span.
         Note that this method is called asynchronously in the background thread.
@@ -72,7 +137,9 @@ class MlflowLogger(CustomLogger):
         except Exception:
             verbose_logger.debug("MLflow Logging Error", stack_info=True)
 
-    def _extract_and_set_chat_attributes(self, span, kwargs, response_obj):
+    def _extract_and_set_chat_attributes(
+        self, span: _MlflowSpan, kwargs: Mapping[str, object], response_obj: object
+    ) -> None:
         try:
             from mlflow.tracing.utils import (
                 set_span_chat_messages,
@@ -84,18 +151,24 @@ class MlflowLogger(CustomLogger):
         inputs: Final = self._construct_input(kwargs)
         input_messages: Final = inputs.get("messages", [])
         output_messages: Final = _output_messages(response_obj)
-        if messages := [*input_messages, *output_messages]:
+        if messages := [*iter_items(input_messages), *output_messages]:
             set_span_chat_messages(span, messages)
         if tools := inputs.get("tools"):
             set_span_chat_tools(span, tools)
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         self._handle_failure(kwargs, response_obj, start_time, end_time)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         self._handle_failure(kwargs, response_obj, start_time, end_time)
 
-    def _handle_failure(self, kwargs, response_obj, start_time, end_time):
+    def _handle_failure(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         """
         Log the failure event as an MLflow span.
         Note that this method is called *synchronously* unlike the success handler.
@@ -122,7 +195,9 @@ class MlflowLogger(CustomLogger):
         except Exception as e:
             verbose_logger.debug("MLflow Logging Error - %s", e, stack_info=True)
 
-    def _handle_stream_event(self, kwargs, response_obj, start_time, end_time):
+    def _handle_stream_event(
+        self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
         """
         Handle the success event for a streaming response. For streaming calls,
         log_success_event handle is triggered for every chunk of the stream.
@@ -166,28 +241,30 @@ class MlflowLogger(CustomLogger):
                 with self._lock:
                     self._stream_id_to_span.pop(litellm_call_id, None)
 
-    def _add_chunk_events(self, span, response_obj):
+    def _add_chunk_events(self, span: _MlflowSpan, response_obj: object) -> None:
         from mlflow.entities import SpanEvent
 
         try:
-            for choice in response_obj.choices:
+            for choice in iter_items(require_attributes(response_obj, _HasChoices, "choices").choices):
+                delta = require_attributes(choice, _ChoiceWithDelta, "delta").delta
+                model_dump = require_attributes(delta, _HasModelDump, "model_dump").model_dump
                 span.add_event(
                     SpanEvent(
                         name="streaming_chunk",
-                        attributes={"delta": json.dumps(choice.delta.model_dump, default=str)},
+                        attributes={"delta": json.dumps(model_dump, default=str)},
                     )
                 )
         except Exception:
             verbose_logger.debug("Error adding chunk events to span", stack_info=True)
 
-    def _construct_input(self, kwargs):
+    def _construct_input(self, kwargs: Mapping[str, object]) -> Mapping[str, object]:
         """Construct span inputs with optional parameters"""
         inputs: Final = {"messages": kwargs.get("messages")}
         if tools := kwargs.get("tools"):
             inputs["tools"] = tools
 
         for key in ["functions", "tools", "stream", "tool_choice", "user"]:
-            if value := kwargs.get("optional_params", {}).pop(key, None):
+            if value := require_attributes(kwargs.get("optional_params", {}), _Poppable, "pop").pop(key, None):
                 inputs[key] = value
 
         if prediction := kwargs.get("prediction"):
@@ -195,7 +272,7 @@ class MlflowLogger(CustomLogger):
 
         return inputs
 
-    def _extract_attributes(self, kwargs):
+    def _extract_attributes(self, kwargs: Mapping[str, object]) -> Mapping[str, object]:
         """
         Extract span attributes from kwargs.
 
@@ -208,25 +285,26 @@ class MlflowLogger(CustomLogger):
             "call_type": kwargs.get("call_type"),
             "model": kwargs.get("model"),
         }
-        standard_obj: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
+        standard_obj: Final = kwargs.get("standard_logging_object")
         if standard_obj:
+            payload: Final = require_get(standard_obj)
             attributes.update(
                 {
-                    "api_base": standard_obj.get("api_base"),
-                    "cache_hit": standard_obj.get("cache_hit"),
+                    "api_base": payload.get("api_base"),
+                    "cache_hit": payload.get("cache_hit"),
                     "mlflow.chat.tokenUsage": {
-                        "input_tokens": standard_obj.get("prompt_tokens"),
-                        "output_tokens": standard_obj.get("completion_tokens"),
-                        "total_tokens": standard_obj.get("total_tokens"),
+                        "input_tokens": payload.get("prompt_tokens"),
+                        "output_tokens": payload.get("completion_tokens"),
+                        "total_tokens": payload.get("total_tokens"),
                     },
-                    "raw_llm_response": standard_obj.get("response"),
-                    "response_cost": standard_obj.get("response_cost"),
-                    "saved_cache_cost": standard_obj.get("saved_cache_cost"),
-                    "request_tags": standard_obj.get("request_tags"),
+                    "raw_llm_response": payload.get("response"),
+                    "response_cost": payload.get("response_cost"),
+                    "saved_cache_cost": payload.get("saved_cache_cost"),
+                    "request_tags": payload.get("request_tags"),
                 }
             )
         else:
-            litellm_params: Final = kwargs.get("litellm_params", {})
+            litellm_params: Final = require_get(kwargs.get("litellm_params", {}))
             attributes.update(
                 {
                     "model": kwargs.get("model"),
@@ -238,7 +316,7 @@ class MlflowLogger(CustomLogger):
             )
         return attributes
 
-    def _get_span_type(self, call_type: str | None) -> str:
+    def _get_span_type(self, call_type: object) -> str:
         from mlflow.entities import SpanType
 
         if call_type in ["completion", "acompletion"]:
@@ -248,7 +326,7 @@ class MlflowLogger(CustomLogger):
         else:
             return SpanType.LLM
 
-    def _start_span_or_trace(self, kwargs, start_time):
+    def _start_span_or_trace(self, kwargs: Mapping[str, object], start_time: datetime) -> _MlflowSpan:
         """
         Start an MLflow span or a trace.
 
@@ -285,7 +363,7 @@ class MlflowLogger(CustomLogger):
                 start_time_ns=start_time_ns,
             )
 
-    def _transform_tag_list_to_dict(self, tag_list: list) -> dict:
+    def _transform_tag_list_to_dict(self, tag_list: list[str]) -> dict[str, str]:
         """
         Transform a list of colon-separated tags into a dictionary.
         Tags without colons are stored with empty string as the value.
@@ -299,7 +377,7 @@ class MlflowLogger(CustomLogger):
                 tags[tag.strip()] = ""
         return tags
 
-    def _end_span_or_trace(self, span, outputs, end_time_ns, status):
+    def _end_span_or_trace(self, span: _MlflowSpan, outputs: object, end_time_ns: int, status: object) -> None:
         """End an MLflow span or a trace."""
         if span.parent_id is None:
             self._client.end_trace(

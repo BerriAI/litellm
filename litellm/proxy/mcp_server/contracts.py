@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from mcp.types import ErrorData, InputRequest, InputResponse, InputResponses
 from pydantic import SecretStr
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.mcp_server.tool_outcome import WireCompat
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
         ListToolsResult | ListPromptsResult | ListResourcesResult | ListResourceTemplatesResult
     )
 
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy.mcp_server.server_resolution import ResolvedMCPServer
 
 
@@ -129,6 +131,11 @@ class ClientInteraction(Protocol):
     async def request(self, key: str, request: InputRequest) -> InputResponse | ErrorData: ...
 
 
+class ToolCallLoggingData(TypedDict, total=False, extra_items=object):
+    requested_server_id: ReadOnly[str | None]
+    litellm_logging_obj: ReadOnly[LiteLLMLoggingObj | None]
+
+
 @dataclass(frozen=True, slots=True)
 class AuthorizedToolCall:
     name: str
@@ -137,7 +144,8 @@ class AuthorizedToolCall:
     start_time: datetime
     host_progress_callback: ProgressCallback | None
     guardrail_context: Mapping[str, object] | None
-    logging_data: Mapping[str, object]
+    logging_data: ToolCallLoggingData
     guardrail_auth: UserAPIKeyAuth | None = None
     input_responses: InputResponses | None = None
     request_state: str | None = None
+    flatten_url_elicitation: bool = False
