@@ -51,7 +51,7 @@ _PARTIAL_ARG_VALUE_FIELDS: Final = (
     ("boolValue", "bool_value"),
     ("nullValue", "null_value"),
 )
-_NON_STRING_VALUE_FIELDS: Final = tuple(chain.from_iterable(_PARTIAL_ARG_VALUE_FIELDS[1:]))
+_PARTIAL_ARG_VALUE_NAMES: Final = tuple(chain.from_iterable(_PARTIAL_ARG_VALUE_FIELDS))
 
 
 def _as_dict(value: object) -> Mapping[object, object] | None:
@@ -236,7 +236,7 @@ def _string_value_field(partial_arg: object) -> str:
 
 def _write_partial_text(partial_arg: object, text: str) -> None:
     string_field: Final = _string_value_field(partial_arg)
-    for name in _NON_STRING_VALUE_FIELDS:
+    for name in _PARTIAL_ARG_VALUE_NAMES:
         _clear_field(partial_arg, name)
     _set_field(partial_arg, string_field, text)
 

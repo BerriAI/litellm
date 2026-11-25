@@ -552,9 +552,14 @@ async def test_masked_partial_function_call_args_in_the_request_are_written_back
             ],
             id="snake-case-split",
         ),
+        pytest.param(
+            [{"json_path": "$.card", "stringValue": "4111"}],
+            [{"json_path": "$.card", "string_value": "[CARD]"}],
+            id="mixed-case-string",
+        ),
     ],
 )
-async def test_masked_number_in_partial_function_call_args_is_written_back_as_a_string(
+async def test_masked_partial_function_call_arg_is_written_back_as_the_only_value(
     partial_args: list[dict[str, object]], masked_partial_args: list[dict[str, object]]
 ) -> None:
     data: Final = {
