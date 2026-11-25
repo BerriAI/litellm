@@ -20,7 +20,6 @@ import sys
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
-from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast, runtime_checkable
 from urllib.parse import quote, unquote
@@ -549,25 +548,8 @@ class _ProviderFileListGuard(Protocol):
 
 
 _GEMINI_FILE_LIST_PATH: Final = re.compile(r"(?:^|/)files/?$")
-_PROMPT_TEXT_KEY: Final = "text"
-
 
 _JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
-
-
-def _nested_json_values(value: JsonValue) -> tuple[JsonValue, ...]:
-    if isinstance(value, dict):
-        return tuple(item for key, item in value.items() if key != _PROMPT_TEXT_KEY)
-    return tuple(value) if isinstance(value, list) else ()
-
-
-def _next_json_layer(layer: tuple[JsonValue, ...], _: None) -> tuple[JsonValue, ...]:
-    return tuple(chain.from_iterable(map(_nested_json_values, layer)))
-
-
-def _iter_gemini_file_references(body: JsonValue) -> Iterator[str]:
-    layers: Final = takewhile(bool, accumulate(repeat(None), _next_json_layer, initial=(body,)))
-    return (value for value in chain.from_iterable(layers) if isinstance(value, str) and "files/" in unquote(value))
 
 
 def _decoded_json(raw: bytes) -> JsonValue:
@@ -575,38 +557,6 @@ def _decoded_json(raw: bytes) -> JsonValue:
         return _JSON_VALUE.validate_json(raw)
     except ValidationError:
         return None
-
-
-def _is_json_too_deep_to_inspect(raw: bytes) -> bool:
-    """The forwarding path reads the body with the standard library, which accepts deeper nesting than Pydantic"""
-    try:
-        json.loads(raw)
-    except RecursionError:
-        return True
-    except ValueError:
-        return False
-    return True
-
-
-async def _enforce_gemini_passthrough_body_file_ownership(
-    request: Request, guard: _ProviderFileListGuard, user_api_key_dict: UserAPIKeyAuth
-) -> None:
-    raw: Final = await request.body()
-    try:
-        body: Final = _JSON_VALUE.validate_json(raw)
-    except ValidationError:
-        if _is_json_too_deep_to_inspect(raw):
-            raise HTTPException(
-                status_code=400, detail="The request body is nested too deeply to check its file references"
-            ) from None
-        return
-    references: Final = tuple(dict.fromkeys(_iter_gemini_file_references(body)))
-    denied: Final = await guard.provider_file_ids_denied_to(references, user_api_key_dict) if references else ()
-    if denied:
-        raise HTTPException(
-            status_code=403,
-            detail=f"User {user_api_key_dict.user_id} does not have access to the file {denied[0]}",
-        )
 
 
 def _listed_file_ids(listed: JsonValue) -> tuple[str, ...]:
@@ -681,8 +631,6 @@ async def _enforce_gemini_passthrough_file_ownership(
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-    if isinstance(hook, _ProviderFileListGuard):
-        await _enforce_gemini_passthrough_body_file_ownership(request, hook, user_api_key_dict)
     decoded_path: Final = _fully_decoded_path(path)
     is_single_file_method: Final = _is_gemini_get_or_delete(request.method, request.headers)
     if decoded_path is None:
