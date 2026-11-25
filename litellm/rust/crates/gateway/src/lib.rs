@@ -43,6 +43,7 @@ use litellm_http::{
 };
 use litellm_model_catalog::{BUNDLED_REGISTRY, Catalog};
 use litellm_redis_store::{Remote, active_teams::ActiveTeams};
+use litellm_router_core::registry::DeploymentFilter;
 use litellm_secrets::{OidcResolver, SecretManagerState, SecretResolver};
 
 /// The config at `path`, its `os.environ/` references read from the process environment.
@@ -90,6 +91,8 @@ pub async fn build_inference(
 ) -> Result<Inference, Error> {
     let catalog = Catalog::parse(BUNDLED_REGISTRY)?.value;
     let (router, shaping) = boot::router(config, &catalog).await?;
+    let deployments = router.registry().deployments(&DeploymentFilter::default());
+    let windows = host::ContextWindows::read(&catalog, &deployments).await;
     let limits = parallel_request_limiter::Settings::read(config, environment);
     let counters = parallel_request_limiter::counters(redis.coordination.clone());
     let key_limiter = KeyLimiter::new(limits, counters.clone(), router.clone());
@@ -115,7 +118,7 @@ pub async fn build_inference(
         router,
         shaping,
         routing,
-        host::NativeHost::new(Arc::new(callbacks)),
+        host::NativeHost::new(Arc::new(callbacks), Arc::new(windows)),
     )?;
     Ok(Inference {
         gateway: Arc::new(gateway),
@@ -125,8 +128,18 @@ pub async fn build_inference(
 
 pub fn install_crypto_provider() {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = process_crypto_provider().install_default();
     }
+}
+
+#[cfg(feature = "fips")]
+fn process_crypto_provider() -> rustls::crypto::CryptoProvider {
+    rustls::crypto::default_fips_provider()
+}
+
+#[cfg(not(feature = "fips"))]
+fn process_crypto_provider() -> rustls::crypto::CryptoProvider {
+    rustls::crypto::aws_lc_rs::default_provider()
 }
 
 pub fn router(state: AppState, config: &Config) -> Router {

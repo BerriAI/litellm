@@ -17,7 +17,7 @@ class VideoGenerationRequestUtils:
         video_generation_provider_config: BaseVideoConfig,
         video_generation_optional_params: VideoCreateOptionalRequestParams,
         drop_params: bool = False,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Get optional parameters for the video generation API.
 

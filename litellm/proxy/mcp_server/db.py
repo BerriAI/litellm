@@ -45,6 +45,7 @@ from litellm.proxy.mcp_server.oauth_utils import (
     build_upstream_oauth2_token_request,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -1528,6 +1529,13 @@ async def get_mcp_server_oauth_client_credentials(prisma_client: PrismaClient, s
     if row is None:
         return None
     return row.credentials
+
+
+async def get_mcp_server_oauth_client_credentials_by_id(
+    prisma_client: PrismaClient, server_ids: Sequence[str]
+) -> Mapping[str, object]:
+    rows: Final = await find_many_in(_oauth_client_table_actions(prisma_client), "server_id", server_ids)
+    return {row.server_id: row.credentials for row in rows}
 
 
 async def upsert_mcp_server_oauth_client_credentials(

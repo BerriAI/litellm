@@ -86,7 +86,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
     Config for sending `nova` requests to `/bedrock/invoke/`
     """
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         super().__init__(**kwargs)
 
     def get_supported_openai_params(self, model: str) -> list:
@@ -142,7 +142,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: Logging,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
@@ -195,7 +195,7 @@ class AmazonInvokeNovaConfig(AmazonInvokeConfig, AmazonConverseConfig):
             "messages": list(messages_with_guard_content_as_text(request.get("messages", ()))),
         }
 
-    def _filter_allowed_fields(self, bedrock_invoke_nova_request: BedrockInvokeNovaRequest) -> dict:
+    def _filter_allowed_fields(self, bedrock_invoke_nova_request: BedrockInvokeNovaRequest) -> dict[str, object]:
         """
         Filter out fields that are not allowed in the `BedrockInvokeNovaRequest` dataclass.
         """

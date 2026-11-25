@@ -24,18 +24,18 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use tokio::task::{JoinHandle, futures::TaskLocalFuture};
 
-pub use self::entries::{Ended, Entries};
+pub use self::entries::{CallState, Charged, Ended, unix};
 
 tokio::task_local! {
     static RECORD: Arc<CallRecord>;
 }
 
 /// One call as it stands. Every access is one short lock, never held across an await.
-pub struct CallRecord(Mutex<Entries>);
+pub struct CallRecord(Mutex<CallState>);
 
 impl CallRecord {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self(Mutex::new(Entries::new())))
+        Arc::new(Self(Mutex::new(CallState::new())))
     }
 }
 
@@ -45,7 +45,7 @@ pub fn scope<F: Future>(record: Arc<CallRecord>, future: F) -> TaskLocalFuture<A
 }
 
 /// Changes the record of the call this code runs in. `None` outside a call, which is a bug.
-pub fn write<R>(change: impl FnOnce(&mut Entries) -> R) -> Option<R> {
+pub fn write<R>(change: impl FnOnce(&mut CallState) -> R) -> Option<R> {
     RECORD
         .try_with(|record| change(&mut record.0.lock()))
         .map_err(missed)
@@ -53,7 +53,7 @@ pub fn write<R>(change: impl FnOnce(&mut Entries) -> R) -> Option<R> {
 }
 
 /// Reads the record of the call this code runs in. `None` outside a call, which is a bug.
-pub fn read<R>(look: impl FnOnce(&Entries) -> R) -> Option<R> {
+pub fn read<R>(look: impl FnOnce(&CallState) -> R) -> Option<R> {
     RECORD
         .try_with(|record| look(&record.0.lock()))
         .map_err(missed)

@@ -596,13 +596,13 @@ async def anthropic_messages(
     max_tokens: int,
     messages: list[dict],
     model: str,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     stop_sequences: list[str] | None = None,
     stream: bool | None = False,
     system: str | list | None = None,
     temperature: float | None = None,
-    thinking: dict | None = None,
-    tool_choice: dict | None = None,
+    thinking: dict[str, object] | None = None,
+    tool_choice: dict[str, object] | None = None,
     tools: list[dict] | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
@@ -760,17 +760,17 @@ def anthropic_messages_handler(
     max_tokens: int,
     messages: list[dict],
     model: str,
-    metadata: dict | None = None,
+    metadata: dict[str, object] | None = None,
     stop_sequences: list[str] | None = None,
     stream: bool | None = False,
     system: str | list | None = None,
     temperature: float | None = None,
-    thinking: dict | None = None,
-    tool_choice: dict | None = None,
+    thinking: dict[str, object] | None = None,
+    tool_choice: dict[str, object] | None = None,
     tools: list[dict] | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
-    container: dict | None = None,
+    container: dict[str, object] | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     client: AsyncHTTPHandler | None = None,
@@ -943,13 +943,10 @@ def anthropic_messages_handler(
         native_deferred_tools: Final = deferred_tools == "native"
         request_messages: Final = cast("list[dict[str, object]]", messages)  # cast-ok: the handler takes untyped dicts
         request_tools: Final = cast("list[dict[str, object]] | None", tools)  # cast-ok: the handler takes untyped dicts
-        request_tool_choice: Final = cast(  # cast-ok: the handler takes untyped dicts
-            "dict[str, object] | None", tool_choice
-        )
         from ..deferred_tool_emulation import deferred_tool_emulation, deferred_tools_messages
 
         emulation: Final = deferred_tool_emulation(
-            deployment_model_info, tools=request_tools, tool_choice=request_tool_choice, messages=request_messages
+            deployment_model_info, tools=request_tools, tool_choice=tool_choice, messages=request_messages
         )
         _refuse_deferred_tools(
             None if emulation is None else emulation.strict_input_refusal(), drops_deferred_tools_setting
@@ -958,9 +955,7 @@ def anthropic_messages_handler(
         bridged_tools: Final = (
             request_tools if emulation is None or request_tools is None else list(emulation.tools(request_tools))
         )
-        bridged_tool_choice: Final = (
-            request_tool_choice if emulation is None else emulation.tool_choice(request_tool_choice)
-        )
+        bridged_tool_choice: Final = tool_choice if emulation is None else emulation.tool_choice(tool_choice)
         if kwargs.get("compaction") is None and _should_route_to_responses_api(
             custom_llm_provider,
             original_model,

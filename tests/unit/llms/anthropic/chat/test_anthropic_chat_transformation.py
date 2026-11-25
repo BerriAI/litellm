@@ -5772,6 +5772,31 @@ def test_strip_advisor_blocks_when_no_advisor_tool():
     assert len(assistant_content) == 2
 
 
+@pytest.mark.parametrize("drop_params", [False, True], ids=["kept-for-the-provider", "dropped-under-drop-params"])
+def test_transform_request_drops_an_advisor_block_with_a_list_id_only_under_drop_params(drop_params: bool) -> None:
+    list_id_result: Final = {"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_01"], "content": "ok"}
+    result: Final = AnthropicConfig().transform_request(
+        model="claude-sonnet-5-5",
+        messages=[
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "server_tool_use", "id": "srvtoolu_01", "name": "advisor", "input": {}},
+                    list_id_result,
+                    {"type": "text", "text": "done"},
+                ],
+            },
+            {"role": "user", "content": "and now?"},
+        ],
+        optional_params={"max_tokens": 64},
+        litellm_params={"drop_params": drop_params},
+        headers={},
+    )
+    kept_types: Final = [block["type"] for block in result["messages"][1]["content"]]
+    assert kept_types == (["text"] if drop_params else ["advisor_tool_result", "text"])
+
+
 def test_strip_advisor_blocks_no_op_when_no_advisor_blocks():
     """strip_advisor_blocks_from_messages is a no-op when no advisor blocks exist."""
     from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_messages
@@ -6817,6 +6842,36 @@ def test_anthropic_messages_request_strips_billing_header_for_minimax():
 
     texts = [block["text"] for block in result.get("system", [])]
     assert all(not t.startswith("x-anthropic-billing-header:") for t in texts)
+
+
+@pytest.mark.parametrize(
+    ("module_path", "class_name", "model"),
+    (
+        ("litellm.llms.minimax.messages.transformation", "MinimaxMessagesConfig", "MiniMax-M3"),
+        ("litellm.llms.deepseek.messages.transformation", "DeepSeekAnthropicMessagesConfig", "deepseek-v4-pro"),
+    ),
+    ids=("minimax", "deepseek"),
+)
+def test_billing_header_strip_forwards_a_non_string_system_text_for_the_provider_to_answer(
+    module_path: str, class_name: str, model: str
+) -> None:
+    import importlib
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    config: Final = getattr(importlib.import_module(module_path), class_name)()
+    result: Final = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 16,
+            "system": [{"type": "text", "text": None}, BILLING_HEADER_BLOCK, {"type": "text", "text": "real"}],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["system"] == [{"type": "text", "text": None}, {"type": "text", "text": "real"}]
 
 
 def test_translate_system_message_strips_billing_header_for_bedrock_invoke():

@@ -224,7 +224,7 @@ class GithubCopilotConfig(OpenAIConfig):
         return text_content, tool_calls, thinking_blocks
 
     @staticmethod
-    def _normalize_anthropic_usage(usage: dict) -> dict:
+    def _normalize_anthropic_usage(usage: dict) -> dict[str, object]:
         normalized: Final = dict(usage)
         if "input_tokens" in usage and "prompt_tokens" not in usage:
             normalized["prompt_tokens"] = usage["input_tokens"]
@@ -305,10 +305,10 @@ class GithubCopilotConfig(OpenAIConfig):
         raw_response: httpx.Response,
         model_response: "ModelResponse",
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

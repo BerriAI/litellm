@@ -510,7 +510,7 @@ class SlackAlerting(CustomBatchLogger):
 
     async def response_taking_too_long(
         self,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ):
         if self.alerting is None or self.alert_types is None:
             return

@@ -84,6 +84,8 @@ pub struct PreCallFacts {
     pub io_estimate: Option<Estimate>,
     #[serde(skip)]
     pub ptu_exact: Option<(f64, f64)>,
+    #[serde(skip)]
+    pub counts_unpriced_media: bool,
     #[serde(default)]
     pub reuses_request_slot: bool,
     #[serde(default)]
@@ -216,6 +218,10 @@ pub struct SuccessFacts {
     #[serde(default)]
     pub total_tokens: i64,
     #[serde(default)]
+    pub settles_at_reservation: bool,
+    #[serde(default)]
+    pub embedding_reported_no_tokens: bool,
+    #[serde(default)]
     pub targets: TargetFacts,
     #[serde(default)]
     pub served_model: Option<RateLimitedModel>,
@@ -287,7 +293,7 @@ pub struct Plan {
     pub ptu: bool,
 }
 
-const EMBEDDING_CALL_TYPES: [&str; 2] = ["aembedding", "embedding"];
+pub const EMBEDDING_CALL_TYPES: [&str; 2] = ["aembedding", "embedding"];
 const RESPONSES_CALL_TYPES: [&str; 2] = ["aresponses", "responses"];
 const EXTRACTION_CALL_TYPES: [&str; 2] = ["extraction", "aextraction"];
 const REALTIME_CALL_TYPES: [&str; 1] = ["_arealtime"];
@@ -766,6 +772,7 @@ impl ParallelRequestLimiter {
             let mut stash = state.stash();
             stash.discard_released_tpm_reservation();
             stash.reserved_tokens = estimated;
+            stash.reservation_counts_unpriced_media = facts.counts_unpriced_media;
             stash.ptu_reserved_tokens = ptu_estimated;
             stash.ptu_windows = windows_keyed(tpm_response.windows(), PTU_TEAM);
             stash.reserved_windows = tpm_response.windows().to_vec();
@@ -1625,11 +1632,17 @@ impl ParallelRequestLimiter {
         } else {
             Vec::new()
         };
+        let keeps_reservation = !stash.reservation_counts_unpriced_media;
+        let settled_tokens = if facts.settles_at_reservation && keeps_reservation {
+            stash.reserved_tokens
+        } else {
+            facts.total_tokens
+        };
         let mut operations: Vec<Op> = self
             .tpm_ops(
                 &charged,
                 &stash.reserved_scopes,
-                facts.total_tokens,
+                settled_tokens,
                 reserved_tokens,
             )
             .into_iter()
@@ -1646,11 +1659,15 @@ impl ParallelRequestLimiter {
             operations.extend(self.engine.project_ops(
                 &reserved_ptu,
                 &stash.reserved_scopes,
-                settlement_tokens(
-                    stash.ptu_ceiling.as_ref(),
-                    facts.usage.as_ref(),
-                    facts.total_tokens,
-                ),
+                if facts.embedding_reported_no_tokens && keeps_reservation {
+                    stash.ptu_reserved_tokens
+                } else {
+                    settlement_tokens(
+                        stash.ptu_ceiling.as_ref(),
+                        facts.usage.as_ref(),
+                        facts.total_tokens,
+                    )
+                },
                 if stash.reservation_released {
                     0
                 } else {
