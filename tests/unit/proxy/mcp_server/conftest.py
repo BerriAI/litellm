@@ -155,9 +155,11 @@ class _UserCredentialsTable:
     def __init__(self) -> None:
         self.rows: dict[tuple[str, str], SimpleNamespace] = {}
         self.writes = 0
+        self.reads = 0
 
     async def find_unique(self, where: Mapping[str, Mapping[str, str]]) -> SimpleNamespace | None:
         pair: Final = where["user_id_server_id"]
+        self.reads += 1
         return self.rows.get((pair["user_id"], pair["server_id"]))
 
     async def upsert(
