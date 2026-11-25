@@ -10,6 +10,7 @@ mod attempt;
 mod entries;
 mod logged_request;
 mod request_facts;
+mod served_message;
 mod trace;
 
 use std::{
@@ -37,6 +38,7 @@ pub use self::{
     entries::{CallState, Charged, Ended, ErrorResponse, HeadSent, unix},
     logged_request::LoggedRequest,
     request_facts::RequestFacts,
+    served_message::ServedMessage,
 };
 
 tokio::task_local! {

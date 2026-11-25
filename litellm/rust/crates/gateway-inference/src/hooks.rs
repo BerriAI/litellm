@@ -215,6 +215,7 @@ pub(crate) async fn post_call<E: Endpoint, K: CallHooks>(
         deployment,
     } = served;
     let Some((chunks, read)) = E::held(outcome) else {
+        E::keep_output(outcome);
         hooks.post_call_success().await?;
         hooks.response_headers().await;
         return Ok(PostCall {
@@ -232,12 +233,16 @@ pub(crate) async fn post_call<E: Endpoint, K: CallHooks>(
     let hooks = hooks.clone();
     let usage: fn(Counts) -> Option<ChatCompletionsUsage> = E::usage;
     let response_id: fn(&str) -> Option<String> = E::stream_response_id;
+    let keep_event: fn(&str) = E::keep_event;
     let seen = Arc::new(StreamSeen::default());
     let seeing = seen.clone();
     let unwatched = std::mem::replace(chunks, stream::empty().boxed())
         .inspect(move |block| {
             if let Ok(block) = block {
                 seeing.see(block, response_id);
+                if let Some(event) = &block.event {
+                    keep_event(&event.data);
+                }
             }
         })
         .boxed();
