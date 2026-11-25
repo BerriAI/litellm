@@ -20,14 +20,14 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     filter_messages_by_skip_flags,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.responses.litellm_completion_transformation.reasoning_items import (
-    encode_thinking_blocks,
-    thinking_block_texts,
-)
 from litellm.proxy.guardrails.guardrail_hooks.lakera_ai_v2 import (
     LakeraAIGuardrail,
     _build_lakera_inspection_messages,
     humanize_lakera_block_reasons,
+)
+from litellm.responses.litellm_completion_transformation.reasoning_items import (
+    encode_thinking_blocks,
+    thinking_block_texts,
 )
 from litellm.types.guardrails import LitellmParams, Mode
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -2643,7 +2643,6 @@ class TestPostCallResponsesReasoning:
         assert result is response
         assert _reasoning_texts(result) == ("Card [MASKED CREDIT_CARD] is on file.", "C.")
 
-
     async def test_mask_rewrites_every_copy_of_bridged_thinking_text(self):
         encrypted: Final = encode_thinking_blocks([{"type": "thinking", "thinking": _CARD_REPLY, "signature": "sig"}])
         reasoning: Final = {
@@ -2653,8 +2652,12 @@ class TestPostCallResponsesReasoning:
             "content": [{"type": "output_text", "text": _CARD_REPLY, "annotations": []}],
             "encrypted_content": encrypted,
         }
-        response = ResponsesAPIResponse(id="resp_1", created_at=1, output=[reasoning])
-        response.provider_specific_fields = {"thinking_blocks": [{"type": "thinking", "thinking": _CARD_REPLY}]}
+        response: Final = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=1,
+            output=[reasoning],
+            provider_specific_fields={"thinking_blocks": [{"type": "thinking", "thinking": _CARD_REPLY}]},
+        )
         verdict: Final = {
             "flagged": True,
             "breakdown": [
