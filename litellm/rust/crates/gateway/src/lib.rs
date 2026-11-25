@@ -12,6 +12,7 @@ mod periodic;
 mod redis;
 mod resources;
 mod state;
+mod stored;
 #[cfg(test)]
 mod test_support;
 pub use admit::{Admit, Reason, Refused};
@@ -26,6 +27,7 @@ pub use periodic::PeriodicJob;
 pub use redis::RedisClients;
 pub use resources::Resources;
 pub use state::AppState;
+pub use stored::{Loaded, StoredConfig};
 
 /// The gateway served through the native host.
 pub type Gateway = litellm_gateway_inference::Gateway<host::NativeHost>;
@@ -46,14 +48,17 @@ use litellm_redis_store::{Remote, active_teams::ActiveTeams};
 use litellm_router_core::registry::DeploymentFilter;
 use litellm_secrets::{OidcResolver, SecretManagerState, SecretResolver};
 
-/// The config at `path`, its `os.environ/` references read from the process environment.
-pub async fn load_config(path: impl AsRef<Path>) -> Result<Config, Error> {
+/// The config at `path`, its `os.environ/` references read from the process environment, with
+/// the config the proxy stores in its database layered in when `store_model_in_db` is on.
+pub async fn load_config(path: impl AsRef<Path>) -> Result<Loaded, Error> {
     let pool = HttpClientPool::new(Arc::new(PublicDnsResolver));
     let lookup = |name: &str| std::env::var(name).ok();
     let settings = HttpSettings::from_layers([HttpSettingsLayer::from_environment(&lookup)]);
     let client = pool.client(&Resolution::from(&settings).config, ClientVariant::Provider)?;
-    let secrets = environment_secrets(Arc::new(ProcessEnvironment), client);
-    Ok(litellm_config_load::load(path, secrets).await?)
+    Box::pin(stored::load(path.as_ref(), || {
+        environment_secrets(Arc::new(ProcessEnvironment), client.clone())
+    }))
+    .await
 }
 
 pub(crate) fn environment_secrets(
@@ -81,10 +86,11 @@ const LICENSE: &str = "LITELLM_LICENSE";
 /// the order the proxy registers them: the config's `callbacks`, of which only the dynamic rate
 /// limiter is built, then the proxy's own key limiter. The keys' limits and the model groups'
 /// capacity are counted in `redis`'s coordination client when there is one, and in this process's
-/// memory otherwise.
+/// memory otherwise. `variables` holds the config's `environment_variables` in front of the
+/// process's, as the limiter reads its window from them on every call.
 pub async fn build_inference(
     config: &Config,
-    environment: &Environment,
+    variables: &Environment,
     resources: &Resources,
     routing: RoutingCache,
     redis: &RedisClients,
@@ -93,7 +99,7 @@ pub async fn build_inference(
     let (router, shaping) = boot::router(config, &catalog).await?;
     let deployments = router.registry().deployments(&DeploymentFilter::default());
     let windows = host::ContextWindows::read(&catalog, &deployments).await;
-    let limits = parallel_request_limiter::Settings::read(config, environment);
+    let limits = parallel_request_limiter::Settings::read(config, variables);
     let counters = parallel_request_limiter::counters(redis.coordination.clone());
     let key_limiter = KeyLimiter::new(limits, counters.clone(), router.clone());
     let licensed = resources.environment.get(LICENSE).is_some();

@@ -101,6 +101,7 @@ async fn gateway(python: SocketAddr, admits: bool, root_path: &str) -> SocketAdd
                 keys: None,
                 entitlements: Arc::new(Entitlements::Community),
                 environment: Arc::new(litellm_env::ProcessEnvironment),
+                variables: Environment::default(),
                 gateway_requests: None,
                 gateway_requests_flush: None,
             },
@@ -252,8 +253,8 @@ async fn holding_keys(python: SocketAddr, config: &str, keys: Option<AuthStore>)
     };
     let admit = Arc::new(litellm_gateway::Admit::new(
         &config,
-        &Environment::default(),
         &state,
+        litellm_gateway::StoredConfig::Unused,
     ));
     let native = middleware::global(
         litellm_gateway::router(state, &config),

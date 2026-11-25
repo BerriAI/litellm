@@ -5659,6 +5659,8 @@ def _general_settings_row_is_readable(row: _ConfigParamValueRow | None) -> bool:
     return row is None or row.param_value is None or isinstance(row.param_value, Mapping)
 
 
+# The Rust gateway keeps a copy in litellm/rust/crates/config/src/db/settings/keys.rs, which
+# test_rust_gateway_copy_of_db_settings_keys_matches_python in tests/unit/proxy/test_proxy_server.py enforces.
 def _db_managed_general_settings_keys() -> frozenset[str]:
     return frozenset((*ConfigGeneralSettings.model_fields, *_CLEANUP_SCHEDULE_KEYS, "allowed_ips", "email_settings"))
 
@@ -5751,6 +5753,8 @@ def _log_ignored_cost_map_copy(model_id: str, fields: tuple[str, ...]) -> None:
     )
 
 
+# The Rust gateway keeps a copy in litellm/rust/crates/config/src/db/settings/keys.rs, which
+# test_rust_gateway_copy_of_db_settings_keys_matches_python in tests/unit/proxy/test_proxy_server.py enforces.
 _DB_CONFIG_CALLBACK_EVENT_TYPES: Final[Mapping[str, tuple[Literal["success", "failure"], ...]]] = MappingProxyType(
     {"success_callback": ("success",), "failure_callback": ("failure",), "callbacks": ("success", "failure")}
 )

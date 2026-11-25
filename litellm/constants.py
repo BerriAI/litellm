@@ -1158,6 +1158,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
     "https://inference.runanywhere.ai/v1",
+    "https://api-ap-southeast-1.modelarts-maas.com/openai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
     "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
@@ -1249,6 +1250,7 @@ openai_compatible_providers: Final[list[str]] = [
     "reka",
     "streamlake",
     "wally",
+    "huawei_maas",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
@@ -2106,6 +2108,8 @@ LENGTH_OF_LITELLM_GENERATED_KEY: Final = get_env_int("LENGTH_OF_LITELLM_GENERATE
 MINIMUM_CUSTOM_KEY_LENGTH: Final = get_env_int("MINIMUM_CUSTOM_KEY_LENGTH", 16)
 SECRET_MANAGER_REFRESH_INTERVAL: Final = get_env_int("SECRET_MANAGER_REFRESH_INTERVAL", 86400)
 OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS: Final = frozenset({"openai", "azure"})
+# The Rust gateway keeps a copy in litellm/rust/crates/config/src/db/settings/keys.rs, which
+# test_rust_gateway_copy_of_db_settings_keys_matches_python in tests/unit/proxy/test_proxy_server.py enforces.
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "default_internal_user_params",
     "default_team_params",
