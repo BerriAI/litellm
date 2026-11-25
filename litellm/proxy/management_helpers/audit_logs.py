@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 _audit_log_callback_cache: Final[dict[str, "CustomLogger | S3Logger"]] = {}
 ALLOW_LITELLM_CHANGED_BY_HEADER_METADATA_KEY: Final = "allow_litellm_changed_by_header"
 _AUDIT_JSON: Final = TypeAdapter(JsonValue)
-_AUDIT_WRITE_RETRY_DELAYS_SECONDS: Final = (0.5, 1.0, 2.0, 4.0)
+_AUDIT_WRITE_RETRY_DELAYS_SECONDS: Final = (0.5, 1.0, 2.0, 4.0, 8.0, 8.0, 5.0)
 _AUDIT_WRITE_RETRY_BUDGET_SECONDS: Final = 30.0
 _AUDIT_DATABASE_CALLBACK_NAME: Final = "audit_log_database"
 _AUDIT_LOG_PRIMARY_KEY: Final = "LiteLLM_AuditLog_pkey"
@@ -352,7 +352,11 @@ def _is_retryable_audit_failure(failure: Exception) -> bool:
 
 
 def _is_stored_by_an_earlier_attempt(failure: Exception) -> bool:
-    return isinstance(failure, NativeDatabaseFailure) and _AUDIT_LOG_PRIMARY_KEY in str(failure)
+    return (
+        isinstance(failure, NativeDatabaseFailure)
+        and failure.kind == "data_rejected"
+        and _AUDIT_LOG_PRIMARY_KEY in str(failure)
+    )
 
 
 def _report_failed_audit_write(write: _AuditWrite, failure: Exception) -> None:
@@ -397,6 +401,9 @@ async def _insert_audit_logs(write: _AuditWrite) -> None:
     if not _is_retryable_audit_failure(failure):
         _report_failed_audit_write(write, failure)
         return
+    verbose_proxy_logger.warning(
+        "Audit log write for %s failed, retrying in the background: %s", _audit_write_label(write), failure
+    )
     deadline: Final = asyncio.get_running_loop().time() + _AUDIT_WRITE_RETRY_BUDGET_SECONDS
     track_audit_task(
         asyncio.create_task(

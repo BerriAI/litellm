@@ -42,6 +42,8 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging, hash_token, update_s
 from starlette.datastructures import URL
 
 from litellm.proxy.management_helpers.audit_logs import (
+    _AUDIT_WRITE_RETRY_BUDGET_SECONDS,
+    _AUDIT_WRITE_RETRY_DELAYS_SECONDS,
     create_audit_log_for_update,
     create_audit_logs_for_updates,
     create_object_audit_log,
@@ -851,10 +853,10 @@ class _RecordedFailureMetric:
 
 
 def _database_failure(
-    message: str = "database query failed", unavailable: bool = False, requeue_safe: bool = False
+    message: str = "database query failed", unavailable: bool = False, requeue_safe: bool = False, kind: str = ""
 ) -> NativeDatabaseFailure:
     failure: Final = NativeDatabaseFailure(message)
-    failure.kind = "unreachable" if unavailable else "other" if requeue_safe else "data_rejected"
+    failure.kind = kind or ("unreachable" if unavailable else "other" if requeue_safe else "data_rejected")
     failure.unavailable = unavailable
     failure.requeue_safe = requeue_safe
     return failure
@@ -990,6 +992,82 @@ async def test_a_duplicate_id_on_a_retry_counts_as_stored_by_the_earlier_attempt
     assert audit_log_store.attempts == 2
     assert audit_failure_metric.callback_names == []
     logged_error.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_retry_error_that_names_the_primary_key_without_a_duplicate_id_is_counted(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+) -> None:
+    audit_log_store.next_errors.extend(
+        (
+            _database_failure(unavailable=True),
+            _database_failure('index "LiteLLM_AuditLog_pkey" contains unexpected zero page', kind="other"),
+        )
+    )
+
+    await create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"members": ["u1"]}))
+    await drain_audit_tasks()
+
+    assert audit_log_store.attempts == 2
+    assert audit_failure_metric.callback_names == ["audit_log_database"]
+
+
+@pytest.mark.asyncio
+async def test_a_first_failed_attempt_is_logged_as_a_warning_before_its_retry_runs(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+) -> None:
+    audit_log_store.next_errors.append(_database_failure("connection refused", unavailable=True))
+
+    with (
+        patch("litellm.proxy.management_helpers.audit_logs._AUDIT_WRITE_RETRY_DELAYS_SECONDS", (10.0,)),
+        patch.object(verbose_proxy_logger, "warning") as logged_warning,
+    ):
+        await create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"members": ["u1"]}))
+        warnings_before_the_retry: Final = tuple(call.args for call in logged_warning.call_args_list)
+        attempts_before_the_retry: Final = audit_log_store.attempts
+        await drain_audit_tasks()
+
+    assert attempts_before_the_retry == 1
+    assert len(warnings_before_the_retry) == 1
+    assert "team-a" in warnings_before_the_retry[0][1]
+    assert "connection refused" in str(warnings_before_the_retry[0][2])
+    assert [row["id"] for row in audit_log_store.rows] == ["audit-1"]
+    assert audit_failure_metric.callback_names == []
+
+
+@dataclass
+class _AttemptClock:
+    times: list[float] = field(default_factory=list)
+
+    async def record(self) -> None:
+        self.times.append(asyncio.get_running_loop().time())
+
+
+@pytest.mark.asyncio
+async def test_a_write_that_keeps_failing_fast_is_still_retried_late_in_its_time_budget(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+) -> None:
+    time_scale: Final = 0.01
+    budget: Final = _AUDIT_WRITE_RETRY_BUDGET_SECONDS * time_scale
+    clock: Final = _AttemptClock()
+    audit_log_store.during_attempt = clock.record
+    audit_log_store.error = _database_failure(unavailable=True)
+
+    with (
+        patch(
+            "litellm.proxy.management_helpers.audit_logs._AUDIT_WRITE_RETRY_DELAYS_SECONDS",
+            tuple(delay * time_scale for delay in _AUDIT_WRITE_RETRY_DELAYS_SECONDS),
+        ),
+        patch("litellm.proxy.management_helpers.audit_logs._AUDIT_WRITE_RETRY_BUDGET_SECONDS", budget),
+    ):
+        await create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"members": ["u1"]}))
+        await asyncio.wait_for(_wait_for_audit_retries(), timeout=budget * 5)
+
+    assert clock.times[-1] - clock.times[0] >= budget * 0.6
+    assert audit_failure_metric.callback_names == ["audit_log_database"]
 
 
 @dataclass
