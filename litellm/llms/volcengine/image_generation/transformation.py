@@ -1,3 +1,4 @@
+import hashlib
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, cast  # noqa: TID251  # Ark-native params are absent from the OpenAI literal
 
@@ -5,8 +6,9 @@ import httpx
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import override
 
+import litellm
 from litellm.exceptions import AuthenticationError, UnsupportedParamsError
-from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -21,7 +23,8 @@ from litellm.types.utils import ImageObject, ImageResponse, ImageUsage
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-ARK_API_BASE: Final = "https://ark.cn-beijing.volces.com"
+ARK_API_BASE: Final = "https://ark.cn-beijing.volces.com/api/v3"
+ARK_SAFETY_IDENTIFIER_MAX_LENGTH: Final = 64
 
 ARK_IMAGE_PARAMS: Final[tuple[str, ...]] = (
     "n",
@@ -43,6 +46,7 @@ ARK_IMAGE_PARAMS: Final[tuple[str, ...]] = (
 )
 
 _REQUEST_ONLY_PARAMS: Final = frozenset({"n", "user", "extra_headers", "extra_body", "stream"})
+_UNSENT_PARAMS: Final = frozenset({"user", "stream"})
 _PROVIDER_FIELDS: Final = frozenset({"url", "b64_json"})
 _BOOLEAN_PARAMS: Final = frozenset({"watermark", "layer_decomposition"})
 _JSON_PARAMS: Final = frozenset(
@@ -58,6 +62,7 @@ _FORM_BOOLEANS: Final = {"true": True, "false": False}
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_VALUE: Final = TypeAdapter(object)
 _IMAGE_COUNT: Final = TypeAdapter(int)
+_STREAM_FLAG: Final = TypeAdapter(bool)
 
 
 class _ArkImage(BaseModel):
@@ -106,21 +111,19 @@ _ARK_RESPONSE: Final = TypeAdapter(_ArkImageResponse)
 
 
 def ark_image_generation_url(api_base: str | None) -> str:
-    base: Final = (
-        api_base or get_secret_str("ARK_API_BASE") or get_secret_str("VOLCENGINE_API_BASE") or ARK_API_BASE
-    ).rstrip("/")
+    base: Final = (api_base or get_secret_str("VOLCENGINE_API_BASE") or ARK_API_BASE).rstrip("/")
     if base.endswith("/images/generations"):
         return base
-    return join_api_base(ensure_api_route(base, "api/v3"), "images/generations")
+    return join_api_base(base, "images/generations")
 
 
 def ark_image_headers(headers: Mapping[str, object], api_key: str | None, model: str) -> Mapping[str, object]:
     resolved_api_key: Final[str | None] = (
-        api_key or get_secret_str("ARK_API_KEY") or get_secret_str("VOLCENGINE_API_KEY")
+        api_key or get_secret_str("VOLCENGINE_API_KEY") or get_secret_str("ARK_API_KEY")
     )
     if not resolved_api_key:
         raise AuthenticationError(
-            message="ARK_API_KEY or VOLCENGINE_API_KEY is not set. Set it in the environment or pass api_key.",
+            message="VOLCENGINE_API_KEY or ARK_API_KEY is not set. Set it in the environment or pass api_key.",
             llm_provider="volcengine",
             model=model,
         )
@@ -131,27 +134,48 @@ def _requests_several_images(requested_images: object) -> bool:
     return requested_images is not None and _IMAGE_COUNT.validate_python(requested_images) > 1
 
 
-def ark_image_params(
-    params: Mapping[str, object],
-    model: str,
-    drop_params: bool,
-) -> Mapping[str, object]:
-    if params.get("stream") and not drop_params:
+def drop_params_requested(requested: object) -> bool:
+    return litellm.drop_params is True or requested is True
+
+
+def _stream_requested(stream: object) -> bool:
+    try:
+        return _STREAM_FLAG.validate_python(stream)
+    except ValidationError:
+        return False
+
+
+def _reject_stream(stream: object, model: str, drop_params: bool) -> None:
+    if _stream_requested(stream) and not drop_params:
         raise UnsupportedParamsError(
             status_code=400,
             message=f"stream is not supported for Volcengine image models ({model}). "
             + "LiteLLM returns one JSON image response; set `litellm.drop_params = True` to ignore stream.",
         )
+
+
+def _safety_identifier(user: str) -> str:
+    if len(user) <= ARK_SAFETY_IDENTIFIER_MAX_LENGTH:
+        return user
+    return hashlib.sha256(user.encode()).hexdigest()
+
+
+def ark_image_params(
+    params: Mapping[str, object],
+    model: str,
+    drop_params: bool,
+) -> Mapping[str, object]:
+    _reject_stream(params.get("stream"), model, drop_params)
     if _requests_several_images(params.get("n")) and not drop_params:
         raise UnsupportedParamsError(
             status_code=400,
             message=f"n > 1 is not supported for Volcengine image models ({model}). "
             + "Use sequential_image_generation for several images, or set `litellm.drop_params = True` to ignore n.",
         )
-    mapped: Final = {key: value for key, value in params.items() if key != "user" and value is not None}
+    mapped: Final = {key: value for key, value in params.items() if key not in _UNSENT_PARAMS and value is not None}
     user: Final = params.get("user")
     if isinstance(user, str) and user and "safety_identifier" not in mapped:
-        return {**mapped, "safety_identifier": user}
+        return {**mapped, "safety_identifier": _safety_identifier(user)}
     return mapped
 
 
@@ -170,8 +194,11 @@ def ark_image_request(
     model: str,
     prompt: str | None,
     params: Mapping[str, object],
+    drop_params: bool,
 ) -> Mapping[str, object]:
     extra_body: Final = _JSON_OBJECT.validate_python(params.get("extra_body") or {})
+    _reject_stream(params.get("stream"), model, drop_params)
+    _reject_stream(extra_body.get("stream"), model, drop_params)
     mapped: Final = {
         key: _form_value(key, value)
         for key, value in params.items()
@@ -179,7 +206,7 @@ def ark_image_request(
     }
     return {
         **mapped,
-        **extra_body,
+        **{key: value for key, value in extra_body.items() if key != "stream"},
         "model": model,
         **({"prompt": prompt} if prompt is not None else {}),
     }
@@ -298,7 +325,9 @@ class VolcEngineImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:  # mutable-ok: inherited contract
-        return dict(ark_image_request(model, prompt, optional_params))
+        return dict(
+            ark_image_request(model, prompt, optional_params, drop_params_requested(litellm_params.get("drop_params")))
+        )
 
     @override
     def transform_image_generation_response(

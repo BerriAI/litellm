@@ -136,6 +136,28 @@ def test_user_becomes_safety_identifier_when_no_explicit_id_is_given() -> None:
     assert "user" not in captured["body"]
 
 
+def test_a_user_longer_than_ark_accepts_becomes_a_stable_fitting_safety_identifier() -> None:
+    long_user: Final = "tenant-" + "x" * 120
+    other_user: Final = "tenant-" + "y" * 120
+    captured: Final[dict[str, object]] = {}
+
+    def identifier_for(user: str) -> object:
+        litellm.image_generation(
+            model=f"volcengine/{SEEDREAM_5_5}",
+            prompt="a cat",
+            api_key="sk-ark",
+            client=_capturing_client(captured),
+            user=user,
+        )
+        return captured["body"]["safety_identifier"]
+
+    first: Final = identifier_for(long_user)
+
+    assert isinstance(first, str) and 0 < len(first) <= 64
+    assert identifier_for(long_user) == first
+    assert identifier_for(other_user) != first
+
+
 @pytest.mark.parametrize("n", [2, "3"])
 def test_n_above_one_is_refused_before_any_ark_request(n: int | str) -> None:
     captured: Final[dict[str, object]] = {}
@@ -176,7 +198,7 @@ def test_one_image_or_a_dropped_n_sends_one_ark_request_without_n(n: int, drop_p
     ("api_base", "expected_url"),
     [
         (None, IMAGES_URL),
-        ("https://ark.example", "https://ark.example/api/v3/images/generations"),
+        ("https://gateway.example/ark", "https://gateway.example/ark/images/generations"),
         ("https://ark.example/api/v3", "https://ark.example/api/v3/images/generations"),
         ("https://ark.example/api/v3/", "https://ark.example/api/v3/images/generations"),
         ("https://ark.example/api/v3/images/generations", "https://ark.example/api/v3/images/generations"),
@@ -194,6 +216,29 @@ def test_generation_resolves_an_api_base_to_the_images_route(api_base: str | Non
     )
 
     assert captured["url"] == expected_url
+
+
+def test_generation_and_edit_resolve_the_same_url_and_key_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("VOLCENGINE_API_BASE", raising=False)
+    monkeypatch.setenv("ARK_API_BASE", "https://ark-only.example/api/v3")
+    monkeypatch.setenv("VOLCENGINE_API_KEY", "volcengine-key")
+    monkeypatch.setenv("ARK_API_KEY", "ark-key")
+    generation: Final[dict[str, object]] = {}
+    edit: Final[dict[str, object]] = {}
+
+    litellm.image_generation(model=f"volcengine/{SEEDREAM_5_5}", prompt="a cat", client=_capturing_client(generation))
+    litellm.image_edit(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        prompt="a cat",
+        image="https://ark.example/input.png",
+        client=_capturing_client(edit),
+    )
+
+    assert edit["url"] == generation["url"]
+    assert generation["authorization"] == "Bearer volcengine-key"
+    assert edit["authorization"] == generation["authorization"]
 
 
 def test_generation_surfaces_the_ark_error_message() -> None:
@@ -247,6 +292,42 @@ def test_generation_rejects_streaming_because_ark_streams_sse_outside_the_image_
         )
 
     assert captured == {}
+
+
+def test_generation_rejects_stream_sent_through_extra_body_so_no_image_goes_unbilled() -> None:
+    captured: Final[dict[str, object]] = {}
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        litellm.image_generation(
+            model=f"volcengine/{SEEDREAM_5_5}",
+            prompt="a cat",
+            api_key="sk-ark",
+            client=_capturing_client(captured),
+            extra_body={"stream": True},
+        )
+
+    assert captured == {}
+
+
+def test_generation_drops_stream_from_extra_body_when_drop_params_is_set() -> None:
+    bodies: Final[list[dict[str, object]]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={**ARK_RESPONSE, "data": [{"url": "https://ark.example/one.png"}]})
+
+    response: Final = litellm.image_generation(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        prompt="a cat",
+        api_key="sk-ark",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        n=2,
+        extra_body={"stream": True, "watermark": False},
+        drop_params=True,
+    )
+
+    assert bodies == [{"model": SEEDREAM_5_5, "prompt": "a cat", "watermark": False}]
+    assert len(response.data) == 1
 
 
 def test_both_surfaces_are_registered_for_volcengine() -> None:

@@ -144,6 +144,67 @@ def test_edit_with_a_dropped_n_sends_one_ark_request_without_n() -> None:
     assert len(response.data) == 1
 
 
+def test_edit_with_stream_and_n_dropped_sends_one_ark_request_without_either() -> None:
+    bodies: Final[list[dict[str, object]]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={**ARK_RESPONSE, "data": [{"url": "https://ark.example/one.png"}]})
+
+    response: Final = litellm.image_edit(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        image=PNG_BYTES,
+        prompt="make the lantern red",
+        api_key="sk-ark",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        n=3,
+        stream=True,
+        drop_params=True,
+    )
+
+    assert bodies == [{"model": SEEDREAM_5_5, "prompt": "make the lantern red", "image": [PNG_DATA_URL]}]
+    assert len(response.data) == 1
+
+
+def test_edit_with_a_multipart_stream_false_is_refused_for_n_and_not_for_stream() -> None:
+    captured: Final[dict[str, object]] = {}
+
+    with pytest.raises(litellm.UnsupportedParamsError) as exc_info:
+        litellm.image_edit(
+            model=f"volcengine/{SEEDREAM_5_5}",
+            prompt="make it blue",
+            image=io.BytesIO(PNG_BYTES),
+            api_key="sk-ark",
+            client=_capturing_client(captured),
+            n="2",
+            stream="false",
+        )
+
+    assert "n > 1 is not supported" in str(exc_info.value)
+    assert captured == {}
+
+
+def test_edit_forwards_extra_body_fields_to_ark() -> None:
+    captured: Final[dict[str, object]] = {}
+
+    _ = litellm.image_edit(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        image=PNG_BYTES,
+        prompt="make the lantern red",
+        api_key="sk-ark",
+        client=_capturing_client(captured),
+        extra_body={"watermark": False, "optimize_prompt_options": {"mode": "fast"}},
+    )
+
+    assert captured["body"] == {
+        "model": SEEDREAM_5_5,
+        "prompt": "make the lantern red",
+        "watermark": False,
+        "optimize_prompt_options": {"mode": "fast"},
+        "image": [PNG_DATA_URL],
+    }
+
+
 def test_edit_surfaces_the_ark_error_message() -> None:
     def respond(request: httpx.Request) -> httpx.Response:
         return httpx.Response(
