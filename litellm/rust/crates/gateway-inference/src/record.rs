@@ -8,6 +8,7 @@
 
 mod attempt;
 mod entries;
+mod failure;
 mod trace;
 
 use std::{
@@ -33,6 +34,7 @@ use tokio::task::futures::TaskLocalFuture;
 pub use self::{
     attempt::{AttemptRecord, Recorder, ServedDeployment},
     entries::{CallState, Charged, Ended, ErrorResponse, HeadSent, unix},
+    failure::CallFailure,
 };
 
 tokio::task_local! {

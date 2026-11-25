@@ -40,6 +40,7 @@ pub enum ExceptionFamily {
     OpenAiCompatible,
     VertexAi,
     Cohere,
+    Anthropic,
     Other,
 }
 
@@ -126,6 +127,7 @@ impl ExceptionFamily {
             provider if OPENAI_COMPATIBLE_PROVIDERS.contains(&provider) => Self::OpenAiCompatible,
             "vertex_ai" | "vertex_ai_beta" | "gemini" => Self::VertexAi,
             "cohere" | "cohere_chat" => Self::Cohere,
+            "anthropic" | "anthropic_text" => Self::Anthropic,
             _ => Self::Other,
         }
     }
@@ -151,7 +153,9 @@ mod tests {
     #[case::gemini("gemini", ExceptionFamily::VertexAi)]
     #[case::cohere("cohere", ExceptionFamily::Cohere)]
     #[case::cohere_chat("cohere_chat", ExceptionFamily::Cohere)]
-    #[case::unported_mapper("anthropic", ExceptionFamily::Other)]
+    #[case::anthropic("anthropic", ExceptionFamily::Anthropic)]
+    #[case::anthropic_text("anthropic_text", ExceptionFamily::Anthropic)]
+    #[case::unported_mapper("bedrock", ExceptionFamily::Other)]
     #[case::unknown("reducto", ExceptionFamily::Other)]
     #[case::empty("", ExceptionFamily::Other)]
     fn provider_selects_the_family(#[case] provider: &str, #[case] family: ExceptionFamily) {

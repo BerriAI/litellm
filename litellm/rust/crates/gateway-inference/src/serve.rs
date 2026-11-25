@@ -21,7 +21,7 @@ use crate::{
     headers::Routing,
     hooks::{self, CallType, ServedBy},
     model_restamp::ReportedModel,
-    record::{self, ErrorResponse},
+    record::{self, CallFailure, ErrorResponse},
     request,
     routing::{self, Host, RouteAttempt},
     stream_event::Counts,
@@ -149,8 +149,14 @@ where
     };
     served.unwrap_or_else(|mut ended| {
         let routing = ended.routing.take();
-        let error = error_response::<H, E>(gateway, ended.raised_on.as_deref(), &ended.error);
-        record::write(|entries| entries.respond_with_error(routing, error));
+        let raised_on = ended.raised_on.as_deref();
+        let error = error_response::<H, E>(gateway, raised_on, &ended.error);
+        let provider = failed_provider(gateway, raised_on);
+        let failure = CallFailure::raised(&ended.error, provider.as_deref(), error.timeout);
+        record::write(|entries| {
+            entries.respond_with_error(routing, error);
+            entries.failure = Some(failure);
+        });
         ended.response(E::ERRORS, call.request_id.as_deref())
     })
 }
@@ -179,4 +185,23 @@ fn error_response<H: Host, E: Endpoint>(
         timeout,
         provider_headers: error.provider_headers(),
     }
+}
+
+/// The provider the exception a failed call raised names: the provider of the deployment whose
+/// attempt raised it, else the one the call's model resolves to as
+/// `resolve_llm_provider_for_rate_limit` resolves it for a limiter's refusal, by the model's
+/// provider prefix and then by the first deployment of the model group it names.
+fn failed_provider<H: Host>(gateway: &Gateway<H>, raised_on: Option<&str>) -> Option<String> {
+    let registry = gateway.router.registry();
+    if let Some(deployment) = raised_on.and_then(|id| registry.deployment(id)) {
+        return Some(deployment.provider().to_owned());
+    }
+    let model = record::read(|entries| entries.model().map(str::to_owned)).flatten()?;
+    if let Some((provider, _)) = model.split_once('/') {
+        return Some(provider.to_owned());
+    }
+    let group = registry.group(&model)?;
+    group
+        .first()
+        .map(|deployment| deployment.provider().to_owned())
 }

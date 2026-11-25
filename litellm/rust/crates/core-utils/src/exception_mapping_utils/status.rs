@@ -2,7 +2,7 @@ use super::public::PublicError;
 
 /// `_map_exception_by_status`, the one place a provider status picks a class. Statuses
 /// below 400 are not failures the table claims.
-pub(super) fn classify(status: u16) -> Option<PublicError> {
+pub fn classify(status: u16) -> Option<PublicError> {
     let error = match status {
         ..400 => return None,
         401 => PublicError::Authentication,

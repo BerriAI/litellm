@@ -36,6 +36,7 @@ litellm-cache.workspace = true
 litellm-core-utils.workspace = true
 litellm-router-types.workspace = true
 litellm-secrets.workspace = true
+litellm-standard-logging.workspace = true
 parking_lot.workspace = true
 litellm-llms-types.workspace = true
 serde.workspace = true

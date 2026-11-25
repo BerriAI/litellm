@@ -5,7 +5,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{Map, Value};
 
-use super::{AttemptRecord, ServedDeployment};
+use super::{AttemptRecord, CallFailure, ServedDeployment};
 use crate::{CallType, ServedCall, headers::Routing};
 
 const MODEL: &str = "model";
@@ -122,6 +122,8 @@ pub struct CallState {
     /// How the call ended, for a call that ended on an error, whose response names only what
     /// [`CallState::respond_with_error`] was told.
     error_response: Option<ErrorResponse>,
+    /// How the call failed, as Python's failure payload logs it.
+    pub failure: Option<CallFailure>,
     /// Whether the call's attempts run under a deployment's stream timeout, by the route's own
     /// rule.
     pub stream_timeout: bool,
@@ -162,6 +164,7 @@ impl CallState {
             attempt: None,
             failed_attempts: Vec::new(),
             error_response: None,
+            failure: None,
             stream_timeout: false,
             stream_response: false,
             callback_time: Duration::ZERO,

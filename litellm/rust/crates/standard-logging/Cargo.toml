@@ -7,8 +7,10 @@ repository.workspace = true
 description = "The StandardLoggingPayload of litellm/types/utils.py: one call as every logging callback receives it"
 
 [dependencies]
+regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+strum.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true
