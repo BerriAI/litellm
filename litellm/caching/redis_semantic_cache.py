@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from litellm.router import Router
 
 SUPPORTED_REDISVL_VERSIONS: Final = ">=0.26.0,<1.0"
+REDISVL_VERSIONS_WITH_WRONG_ASYNC_HITS: Final = ">=0.5.1,<0.13.0"
 
 
 class _RedisvlCacheClasses(NamedTuple):
@@ -178,6 +179,14 @@ class RedisSemanticCache(BaseCache):
         # billable embedding on top of the request's own.
         redisvl_classes: Final = _redisvl_cache_classes()
         redisvl_version: Final = version("redisvl")
+        if redisvl_version in SpecifierSet(REDISVL_VERSIONS_WITH_WRONG_ASYNC_HITS):
+            verbose_logger.error(
+                "Redis semantic cache is off because redisvl %s returns async hits for other prompts, "
+                "install a fixed one with `pip install 'redisvl%s'`",
+                redisvl_version,
+                SUPPORTED_REDISVL_VERSIONS,
+            )
+            raise ImportError(f"redisvl {redisvl_version} returns async semantic-cache hits for other prompts")
         if redisvl_version not in SpecifierSet(SUPPORTED_REDISVL_VERSIONS):
             verbose_logger.warning(
                 "Redis semantic cache supports redisvl%s but found %s, install one with `pip install 'redisvl%s'`",

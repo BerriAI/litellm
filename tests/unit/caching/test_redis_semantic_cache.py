@@ -20,6 +20,13 @@ def _fake_redisvl_modules(semantic_cache_mock: MagicMock, custom_vectorizer_mock
         yield
 
 
+def _install_redisvl_distribution(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, installed_redisvl: str) -> None:
+    dist_info: Final = tmp_path / f"redisvl-{installed_redisvl}.dist-info"
+    dist_info.mkdir()
+    _ = (dist_info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: redisvl\nVersion: {installed_redisvl}\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+
+
 # Tests for RedisSemanticCache
 def test_redis_semantic_cache_initialization(monkeypatch):
     # Mock the redisvl import
@@ -321,10 +328,7 @@ def test_redis_semantic_cache_warns_when_the_installed_redisvl_is_outside_the_su
 ) -> None:
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
-    dist_info: Final = tmp_path / f"redisvl-{installed_redisvl}.dist-info"
-    dist_info.mkdir()
-    _ = (dist_info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: redisvl\nVersion: {installed_redisvl}\n")
-    monkeypatch.syspath_prepend(str(tmp_path))
+    _install_redisvl_distribution(monkeypatch, tmp_path, installed_redisvl)
     redis_semantic_cache: Final = RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=0.8)
 
     with _fake_redisvl_modules(MagicMock(), MagicMock()), caplog.at_level(logging.WARNING, logger="LiteLLM"):
@@ -335,6 +339,47 @@ def test_redis_semantic_cache_warns_when_the_installed_redisvl_is_outside_the_su
         for record in caplog.records
     )
     assert warned is warns
+
+
+@pytest.mark.parametrize("installed_redisvl", ["0.5.1", "0.12.1"])
+def test_redis_semantic_cache_refuses_redisvl_whose_async_lookups_return_hits_for_other_prompts(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    installed_redisvl: str,
+) -> None:
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    _install_redisvl_distribution(monkeypatch, tmp_path, installed_redisvl)
+    semantic_cache_cls: Final = MagicMock()
+    redis_semantic_cache: Final = RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=0.8)
+
+    with _fake_redisvl_modules(semantic_cache_cls, MagicMock()), caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        with pytest.raises(ImportError, match=f"redisvl {installed_redisvl} returns async semantic-cache hits"):
+            _ = redis_semantic_cache.llmcache
+
+    semantic_cache_cls.assert_not_called()
+    assert any(
+        f"redisvl {installed_redisvl} returns async hits for other prompts, "
+        "install a fixed one with `pip install 'redisvl>=0.26.0,<1.0'`" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize("installed_redisvl", ["0.4.1", "0.13.0"])
+def test_redis_semantic_cache_builds_on_redisvl_outside_the_wrong_async_hit_range(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    installed_redisvl: str,
+) -> None:
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    _install_redisvl_distribution(monkeypatch, tmp_path, installed_redisvl)
+    semantic_cache_cls: Final = MagicMock()
+    redis_semantic_cache: Final = RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=0.8)
+
+    with _fake_redisvl_modules(semantic_cache_cls, MagicMock()):
+        assert redis_semantic_cache.llmcache is semantic_cache_cls.return_value
 
 
 def test_redis_semantic_cache_matches_bytes_cache_key():
