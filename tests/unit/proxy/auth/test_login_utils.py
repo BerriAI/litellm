@@ -11,6 +11,7 @@ import json
 import os
 from collections.abc import Mapping
 from contextlib import ExitStack
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final
@@ -24,7 +25,7 @@ if TYPE_CHECKING:
     from litellm.proxy.auth.login_throttle import LoginThrottle
 
 
-def _unlimited_throttle():
+def _unlimited_throttle() -> "LoginThrottle":
     """A throttle wired to real in-memory stores with limits no test can reach."""
     from litellm.caching.in_memory_cache import InMemoryCache
     from litellm.proxy.auth.login_throttle import LoginThrottle
@@ -260,7 +261,7 @@ async def test_authenticate_user_invalid_credentials():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("configured", "premium"), [(True, True), (False, True), (True, False)])
-async def test_rejected_login_exports_only_safe_audit_fields_when_enabled(
+async def test_credential_rejections_export_only_safe_audit_fields_and_throttle_rejections_export_nothing(
     configured: bool, premium: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("UI_USERNAME", "configured-admin")
@@ -271,18 +272,20 @@ async def test_rejected_login_exports_only_safe_audit_fields_when_enabled(
     sink: Final = _AuditSink()
     monkeypatch.setattr("litellm.audit_log_callbacks", [sink])
 
-    with pytest.raises(ProxyException) as error:
-        await authenticate_user(
-            username="unverified-admin",
-            password="rejected-password",
-            master_key=MASTER_KEY,
-            prisma_client=None,
-            throttle=_unlimited_throttle(),
-            audit_route="/v2/login",
-        )
+    throttle: Final = replace(_unlimited_throttle(), user_limit=1)
+    for expected_status in ("401", "401", "429"):
+        with pytest.raises(ProxyException) as error:
+            await authenticate_user(
+                username="unverified-admin",
+                password="rejected-password",
+                master_key=MASTER_KEY,
+                prisma_client=None,
+                throttle=throttle,
+                audit_route="/v2/login",
+            )
+        assert error.value.code == expected_status
     await drain_audit_tasks()
 
-    assert error.value.code == "401"
     expected = (
         "login_failed",
         "LiteLLM_UserTable",
@@ -304,7 +307,7 @@ async def test_rejected_login_exports_only_safe_audit_fields_when_enabled(
         )
         for event in (sink.events.get_nowait() for _ in range(sink.events.qsize()))
     )
-    assert observed == ((expected,) if configured and premium else ())
+    assert observed == ((expected, expected) if configured and premium else ())
 
 
 @pytest.mark.asyncio

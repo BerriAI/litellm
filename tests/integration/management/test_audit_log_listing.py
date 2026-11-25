@@ -96,6 +96,7 @@ def test_the_audit_page_records_local_admin_login_once_and_leaves_rejections_una
         "general_settings:\n"
         "  master_key: os.environ/LITELLM_MASTER_KEY\n"
         "  control_plane_url: https://control-plane.example.invalid\n"
+        "  max_failed_login_attempts_per_source: 2\n"
         "litellm_settings:\n"
         "  store_audit_logs: true\n"
     )
@@ -116,25 +117,28 @@ def test_the_audit_page_records_local_admin_login_once_and_leaves_rejections_una
         candidate: Final = owned.gateway
         code: Final = string_value(candidate.post("/v3/login", {"username": username, "password": password})["code"])
         exchange: Final = candidate.post("/v3/login/exchange", {"code": code})
-        rejected: Final = candidate.request("POST", "/v2/login", {"username": username, "password": "wrong-password"})
-        assert rejected.status_code == 401
+        bad_credentials: Final = {"username": username, "password": "wrong-password"}
+        outcomes: Final = tuple(candidate.request("POST", "/v2/login", bad_credentials).status_code for _ in range(3))
+        assert outcomes == (401, 401, 429)
         assert string_value(exchange["token"])
 
-        eventually(lambda: candidate.rows(sql, actions), lambda rows: len(rows) >= len(original) + 2, seconds=30)
+        eventually(lambda: candidate.rows(sql, actions), lambda rows: len(rows) >= len(original) + 3, seconds=30)
         page: Final = candidate.request("GET", "/audit", params={"action": "login_failed"})
         assert page.status_code == 200
         events: Final = tuple(object_value(row) for row in list_value(object_value(page.json())["audit_logs"]))
         assert [(row["action"], row["updated_values"]) for row in events if row["id"] not in original] == [
             ("login_failed", {"route": "/v2/login", "reason": "invalid_credentials"})
-        ]
+        ] * 2
 
     added: Final = [row for row in read_rows(sql, actions, database_url=db) if row["id"] not in original]
-    assert sorted(string_value(row["action"]) for row in added) == ["login", "login_failed"]
+    assert sorted(string_value(row["action"]) for row in added) == ["login", "login_failed", "login_failed"]
     success: Final = next(row for row in added if row["action"] == "login")
-    failure: Final = next(row for row in added if row["action"] == "login_failed")
     assert success["object_id"] and success["changed_by"] == success["object_id"]
     assert success["changed_by_api_key"] == ""
-    assert success["table_name"] == failure["table_name"] == "LiteLLM_UserTable"
+    assert {row["table_name"] for row in added} == {"LiteLLM_UserTable"}
     assert success["updated_values"] == {"route": "/v3/login"}
-    assert failure["object_id"] == failure["changed_by"] == failure["changed_by_api_key"] == ""
-    assert failure["updated_values"] == {"route": "/v2/login", "reason": "invalid_credentials"}
+    assert [
+        (row["object_id"], row["changed_by"], row["changed_by_api_key"], row["updated_values"])
+        for row in added
+        if row["action"] == "login_failed"
+    ] == [("", "", "", {"route": "/v2/login", "reason": "invalid_credentials"})] * 2

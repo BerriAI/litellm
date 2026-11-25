@@ -319,15 +319,12 @@ async def authenticate_user(
             code=500,
         )
 
+    attempt: Final = await throttle.attempt(username)
     try:
-        attempt: Final = await throttle.attempt(username)
         result: Final = await _sign_in(username, password, master_key, prisma_client, attempt, general_settings)
     except ProxyException as exc:
-        if audit_route is not None and exc.type == ProxyErrorTypes.auth_error:
-            if exc.code == "401":
-                _schedule_login_audit(audit_route, reason="invalid_credentials")
-            elif exc.code == "429":
-                _schedule_login_audit(audit_route, reason="throttled")
+        if audit_route is not None and exc.type == ProxyErrorTypes.auth_error and exc.code == "401":
+            _schedule_login_audit(audit_route, reason="invalid_credentials")
         raise
 
     if audit_route is not None and result.user_role == LitellmUserRoles.PROXY_ADMIN:
