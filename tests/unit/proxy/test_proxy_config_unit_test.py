@@ -22,6 +22,7 @@ import yaml
 
 import litellm
 from litellm.proxy.proxy_server import ProxyConfig
+from tests._master_key import MASTER_KEY
 
 INVALID_FILES = ["config_with_missing_include.yaml"]
 
@@ -378,3 +379,59 @@ async def test_proxy_config_model_fallbacks_never_becomes_the_sdk_global_fallbac
     _ = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
 
     assert litellm.model_fallbacks is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("empty", [[], None, {}])
+async def test_get_config_keeps_the_general_settings_a_config_sets_over_an_empty_included_section(
+    tmp_path: Path, empty: object
+) -> None:
+    general_settings: Final = {"master_key": MASTER_KEY, "allowed_ips": ["10.9.9.9"]}
+    (tmp_path / "shared.yaml").write_text(yaml.safe_dump({"general_settings": empty}))
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump({"model_list": [], "include": ["shared.yaml"], "general_settings": general_settings})
+    )
+
+    config: Final = await ProxyConfig().get_config(config_file_path=str(config_path))
+
+    assert config["general_settings"] == general_settings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("settings", ["callbacks", [{"callbacks": ["prometheus"]}]])
+async def test_get_config_keeps_a_set_litellm_settings_that_is_not_a_mapping(
+    tmp_path: Path, settings: object
+) -> None:
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump({"model_list": [], "litellm_settings": settings}))
+
+    config: Final = await ProxyConfig().get_config(config_file_path=str(config_path))
+
+    assert config["litellm_settings"] == settings
+
+
+@pytest.mark.asyncio
+async def test_load_config_with_mcp_servers_boots_when_litellm_settings_is_empty(tmp_path: Path) -> None:
+    from litellm.proxy.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    config_path: Final = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "model_list": [],
+                "litellm_settings": [],
+                "mcp_servers": {"empty_settings_server": {"url": "http://127.0.0.1:9/mcp", "transport": "http"}},
+            }
+        )
+    )
+    loaded_before: Final = dict(global_mcp_server_manager.config_mcp_servers)
+
+    try:
+        await ProxyConfig().load_config(router=None, config_file_path=str(config_path))
+        loaded: Final = {server.name for server in global_mcp_server_manager.config_mcp_servers.values()}
+    finally:
+        global_mcp_server_manager.config_mcp_servers.clear()
+        global_mcp_server_manager.config_mcp_servers.update(loaded_before)
+
+    assert "empty_settings_server" in loaded

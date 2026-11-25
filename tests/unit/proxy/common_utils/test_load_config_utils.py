@@ -231,6 +231,32 @@ class TestBucketConfigIncludes:
         }
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("section", ["general_settings", "router_settings", "litellm_settings"])
+    @pytest.mark.parametrize("empty", [[], None, "", False, {}])
+    async def test_an_empty_settings_section_in_an_included_object_keeps_the_section_the_config_sets(
+        self, section, empty
+    ):
+        merged = await resolve_bucket_includes(
+            config={"include": ["shared.yaml"], section: {"num_retries": 2}},
+            object_key="configs/config.yaml",
+            fetch=self._bucket({"configs/shared.yaml": {section: empty}}),
+        )
+
+        assert merged == {section: {"num_retries": 2}}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("section", ["general_settings", "router_settings", "litellm_settings"])
+    @pytest.mark.parametrize("empty", [[], None, "", 0, False, {}])
+    async def test_an_empty_settings_section_in_the_config_object_reads_as_no_section(self, section, empty):
+        merged = await resolve_bucket_includes(
+            config={"model_list": [], section: empty},
+            object_key="configs/config.yaml",
+            fetch=self._bucket({}),
+        )
+
+        assert merged == {"model_list": []}
+
+    @pytest.mark.asyncio
     async def test_a_missing_included_object_fails_loudly_with_its_key(self):
         with pytest.raises(FileNotFoundError, match=re.escape("configs/prod/model_config.yaml")):
             await resolve_bucket_includes(

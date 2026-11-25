@@ -29,7 +29,7 @@ import yaml
 from click.testing import CliRunner
 from fastapi.testclient import TestClient
 from gunicorn.config import Config as GunicornConfig
-from pydantic import SecretStr, TypeAdapter
+from pydantic import SecretStr, TypeAdapter, ValidationError
 from uvicorn.config import LOOP_FACTORIES
 from uvicorn.importer import import_from_string
 
@@ -4886,6 +4886,65 @@ class TestJsonLogsConfigReachesSpawnedWorkers:
         )
 
         assert exported == "true"
+
+
+@pytest.mark.parametrize("section", ["litellm_settings", "general_settings"])
+@pytest.mark.parametrize("empty", [[], "", 0, False])
+def test_an_empty_settings_section_boots_two_workers_from_a_cli_config(
+    tmp_path: Path, section: str, empty: object
+) -> None:
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"model_list": [], section: empty}))
+    unset: Final = frozenset(
+        ("DATABASE_URL", "DIRECT_URL", "CONFIG_FILE_PATH", "PROMETHEUS_MULTIPROC_DIR", "prometheus_multiproc_dir")
+    )
+    env: Final = {k: v for k, v in os.environ.items() if k not in unset}
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch("litellm.proxy.proxy_cli.start_query_engine_reaper"),  # test-quality-ok: makes pytest a subreaper
+        patch("uvicorn.run") as uvicorn_run,
+    ):
+        result: Final = CliRunner().invoke(run_server, ["--config", str(config_file), "--num_workers", "2"])
+
+    assert result.exit_code == 0, result.output
+    assert uvicorn_run.call_args.kwargs["workers"] == 2
+
+
+def test_a_prometheus_callback_in_a_cli_config_exports_the_multiproc_dir_for_two_workers(tmp_path: Path) -> None:
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"model_list": [], "litellm_settings": {"callbacks": ["prometheus"]}}))
+    multiproc_dir: Final = tmp_path / "multiproc"
+    unset: Final = frozenset(("DATABASE_URL", "DIRECT_URL", "CONFIG_FILE_PATH", "PROMETHEUS_MULTIPROC_DIR"))
+    env: Final = {
+        **{k: v for k, v in os.environ.items() if k not in unset},
+        "prometheus_multiproc_dir": str(multiproc_dir),
+    }
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch("litellm.proxy.proxy_cli.start_query_engine_reaper"),  # test-quality-ok: makes pytest a subreaper
+        patch("uvicorn.run"),
+    ):
+        result: Final = CliRunner().invoke(run_server, ["--config", str(config_file), "--num_workers", "2"])
+        exported: Final = os.environ.get("PROMETHEUS_MULTIPROC_DIR")
+
+    assert result.exit_code == 0, result.output
+    assert exported == str(multiproc_dir)
+
+
+@pytest.mark.parametrize("litellm_settings", ["callbacks", [{"callbacks": ["prometheus"]}]])
+def test_a_non_mapping_litellm_settings_fails_the_cli_boot_naming_the_key(
+    tmp_path: Path, litellm_settings: object
+) -> None:
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text(yaml.dump({"model_list": [], "litellm_settings": litellm_settings}))
+    unset: Final = frozenset(("DATABASE_URL", "DIRECT_URL", "CONFIG_FILE_PATH"))
+    env: Final = {k: v for k, v in os.environ.items() if k not in unset}
+    with patch.dict(os.environ, env, clear=True), patch("uvicorn.run") as uvicorn_run:
+        result: Final = CliRunner().invoke(run_server, ["--config", str(config_file), "--num_workers", "2"])
+
+    assert isinstance(result.exception, ValidationError)
+    assert "litellm_settings" in str(result.exception)
+    uvicorn_run.assert_not_called()
 
 
 class TestEnforcePrismaMigrationCheckNoticeAroundTheConfigRead:

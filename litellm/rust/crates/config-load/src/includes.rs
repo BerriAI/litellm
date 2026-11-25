@@ -3,10 +3,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use litellm_python_compat::lenient::Truthy;
 use serde::Deserialize;
+use serde_with::DeserializeAs;
 use serde_yaml_ng::{Mapping, Value};
 
 use crate::Error;
+
+const SETTINGS_SECTIONS: [&str; 3] = ["general_settings", "litellm_settings", "router_settings"];
 
 #[derive(Deserialize)]
 struct Includes {
@@ -23,10 +27,21 @@ fn read(path: &Path) -> Result<Mapping, Error> {
         path: path.to_owned(),
         source,
     })?;
-    serde_yaml_ng::from_value(document).map_err(|source| Error::ParseFile {
-        path: path.to_owned(),
-        source,
-    })
+    let config: Mapping =
+        serde_yaml_ng::from_value(document).map_err(|source| Error::ParseFile {
+            path: path.to_owned(),
+            source,
+        })?;
+    Ok(config
+        .into_iter()
+        .filter(|(key, value)| !is_empty_settings_section(key, value))
+        .collect())
+}
+
+fn is_empty_settings_section(key: &Value, value: &Value) -> bool {
+    key.as_str()
+        .is_some_and(|key| SETTINGS_SECTIONS.contains(&key))
+        && !Truthy::deserialize_as(value).unwrap_or(true)
 }
 
 fn canonical(path: &Path) -> Result<PathBuf, Error> {

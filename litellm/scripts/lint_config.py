@@ -410,7 +410,10 @@ def lint_file(config_path: Path, environ: Mapping[str, str]) -> tuple[Finding, .
 
 
 def _included_items(location: str) -> tuple[tuple[str, object], ...]:
-    return tuple((_mapping(yaml.safe_load(Path(location).read_text(encoding="utf-8"))) or {}).items())
+    from litellm.proxy.common_utils.config_includes import is_empty_settings_section
+
+    included: Final = _mapping(yaml.safe_load(Path(location).read_text(encoding="utf-8"))) or {}
+    return tuple((key, value) for key, value in included.items() if not is_empty_settings_section(key, value))
 
 
 def _located(found: Finding, lines: Mapping[PathKey, int], replaced: frozenset[str], has_includes: bool) -> Finding:
