@@ -7,11 +7,15 @@ otherwise record its own duration instead of the call's.
 
 import json
 import logging
+import os
 import threading
 import time
 import uuid
 from base64 import b64encode
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from functools import partial
+from hashlib import sha256
 from time import monotonic, sleep
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
@@ -39,8 +43,11 @@ from litellm.integrations.langfuse.langfuse_sdk import (
     LangfusePromptError,
     LangfuseSpanExporter,
     LangfuseTracing,
+    LangfuseTransformingSpanExporter,
+    SdkMediaExporter,
     _build_span_exporter,
     _encode,
+    _rest_api,
     acquire_langfuse_tracing,
     build_langfuse_client,
     build_langfuse_tracing,
@@ -59,6 +66,7 @@ from litellm.integrations.langfuse.langfuse_sdk import (
     trace_attributes,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 CALL_START = datetime(2024, 3, 1, 12, 0, 0, tzinfo=timezone.utc)
 FIRST_TOKEN = CALL_START + timedelta(seconds=5)
@@ -877,9 +885,7 @@ def test_release_of_a_channel_the_registry_never_handed_out_is_a_no_op():
 def test_flush_langfuse_tracing_exports_the_queued_spans_of_every_channel(monkeypatch: pytest.MonkeyPatch):
     """The proxy shutdown hook flushes through this, so a span finished just before a
     graceful restart must reach the exporter without waiting for the batch interval."""
-    exporters: Final[
-        list[InMemorySpanExporter]
-    ] = []
+    exporters: Final[list[InMemorySpanExporter]] = []
 
     def build_in_memory(*, public_key: str, secret_key: str, base_url: str) -> InMemorySpanExporter:
         exporters.append(InMemorySpanExporter())
@@ -1780,3 +1786,204 @@ def test_prompt_cache_keeps_a_missing_label_apart_from_the_label_named_none():
     assert named_none.prompt == "label='None'"
     assert cached_unlabelled is unlabelled
     assert api.requests == [("greeting", None, None), ("greeting", None, "None")]
+
+
+IMAGE: Final = b"\x89PNG langfuse media " * 40
+IMAGE_SHA256: Final = b64encode(sha256(IMAGE).digest()).decode()
+IMAGE_MEDIA_ID: Final = IMAGE_SHA256.replace("+", "-").replace("/", "_")[:22]
+IMAGE_URI: Final = "data:image/png;base64," + b64encode(IMAGE).decode()
+IMAGE_REFERENCE: Final = f"@@@langfuseMedia:type=image/png|id={IMAGE_MEDIA_ID}|source=base64_data_uri@@@"
+IMAGE_MESSAGES: Final = json.dumps(
+    [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "what is this"},
+                {"type": "image_url", "image_url": {"url": IMAGE_URI}},
+            ],
+        }
+    ]
+)
+
+
+class _LangfuseMediaApi:
+    """Answers the three requests of a media upload the way Langfuse and its storage do, and keeps them."""
+
+    def __init__(self, storage_status: int = 200, storage_open: threading.Event | None = None) -> None:
+        self.requests: Final[list[httpx.Request]] = []
+        self.storage_status: Final = storage_status
+        self.storage_open: Final = storage_open
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if request.method == "POST":
+            media_id: Final = json.loads(request.content)["sha256Hash"].replace("+", "-").replace("/", "_")[:22]
+            return httpx.Response(
+                201, json={"mediaId": media_id, "uploadUrl": "http://storage.test/bucket/" + media_id}
+            )
+        if request.method == "PUT":
+            if self.storage_open is not None:
+                self.storage_open.wait(10)
+            return httpx.Response(self.storage_status, text="storage said so")
+        return httpx.Response(200, json={})
+
+    def sent(self, method: str) -> tuple[httpx.Request, ...]:
+        return tuple(request for request in self.requests if request.method == method)
+
+
+def _media_channel(
+    langfuse: Callable[[httpx.Request], httpx.Response],
+) -> tuple[LangfuseTracing, InMemorySpanExporter]:
+    exporter: Final = InMemorySpanExporter()
+    media: Final = SdkMediaExporter(
+        exporter,
+        transforming=LangfuseTransformingSpanExporter,
+        api=partial(_rest_api, public_key="pk-media", secret_key="sk-media", base_url="http://langfuse.test"),
+        http_handler=lambda: HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(langfuse))),
+    )
+    return (
+        build_langfuse_tracing(
+            exporter=media, media=media, environment=None, release=None, sample_rate=1.0, flush_interval_millis=10
+        ),
+        exporter,
+    )
+
+
+def _exported_input(tracing: LangfuseTracing, exporter: InMemorySpanExporter, value: str) -> str:
+    _generation(tracing, name="media", attributes={A.OBSERVATION_INPUT: value}).end(CALL_END)
+    assert tracing.flush() is True
+    return str(_only_span(exporter, "media").attributes[A.OBSERVATION_INPUT])
+
+
+def test_base64_image_is_exported_as_a_media_reference_and_its_bytes_go_to_media_storage():
+    langfuse: Final = _LangfuseMediaApi()
+    tracing, exporter = _media_channel(langfuse)
+
+    exported: Final = _exported_input(tracing, exporter, IMAGE_MESSAGES)
+
+    assert json.loads(exported) == json.loads(IMAGE_MESSAGES.replace(IMAGE_URI, IMAGE_REFERENCE))
+    span: Final = _only_span(exporter, "media")
+    (registration,) = langfuse.sent("POST")
+    assert registration.url == "http://langfuse.test/api/public/media"
+    registered: Final = json.loads(registration.content)
+    assert {key: registered[key] for key in ("traceId", "observationId", "contentType", "contentLength")} == {
+        "traceId": format(span.context.trace_id, "032x"),
+        "observationId": format(span.context.span_id, "016x"),
+        "contentType": "image/png",
+        "contentLength": len(IMAGE),
+    }
+    assert (registered["sha256Hash"], registered["field"]) == (IMAGE_SHA256, "input")
+    (upload,) = langfuse.sent("PUT")
+    assert (str(upload.url), upload.content) == ("http://storage.test/bucket/" + IMAGE_MEDIA_ID, IMAGE)
+    assert upload.headers["content-type"] == "image/png"
+    (confirmation,) = langfuse.sent("PATCH")
+    assert confirmation.url == "http://langfuse.test/api/public/media/" + IMAGE_MEDIA_ID
+    assert json.loads(confirmation.content)["uploadHttpStatus"] == 200
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "plain text",
+        json.dumps([{"role": "user", "content": "decode it with data:text/plain;base64 in the browser"}]),
+        json.dumps({"media_type": "image/png", "note": "a typed block without data"}),
+    ],
+    ids=["text", "data-uri-in-prose", "content-type-without-data"],
+)
+def test_values_without_media_are_exported_as_they_are_and_nothing_is_uploaded(value):
+    langfuse: Final = _LangfuseMediaApi()
+    tracing, exporter = _media_channel(langfuse)
+
+    assert _exported_input(tracing, exporter, value) == value
+    assert langfuse.requests == []
+
+
+def test_flush_is_false_while_a_media_upload_is_still_on_its_way():
+    storage_open: Final = threading.Event()
+    langfuse: Final = _LangfuseMediaApi(storage_open=storage_open)
+    tracing, _ = _media_channel(langfuse)
+    _generation(tracing, name="media", attributes={A.OBSERVATION_INPUT: IMAGE_MESSAGES}).end(CALL_END)
+
+    assert tracing.flush(timeout_millis=300) is False
+    storage_open.set()
+    assert tracing.flush() is True
+    assert len(langfuse.sent("PATCH")) == 1
+
+
+def test_shutdown_sends_the_queued_media_before_the_channel_goes_away():
+    storage_open: Final = threading.Event()
+    langfuse: Final = _LangfuseMediaApi(storage_open=storage_open)
+    tracing, _ = _media_channel(langfuse)
+    _generation(tracing, name="media", attributes={A.OBSERVATION_INPUT: IMAGE_MESSAGES}).end(CALL_END)
+    slow_storage: Final = threading.Timer(0.3, storage_open.set)
+    slow_storage.start()
+
+    tracing.shutdown()
+
+    assert len(langfuse.sent("PUT")) == 1
+    assert len(langfuse.sent("PATCH")) == 1
+
+
+def test_storage_refusal_is_reported_to_langfuse_and_the_span_keeps_its_reference():
+    langfuse: Final = _LangfuseMediaApi(storage_status=403)
+    tracing, exporter = _media_channel(langfuse)
+
+    assert IMAGE_REFERENCE in _exported_input(tracing, exporter, IMAGE_MESSAGES)
+    (confirmation,) = langfuse.sent("PATCH")
+    assert json.loads(confirmation.content)["uploadHttpStatus"] == 403
+
+
+def test_only_a_live_channel_on_an_sdk_with_export_stage_media_handling_uploads_media(monkeypatch: pytest.MonkeyPatch):
+    assert _acquire(public_key="pk-media-live", mock_mode=False).media is not None
+    assert _acquire(public_key="pk-media-mock", mock_mode=True).media is None
+    monkeypatch.setattr("litellm.integrations.langfuse.langfuse_sdk.LangfuseTransformingSpanExporter", None)
+    assert _acquire(public_key="pk-media-old-sdk", mock_mode=False).media is None
+
+
+_FORKED_UPLOAD: Final = f"""
+import os, sys
+from functools import partial
+
+import httpx
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+from litellm.integrations.langfuse.langfuse_sdk import (
+    LangfuseTransformingSpanExporter, SdkMediaExporter, _rest_api, build_langfuse_tracing
+)
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+uploads = []
+
+
+def langfuse(request):
+    if request.method == "POST":
+        return httpx.Response(201, json={{"mediaId": {IMAGE_MEDIA_ID!r}, "uploadUrl": "http://storage.test/bucket"}})
+    if request.method == "PUT":
+        uploads.append(request)
+    return httpx.Response(200, json={{}})
+
+
+media = SdkMediaExporter(
+    InMemorySpanExporter(),
+    transforming=LangfuseTransformingSpanExporter,
+    api=partial(_rest_api, public_key="pk-media", secret_key="sk-media", base_url="http://langfuse.test"),
+    http_handler=lambda: HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(langfuse))),
+)
+tracing = build_langfuse_tracing(
+    exporter=media, media=media, environment=None, release=None, sample_rate=1.0, flush_interval_millis=10
+)
+child = os.fork()
+if child == 0:
+    span = tracing.tracer.start_span("media")
+    span.set_attribute("langfuse.observation.input", {IMAGE_MESSAGES!r})
+    span.end()
+    os._exit(0 if tracing.flush(10_000) and len(uploads) == 1 else 1)
+sys.exit(os.waitstatus_to_exitcode(os.waitpid(child, 0)[1]))
+"""
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+def test_a_forked_child_uploads_the_media_of_the_spans_it_exports():
+    """The parent's upload thread does not exist in the child, so the child has to start its own."""
+    finished: Final = run_child_interpreter(_FORKED_UPLOAD, timeout=60)
+    assert finished.returncode == 0, finished.stderr

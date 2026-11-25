@@ -4,8 +4,9 @@ import logging
 import os
 import re
 import threading
+import weakref
 from base64 import b64encode
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -13,6 +14,7 @@ from functools import partial, reduce
 from hashlib import sha256
 from importlib.metadata import version
 from itertools import chain
+from queue import Queue
 from time import monotonic, sleep
 from types import MappingProxyType
 from typing import Final, Literal
@@ -21,6 +23,12 @@ from urllib.parse import quote
 import httpx
 import opentelemetry.trace as otel_trace
 from langfuse import LangfuseOtelSpanAttributes
+from langfuse._task_manager.media_manager import (  # pyright: ignore[reportMissingTypeStubs]  # SDK ships no stubs
+    MediaManager,
+)
+from langfuse._task_manager.media_upload_consumer import (  # pyright: ignore[reportMissingTypeStubs]  # SDK ships no stubs
+    MediaUploadConsumer,
+)
 from langfuse.api import LangfuseAPI, Prompt, Prompt_Chat
 from langfuse.api.core.api_error import ApiError
 from langfuse.api.core.request_options import RequestOptions
@@ -35,6 +43,13 @@ from opentelemetry.sdk.trace.sampling import ALWAYS_ON, Decision, Sampler, Sampl
 from opentelemetry.trace import Link, NonRecordingSpan, Span, SpanContext, SpanKind, TraceFlags, Tracer, TraceState
 from opentelemetry.util.types import Attributes, AttributeValue
 from pydantic import ConfigDict
+
+try:
+    from langfuse._client.span_exporter import (  # pyright: ignore[reportMissingTypeStubs]  # SDK ships no stubs
+        LangfuseTransformingSpanExporter,
+    )
+except ImportError:
+    LangfuseTransformingSpanExporter = None  # pyright: ignore[reportAssignmentType]  # rebind-ok: absent before langfuse 4.9
 
 import litellm
 from litellm._logging import verbose_logger
@@ -92,6 +107,7 @@ _SERVER_FLOOR_HINT: Final = (
 )
 _langfuse_logger: Final = logging.getLogger("langfuse")
 _MAX_QUEUE_SIZE: Final = 100_000
+_SHUTDOWN_UPLOAD_MILLIS: Final = 5_000
 _DEFAULT_FLUSH_AT: Final = 512
 _CHANNEL_RETIRE_GRACE_SECONDS: Final = 60.0
 _DEFAULT_TIMEOUT_SECONDS: Final = 20.0
@@ -843,22 +859,98 @@ class _ExportLedger(SpanExporter):
         return self.exporter.force_flush(timeout_millis)
 
 
+class SdkMediaExporter(SpanExporter):
+    """Puts the Langfuse SDK's export-stage media handling in front of ``exporter``: base64 media in a span's
+    attributes becomes a media reference, and the SDK's upload thread sends the bytes to Langfuse's media storage."""
+
+    def __init__(
+        self,
+        exporter: SpanExporter,
+        *,
+        transforming: Callable[..., SpanExporter],
+        api: Callable[[httpx.Client], LangfuseAPI],
+        http_handler: Callable[[], HTTPHandler],
+    ) -> None:
+        self._exporter: Final = exporter
+        self._transforming_class: Final = transforming
+        self._api: Final = api
+        self._http_handler: Final = http_handler
+        self.start()
+        _LIVE_MEDIA_EXPORTERS.add(self)
+
+    def start(self) -> None:
+        """Also run in a forked child, where the parent's upload thread does not exist."""
+        self._handler = self._http_handler()
+        self._queue: Queue[object] = Queue(_MAX_QUEUE_SIZE)
+        self._manager = MediaManager(
+            api_client=self._api(self._handler.client),
+            httpx_client=self._handler.client,
+            media_upload_queue=self._queue,
+        )
+        self._consumer = MediaUploadConsumer(identifier=0, media_manager=self._manager)
+        self._consumer.start()
+        self._transforming = self._transforming_class(
+            exporter=self._exporter, media_manager=self._manager, mask_otel_spans=None
+        )
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        return self._transforming.export(spans)
+
+    def drain(self, timeout_millis: int) -> bool:
+        """Whether the upload thread got through everything queued within ``timeout_millis``."""
+        with self._queue.all_tasks_done:
+            return self._queue.all_tasks_done.wait_for(lambda: not self._queue.unfinished_tasks, timeout_millis / 1000)
+
+    def shutdown(self) -> None:
+        self._transforming.shutdown()
+        self.drain(_SHUTDOWN_UPLOAD_MILLIS)
+        self._consumer.pause()
+        self._manager.signal_shutdown()
+        self._handler.close()
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        return self._transforming.force_flush(timeout_millis)
+
+
+_LIVE_MEDIA_EXPORTERS: Final[weakref.WeakSet[SdkMediaExporter]] = weakref.WeakSet()
+
+
+def _restart_media_uploads_in_child() -> None:
+    for exporter in tuple(_LIVE_MEDIA_EXPORTERS):
+        exporter.start()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_restart_media_uploads_in_child)
+
+
+def _media_http_handler() -> HTTPHandler:
+    """The channel's own client: litellm closes a pooled one when its cache entry expires, and the SDK's upload
+    thread keeps the client it was built with."""
+    return HTTPHandler(timeout=configured_timeout(), follow_redirects=False)
+
+
 @dataclass(frozen=True, slots=True)
 class LangfuseTracing:
     """litellm's own export channel to one Langfuse project: a provider, its tracer and the exporter behind them.
 
     The channel is litellm's rather than the SDK's so that the process-global OTel provider stays
-    untouched, historical timestamps and caller ids are honoured, and no SDK internals are needed.
+    untouched and historical timestamps and caller ids are honoured.
     """
 
     provider: TracerProvider
     tracer: Tracer
     ledger: _ExportLedger
+    media: SdkMediaExporter | None = None
 
     def flush(self, timeout_millis: int = 30_000) -> bool:
-        """``True`` only when the queue drained in time and every batch it held was accepted by the destination."""
+        """``True`` only when the queue drained in time, every batch it held was accepted by the destination and
+        the media upload queue emptied. A failed upload is only logged, as in the SDK."""
+        deadline: Final = monotonic() + timeout_millis / 1000
         failed_before: Final = self.ledger.failed_batches
-        return self.provider.force_flush(timeout_millis) and self.ledger.failed_batches == failed_before
+        exported: Final = self.provider.force_flush(timeout_millis)
+        uploaded: Final = self.media is None or self.media.drain(max(0, int((deadline - monotonic()) * 1000)))
+        return exported and uploaded and self.ledger.failed_batches == failed_before
 
     def shutdown(self) -> None:
         self.provider.shutdown()
@@ -923,10 +1015,24 @@ def acquire_langfuse_tracing(
                 cached.retire.cancel()
             _TRACING[key] = replace(cached, holders=cached.holders + 1, retire=None)
             return cached.tracing
-        created: Final = build_langfuse_tracing(
-            exporter=DiscardingSpanExporter()
+        exporter: Final = (
+            DiscardingSpanExporter()
             if mock_mode
-            else _build_span_exporter(public_key=public_key, secret_key=secret_key, base_url=base_url),
+            else _build_span_exporter(public_key=public_key, secret_key=secret_key, base_url=base_url)
+        )
+        media: Final = (
+            None
+            if mock_mode or LangfuseTransformingSpanExporter is None
+            else SdkMediaExporter(
+                exporter,
+                transforming=LangfuseTransformingSpanExporter,
+                api=partial(_rest_api, public_key=public_key, secret_key=secret_key, base_url=base_url),
+                http_handler=_media_http_handler,
+            )
+        )
+        created: Final = build_langfuse_tracing(
+            exporter=media or exporter,
+            media=media,
             environment=environment,
             release=release,
             sample_rate=key.sample_rate,
@@ -1012,6 +1118,7 @@ def build_langfuse_tracing(
     sample_rate: float,
     flush_interval_millis: int,
     flush_at: int = _DEFAULT_FLUSH_AT,
+    media: SdkMediaExporter | None = None,
 ) -> LangfuseTracing:
     """Wire the provider from litellm's own settings so a host's ``OTEL_*`` variables do not steer it.
 
@@ -1039,7 +1146,7 @@ def build_langfuse_tracing(
             schedule_delay_millis=flush_interval_millis,
         )
     )
-    return LangfuseTracing(provider=provider, tracer=provider.get_tracer(_TRACER_NAME), ledger=ledger)
+    return LangfuseTracing(provider=provider, tracer=provider.get_tracer(_TRACER_NAME), ledger=ledger, media=media)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1201,15 +1308,21 @@ def build_langfuse_client(
     ``auth_check`` reports as a failure rather than raising at construction.
     """
     return LangfuseApiClient(
-        LangfuseAPI(
-            base_url=base_url,
-            username=public_key,
-            password=secret_key,
-            x_langfuse_sdk_name="python",
-            x_langfuse_sdk_version=version("langfuse"),
-            x_langfuse_public_key=public_key,
-            httpx_client=httpx_client,
-            timeout=configured_timeout(),
-        ),
+        _rest_api(httpx_client, public_key=public_key, secret_key=secret_key, base_url=base_url),
         prompt_cache_ttl_seconds=configured_prompt_cache_ttl(),
+    )
+
+
+def _rest_api(
+    httpx_client: httpx.Client | None, *, public_key: str | None, secret_key: str | None, base_url: str
+) -> LangfuseAPI:
+    return LangfuseAPI(
+        base_url=base_url,
+        username=public_key,
+        password=secret_key,
+        x_langfuse_sdk_name="python",
+        x_langfuse_sdk_version=version("langfuse"),
+        x_langfuse_public_key=public_key,
+        httpx_client=httpx_client,
+        timeout=configured_timeout(),
     )
