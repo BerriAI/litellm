@@ -682,6 +682,40 @@ async def test_a_guardrail_replacing_a_reply_with_one_text_replaces_its_first_te
     assert guardrailed["candidates"][0]["content"]["parts"] == ordered({"text": "Blocked by policy"}, code_part)
 
 
+class _LastTextOnlyGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="last-text-only")
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        if "zebrafruit" in (inputs.get("texts") or [""])[-1]:
+            raise GuardrailBlockedError("blocked")
+        return inputs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ordered",
+    [lambda text, code: [text, code], lambda text, code: [code, text]],
+    ids=["text_first", "code_first"],
+)
+async def test_a_guardrail_scanning_only_the_last_text_like_hiddenlayer_still_sees_a_reply_text_beside_code(
+    ordered: Callable[[dict[str, object], dict[str, object]], list[dict[str, object]]],
+) -> None:
+    code_part: Final = {"executableCode": {"language": "PYTHON", "code": "print(1)"}}
+    reply: Final = {"candidates": [{"content": {"role": "model", "parts": ordered({"text": "zebrafruit"}, code_part)}}]}
+
+    with pytest.raises(GuardrailBlockedError):
+        await GoogleGenAIGenerateContentHandler().process_output_response(
+            response=reply, guardrail_to_apply=_LastTextOnlyGuardrail()
+        )
+
+
 @pytest.mark.asyncio
 async def test_output_object_response_text_is_guardrailed_and_written_back():
     handler = GoogleGenAIGenerateContentHandler()

@@ -345,7 +345,15 @@ def _response_part_slots(response: object) -> tuple[_TextSlot, ...]:
     slots: Final = tuple(
         chain.from_iterable(_content_part_slots(content, _FULL_PART_SCOPE) for content in _candidate_contents(response))
     )
-    return (*filter(_is_text_part_slot, slots), *filterfalse(_is_text_part_slot, slots))
+    return (*filterfalse(_is_text_part_slot, slots), *filter(_is_text_part_slot, slots))
+
+
+def _reply_write_back_slots(
+    text_slots: Sequence[_TextSlot], guardrailed_texts: Sequence[str] | None
+) -> Sequence[_TextSlot]:
+    if guardrailed_texts is None or len(guardrailed_texts) >= len(text_slots):
+        return text_slots
+    return (*filter(_is_text_part_slot, text_slots), *filterfalse(_is_text_part_slot, text_slots))
 
 
 def _slot_texts(text_slots: Sequence[_TextSlot]) -> tuple[str, ...]:
@@ -987,7 +995,10 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
             input_type="response",
             logging_obj=litellm_logging_obj,
         )
-        _write_back_texts(text_slots, guardrailed_inputs.get("texts"), guardrail_to_apply.guardrail_name)
+        guardrailed_texts: Final = guardrailed_inputs.get("texts")
+        _write_back_texts(
+            _reply_write_back_slots(text_slots, guardrailed_texts), guardrailed_texts, guardrail_to_apply.guardrail_name
+        )
         _write_back_function_calls(
             call_groups, _returned_tool_calls(call_groups, guardrailed_inputs), guardrail_to_apply.guardrail_name
         )
