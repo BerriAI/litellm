@@ -47,6 +47,7 @@ chrono = [
     "dep:chrono",
     "sqlx-core/chrono",
 ]
+fips = ["dep:aws-lc-rs"]
 ipnet = [
     "dep:ipnet",
     "sqlx-core/ipnet",
@@ -93,6 +94,12 @@ path = "src/lib.rs"
 
 [dependencies.atoi]
 version = "2.0"
+
+[dependencies.aws-lc-rs]
+version = "1.14"
+features = ["fips"]
+optional = true
+default-features = false
 
 [dependencies.base64]
 version = "0.22.1"

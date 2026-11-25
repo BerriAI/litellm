@@ -82,6 +82,16 @@ impl PgConnection {
                             .await?;
                     }
 
+                    #[cfg(feature = "fips")]
+                    Authentication::Md5Password(_) => {
+                        return Err(err_protocol!(
+                            "the server asked for MD5 password authentication, which the FIPS build \
+                             refuses; store the role's password as SCRAM-SHA-256 \
+                             (password_encryption = scram-sha-256) and use scram-sha-256 in pg_hba.conf"
+                        ));
+                    }
+
+                    #[cfg(not(feature = "fips"))]
                     Authentication::Md5Password(body) => {
                         // The frontend must now send a [PasswordMessage] containing the
                         // password (with user name) encrypted via MD5, then encrypted again

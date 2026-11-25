@@ -8,6 +8,7 @@ use std::num::Saturating;
 pub enum Password<'a> {
     Cleartext(&'a str),
 
+    #[cfg_attr(feature = "fips", allow(dead_code))]
     Md5 {
         password: &'a str,
         username: &'a str,

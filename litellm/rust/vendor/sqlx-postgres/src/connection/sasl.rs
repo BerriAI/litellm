@@ -1,14 +1,19 @@
 use crate::connection::stream::PgStream;
 use crate::error::Error;
 use crate::message::{Authentication, AuthenticationSasl, SaslInitialResponse, SaslResponse};
+#[cfg(not(feature = "fips"))]
 use crate::rt;
 use crate::PgConnectOptions;
+#[cfg(not(feature = "fips"))]
 use hmac::{Hmac, Mac};
+#[cfg(not(feature = "fips"))]
 use hmac::{HmacReset, KeyInit};
+#[cfg(not(feature = "fips"))]
 use sha2::{Digest, Sha256};
 use stringprep::saslprep;
 
 use base64::prelude::{Engine as _, BASE64_STANDARD};
+#[cfg(not(feature = "fips"))]
 use rand::RngExt;
 
 const GS2_HEADER: &str = "n,,";
@@ -65,7 +70,7 @@ pub(crate) async fn authenticate(
     };
 
     // nonce = "r=" c-nonce [s-nonce] ;; Second part provided by server.
-    let nonce = gen_nonce();
+    let nonce = gen_nonce()?;
 
     // client-first-message-bare = [reserved-mext ","] username "," nonce ["," extensions]
     let client_first_message_bare = format!("{username},{nonce}");
@@ -105,13 +110,10 @@ pub(crate) async fn authenticate(
     let salted_password = hi(&password, &cont.salt, cont.iterations).await?;
 
     // ClientKey := HMAC(SaltedPassword, "Client Key")
-    let mut mac = Hmac::<Sha256>::new_from_slice(&salted_password).map_err(Error::protocol)?;
-    mac.update(b"Client Key");
-
-    let client_key = mac.finalize().into_bytes();
+    let client_key = hmac_sha256(&salted_password, b"Client Key")?;
 
     // StoredKey := H(ClientKey)
-    let stored_key = Sha256::digest(client_key);
+    let stored_key = sha256(&client_key);
 
     // client-final-message-without-proof
     let client_final_message_wo_proof = format!(
@@ -129,10 +131,7 @@ pub(crate) async fn authenticate(
     );
 
     // ClientSignature := HMAC(StoredKey, AuthMessage)
-    let mut mac = Hmac::<Sha256>::new_from_slice(&stored_key).map_err(Error::protocol)?;
-    mac.update(auth_message.as_bytes());
-
-    let client_signature = mac.finalize().into_bytes();
+    let client_signature = hmac_sha256(&stored_key, auth_message.as_bytes())?;
 
     // ClientProof := ClientKey XOR ClientSignature
     let client_proof: Vec<u8> = client_key
@@ -142,14 +141,7 @@ pub(crate) async fn authenticate(
         .collect();
 
     // ServerKey := HMAC(SaltedPassword, "Server Key")
-    let mut mac = Hmac::<Sha256>::new_from_slice(&salted_password).map_err(Error::protocol)?;
-    mac.update(b"Server Key");
-
-    let server_key = mac.finalize().into_bytes();
-
-    // ServerSignature := HMAC(ServerKey, AuthMessage)
-    let mut mac = Hmac::<Sha256>::new_from_slice(&server_key).map_err(Error::protocol)?;
-    mac.update(auth_message.as_bytes());
+    let server_key = hmac_sha256(&salted_password, b"Server Key")?;
 
     // client-final-message = client-final-message-without-proof "," proof
     let mut client_final_message = format!("{client_final_message_wo_proof},{CLIENT_PROOF_ATTR}=");
@@ -166,13 +158,14 @@ pub(crate) async fn authenticate(
     };
 
     // authentication is only considered valid if this verification passes
-    mac.verify_slice(&data.verifier).map_err(Error::protocol)?;
+    verify_hmac_sha256(&server_key, auth_message.as_bytes(), &data.verifier)?;
 
     Ok(())
 }
 
 // nonce is a sequence of random printable bytes
-fn gen_nonce() -> String {
+#[cfg(not(feature = "fips"))]
+fn gen_nonce() -> Result<String, Error> {
     let mut rng = rand::rng();
     let count = rng.random_range(64..128);
 
@@ -194,10 +187,11 @@ fn gen_nonce() -> String {
         .map(|c| c as char)
         .collect();
 
-    format!("{NONCE_ATTR}={nonce}")
+    Ok(format!("{NONCE_ATTR}={nonce}"))
 }
 
 // Hi(str, salt, i):
+#[cfg(not(feature = "fips"))]
 async fn hi<'a>(s: &'a str, salt: &'a [u8], iter_count: u32) -> Result<[u8; 32], Error> {
     let mut mac = HmacReset::<Sha256>::new_from_slice(s.as_bytes()).map_err(Error::protocol)?;
 
@@ -222,4 +216,74 @@ async fn hi<'a>(s: &'a str, salt: &'a [u8], iter_count: u32) -> Result<[u8; 32],
     }
 
     Ok(hi.into())
+}
+
+#[cfg(not(feature = "fips"))]
+fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<[u8; 32], Error> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).map_err(Error::protocol)?;
+    mac.update(message);
+
+    Ok(mac.finalize().into_bytes().into())
+}
+
+#[cfg(not(feature = "fips"))]
+fn sha256(data: &[u8]) -> [u8; 32] {
+    Sha256::digest(data).into()
+}
+
+#[cfg(not(feature = "fips"))]
+fn verify_hmac_sha256(key: &[u8], message: &[u8], tag: &[u8]) -> Result<(), Error> {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).map_err(Error::protocol)?;
+    mac.update(message);
+
+    mac.verify_slice(tag).map_err(Error::protocol)
+}
+
+#[cfg(feature = "fips")]
+fn gen_nonce() -> Result<String, Error> {
+    let mut nonce = [0u8; 18];
+    aws_lc_rs::rand::fill(&mut nonce).map_err(Error::protocol)?;
+
+    Ok(format!("{NONCE_ATTR}={}", BASE64_STANDARD.encode(nonce)))
+}
+
+#[cfg(feature = "fips")]
+async fn hi<'a>(s: &'a str, salt: &'a [u8], iter_count: u32) -> Result<[u8; 32], Error> {
+    let iterations = std::num::NonZeroU32::new(iter_count)
+        .ok_or_else(|| err_protocol!("SCRAM iteration count must be positive"))?;
+    let mut hi = [0u8; 32];
+    aws_lc_rs::pbkdf2::derive(
+        aws_lc_rs::pbkdf2::PBKDF2_HMAC_SHA256,
+        iterations,
+        salt,
+        s.as_bytes(),
+        &mut hi,
+    );
+
+    Ok(hi)
+}
+
+#[cfg(feature = "fips")]
+fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<[u8; 32], Error> {
+    let key = aws_lc_rs::hmac::Key::new(aws_lc_rs::hmac::HMAC_SHA256, key);
+
+    aws_lc_rs::hmac::sign(&key, message)
+        .as_ref()
+        .try_into()
+        .map_err(Error::protocol)
+}
+
+#[cfg(feature = "fips")]
+fn sha256(data: &[u8]) -> [u8; 32] {
+    let mut digest = [0u8; 32];
+    digest.copy_from_slice(aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, data).as_ref());
+
+    digest
+}
+
+#[cfg(feature = "fips")]
+fn verify_hmac_sha256(key: &[u8], message: &[u8], tag: &[u8]) -> Result<(), Error> {
+    let key = aws_lc_rs::hmac::Key::new(aws_lc_rs::hmac::HMAC_SHA256, key);
+
+    aws_lc_rs::hmac::verify(&key, message, tag).map_err(|_| err_protocol!("MAC tag mismatch"))
 }

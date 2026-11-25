@@ -4111,14 +4111,18 @@ dependencies = [
 name = "litellm-db"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "futures-util",
+ "hmac 0.12.1",
  "litellm-circuit-breaker",
  "litellm-error",
  "litellm-secret-value",
  "rstest",
  "serde",
+ "sha2 0.10.9",
  "sqlx",
  "sqlx-core",
+ "sqlx-postgres",
  "strum",
  "thiserror 2.0.21",
  "tokio",
@@ -7782,6 +7786,7 @@ name = "sqlx-postgres"
 version = "0.9.0"
 dependencies = [
  "atoi",
+ "aws-lc-rs",
  "base64 0.22.1",
  "bitflags 2.13.1",
  "byteorder",

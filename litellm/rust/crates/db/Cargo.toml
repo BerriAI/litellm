@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 include = ["Cargo.toml", "src/**"]
 
+[features]
+fips = ["dep:sqlx-postgres", "sqlx-postgres/fips"]
+
 [dependencies]
 futures-util.workspace = true
 litellm-circuit-breaker.workspace = true
@@ -14,11 +17,15 @@ litellm-secret-value.workspace = true
 serde.workspace = true
 sqlx.workspace = true
 sqlx-core.workspace = true
+sqlx-postgres = { workspace = true, optional = true }
 strum.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "sync", "time"] }
 
 [dev-dependencies]
+base64.workspace = true
+hmac = "0.12.1"
 rstest.workspace = true
-tokio = { workspace = true, features = ["test-util"] }
+sha2.workspace = true
+tokio = { workspace = true, features = ["io-util", "test-util"] }
 url.workspace = true

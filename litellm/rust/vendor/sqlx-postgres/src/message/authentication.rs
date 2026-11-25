@@ -34,6 +34,7 @@ pub enum Authentication {
     /// The frontend must now send a [PasswordMessage] containing the
     /// password (with user name) encrypted via MD5, then encrypted
     /// again using the 4-byte random salt.
+    #[cfg_attr(feature = "fips", allow(dead_code))]
     Md5Password(AuthenticationMd5Password),
 
     /// The frontend must now initiate a SASL negotiation,
@@ -89,6 +90,7 @@ impl BackendMessage for Authentication {
 
 /// Body of [Authentication::Md5Password].
 #[derive(Debug)]
+#[cfg_attr(feature = "fips", allow(dead_code))]
 pub struct AuthenticationMd5Password {
     pub salt: [u8; 4],
 }

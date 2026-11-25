@@ -335,3 +335,173 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(all(test, feature = "fips"))]
+mod fips_build_tests {
+    use std::error::Error as StdError;
+
+    use base64::{Engine as _, prelude::BASE64_STANDARD};
+    use hmac::{Hmac, Mac};
+    use litellm_secret_value::SecretValue;
+    use sha2::{Digest, Sha256};
+    use sqlx::{Connection, PgConnection};
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::{TcpListener, TcpStream},
+    };
+
+    use super::{Endpoint, PoolLimits, SslMode};
+
+    type TestResult<T = ()> = Result<T, Box<dyn StdError + Send + Sync>>;
+
+    // RFC 7677 section 3 example for password "pencil"
+    const SALT: &str = "W22ZaJ0SNY7soEsUEjb6gQ==";
+    const STORED_KEY: &str = "WG5d8oPm3OtcPnkdi4Uo7BkeZkBFzpcXkuLmtbsT4qY=";
+    const SERVER_KEY: &str = "wfPLwcE6nTWhTAmQ7tl2KeoiWGPlZqQxSrmfPwDl2dU=";
+    const SCRAM_SHA_256: &[u8] = b"SCRAM-SHA-256\0";
+
+    fn endpoint(port: u16) -> Endpoint {
+        Endpoint {
+            host: "127.0.0.1".to_owned(),
+            port,
+            socket: None,
+            username: "user".to_owned(),
+            password: Some(SecretValue::new("pencil")),
+            database: "postgres".to_owned(),
+            ssl_mode: SslMode::Disable,
+            ssl_root_cert: None,
+            ssl_client: None,
+            application_name: None,
+            options: Vec::new(),
+            statement_cache_capacity: 0,
+            pool: PoolLimits {
+                max_connections: 1,
+                acquire_timeout_seconds: None,
+                idle_timeout_seconds: None,
+                socket_timeout_seconds: None,
+            },
+        }
+    }
+
+    async fn accept_startup(listener: &TcpListener) -> std::io::Result<TcpStream> {
+        let (mut socket, _) = listener.accept().await?;
+        let length = socket.read_u32().await?;
+        let mut startup = vec![0; length as usize - 4];
+        socket.read_exact(&mut startup).await?;
+        Ok(socket)
+    }
+
+    async fn read_message(socket: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+        let _tag = socket.read_u8().await?;
+        let length = socket.read_u32().await?;
+        let mut body = vec![0; length as usize - 4];
+        socket.read_exact(&mut body).await?;
+        Ok(body)
+    }
+
+    async fn send_authentication(
+        socket: &mut TcpStream,
+        code: u32,
+        data: &[u8],
+    ) -> std::io::Result<()> {
+        let length = u32::try_from(8 + data.len()).map_err(std::io::Error::other)?;
+        socket.write_u8(b'R').await?;
+        socket.write_u32(length).await?;
+        socket.write_u32(code).await?;
+        socket.write_all(data).await
+    }
+
+    async fn finish_login(socket: &mut TcpStream) -> std::io::Result<()> {
+        send_authentication(socket, 0, &[]).await?;
+        socket.write_all(b"Z\0\0\0\x05I").await
+    }
+
+    fn hmac_sha256(key: &[u8], message: &str) -> Vec<u8> {
+        let mut mac =
+            <Hmac<Sha256> as Mac>::new_from_slice(key).expect("HMAC takes a key of any length");
+        mac.update(message.as_bytes());
+        mac.finalize().into_bytes().to_vec()
+    }
+
+    async fn scram_server(listener: TcpListener) -> TestResult<(String, bool)> {
+        let mut socket = accept_startup(&listener).await?;
+        send_authentication(&mut socket, 10, b"SCRAM-SHA-256\0\0").await?;
+
+        let initial = read_message(&mut socket).await?;
+        let client_first = std::str::from_utf8(&initial[SCRAM_SHA_256.len() + 4..])?;
+        let client_first_bare = client_first.strip_prefix("n,,").ok_or("no gs2 header")?;
+        let client_nonce = client_first_bare.split_once(",r=").ok_or("no nonce")?.1;
+        let server_first =
+            format!("r={client_nonce}%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s={SALT},i=4096");
+        send_authentication(&mut socket, 11, server_first.as_bytes()).await?;
+
+        let response = read_message(&mut socket).await?;
+        let (without_proof, proof) = std::str::from_utf8(&response)?
+            .split_once(",p=")
+            .ok_or("no proof")?;
+        let auth_message = format!("{client_first_bare},{server_first},{without_proof}");
+        let stored_key = BASE64_STANDARD.decode(STORED_KEY)?;
+        let client_key: Vec<u8> = BASE64_STANDARD
+            .decode(proof)?
+            .iter()
+            .zip(hmac_sha256(&stored_key, &auth_message))
+            .map(|(proof, signature)| proof ^ signature)
+            .collect();
+        let proof_is_right = Sha256::digest(&client_key).as_slice() == stored_key.as_slice();
+
+        let server_signature = hmac_sha256(&BASE64_STANDARD.decode(SERVER_KEY)?, &auth_message);
+        let server_final = format!("v={}", BASE64_STANDARD.encode(server_signature));
+        send_authentication(&mut socket, 12, server_final.as_bytes()).await?;
+        finish_login(&mut socket).await?;
+        let _terminate = read_message(&mut socket).await;
+        Ok((client_nonce.to_owned(), proof_is_right))
+    }
+
+    #[tokio::test]
+    async fn refuses_an_md5_challenge() -> TestResult {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let options = endpoint(listener.local_addr()?.port()).connect_options();
+        let server = tokio::spawn(async move {
+            let mut socket = accept_startup(&listener).await?;
+            send_authentication(&mut socket, 5, b"salt").await?;
+            if read_message(&mut socket).await.is_ok() {
+                finish_login(&mut socket).await?;
+            }
+            std::io::Result::Ok(())
+        });
+
+        let error = PgConnection::connect_with(&options)
+            .await
+            .expect_err("the FIPS build must not answer an MD5 challenge");
+
+        assert!(
+            error
+                .to_string()
+                .contains("the server asked for MD5 password authentication"),
+            "{error}"
+        );
+        server.await??;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn logs_in_with_scram_sha_256_through_the_module() -> TestResult {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let options = endpoint(listener.local_addr()?.port()).connect_options();
+        let server = tokio::spawn(scram_server(listener));
+
+        PgConnection::connect_with(&options).await?.close().await?;
+        let (client_nonce, proof_is_right) = server.await??;
+
+        assert!(proof_is_right);
+        assert_eq!(
+            BASE64_STANDARD
+                .decode(&client_nonce)
+                .map(|nonce| nonce.len())
+                .ok(),
+            Some(18),
+            "{client_nonce}"
+        );
+        Ok(())
+    }
+}
