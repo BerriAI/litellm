@@ -1024,7 +1024,10 @@ class _AsyncChatStream(FallbackAwareStreamWrapper):
         if error is not None:
             self._attempt.report_failure(error)
         else:
-            self._attempt.report_success(_chat_total_tokens(last), last)
+            # a drain that began after the last chunk was returned reaches the end without an item
+            self._attempt.report_success(
+                _chat_total_tokens(last) or _usage_total_tokens(self._source_stream.final_usage()), last
+            )
 
     async def aclose(self) -> None:
         await super().aclose()

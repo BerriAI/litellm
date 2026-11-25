@@ -87,6 +87,7 @@ from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
+    DETACHED_STREAM_DRAIN_SHUTDOWN_BILLING_MIN_SECONDS,
     GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
     INTERNAL_CALLBACK_NAMES,
     LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
@@ -2216,7 +2217,9 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
                     GracefulShutdownManager.start_shutdown()
                     await GracefulShutdownManager.wait_for_drain()
         finally:
-            await bill_detached_stream_drains_on_shutdown(GracefulShutdownManager.remaining(5.0))
+            await bill_detached_stream_drains_on_shutdown(
+                max(DETACHED_STREAM_DRAIN_SHUTDOWN_BILLING_MIN_SECONDS, GracefulShutdownManager.remaining(5.0))
+            )
             # Shutdown event - close shared aiohttp session
             if shared_aiohttp_session is not None:
                 try:

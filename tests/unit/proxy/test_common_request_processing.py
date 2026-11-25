@@ -12376,8 +12376,9 @@ class TestStreamingClientDisconnectBilling:
 class _ProviderWithLateUsage(litellm.CustomLLM):
     """Streams a few words, holds the rest until ``tail`` is set, then reports the usage it billed."""
 
-    def __init__(self, fail_after_tail: bool = False) -> None:
+    def __init__(self, fail_after_tail: bool = False, usage_before_tail: bool = False) -> None:
         super().__init__()
+        self.usage_before_tail: Final = usage_before_tail
         self.tail: Final = asyncio.Event()
         self.tail_streamed = False
         self.stream_closed = False
@@ -12387,20 +12388,28 @@ class _ProviderWithLateUsage(litellm.CustomLLM):
         try:
             for word in ("Once ", "upon ", "a "):
                 yield _generic_chunk(word)
+            if self.usage_before_tail:
+                yield _final_usage_chunk()
+                await self.tail.wait()
+                return
             await self.tail.wait()
             self.tail_streamed = True
             if self.fail_after_tail:
                 raise litellm.InternalServerError(message="provider dropped", llm_provider="late", model="m")
             for word in ("time ", "there ", "was "):
                 yield _generic_chunk(word)
-            yield {
-                **_generic_chunk(""),
-                "is_finished": True,
-                "finish_reason": "stop",
-                "usage": {"prompt_tokens": 50, "completion_tokens": 2000, "total_tokens": 2050},
-            }
+            yield _final_usage_chunk()
         finally:
             self.stream_closed = True
+
+
+def _final_usage_chunk() -> GenericStreamingChunk:
+    return {
+        **_generic_chunk(""),
+        "is_finished": True,
+        "finish_reason": "stop",
+        "usage": {"prompt_tokens": 50, "completion_tokens": 2000, "total_tokens": 2050},
+    }
 
 
 def _generic_chunk(text: str) -> GenericStreamingChunk:
@@ -12427,6 +12436,7 @@ class TestStreamingDisconnectDrainsProviderUsage:
         recorder: _RecordingSuccessLogger,
         use_router: bool = False,
         release_tail: bool = True,
+        reads_before_disconnect: int = 3,
         settle: Callable[[], Awaitable[None]] | None = None,
     ) -> Router | None:
         from litellm.proxy.common_request_processing import arm_disconnect_drain
@@ -12446,7 +12456,7 @@ class TestStreamingDisconnectDrainsProviderUsage:
         )
         arm_disconnect_drain(response)
         stream: Final = response.__aiter__()
-        for _ in range(3):
+        for _ in range(reads_before_disconnect):
             await stream.__anext__()
         waiting_for_tail: Final = asyncio.ensure_future(stream.__anext__())
         await asyncio.sleep(0.05)
@@ -12483,6 +12493,20 @@ class TestStreamingDisconnectDrainsProviderUsage:
         assert (logged["prompt_tokens"], logged["completion_tokens"]) == (50, 2000)
         if router is not None:
             assert await router.get_model_group_usage("m") == (2050, 1)
+
+    @pytest.mark.asyncio
+    async def test_disconnect_after_the_usage_chunk_still_counts_its_tokens_on_the_router(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        provider: Final = _ProviderWithLateUsage(usage_before_tail=True)
+        recorder: Final = _RecordingSuccessLogger()
+
+        router: Final = await self._disconnect_mid_read(
+            monkeypatch, provider, recorder, use_router=True, reads_before_disconnect=4
+        )
+
+        assert router is not None
+        assert await router.get_model_group_usage("m") == (2050, 1)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("drain_cap", [0, 1])

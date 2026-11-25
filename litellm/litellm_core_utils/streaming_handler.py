@@ -868,6 +868,10 @@ class CustomStreamWrapper:
             return None
         return self
 
+    def final_usage(self) -> object:
+        """The usage this stream stamped on the last chunk it returned, None before it returned one."""
+        return (self._last_returned_hidden_params or {}).get("usage")
+
     def report_disconnect_drain(self, last: object, error: Exception | None = None) -> None:
         """Called once a disconnect drain read this stream to its end (``last`` is its final item) or to ``error``."""
 

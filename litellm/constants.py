@@ -785,6 +785,9 @@ CHAT_COMPLETIONS_MAX_DETACHED_STREAM_DRAINS: Final = get_env_int("CHAT_COMPLETIO
 CHAT_COMPLETIONS_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS: Final = get_env_float(
     "CHAT_COMPLETIONS_DETACHED_STREAM_DRAIN_TIMEOUT_SECONDS", 600.0
 )
+# At shutdown the drains still running are stopped and bill the chunks they read. They get
+# at least this long to do it even when in-flight requests used up the shutdown budget.
+DETACHED_STREAM_DRAIN_SHUTDOWN_BILLING_MIN_SECONDS: Final = 1.0
 LOGGING_WORKER_CONCURRENCY: Final = get_env_int("LOGGING_WORKER_CONCURRENCY", 100)  # Must be above 0
 LOGGING_WORKER_MAX_QUEUE_SIZE: Final = get_env_int("LOGGING_WORKER_MAX_QUEUE_SIZE", 50_000)
 LOGGING_WORKER_MAX_TIME_PER_COROUTINE: Final = get_env_float("LOGGING_WORKER_MAX_TIME_PER_COROUTINE", 20.0)
