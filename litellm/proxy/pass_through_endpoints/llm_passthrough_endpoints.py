@@ -20,6 +20,7 @@ import sys
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
+from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, cast, runtime_checkable
 from urllib.parse import quote, unquote
@@ -554,16 +555,19 @@ _PROMPT_TEXT_KEY: Final = "text"
 _JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
-def _iter_gemini_file_references(value: JsonValue) -> Iterator[str]:
+def _nested_json_values(value: JsonValue) -> tuple[JsonValue, ...]:
     if isinstance(value, dict):
-        for key, item in value.items():
-            if key != _PROMPT_TEXT_KEY:
-                yield from _iter_gemini_file_references(item)
-    elif isinstance(value, list):
-        for item in value:
-            yield from _iter_gemini_file_references(item)
-    elif isinstance(value, str) and "files/" in unquote(value):
-        yield value
+        return tuple(item for key, item in value.items() if key != _PROMPT_TEXT_KEY)
+    return tuple(value) if isinstance(value, list) else ()
+
+
+def _next_json_layer(layer: tuple[JsonValue, ...], _: None) -> tuple[JsonValue, ...]:
+    return tuple(chain.from_iterable(map(_nested_json_values, layer)))
+
+
+def _iter_gemini_file_references(body: JsonValue) -> Iterator[str]:
+    layers: Final = takewhile(bool, accumulate(repeat(None), _next_json_layer, initial=(body,)))
+    return (value for value in chain.from_iterable(layers) if isinstance(value, str) and "files/" in unquote(value))
 
 
 def _decoded_json(raw: bytes) -> JsonValue:
@@ -599,18 +603,21 @@ def _iter_listed_file_ids(files: Sequence[JsonValue]) -> Iterator[str]:
 async def _without_files_denied_to_caller(
     response: object, guard: _ProviderFileListGuard, user_api_key_dict: UserAPIKeyAuth
 ) -> object:
+    """A file the response gives no id for cannot be checked, so it is left out"""
     if not isinstance(response, Response) or response.status_code != 200:
         return response
-    listing: Final = _decoded_json(bytes(response.body))
-    files: Final = listing.get("files") if isinstance(listing, dict) else None
-    if not isinstance(listing, dict) or not isinstance(files, list):
+    listing: Final = None if isinstance(response, StreamingResponse) else _decoded_json(bytes(response.body))
+    if not isinstance(listing, dict):
+        raise HTTPException(status_code=502, detail="The provider returned a file list that is not a JSON object")
+    files: Final = listing.get("files")
+    if not isinstance(files, list):
         return response
     denied: Final = frozenset(
         await guard.provider_file_ids_denied_to(tuple(_iter_listed_file_ids(files)), user_api_key_dict)
     )
-    if not denied:
+    visible: Final = [listed for listed in files if (ids := _listed_file_ids(listed)) and denied.isdisjoint(ids)]
+    if len(visible) == len(files):
         return response
-    visible: Final = [listed for listed in files if denied.isdisjoint(_listed_file_ids(listed))]
     return Response(
         content=json.dumps({**listing, "files": visible}),
         status_code=response.status_code,

@@ -6831,6 +6831,15 @@ async def test_provider_file_ids_denied_to_denies_nothing_to_a_caller_who_may_re
     assert await managed_files.provider_file_ids_denied_to(_GEMINI_OUTPUT_SPELLINGS, caller) == ()
 
 
+@pytest.mark.asyncio
+async def test_provider_file_ids_denied_to_finds_another_keys_file_past_the_first_lookup_chunk():
+    managed_files, _ = _managed_files_with_fake_prisma(_gemini_batch_output_row())
+    stranger: Final = UserAPIKeyAuth(user_id="stranger", team_id="team-stranger")
+    asked: Final = (*(f"files/filler-{n}" for n in range(2_000)), "files/zz-last/../batch-out1", "files/batch-out1")
+
+    assert await managed_files.provider_file_ids_denied_to(asked, stranger) == ("files/batch-out1",)
+
+
 _GEMINI_UPLOAD_URI: Final = "https://generativelanguage.googleapis.com/v1beta/files/upload-1"
 
 

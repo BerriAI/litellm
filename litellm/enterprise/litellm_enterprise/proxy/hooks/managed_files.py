@@ -79,6 +79,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     sanitize_for_log,
 )
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     FILE_LIST_CONTINUATION_CHUNK_SIZE,
@@ -1218,13 +1219,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             {file_id: frozenset(provider_file_id_spellings(file_id)) for file_id in dict.fromkeys(file_ids)}
         )
         spellings: Final = sorted(frozenset(chain.from_iterable(spellings_by_id.values())))
-        managed_files: Final = await _managed_file_table(self.prisma_client).find_many(
-            where={
-                "OR": [
-                    {"unified_file_id": {"in": spellings}},  # bounded-ok: the ids of one request body or one list page
-                    {"flat_model_file_ids": {"hasSome": spellings}},
+        table: Final = _managed_file_table(self.prisma_client)
+        managed_files: Final = tuple(
+            chain.from_iterable(
+                [
+                    await table.find_many(
+                        where={
+                            "OR": [
+                                {"unified_file_id": {"in": spellings[start : start + IN_LIST_CHUNK_SIZE]}},
+                                {"flat_model_file_ids": {"hasSome": spellings[start : start + IN_LIST_CHUNK_SIZE]}},
+                            ]
+                        }
+                    )
+                    for start in range(0, len(spellings), IN_LIST_CHUNK_SIZE)
                 ]
-            }
+            )
         )
         denied_spellings: Final = frozenset(
             stored_id

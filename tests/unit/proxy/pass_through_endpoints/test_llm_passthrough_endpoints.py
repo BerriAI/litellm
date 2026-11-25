@@ -408,6 +408,53 @@ async def test_gemini_pass_through_file_list_leaves_out_files_the_caller_does_no
 
 
 @pytest.mark.asyncio
+async def test_gemini_pass_through_file_list_leaves_out_a_file_the_response_gives_no_id_for(
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    guard: Final = _AnotherCallersFilesGuard("abc123")
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
+    partial_listing: Final = [{"displayName": "secret.txt", "downloadUri": "https://example.invalid/d"}]
+    respx_mock.route(host="generativelanguage.googleapis.com").mock(
+        return_value=httpx.Response(200, json={"files": [*partial_listing, {"name": "files/mine456"}]})
+    )
+
+    response: Final = await _call_gemini_pass_through("GET", "v1beta/files")
+
+    assert json.loads(response.body) == {"files": [{"name": "files/mine456"}]}
+
+
+@pytest.mark.asyncio
+async def test_gemini_pass_through_refuses_a_file_list_it_cannot_read_as_json(
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+    from fastapi import HTTPException
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    guard: Final = _AnotherCallersFilesGuard("abc123")
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
+    respx_mock.route(host="generativelanguage.googleapis.com").mock(
+        return_value=httpx.Response(200, text='callback({"files": [{"name": "files/abc123"}]})')
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        await _call_gemini_pass_through("GET", "v1beta/files")
+
+    assert refused.value.status_code == 502
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("method", "endpoint"),
     [
