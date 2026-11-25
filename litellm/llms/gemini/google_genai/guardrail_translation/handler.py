@@ -1,31 +1,15 @@
 """
 Google GenAI generateContent handler for Unified Guardrails.
 
-Request text comes from every system instruction the request carries
-(systemInstruction and system_instruction, top level and inside config) and from
-contents[].parts[]: text parts, plain-string parts, executableCode code, toolCall
-args, and the tool results (codeExecutionResult output, functionResponse and
-toolResponse response), which are left out when the guardrail skips tool messages,
-as system instructions are when it skips system messages.
-A guardrail that scans only tool results gets only the tool results, plus toolCall
-args and functionCall parts when it also scans tool calls as text, as on chat.
-Structured values are scanned as one JSON text, the way chat scans a tool message,
-with control characters left raw so patterns still see line starts and numbers
-quoted so a mask can replace them. A changed text is decoded back into the part,
-numbers the guardrail left alone keep their type at their JSON path, and a text
-that no longer decodes, turns an object into something else, sits in a tuple, or
-comes back with a different count of texts or tool calls, is rejected as an
-unappliable rewrite (a 500, as on chat).
-Responses are scanned the same way across candidates[].content.parts[], tool
-results included, and streaming chunks only for their text. Every functionCall
-part goes to the guardrail as a tool call, the way chat sends its tool calls, with
-the values a streamed call sends in partialArgs joined per JSON path, and masked
-arguments are written back into functionCall.args. A reply whose tool calls come
-back in a different count keeps the model's calls, as on chat. Guardrailed text is written
-back in place, so the provider and the client get their wire shape. Requests and
-responses may be dicts (wire format) or google-genai SDK objects; streaming
-chunks may additionally be raw SSE frames, which are scanned for detection (a
-blocking guardrail raises) without rewriting the frames.
+Scans what the provider or the client reads: system instructions, text and code
+parts, tool results, and functionCall parts, which go to the guardrail as tool
+calls the way chat sends its tool calls, whether parts arrive as a list or as one
+object. Structured values are scanned as one JSON text with numbers quoted so a
+mask can replace them, and a changed value is decoded back in place with the
+numbers the guardrail left alone keeping their type. A request rewrite that
+cannot be written back faithfully is rejected (a 500, as on chat) instead of
+being sent unrewritten. Requests and responses may be dicts or google-genai SDK
+objects, and raw SSE stream frames are scanned for detection without rewriting.
 """
 
 import json
@@ -188,7 +172,7 @@ def _json_scan_text(value: object) -> str:
 
 def _with_original_numbers(original: object, guardrailed: object, depth: int) -> object:
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
-        return guardrailed
+        return original if _json_scan_text(original) == _json_scan_text(guardrailed) else guardrailed
     if isinstance(original, (int, float)) and not isinstance(original, bool):
         return original if guardrailed == _json_text(original) else guardrailed
     original_fields: Final = _json_object(original)
@@ -455,10 +439,6 @@ def _returned_tool_calls(
     return as_object_list(stream_item_field(guardrailed_inputs, "tool_calls")) if groups else None
 
 
-def _tool_call_count_differs(groups: Sequence[Sequence[object]], returned_tool_calls: Sequence[object] | None) -> bool:
-    return returned_tool_calls is not None and len(returned_tool_calls) != len(groups)
-
-
 def _text_count_differs(text_slots: Sequence[_TextSlot], returned_texts: Sequence[str] | None) -> bool:
     return bool(text_slots and returned_texts and len(returned_texts) != len(text_slots))
 
@@ -466,7 +446,7 @@ def _text_count_differs(text_slots: Sequence[_TextSlot], returned_texts: Sequenc
 def _write_back_function_calls(
     groups: Sequence[Sequence[object]], returned_tool_calls: Sequence[object] | None, guardrail_name: str | None
 ) -> None:
-    if returned_tool_calls is None or _tool_call_count_differs(groups, returned_tool_calls):
+    if returned_tool_calls is None or len(returned_tool_calls) != len(groups):
         return
     changed: Final = tuple(
         (group, returned)
@@ -499,7 +479,7 @@ def _written_value(slot: _TextSlot, text: str, guardrail_name: str | None) -> ob
 def _write_back_texts(
     text_slots: Sequence[_TextSlot], guardrailed_texts: Sequence[str] | None, guardrail_name: str | None
 ) -> None:
-    if not guardrailed_texts or len(guardrailed_texts) != len(text_slots):
+    if not guardrailed_texts:
         return
     writes: Final = tuple(
         (slot, _written_value(slot, text, guardrail_name))
@@ -520,17 +500,10 @@ def _parse_json_dict_or_none(payload: str) -> Mapping[str, object] | None:
     return as_str_mapping(parsed)
 
 
-def _sse_payload_texts(sse_text: str) -> tuple[str, ...]:
-    return tuple(
-        text
-        for line in split_sse_lines(sse_text)
-        if line.startswith("data:")
-        for payload in (line[len("data:") :].strip(),)
-        if payload and payload != "[DONE]"
-        for parsed in (_parse_json_dict_or_none(payload),)
-        if parsed is not None
-        for text in _slot_texts(_response_part_slots(parsed))
-    )
+def _sse_payload_slots(sse_text: str) -> tuple[_TextSlot, ...]:
+    payloads: Final = (line[len("data:") :].strip() for line in split_sse_lines(sse_text) if line.startswith("data:"))
+    parsed: Final = (_parse_json_dict_or_none(payload) for payload in payloads if payload and payload != "[DONE]")
+    return tuple(chain.from_iterable(_response_part_slots(chunk) for chunk in parsed if chunk is not None))
 
 
 def _chunk_sse_text(chunk: object) -> str | None:
@@ -541,15 +514,27 @@ def _chunk_sse_text(chunk: object) -> str | None:
     return None
 
 
-def _accumulated_stream_text(responses_so_far: Sequence[object]) -> str:
-    object_texts: Final = tuple(
-        text
-        for chunk in responses_so_far
-        if _chunk_sse_text(chunk) is None
-        for text in _slot_texts(_response_part_slots(chunk))
+def _is_text_part_slot(slot: _TextSlot) -> bool:
+    return slot.key == "text" or isinstance(slot.key, int)
+
+
+def _stream_separator(previous: _TextSlot, current: _TextSlot) -> str:
+    return "" if _is_text_part_slot(previous) and _is_text_part_slot(current) else "\n"
+
+
+def _joined_stream_text(text_slots: Sequence[_TextSlot]) -> str:
+    if not text_slots:
+        return ""
+    return text_slots[0].text + "".join(
+        _stream_separator(previous, current) + current.text for previous, current in pairwise(text_slots)
     )
-    sse_text: Final = "".join(sse for chunk in responses_so_far for sse in (_chunk_sse_text(chunk),) if sse is not None)
-    return "".join(object_texts) + "".join(_sse_payload_texts(sse_text))
+
+
+def _accumulated_stream_text(responses_so_far: Sequence[object]) -> str:
+    object_slots: Final = tuple(
+        chain.from_iterable(_response_part_slots(chunk) for chunk in responses_so_far if _chunk_sse_text(chunk) is None)
+    )
+    return _joined_stream_text((*object_slots, *_sse_payload_slots(_joined_sse_text(responses_so_far))))
 
 
 def _joined_sse_text(responses_so_far: Sequence[object]) -> str:
@@ -893,9 +878,7 @@ class GoogleGenAIGenerateContentHandler(BaseTranslation):
         )
         returned_texts: Final = guardrailed_inputs.get("texts")
         returned_tool_calls: Final = _returned_tool_calls(call_groups, guardrailed_inputs)
-        if _text_count_differs(text_slots, returned_texts) or _tool_call_count_differs(
-            call_groups, returned_tool_calls
-        ):
+        if _text_count_differs(text_slots, returned_texts):
             raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
         _write_back_texts(text_slots, returned_texts, guardrail_to_apply.guardrail_name)
         _write_back_function_calls(call_groups, returned_tool_calls, guardrail_to_apply.guardrail_name)

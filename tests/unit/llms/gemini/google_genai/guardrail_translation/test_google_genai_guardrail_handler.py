@@ -227,6 +227,18 @@ async def test_a_clean_tool_result_nested_deeper_than_any_scan_cap_reaches_the_p
 
 
 @pytest.mark.asyncio
+async def test_a_number_nested_deeper_than_any_scan_cap_keeps_its_type_when_another_value_is_masked() -> None:
+    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=_function_response_with_rows(["zebrafruit", _nested_in_lists(_DEEPER_THAN_ANY_SCAN_CAP, 3)]),
+        guardrail_to_apply=_zebrafruit_filter(ContentFilterAction.MASK),
+    )
+
+    assert _sent_request(guardrailed) == _function_response_with_rows(
+        [_MASKED, _nested_in_lists(_DEEPER_THAN_ANY_SCAN_CAP, 3)]
+    )
+
+
+@pytest.mark.asyncio
 async def test_a_masked_word_deep_in_a_function_response_is_masked_where_it_sits() -> None:
     guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
         data=_function_response_with_rows(_nested_in_lists(_DEEPER_THAN_ANY_SCAN_CAP, "zebrafruit")),
@@ -600,6 +612,29 @@ async def test_a_masked_word_in_a_function_call_the_model_returns_reaches_the_cl
 
 
 @pytest.mark.asyncio
+async def test_a_guardrail_replacing_a_reply_with_one_text_replaces_its_first_text_as_on_chat() -> None:
+    reply: Final = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "zebrafruit"}, {"executableCode": {"language": "PYTHON", "code": "print(1)"}}],
+                }
+            }
+        ]
+    }
+
+    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_output_response(
+        response=reply, guardrail_to_apply=_mock_guardrail(["Blocked by policy"])
+    )
+
+    assert guardrailed["candidates"][0]["content"]["parts"] == [
+        {"text": "Blocked by policy"},
+        {"executableCode": {"language": "PYTHON", "code": "print(1)"}},
+    ]
+
+
+@pytest.mark.asyncio
 async def test_output_object_response_text_is_guardrailed_and_written_back():
     handler = GoogleGenAIGenerateContentHandler()
     guardrail = _mock_guardrail(["masked answer"])
@@ -671,6 +706,20 @@ async def test_streaming_raw_sse_chunks_accumulate_text_across_split_frames():
     )
 
     assert guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"] == ["harmful answer"]
+
+
+@pytest.mark.asyncio
+async def test_a_blocked_word_split_between_a_streamed_text_part_and_a_code_part_does_not_block() -> None:
+    chunks: Final = [
+        {"candidates": [{"content": {"parts": [{"text": "zebra"}]}}]},
+        {"candidates": [{"content": {"parts": [{"executableCode": {"language": "PYTHON", "code": "fruit = 1"}}]}}]},
+    ]
+
+    result: Final = await GoogleGenAIGenerateContentHandler().process_output_streaming_response(
+        responses_so_far=chunks, guardrail_to_apply=_zebrafruit_filter(ContentFilterAction.BLOCK)
+    )
+
+    assert result is chunks
 
 
 @pytest.mark.asyncio
@@ -945,19 +994,7 @@ async def test_masked_function_call_args_are_written_back_and_unmasked_ones_are_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "rewrite",
-    [
-        pytest.param(lambda tool_calls: [], id="dropped"),
-        pytest.param(
-            lambda tool_calls: [{**call, "function": {**call["function"], "arguments": "[1]"}} for call in tool_calls],
-            id="not-an-object",
-        ),
-    ],
-)
-async def test_function_call_rewrite_the_request_cannot_carry_is_rejected(
-    rewrite: Callable[[Sequence[ChatCompletionToolCallChunk]], list[object]],
-) -> None:
+async def test_function_call_rewrite_the_request_cannot_carry_is_rejected() -> None:
     data: Final = {
         "model": "gemini-2.5-flash",
         "contents": [{"role": "model", "parts": [copy.deepcopy(FUNCTION_CALL_PART)]}],
@@ -965,8 +1002,27 @@ async def test_function_call_rewrite_the_request_cannot_carry_is_rejected(
 
     with pytest.raises(UnappliableRequestRewrite):
         await GoogleGenAIGenerateContentHandler().process_input_messages(
-            data=data, guardrail_to_apply=_ToolCallGuardrail(rewrite=rewrite)
+            data=data,
+            guardrail_to_apply=_ToolCallGuardrail(
+                rewrite=lambda tool_calls: [
+                    {**call, "function": {**call["function"], "arguments": "[1]"}} for call in tool_calls
+                ]
+            ),
         )
+
+    assert data["contents"][0]["parts"][0] == FUNCTION_CALL_PART
+
+
+@pytest.mark.asyncio
+async def test_a_request_tool_call_the_guardrail_drops_still_reaches_the_provider_as_on_chat() -> None:
+    data: Final = {
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "model", "parts": [copy.deepcopy(FUNCTION_CALL_PART)]}],
+    }
+
+    await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=data, guardrail_to_apply=_ToolCallGuardrail(rewrite=lambda tool_calls: [])
+    )
 
     assert data["contents"][0]["parts"][0] == FUNCTION_CALL_PART
 
