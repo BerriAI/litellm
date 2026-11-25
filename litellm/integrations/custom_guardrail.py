@@ -1902,6 +1902,7 @@ class CustomGuardrail(CustomLogger):
         if call_type == CallTypes.responses.value or call_type == CallTypes.aresponses.value:
             from typing import cast
 
+            from litellm.litellm_core_utils.tool_fields import qualified_member_name
             from litellm.responses.litellm_completion_transformation.transformation import (
                 LiteLLMCompletionResponsesConfig,
             )
@@ -1913,6 +1914,7 @@ class CustomGuardrail(CustomLogger):
             messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input_data,
                 responses_api_request=data,
+                member_name=qualified_member_name,
             )
             return cast(list[AllMessageValues], messages)
         return None
