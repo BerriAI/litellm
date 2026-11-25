@@ -231,6 +231,7 @@ class UserAPIKeyLabelNames(Enum):
     USER_AGENT = "user_agent"
     CALLBACK_NAME = "callback_name"
     STREAM = "stream"
+    DEPRECATED = "deprecated"
     ORG_ID = "org_id"
     ORG_ALIAS = "org_alias"
     CUSTOMER_ORG_ID = "customer_org_id"
@@ -1038,6 +1039,22 @@ class PrometheusMetricLabels:
         ):
             custom_labels.append(UserAPIKeyLabelNames.STREAM.value)
 
+        deprecated_labels: Final = (
+            (UserAPIKeyLabelNames.DEPRECATED.value,)
+            if (
+                label_name
+                in (
+                    "litellm_proxy_total_requests_metric",
+                    "litellm_proxy_failed_requests_metric",
+                    "litellm_requests_metric",
+                )
+                and litellm.prometheus_emit_deprecated_label is True
+                and UserAPIKeyLabelNames.DEPRECATED.value not in default_labels
+                and UserAPIKeyLabelNames.DEPRECATED.value not in custom_labels
+            )
+            else ()
+        )
+
         # Conditionally add unified rate-limit labels to
         # litellm_proxy_failed_requests_metric. Off by default so the metric's
         # historical label set is preserved across upgrade; enable via
@@ -1081,7 +1098,7 @@ class PrometheusMetricLabels:
             )
             else ()
         )
-        return [*default_labels, *custom_labels, *input_sequence_length_labels]
+        return [*default_labels, *custom_labels, *deprecated_labels, *input_sequence_length_labels]
 
 
 _USER_API_KEY_LABEL_VALUE_INIT_ALIASES: Final[Mapping[str, str]] = MappingProxyType(
@@ -1133,6 +1150,7 @@ class UserAPIKeyLabelValues:
     client_ip: str | None = None
     user_agent: str | None = None
     stream: str | None = None
+    deprecated: str | None = None
     org_id: str | None = None
     org_alias: str | None = None
     customer_org_id: str | None = None

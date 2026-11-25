@@ -165,12 +165,21 @@ def _resolve_deployment_deprecation(
     )
 
 
+def resolve_deployment_deprecation_date(deployment: Mapping[str, object], catalog: Mapping[str, object]) -> date | None:
+    resolved: Final = _resolve_deployment_deprecation(deployment, catalog)
+    return resolved.deprecation_date if resolved is not None else None
+
+
 def _classify(days_until: int, warn_within_days: int) -> DeprecationStatus:
     if days_until < 0:
         return "deprecated"
     if days_until <= warn_within_days:
         return "imminent"
     return "upcoming"
+
+
+def is_model_deprecated(deprecation_date: date | None, today: date) -> bool:
+    return deprecation_date is not None and _classify((deprecation_date - today).days, 0) == "deprecated"
 
 
 def _checked_successor(

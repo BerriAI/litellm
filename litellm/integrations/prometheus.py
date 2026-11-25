@@ -8,9 +8,9 @@ import math
 import os
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import replace
-from datetime import datetime, timedelta
-from functools import partial
+from dataclasses import dataclass, replace
+from datetime import date, datetime, timedelta, timezone
+from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Any, Final, Generic, Literal, Protocol, TypeAlias, TypeVar, cast
 
@@ -53,6 +53,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.get_llm_provider_logic import is_registered_custom_provider
+from litellm.litellm_core_utils.model_cost_table import ModelCostVersion, model_cost_version
 from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
 )
@@ -505,6 +506,74 @@ def _get_proxy_llm_router() -> Router | None:
     except Exception:
         return None
     return llm_router
+
+
+@dataclass(frozen=True)
+class _DeprecationCacheKey:
+    catalog_revision: str | None
+    cost_version: ModelCostVersion
+    model: str | None
+    custom_llm_provider: str | None
+    base_model: str | None
+    deprecation_date: str | date | None
+
+
+@lru_cache(maxsize=4096)
+def _cached_deprecation_date(key: _DeprecationCacheKey) -> date | None:
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+    from litellm.proxy.common_utils.model_deprecation import resolve_deployment_deprecation_date
+
+    return resolve_deployment_deprecation_date(
+        {
+            "litellm_params": {"model": key.model, "custom_llm_provider": key.custom_llm_provider},
+            "model_info": {"base_model": key.base_model, "deprecation_date": key.deprecation_date},
+        },
+        GetModelCostMap.loaded_model_cost_map(),
+    )
+
+
+def _deployment_deprecation_date(deployment: Mapping[str, object]) -> date | None:
+    from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map_provenance
+
+    params: Final = _logged_fields(deployment.get("litellm_params"))
+    info: Final = _logged_fields(deployment.get("model_info"))
+    model: Final = params.get("model")
+    provider: Final = params.get("custom_llm_provider")
+    base_model: Final = info.get("base_model")
+    override: Final = info.get("deprecation_date")
+    return _cached_deprecation_date(
+        _DeprecationCacheKey(
+            catalog_revision=get_model_cost_map_provenance()["source_revision"],
+            cost_version=model_cost_version(),
+            model=model if isinstance(model, str) else None,
+            custom_llm_provider=provider if isinstance(provider, str) else None,
+            base_model=base_model if isinstance(base_model, str) else None,
+            deprecation_date=override if isinstance(override, (str, date)) else None,
+        )
+    )
+
+
+def _deprecated_label(model_id: object, requested_model: object, router: Router | None, today: date) -> str:
+    from litellm.proxy.common_utils.model_deprecation import is_model_deprecated
+
+    if router is None:
+        return "false"
+    registry: Final = router.registry()
+    if isinstance(model_id, str) and model_id:
+        deployment: Final = registry.deployment_dict(model_id)
+        return (
+            "true"
+            if deployment is not None and is_model_deprecated(_deployment_deprecation_date(deployment), today)
+            else "false"
+        )
+    deployments: Final = (
+        registry.deployments(requested_model) if isinstance(requested_model, str) and requested_model else ()
+    )
+    return (
+        "true"
+        if deployments and all(is_model_deprecated(_deployment_deprecation_date(item), today) for item in deployments)
+        else "false"
+    )
 
 
 _CALLER_CREDENTIAL_FIELDS: Final = frozenset(
@@ -1794,8 +1863,20 @@ class PrometheusLogger(CustomLogger):
             enum_values=enum_values,
             label_context=label_context,
         )
-        counter.labels(**_labels).inc(amount)
-        self._track_end_user_metric_series(counter, metric_name, _labels)
+        resolved_labels: Final = (
+            {**_labels, UserAPIKeyLabelNames.DEPRECATED.value: enum_values.deprecated}
+            if enum_values.deprecated is not None
+            and UserAPIKeyLabelNames.DEPRECATED.value in _labels
+            and metric_name
+            in (
+                "litellm_proxy_total_requests_metric",
+                "litellm_proxy_failed_requests_metric",
+                "litellm_requests_metric",
+            )
+            else _labels
+        )
+        counter.labels(**resolved_labels).inc(amount)
+        self._track_end_user_metric_series(counter, metric_name, resolved_labels)
 
     async def async_log_success_event(self, kwargs, response_obj: object, start_time: datetime, end_time: datetime):
         # Define prometheus client
@@ -1841,7 +1922,7 @@ class PrometheusLogger(CustomLogger):
             f"inside track_prometheus_metrics, model {model}, response_cost {response_cost}, tokens_used {tokens_used}, end_user_id {end_user_id}, user_api_key {user_api_key}"
         )
 
-        enum_values: Final = UserAPIKeyLabelValues(
+        base_enum_values: Final = UserAPIKeyLabelValues(
             end_user=end_user_id,
             hashed_api_key=user_api_key,
             api_key_alias=user_api_key_alias,
@@ -1870,6 +1951,19 @@ class PrometheusLogger(CustomLogger):
             user_agent=standard_logging_payload["metadata"].get("user_agent"),
             stream=(str(standard_logging_payload.get("stream")) if litellm.prometheus_emit_stream_label else None),
             service_tier=get_service_tier_from_standard_logging_payload(standard_logging_payload),
+        )
+        enum_values: Final = (
+            replace(
+                base_enum_values,
+                deprecated=_deprecated_label(
+                    base_enum_values.model_id,
+                    base_enum_values.requested_model,
+                    _get_proxy_llm_router(),
+                    datetime.now(timezone.utc).date(),
+                ),
+            )
+            if litellm.prometheus_emit_deprecated_label is True
+            else base_enum_values
         )
 
         if user_api_key is not None and isinstance(user_api_key, str) and user_api_key.startswith("sk-"):
@@ -3300,6 +3394,16 @@ class PrometheusLogger(CustomLogger):
                 model_id=model_id,
                 api_provider=api_provider,
                 stream=(str(request_data.get("stream")) if litellm.prometheus_emit_stream_label else None),
+                deprecated=(
+                    _deprecated_label(
+                        model_id,
+                        self._failed_request_requested_model(request_data),
+                        _get_proxy_llm_router(),
+                        datetime.now(timezone.utc).date(),
+                    )
+                    if litellm.prometheus_emit_deprecated_label is True
+                    else None
+                ),
             )
             _label_ctx: Final = PrometheusLabelFactoryContext(enum_values)
             PrometheusLogger._inc_labeled_counter(
