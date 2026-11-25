@@ -65,6 +65,10 @@ pub struct NativeAuthHost {
     keys: Option<Arc<AuthStore>>,
     /// The hash Python caches the master key's identity under, which is no key row.
     master: Option<KeyHash>,
+    /// Whether a key's own budget is served: `BudgetCheck` reads its spend, which it does only
+    /// with a database, and `general_settings.disable_budget_reservation` is on, so no call holds
+    /// against it.
+    own_budget: bool,
 }
 
 impl NativeAuthHost {
@@ -73,6 +77,7 @@ impl NativeAuthHost {
         Self {
             keys: None,
             master: None,
+            own_budget: false,
         }
     }
 }
@@ -125,12 +130,18 @@ fn settings(config: &Config, database: bool) -> Settings {
 
 /// Who the inference routes and `admit` authenticate: the callers the core finds over this host
 /// for `config`, the master key and with `keys` a virtual key read from them, taken from the
-/// header an inference client sends its key in.
-pub fn auth(config: &Config, keys: Option<Arc<AuthStore>>) -> Auth<NativeRows> {
+/// header an inference client sends its key in. `budgets_checked` is whether the budget checks
+/// are registered, which read a counter's spend from the database.
+pub fn auth(
+    config: &Config,
+    keys: Option<Arc<AuthStore>>,
+    budgets_checked: bool,
+) -> Auth<NativeRows> {
     let settings = settings(config, keys.is_some());
     let host = NativeAuthHost {
         keys,
         master: master_key(config).map(|key| Token::new(key.clone()).hash()),
+        own_budget: budgets_checked && config.general_settings.disable_budget_reservation,
     };
     let keys = KeyAuthenticator::new(host, settings, Arc::new(SystemClock));
     Auth::new(Arc::new(keys)).with_extractor(Arc::new(BearerOrXApiKey))
@@ -379,8 +390,16 @@ impl AuthHost for NativeAuthHost {
         Ok(())
     }
 
+    /// A key's own budget is enforced by `BudgetCheck` at read time, so it is served while the
+    /// check is registered and the budget reservation is disabled.
+    // TODO(#54329): serve it with the reservation on too once a native call carries its cost. Until
+    // then a hold is never settled, so it leaves its input cost on the key's counter and no row in
+    // the database, and the counter drifts above the spend Python reads
     async fn key_budgets(&self, key: &Key, _: Option<&UserRecord>, _: bool) -> Result<(), Error> {
-        match key.budget {
+        match key
+            .budget
+            .or(key.checked_budget.filter(|_| !self.own_budget))
+        {
             Some(column) => declined(column),
             None => Ok(()),
         }
@@ -495,7 +514,7 @@ mod tests {
         keys: Option<KeyDatabase>,
         header: (&str, &str),
     ) -> Result<Authenticated<NativeRows>, Rejected> {
-        auth(config, keys.map(memory_only))
+        auth(config, keys.map(memory_only), true)
             .authenticate_parts(&parts(header))
             .await
     }
@@ -516,7 +535,7 @@ mod tests {
         token: &str,
     ) -> Result<Authenticated<NativeRows>, Rejected> {
         bearing(
-            &auth(&with_master_key(), Some(memory_only(database))),
+            &auth(&with_master_key(), Some(memory_only(database)), true),
             token,
         )
         .await
@@ -610,7 +629,7 @@ mod tests {
         let app = Router::new()
             .route("/protected", get(|| async { StatusCode::NO_CONTENT }))
             .layer(from_extractor_with_state::<RequireMasterKey, _>(auth(
-                &config, None,
+                &config, None, false,
             )));
         let request = Request::get("/protected");
         let request = match authorization {
@@ -705,6 +724,77 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_key_that_holds_anything_else_is_not_native(#[case] columns: Columns) {
         let refused = authenticate_holding(columns).await;
+
+        assert!(
+            matches!(refused, Err(Rejected::NotNative)),
+            "{:?}",
+            refused.err()
+        );
+    }
+
+    #[rstest]
+    #[case::max_budget(json!({"max_budget": 5.0}), true)]
+    #[case::max_budget_spent(json!({"max_budget": 5.0, "spend": 7.0}), true)]
+    #[case::a_reset_schedule(
+        json!({"max_budget": 5.0, "budget_duration": "30d", "budget_reset_at": FAR_FUTURE}),
+        true
+    )]
+    #[case::soft_budget_cooldown(json!({"max_budget": 5.0, "soft_budget_cooldown": true}), false)]
+    #[case::budget_limits(json!({"max_budget": 5.0, "budget_limits": [{"a": 1}]}), false)]
+    #[case::budget_fallbacks(json!({"max_budget": 5.0, "budget_fallbacks": {"a": ["b"]}}), false)]
+    #[case::budget_id(json!({"max_budget": 5.0, "budget_id": "budget"}), false)]
+    #[case::model_max_budget(json!({"max_budget": 5.0, "model_max_budget": {"claude": 1}}), false)]
+    #[case::a_temporary_increase(
+        json!({"max_budget": 5.0, "metadata": {"temp_budget_increase": 5.0, "temp_budget_expiry": FAR_FUTURE}}),
+        false
+    )]
+    #[case::throttle_on_budget_exceeded(
+        json!({"max_budget": 5.0, "rpm_limit": 2, "metadata": {"throttle_on_budget_exceeded": true}}),
+        false
+    )]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_keys_own_budget_is_served_only_while_the_reservation_is_disabled(
+        #[case] columns: Columns,
+        #[case] served_without_reservation: bool,
+        #[values(true, false)] reservation_disabled: bool,
+    ) {
+        let held = holding(columns).await;
+        let config = config(&format!(
+            "  master_key: {MASTER_KEY}\n  disable_budget_reservation: {reservation_disabled}\n"
+        ));
+
+        let authenticated = bearing(
+            &auth(&config, Some(memory_only(held.database())), true),
+            VIRTUAL_KEY,
+        )
+        .await;
+
+        let budget = match authenticated {
+            Ok(caller) => match &caller.credential {
+                Credential::Key { key } => Some(key.budget().max),
+                Credential::MasterKey => panic!("the key authenticated as the master key"),
+            },
+            Err(Rejected::NotNative) => None,
+            Err(other) => panic!("{other:?}"),
+        };
+        assert_eq!(
+            budget,
+            (served_without_reservation && reservation_disabled).then_some(Some(5.0))
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_keys_own_budget_is_not_native_while_no_check_reads_its_spend() {
+        let held = holding(json!({"max_budget": 5.0})).await;
+        let config = config(&format!(
+            "  master_key: {MASTER_KEY}\n  disable_budget_reservation: true\n"
+        ));
+
+        let refused = bearing(
+            &auth(&config, Some(memory_only(held.database())), false),
+            VIRTUAL_KEY,
+        )
+        .await;
 
         assert!(
             matches!(refused, Err(Rejected::NotNative)),
@@ -845,7 +935,7 @@ mod tests {
             held.repositories(),
             Arc::new(SpendCounters::new(None)),
         );
-        auth(config, Some(Arc::new(keys)))
+        auth(config, Some(Arc::new(keys)), true)
     }
 
     /// One gateway pod as `AppState` builds its auth with `enable_redis_auth_cache` on: its own

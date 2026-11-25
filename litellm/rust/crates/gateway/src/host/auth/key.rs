@@ -112,8 +112,12 @@ pub struct Key {
     name: Option<Arc<str>>,
     /// The key's own budget, which its budget counter is planned from.
     own_budget: Budget,
-    /// The first budget column the row holds, which `key_budgets` declines.
+    /// The first budget column the row holds that the native app never enforces, which
+    /// `key_budgets` declines.
     pub(super) budget: Option<&'static str>,
+    /// The first of the key's own budget columns the row holds, which `BudgetCheck` enforces and
+    /// `key_budgets` declines while the budget reservation is on.
+    pub(super) checked_budget: Option<&'static str>,
     /// The row maps model names, which `normalize_model` declines.
     pub(super) aliased: bool,
 }
@@ -165,6 +169,7 @@ impl Key {
             name: None,
             own_budget: Budget::default(),
             budget: None,
+            checked_budget: None,
             aliased: false,
         }
     }
@@ -210,13 +215,17 @@ struct Held {
     /// The first column that holds something no host step is asked about.
     unasked: Option<&'static str>,
     budget: Option<&'static str>,
+    checked_budget: Option<&'static str>,
     aliased: bool,
 }
 
 /// The native app honors a key's expiry, its block, its model list, its `rpm_limit`, `tpm_limit`
 /// and `max_parallel_requests`, and the per-model limits in its metadata. Its `tpd_limit` only
 /// counts a batch, which no native route serves. The owner, the team and the project are the
-/// core's to ask the host for, the budgets and the aliases are steps the host declines, and every
+/// core's to ask the host for. Its `max_budget` is checked at read time, and `budget_duration` and
+/// `budget_reset_at` only say when Python's reset job zeroes the spend that check reads, so the
+/// three are served while the budget reservation is disabled. The other budgets and the aliases
+/// are steps the host declines, and every
 /// other field that holds something is one no step is asked about. The team, organization and
 /// project fields are only filled for a key that names one, and the last group
 /// only describes the key or the request that cached it. A field this build does not name, which
@@ -381,14 +390,12 @@ fn held(key: &CachedKey) -> Held {
         budget: carried![
             soft_budget_cooldown,
             soft_budget,
-            budget_duration,
-            budget_reset_at,
             budget_limits,
             budget_fallbacks,
             budget_id,
             model_max_budget,
-            max_budget,
         ],
+        checked_budget: carried![max_budget, budget_duration, budget_reset_at],
         aliased: aliases.is_carried(),
     }
 }
@@ -412,6 +419,7 @@ pub(super) fn read(key: &CachedKey) -> Result<Keyed<Key>, &'static str> {
     let Held {
         unasked,
         budget,
+        checked_budget,
         aliased,
     } = held(key);
     let metadata = Metadata::read(&key.metadata);
@@ -452,6 +460,7 @@ pub(super) fn read(key: &CachedKey) -> Result<Keyed<Key>, &'static str> {
                 spend: key.spend,
             },
             budget,
+            checked_budget,
             aliased,
         },
     })
@@ -594,20 +603,27 @@ mod tests {
     }
 
     #[rstest]
-    #[case::a_max_budget_alone(json!({"max_budget": 5.0}), "max_budget")]
-    #[case::a_soft_budget(json!({"max_budget": 5.0, "soft_budget": 4.0}), "soft_budget")]
-    #[case::a_soft_budget_alert_cooldown(json!({"max_budget": 5.0, "soft_budget_cooldown": true}), "soft_budget_cooldown")]
-    #[case::a_budget_window(json!({"max_budget": 5.0, "budget_limits": [{"budget_duration": "1d", "max_budget": 1.0}]}), "budget_limits")]
-    #[case::a_budget_fallback(json!({"max_budget": 5.0, "budget_fallbacks": {"claude": ["haiku"]}}), "budget_fallbacks")]
-    #[case::a_per_model_budget(json!({"max_budget": 5.0, "model_max_budget": {"claude": {"budget_limit": 1.0}}}), "model_max_budget")]
-    #[case::a_budget_reset(json!({"max_budget": 5.0, "budget_duration": "30d"}), "budget_duration")]
-    fn a_budget_feature_beside_a_max_budget_is_named_over_it(
+    #[case::a_max_budget_alone(json!({"max_budget": 5.0}), None, Some("max_budget"))]
+    #[case::a_budget_of_zero(json!({"max_budget": 0.0}), None, Some("max_budget"))]
+    #[case::a_budget_reset(json!({"max_budget": 5.0, "budget_duration": "30d"}), None, Some("max_budget"))]
+    #[case::a_reset_alone(json!({"budget_duration": "30d"}), None, Some("budget_duration"))]
+    #[case::a_reset_time_alone(json!({"budget_reset_at": "2100-01-01T00:00:00Z"}), None, Some("budget_reset_at"))]
+    #[case::a_soft_budget(json!({"max_budget": 5.0, "soft_budget": 4.0}), Some("soft_budget"), Some("max_budget"))]
+    #[case::a_soft_budget_alert_cooldown(json!({"max_budget": 5.0, "soft_budget_cooldown": true}), Some("soft_budget_cooldown"), Some("max_budget"))]
+    #[case::a_budget_window(json!({"max_budget": 5.0, "budget_limits": [{"budget_duration": "1d", "max_budget": 1.0}]}), Some("budget_limits"), Some("max_budget"))]
+    #[case::a_budget_fallback(json!({"max_budget": 5.0, "budget_fallbacks": {"claude": ["haiku"]}}), Some("budget_fallbacks"), Some("max_budget"))]
+    #[case::a_budget_row(json!({"budget_id": "budget"}), Some("budget_id"), None)]
+    #[case::a_per_model_budget(json!({"max_budget": 5.0, "model_max_budget": {"claude": {"budget_limit": 1.0}}}), Some("model_max_budget"), Some("max_budget"))]
+    fn only_a_keys_own_budget_is_one_the_read_time_check_enforces(
         #[case] change: Fields,
-        #[case] column: &str,
+        #[case] declined: Option<&str>,
+        #[case] checked: Option<&str>,
     ) {
+        let key = read(&cached(change)).unwrap();
+
         assert_eq!(
-            read(&cached(change)).map(|key| key.row.budget),
-            Ok(Some(column))
+            (key.row.budget, key.row.checked_budget),
+            (declined, checked)
         );
     }
 

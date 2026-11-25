@@ -28,6 +28,13 @@ struct Scenario {
     /// The `tpm_limit` of each key that holds one.
     #[serde(default)]
     tpm_limits: BTreeMap<String, i64>,
+    /// Whether the config reads the database that holds the keys, as its
+    /// `general_settings.database_url`.
+    #[serde(default)]
+    database: bool,
+    /// Any other columns each key that holds them sets.
+    #[serde(default)]
+    columns: BTreeMap<String, serde_json::Map<String, serde_json::Value>>,
     /// What boot read of the config the proxy stores in its database.
     #[serde(default)]
     stored: Stored,
@@ -98,18 +105,27 @@ fn stored_config(stored: Stored, held: Held) -> StoredConfig {
     }
 }
 
-/// The database holding each key of the scenario, a plain row with the model list and the token
-/// limit it gives.
-async fn listed(
-    keys: &BTreeMap<String, Vec<String>>,
-    tpm_limits: &BTreeMap<String, i64>,
-) -> keys::Held {
+/// The database holding each key of the scenario, a plain row with the model list, the token
+/// limit and the other columns it gives.
+async fn listed(scenario: &Scenario) -> keys::Held {
     let held = keys::Held::start().await;
-    for (token, models) in keys {
-        let columns = serde_json::json!({"models": models, "tpm_limit": tpm_limits.get(token)});
+    for (token, models) in &scenario.keys {
+        let mut columns = serde_json::json!({
+            "models": models,
+            "tpm_limit": scenario.tpm_limits.get(token),
+        });
+        if let (Some(row), Some(set)) = (columns.as_object_mut(), scenario.columns.get(token)) {
+            row.extend(set.clone());
+        }
         held.key(token, columns).await;
     }
     held
+}
+
+/// `config` reading the database at `url`.
+fn with_database(mut config: serde_yaml_ng::Value, url: &str) -> serde_yaml_ng::Value {
+    config["general_settings"]["database_url"] = url.into();
+    config
 }
 
 #[derive(Deserialize)]
@@ -210,6 +226,10 @@ impl Sent {
 #[case::proxy_budget("proxy_budget")]
 #[case::budget_alerting("budget_alerting")]
 #[case::budget_throttle("budget_throttle")]
+#[case::virtual_key_budgets("virtual_key_budgets")]
+#[case::virtual_key_budgets_reserved("virtual_key_budgets_reserved")]
+#[case::virtual_key_budgets_alerting("virtual_key_budgets_alerting")]
+#[case::virtual_key_budgets_without_database("virtual_key_budgets_without_database")]
 #[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();
@@ -217,16 +237,20 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     let text = std::fs::read_to_string(&path).unwrap();
     let scenario: Scenario =
         serde_yaml_ng::from_value(litellm_yaml::from_str(&text).unwrap()).unwrap();
-    let config = Config::from_value(scenario.config).unwrap();
+    let held = match scenario.keys.is_empty() {
+        true => None,
+        false => Some(listed(&scenario).await),
+    };
+    let config = match (&held, scenario.database) {
+        (Some(held), true) => with_database(scenario.config.clone(), held.url()),
+        _ => scenario.config.clone(),
+    };
+    let config = Config::from_value(config).unwrap();
     let resources =
         litellm_gateway::Resources::over(&config, Arc::new(|_: &str| None::<String>)).unwrap();
     let state = litellm_gateway::AppState::over(&config, &Environment::default(), &resources)
         .await
         .unwrap();
-    let held = match scenario.keys.is_empty() {
-        true => None,
-        false => Some(listed(&scenario.keys, &scenario.tpm_limits).await),
-    };
     let state = match &held {
         None => state,
         Some(held) => litellm_gateway::AppState {

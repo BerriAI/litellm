@@ -1,0 +1,42 @@
+# With the budget reservation on, a native call would hold against a key's budget, and until a
+# native call is priced that hold is never settled. So a key with any budget still goes to Python,
+# and one without is served.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+
+database: true
+
+keys:
+  sk-plain: []
+  sk-budget: []
+  sk-reset: []
+
+columns:
+  sk-budget: {max_budget: 10.0}
+  sk-reset: {budget_duration: 30d, budget_reset_at: "2100-01-01T00:00:00"}
+
+requests:
+  - name: a key without a budget
+    headers: {authorization: Bearer sk-plain}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a key with a max budget
+    headers: {authorization: Bearer sk-budget}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a key whose budget resets
+    headers: {authorization: Bearer sk-reset}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native

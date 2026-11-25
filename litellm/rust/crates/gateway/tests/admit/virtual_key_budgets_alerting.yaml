@@ -1,0 +1,28 @@
+# Python alerts on a key's budget when alerting is configured, which the native app does not, so
+# a config that sets it goes to Python whatever the key holds.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    disable_budget_reservation: true
+    alerting: [slack]
+
+database: true
+
+keys:
+  sk-budget: []
+
+columns:
+  sk-budget: {max_budget: 10.0, soft_budget: 5.0}
+
+requests:
+  - name: a key with a max and a soft budget
+    headers: {authorization: Bearer sk-budget}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+    over: general_settings.alerting
