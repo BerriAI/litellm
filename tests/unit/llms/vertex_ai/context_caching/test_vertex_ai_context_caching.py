@@ -1789,11 +1789,10 @@ _MARKED_SYSTEM: Final[ChatCompletionSystemMessage] = {
 
 
 @pytest.mark.parametrize(
-    ("messages", "system_run_holds_a_cache", "cache_accepts", "expected_cached", "expected_non_cached"),
+    ("messages", "cache_accepts", "expected_cached", "expected_non_cached"),
     [
         pytest.param(
             [_SYSTEM, _Q1, _A1, _MARKED_Q2],
-            False,
             True,
             [_SYSTEM],
             [_Q1, _A1, _MARKED_Q2],
@@ -1802,54 +1801,26 @@ _MARKED_SYSTEM: Final[ChatCompletionSystemMessage] = {
         pytest.param(
             [_MARKED_SYSTEM, _MARKED_Q2],
             True,
-            True,
-            [_MARKED_SYSTEM],
-            [_MARKED_Q2],
-            id="fully-marked-with-a-system-run-that-holds-a-cache",
-        ),
-        pytest.param(
-            [_MARKED_SYSTEM, _MARKED_Q2],
-            False,
-            True,
             [_MARKED_SYSTEM, _MARKED_Q2],
             [],
-            id="fully-marked-with-a-short-system-run",
-        ),
-        pytest.param(
-            [_SYSTEM, _MARKED_Q2],
-            False,
-            True,
-            [_SYSTEM, _MARKED_Q2],
-            [],
-            id="one-marked-turn-with-a-short-system-run",
+            id="fully-marked",
         ),
         pytest.param(
             [_SYSTEM, _MARKED_Q2],
             True,
-            True,
             [_SYSTEM, _MARKED_Q2],
             [],
-            id="one-marked-turn-with-an-unmarked-system-run-that-holds-a-cache",
+            id="one-marked-turn",
         ),
         pytest.param(
             [_MARKED_Q2],
-            False,
             True,
             [_MARKED_Q2],
             [],
             id="one-marked-turn-without-system",
         ),
         pytest.param(
-            [_MARKED_Q2],
-            True,
-            True,
-            [_MARKED_Q2],
-            [],
-            id="one-marked-turn-without-system-when-the-tools-hold-a-cache",
-        ),
-        pytest.param(
             [_Q1, _A1, _MARKED_Q2],
-            False,
             True,
             [],
             [_Q1, _A1, _MARKED_Q2],
@@ -1857,7 +1828,6 @@ _MARKED_SYSTEM: Final[ChatCompletionSystemMessage] = {
         ),
         pytest.param(
             [_Q1, _A1, _MARKED_Q2, _A2, _Q3],
-            False,
             True,
             [_Q1, _A1, _MARKED_Q2],
             [_A2, _Q3],
@@ -1866,14 +1836,12 @@ _MARKED_SYSTEM: Final[ChatCompletionSystemMessage] = {
         pytest.param(
             [_SYSTEM, _Q1, _A1, _MARKED_Q2, _A2, _Q3],
             False,
-            False,
             [_SYSTEM],
             [_Q1, _A1, _MARKED_Q2, _A2, _Q3],
             id="marked-middle-turn-the-cache-does-not-accept",
         ),
         pytest.param(
             [_MARKED_SYSTEM, _Q1],
-            False,
             True,
             [_MARKED_SYSTEM],
             [_Q1],
@@ -1883,16 +1851,13 @@ _MARKED_SYSTEM: Final[ChatCompletionSystemMessage] = {
 )
 def test_separate_cached_messages_caches_prefix_through_marked_block(
     messages: list[AllMessageValues],
-    system_run_holds_a_cache: bool,
     cache_accepts: bool,
     expected_cached: list[AllMessageValues],
     expected_non_cached: list[AllMessageValues],
 ) -> None:
     from litellm.llms.vertex_ai.context_caching.transformation import separate_cached_messages
 
-    cached_messages, non_cached_messages = separate_cached_messages(
-        messages, lambda _: system_run_holds_a_cache, lambda _: cache_accepts
-    )
+    cached_messages, non_cached_messages = separate_cached_messages(messages, lambda _: cache_accepts)
 
     assert cached_messages == expected_cached
     assert non_cached_messages == expected_non_cached
@@ -2883,61 +2848,35 @@ async def test_one_marked_turn_without_a_system_prompt_goes_into_the_gemini_cach
 
 
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
-async def test_a_marked_system_prompt_cached_alone_keeps_one_gemini_cache_when_the_newest_turn_mark_sets_a_ttl(
+async def test_a_repeat_of_a_marked_system_prompt_and_marked_turn_reads_one_gemini_cache_of_both_with_the_turn_ttl(
     local_model_cost_map, use_async: bool
 ) -> None:
-    system: Final[ChatCompletionSystemMessage] = {
-        "role": "system",
-        "content": [{"type": "text", "text": "house rules " * 3000, "cache_control": {"type": "ephemeral"}}],
-    }
-    newest_turn_mark: Final = {"type": "ephemeral", "ttl": "1h"}
-    turns: Final[tuple[list[AllMessageValues], ...]] = (
-        [
-            system,
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "What's the weather in Tokyo today?", "cache_control": newest_turn_mark}
-                ],
-            },
-        ],
-        [
-            system,
-            {"role": "user", "content": "What's the weather in Tokyo today?"},
-            {"role": "assistant", "content": "Sunny."},
-            {
-                "role": "user",
-                "content": [{"type": "text", "text": "And Nagoya tomorrow?", "cache_control": newest_turn_mark}],
-            },
-        ],
-    )
-    calls: Final[list[httpx.Request]] = []
-    transport: Final = httpx.MockTransport(_recording_gemini_route(calls))
-    for messages in turns:
-        if use_async:
-            await litellm.acompletion(
-                model="gemini/gemini-flash-latest",
-                messages=messages,
-                api_key="test-key",
-                client=AsyncHTTPHandler(transport=transport),
-            )
-        else:
-            litellm.completion(
-                model="gemini/gemini-flash-latest",
-                messages=messages,
-                api_key="test-key",
-                client=HTTPHandler(client=httpx.Client(transport=transport)),
-            )
-
-    created: Final = [
-        json.loads(call.content)
-        for call in calls
-        if call.method == "POST" and call.url.path.endswith("/cachedContents")
+    messages: Final[list[AllMessageValues]] = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "house rules " * 3000, "cache_control": {"type": "ephemeral"}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Which archive holds the Tokyo station logs?",
+                    "cache_control": {"type": "ephemeral", "ttl": "300s"},
+                }
+            ],
+        },
     ]
-    generated: Final = [json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent")]
+
+    calls: Final = await _complete_each_turn((messages, messages), use_async)
+
+    created: Final = _created_caches(calls)
+    generated: Final = _generate_requests(calls)
     assert len(created) == 1
-    assert "Tokyo" not in json.dumps(created[0].get("contents", []))
+    assert created[0]["ttl"] == "300s"
+    assert "Tokyo station logs" in json.dumps(created[0]["contents"])
     assert [request["cachedContent"] for request in generated] == ["cachedContents/created"] * 2
+    assert all("Tokyo station logs" not in json.dumps(request.get("contents", [])) for request in generated)
 
 
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
@@ -3510,9 +3449,9 @@ def test_a_reminder_after_the_cached_block_stays_out_of_the_gemini_cache_and_rea
         json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
     )
     generated: Final = tuple(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
-    assert ["question 1" in json.dumps(body["contents"]) for body in created] == [False, True]
-    assert created[1]["system_instruction"] == {"parts": [{"text": "shared policy " * 3000}]}
-    assert created[1]["contents"] == [{"role": "user", "parts": [{"text": "question 1"}]}]
+    assert len(created) == 1
+    assert created[0]["system_instruction"] == {"parts": [{"text": "shared policy " * 3000}]}
+    assert created[0]["contents"] == [{"role": "user", "parts": [{"text": "question 1"}]}]
     assert generated[1]["cachedContent"] == "cachedContents/created"
     assert "system_instruction" not in generated[1]
     assert generated[1]["contents"] == [
@@ -3624,11 +3563,10 @@ async def test_a_ttl_on_a_reminder_that_ends_the_cached_block_still_sets_how_lon
         json.loads(call.content) for call in calls if call.method == "POST" and call.url.path.endswith("/cachedContents")
     )
     generated: Final = tuple(json.loads(call.content) for call in calls if call.url.path.endswith(":generateContent"))
-    assert [("question 1" in json.dumps(body["contents"]), body.get("ttl")) for body in created] == [
-        (False, None),
-        (True, "300s"),
+    assert [(body["contents"], body.get("ttl")) for body in created] == [
+        ([{"role": "user", "parts": [{"text": "question 1"}]}], "300s")
     ]
-    assert generated[1]["cachedContent"] == "cachedContents/created"
+    assert [request["cachedContent"] for request in generated] == ["cachedContents/created"] * 2
 
 
 @pytest.mark.asyncio

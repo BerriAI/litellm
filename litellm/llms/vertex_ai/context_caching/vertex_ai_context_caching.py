@@ -472,7 +472,6 @@ class ContextCachingEndpoints(VertexBase):
         )
         cached_messages, non_cached_messages = separate_cached_messages(
             messages=messages,
-            system_run_holds_a_cache=clears_the_cache_floor,
             cache_accepts=partial(_cached_contents_accepts, model=model, custom_llm_provider=custom_llm_provider),
             supports_system_message=supports_system_message,
         )
@@ -537,7 +536,7 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        ttl: Final = cached_block_ttl(messages, cached_messages)
+        ttl: Final = cached_block_ttl(messages)
         generated_cache_key: Final = _cache_key(cached_messages, ttl, tools, tool_choice, model)
         google_cache_name: Final = self.check_cache(
             cache_key=generated_cache_key,
@@ -647,7 +646,6 @@ class ContextCachingEndpoints(VertexBase):
         )
         cached_messages, non_cached_messages = separate_cached_messages(
             messages=messages,
-            system_run_holds_a_cache=clears_the_cache_floor,
             cache_accepts=partial(_cached_contents_accepts, model=model, custom_llm_provider=custom_llm_provider),
             supports_system_message=supports_system_message,
         )
@@ -707,7 +705,7 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        ttl: Final = cached_block_ttl(messages, cached_messages)
+        ttl: Final = cached_block_ttl(messages)
         generated_cache_key: Final = _cache_key(cached_messages, ttl, tools, tool_choice, model)
         google_cache_name: Final = await self.async_check_cache(
             cache_key=generated_cache_key,
