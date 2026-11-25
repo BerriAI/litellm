@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_f
 from litellm.litellm_core_utils.internal_call_metadata import (
     effective_turn_off_message_logging,
     forwarded_internal_call_metadata,
+    inherits_parent_session,
     parent_session_kwargs,
 )
 from litellm.router_strategy.switchyard_router.config import (
@@ -76,7 +77,7 @@ def _caller_key_hash(request_kwargs: Mapping[str, object]) -> str:
 
 def _scoped_session(request_kwargs: Mapping[str, object]) -> str | None:
     session: Final = parent_session_kwargs(request_kwargs).get("litellm_session_id")
-    if not session:
+    if not session or inherits_parent_session(request_kwargs):
         return None
     return hashlib.sha256(f"{_caller_key_hash(request_kwargs)}\0{session}".encode()).hexdigest()
 

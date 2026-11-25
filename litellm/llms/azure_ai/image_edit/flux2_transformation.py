@@ -35,15 +35,15 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
     with the image passed as base64 in JSON body.
     """
 
-    def get_supported_openai_params(self, model: str) -> list:
-        return AzureFoundryFluxImageGenerationConfig().get_supported_openai_params(model)
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseImageEditConfig contract
+        return [*AzureFoundryFluxImageGenerationConfig().get_supported_openai_params(model)]
 
     def map_openai_params(
         self,
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI params to FLUX 2 params.
         FLUX 2 uses the same param names as OpenAI for supported params.
@@ -63,12 +63,12 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate Azure AI Foundry environment and set up authentication
         """
@@ -89,10 +89,10 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         model: str,
         prompt: str | None,
         image: FileTypes | Sequence[FileTypes | None] | None,
-        image_edit_optional_request_params: dict,
+        image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+        headers: Mapping[str, str],
+    ) -> tuple[dict[str, object], RequestFiles]:
         """
         Transform image edit request for FLUX 2.
 

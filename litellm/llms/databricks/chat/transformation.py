@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 
 from litellm.anthropic_beta_gated_fields import log_beta_gated_strips, strip_beta_gated_thinking
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.core_helpers import drops_unsupported_params
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     handle_invalid_parallel_tool_calls,
@@ -435,14 +436,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         # Check for custom user agent in optional_params or environment
         # This allows partners building on LiteLLM to set their own telemetry
         # Use pop() to remove these keys so they don't get sent to the API
@@ -471,8 +472,8 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         use_ai_gateway: Final = self.uses_ai_gateway(model)
@@ -558,7 +559,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     def map_response_format_to_databricks_tool(
         self,
         model: str,
-        value: dict | None,
+        value: dict[str, object] | None,
         optional_params: dict,
         tool_is_forced: bool,
     ) -> DatabricksTool | None:
@@ -585,6 +586,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         # every request doesn't have to be transformed for to OpenAI and Anthropic request formats.
         return messages, tools
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops" if "claude" in model else "forwards"
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -592,11 +596,13 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         model: str,
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
-    ) -> dict:
-        request_params: Final = (
-            tool_params_without_hosted_mcp(non_default_params, model=model, route="databricks", drop_params=drop_params)
-            if "claude" in model
-            else non_default_params
+    ) -> dict[str, object]:
+        request_params: Final = tool_params_without_hosted_mcp(
+            non_default_params,
+            model=model,
+            route="databricks",
+            drop_params=drop_params,
+            handling=self.hosted_mcp_tool_handling(model),
         )
         mapped_params: Final = super().map_openai_params(request_params, optional_params, model, drop_params)
         if "claude" in model:
@@ -679,7 +685,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
 
         return mapped_params
 
-    def _should_fake_stream(self, optional_params: dict) -> bool:
+    def _should_fake_stream(self, optional_params: Mapping[str, object]) -> bool:
         """
         Databricks doesn't support 'response_format' while streaming
         """
@@ -861,7 +867,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     ) -> Sequence[Sequence[Mapping[str, object]]] | None:
         if content is None:
             return None
-        citations: Final = []
+        citations: Final[list[Sequence[Mapping[str, object]]]] = []
         if isinstance(content, list):
             for item in content:
                 text = item.get("text", None)
@@ -870,7 +876,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         return citations or None
 
     def _transform_dbrx_choices(self, choices: list[DatabricksChoice], json_mode: bool | None = None) -> list[Choices]:
-        transformed_choices: Final = []
+        transformed_choices: Final[list[Choices]] = []
 
         for choice in choices:
             ## HANDLE JSON MODE - anthropic returns single function call]
@@ -944,7 +950,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,

@@ -133,7 +133,9 @@ def _transcription_model_overrides(session: Mapping[str, object], model_name: st
 def with_resolved_session_model(session: Mapping[str, object], model_name: str) -> dict[str, object]:
     top_level_model: Final = {} if "model" not in session else {"model": model_name}
     transcription_models: Final = (
-        _transcription_model_overrides(session, model_name) if session.get("type") == "transcription" else {}
+        _transcription_model_overrides(session, model_name)
+        if session.get("type") == "transcription"
+        else _EMPTY_MODEL_PARAMS
     )
     return {**session, **top_level_model, **transcription_models}
 
@@ -1384,6 +1386,18 @@ async def realtime_health_check(
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime.construct_url(api_base=openai_api_base, query_params={"model": model})
+    elif custom_llm_provider == "elevenlabs":
+        from ..llms.elevenlabs.realtime.transformation import (
+            elevenlabs_realtime_health_check,
+            realtime_options_from_params,
+        )
+
+        return await elevenlabs_realtime_health_check(
+            model=model,
+            api_base=resolved_api_base,
+            api_key=health_check_api_key,
+            options=realtime_options_from_params(resolved_params),
+        )
     elif custom_llm_provider == "soniox":
         return await soniox_realtime_health_check(
             model=model,

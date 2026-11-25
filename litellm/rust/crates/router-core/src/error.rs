@@ -41,13 +41,11 @@ pub enum Error {
         /// strategy refused every candidate.
         request_ids: Option<Vec<String>>,
     },
-    /// `raised_at` names the slot the call keeps the host's own error in. It is `None` for a
-    /// failure the router made itself and for one handed in from outside the call.
     #[error("the attempt failed")]
     Attempt {
         #[source]
         failure: AttemptError,
-        raised_at: Option<RaisedAt>,
+        raised_by: RaisedBy,
     },
     /// The host ended the call from inside an attempt ([`crate::AttemptFailure::Refused`]).
     #[error("the host refused the call")]
@@ -91,7 +89,11 @@ pub enum Error {
     /// The pre-call checks found no deployment whose context window fits the prompt; `detail`
     /// names each one dropped for it.
     #[error("no deployment of `{model}` has a context window large enough for this call")]
-    ContextWindowExceeded { model: String, detail: String },
+    ContextWindowExceeded {
+        model: String,
+        detail: String,
+        held_for_fallback: bool,
+    },
     /// The pre-call checks found no deployment of `model` that takes the requested `params`.
     #[error("no deployment of `{model}` supports {params:?}")]
     UnsupportedParams { model: String, params: Vec<String> },
@@ -134,12 +136,23 @@ impl From<AttemptError> for Error {
     fn from(failure: AttemptError) -> Self {
         Self::Attempt {
             failure,
-            raised_at: None,
+            raised_by: RaisedBy::Core,
         }
     }
 }
 
 impl Error {
+    /// The refusal behind this error, when a pre-call check turned the picked deployment away.
+    pub fn refused(&self) -> Option<&Refused> {
+        match self {
+            Self::Attempt {
+                raised_by: RaisedBy::PreCallCheck(refused),
+                ..
+            } => Some(refused),
+            _ => None,
+        }
+    }
+
     /// The failed attempt behind this error, when a deployment was called.
     pub fn attempt(&self) -> Option<&AttemptError> {
         match self {
@@ -261,9 +274,14 @@ impl Error {
                 until: until.clone(),
                 timezone: timezone.clone(),
             },
-            Self::ContextWindowExceeded { model, detail } => Self::ContextWindowExceeded {
+            Self::ContextWindowExceeded {
+                model,
+                detail,
+                held_for_fallback,
+            } => Self::ContextWindowExceeded {
                 model: model.clone(),
                 detail: detail.clone(),
+                held_for_fallback: *held_for_fallback,
             },
             Self::UnsupportedParams { model, params } => Self::UnsupportedParams {
                 model: model.clone(),
@@ -381,6 +399,29 @@ impl FailureKind {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RaisedAt(pub(crate) usize);
 
+/// Who made a failed attempt's error, which decides how the failure is recorded against the
+/// deployment and what the host can say about it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RaisedBy {
+    /// The host's attempt: the slot holds the host's own error, and the failure is recorded as
+    /// `deployment_callback_on_failure` does.
+    Host(RaisedAt),
+    /// A pre-call check of the core, before any provider call
+    /// (`async_routing_strategy_pre_call_checks`): the deployment cools down for the router's
+    /// `cooldown_time` and nothing else is recorded.
+    PreCallCheck(Box<Refused>),
+    /// The core with no host error behind it, or a failure handed in from outside the call.
+    Core,
+}
+
+/// What a pre-call check turned away.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refused {
+    pub deployment_id: String,
+    /// How long until the limit's window starts over, the `retry-after` the caller is told.
+    pub resets_in: Duration,
+}
+
 /// One failed attempt, as typed facts the retry, fallback and cooldown rules decide by.
 #[derive(Clone, Debug, thiserror::Error)]
 #[error("the deployment call failed with {kind}")]
@@ -414,6 +455,9 @@ pub struct AttemptError {
     /// (`is_agentic_followup_failure`): never retried, since a retry reruns every paid round. The
     /// failure keeps its own class, which decides its fallbacks and cooldown as for any failure.
     pub agentic_followup: bool,
+    /// A file or batch create the provider may already hold (`is_create_that_may_already_exist`):
+    /// neither retried nor sent to a fallback, since either sends the create again.
+    pub create_may_exist: bool,
     /// One of `deployment_callback_on_failure`'s early exits holds: the failure says nothing about
     /// the deployment, so it is neither counted nor cooled down (a failed request still counts
     /// against the minute's requests, which `async_deployment_callback_on_failure` does apart).
@@ -442,6 +486,7 @@ impl AttemptError {
             recorded: false,
             names_provider: false,
             agentic_followup: false,
+            create_may_exist: false,
             outside_deployment: false,
             caller_scoped: false,
             status_absent: false,
@@ -474,10 +519,18 @@ impl AttemptError {
 
     /// No retry can clear the failure: a failed agentic follow-up reruns every paid round, a
     /// request alone over every deployment's tpm limit (`RequestOverDeploymentTpmError`) stays
-    /// over it, and a queue rejection ends the request. Its fallbacks still run, except a queue
-    /// rejection's.
+    /// over it, a follow-up whose earlier turns cannot be found stays unanswerable, and a queue
+    /// rejection ends the request. Its fallbacks still run, except a queue rejection's and those
+    /// of a follow-up to a response no provider holds.
     pub fn ends_retries(&self) -> bool {
-        self.agentic_followup || self.is_a("RequestOverDeploymentTpmError") || self.queue_rejected()
+        self.agentic_followup
+            || self.is_a("RequestOverDeploymentTpmError")
+            || self.is_a("UnresolvablePreviousResponseError")
+            || self.queue_rejected()
+    }
+
+    pub fn is_unknown_follow_up(&self) -> bool {
+        self.is_a("UnknownPreviousResponseError")
     }
 
     /// The dynamic queue refused the attempt: the request ends with this error and runs no fallback.

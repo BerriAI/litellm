@@ -3388,6 +3388,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "PERPLEXITY_ORCHESTRATOR",
+    "provider_display_name": "Perplexity Orchestrator",
+    "litellm_provider": "perplexity_orchestrator",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.perplexity.ai/orchestrator/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "perplexity_orchestrator/anthropic/claude-sonnet-5-5"
+  },
+  {
     "provider": "PETALS",
     "provider_display_name": "Petals",
     "litellm_provider": "petals",
@@ -3750,6 +3778,34 @@
       }
     ],
     "default_model_placeholder": "wally/glm-5.3-flash"
+  },
+  {
+    "provider": "HUAWEI_MAAS",
+    "provider_display_name": "Huawei Cloud MaaS",
+    "litellm_provider": "huawei_maas",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api-ap-southeast-1.modelarts-maas.com/openai/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "huawei_maas/glm-5.3"
   },
   {
     "provider": "Sail",

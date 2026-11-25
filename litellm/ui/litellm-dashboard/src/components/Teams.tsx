@@ -1,4 +1,6 @@
-import { Page, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { LensCreateField } from "@/components/lens/LensControls";
+import { lensCreationMetadata, readLensPolicy, type LensPolicy } from "@/components/lens/lensPolicy";
+import { PageTabs, PageTabsBar, PageTabsTrigger } from "@/components/shared/Page";
 import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import useCan from "@/app/(dashboard)/hooks/useCan";
 import AvailableTeamsPanel from "@/components/team/AvailableTeamsPanel";
@@ -286,6 +288,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
   const canViewPolicies = useCan("viewPolicies");
   const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
+  const [lensPolicy, setLensPolicy] = useState<LensPolicy>(null);
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
   const [modelMaxBudget, setModelMaxBudget] = useState<ModelMaxBudget>({});
   const [teamMemberModelMaxBudget, setTeamMemberModelMaxBudget] = useState<ModelMaxBudget>({});
@@ -368,6 +371,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
     setAgentSettingsOpen(false);
     setSearchToolSettingsOpen(false);
     setLoggingSettings([]);
+    setLensPolicy(null);
     setModelAliases({});
     setModelMaxBudget({});
     setTeamMemberModelMaxBudget({});
@@ -444,10 +448,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
 
         toast.info(t("teams.page.toasts.creating"));
 
-        const metadataObject = {
-          ...metadataPairsToObject(formValues.metadata),
-          ...(loggingSettings.length > 0 ? { logging: loggingSettings.filter((config) => config.callback_name) } : {}),
-        };
+        const metadataObject = lensCreationMetadata(
+          {
+            ...metadataPairsToObject(formValues.metadata),
+            ...(loggingSettings.length > 0
+              ? { logging: loggingSettings.filter((config) => config.callback_name) }
+              : {}),
+          },
+          lensPolicy,
+        );
         formValues.metadata = Object.keys(metadataObject).length > 0 ? JSON.stringify(metadataObject) : undefined;
 
         if (formValues.secret_manager_settings) {
@@ -681,7 +690,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
   ];
 
   return (
-    <Page className={selectedTeamId ? undefined : "h-full"}>
+    <>
       {selectedTeamId ? (
         <TeamInfoView
           teamId={selectedTeamId}
@@ -700,6 +709,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
           userModels={userModels}
           editTeam={editTeam}
           premiumUser={premiumUser}
+          framed
         />
       ) : (
         <PageTabs defaultValue={tabItems[0].key}>
@@ -709,22 +719,25 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
               {t("teams.page.header.title")}
             </PageHeaderTitle>
             <PageHeaderDescription>{t("teams.page.header.description")}</PageHeaderDescription>
-            {canCreateOrManageTeams(userRole, userID, organizations) && (
-              <PageHeaderControls>
-                <UIButton onClick={openCreateTeamModal} data-testid="create-team-button">
-                  <Plus className="size-4" />
-                  {t("teams.page.header.createTeam")}
-                </UIButton>
-              </PageHeaderControls>
-            )}
+            <PageHeaderControls>
+              <PageTabsBar
+                actions={
+                  canCreateOrManageTeams(userRole, userID, organizations) && (
+                    <UIButton onClick={openCreateTeamModal} data-testid="create-team-button">
+                      <Plus className="size-4" />
+                      {t("teams.page.header.createTeam")}
+                    </UIButton>
+                  )
+                }
+              >
+                {tabItems.map((item) => (
+                  <PageTabsTrigger key={item.key} value={item.key}>
+                    {item.label}
+                  </PageTabsTrigger>
+                ))}
+              </PageTabsBar>
+            </PageHeaderControls>
           </PageHeader>
-          <PageTabsList>
-            {tabItems.map((item) => (
-              <PageTabsTrigger key={item.key} value={item.key}>
-                {item.label}
-              </PageTabsTrigger>
-            ))}
-          </PageTabsList>
           {tabItems.map((item) => (
             <TabsContent key={item.key} value={item.key} className={item.className}>
               {item.children}
@@ -742,6 +755,10 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
             <TooltipProvider>
               <form onSubmit={form.handleSubmit(onCreateSubmit)}>
                 <FieldGroup>
+                  <LensCreateField
+                    policy={lensPolicy ?? readLensPolicy(metadataPairsToObject(form.watch("metadata")))}
+                    onChange={setLensPolicy}
+                  />
                   <FormField control={form.control} name="team_alias" label={t("teams.page.create.fields.teamName")}>
                     {({ ref, value, ...field }) => (
                       <UIInput {...field} ref={ref} value={value ?? ""} data-testid="team-name-input" />
@@ -1381,7 +1398,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
           </DialogContent>
         </Dialog>
       )}
-    </Page>
+    </>
   );
 };
 

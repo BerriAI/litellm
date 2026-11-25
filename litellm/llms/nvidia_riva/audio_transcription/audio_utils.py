@@ -49,6 +49,10 @@ class FloatArray(Protocol):
 
     def __mul__(self, other: float) -> "FloatArray": ...
 
+    def __rmul__(self, other: object) -> "FloatArray": ...
+
+    def __add__(self, other: "FloatArray") -> "FloatArray": ...
+
 
 _INSTALL_HINT = "Install Riva STT extras to enable automatic audio resampling: `pip install 'litellm[stt-nvidia-riva]'`"
 
@@ -153,7 +157,7 @@ def _decode_to_float32(file_bytes: bytes) -> tuple["FloatArray", int]:
             with audioread.audio_open(tmp_path) as src:
                 source_rate = int(src.samplerate)
                 channels: Final = int(src.channels)
-                chunks: Final = []
+                chunks: Final[list[np.ndarray[tuple[int, ...], np.dtype[np.int16]]]] = []
                 for buf in src:
                     chunks.append(np.frombuffer(buf, dtype=np.int16))
                 if not chunks:

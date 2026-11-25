@@ -1,0 +1,44 @@
+# The messages settings a request, its deployment and litellm_settings set, each read by the
+# native call as Python reads it. A deployment timeout Python keeps and the native call does not
+# sends its group to Python.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        additional_drop_params: [metadata.user_id]
+        request_timeout: 30
+    - model_name: claude-no-timeout
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        request_timeout: 0
+  litellm_settings:
+    reasoning_auto_summary: "false"
+    request_timeout: 60
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: the request's drop_params
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], drop_params: "yes"}
+    expect: rust
+
+  - name: the request's additional_drop_params
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], additional_drop_params: [temperature]}
+    expect: rust
+
+  - name: a deployment with no timeout at all
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude-no-timeout, max_tokens: 16, messages: []}
+    expect: python
+    reason: model
+    over: model_list.litellm_params.request_timeout

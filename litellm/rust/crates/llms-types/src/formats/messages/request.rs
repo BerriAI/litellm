@@ -76,7 +76,11 @@ pub struct ContentBlock {
         deserialize_with = "crate::recognized::null_or_known"
     )]
     pub block_type: Option<Recognized<ContentBlockType>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "crate::recognized::non_null"
+    )]
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
@@ -991,6 +995,27 @@ mod tests {
     #[case::enum_object(json!({"text": null}))]
     fn block_type_rejects_non_string_values(#[case] value: Value) {
         assert!(serde_json::from_value::<ContentBlock>(json!({"type": value})).is_err());
+    }
+
+    #[rstest]
+    #[case::null(json!(null))]
+    #[case::number(json!(5))]
+    #[case::object(json!({"value": "hi"}))]
+    fn a_message_whose_block_text_is_not_a_string_stays_as_sent(#[case] text: Value) {
+        let message = json!({"role": "user", "content": [{"type": "text", "text": text}]});
+        assert!(
+            serde_json::from_value::<ContentBlock>(json!({"type": "text", "text": text})).is_err()
+        );
+        assert_eq!(
+            serde_json::from_value::<Recognized<Message>>(message.clone()).unwrap(),
+            Recognized::Unrecognized(message)
+        );
+    }
+
+    #[rstest]
+    fn a_block_without_text_still_parses() {
+        let block: ContentBlock = serde_json::from_value(json!({"type": "text"})).unwrap();
+        assert_eq!(block.text, None);
     }
 
     #[rstest]
