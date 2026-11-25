@@ -543,6 +543,9 @@ async def read_customer_hierarchy_windows(
             reset_at=counter.reset_at,
         )
 
+    async def measured(scope: CustomerScopeAuth, level: Sequence[BudgetCounter]) -> CustomerScopeAuth:
+        return scope.model_copy(update={"budget_window_usage": tuple([await usage(counter) for counter in level])})
+
     counters: Final = tuple(
         customer_window_counters(scope.key, scope.entity_id, scope.budget_limits, now=now) for scope in hierarchy.scopes
     )
@@ -553,12 +556,7 @@ async def read_customer_hierarchy_windows(
         return hierarchy.model_copy(
             update={
                 "scopes": tuple(
-                    [
-                        scope.model_copy(
-                            update={"budget_window_usage": tuple([await usage(counter) for counter in level])}
-                        )
-                        for scope, level in zip(hierarchy.scopes, counters, strict=True)
-                    ]
+                    [await measured(scope, level) for scope, level in zip(hierarchy.scopes, counters, strict=True)]
                 )
             }
         )
