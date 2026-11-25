@@ -46,6 +46,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
     LitellmUserRoles,
+    ModelAccessDeniedProxyException,
     ProxyException,
     UserAPIKeyAuth,
 )
@@ -3147,3 +3148,69 @@ def test_a_litellm_model_name_is_judged_by_the_deployments_of_the_team_the_reque
             object_type="customer",
             routing_team_id="team-2",
         )
+
+
+_TEAMLESS_PROJECT: Final = LiteLLM_ProjectTableCachedObj(project_id="teamless", team_id=None, models=["group-a"])
+
+
+async def _teamless_project_gate(gate: str, team_id: str, monkeypatch: pytest.MonkeyPatch) -> bool:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
+    from litellm.proxy.auth.user_api_key_auth import _is_fallback_model_authorized
+
+    token: Final = UserAPIKeyAuth(token="test-token", team_id=team_id, models=[], project_id="teamless")
+    match gate:
+        case "common_checks":
+            return await common_checks(
+                request_body={"model": "openai/cross-team-raw"},
+                team_object=LiteLLM_TeamTable(team_id=team_id, models=[]),
+                user_object=None,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/v1/chat/completions",
+                llm_router=_namesake_router(),
+                proxy_logging_obj=AsyncMock(),
+                valid_token=token,
+                request=MagicMock(),
+                skip_budget_checks=True,
+                project_object=_TEAMLESS_PROJECT,
+            )
+        case "key_check":
+            cache: Final = UserApiKeyCache()
+            await cache.async_set_cache(key=AuthObject.project("teamless"), value=_TEAMLESS_PROJECT)
+            await cache.async_set_cache(key=AuthObject.team(team_id), value=LiteLLM_TeamTable(team_id=team_id))
+            monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+            monkeypatch.setattr(proxy_server, "prisma_client", MagicMock())
+            await can_key_call_resolved_model("openai/cross-team-raw", None, token, _namesake_router())
+            return True
+        case _:
+            if not await _is_fallback_model_authorized(
+                model="openai/cross-team-raw",
+                valid_token=token,
+                llm_model_list=None,
+                llm_router=_namesake_router(),
+                project_object=_TEAMLESS_PROJECT,
+            ):
+                raise ModelAccessDeniedProxyException(
+                    message="fallback refused",
+                    internal_message="project not allowed to access model (fallback refused)",
+                    type="project_model_access_denied",
+                    param="model",
+                    code=403,
+                )
+            return True
+
+
+@pytest.mark.parametrize("gate", ["common_checks", "key_check", "fallback"])
+@pytest.mark.parametrize("team_id,allowed", [("team-1", True), ("team-2", False)])
+@pytest.mark.asyncio
+async def test_a_teamless_project_reaches_a_litellm_model_name_only_when_every_deployment_its_key_team_routes_to_is_granted(
+    gate: str, team_id: str, allowed: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if allowed:
+        assert await _teamless_project_gate(gate, team_id, monkeypatch) is True
+        return
+    with pytest.raises(ModelAccessDeniedProxyException) as denied:
+        await _teamless_project_gate(gate, team_id, monkeypatch)
+    assert denied.value.internal_message.startswith("project not allowed to access model")

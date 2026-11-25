@@ -863,6 +863,7 @@ async def _run_project_checks(
             project_object=project_object,
             llm_router=llm_router,
             key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+            routing_team_id=valid_token.team_id if valid_token is not None else None,
         )
 
     if not skip_budget_checks:
@@ -6001,6 +6002,7 @@ async def _can_key_call_resolved_model(
                 project_object=project_object,
                 llm_router=llm_router,
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                routing_team_id=valid_token.team_id,
             )
 
     if valid_token.end_user_id is not None and prisma_client is not None:
@@ -6191,6 +6193,7 @@ def can_project_access_model(
     project_object: LiteLLM_ProjectTable,
     llm_router: RegistryReader | None,
     key_model_aliases: Mapping[str, str] | None = None,
+    routing_team_id: str | None = None,
 ) -> Literal[True]:
     """
     Returns True if the project can access a specific model.
@@ -6204,6 +6207,7 @@ def can_project_access_model(
         team_id=project_object.team_id if project_object else None,
         key_model_aliases=key_model_aliases,
         object_type="project",
+        routing_team_id=routing_team_id,
     )
 
 

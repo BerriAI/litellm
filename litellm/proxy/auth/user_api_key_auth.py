@@ -841,6 +841,7 @@ async def _is_fallback_model_authorized(
                 project_object=project_object,
                 llm_router=llm_router,
                 key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+                routing_team_id=valid_token.team_id,
             )
     except ProxyException:
         return False

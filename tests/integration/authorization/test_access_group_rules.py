@@ -513,3 +513,50 @@ def test_a_model_group_alias_does_not_add_a_grant_to_reach_a_deployment_by_its_l
                 _chat(candidate, litellm_model, key).status_code for key in (granted_key, group_only_key)
             )
         assert statuses == (200, 403), statuses
+
+
+def test_a_teamless_project_reaches_a_litellm_model_only_when_every_deployment_its_key_team_routes_to_is_granted(
+    gateway: Gateway,
+) -> None:
+    with wire_server(_completion) as wire, gateway.scenario() as scenario:
+        suffix: Final = uuid.uuid4().hex
+        group: Final = f"granted-{suffix}"
+        litellm_model: Final = f"openai/project-{suffix}"
+        key_team: Final = scenario.team()
+        scenario.model(
+            model=litellm_model,
+            api_base=f"{wire.url}/v1",
+            api_key="granted-deployment",
+            model_info={"access_groups": [group]},
+        )
+        scenario.model(
+            model=litellm_model,
+            api_base=f"{wire.url}/v1",
+            api_key="ungranted-team-deployment",
+            model_info={"team_id": key_team, "team_public_model_name": f"key-team-{suffix}"},
+        )
+        former_team: Final = string_value(
+            gateway.post("/team/new", {"team_alias": f"integration-{uuid.uuid4().hex}"})["team_id"]
+        )
+        project: Final = scenario.project(former_team, models=[group])
+        gateway.post("/team/delete", {"team_ids": [former_team]})
+        assert gateway.rows('SELECT team_id FROM "LiteLLM_ProjectTable" WHERE project_id = %s', (project,)) == [
+            {"team_id": None}
+        ]
+        key: Final = scenario.key(team_id=key_team, project_id=project)
+        wire.drain()
+        statuses: Final = tuple(
+            gateway.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": litellm_model, "messages": [{"role": "user", "content": "teamless project raw name"}]},
+                key=key,
+            )
+            for _ in range(4)
+        )
+        served_by: Final = {
+            entry.headers.get("authorization") for entry in wire.drain() if entry.target == "/v1/chat/completions"
+        }
+        assert [response.status_code for response in statuses] == [403] * 4, [r.text for r in statuses]
+        assert all("project_model_access_denied" in response.text for response in statuses), statuses[0].text
+        assert served_by == set(), served_by
