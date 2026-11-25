@@ -15,7 +15,7 @@ class BitbucketDetector(RegexBasedDetector):
         return "Bitbucket Secrets"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # For Bitbucket Client ID
             re.compile(

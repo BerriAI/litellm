@@ -714,7 +714,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         anthropic_messages_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
-    ) -> dict:
+    ) -> dict[str, object]:
         requested_thinking: Final = anthropic_messages_optional_request_params.get("thinking")
         requested_display_updates: Final = AnthropicModelInfo().is_thinking_display_updates_used(requested_thinking)
         drop_params: Final = getattr(litellm_params, "drop_params", None) is True

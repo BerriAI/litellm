@@ -621,7 +621,7 @@ class _AsyncFilesEnvironmentValidator(Protocol):
         litellm_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict: ...  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    ) -> dict[str, object]: ...  # mutable-ok: mirrors the sync validate_environment contract this overrides
 
 
 async def _avalidate_files_environment(
@@ -854,7 +854,7 @@ def _bridged_chat_request_fields(data: Mapping[str, object], logging_obj: LiteLL
     return bounded_call_id_fields(data)
 
 
-def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> bytes | str | dict:
+def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> bytes | str | dict[str, object]:
     """A pre-signed request carries its auth inside its own ``headers`` key, which
     logging treats as request body (only the top-level headers channel gets masked),
     so mask it here before the request is handed to ``pre_call``."""
@@ -1451,7 +1451,7 @@ class BaseLLMHTTPHandler:
         signed_json_body: bytes | None,
         original_data: dict[str, object],
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict[str, object],
         litellm_params: dict[str, object],
@@ -1459,7 +1459,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         client: HTTPHandler | None = None,
         json_mode: bool = False,
-    ) -> tuple[object, dict]:
+    ) -> tuple[object, dict[str, object]]:
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = get_httpx_client(
                 {
@@ -4128,7 +4128,7 @@ class BaseLLMHTTPHandler:
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> dict | Coroutine[object, object, dict]:
+    ) -> dict[str, object] | Coroutine[object, object, dict[str, object]]:
         if _is_async:
             return self.async_list_responses_input_items(
                 response_id=response_id,
@@ -4210,7 +4210,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             verbose_logger.debug(
                 "Creating HTTP client for list_input_items with shared_session: %s",
@@ -5913,7 +5913,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseFilesConfig,
         headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
         litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
-    ) -> dict:  # mutable-ok: validate_environment returns the header dict the files contract types
+    ) -> dict[str, object]:  # mutable-ok: validate_environment returns the header dict the files contract types
         return provider_config.validate_environment(
             api_key=litellm_params.get("api_key"),
             headers=headers,
@@ -6936,7 +6936,7 @@ class BaseLLMHTTPHandler:
             raise with_provider_reply(raised_by_config, error_response)
         if not isinstance(received_status_code, int):
             provider_error.status_code_is_synthesized = True
-        raise with_provider_reply(provider_error, error_response)
+        raise with_provider_reply(provider_error, error_response) from error
 
     def handle_error(
         self,
@@ -13245,7 +13245,7 @@ class BaseLLMHTTPHandler:
         self,
         request_body: dict,
         headers: dict[str, object],
-    ) -> tuple[dict | None, list | None]:
+    ) -> tuple[dict[str, object] | None, list | None]:
         """
         Helper to prepare multipart/form-data request for skills API.
 

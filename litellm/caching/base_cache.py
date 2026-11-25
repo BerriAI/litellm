@@ -52,7 +52,7 @@ class BaseCache(ABC):
     async def async_set_cache_pipeline(self, cache_list: list[tuple[str, object]], **kwargs: object) -> None:
         pass
 
-    def get_cache(self, key, **kwargs) -> object:
+    def get_cache(self, key, **kwargs: object) -> object:
         raise NotImplementedError
 
     async def async_get_cache(self, key, **kwargs) -> object:

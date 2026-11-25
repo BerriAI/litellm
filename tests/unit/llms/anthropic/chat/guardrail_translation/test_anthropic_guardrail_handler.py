@@ -3658,6 +3658,24 @@ class TestToolsTheGuardrailLeftAloneReachTheProviderAsSent:
 
         assert tools == [self._READ, self._DEFERRED]
 
+    @pytest.mark.parametrize(
+        ("dropped", "expected_deferred"),
+        [("ToolSearch", False), ("Write", True)],
+        ids=["tool-search-removed", "tool-search-kept"],
+    )
+    async def test_deferred_tools_load_up_front_only_once_the_guardrail_removed_tool_search(
+        self, dropped: str, expected_deferred: bool
+    ) -> None:
+        tool_search: Final[dict[str, object]] = {**self._READ, "name": "ToolSearch", "description": "Loads tools"}
+        sent: Final = [self._READ, tool_search, self._WRITE, self._DEFERRED]
+        tools: Final = await self._tools_after(ToolDroppingGuardrail(tool_name=dropped), json.loads(json.dumps(sent)))
+
+        deferred_after: Final = cast(dict[str, object], tools[-1])
+        assert [cast(dict[str, object], tool)["name"] for tool in tools] == [
+            str(tool["name"]) for tool in sent if tool["name"] != dropped
+        ]
+        assert deferred_after.get("defer_loading") is (True if expected_deferred else None)
+
     async def test_a_tool_the_guardrail_renamed_stays_where_the_guardrail_put_it(self):
         def renamed(returned: list[object]) -> list[object]:
             first: Final = cast(dict[str, dict[str, object]], json.loads(json.dumps(returned[0])))

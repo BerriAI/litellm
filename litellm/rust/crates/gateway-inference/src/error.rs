@@ -3,7 +3,7 @@ use axum::{
     Extension, Json,
     response::{AppendHeaders, IntoResponse, Response},
 };
-use litellm_gateway_auth_core::authz::Denied;
+use litellm_gateway_auth_core::AuthzDenial;
 use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use litellm_llms_types::formats::messages::MessagesErrorType;
@@ -20,7 +20,7 @@ use crate::{
 pub enum Error {
     /// The auth core found a model list of the caller's that does not reach the model.
     #[error("operation is not permitted")]
-    ModelAccess(#[from] Denied),
+    ModelAccess(#[from] AuthzDenial),
     #[error("invalid request body")]
     InvalidBody(#[from] BodyError),
     #[error(
@@ -290,6 +290,9 @@ fn route_status(error: &InferenceError) -> StatusCode {
     }
     if let Some((status, _)) = error.upstream_response() {
         return StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+    }
+    if error.timeout().is_some() {
+        return StatusCode::REQUEST_TIMEOUT;
     }
     if error.is_missing_credential() {
         return StatusCode::UNAUTHORIZED;

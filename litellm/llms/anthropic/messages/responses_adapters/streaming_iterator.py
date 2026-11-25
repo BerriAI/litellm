@@ -14,7 +14,7 @@ from litellm import verbose_logger
 from litellm._logging import redact_internal_details_from_client_message
 from litellm._uuid import uuid
 from litellm.exceptions import APIError, MidStreamFallbackError
-from litellm.litellm_core_utils.core_helpers import has_attributes, iter_items
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, has_attributes, iter_items
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     encrypted_reasoning_signature,
 )
@@ -152,8 +152,10 @@ class AnthropicResponsesStreamWrapper:
         litellm_logging_obj: "LiteLLMLoggingObject | None" = None,
         safeguards_evaluator: "SafeguardsEvaluator | None" = None,
         applied_edits: Sequence[AppliedEdit] | None = None,
+        tool_search_name: str | None = None,
     ) -> None:
         self.responses_stream = responses_stream
+        self._tool_search_name: Final = tool_search_name
         self._applied_edits: Final = tuple(applied_edits or ())
         self.model = model
         self.litellm_logging_obj = litellm_logging_obj
@@ -324,11 +326,18 @@ class AnthropicResponsesStreamWrapper:
 
             if item_type == "message":
                 self._open_block(item_id, {"type": "text", "text": ""})
-            elif item_type == "function_call":
+            elif item_type == "function_call" or (
+                item_type == "tool_search_call" and self._tool_search_name is not None
+            ):
                 call_id: Final = (
                     getattr(item, "call_id", None) or (item.get("call_id") if isinstance(item, dict) else None) or ""
                 )
-                name: Final = getattr(item, "name", None) or _dict_value(item, "name") or ""
+                name: Final = (
+                    (self._tool_search_name if item_type == "tool_search_call" else None)
+                    or getattr(item, "name", None)
+                    or _dict_value(item, "name")
+                    or ""
+                )
                 if item_id:
                     self._pending_tool_ids[item_id] = call_id
                 self._open_block(
@@ -459,6 +468,9 @@ class AnthropicResponsesStreamWrapper:
                 return
             if self._field(item, "type") == "function_call":
                 self._stream_unstreamed_tool_input(item_id, self._field(item, "arguments"))
+            search_arguments: Final = as_str_mapping(self._field(item, "arguments"))
+            if self._field(item, "type") == "tool_search_call" and search_arguments:
+                self._stream_unstreamed_tool_input(item_id, json.dumps(search_arguments))
             self._tool_input_settled_blocks = self._tool_input_settled_blocks | {block_idx}
             self._chunk_queue.append(
                 {
@@ -501,10 +513,12 @@ class AnthropicResponsesStreamWrapper:
             )
             refusal_text: Final = responses_output_refusal_text(output) or (self._refusal_text or None)
             status: Final = getattr(response_obj, "status", None) if response_obj is not None else None
-            has_tool_call: Final = any(
-                getattr(item, "type", None) == "function_call" or _dict_value(item, "type") == "function_call"
-                for item in output
+            tool_call_types: Final = (
+                frozenset({"function_call", "tool_search_call"})
+                if self._tool_search_name is not None
+                else frozenset({"function_call"})
             )
+            has_tool_call: Final = any(self._field(item, "type") in tool_call_types for item in output)
             stop_reason: Final = (
                 "max_tokens"
                 if status == "incomplete"

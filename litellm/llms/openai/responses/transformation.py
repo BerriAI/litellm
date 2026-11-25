@@ -50,6 +50,11 @@ from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     refused_reasoning_effort_warning,
     unsupported_reasoning_effort_message,
 )
+from litellm.llms.openai.responses.instruction_items import (
+    SystemItemPlacement,
+    has_instruction_items,
+    system_first_input_and_params,
+)
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_litellm_minted_reasoning_item
 from litellm.responses.litellm_completion_transformation.tool_search import (
@@ -67,6 +72,7 @@ from litellm.types.responses.main import *
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
+from litellm.utils import declares_system_first
 
 from ..common_utils import OpenAIError, without_cache_control
 from ..workload_identity import get_workload_identity_bearer_token, resolve_openai_workload_identity_config
@@ -685,26 +691,61 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         request_params: Final = cast(  # cast-ok: the base signature leaves the params bag untyped
             "Mapping[str, object]", response_api_optional_request_params
         )
+        placement: Final = self._system_item_placement(model, input, request_params, litellm_params)
+        placed: Final = (
+            None
+            if placement is None
+            else system_first_input_and_params(self._validate_input_param(input), request_params, placement)
+        )
+        placed_input: Final = input if placed is None else placed[0]
+        placed_params: Final = request_params if placed is None else placed[1]
         replay_safe_input, sanitized_tools = self._prepared_input_and_tools(
             model=model,
-            input=input,
+            input=placed_input,
             tools=response_api_optional_request_params.get("tools"),
             litellm_params=litellm_params,
             prompt_cache_options=request_params.get("prompt_cache_options"),
         )
         if sanitized_tools is not None:
             response_api_optional_request_params["tools"] = sanitized_tools
+        tools_override: Final[Mapping[str, object]] = {} if sanitized_tools is None else {"tools": sanitized_tools}
         final_request_params: Final = cast(  # cast-ok: typed dict spread is inferred as Unknown by basedpyright
             dict[str, object],
             {
                 "model": model,
                 "input": replay_safe_input,
-                **response_api_optional_request_params,
+                **placed_params,
+                **tools_override,
                 **self._prompt_cache_options_with_original_comparison_id(request_params),
             },
         )
 
         return final_request_params
+
+    def _system_item_placement(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        request_params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+    ) -> SystemItemPlacement | None:
+        continues_conversation: Final = request_params.get("previous_response_id") is not None
+        sets_instructions: Final = bool(request_params.get("instructions"))
+        places_system_items_first: Final = (
+            self.custom_llm_provider is LlmProviders.OPENAI
+            and not self._targets_openai_api(litellm_params)
+            and has_instruction_items(
+                self._validate_input_param(input), 0 if continues_conversation or sets_instructions else 1
+            )
+            and declares_system_first(model, LlmProviders.OPENAI.value, deployment_model_info(litellm_params))
+        )
+        if not places_system_items_first:
+            return None
+        if continues_conversation:
+            return "every_item_in_place"
+        if sets_instructions:
+            return "leading_block_into_instructions"
+        return "leading_block_into_system_item"
 
     def transform_extra_body(
         self,

@@ -37,6 +37,7 @@ from typing_extensions import assert_never
 
 from litellm._internal_context import request_parent_otel_span, service_target
 from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS, SEMANTIC_CACHE_POLICY_KEY
+from litellm.exceptions import UnknownPreviousResponseError
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -118,6 +119,7 @@ from litellm.router_rust.invoke.endpoints import (
     pinned_request_deployment,
     pinned_video_deployment,
     plan_for,
+    python_handler_name,
     reports_own_success,
     scoped_fallback_fields,
     selection_endpoint,
@@ -542,6 +544,14 @@ _NUMBER_SETTINGS: Final = frozenset(
 )
 # The settings `_core_update_settings` casts with `int(value)`.
 _UPDATE_INT_SETTINGS: Final = frozenset({"timeout", "num_retries", "retry_after", "allowed_fails", "cooldown_time"})
+_LONGEST_CONTEXT_CHAIN: Final = 32
+
+
+def _context_chain(error: BaseException, links_left: int = _LONGEST_CONTEXT_CHAIN) -> tuple[BaseException, ...]:
+    following: Final = error.__context__
+    if following is None or links_left == 0:
+        return (error,)
+    return (error, *_context_chain(following, links_left - 1))
 
 
 def _raised_before_provider(error: BaseException) -> bool:
@@ -3359,7 +3369,9 @@ class RustCore(
         try:
             await await_all(driver.outcomes.take_pending())
             if step["kind"] == "failed":
-                return driver.last_error if driver.last_error is not None else failure
+                return (
+                    driver.last_error if driver.last_error is not None and not driver.raises_stream_origin else failure
+                )
             attempted: Final = step.get("attempted_retries")
             budget: Final = step.get("max_retries")
             return (
@@ -4706,7 +4718,9 @@ class _Driver:
         self._level_errors: Final[dict[int, BaseException]] = dict(  # mutable-ok: filled as the call runs
             (stream_failure,) if stream_failure else ()
         )
-        self._queue_rejection: QueueRejectedError | None = None
+        self._ending_error: BaseException | None = None
+        self._attempt_errors: Final[dict[tuple[int, str], BaseException]] = {}  # mutable-ok: filled as the call runs
+        self._raises_stream_origin: bool = False
         # The retry counts an exhausted retry loop stamps on the pick error its level then raises.
         self._pending_stamps: Final[dict[int, tuple[object, object]]] = {}  # mutable-ok: filled as the call runs
         # Each level's current hop's first failure, once it retries: the error its retry loop raises
@@ -4743,12 +4757,15 @@ class _Driver:
         # The primary level reached the end of `async_function_with_fallbacks_common_utils`, the
         # only place the outcome message is appended: not its early raises, nor its order path.
         self._explains_failure: bool = False
+        self._fallback_ran: bool = False
 
     def clear_errors(self) -> None:
         self._last_error = None
-        self._queue_rejection = None
+        self._ending_error = None
         self._level_errors.clear()
         self._hop_first.clear()
+        self._attempt_errors.clear()
+        self._raises_stream_origin = False
         self._level_picks.clear()
 
     def _blocked(self, response: object, endpoint_name: str) -> str | None:
@@ -4828,6 +4845,17 @@ class _Driver:
         self._last_error = raised
         self._level_errors[level if isinstance(level, int) else 0] = raised
 
+    def _context_window_raised(self, event: Mapping[str, object]) -> None:
+        if event.get("stream_origin") is True:
+            self._raises_stream_origin = True
+            return
+        level: Final = event.get("level")
+        at: Final = level if isinstance(level, int) else 0
+        refused: Final = self._attempt_errors.get((at, str(event.get("deployment_id"))))
+        if refused is not None:
+            self._last_error = refused
+            self._level_errors[at] = refused
+
     def _cause_error(self, event: Mapping[str, object]) -> BaseException | None:
         """The error the ``cause`` of a ``retry_logged`` or ``retry_policy_raised`` event names."""
         match event.get("cause"):
@@ -4855,7 +4883,7 @@ class _Driver:
         if isinstance(error, RustCoreUnsupported):
             raise error
         if isinstance(error, QueueRejectedError):
-            self._queue_rejection = error
+            self._ending_error = error
         if logged:
             self._log_pick_failure(error)
         else:
@@ -4946,6 +4974,7 @@ class _Driver:
             self._level_errors[at] = last_hop
         if at == self._base_level:
             self._explains_failure = False
+            self._fallback_ran = True
 
     def _logged_off_the_loop(self) -> bool:
         """Whether litellm logged the attempt's failure on a thread with no running loop. An async
@@ -5010,6 +5039,11 @@ class _Driver:
                 return
             self._explain_no_fallback_group(own, at)
         raised: Final = self._level_errors.get(at + 1, own) if event.get("last_hop") is True else own
+        if raised is not None and raised is not own and self._is_create_that_may_already_exist(raised):
+            self._level_errors[at] = raised
+            if at == self._base_level:
+                self._explains_failure = False
+                self._fallback_ran = True
         self.outcomes.failed_fallbacks(
             RoutingContext(self._core),  # pyright: ignore[reportArgumentType]  # the read uses registry() and health()
             truncate_fallback_error_detail(redact_string(str(raised))),
@@ -5107,6 +5141,9 @@ class _Driver:
             if event.get("kind") == "retry_count_raised":
                 self._count_raised(event)
                 continue
+            if event.get("kind") == "context_window_raised":
+                self._context_window_raised(event)
+                continue
             if event.get("kind") == "level_failed":
                 self._level_failed(event)
                 continue
@@ -5184,7 +5221,7 @@ class _Driver:
                 error.max_retries = event.get("max")  # pyright: ignore[reportAttributeAccessIssue]  # Python's router stamps the same attributes
                 error.num_retries = event.get("attempted")  # pyright: ignore[reportAttributeAccessIssue]  # same
 
-    def _call(self, step: Mapping[str, object]) -> "tuple[Mapping[str, object], AttemptCall]":
+    def _call(self, step: Mapping[str, object]) -> "tuple[Mapping[str, object], AttemptCall, Mapping[str, object]]":
         name: Final = step.get("model")
         requested: Final = str(name) if name is not None else str(self._request.get("model"))
         deployment: Mapping[str, object] = (  # rebind-ok: given its live params below
@@ -5212,10 +5249,11 @@ class _Driver:
                 **deployment,
                 "litellm_params": with_cache_lock(params, self._cache_lock),
             }
+        request: Final = self._attempt_request(step, self._inherited_request(step, deployment, shape, requested))
         call: Final = attempt_call(
             self._core._port,  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
             self._plan,
-            self._attempt_request(step, self._inherited_request(step, deployment, shape, requested)),
+            request,
             deployment,
             group=requested,
             requested=requested,
@@ -5233,7 +5271,7 @@ class _Driver:
         self._latest_call = (deployment, call)
         if call.refused is None:
             self._core._endpoints.counters.started(self._plan, call)  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
-        return deployment, call
+        return deployment, call, request
 
     def _configured_cache_lock(self) -> Mapping[str, object] | None:
         """The lock of the deployment a failed stream ran on, for its recovery call, else of every
@@ -5280,6 +5318,10 @@ class _Driver:
     def last_error(self) -> BaseException | None:
         return self._last_error
 
+    @property
+    def raises_stream_origin(self) -> bool:
+        return self._raises_stream_origin
+
     def _stream_attempt(
         self, step: Mapping[str, object], kwargs: Mapping[str, object], slot: "contextlib.ExitStack | None" = None
     ) -> StreamAttempt:
@@ -5302,10 +5344,25 @@ class _Driver:
             deployment_id=deployment_id if isinstance(deployment_id, str) else None,
             attempted_retries=number("retry"),
             routed=routed if isinstance(routed, str) else None,
+            refused_ids=_strings(step.get("refused_ids")),
+            provider_refused_window=step.get("provider_refused_window") is True,
             slot=slot,
             explain_failure=self._hop_failure_explainer(step),
             caller_key_origin=self._caller_key_origin,
         )
+
+    def _is_create_that_may_already_exist(self, error: BaseException) -> bool:
+        from litellm.router_utils.fallback_event_handlers import is_create_that_may_already_exist
+
+        return is_create_that_may_already_exist(python_handler_name(self._plan), error)
+
+    def _create_may_exist(self, error: BaseException, model_group: str) -> bool:
+        from litellm.router_utils.fallback_event_handlers import log_create_not_resent
+
+        if not self._is_create_that_may_already_exist(error):
+            return False
+        log_create_not_resent(model_group)
+        return True
 
     def _failed(
         self,
@@ -5322,11 +5379,16 @@ class _Driver:
         stamp_error(self._plan, error, deployment, served)  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
         self._core._endpoints.attempt_failed(self._plan, error, deployment, call, str(step.get("model")))  # pyright: ignore[reportPrivateUsage]  # see above
         self._last_error = error
+        if isinstance(error, UnknownPreviousResponseError):
+            self._ending_error = error
         level: Final = step.get("fallback_level")
         retry: Final = step.get("retry")
         if isinstance(retry, int) and retry > 0:
             self._chain_to_hop_first(error, level if isinstance(level, int) else 0)
         self._level_errors[level if isinstance(level, int) else 0] = error
+        attempted_on: Final = step.get("deployment_id")
+        if isinstance(attempted_on, str):
+            self._attempt_errors[(level if isinstance(level, int) else 0, attempted_on)] = error
         logged: Final = logged_call(
             call.host_op if call is not None else self._plan.host_op,
             served or self._request,  # pyright: ignore[reportUnknownArgumentType]  # see above
@@ -5341,6 +5403,7 @@ class _Driver:
         return {
             **attempt_failure(error),
             "detail": detail,
+            "create_may_exist": self._create_may_exist(error, str(step.get("model"))),
             **exits,
             **({"outside_deployment": True} if request_scoped or _raised_before_provider(error) else {}),
             # `async_deployment_callback_on_failure` does not run for a sync call, and skips a batch retrieve.
@@ -5373,10 +5436,14 @@ class _Driver:
 
     def _chain_to_hop_first(self, error: BaseException, level: int) -> None:
         """A retry's failure is raised while the hop's first failure is handled (the retry loop
-        runs in its ``except`` block), so it chains to it."""
+        runs in its ``except`` block), so the end of its own chain links to it."""
         first: Final = self._hop_first.get(level)
-        if first is not None and first is not error:
-            error.__context__ = first  # rebind-ok: chained as the retry loop's raise chains it
+        if first is None:
+            return
+        chain: Final = _context_chain(error)
+        if any(link is first for link in chain) or chain[-1].__context__ is not None:
+            return
+        chain[-1].__context__ = first
 
     def _succeeded(
         self, call: "AttemptCall", response: object, host_op: str, stream: "StreamAttempt | None" = None
@@ -5537,7 +5604,7 @@ class _Driver:
         return tuple(release for release in releases if release is not None)
 
     async def _admit(
-        self, step: Mapping[str, object], deployment: Mapping[str, object], call: "AttemptCall"
+        self, request: Mapping[str, object], deployment: Mapping[str, object], call: "AttemptCall"
     ) -> Admission | None:
         """Only an async non-streaming chat attempt waits, on the deployment its ordinary pick chose."""
         request_queue: Final = current_request_queue()
@@ -5546,7 +5613,7 @@ class _Driver:
             return None
         if self._plan.sync or self._plan.kind != "chat" or call.kwargs.get("stream"):
             return None
-        if not self._core.queues_on(self._attempt_request(step))(deployment):
+        if not self._core.queues_on(request)(deployment):
             return None
         own_id: Final = (as_str_mapping(deployment.get("model_info")) or {}).get("id")
         admitted: Final = await request_queue.admit(capacity, call.model_name, partial(self._cooldown_left_s, own_id))
@@ -5658,7 +5725,7 @@ class _Driver:
     ) -> Mapping[str, object]:
         terminal: Final = await self._queue_terminal(admission, error)
         if terminal is not None:
-            self._queue_rejection = terminal
+            self._ending_error = terminal
             return {**self._failed(step, deployment, call, terminal), "recorded": True}
         failed: Final = self._failed(step, deployment, call, error)
         if reading_stream is None or not logs_failure:
@@ -5683,7 +5750,7 @@ class _Driver:
         if refused_call is not None:
             return {**self._failed(step, self._default_copy(step), None, refused_call), "recorded": True}
         try:
-            deployment, call = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
+            deployment, call, request = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
             enforce_total_timeout_scope(call.kwargs)
             if call.refused is not None:
                 await log_refused_call(call, call.refused)
@@ -5693,7 +5760,7 @@ class _Driver:
                 compacted: Final = await compacted_attempt(self._core._port, self._plan, deployment, call)  # pyright: ignore[reportPrivateUsage]  # see above
             except Exception as refused:  # noqa: BLE001  # raised before the provider call, so no cooldown reads it
                 return {**self._failed(step, deployment, call, refused), "recorded": True}
-            admission = await self._admit(step, deployment, call)  # rebind-ok: see above
+            admission = await self._admit(request, deployment, call)  # rebind-ok: see above
             # The deployment's max_parallel_requests slot; an open chat or speech stream takes it along.
             port = self._core._port  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core  # rebind-ok: the same port on every attempt
             with await self._slot_or_turn_back(port, deployment, call, admission) as slot:
@@ -5784,7 +5851,7 @@ class _Driver:
         if refused_call is not None:
             return {**self._failed(step, self._default_copy(step), None, refused_call), "recorded": True}
         try:
-            deployment, call = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
+            deployment, call, _ = self._call(step)  # rebind-ok: rebound as the Python router rebinds it
             if call.refused is not None:
                 log_refused_call_sync(call, call.refused)
                 raise call.refused
@@ -5992,8 +6059,8 @@ class _Driver:
             self.clear_errors()
 
     def _failure(self, step: Mapping[str, object]) -> BaseException:
-        if self._queue_rejection is not None:
-            return self._queue_rejection
+        if self._ending_error is not None:
+            return self._ending_error
         model: Final = str(self._request.get("model"))
         primary: Final = self._level_errors.get(self._base_level)
         if primary is None:
@@ -6002,7 +6069,7 @@ class _Driver:
             )
         if (
             self._base_level == 0
-            and self._explains_failure
+            and (self._explains_failure or (not self._fallback_ran and self._is_create_that_may_already_exist(primary)))
             and self._core._host.dynamic().expose_router_debug_in_errors  # pyright: ignore[reportPrivateUsage]  # see above
             and hasattr(primary, "message")
         ):
@@ -6079,6 +6146,8 @@ class _Driver:
             get_fallback_model_group_for_lookup_groups,
         )
 
+        if self._is_create_that_may_already_exist(primary):
+            return format_fallback_outcome_message(model, None, "")
         walked: Final = self._core._walked_fallbacks  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
         request: Final = self._request
         # The request's own lists replace the router's (`kwargs.get("fallbacks", router)`).

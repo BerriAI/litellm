@@ -71,7 +71,7 @@ class ContainerRequestUtils:
     def get_optional_params_container_create(
         container_provider_config: BaseContainerConfig,
         container_create_optional_params: ContainerCreateOptionalRequestParams,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Get the optional parameters for container creation."""
         supported_params: Final = container_provider_config.get_supported_openai_params()
 

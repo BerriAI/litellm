@@ -808,7 +808,17 @@ T_ParamSpec = ParamSpec("T_ParamSpec")
 T_Retval = TypeVar("T_Retval")
 _COUNT_OFFLOAD_LIMITER: Final = anyio.lowlevel.RunVar[anyio.CapacityLimiter]("litellm_count_offload_limiter")
 _ANTHROPIC_TOOL_KEYS_MAPPED_BY_BRIDGE: Final = frozenset(
-    ("name", "input_schema", "description", "cache_control", "strict", "type", "eager_input_streaming", "custom")
+    (
+        "name",
+        "input_schema",
+        "description",
+        "cache_control",
+        "strict",
+        "type",
+        "eager_input_streaming",
+        "custom",
+        "defer_loading",
+    )
 )
 
 
@@ -934,6 +944,21 @@ def _is_openai_or_azure_model(model: str) -> bool:
 
 def pdf_page_pricing(model: str | None) -> PdfPagePricing:
     return "openai" if _is_openai_or_azure_model(model or "") else "claude"
+
+
+@dataclass(frozen=True, slots=True)
+class MessageCountFraming:
+    legacy_message_accounting: bool
+    tool_section: ChatTemplateToolSection | None
+    pdf_pricing: PdfPagePricing
+
+
+def message_count_framing(model: str) -> MessageCountFraming:
+    return MessageCountFraming(
+        legacy_message_accounting=uses_legacy_message_accounting(model),
+        tool_section=chat_template_tool_section(model),
+        pdf_pricing=pdf_page_pricing(model),
+    )
 
 
 def reads_pdf_pages(model: str) -> bool:
@@ -1314,7 +1339,8 @@ def _get_count_function(
 ) -> TokenCounterFunction:
     exact: Final = _resolve_exact_count(model, custom_tokenizer)
     count: Final = _get_extrapolating_count_function(exact.count)
-    return count if custom_tokenizer is not None else _TOKEN_COUNT_MEMO.wrap(exact.tokenizer, count)
+    memoizable: Final = custom_tokenizer is None or isinstance(exact.tokenizer, tiktoken.Encoding | OpenAIEncoding)
+    return _TOKEN_COUNT_MEMO.wrap(exact.tokenizer, count) if memoizable else count
 
 
 @dataclass(frozen=True, slots=True)
@@ -1349,7 +1375,13 @@ def _resolve_exact_count(
 
         return _ExactCount(tokenizer, count_tokens)
     if tokenizer_json["type"] == "openai_tokenizer":
-        encoding: Final = openai_tokenizer_encoding(model or "")
+        encoding: Final = (
+            tokenizer_json["tokenizer"]
+            if custom_tokenizer is not None
+            and isinstance(tokenizer_json["tokenizer"], tiktoken.Encoding | OpenAIEncoding)
+            and not is_openai_model(model or "")
+            else openai_tokenizer_encoding(model or "")
+        )
 
         def encode_length(text: str) -> int:
             return _encoding_count(encoding, text)
@@ -1437,15 +1469,6 @@ def _served_model(deployment: object) -> str | None:
 
 def _as_openai_model(model: str | None) -> str | None:
     return model if model is not None and is_openai_model(model) else None
-
-
-def single_encoding_openai_model(served: Sequence[str | None]) -> str | None:
-    """An OpenAI model to count a request with, when every `served_openai_models` entry is an OpenAI model on the same
-    encoding, else None."""
-    if not served or None in served:
-        return None
-    encodings: Final = frozenset(openai_tokenizer_encoding_name(model) for model in served if model is not None)
-    return served[0] if len(encodings) == 1 else None
 
 
 def _openai_model_name(model: str) -> str | None:
@@ -1897,12 +1920,15 @@ def _count_opaque_document_tokens(
 
 
 def inline_pdf_token_deltas(
-    model: str, messages: object, pdf_pricings: Iterable[PdfDocumentPricing]
+    model: str,
+    messages: object,
+    pdf_pricings: Iterable[PdfDocumentPricing],
+    custom_tokenizer: SelectTokenizerResponse | None = None,
 ) -> Mapping[PdfDocumentPricing, int]:
-    """How much `token_counter(model=model, messages=messages)` changes when every inline PDF it reads is priced with
-    each of `pdf_pricings`. Only the PDF documents are priced, so no other content is counted or fetched again, and
-    each distinct PDF is read once to calculate all prices."""
-    count_function: Final = _get_count_function(model, None)
+    """How much `token_counter(model=model, messages=messages, custom_tokenizer=custom_tokenizer)` changes when every
+    inline PDF it reads is priced with each of `pdf_pricings`. Only the PDF documents are priced, so no other content
+    is counted or fetched again, and each distinct PDF is read once to calculate all prices."""
+    count_function: Final = _get_count_function(model, custom_tokenizer)
     counted_pricing: Final = pdf_page_pricing(model)
     asked: Final = tuple(dict.fromkeys(pdf_pricings))
     occurrences: Final = tuple(_inline_pdf_data_urls(messages))
