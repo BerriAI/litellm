@@ -3,7 +3,8 @@
 //! set it.
 //!
 //! One rule for every such key: the config's own value first, then `LITELLM_<KEY>`, then the
-//! default. A flag is read by the one flag rule, `lax_bool`, whichever of the two wrote it, and
+//! default. `general_settings.proxy_config_reload_interval_seconds` follows it with
+//! `PROXY_CONFIG_RELOAD_INTERVAL_SECONDS`, the name the proxy reads. A flag is read by the one flag rule, `lax_bool`, whichever of the two wrote it, and
 //! leaves this crate as a `bool`.
 //!
 //! The proxy differs in three places, and none of them is kept. It reads some of these variables
@@ -19,7 +20,7 @@ use litellm_env::Lookup;
 use litellm_python_compat::flags::lax_bool;
 use litellm_secret_value::SecretValue;
 
-use crate::{Config, LiteLlmSettings};
+use crate::{Config, GeneralSettings, LiteLlmSettings};
 
 /// What the environment did to each config key the config left unset, with the variable it read.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -59,6 +60,12 @@ trait Written: Sized {
 impl Written for bool {
     fn written(text: String) -> Option<Self> {
         lax_bool(&text.as_str().into())
+    }
+}
+
+impl Written for i64 {
+    fn written(text: String) -> Option<Self> {
+        text.trim().parse().ok()
     }
 }
 
@@ -138,13 +145,24 @@ impl Config {
                 autorouter_presets_url,
             ]
         );
+        let (proxy_config_reload_interval_seconds, interval_origin) = filled(
+            self.general_settings.proxy_config_reload_interval_seconds,
+            environment,
+            "general_settings.proxy_config_reload_interval_seconds",
+            "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS".to_owned(),
+        );
         Self {
             litellm_settings,
+            general_settings: GeneralSettings {
+                proxy_config_reload_interval_seconds,
+                ..self.general_settings
+            },
             origins: Origins(
                 self.origins
                     .0
                     .into_iter()
                     .chain(origins.into_iter().flatten())
+                    .chain(interval_origin)
                     .collect(),
             ),
             ..self
@@ -238,6 +256,47 @@ mod tests {
                 config.origins.unread(KEY)
             ),
             (value, variable, unread)
+        );
+    }
+
+    #[rstest]
+    #[case::the_config_when_both_set_it(
+        "general_settings:\n  proxy_config_reload_interval_seconds: 5\n",
+        Some("7"),
+        Some(5),
+        None
+    )]
+    #[case::the_variable_when_the_config_leaves_it_unset(
+        "model_list: []\n",
+        Some(" 7 "),
+        Some(7),
+        Some("PROXY_CONFIG_RELOAD_INTERVAL_SECONDS")
+    )]
+    #[case::a_variable_that_is_no_integer("model_list: []\n", Some("soon"), None, None)]
+    #[case::neither("model_list: []\n", None, None, None)]
+    fn the_reload_interval_is_read_from_the_config_first_and_its_variable_second(
+        #[case] yaml: &str,
+        #[case] written: Option<&str>,
+        #[case] value: Option<i64>,
+        #[case] variable: Option<&str>,
+    ) {
+        let lookup = |name: &str| {
+            (name == "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS")
+                .then_some(written)
+                .flatten()
+                .map(str::to_owned)
+        };
+
+        let config = Config::from_yaml(yaml).unwrap().with_environment(&lookup);
+
+        assert_eq!(
+            (
+                config.general_settings.proxy_config_reload_interval_seconds,
+                config
+                    .origins
+                    .variable("general_settings.proxy_config_reload_interval_seconds")
+            ),
+            (value, variable)
         );
     }
 

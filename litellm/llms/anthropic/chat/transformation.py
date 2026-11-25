@@ -2112,7 +2112,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return thinking
         return AnthropicThinkingParam(type=thinking.get("type", "enabled"), budget_tokens=max_tokens - 1)
 
-    def _extract_json_schema_from_response_format(self, value: dict | None) -> dict | None:
+    def _extract_json_schema_from_response_format(self, value: dict | None) -> dict[str, object] | None:
         if value is None:
             return None
         json_schema: dict | None = None
@@ -2166,13 +2166,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return AnthropicOutputSchema(type="json_schema", schema=dict(native_schema))
 
     def map_response_format_to_anthropic_tool(
-        self, value: dict | None, optional_params: dict, tool_is_forced: bool
+        self, value: dict | None, optional_params: dict[str, object], tool_is_forced: bool
     ) -> AnthropicMessagesTool | None:
         ignore_response_format_types: Final = ["text"]
         if value is None or value["type"] in ignore_response_format_types:  # value is a no-op
             return None
 
-        json_schema: Final[dict | None] = self._extract_json_schema_from_response_format(value)
+        json_schema: Final[dict[str, object] | None] = self._extract_json_schema_from_response_format(value)
         if json_schema is None:
             return None
         """
@@ -2276,7 +2276,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -2587,7 +2587,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         self,
         messages: list[AllAnthropicPassThroughMessageValues],
         tools: list[AllAnthropicToolsValues | dict],
-    ) -> list[AllAnthropicToolsValues | dict]:
+    ) -> list[AllAnthropicToolsValues | dict[str, object]]:
         """if 'container_upload' in messages, add code_execution tool
 
         Takes the pass-through union because the translator emits ``role: "system"``
@@ -2760,7 +2760,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         headers: dict,
     ) -> dict:
         """
@@ -2924,7 +2924,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         _has_advisor = any(isinstance(t, dict) and t.get("type") == ANTHROPIC_ADVISOR_TOOL_TYPE for t in _all_tools)
         anthropic_messages = list(
             without_stale_tool_search_results(
-                anthropic_messages if _has_advisor else strip_advisor_blocks_from_messages(anthropic_messages),
+                anthropic_messages
+                if _has_advisor
+                else strip_advisor_blocks_from_messages(anthropic_messages, drop_params=drop_params),
                 _TOOLS_ADAPTER.validate_python(_all_tools),
             )
         )
@@ -3699,10 +3701,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

@@ -467,6 +467,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_image_token: float | None
     output_cost_per_image_token_batches: ReadOnly[float | None]
     output_cost_per_image_token_priority: ReadOnly[float | None]
+    output_cost_per_image_token_flex: ReadOnly[float | None]
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
     output_cost_per_reasoning_token: float | None
@@ -1348,7 +1349,7 @@ class Function(OpenAIObject):
         self,
         arguments: dict | str | None = None,
         name: str | None = None,
-        **params,
+        **params: object,
     ) -> None:
         if arguments is None:
             if params.get("parameters", None) is not None and isinstance(params["parameters"], dict):
@@ -1660,7 +1661,7 @@ class Message(SafeAttributeModel, OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -1821,7 +1822,7 @@ class Choices(SafeAttributeModel, OpenAIObject):
         logprobs: ChoiceLogprobs | dict | Any | None = None,
         enhancements=None,
         provider_specific_fields: dict[str, Any] | None = None,
-        **params,
+        **params: object,
     ) -> None:
         if finish_reason is not None:
             mapped: Final = map_finish_reason(finish_reason)
@@ -1989,7 +1990,7 @@ class PromptTokensDetailsWrapper(
         elif name == "cache_creation_tokens":
             super().__setattr__("cache_write_tokens", value)
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: object, **kwargs) -> None:
         super().__init__(*args, **kwargs)
         extra_fields: Final = self.model_extra
         nested_cache_creation_input_tokens: Final = (
@@ -2090,7 +2091,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
         completion_tokens_details: CompletionTokensDetailsWrapper | dict | None = None,
         server_tool_use: ServerToolUse | dict | None = None,
         cost: float | None = None,
-        **params,
+        **params: object,
     ) -> None:
         # handle reasoning_tokens
         _completion_tokens_details: CompletionTokensDetailsWrapper | None = None
@@ -2240,7 +2241,7 @@ class StreamingChoices(OpenAIObject):
         delta: Delta | None = None,
         logprobs=None,
         enhancements=None,
-        **params,
+        **params: object,
     ) -> None:
         # Fix Perplexity return both delta and message cause OpenWebUI repect text
         # https://github.com/BerriAI/litellm/issues/8455
@@ -2330,7 +2331,7 @@ class ModelResponseBase(OpenAIObject):
         """Surface a provider's raw response headers to the caller as `llm_provider-*` headers."""
         self._hidden_params["additional_headers"] = process_response_headers(headers)
 
-    def model_dump(self, **kwargs):
+    def model_dump(self, **kwargs: object):
         """Default to exclude_unset to avoid Pydantic serializer warnings for OpenAIObject-derived types."""
         if "exclude_unset" not in kwargs and "exclude_none" not in kwargs:
             kwargs["exclude_unset"] = True
@@ -2407,7 +2408,7 @@ class ModelResponseStream(ModelResponseBase):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2516,7 +2517,7 @@ class ModelResponse(ModelResponseBase):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2635,7 +2636,7 @@ class EmbeddingResponse(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2686,7 +2687,7 @@ class TextChoices(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2858,7 +2859,7 @@ class ImageObject(OpenAIImage):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -2977,7 +2978,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         response_ms=None,
         usage: ImageUsage | None = None,
         hidden_params: dict | None = None,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
         if response_ms:
             _response_ms = response_ms
@@ -3034,7 +3035,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -3130,7 +3131,7 @@ class TranscriptionResponse(OpenAIObject):
         # Allow dictionary-style assignment of attributes
         setattr(self, key, value)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -4366,6 +4367,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_image_token: float | None = None
     output_cost_per_image_token_batches: float | None = None
     output_cost_per_image_token_priority: float | None = None
+    output_cost_per_image_token_flex: float | None = None
     output_cost_per_video_token: float | None = None
     output_cost_per_reasoning_token: float | None = None
     output_cost_per_reasoning_token_flex: float | None = None
@@ -4581,6 +4583,13 @@ oauth_token_exchange_litellm_params: Final = (
     "token_exchange_profile",
     "token_exchange_scope",
 )
+provider_oauth_litellm_params: Final = (
+    "oauth_client_credentials",
+    "oauth_token_url",
+    "oauth_client_id",
+    "oauth_client_secret",
+    "oauth_scope",
+)
 github_copilot_oauth_litellm_params: Final = (
     "github_copilot_auth_type",
     "github_copilot_host",
@@ -4697,10 +4706,14 @@ server_owned_wif_litellm_params: Final = (
     + openai_wif_litellm_params
     + oauth_token_exchange_litellm_params
     + github_copilot_oauth_litellm_params
+    + provider_oauth_litellm_params
     + ("chatgpt_auth_file",)
 )
 secret_bearing_wif_litellm_params: Final = tuple(
-    sorted(WIF_SECRET_BEARING_KEYS | {"github_copilot_app_private_key_ref", "github_copilot_app_private_key"})
+    sorted(
+        WIF_SECRET_BEARING_KEYS
+        | {"github_copilot_app_private_key_ref", "github_copilot_app_private_key", "oauth_client_secret"}
+    )
 )
 
 all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it
@@ -4944,6 +4957,7 @@ class LlmProviders(str, Enum):
     REKA = "reka"
     STREAMLAKE = "streamlake"
     WALLY = "wally"
+    HUAWEI_MAAS = "huawei_maas"
     SARVAM = "sarvam"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
@@ -5301,7 +5315,7 @@ class LiteLLMBatch(Batch):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:
@@ -5353,7 +5367,7 @@ class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: object):
         try:
             return self.model_dump()
         except Exception:

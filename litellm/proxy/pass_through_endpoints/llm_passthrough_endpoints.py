@@ -53,7 +53,6 @@ from litellm.constants import (
     AZURE_SPEECH_SUBSCRIPTION_KEY_HEADER,
     BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
     PASS_THROUGH_HEADER_PREFIX,
-    TYPESAFE_DANGER_ZONE_HEADER_PREFIX,
 )
 from litellm.exceptions import (
     AuthenticationError,
@@ -70,7 +69,6 @@ from litellm.litellm_core_utils.core_helpers import (
     attribute_or_none,
     require_get,
 )
-from litellm.litellm_core_utils.fallback_generalizations import match_routing_generalization
 from litellm.litellm_core_utils.get_llm_provider_logic import resolve_model_and_provider_for_metadata
 from litellm.llms.anthropic.common_utils import (
     AnthropicModelInfo,
@@ -895,62 +893,6 @@ async def mistral_proxy_route(
     )
 
     return received_value
-
-
-@router.api_route(
-    "/typesafe/{endpoint:path}",
-    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    tags=["TypeSafe AI Pass-through", "pass-through"],
-)
-async def typesafe_proxy_route(
-    endpoint: str,
-    request: Request,
-    fastapi_response: Response,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-):
-    """[Docs](https://docs.litellm.ai/docs/pass_through/typesafe)"""
-    base_target_url: Final = get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
-    encoded_endpoint: Final = httpx.URL(endpoint).path
-    normalized_endpoint: Final = encoded_endpoint if encoded_endpoint.startswith("/") else f"/{encoded_endpoint}"
-    base_url: Final = httpx.URL(base_target_url)
-    updated_url: Final = base_url.copy_with(
-        path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, normalized_endpoint),
-    )
-    typesafe_api_key: Final = passthrough_endpoint_router.get_credentials(
-        custom_llm_provider="typesafe",
-        region_name=None,
-    )
-    danger_zone_headers: Final = {
-        name: value
-        for name, value in request.headers.items()
-        if name.lower().startswith(TYPESAFE_DANGER_ZONE_HEADER_PREFIX)
-    }
-    endpoint_func: Final = create_pass_through_route(
-        endpoint=endpoint,
-        target=str(updated_url),
-        custom_headers={
-            **danger_zone_headers,
-            "Authorization": f"Bearer {typesafe_api_key}",
-            "Content-Type": "application/json",
-        },
-        custom_llm_provider="typesafe",
-        is_streaming_request=False,
-    )
-    return await endpoint_func(request, fastapi_response, user_api_key_dict)
-
-
-_COST_MAP_ENTRIES: Final = TypeAdapter(Mapping[str, object])
-
-
-def typesafe_allowlist_model_names() -> tuple[str, ...]:
-    if not passthrough_endpoint_router.has_credentials(custom_llm_provider="typesafe"):
-        return ()
-    cost_map: Final = _COST_MAP_ENTRIES.validate_python(litellm.model_cost)  # pyright: ignore[reportUnknownMemberType]  # legacy registry is validated at this boundary
-    priced_names: Final = (name.removeprefix("typesafe/") for name in cost_map if name.startswith("typesafe/"))
-    jev_models_typesafe_serves: Final = sorted(
-        name for name in priced_names if match_routing_generalization(name) == "typesafe"
-    )
-    return ("typesafe/*", *jev_models_typesafe_serves)
 
 
 _EU_JEV_DECISION_REQUEST_BODY: Final = inline_request_body(
@@ -3973,11 +3915,11 @@ def openai_api_key_headers(api_key: str | None) -> Mapping[str, str]:
 
 
 async def openai_passthrough_poll_headers(base_target_url: str) -> Mapping[str, str] | None:
-    api_key: Final = await _openai_passthrough_credential(base_target_url)
+    api_key: Final = await openai_passthrough_credential(base_target_url)
     return None if api_key is None else openai_api_key_headers(api_key)
 
 
-async def _openai_passthrough_credential(base_target_url: str) -> str | None:
+async def openai_passthrough_credential(base_target_url: str) -> str | None:
     static_api_key: Final = normalize_nonempty_secret_str(
         passthrough_endpoint_router.get_credentials(
             custom_llm_provider=litellm.LlmProviders.OPENAI.value,
@@ -4024,7 +3966,7 @@ async def openai_proxy_route(
     [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
     """
     base_target_url: Final = openai_passthrough_base_url()
-    openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
+    openai_api_key: Final = await openai_passthrough_credential(base_target_url)
     if openai_api_key is None:
         raise Exception("Required 'OPENAI_API_KEY' in environment to make pass-through calls to OpenAI.")
 
@@ -4260,7 +4202,7 @@ async def openai_websocket_proxy_route(
 
     base_target_url: Final = openai_passthrough_base_url()
     try:
-        openai_api_key: Final = await _openai_passthrough_credential(base_target_url)
+        openai_api_key: Final = await openai_passthrough_credential(base_target_url)
     except (openai.OpenAIError, httpx.HTTPError, LiteLLMOpenAIError):
         verbose_proxy_logger.exception("OpenAI workload identity token exchange failed for websocket passthrough")
         await websocket.close(code=1011, reason=_OPENAI_WS_TOKEN_EXCHANGE_FAILED_REASON)
@@ -5258,7 +5200,7 @@ async def handle_gigachat_passthrough_router_model(
     model: str,
     endpoint: str,
     request: Request,
-    request_body: dict,
+    request_body: dict[str, object],
     fastapi_response: Response,
     llm_router: litellm.Router,
     user_api_key_dict: UserAPIKeyAuth,

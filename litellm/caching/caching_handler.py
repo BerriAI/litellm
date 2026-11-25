@@ -44,6 +44,7 @@ from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import ChatCompletionFileObject, ResponsesAPIResponse
 from litellm.types.rerank import RerankResponse
+from litellm.types.semantic_cache import semantic_cache_policy
 from litellm.types.utils import (
     CachingDetails,
     CallTypes,
@@ -51,6 +52,7 @@ from litellm.types.utils import (
     Embedding,
     EmbeddingResponse,
     ModelResponse,
+    PromptTokensDetailsWrapper,
     TextChoices,
     TextCompletionResponse,
     TranscriptionResponse,
@@ -62,7 +64,7 @@ if TYPE_CHECKING:
     from litellm.llms.anthropic.messages.native.response_cache import (
         AnthropicMessagesStreamCacheWriter,
     )
-    from litellm.types.utils import ModelResponseStream, PromptTokensDetailsWrapper
+    from litellm.types.utils import ModelResponseStream
 else:
     LiteLLMLoggingObj = Any
 
@@ -388,6 +390,59 @@ def _current_format_embedding_entry(entry: object) -> CachedEmbedding | None:
     return cached
 
 
+def _is_per_input_embedding_entry(cached: object) -> bool:
+    entry: Final = as_str_mapping(cached)
+    return isinstance(cached, dict) and entry is not None and "embedding" in entry and "data" not in entry
+
+
+def _is_single_embedding_input(request_input: object) -> bool:
+    items: Final = as_object_list(request_input)
+    return items is None or all(isinstance(item, int) for item in items)
+
+
+def _count_text_tokens(text: str) -> int:
+    from litellm.utils import token_counter
+
+    return token_counter(text=text, count_response_tokens=True)
+
+
+def _cached_prompt_tokens_details(entry: CachedEmbedding) -> PromptTokensDetailsWrapper | None:
+    if not entry["prompt_tokens_details"]:
+        return None
+    try:
+        return PromptTokensDetailsWrapper.model_validate(entry["prompt_tokens_details"])
+    except ValidationError:
+        return None
+
+
+def _per_input_embedding_response(
+    cached: object, request_input: object, fallback_model: str
+) -> EmbeddingResponse | None:
+    """Expand the per-input entry aembedding stores under the key a single-input embedding request also uses."""
+    entry: Final = _current_format_embedding_entry(cached)
+    if entry is None or entry["embedding"] is None or not _is_single_embedding_input(request_input):
+        return None
+    stored_tokens: Final = entry["prompt_tokens"]
+    prompt_tokens: Final = (
+        stored_tokens
+        if stored_tokens is not None
+        else _count_text_tokens(request_input)
+        if isinstance(request_input, str)
+        else 0
+    )
+    return EmbeddingResponse(
+        model=entry["model"] or fallback_model,
+        data=[Embedding(embedding=entry["embedding"], index=0, object="embedding")],
+        usage=Usage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=0,
+            total_tokens=prompt_tokens,
+            prompt_tokens_details=_cached_prompt_tokens_details(entry),
+        ),
+        hidden_params={"cache_hit": True},
+    )
+
+
 class LLMCachingHandler:
     def __init__(
         self,
@@ -629,8 +684,21 @@ class LLMCachingHandler:
                     pass
                 else:
                     call_type = original_function.__name__
+                    per_input_entry: Final = call_type == CallTypes.embedding.value and _is_per_input_embedding_entry(
+                        cached_result
+                    )
+                    expanded_entry: Final = (
+                        _per_input_embedding_response(
+                            cached=cached_result, request_input=new_kwargs.get("input"), fallback_model=model
+                        )
+                        if per_input_entry
+                        else None
+                    )
+                    if per_input_entry and expanded_entry is None:
+                        verbose_logger.debug("LiteLLM Cache: unusable per-input embedding entry, treating it as a miss")
+                        return CachingHandlerResponse(cached_result=None)
                     converted_result: Final = self._convert_cached_result_to_model_response(
-                        cached_result=cached_result,
+                        cached_result=cached_result if expanded_entry is None else expanded_entry,
                         call_type=call_type,
                         kwargs=kwargs,
                         logging_obj=logging_obj,
@@ -803,9 +871,7 @@ class LLMCachingHandler:
                     if cached_prompt_tokens is not None:
                         prompt_tokens += cached_prompt_tokens
                     elif isinstance(kwargs_input_as_list[idx], str):
-                        from litellm.utils import token_counter
-
-                        prompt_tokens += token_counter(text=kwargs_input_as_list[idx], count_response_tokens=True)
+                        prompt_tokens += _count_text_tokens(kwargs_input_as_list[idx])
                     # Aggregate prompt_tokens_details from cached items
                     item_details = cr.get("prompt_tokens_details")
                     if item_details:
@@ -1076,6 +1142,11 @@ class LLMCachingHandler:
             new_kwargs["cache_key"] = litellm.cache.get_cache_key(**new_kwargs)
         cached_result: object | None = None
         if call_type == CallTypes.aembedding.value:
+            scoped_controls: Final = (
+                {"cache": new_kwargs["cache"]}
+                if not litellm.cache.is_semantic_cache() and semantic_cache_policy(new_kwargs) is not None
+                else {}
+            )
             new_kwargs["input"] = self.handle_kwargs_input_list_or_str(new_kwargs)
             tasks: Final[list[Awaitable[object]]] = []
             for idx, i in enumerate(new_kwargs["input"]):
@@ -1084,6 +1155,7 @@ class LLMCachingHandler:
                     litellm.cache.async_get_cache(
                         cache_key=preset_cache_key,
                         dynamic_cache_object=self.dual_cache,
+                        **scoped_controls,
                     )
                 )
             with response_cache_phase("get"):
@@ -1604,6 +1676,9 @@ class LLMCachingHandler:
             stream=request_kwargs.get("stream", False),
             custom_llm_provider=custom_llm_provider,
         )
+        from litellm.utils import call_headers
+
+        logging_obj.record_call_credential(request_kwargs.get("api_key"), call_headers(request_kwargs))
 
         logging_obj.caching_details = CachingDetails(
             cache_hit=True,

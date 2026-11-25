@@ -209,7 +209,9 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
+    MESSAGE_REDACTION_ENABLE_HEADERS,
     TokenDataCheckedFields,
     drop_token_ids,
     without_hidden_token_data,
@@ -1879,7 +1881,45 @@ _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRai
 _PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
     {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}
 )
+_PROMPT_FIELDS: Final = frozenset(ModelParamHelper.get_exclude_params_for_model_parameters())
+_PROMPT_FIELD_BY_SETUP_CALL_TYPE: Final[Mapping[str | None, str]] = {
+    CallTypes.aresponses.value: "input",
+    CallTypes.atext_completion.value: "prompt",
+    CallTypes.aembedding.value: "input",
+}
 _LOG_DB_METRICS_CALL_TYPES: Final = frozenset(("get_data", "insert_data", "update_data", "delete_data"))
+
+
+def _is_text_or_message_prompt(prompt: object) -> bool:
+    """True for a non-empty string, a list of strings, or a list of message objects: the shapes
+    a logging callback can read as messages. Token ID lists and other shapes are not."""
+    if isinstance(prompt, str):
+        return bool(prompt)
+    if not isinstance(prompt, list) or not prompt:
+        return False
+    items: Final = cast(Sequence[object], prompt)  # cast-ok: a JSON array holds arbitrary JSON values
+    return all(isinstance(item, str) for item in items) or all(isinstance(item, Mapping) for item in items)
+
+
+def _has_redaction_header(holder: object) -> bool:
+    if not isinstance(holder, Mapping):
+        return False
+    headers: Final = cast(Mapping[str, object], holder).get("headers")  # cast-ok: request bodies are str-keyed JSON
+    if not isinstance(headers, Mapping):
+        return False
+    header_map: Final = cast(Mapping[str, object], headers)  # cast-ok: header maps are str-keyed
+    return any(header_map.get(name) for name in MESSAGE_REDACTION_ENABLE_HEADERS)
+
+
+def _asks_for_message_redaction(request_data: Mapping[str, object]) -> bool:
+    """True when the request itself opts in to redaction, by the body flag or a redaction header."""
+    flag: Final = request_data.get("turn_off_message_logging")
+    parsed: Final = flag if isinstance(flag, bool) else str_to_bool(flag) if isinstance(flag, str) else None
+    if parsed is not None:
+        return parsed
+    return any(
+        _has_redaction_header(request_data.get(key)) for key in ("metadata", "litellm_metadata", "proxy_server_request")
+    )
 
 
 _EXCEPTION_CHAIN_MAX_DEPTH: Final = 16
@@ -2465,8 +2505,8 @@ class ProxyLogging:
         alerting_threshold: float | None = None,
         redis_cache: RedisCache | None = None,
         alert_types: list[AlertType] | None = None,
-        alerting_args: dict | None = None,
-        alert_to_webhook_url: dict | None = None,
+        alerting_args: dict[str, object] | None = None,
+        alert_to_webhook_url: dict[str, object] | None = None,
         alert_type_config: dict | None = None,
     ):
         updated_slack_alerting: bool = False
@@ -2640,7 +2680,9 @@ class ProxyLogging:
                 return user_api_key_auth_obj.__dict__
         return {}
 
-    def _convert_mcp_to_llm_format(self, request_obj: MCPPreCallRequestObject, kwargs: Mapping[str, object]) -> dict:
+    def _convert_mcp_to_llm_format(
+        self, request_obj: MCPPreCallRequestObject, kwargs: Mapping[str, object]
+    ) -> dict[str, object]:
         """
         Convert MCP tool call to LLM message format for existing guardrail validation.
         """
@@ -3212,7 +3254,7 @@ class ProxyLogging:
         self,
         callback: CustomGuardrail,
         data: dict[str, object],  # mutable-ok: matches _process_guardrail_callback's own request-payload typing
-        raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
+        raw_request_snapshot: dict[str, object] | None,  # mutable-ok: same request-payload shape as data
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ) -> dict:  # mutable-ok: callers reassign the loop's own data from this return value
@@ -3412,7 +3454,7 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         call_type: str,
         event_hook: str,
-        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
+        raw_request_snapshot: dict[str, object] | None = None,  # mutable-ok: same request-payload shape as data
         response: LLMResponseTypes | None = None,
     ) -> tuple[dict, LLMResponseTypes | None]:  # mutable-ok: returns the request-payload dict onward
         """
@@ -4166,7 +4208,7 @@ class ProxyLogging:
 
     async def during_call_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth | None,
         call_type: CallTypesLiteral,
         guardrails_only: bool = False,
@@ -4666,8 +4708,15 @@ class ProxyLogging:
 
             request_data.setdefault("litellm_call_id", str(uuid.uuid4()))
 
+            route_call_type: Final = _call_type_for_route(route)
+            route_prompt: Final = request_fields.get(_PROMPT_FIELD_BY_SETUP_CALL_TYPE.get(route_call_type, ""))
             litellm_logging_obj, data = litellm.utils.function_setup(
-                original_function=route or "IGNORE_THIS",
+                original_function=(
+                    route_call_type
+                    if _is_text_or_message_prompt(route_prompt) and not _asks_for_message_redaction(request_fields)
+                    else route
+                )
+                or "IGNORE_THIS",
                 rules_obj=litellm.utils.Rules(),
                 start_time=datetime.now(),
                 **_proxy_only_error_log_fields(  # pyright: ignore[reportArgumentType]  # the allowlist never carries is_async_call
@@ -4690,10 +4739,11 @@ class ProxyLogging:
             _litellm_params: Final[dict[str, object]] = {}  # mutable-ok: filled below, then handed to the logger
 
             litellm_param_keys: Final = LoggedLiteLLMParams.__annotations__.keys()
-            for k, v in _proxy_only_error_log_fields(request_fields, logged_metadata_keys).items():
+            logged_fields: Final = _proxy_only_error_log_fields(request_fields, logged_metadata_keys)
+            for k, v in logged_fields.items():
                 if k in litellm_param_keys:
                     _litellm_params[k] = v
-                elif k not in ("model", "user", "litellm_logging_obj"):
+                elif k not in ("model", "user", "litellm_logging_obj") and k not in _PROMPT_FIELDS:
                     _optional_params[k] = v
 
             existing: Final = _as_str_mapping(
@@ -4734,6 +4784,7 @@ class ProxyLogging:
                     if "custom_llm_provider" in attribution
                     else {}
                 ),
+                **{key: value for key, value in logged_fields.items() if key in _PROMPT_FIELDS},
             )
 
             input: list | str | dict = ""
@@ -4824,7 +4875,7 @@ class ProxyLogging:
 
     async def post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         response: LLMResponseTypes,
         user_api_key_dict: UserAPIKeyAuth,
     ):
@@ -5093,7 +5144,7 @@ class ProxyLogging:
 
     async def post_call_response_headers_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: object,
         request_headers: dict[str, str] | None = None,
@@ -5229,7 +5280,7 @@ class ProxyLogging:
 
     async def async_post_call_streaming_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         response: object,
         user_api_key_dict: UserAPIKeyAuth,
         str_so_far: str | None = None,
@@ -5801,10 +5852,23 @@ class ProxyLogging:
         The request stash serializes release with callbacks and clears the acquisition,
         so repeated cleanup cannot release another request's slot.
         """
+        await self.arelease_request_parallel_slot()
+
+    async def arelease_request_parallel_slot(self) -> None:
         limiter: Final = self.get_proxy_hook("parallel_request_limiter")
         if not isinstance(limiter, ParallelRequestLimiterHook):
             return
-        await limiter.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+        await limiter.async_release_request_parallel_slot()
+
+    async def arelease_slot_before_logging(self, logging_obj: "LiteLLMLoggingObj") -> None:
+        limiter: Final = self.get_proxy_hook("parallel_request_limiter")
+        match limiter:
+            case ParallelRequestLimiterHook():
+                await limiter.async_release_request_parallel_slot()
+            case _PROXY_MaxParallelRequestsHandler():
+                await limiter.async_release_slot_before_logging(logging_obj)
+            case _:
+                return
 
     arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
     _arelease_max_parallel_requests_on_disconnect = arelease_max_parallel_requests
@@ -10048,8 +10112,8 @@ def check_and_merge_model_level_guardrails(
         # route_request resolves them; otherwise team-scoped deployments are
         # invisible to this lookup and their guardrails are silently dropped.
         deployments: Final = llm_router.registry().deployments(model_name=alias, team_id=team_id) or []
-        seen: Final[set] = set()
-        union: Final[list] = []
+        seen: Final[set[str]] = set()
+        union: Final[list[object]] = []
         for dep in deployments:
             litellm_params_dep = dep.get("litellm_params") or {}
             guardrails = litellm_params_dep.get("guardrails")

@@ -7,8 +7,10 @@ repository.workspace = true
 
 [features]
 test-support = []
+fips = ["rustls/fips", "litellm-http/fips", "litellm-at-rest/fips"]
 
 [dependencies]
+litellm-at-rest.workspace = true
 litellm-python-compat.workspace = true
 litellm-env.workspace = true
 litellm-secret-value.workspace = true
@@ -24,8 +26,12 @@ litellm-gateway-auth.workspace = true
 litellm-gateway-auth-core.workspace = true
 jiff.workspace = true
 litellm-callbacks.workspace = true
+litellm-callbacks-spend-logger.workspace = true
+litellm-coroutine.workspace = true
+litellm-callbacks-budgets.workspace = true
+litellm-spend-log-writer.workspace = true
 parking_lot.workspace = true
-rand.workspace = true
+arc-swap.workspace = true
 litellm-config.workspace = true
 litellm-config-load.workspace = true
 litellm-core-utils.workspace = true
@@ -49,11 +55,14 @@ litellm-license.workspace = true
 litellm-llms.workspace = true
 litellm-llms-types.workspace = true
 litellm-model-catalog.workspace = true
+litellm-token-counter = { path = "../token-counter", default-features = false, features = ["tiktoken"] }
 litellm-router-core.workspace = true
 litellm-secrets.workspace = true
+litellm-redaction.workspace = true
 litellm-tracing.workspace = true
 serde_json.workspace = true
 serde.workspace = true
+rand.workspace = true
 strum.workspace = true
 tracing.workspace = true
 tokio = { workspace = true, features = ["signal", "sync"] }
@@ -62,6 +71,7 @@ tower-http = { version = "0.6.11", features = ["catch-panic", "cors", "decompres
 uuid.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
 litellm-gateway = { workspace = true, features = ["test-support"] }
 litellm-redis-testing.workspace = true
 litellm-db-testing.workspace = true
@@ -70,6 +80,7 @@ litellm-yaml.workspace = true
 serde_yaml_ng = "0.10.0"
 litellm-http = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
+litellm-callbacks-spend-log.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync", "test-util"] }
 flate2 = "1.1.10"

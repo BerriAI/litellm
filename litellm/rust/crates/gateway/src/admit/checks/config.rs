@@ -7,12 +7,20 @@ use litellm_callbacks_model_capacity::NAME as MODEL_CAPACITY;
 use litellm_config::{
     Config, Environment, GeneralSettings, LiteLlmSettings, PriorityReservationSettings,
     RouterSettings, Value,
+    db::switches::{DbObject, SupportedDbObjects},
 };
 
 use super::{
     Admit, Reason, Refused,
     fields::{IsSet, other, unknown},
 };
+use crate::{StoredConfig, stored::holds};
+
+const STORE_MODEL_IN_DB: &str = "store_model_in_db";
+/// The `LiteLLM_UISettings` row, named when it could not be read.
+const UI_SETTINGS: &str = "ui_settings";
+/// The `general_settings` keys the config types do not name that the native app honors.
+const HONORED_GENERAL_SETTINGS: [&str; 2] = ["supported_db_objects", "encryption_algorithm"];
 
 /// The `litellm_settings` keys a variable can fill, as `Config::with_environment` layers them.
 const LAYERED: [&str; 12] = [
@@ -31,13 +39,41 @@ const LAYERED: [&str; 12] = [
 ];
 
 pub(super) fn settings(admit: &Admit, _: &Parts) -> Option<Reason> {
-    admit
-        .stored_models
-        .iter()
-        .cloned()
-        .chain(unhonored(&admit.config, &admit.environment))
+    match admit.stored {
+        StoredConfig::Unread => {
+            return Some(Reason::new(Refused::DbConfigNotLoaded, STORE_MODEL_IN_DB));
+        }
+        StoredConfig::UiSettingsUnread => {
+            return Some(Reason::new(Refused::DbConfigNotLoaded, UI_SETTINGS));
+        }
+        StoredConfig::Unused | StoredConfig::Loaded(_) => {}
+    }
+    unhonored(&admit.config, &admit.environment)
+        .chain(stored_objects(admit))
         .next()
         .map(|over| Reason::new(Refused::Settings, over))
+}
+
+/// Each kind of stored object the database holds that the proxy loads beside the stored config and
+/// the native app does not read, unless `general_settings.supported_db_objects` leaves it out.
+fn stored_objects(admit: &Admit) -> impl Iterator<Item = Box<str>> + '_ {
+    let supported = SupportedDbObjects::of(&admit.config.general_settings);
+    let held = match admit.stored {
+        StoredConfig::Loaded(objects) => Some(objects),
+        StoredConfig::Unused | StoredConfig::Unread | StoredConfig::UiSettingsUnread => None,
+    };
+    <DbObject as strum::VariantArray>::VARIANTS
+        .iter()
+        .filter(move |object| {
+            held.is_some_and(|objects| holds(objects, **object)) && supported.loads(**object)
+        })
+        .map(|object| {
+            format!(
+                "general_settings.supported_db_objects.{}",
+                <&str>::from(*object)
+            )
+            .into()
+        })
 }
 
 /// The setting Python reads only where it sends a Messages request on.
@@ -96,6 +132,9 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
         litellm_rate_limit_window_size: _,
         litellm_tpm_token_reservation_enabled: _,
         proxy_batch_write_at: _,
+        spend_log_queue_max_bytes: _,
+        spend_log_write_batch_max_bytes: _,
+        spend_log_write_batch_max_rows: _,
         legacy_multi_instance_rate_limiting,
         use_aws_kms,
         litellm_ssl_ciphers,
@@ -134,8 +173,11 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
 }
 
 /// The database settings are read as the proxy reads them, and what the proxy holds in its
-/// database beyond keys is not checked. `STORE_MODEL_IN_DB` is `Admit::stored_models`. The JWT settings shape only a caller whose token is a JWT, and the public routes
-/// only one who sends no key.
+/// database beyond keys is not checked here. `store_model_in_db` and `supported_db_objects` are
+/// honored, since boot layers the stored config in, and [`settings`] checks what it could not
+/// load. `encryption_algorithm` only picks the format Python writes a secret in, and the at-rest
+/// crate reads either format. The JWT settings shape only a caller whose token is a JWT, and the public routes only one
+/// who sends no key.
 fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
     let GeneralSettings {
         master_key: _,
@@ -171,7 +213,7 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         global_max_parallel_requests,
         max_response_size_mb,
         background_health_checks,
-        store_model_in_db,
+        store_model_in_db: _,
         forward_client_headers_to_llm_api,
         cancel_on_disconnect,
         infer_model_from_keys,
@@ -224,20 +266,24 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         ],
         on: [
             background_health_checks,
-            store_model_in_db,
             forward_client_headers_to_llm_api,
             cancel_on_disconnect,
             infer_model_from_keys,
             dangerously_permit_weak_or_unset_master_key,
         ]
     )
-    .chain(unknown("general_settings.", additional_fields))
+    .chain(other(
+        "general_settings.",
+        additional_fields.keys(),
+        &HONORED_GENERAL_SETTINGS,
+    ))
     .map(|key| spelled(config, key))
 }
 
 /// The settings router-core never reads. It reads every other one as Python's router does, and
 /// `model` names the ones it serves through a host step the native host does not answer, for the
 /// groups a request reaches.
+/// `optional_pre_call_checks` is honored when it names only the checks it runs itself.
 fn router(settings: &RouterSettings) -> impl Iterator<Item = Box<str>> + '_ {
     let RouterSettings {
         routing_strategy: _,
@@ -280,9 +326,9 @@ fn router(settings: &RouterSettings) -> impl Iterator<Item = Box<str>> + '_ {
             max_retries,
             weights,
             tag_routing_prefix,
-            optional_pre_call_checks,
         ],
-        on: [enable_tag_filtering]
+        on: [enable_tag_filtering],
+        by: [optional_pre_call_checks => super::router::checked_by_the_host]
     )
     .chain(other("router_settings.", additional_fields.keys(), &[]))
 }
@@ -384,7 +430,7 @@ fn sections(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         assistant_settings,
         default_vertex_config,
         mcp_servers,
-        credential_list,
+        credential_list: _,
         guardrails,
         prompts,
         sandbox_tools,
@@ -407,7 +453,6 @@ fn sections(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
             assistant_settings,
             default_vertex_config,
             mcp_servers,
-            credential_list,
             guardrails,
             prompts,
             sandbox_tools,
@@ -463,6 +508,14 @@ mod tests {
         "router_settings:\n  provider_budget_config: {}\n",
         "router_settings.provider_budget_config"
     )]
+    #[case::an_unknown_general_setting_beside_the_encryption_algorithm(
+        "general_settings:\n  encryption_algorithm: aes-256-gcm\n  future_setting: true\n",
+        "general_settings.future_setting"
+    )]
+    #[case::a_pre_call_check_the_host_runs(
+        "router_settings:\n  optional_pre_call_checks: [enforce_model_rate_limits, prompt_caching]\n",
+        "router_settings.optional_pre_call_checks"
+    )]
     #[case::a_section_the_config_types_do_not_name("future_section: {}\n", "future_section")]
     #[case::a_callback_beside_the_dynamic_rate_limiter(
         "litellm_settings:\n  callbacks: [dynamic_rate_limiter_v3, prometheus]\n",
@@ -482,6 +535,18 @@ mod tests {
                 messages_only(&Config::from_yaml(yaml).unwrap())
             ),
             (vec![], None)
+        );
+    }
+
+    #[rstest]
+    #[case::aes_256_gcm("aes-256-gcm")]
+    #[case::xsalsa20_poly1305("xsalsa20-poly1305")]
+    fn the_encryption_algorithm_python_writes_with_is_honored(#[case] algorithm: &str) {
+        assert_eq!(
+            written(&format!(
+                "general_settings:\n  encryption_algorithm: {algorithm}\n"
+            )),
+            Vec::<String>::new()
         );
     }
 

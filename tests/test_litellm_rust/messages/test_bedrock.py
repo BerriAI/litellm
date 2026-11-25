@@ -19,6 +19,7 @@ from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import model_cost_table
 from litellm.llms.bedrock.base_aws_llm import AwsAuthError
+from litellm.llms.bedrock_mantle.common_utils import BedrockMantleAuthError
 from tests.test_litellm_rust.messages.data import MESSAGES, MESSAGES_EVENTS, MESSAGES_RESPONSE, RATE_LIMITED
 from tests.test_litellm_rust.support.isolation import rebound
 from tests.test_litellm_rust.support.recording_server import RecordedRequest, RecordingServer, ResponseSpec, relaxed
@@ -259,25 +260,31 @@ def no_aws_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_aws_credentials")
 @pytest.mark.parametrize(
-    ("credentials", "raised", "status"),
+    ("credentials", "raised", "status", "cause"),
     (
-        pytest.param({}, NoCredentialsError, None, id="no-credentials"),
+        pytest.param({}, litellm.AuthenticationError, 401, NoCredentialsError, id="no-credentials"),
         pytest.param(
             {"aws_web_identity_token": "os.environ/AWS_WEB_IDENTITY_TOKEN"},
             AwsAuthError,
             400,
+            None,
             id="environment-reference",
         ),
         pytest.param(
             {"aws_web_identity_token": "bedrock-web-identity-token-not-set"},
             AwsAuthError,
             401,
+            None,
             id="unresolved-token",
         ),
     ),
 )
 async def test_bedrock_invoke_credential_failure_raises_what_python_raises(
-    server: RecordingServer, credentials: Mapping[str, str], raised: type[Exception], status: int | None
+    server: RecordingServer,
+    credentials: Mapping[str, str],
+    raised: type[Exception],
+    status: int | None,
+    cause: type[Exception] | None,
 ) -> None:
     web_identity: Final = (
         {"aws_role_name": "arn:aws:iam::123456789012:role/bedrock", "aws_session_name": "litellm-session"}
@@ -291,6 +298,8 @@ async def test_bedrock_invoke_credential_failure_raises_what_python_raises(
 
     assert type(rust_raised.value) is raised
     assert getattr(rust_raised.value, "status_code", None) == status
+    if cause is not None:
+        assert type(rust_raised.value.__context__) is cause
     assert server.requests == []
 
 
@@ -302,10 +311,11 @@ async def test_bedrock_invoke_access_key_without_its_secret_raises_what_python_r
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIDEXAMPLE")
     unsigned: Final = {"aws_access_key_id": None, "aws_secret_access_key": None}
 
-    with pytest.raises(PartialCredentialsError) as rust_raised:
+    with pytest.raises(litellm.AuthenticationError) as rust_raised:
         await _rust(server, **unsigned)
 
-    assert type(rust_raised.value) is PartialCredentialsError
+    assert rust_raised.value.status_code == 401
+    assert type(rust_raised.value.__context__) is PartialCredentialsError
     assert server.requests == []
 
 
@@ -1194,19 +1204,32 @@ async def test_bedrock_mantle_invalid_region_raises_what_python_raises(
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_aws_credentials")
 @pytest.mark.parametrize(
-    ("route", "raised"),
+    ("route", "raised", "status", "cause"),
     (
-        pytest.param({}, ValueError, id="bedrock-mantle"),
+        pytest.param({}, litellm.AuthenticationError, 401, BedrockMantleAuthError, id="bedrock-mantle"),
         pytest.param(
             {"aws_web_identity_token": "os.environ/AWS_WEB_IDENTITY_TOKEN"},
             AwsAuthError,
+            400,
+            None,
             id="bedrock-mantle-web-identity",
         ),
-        pytest.param({"model": "bedrock/mantle/anthropic.claude-opus-4-8"}, NoCredentialsError, id="mantle-route"),
+        pytest.param(
+            {"model": "bedrock/mantle/anthropic.claude-opus-4-8"},
+            litellm.AuthenticationError,
+            401,
+            NoCredentialsError,
+            id="mantle-route",
+        ),
     ),
 )
 async def test_bedrock_mantle_credential_failure_raises_what_python_raises(
-    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, route: Mapping[str, object], raised: type[Exception]
+    server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    route: Mapping[str, object],
+    raised: type[Exception],
+    status: int,
+    cause: type[Exception] | None,
 ) -> None:
     monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
     identity: Final = (
@@ -1220,7 +1243,9 @@ async def test_bedrock_mantle_credential_failure_raises_what_python_raises(
         await _mantle(_RUST_ENTRY, server, **unsigned)
 
     assert type(rust_raised.value) is raised
-    assert getattr(rust_raised.value, "status_code", None) == (400 if raised is AwsAuthError else None)
+    assert getattr(rust_raised.value, "status_code", None) == status
+    if cause is not None:
+        assert type(rust_raised.value.__context__) is cause
     assert server.requests == []
 
 
@@ -1229,34 +1254,39 @@ async def test_bedrock_mantle_credential_failure_raises_what_python_raises(
 async def test_bedrock_invoke_missing_profile_raises_what_python_raises(server: RecordingServer) -> None:
     unsigned: Final = {"aws_access_key_id": None, "aws_secret_access_key": None, "aws_profile_name": "absent-profile"}
 
-    with pytest.raises(ProfileNotFound) as rust_raised:
+    with pytest.raises(litellm.AuthenticationError) as rust_raised:
         await _rust(server, **unsigned)
 
-    assert rust_raised.value.kwargs == {"profile": "absent-profile"}
+    assert rust_raised.value.status_code == 401
+    profile_not_found: Final = rust_raised.value.__context__
+    assert isinstance(profile_not_found, ProfileNotFound)
+    assert profile_not_found.kwargs == {"profile": "absent-profile"}
     assert server.requests == []
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("no_aws_credentials")
 @pytest.mark.parametrize(
-    ("route", "raised"),
+    ("route", "cause"),
     (
-        pytest.param({}, ValueError, id="bedrock-mantle"),
+        pytest.param({}, BedrockMantleAuthError, id="bedrock-mantle"),
         pytest.param({"model": "bedrock/mantle/anthropic.claude-opus-4-8"}, ProfileNotFound, id="mantle-route"),
     ),
 )
 async def test_bedrock_mantle_missing_profile_raises_what_python_raises(
-    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, route: Mapping[str, object], raised: type[Exception]
+    server: RecordingServer, monkeypatch: pytest.MonkeyPatch, route: Mapping[str, object], cause: type[Exception]
 ) -> None:
     monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
     unsigned: Final = {"api_key": None, "aws_region_name": "us-east-1", "aws_profile_name": "absent-profile", **route}
 
-    with pytest.raises(raised) as rust_raised:
+    with pytest.raises(litellm.AuthenticationError) as rust_raised:
         await _mantle(_RUST_ENTRY, server, **unsigned)
 
-    assert type(rust_raised.value) is raised
-    if raised is ProfileNotFound:
-        assert rust_raised.value.kwargs == {"profile": "absent-profile"}
+    assert rust_raised.value.status_code == 401
+    underlying: Final = rust_raised.value.__context__
+    assert type(underlying) is cause
+    if isinstance(underlying, ProfileNotFound):
+        assert underlying.kwargs == {"profile": "absent-profile"}
     assert server.requests == []
 
 
