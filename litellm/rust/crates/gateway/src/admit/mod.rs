@@ -171,7 +171,7 @@ impl Admit {
         Self {
             router,
             allowlists: Allowlists::new(&config.general_settings),
-            auth: host::auth::auth(config, None),
+            auth: host::auth::auth(config, None, false),
             config: config.clone(),
             environment: Environment::default(),
             stored: StoredConfig::Unused,
@@ -361,6 +361,7 @@ mod tests {
             auth: host::auth::auth(
                 &config,
                 Some(Arc::new(AuthStore::new(keys::memory_cache(), database))),
+                false,
             ),
             ..Admit::over(
                 &config,

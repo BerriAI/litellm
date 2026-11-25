@@ -1,0 +1,32 @@
+# The budget checks read a key's spend through the database the config names. A gateway whose keys
+# come from elsewhere registers no check, so a key with a budget goes to Python even with the
+# budget reservation disabled.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    disable_budget_reservation: true
+
+keys:
+  sk-plain: []
+  sk-budget: []
+
+columns:
+  sk-budget: {max_budget: 10.0}
+
+requests:
+  - name: a key without a budget
+    headers: {authorization: Bearer sk-plain}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a key with a max budget
+    headers: {authorization: Bearer sk-budget}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native

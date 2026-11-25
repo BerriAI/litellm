@@ -1,0 +1,113 @@
+# With the budget reservation disabled, a key's own budget is checked natively at read time
+# (`callbacks/budget_check.rs`), so a key that holds `max_budget`, `budget_duration` or
+# `budget_reset_at` is served. `admit` lets a key over its budget through, since the native app
+# refuses it with Python's error. Every other budget a key can hold still goes to Python, and so
+# does a call the gateway cannot price, which includes a model group the cost map does not name.
+config:
+  model_list:
+    - model_name: claude-haiku-5-5
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+    - model_name: unpriced
+      litellm_params:
+        model: anthropic/claude-unlisted-9
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    disable_budget_reservation: true
+
+database: true
+
+keys:
+  sk-plain: []
+  sk-budget: []
+  sk-spent: []
+  sk-reset: []
+  sk-cooldown: []
+  sk-windows: []
+  sk-fallbacks: []
+  sk-model-budget: []
+  sk-temporary: []
+  sk-throttled: []
+
+columns:
+  sk-budget: {max_budget: 10.0}
+  sk-spent: {max_budget: 10.0, spend: 12.0}
+  sk-reset: {max_budget: 10.0, budget_duration: 30d, budget_reset_at: "2100-01-01T00:00:00"}
+  sk-cooldown: {max_budget: 10.0, soft_budget_cooldown: true}
+  sk-windows: {max_budget: 10.0, budget_limits: [{budget_duration: 1d, max_budget: 1.0}]}
+  sk-fallbacks: {max_budget: 10.0, budget_fallbacks: {claude-haiku-5-5: [unpriced]}}
+  sk-model-budget: {max_budget: 10.0, model_max_budget: {claude-haiku-5-5: {max_budget: 1.0}}}
+  sk-temporary: {max_budget: 10.0, metadata: {temp_budget_increase: 5.0, temp_budget_expiry: "2100-01-01"}}
+  sk-throttled: {max_budget: 10.0, rpm_limit: 5, metadata: {throttle_on_budget_exceeded: true}}
+
+requests:
+  - name: a key with a max budget
+    headers: {authorization: Bearer sk-budget}
+    body: {model: claude-haiku-5-5, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a key over its max budget
+    headers: {authorization: Bearer sk-spent}
+    body: {model: claude-haiku-5-5, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a key whose budget resets
+    headers: {authorization: Bearer sk-reset}
+    body: {model: claude-haiku-5-5, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a key in its soft budget cooldown
+    headers: {authorization: Bearer sk-cooldown}
+    body: {model: claude-haiku-5-5, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a key with budget windows
+    headers: {authorization: Bearer sk-windows}
+    body: {model: claude-haiku-5-5, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a key with budget fallbacks
+    headers: {authorization: Bearer sk-fallbacks}
+    body: {model: claude-haiku-5-5, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a key with a per-model budget
+    headers: {authorization: Bearer sk-model-budget}
+    body: {model: claude-haiku-5-5, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a key with a temporary budget increase
+    headers: {authorization: Bearer sk-temporary}
+    body: {model: claude-haiku-5-5, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a key throttled when over its budget
+    headers: {authorization: Bearer sk-throttled}
+    body: {model: claude-haiku-5-5, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: a key with a max budget calling a model the gateway cannot price
+    headers: {authorization: Bearer sk-budget}
+    body: {model: unpriced, max_tokens: 16, messages: []}
+    expect: python
+    reason: body
+    over: budget_hold
+
+  - name: a key without a budget calling a model the gateway cannot price
+    headers: {authorization: Bearer sk-plain}
+    body: {model: unpriced, max_tokens: 16, messages: []}
+    expect: rust

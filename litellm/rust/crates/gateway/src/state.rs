@@ -165,9 +165,10 @@ impl AppState {
     }
 
     /// Who the inference routes and `admit` authenticate, which the core decides over the native
-    /// host: the master key of `config`, and with a database a virtual key it holds.
+    /// host: the master key of `config`, and with a database a virtual key it holds. A key's own
+    /// budget is checked only with the spend logs, whose counters the budget checks read.
     pub(crate) fn auth(&self, config: &Config) -> Auth<NativeRows> {
-        host::auth::auth(config, self.keys.clone())
+        host::auth::auth(config, self.keys.clone(), self.spend_logs.is_some())
     }
 
     /// Drains the spend logs still queued, writes the gateway request counts still in memory,
