@@ -38,12 +38,13 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.managed_resources.utils import is_base64_encoded_unified_id
 from litellm.llms.gemini.files.utils import gemini_file_id
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import LitellmUserRoles, ProxyException
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.repositories.managed_file_repository import ManagedFileRepository
 from litellm.repositories.table_repositories import (
     ManagedObjectRepository,
 )
+from litellm.router_api import deployment_usable_by_team
 from litellm.types.llms.openai import OpenAIFilesPurpose
 from litellm.types.utils import SpecialEnums
 
@@ -698,7 +699,7 @@ async def video_deployment_the_caller_may_use(
         tuple(
             deployment
             for deployment in _team_provider_deployments(llm_router, user_api_key_dict, custom_llm_provider)
-            if _may_serve_videos(registry, deployment.deployment_id)
+            if _lists_videos_of_provider(registry, deployment.deployment_id, custom_llm_provider)
         ),
         custom_llm_provider,
         llm_router,
@@ -707,32 +708,51 @@ async def video_deployment_the_caller_may_use(
     if team_deployment is not None:
         return team_deployment
     for deployment in _accessible_provider_deployments(
-        llm_router, user_api_key_dict, custom_llm_provider, pick=_first_provider_deployment_in_group
+        llm_router, user_api_key_dict, custom_llm_provider, pick=_first_video_deployment_in_group
     ):
-        if _may_serve_videos(registry, deployment.deployment_id) and await caller_may_use_model(
-            deployment.public_model_name, llm_router, user_api_key_dict
-        ):
+        if await caller_may_use_model(deployment.public_model_name, llm_router, user_api_key_dict):
             return deployment
     return None
 
 
-def _may_serve_videos(registry: "RouterRegistry", deployment_id: str) -> bool:
+def _video_fit(registry: "RouterRegistry", deployment_id: str) -> "_VideoFit":
     deployment: Final = registry.deployment(deployment_id)
     model_info: Final = (
         None
         if deployment is None
         else registry.deployment_model_info(deployment_id, deployment.litellm_params.model, cached=True)
     )
-    return model_info is None or model_info.get("mode") in (None, "video_generation")
+    mode: Final = None if model_info is None else model_info.get("mode")
+    match mode:
+        case "video_generation":
+            return _VideoFit.SERVES_VIDEOS
+        case None:
+            return _VideoFit.UNKNOWN
+        case _:
+            return _VideoFit.SERVES_ANOTHER_MODE
 
 
-def deployment_with_credentials(llm_router: Optional["Router"], deployment_id: str) -> TeamProviderDeployment | None:
+def _lists_videos_of_provider(registry: "RouterRegistry", deployment_id: str, custom_llm_provider: str) -> bool:
+    from litellm.utils import ProviderConfigManager
+
+    fit: Final = _video_fit(registry, deployment_id)
+    return fit is _VideoFit.SERVES_VIDEOS or (
+        fit is _VideoFit.UNKNOWN
+        and ProviderConfigManager.get_custom_provider_video_config(custom_llm_provider) is not None
+    )
+
+
+def deployment_with_credentials(
+    llm_router: Optional["Router"], deployment_id: str, team_id: str | None, every_team: bool
+) -> TeamProviderDeployment | None:
     if llm_router is None:
         return None
     registry: Final = llm_router.registry()
     deployment: Final = registry.deployment(deployment_id)
     credentials: Final = as_str_mapping(registry.credentials(deployment_id, form="with_provider"))
     if deployment is None or credentials is None:
+        return None
+    if not (every_team or deployment_usable_by_team(deployment, team_id)):
         return None
     return TeamProviderDeployment(
         deployment_id,
@@ -742,16 +762,30 @@ def deployment_with_credentials(llm_router: Optional["Router"], deployment_id: s
 
 
 def first_deployment_id_in_group(
-    llm_router: Optional["Router"], model_name: str, team_id: str | None, custom_llm_provider: str | None
+    llm_router: Optional["Router"],
+    model_name: str,
+    user_api_key_dict: "UserAPIKeyAuth",
+    custom_llm_provider: str | None,
 ) -> str | None:
     if llm_router is None:
         return None
     registry: Final = llm_router.registry()
+    team_id: Final = user_api_key_dict.team_id
+    every_team: Final = team_id is None and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
     if custom_llm_provider is None:
         first: Final = registry.credentials(model_name, form="deployment", team_id=team_id)
-        return None if first is None else first.model_info.id
-    for_provider: Final = _first_provider_deployment_in_group(registry, model_name, team_id, custom_llm_provider)
-    return None if for_provider is None else for_provider.deployment_id
+        if first is None or not (every_team or deployment_usable_by_team(first, team_id)):
+            return None
+        return first.model_info.id
+    videos_first: Final = sorted(
+        (
+            deployment.deployment_id
+            for deployment in _provider_deployments_in_group(registry, model_name, team_id, custom_llm_provider)
+            if every_team or _usable_by_team(registry, deployment.deployment_id, team_id)
+        ),
+        key=lambda deployment_id: _video_fit(registry, deployment_id),
+    )
+    return videos_first[0] if videos_first else None
 
 
 async def team_deployment_as_the_caller_reaches_it(
@@ -1028,6 +1062,12 @@ class _SupportsGet(Protocol):
     def get(self, key: str, /) -> object: ...
 
 
+class _VideoFit(IntEnum):
+    SERVES_VIDEOS = 0
+    UNKNOWN = 1
+    SERVES_ANOTHER_MODE = 2
+
+
 class _KeyReach(IntEnum):
     NAMED = 0
     SHARED = 1
@@ -1075,30 +1115,47 @@ def _provider_deployment(
     return TeamProviderDeployment(deployment.model_info.id, model_name, credentials)
 
 
+def _usable_by_team(registry: "RouterRegistry", deployment_id: str, team_id: str | None) -> bool:
+    deployment: Final = registry.deployment(deployment_id)
+    return deployment is not None and deployment_usable_by_team(deployment, team_id)
+
+
 def _deployment_id(deployment: object) -> str | None:
     deployment_id: Final = require_attributes(subscript(deployment, "model_info"), _SupportsGet, "get").get("id")
     return deployment_id if isinstance(deployment_id, str) else None
 
 
-def _first_provider_deployment_in_group(
+def _provider_deployments_in_group(
     registry: "RouterRegistry", model_name: str, team_id: str | None, custom_llm_provider: str
-) -> TeamProviderDeployment | None:
+) -> tuple[TeamProviderDeployment, ...]:
     group_deployment_ids: Final = (
         deployment_id
         for deployment in registry.deployments(model_name, source="all", team_id=team_id)
         if (deployment_id := _deployment_id(deployment)) is not None
     )
-    in_group: Final = next(
+    in_group: Final = tuple(
+        TeamProviderDeployment(deployment_id, model_name, credentials)
+        for deployment_id in group_deployment_ids
+        if (credentials := _provider_credentials(registry, deployment_id, team_id, custom_llm_provider)) is not None
+    )
+    if in_group:
+        return in_group
+    by_name: Final = _provider_deployment(registry, model_name, team_id, custom_llm_provider)
+    return () if by_name is None else (by_name,)
+
+
+def _first_video_deployment_in_group(
+    registry: "RouterRegistry", model_name: str, team_id: str | None, custom_llm_provider: str
+) -> TeamProviderDeployment | None:
+    return next(
         (
-            TeamProviderDeployment(deployment_id, model_name, credentials)
-            for deployment_id in group_deployment_ids
-            if (credentials := _provider_credentials(registry, deployment_id, team_id, custom_llm_provider)) is not None
+            deployment
+            for deployment in _provider_deployments_in_group(registry, model_name, team_id, custom_llm_provider)
+            if _usable_by_team(registry, deployment.deployment_id, team_id)
+            and _lists_videos_of_provider(registry, deployment.deployment_id, custom_llm_provider)
         ),
         None,
     )
-    if in_group is not None:
-        return in_group
-    return _provider_deployment(registry, model_name, team_id, custom_llm_provider)
 
 
 def _team_provider_deployments(

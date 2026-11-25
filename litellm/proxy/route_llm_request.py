@@ -823,8 +823,22 @@ async def _authorized_team_file_deployment(
     return await team_deployment_the_caller_may_use(llm_router, call.caller, call.custom_llm_provider)
 
 
-def _video_list_deployment(listed_by: object, llm_router: LitellmRouter | None) -> TeamProviderDeployment | None:
-    return deployment_with_credentials(llm_router, listed_by) if isinstance(listed_by, str) else None
+_CONNECTION_SETTINGS: Final = frozenset({"extra_headers", "ssl_verify"})
+
+
+def _video_list_deployment(
+    listed_by: object, llm_router: LitellmRouter | None, team_id: str | None, every_team: bool
+) -> TeamProviderDeployment | None:
+    if not isinstance(listed_by, str):
+        return None
+    return deployment_with_credentials(llm_router, listed_by, team_id, every_team)
+
+
+def _connection_settings(deployment: TeamProviderDeployment, llm_router: LitellmRouter | None) -> Mapping[str, object]:
+    listed_with: Final = None if llm_router is None else llm_router.registry().deployment(deployment.deployment_id)
+    if listed_with is None:
+        return MappingProxyType({})
+    return listed_with.litellm_params.model_dump(include=set(_CONNECTION_SETTINGS), exclude_none=True)
 
 
 def _with_team_deployment_attribution(
@@ -1088,7 +1102,9 @@ async def _route_request_single_attempt(
                 )
             )
         video_list_deployment: Final = (
-            _video_list_deployment(direct_litellm_kwargs().get("model"), llm_router)
+            _video_list_deployment(
+                direct_litellm_kwargs().get("model"), llm_router, team_id, is_proxy_admin_without_team
+            )
             if route_type == "avideo_list"
             else None
         )
@@ -1096,6 +1112,7 @@ async def _route_request_single_attempt(
             return direct_litellm_endpoint()(
                 **_with_team_deployment_attribution(
                     {
+                        **_connection_settings(video_list_deployment, llm_router),
                         **{key: value for key, value in direct_litellm_kwargs().items() if key != "model"},
                         **video_list_deployment.credentials,
                     },

@@ -191,7 +191,7 @@ async def video_list_target(
             model_id=requested_model, llm_router=llm_router, user_api_key_dict=user_api_key_dict
         )
         group: Final = await _served_list_group(requested_model, user_api_key_dict, llm_router, router_settings)
-        pinned: Final = first_deployment_id_in_group(llm_router, group, user_api_key_dict.team_id, provider)
+        pinned: Final = first_deployment_id_in_group(llm_router, group, user_api_key_dict, provider)
         if pinned is not None:
             return VideoListTarget(model=pinned, deployment_id=pinned)
         if provider is None:

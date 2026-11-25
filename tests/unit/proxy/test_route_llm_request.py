@@ -2,10 +2,12 @@ import asyncio
 import contextlib
 import gc
 import json
+import ssl
 import threading
 import weakref
 from collections.abc import Awaitable, Callable, Coroutine, Iterator, Mapping
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import MagicMock
@@ -23,7 +25,7 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import model_less_team_deployment
 from litellm.proxy.route_llm_request import (
     JSON_OBJECT_ADAPTER,
@@ -42,6 +44,8 @@ from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_RESPONSE_HEADER,
 )
 from litellm.types.router import RouterErrors, RouterGeneralSettings, RouterRateLimitError
+from tests.integration._support.wire import Reply, wire_server
+from tests.unit.integrations.conftest import write_self_signed_cert
 from tests.unit.proxy.router_entry_point_stubs import route_entry_points_to_stubs
 
 
@@ -2777,7 +2781,7 @@ async def test_missing_vector_store_files_do_not_cool_down_the_team_deployment(
 _ARK_TASKS_PATH: Final = "/api/v3/contents/generations/tasks"
 
 
-def _seedance_group_router() -> litellm.Router:
+def _seedance_group_router(**model_info: str) -> litellm.Router:
     return litellm.Router(
         model_list=[
             {
@@ -2787,7 +2791,7 @@ def _seedance_group_router() -> litellm.Router:
                     "api_key": f"{deployment_id}-key",
                     "api_base": f"https://{deployment_id}.ark.example",
                 },
-                "model_info": {"id": deployment_id},
+                "model_info": {"id": deployment_id, **model_info},
             }
             for deployment_id in ("dep-a", "dep-b")
         ]
@@ -2817,18 +2821,143 @@ async def test_a_video_list_pinned_to_a_deployment_lists_with_that_deployments_k
 
 
 @pytest.mark.asyncio
-async def test_a_rate_limited_video_list_leaves_its_deployment_in_rotation(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("model_info", "metadata"),
+    [
+        pytest.param({}, {}, id="shared-deployment"),
+        pytest.param(
+            {"team_id": "team-a", "team_public_model_name": "seedance"},
+            {"litellm_metadata": {"user_api_key_team_id": "team-a"}},
+            id="team-deployment",
+        ),
+    ],
+)
+async def test_a_rate_limited_video_list_leaves_its_deployment_in_rotation(
+    monkeypatch: pytest.MonkeyPatch, model_info: dict[str, str], metadata: dict[str, object]
+) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    router: Final = _seedance_group_router()
+    router: Final = _seedance_group_router(**model_info)
 
     with respx.mock(assert_all_called=True) as respx_mock:
         respx_mock.get(url__startswith=f"https://dep-a.ark.example{_ARK_TASKS_PATH}").mock(
             return_value=httpx.Response(429, json={"error": {"code": "RateLimitExceeded", "message": "slow down"}})
         )
         with pytest.raises(litellm.RateLimitError):
-            await (await route_request(_video_list_pinned_to("dep-a"), router, None, "avideo_list"))
+            await (
+                await route_request({**_video_list_pinned_to("dep-a"), **metadata}, router, None, "avideo_list")
+            )
 
     assert router.health().cooldowns.get_active_cooldowns(["dep-a"], None) == []
+
+
+def _team_b_seedance_router(**litellm_params: object) -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "team-b-seedance",
+                "litellm_params": {
+                    "model": "volcengine/doubao-seedance-2-0-mini-260615",
+                    "api_key": "dep-b-key",
+                    "api_base": "https://dep-b.ark.example",
+                    **litellm_params,
+                },
+                "model_info": {"id": "dep-b", "team_id": "team-b", "team_public_model_name": "seedance"},
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team_id", [None, "team-a"])
+@pytest.mark.parametrize("metadata_field", ["metadata", "litellm_metadata"])
+async def test_a_video_list_naming_another_teams_deployment_never_uses_its_key(
+    monkeypatch: pytest.MonkeyPatch, team_id: str | None, metadata_field: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    caller: Final = UserAPIKeyAuth(api_key="other-team-key", team_id=team_id)
+    request: Final = {
+        **_video_list_pinned_to("dep-b"),
+        metadata_field: {"user_api_key_team_id": team_id, "user_api_key_auth": caller},
+    }
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        route: Final = respx_mock.get(url__startswith="https://dep-b.ark.example").mock(
+            return_value=httpx.Response(200, json={"items": [], "total": 0})
+        )
+        with pytest.raises((litellm.BadRequestError, ProxyModelNotFoundError, RouterRateLimitError)):
+            await (
+                await route_request(
+                    request, _team_b_seedance_router(), None, "avideo_list", user_api_key_dict=caller
+                )
+            )
+
+    assert route.call_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "caller",
+    [
+        pytest.param(UserAPIKeyAuth(api_key="team-b-key", team_id="team-b"), id="owning-team"),
+        pytest.param(UserAPIKeyAuth(api_key="admin-key", user_role=LitellmUserRoles.PROXY_ADMIN), id="proxy-admin"),
+    ],
+)
+async def test_a_video_list_uses_a_teams_deployment_for_that_team_and_for_a_proxy_admin(
+    monkeypatch: pytest.MonkeyPatch, caller: UserAPIKeyAuth
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    request: Final = {
+        **_video_list_pinned_to("dep-b"),
+        "litellm_metadata": {"user_api_key_team_id": caller.team_id, "user_api_key_auth": caller},
+    }
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.get(url__startswith=f"https://dep-b.ark.example{_ARK_TASKS_PATH}").mock(
+            return_value=httpx.Response(200, json={"items": [], "total": 0})
+        )
+        await (
+            await route_request(request, _team_b_seedance_router(), None, "avideo_list", user_api_key_dict=caller)
+        )
+
+    assert route.calls.last.request.headers["Authorization"] == "Bearer dep-b-key"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_headers", "sent_tenant"),
+    [({}, "video-team"), ({"extra_headers": {"X-Tenant": "asked-tenant"}}, "asked-tenant")],
+)
+async def test_a_video_list_sends_its_deployments_extra_headers_unless_the_request_sets_them(
+    monkeypatch: pytest.MonkeyPatch, request_headers: dict[str, object], sent_tenant: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _team_b_seedance_router(extra_headers={"X-Tenant": "video-team"})
+    request: Final = {
+        **_video_list_pinned_to("dep-b"),
+        **request_headers,
+        "litellm_metadata": {"user_api_key_team_id": "team-b"},
+    }
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        route: Final = respx_mock.get(url__startswith=f"https://dep-b.ark.example{_ARK_TASKS_PATH}").mock(
+            return_value=httpx.Response(200, json={"items": [], "total": 0})
+        )
+        await (await route_request(request, router, None, "avideo_list"))
+
+    assert route.calls.last.request.headers["X-Tenant"] == sent_tenant
+
+
+@pytest.mark.asyncio
+async def test_a_video_list_reaches_a_self_signed_backend_whose_deployment_turns_tls_checks_off(tmp_path: Path) -> None:
+    tls: Final = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    tls.load_cert_chain(*write_self_signed_cert(tmp_path, "ark"))
+    request: Final = {**_video_list_pinned_to("dep-b"), "litellm_metadata": {"user_api_key_team_id": "team-b"}}
+
+    with wire_server(lambda _: Reply(body=b'{"items": [], "total": 0}'), tls=tls) as wire:
+        router: Final = _team_b_seedance_router(api_base=wire.url, ssl_verify=False)
+        listed: Final = await (await route_request(request, router, None, "avideo_list"))
+
+    assert listed["data"] == [], listed
 
 
 _DIRECT_VECTOR_STORE_FILE_ROUTES: Final = (
