@@ -1887,6 +1887,16 @@ def test_calls_naming_one_trace_share_it_under_the_request_span_another_otel_log
     assert _trace_ids_of_calls(call(), call()) == (_NAMED_TRACE, _NAMED_TRACE)
 
 
+def test_a_call_in_a_named_trace_links_to_the_request_span_another_otel_logger_keeps_it_under() -> None:
+    request_span: Final = _proxy_span()
+
+    (linked,) = _exported_calls({"metadata": {"trace_id": _NAMED_TRACE, "litellm_parent_otel_span": request_span}})
+    (unlinked,) = _exported_calls({"metadata": {"trace_id": _NAMED_TRACE}})
+
+    assert [link.context for link in linked.links] == [request_span.get_span_context()]
+    assert tuple(unlinked.links) == ()
+
+
 def test_calls_naming_one_trace_id_that_is_not_hex_share_the_trace_the_langfuse_callback_hashes_it_to() -> None:
     named: Final = {"metadata": {"trace_id": "order-1234"}}
 

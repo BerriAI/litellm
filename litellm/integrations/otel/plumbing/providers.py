@@ -36,7 +36,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
     InMemorySpanExporter,
 )
 from opentelemetry.sdk.trace.sampling import Decision, Sampler, SamplingResult
-from opentelemetry.trace import Link, Span, SpanContext, SpanKind, Status, StatusCode, Tracer, TraceState
+from opentelemetry.trace import Link, Span, SpanContext, SpanKind, Status, StatusCode, TraceFlags, Tracer, TraceState
 from opentelemetry.util.re import parse_env_headers
 from opentelemetry.util.types import Attributes, AttributeValue
 
@@ -76,7 +76,7 @@ from litellm.integrations.otel.plumbing.context import (
     request_traces_excluded,
     suppressed_backends,
 )
-from litellm.integrations.otel.plumbing.named_trace import NamedTraceIdGenerator
+from litellm.integrations.otel.plumbing.named_trace import NamedTraceSpanProcessor, named_trace_id_of
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 
 if TYPE_CHECKING:
@@ -439,15 +439,18 @@ class _SpanView(ReadableSpan):
         events: Sequence[Event],
         status: Status,
         parent: SpanContext | None,
+        *,
+        context: SpanContext | None = None,
+        links: Sequence[Link] | None = None,
     ) -> None:
         super().__init__(
             name=inner.name,
-            context=inner.context,
+            context=context or inner.context,
             parent=parent,
             resource=resource,
             attributes=attributes,
             events=events,
-            links=inner.links,
+            links=inner.links if links is None else links,
             kind=inner.kind,
             status=status,
             start_time=inner.start_time,
@@ -478,8 +481,21 @@ class _CountedSpanView(_SpanView):
         attributes: Attributes,
         dropped_attributes: int = 0,
         resource: Resource | None = None,
+        *,
+        context: SpanContext | None = None,
+        parent: SpanContext | None = None,
+        links: Sequence[Link] | None = None,
     ) -> None:
-        super().__init__(inner, resource or inner.resource, attributes, inner.events, inner.status, parent=inner.parent)
+        super().__init__(
+            inner,
+            resource or inner.resource,
+            attributes,
+            inner.events,
+            inner.status,
+            parent=parent or inner.parent,
+            context=context,
+            links=links,
+        )
         self._dropped_counts: Final = (
             inner.dropped_attributes + dropped_attributes,
             inner.dropped_events,
@@ -497,6 +513,54 @@ class _CountedSpanView(_SpanView):
     @property
     def dropped_links(self) -> int:
         return self._dropped_counts[2]
+
+
+def in_named_trace(span: ReadableSpan) -> ReadableSpan:
+    """``span`` as a Langfuse exporter receives it: a span whose caller named its trace goes out in that trace, with
+    no mark naming it, and linked to the same span in the trace every other exporter gets."""
+    named: Final = named_trace_id_of(span)
+    context: Final = span.context
+    if named is None or context is None:
+        return span
+    attributes: Final = span.attributes or _NO_ATTRIBUTES
+    parent: Final = span.parent
+    return _CountedSpanView(
+        span,
+        MappingProxyType({key: value for key, value in attributes.items() if key != LiteLLM.NAMED_TRACE_ID}),
+        context=_in_trace(context, named),
+        parent=_in_trace(parent, named) if parent is not None and parent.trace_id == context.trace_id else None,
+        links=(*span.links, Link(context)),
+    )
+
+
+def _in_trace(context: SpanContext, trace_id: int) -> SpanContext:
+    """``context`` in the trace a caller named, whose id is the caller's choice and so not random."""
+    return SpanContext(
+        trace_id=trace_id,
+        span_id=context.span_id,
+        is_remote=context.is_remote,
+        trace_flags=TraceFlags(context.trace_flags & ~TraceFlags.RANDOM_TRACE_ID),
+        trace_state=context.trace_state,
+    )
+
+
+class _NamedTraceFilter(SpanProcessor):
+    """Hand a Langfuse exporter's ``inner`` each span in the trace its caller named (see :func:`in_named_trace`)."""
+
+    def __init__(self, inner: SpanProcessor) -> None:
+        self._inner: Final = inner
+
+    def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
+        self._inner.on_start(span, parent_context)
+
+    def on_end(self, span: ReadableSpan) -> None:
+        self._inner.on_end(in_named_trace(span))
+
+    def shutdown(self) -> None:
+        self._inner.shutdown()
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        return self._inner.force_flush(timeout_millis)
 
 
 def span_limits(span: object) -> SpanLimits:
@@ -908,7 +972,12 @@ class TenantFanOutSpanProcessor(SpanProcessor):
             return
         try:
             exported: Final = _scoped(
-                _for_destination(span, destination, self._default_capture_for(destination), self._langfuse_mapped),
+                _for_destination(
+                    in_named_trace(span) if destination.callback_name == ExporterOwner.LANGFUSE_OTEL else span,
+                    destination,
+                    self._default_capture_for(destination),
+                    self._langfuse_mapped,
+                ),
                 destination.span_scope,
             )
             processor.on_end(with_pending_metadata(span, exported))
@@ -1626,7 +1695,8 @@ def _spec_processor(
         if strip_destination_langfuse_attributes
         else exporting
     )
-    return _MessageContentFilter(scoped) if strip_message_content else scoped
+    filtered: Final = _MessageContentFilter(scoped) if strip_message_content else scoped
+    return _NamedTraceFilter(filtered) if spec.owner is ExporterOwner.LANGFUSE_OTEL else filtered
 
 
 class _RequestExclusionSampler(Sampler):
@@ -1688,11 +1758,12 @@ def build_tracer_provider(
     prints only under ``console_default``, which the ``otel`` callback passes: a
     vendor preset or the proxy's background global logger was never asked to print.
     """
-    provider: Final = TracerProvider(resource=build_resource(config), id_generator=NamedTraceIdGenerator())
+    provider: Final = TracerProvider(resource=build_resource(config))
     provider.sampler = _RequestExclusionSampler(provider.sampler)
     if baggage_processor is None:
         baggage_processor = LiteLLMBaggageSpanProcessor(allowed_keys=config.baggage_promoted_keys)
     provider.add_span_processor(baggage_processor)
+    provider.add_span_processor(NamedTraceSpanProcessor())
 
     if exporter is not None:
         provider.add_span_processor(_processor_for(exporter, use_simple_processor))

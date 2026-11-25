@@ -341,6 +341,8 @@ class LiteLLM:
     MCP_SERVER_NAME: Final = "litellm.mcp.server.name"
     CACHE_HIT: Final = "litellm.cache_hit"
     SAVED_CACHE_COST: Final = "litellm.saved_cache_cost"
+    NAMED_TRACE_ID: Final = "litellm.otel.named_trace_id"
+    TRACE_ID_SKIPPED: Final = "litellm.otel.trace_id_skipped"
 
 
 class Metric:

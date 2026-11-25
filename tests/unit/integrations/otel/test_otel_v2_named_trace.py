@@ -1,9 +1,12 @@
-"""Proxy requests that name a trace (``trace_id`` in ``metadata`` / ``litellm_metadata``) share that OTel trace on V2."""
+"""Proxy requests that name a trace (``trace_id`` in ``metadata`` / ``litellm_metadata``) share that trace in Langfuse on
+V2, while every other exporter keeps each request's own trace."""
 
 import asyncio
 import json
 import logging
 import time
+from dataclasses import dataclass
+from types import MappingProxyType
 from hashlib import sha256
 from typing import Final
 
@@ -15,16 +18,32 @@ pytest.importorskip("opentelemetry.instrumentation.fastapi")
 from fastapi.testclient import TestClient  # noqa: E402  # optional dependencies are skipped first
 from opentelemetry import trace  # noqa: E402
 from opentelemetry.instrumentation.propagators import set_global_response_propagator  # noqa: E402
+from opentelemetry.sdk.trace import TracerProvider  # noqa: E402
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter  # noqa: E402
 from opentelemetry.trace import SpanKind  # noqa: E402
 
-from litellm.integrations.langfuse.trace_id import resolve_trace_id  # noqa: E402
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
-from litellm.integrations.otel.model.config import OpenTelemetryV2Config, is_otel_v2_enabled  # noqa: E402
+from litellm.integrations.otel.model.config import (  # noqa: E402
+    ExporterOwner,
+    ExporterSpec,
+    OpenTelemetryV2Config,
+    is_otel_v2_enabled,
+)
+from litellm.integrations.otel.model.destination import OtelDestination  # noqa: E402
+from litellm.integrations.otel.model.semconv import GenAI, LiteLLM  # noqa: E402
 from litellm.integrations.otel.mount import instrument_fastapi_app  # noqa: E402
-from litellm.integrations.otel.plumbing import named_trace, providers  # noqa: E402
-from litellm.integrations.otel.plumbing.context import resolve_request_span_context  # noqa: E402
+from litellm.integrations.otel.plumbing import named_trace  # noqa: E402
+from litellm.integrations.otel.plumbing.context import (  # noqa: E402
+    reset_request_destinations,
+    resolve_request_span_context,
+    set_request_destinations,
+)
+from litellm.integrations.otel.plumbing.providers import (  # noqa: E402
+    TenantFanOutSpanProcessor,
+    parse_headers,
+    register_exporter_factory,
+)
 from litellm.proxy.auth.user_api_key_auth import _ensure_litellm_received_at_on_request_state  # noqa: E402
 from litellm.proxy.litellm_pre_call_utils import add_otel_trace_id_to_request  # noqa: E402
 
@@ -32,6 +51,9 @@ UUID: Final = "0b6f3a1c-9d2e-4f5a-8b7c-1d2e3f4a5b6c"
 UUID_HEX: Final = UUID.replace("-", "")
 OTHER_HEX: Final = "4bf92f3577b34da6a3ce929d0e0e4736"
 PATHS: Final = ("/v1/chat/completions", "/v1/responses", "/v1/messages")
+NAMED: Final = named_trace.TraceNaming(int(UUID_HEX, 16))
+NOT_NAMED: Final = named_trace.TraceNaming()
+EXPORTER_KIND: Final = "lit11186_named_trace"
 
 
 @pytest.fixture(autouse=True)
@@ -47,11 +69,43 @@ def _isolate():
     is_otel_v2_enabled.cache_clear()
 
 
+@dataclass(frozen=True)
+class _Exported:
+    langfuse: InMemorySpanExporter
+    otel: InMemorySpanExporter
+
+
+@dataclass(frozen=True)
+class _Proxy:
+    client: TestClient
+    langfuse: InMemorySpanExporter
+    otel: InMemorySpanExporter
+
+
 @pytest.fixture
 def proxy(monkeypatch):
-    """A V2-instrumented app whose LLM routes echo the body they read and start the request's LLM span and a
-    detached root span, as the proxy does for the call and for its spend tracking."""
+    """A V2-instrumented app exporting to Langfuse and to a plain OTLP collector, whose LLM routes echo the body
+    they read and start the request's LLM span and a detached root span, as the proxy does for the call and for its
+    spend tracking."""
     return _instrumented(monkeypatch)
+
+
+def _logger(**logger_kwargs):
+    exporters: Final = {}
+    register_exporter_factory(EXPORTER_KIND, lambda spec: exporters.setdefault(spec.owner, InMemorySpanExporter()))
+    config: Final = OpenTelemetryV2Config(
+        exporters=[
+            ExporterSpec(
+                kind=EXPORTER_KIND,
+                endpoint="http://langfuse.local",
+                owner=ExporterOwner.LANGFUSE_OTEL,
+                use_simple_processor=True,
+            ),
+            ExporterSpec(kind=EXPORTER_KIND, endpoint="http://collector.local", use_simple_processor=True),
+        ]
+    )
+    logger: Final = OpenTelemetryV2(config=config, **logger_kwargs)
+    return logger, _Exported(exporters[ExporterOwner.LANGFUSE_OTEL], exporters[None])
 
 
 async def _spend_session(request: fastapi.Request):
@@ -66,10 +120,8 @@ async def _spend_session(request: fastapi.Request):
 def _instrumented(monkeypatch, route=None, **instrument_kwargs):
     monkeypatch.setenv("LITELLM_OTEL_V2", "1")
     is_otel_v2_enabled.cache_clear()
-    logger: Final = OpenTelemetryV2(config=OpenTelemetryV2Config(exporter="in_memory"))
+    logger, exported = _logger()
     provider: Final = logger._tracer_provider
-    exporter: Final = InMemorySpanExporter()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
     tracer: Final = provider.get_tracer("test")
     app: Final = fastapi.FastAPI()
 
@@ -82,7 +134,7 @@ def _instrumented(monkeypatch, route=None, **instrument_kwargs):
     for path in PATHS:
         app.add_api_route(path, route or llm_route, methods=["POST"])
     instrument_fastapi_app(app, tracer_provider=provider, **instrument_kwargs)
-    return TestClient(app), exporter
+    return _Proxy(TestClient(app), exported.langfuse, exported.otel)
 
 
 def _trace_ids(exporter, name=None):
@@ -108,23 +160,87 @@ def _trace_ids(exporter, name=None):
         ),
     ],
 )
-def test_requests_naming_one_trace_share_that_otel_trace(proxy, path, body, expected):
-    client, exporter = proxy
+def test_requests_naming_one_trace_share_that_langfuse_trace(proxy, path, body, expected):
+    client, exporter = proxy.client, proxy.langfuse
 
     responses: Final = [client.post(path, json={"model": "m", **body}) for _ in range(2)]
 
     assert [r.json() for r in responses] == [{"model": "m", **body}] * 2
     assert _trace_ids(exporter) == [expected, expected]
     assert _trace_ids(exporter, "llm") == [expected, expected]
-    assert [r.headers["traceresponse"].split("-")[1] for r in responses] == [expected, expected]
 
+
+def test_every_other_exporter_and_the_traceresponse_keep_each_requests_own_trace(proxy):
+    responses: Final = [proxy.client.post(PATHS[0], json={"metadata": {"trace_id": UUID}}) for _ in range(2)]
+
+    server: Final = _trace_ids(proxy.otel)
+    assert len(set(server)) == 2
+    assert UUID_HEX not in server
+    assert _trace_ids(proxy.otel, "llm") == server
+    assert [r.headers["traceresponse"].split("-")[1] for r in responses] == server
+    assert [
+        span.attributes.get(LiteLLM.NAMED_TRACE_ID) for span in proxy.otel.get_finished_spans() if span.name != "detached"
+    ] == [UUID_HEX] * 4
+
+
+def test_every_span_of_a_named_langfuse_trace_links_to_the_same_span_in_the_trace_every_other_exporter_sees(proxy):
+    proxy.client.post(PATHS[0], json={"metadata": {"trace_id": UUID}})
+
+    seen: Final = {span.context.span_id: span.context for span in proxy.otel.get_finished_spans()}
+    langfuse: Final = proxy.langfuse.get_finished_spans()
+    named: Final = [span for span in langfuse if span.context.trace_id == int(UUID_HEX, 16)]
+    (server,) = [span for span in named if span.kind is SpanKind.SERVER]
+    (llm,) = [span for span in named if span.name == "llm"]
+    assert (llm.parent.trace_id, llm.parent.span_id) == (int(UUID_HEX, 16), server.context.span_id)
+    assert [[link.context for link in span.links] for span in named] == [[seen[span.context.span_id]] for span in named]
+    assert [span.links for span in langfuse if span not in named] == [()]
+    assert all(LiteLLM.NAMED_TRACE_ID not in span.attributes for span in langfuse)
+
+
+
+@pytest.mark.parametrize("span_scope", ["full", "llm_only"])
+def test_every_span_a_langfuse_destination_gets_in_a_named_trace_links_to_the_trace_other_exporters_see(span_scope):
+    destination: Final = InMemorySpanExporter()
+    other: Final = InMemorySpanExporter()
+    provider: Final = TracerProvider()
+    provider.add_span_processor(named_trace.NamedTraceSpanProcessor())
+    provider.add_span_processor(SimpleSpanProcessor(other))
+    provider.add_span_processor(
+        TenantFanOutSpanProcessor(
+            processor_factory=lambda _destination: SimpleSpanProcessor(destination),
+            operator_sinks=MappingProxyType({}),
+        )
+    )
+    tracer: Final = provider.get_tracer("test")
+    token: Final = set_request_destinations(
+        (
+            OtelDestination(
+                endpoint="http://key.local/api/public/otel",
+                headers=MappingProxyType({"Authorization": "Basic a2V5"}),
+                callback_name="langfuse_otel",
+                span_scope=span_scope,
+            ),
+        )
+    )
+    try:
+        with named_trace.named_trace_scope(int(UUID_HEX, 16)), tracer.start_as_current_span("request"):
+            tracer.start_span("chat m", attributes={GenAI.OPERATION_NAME: "chat"}).end()
+    finally:
+        reset_request_destinations(token)
+
+    seen: Final = {span.context.span_id: span.context for span in other.get_finished_spans()}
+    exported: Final = destination.get_finished_spans()
+    assert {span.context.trace_id for span in exported} == {int(UUID_HEX, 16)}
+    assert [[link.context for link in span.links] for span in exported] == [
+        [seen[span.context.span_id]] for span in exported
+    ]
 
 @pytest.mark.parametrize(
     ("path", "own", "other"),
     [(PATHS[0], "metadata", "litellm_metadata"), (PATHS[1], "litellm_metadata", "metadata")],
 )
 def test_the_routes_own_metadata_field_names_the_trace_over_the_other(proxy, path, own, other):
-    client, exporter = proxy
+    client, exporter = proxy.client, proxy.langfuse
 
     client.post(path, json={own: {"trace_id": UUID}, other: {"trace_id": OTHER_HEX}})
 
@@ -132,7 +248,7 @@ def test_the_routes_own_metadata_field_names_the_trace_over_the_other(proxy, pat
 
 
 def test_only_a_trace_id_the_proxy_generated_is_flagged_random(proxy):
-    client, exporter = proxy
+    client, exporter = proxy.client, proxy.langfuse
 
     client.post(PATHS[0], json={"metadata": {"trace_id": UUID}})
     client.post(PATHS[0], json={"model": "m"})
@@ -143,10 +259,11 @@ def test_only_a_trace_id_the_proxy_generated_is_flagged_random(proxy):
         span.context.trace_flags.random_trace_id is (span.context.trace_id != int(UUID_HEX, 16))
         for span in exporter.get_finished_spans()
     )
+    assert all(span.context.trace_flags.random_trace_id for span in proxy.otel.get_finished_spans())
 
 
 def test_a_langfuse_trace_id_header_names_the_trace(proxy):
-    client, exporter = proxy
+    client, exporter = proxy.client, proxy.langfuse
 
     for _ in range(2):
         client.post(PATHS[0], json={"model": "m"}, headers={"langfuse_trace_id": UUID})
@@ -165,7 +282,7 @@ def test_a_langfuse_trace_id_header_names_the_trace(proxy):
     ],
 )
 def test_only_the_langfuse_trace_id_header_wins_over_the_body(proxy, headers, expected):
-    client, exporter = proxy
+    client, exporter = proxy.client, proxy.langfuse
 
     client.post(PATHS[1], json={"litellm_metadata": {"trace_id": "body-trace"}}, headers=headers)
 
@@ -173,7 +290,7 @@ def test_only_the_langfuse_trace_id_header_wins_over_the_body(proxy, headers, ex
 
 
 def test_requests_naming_different_traces_stay_apart(proxy):
-    client, exporter = proxy
+    client, exporter = proxy.client, proxy.langfuse
 
     client.post(PATHS[1], json={"litellm_metadata": {"trace_id": UUID}})
     client.post(PATHS[1], json={"litellm_metadata": {"trace_id": OTHER_HEX}})
@@ -187,7 +304,7 @@ def test_requests_naming_different_traces_stay_apart(proxy):
     ids=["all-zero-trace", "malformed", "all-zero-parent"],
 )
 def test_a_traceparent_carrying_no_valid_trace_leaves_the_named_trace(proxy, traceparent):
-    client, exporter = proxy
+    client, exporter = proxy.client, proxy.langfuse
 
     client.post(PATHS[1], json={"litellm_metadata": {"trace_id": UUID}}, headers={"traceparent": traceparent})
 
@@ -195,7 +312,7 @@ def test_a_traceparent_carrying_no_valid_trace_leaves_the_named_trace(proxy, tra
 
 
 def test_traceparent_wins_over_a_named_trace(proxy):
-    client, exporter = proxy
+    client, exporter = proxy.client, proxy.langfuse
 
     client.post(
         PATHS[1],
@@ -209,7 +326,7 @@ def test_traceparent_wins_over_a_named_trace(proxy):
 
 
 def test_work_the_request_detaches_keeps_its_own_trace(proxy):
-    client, exporter = proxy
+    client, exporter = proxy.client, proxy.langfuse
 
     client.post(PATHS[0], json={"metadata": {"trace_id": UUID}})
     client.post(PATHS[0], json={"metadata": {"trace_id": UUID}})
@@ -243,13 +360,16 @@ def test_work_the_request_detaches_keeps_its_own_trace(proxy):
             id="invalid-json",
         ),
         pytest.param(
-            {"content": b'{"metadata": {"trace_id": "%s"}}' % UUID.encode(), "headers": {"content-type": "text/plain"}},
-            id="not-json-content-type",
+            {
+                "content": b'{"metadata": {"trace_id": "%s"}}' % UUID.encode(),
+                "headers": {"content-type": "application/x-protobuf"},
+            },
+            id="binary-upload",
         ),
     ],
 )
 def test_requests_naming_no_trace_each_get_their_own(proxy, request_kwargs):
-    client, exporter = proxy
+    client, exporter = proxy.client, proxy.langfuse
 
     responses: Final = [client.post(PATHS[0], **request_kwargs) for _ in range(2)]
 
@@ -274,7 +394,8 @@ QUEUED_SECONDS: Final = 0.2
 
 
 def test_a_request_counts_the_time_spent_reading_its_body_but_not_the_time_it_waited_before_the_route(monkeypatch):
-    client, exporter = _instrumented(monkeypatch, route=_queued_route)
+    rig: Final = _instrumented(monkeypatch, route=_queued_route)
+    client, exporter = rig.client, rig.langfuse
     payload: Final = b'{"litellm_metadata": {"trace_id": "%s"}}' % UUID.encode()
     upload_seconds: Final = 0.2
 
@@ -295,54 +416,49 @@ def test_a_request_counts_the_time_spent_reading_its_body_but_not_the_time_it_wa
 
 
 @pytest.mark.parametrize(
-    "request_kwargs, name",
+    "request_kwargs",
     [
-        pytest.param({"json": {"metadata": {}}, "headers": {"langfuse_trace_id": UUID}}, UUID, id="header"),
-        pytest.param({"json": {"metadata": {}}, "headers": {"langfuse_trace_id": "run-7"}}, "run-7", id="not-hex"),
-        pytest.param(
-            {"json": {"metadata": {}, "litellm_metadata": {"trace_id": UUID}}}, UUID, id="other-metadata-field"
-        ),
+        pytest.param({"json": {"metadata": {}}}, id="no-name"),
+        pytest.param({"json": {"metadata": {}}, "headers": {"langfuse_trace_id": UUID}}, id="header"),
+        pytest.param({"json": {"metadata": {}, "litellm_metadata": {"trace_id": UUID}}}, id="other-metadata-field"),
     ],
 )
-def test_a_named_trace_keeps_the_id_its_caller_sent_as_the_requests_spend_session(monkeypatch, request_kwargs, name):
-    client, _ = _instrumented(monkeypatch, route=_spend_session)
+def test_a_requests_spend_session_is_its_own_server_trace_whatever_trace_it_names(monkeypatch, request_kwargs):
+    client: Final = _instrumented(monkeypatch, route=_spend_session).client
 
     responses: Final = [client.post(PATHS[0], **request_kwargs).json() for _ in range(2)]
 
-    assert responses == [{"litellm_trace_id": name, "server_trace": resolve_trace_id(name)}] * 2
-
-
-def test_a_request_naming_no_trace_keeps_its_server_trace_as_its_spend_session(monkeypatch):
-    client, _ = _instrumented(monkeypatch, route=_spend_session)
-
-    response: Final = client.post(PATHS[0], json={"metadata": {}}).json()
-
-    assert response["litellm_trace_id"] == response["server_trace"]
+    assert [r["litellm_trace_id"] for r in responses] == [r["server_trace"] for r in responses]
+    assert len({r["server_trace"] for r in responses}) == 2
 
 
 @pytest.mark.parametrize(
-    "body",
+    "body, reason",
     [
-        pytest.param({"metadata": {"trace_id": UUID, "existing_trace_id": OTHER_HEX}}, id="existing_trace_id"),
-        pytest.param({"metadata": {"trace_id": UUID}, "input": "x" * 200}, id="over-the-lookahead-cap"),
+        pytest.param(
+            {"metadata": {"trace_id": UUID, "existing_trace_id": OTHER_HEX}}, "existing_trace_id", id="existing_trace_id"
+        ),
+        pytest.param({"metadata": {"trace_id": UUID}, "input": "x" * 200}, "body_too_large", id="over-the-size-limit"),
     ],
 )
-def test_a_request_whose_name_is_skipped_warns_once_and_logs_each_later_one_at_debug(proxy, monkeypatch, caplog, body):
-    monkeypatch.setattr(named_trace, "_MAX_LOOKAHEAD_BYTES", 150)
-    client, exporter = proxy
+def test_a_request_whose_name_is_skipped_says_why_on_its_root_and_warns_once(monkeypatch, caplog, body, reason):
+    rig: Final = _instrumented(monkeypatch, max_request_body_bytes=lambda _scope: 150)
 
     with caplog.at_level(logging.DEBUG, logger="LiteLLM"):
         for _ in range(3):
-            client.post(PATHS[0], json=body)
+            rig.client.post(PATHS[0], json=body)
 
     skipped: Final = [record for record in caplog.records if "OTel V2" in record.getMessage()]
     assert [record.levelno for record in skipped].count(logging.WARNING) == 1
     assert [record.levelno for record in skipped].count(logging.DEBUG) == 3
-    assert UUID_HEX not in _trace_ids(exporter)
+    assert UUID_HEX not in _trace_ids(rig.langfuse)
+    assert [
+        span.attributes.get(LiteLLM.TRACE_ID_SKIPPED) for span in rig.otel.get_finished_spans() if span.parent is None
+    ] == [None, reason] * 3
 
 
 def test_requests_skipped_for_different_content_encodings_warn_once(proxy, caplog):
-    client, _ = proxy
+    client: Final = proxy.client
     payload: Final = b'{"metadata": {"trace_id": "%s"}}' % UUID.encode()
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
@@ -354,16 +470,10 @@ def test_requests_skipped_for_different_content_encodings_warn_once(proxy, caplo
     assert len([record for record in caplog.records if "OTel V2" in record.getMessage()]) == 1
 
 
-def _sdk_logger():
-    config: Final = OpenTelemetryV2Config(exporter="in_memory")
-    exporter: Final = InMemorySpanExporter()
-    return OpenTelemetryV2(config=config, tracer_provider=providers.build_tracer_provider(config, exporter=exporter)), exporter
-
-
 async def _sdk_call_traces(monkeypatch, *metadatas, parent=None):
     import litellm
 
-    logger, exporter = _sdk_logger()
+    logger, exported = _logger()
     monkeypatch.setattr(litellm, "callbacks", [logger])
     for metadata in metadatas:
         with trace.use_span(parent, end_on_exit=False) if parent is not None else _no_span():
@@ -371,10 +481,13 @@ async def _sdk_call_traces(monkeypatch, *metadatas, parent=None):
                 model="gpt-4o", messages=[{"role": "user", "content": "hi"}], mock_response="ok", metadata=metadata
             )
     for _ in range(200):
-        if len(exporter.get_finished_spans()) >= len(metadatas):
+        if len(exported.langfuse.get_finished_spans()) >= len(metadatas):
             break
         await asyncio.sleep(0.01)
-    return [f"{span.context.trace_id:032x}" for span in exporter.get_finished_spans() if span.parent is None or parent]
+    return tuple(
+        [f"{span.context.trace_id:032x}" for span in exporter.get_finished_spans() if span.parent is None or parent]
+        for exporter in (exported.langfuse, exported.otel)
+    )
 
 
 def _no_span():
@@ -384,15 +497,18 @@ def _no_span():
 
 
 @pytest.mark.asyncio
-async def test_sdk_calls_naming_one_trace_share_that_otel_trace(monkeypatch):
-    assert await _sdk_call_traces(monkeypatch, {"trace_id": UUID}, {"trace_id": UUID}) == [UUID_HEX, UUID_HEX]
+async def test_sdk_calls_naming_one_trace_share_that_langfuse_trace(monkeypatch):
+    langfuse, otel = await _sdk_call_traces(monkeypatch, {"trace_id": UUID}, {"trace_id": UUID})
+
+    assert langfuse == [UUID_HEX, UUID_HEX]
+    assert len(set(otel)) == 2
 
 
 @pytest.mark.asyncio
 async def test_sdk_calls_naming_no_trace_each_get_their_own(monkeypatch):
-    traces: Final = await _sdk_call_traces(monkeypatch, {}, {})
+    langfuse, _ = await _sdk_call_traces(monkeypatch, {}, {})
 
-    assert len(set(traces)) == 2
+    assert len(set(langfuse)) == 2
 
 
 @pytest.mark.asyncio
@@ -401,11 +517,13 @@ async def test_an_sdk_call_under_an_app_span_stays_in_the_app_trace(monkeypatch)
         trace.SpanContext(int(OTHER_HEX, 16), 0x00F067AA0BA902B7, is_remote=False, trace_flags=trace.TraceFlags(1))
     )
 
-    assert set(await _sdk_call_traces(monkeypatch, {"trace_id": UUID}, parent=app_span)) == {OTHER_HEX}
+    langfuse, otel = await _sdk_call_traces(monkeypatch, {"trace_id": UUID}, parent=app_span)
+
+    assert set(langfuse) == set(otel) == {OTHER_HEX}
 
 
 def test_a_body_sent_in_chunks_reaches_the_route_whole(proxy):
-    client, exporter = proxy
+    client, exporter = proxy.client, proxy.langfuse
     payload: Final = b'{"metadata": {"trace_id": "%s"}, "input": "%s"}' % (UUID.encode(), b"x" * 200_000)
 
     def chunks():
@@ -419,7 +537,7 @@ def test_a_body_sent_in_chunks_reaches_the_route_whole(proxy):
 
 
 def test_a_body_too_deep_to_parse_still_reaches_the_route(proxy):
-    client, exporter = proxy
+    client, exporter = proxy.client, proxy.langfuse
     payload: Final = b'{"metadata": {"trace_id": "%s"}, "input": %s' % (UUID.encode(), b"[" * 200_000)
 
     response: Final = client.post(PATHS[0], content=payload, headers={"content-type": "application/json"})
@@ -429,23 +547,8 @@ def test_a_body_too_deep_to_parse_still_reaches_the_route(proxy):
     assert UUID_HEX not in _trace_ids(exporter)
 
 
-def test_a_body_naming_no_trace_is_never_parsed(proxy, monkeypatch):
-    from litellm.integrations.otel.plumbing import named_trace
-
-    def never_called(body: bytes) -> object:
-        raise AssertionError("parsed a body that names no trace")
-
-    monkeypatch.setattr(named_trace, "_loads", never_called)
-    client, exporter = proxy
-
-    response: Final = client.post(PATHS[1], json={"model": "m", "input": "x" * 10_000})
-
-    assert response.status_code == 200
-    assert len(_trace_ids(exporter)) == 1
-
-
 def test_the_json_content_type_is_matched_in_any_case(proxy):
-    client, exporter = proxy
+    client, exporter = proxy.client, proxy.langfuse
     payload: Final = b'{"litellm_metadata": {"trace_id": "%s"}}' % UUID.encode()
 
     client.post(PATHS[1], content=payload, headers={"content-type": "Application/JSON; charset=utf-8"})
@@ -453,12 +556,54 @@ def test_the_json_content_type_is_matched_in_any_case(proxy):
     assert _trace_ids(exporter) == [UUID_HEX]
 
 
-@pytest.mark.parametrize("declare_length", [True, False])
-def test_a_body_over_the_lookahead_cap_is_not_held_and_reaches_the_route_whole(proxy, monkeypatch, declare_length):
-    from litellm.integrations.otel.plumbing import named_trace
+@pytest.mark.parametrize(
+    "request_kwargs",
+    [
+        pytest.param({"content": b'{"metadata": {"trace_id": "%s"}}' % UUID.encode()}, id="no-content-type"),
+        pytest.param(
+            {"content": b'{"metadata": {"trace_id": "%s"}}' % UUID.encode(), "headers": {"content-type": "text/plain"}},
+            id="text-content-type",
+        ),
+        pytest.param({"data": {"model": "m", "metadata": json.dumps({"trace_id": UUID})}}, id="urlencoded-form"),
+        pytest.param(
+            {
+                "data": {"model": "m", "metadata": json.dumps({"trace_id": UUID})},
+                "files": {"file": ("speech.wav", b"RIFF" + b"\x00" * 4096, "audio/wav")},
+            },
+            id="multipart-form",
+        ),
+    ],
+)
+def test_a_body_the_proxy_parses_as_json_or_as_a_form_names_its_trace(proxy, request_kwargs):
+    requests: Final = [proxy.client.build_request("POST", PATHS[0], **request_kwargs) for _ in range(2)]
 
-    monkeypatch.setattr(named_trace, "_MAX_LOOKAHEAD_BYTES", 10_000)
-    client, exporter = proxy
+    responses: Final = [proxy.client.send(request) for request in requests]
+
+    assert [response.content for response in responses] == [request.read() for request in requests]
+    assert _trace_ids(proxy.langfuse) == [UUID_HEX, UUID_HEX]
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        pytest.param({"metadata": "{not json"}, id="metadata-not-json"),
+        pytest.param({"metadata": json.dumps({"session_id": "trace_id"})}, id="metadata-naming-no-trace"),
+        pytest.param({"trace_id": UUID}, id="no-metadata-field"),
+    ],
+)
+def test_a_form_whose_metadata_names_no_trace_still_reaches_the_route(proxy, form):
+    request: Final = proxy.client.build_request("POST", PATHS[0], data=form)
+
+    response: Final = proxy.client.send(request)
+
+    assert response.content == request.read()
+    assert UUID_HEX not in _trace_ids(proxy.langfuse)
+
+
+@pytest.mark.parametrize("declare_length", [True, False])
+def test_a_body_over_the_apps_size_limit_is_not_held_and_reaches_the_route_whole(monkeypatch, declare_length):
+    rig: Final = _instrumented(monkeypatch, max_request_body_bytes=lambda _scope: 10_000)
+    client, exporter = rig.client, rig.langfuse
     payload: Final = b'{"metadata": {"trace_id": "%s"}, "input": "%s"}' % (UUID.encode(), b"x" * 50_000)
 
     def chunks():
@@ -476,32 +621,66 @@ def test_a_body_over_the_lookahead_cap_is_not_held_and_reaches_the_route_whole(p
 
 
 @pytest.mark.parametrize(
-    ("lookahead_cap", "max_body_bytes"),
-    [(10, None), (None, 10), (10, 1000)],
-    ids=["lookahead cap", "app size limit", "lookahead cap under a larger app size limit"],
+    ("piece_bytes", "max_body_bytes", "pieces_read"),
+    [
+        (8, 10, 2),
+        (named_trace._MAX_LOOKAHEAD_BYTES // 4, None, 5),
+        (named_trace._MAX_LOOKAHEAD_BYTES // 4, named_trace._MAX_LOOKAHEAD_BYTES * 2, 5),
+    ],
+    ids=["app size limit", "lookahead cap", "lookahead cap under a larger app size limit"],
 )
 @pytest.mark.asyncio
-async def test_reading_stops_at_the_lookahead_cap(monkeypatch, lookahead_cap, max_body_bytes):
-    from litellm.integrations.otel.plumbing import named_trace
-
-    if lookahead_cap is not None:
-        monkeypatch.setattr(named_trace, "_MAX_LOOKAHEAD_BYTES", lookahead_cap)
-    sent: Final = [{"type": "http.request", "body": b"x" * 8, "more_body": True} for _ in range(5)]
+async def test_reading_stops_past_the_lookahead_cap(piece_bytes, max_body_bytes, pieces_read):
+    sent: Final = [{"type": "http.request", "body": b"x" * piece_bytes, "more_body": True} for _ in range(6)]
     pulled: Final = []
 
     async def receive():
         pulled.append(sent[len(pulled)])
         return pulled[-1]
 
-    scope: Final = {"type": "http", "method": "POST", "headers": [(b"content-type", b"application/json")]}
-    async with named_trace.read_named_trace(scope, receive, named_trace.LookaheadBudget(), max_body_bytes) as (
+    async with named_trace.read_named_trace(JSON_POST, receive, named_trace.LookaheadBudget(), max_body_bytes) as (
         named,
         replay,
     ):
-        assert named is None
-        assert len(pulled) == 2
-        assert await replay() == {"type": "http.request", "body": b"x" * 16, "more_body": True}
-        assert [await replay() for _ in sent[2:]] == sent[2:]
+        assert named == named_trace.TraceNaming(skipped="body_too_large")
+        assert len(pulled) == pieces_read
+        assert await replay() == {"type": "http.request", "body": b"x" * piece_bytes * pieces_read, "more_body": True}
+        assert [await replay() for _ in sent[pieces_read:]] == sent[pieces_read:]
+
+
+@pytest.mark.parametrize(
+    "headers, expected",
+    [
+        pytest.param((), named_trace.TraceNaming(skipped="timed_out"), id="body-name"),
+        pytest.param(((b"langfuse_trace_id", UUID.encode()),), NAMED, id="header-name"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_body_still_arriving_at_the_deadline_is_handed_on_with_what_was_read(headers, expected):
+    import anyio
+
+    body: Final = _named_body()
+    first: Final = {"type": "http.request", "body": body[:10], "more_body": True}
+    rest: Final = {"type": "http.request", "body": body[10:], "more_body": False}
+    arrived: Final = anyio.Event()
+    pieces: Final = iter([first])
+
+    async def stalled_receive():
+        piece = next(pieces, None)
+        if piece is not None:
+            return piece
+        await arrived.wait()
+        return rest
+
+    scope: Final = {**JSON_POST, "headers": [*JSON_POST["headers"], *headers]}
+    with anyio.fail_after(5):
+        async with named_trace.read_named_trace(
+            scope, stalled_receive, named_trace.LookaheadBudget(), deadline_seconds=0.05
+        ) as (named, replay):
+            assert named == expected
+            assert await replay() == first
+            arrived.set()
+            assert await replay() == rest
 
 
 @pytest.mark.parametrize("coding", ["gzip", "x-gzip", "zstd"])
@@ -520,7 +699,7 @@ def test_a_compressed_body_names_its_trace(proxy, coding):
         compress = zstd.compress
     else:
         compress = gzip.compress
-    client, exporter = proxy
+    client, exporter = proxy.client, proxy.langfuse
     payload: Final = compress(json.dumps({"model": "m", "litellm_metadata": {"trace_id": UUID}}).encode())
 
     for _ in range(2):
@@ -546,11 +725,9 @@ def test_a_compressed_body_names_its_trace(proxy, coding):
     ],
     ids=["damaged", "unknown coding", "decodes past the cap"],
 )
-def test_a_compressed_body_that_cannot_be_read_still_reaches_the_route(proxy, monkeypatch, coding, payload):
-    from litellm.integrations.otel.plumbing import named_trace
-
-    monkeypatch.setattr(named_trace, "_MAX_LOOKAHEAD_BYTES", 10_000)
-    client, exporter = proxy
+def test_a_compressed_body_that_cannot_be_read_still_reaches_the_route(monkeypatch, coding, payload):
+    rig: Final = _instrumented(monkeypatch, max_request_body_bytes=lambda _scope: 10_000)
+    client, exporter = rig.client, rig.langfuse
 
     response: Final = client.post(
         PATHS[1], content=payload, headers={"content-type": "application/json", "content-encoding": coding}
@@ -562,8 +739,6 @@ def test_a_compressed_body_that_cannot_be_read_still_reaches_the_route(proxy, mo
 
 @pytest.mark.asyncio
 async def test_a_body_sent_in_many_tiny_pieces_is_held_as_one_message():
-    from litellm.integrations.otel.plumbing import named_trace
-
     body: Final = b'{"metadata": {"trace_id": "%s"}}' % UUID.encode()
     sent: Final = [
         {"type": "http.request", "body": body[index : index + 1], "more_body": index < len(body) - 1}
@@ -574,31 +749,27 @@ async def test_a_body_sent_in_many_tiny_pieces_is_held_as_one_message():
     async def receive():
         return next(left)
 
-    scope: Final = {"type": "http", "method": "POST", "headers": [(b"content-type", b"application/json")]}
-    async with named_trace.read_named_trace(scope, receive, named_trace.LookaheadBudget()) as (named, replay):
-        assert named == UUID
+    async with named_trace.read_named_trace(JSON_POST, receive, named_trace.LookaheadBudget()) as (named, replay):
+        assert named == NAMED
         assert await replay() == {"type": "http.request", "body": body, "more_body": False}
         assert await replay() == {"type": "http.disconnect"}
 
 
 @pytest.mark.asyncio
 async def test_a_client_that_leaves_mid_body_is_still_seen_leaving():
-    from litellm.integrations.otel.plumbing import named_trace
-
     left: Final = iter([{"type": "http.request", "body": b"{", "more_body": True}, {"type": "http.disconnect"}])
 
     async def receive():
         return next(left)
 
-    scope: Final = {"type": "http", "method": "POST", "headers": [(b"content-type", b"application/json")]}
-    async with named_trace.read_named_trace(scope, receive, named_trace.LookaheadBudget()) as (named, replay):
-        assert named is None
+    async with named_trace.read_named_trace(JSON_POST, receive, named_trace.LookaheadBudget()) as (named, replay):
+        assert named == NOT_NAMED
         assert await replay() == {"type": "http.request", "body": b"{", "more_body": True}
         assert await replay() == {"type": "http.disconnect"}
 
 
 def test_a_plain_body_labelled_gzip_names_its_trace(proxy):
-    client, exporter = proxy
+    client, exporter = proxy.client, proxy.langfuse
     payload: Final = json.dumps({"model": "m", "litellm_metadata": {"trace_id": UUID}}).encode()
 
     for _ in range(2):
@@ -616,7 +787,7 @@ def test_a_compressed_body_expanding_past_the_proxy_ratio_names_no_trace(proxy, 
     from litellm import constants
 
     monkeypatch.setattr(constants, "MAX_REQUEST_BODY_DECOMPRESSION_RATIO", 2)
-    client, exporter = proxy
+    client, exporter = proxy.client, proxy.langfuse
     payload: Final = gzip.compress(b'{"metadata": {"trace_id": "%s"}, "input": "%s"}' % (UUID.encode(), b"x" * 50_000))
 
     response = client.post(
@@ -625,6 +796,8 @@ def test_a_compressed_body_expanding_past_the_proxy_ratio_names_no_trace(proxy, 
 
     assert response.content == payload
     assert UUID_HEX not in _trace_ids(exporter)
+    (server,) = [span for span in proxy.otel.get_finished_spans() if span.kind is SpanKind.SERVER]
+    assert server.attributes[LiteLLM.TRACE_ID_SKIPPED] == "decoded_too_large"
 
 
 JSON_POST: Final = {"type": "http", "method": "POST", "headers": [(b"content-type", b"application/json")]}
@@ -647,8 +820,6 @@ def _sends(*messages):
 @pytest.mark.asyncio
 async def test_partial_uploads_together_hold_no_more_than_the_budget():
     import asyncio
-
-    from litellm.integrations.otel.plumbing import named_trace
 
     budget: Final = named_trace.LookaheadBudget(max_bytes=100)
     rest_sent: Final = asyncio.Event()
@@ -684,23 +855,21 @@ async def test_partial_uploads_together_hold_no_more_than_the_budget():
         return second_pulled[-1]
 
     async with named_trace.read_named_trace(JSON_POST, second_receive, budget) as (named, replay):
-        assert named is None
+        assert named == named_trace.TraceNaming(skipped="budget_spent")
         assert len(second_pulled) == 1
         assert await replay() == second_pieces[0]
         assert await replay() == second_pieces[1]
 
     rest_sent.set()
-    assert await first == OTHER_HEX
+    assert await first == named_trace.TraceNaming(int(OTHER_HEX, 16))
     async with named_trace.read_named_trace(
         JSON_POST, _sends({"type": "http.request", "body": _named_body(), "more_body": False}), budget
     ) as (named, _):
-        assert named == UUID
+        assert named == NAMED
 
 
 @pytest.mark.asyncio
 async def test_a_body_the_app_never_read_gives_its_budget_back_when_the_request_ends():
-    from litellm.integrations.otel.plumbing import named_trace
-
     body: Final = _named_body()
     budget: Final = named_trace.LookaheadBudget(max_bytes=len(body))
 
@@ -708,20 +877,18 @@ async def test_a_body_the_app_never_read_gives_its_budget_back_when_the_request_
         async with named_trace.read_named_trace(
             JSON_POST, _sends({"type": "http.request", "body": body, "more_body": False}), budget
         ) as (named, _):
-            assert named == UUID
+            assert named == NAMED
 
 
 @pytest.mark.asyncio
 async def test_a_body_the_app_has_read_gives_its_budget_back_while_the_request_runs():
-    from litellm.integrations.otel.plumbing import named_trace
-
     sent: Final = {"type": "http.request", "body": _named_body(), "more_body": False}
     budget: Final = named_trace.LookaheadBudget(max_bytes=len(sent["body"]))
 
     async with named_trace.read_named_trace(JSON_POST, _sends(sent), budget) as (named, replay):
         assert await replay() == sent
         async with named_trace.read_named_trace(JSON_POST, _sends(sent), budget) as (later, _):
-            assert (named, later) == (UUID, UUID)
+            assert (named, later) == (NAMED, NAMED)
 
 
 @pytest.mark.asyncio
@@ -729,19 +896,17 @@ async def test_a_compressed_body_names_no_trace_when_the_budget_cannot_cover_its
     import gzip
 
     from litellm import constants
-    from litellm.integrations.otel.plumbing import named_trace
-
     sent: Final = {"type": "http.request", "body": gzip.compress(_named_body()), "more_body": False}
     decoded_limit: Final = len(sent["body"]) * constants.MAX_REQUEST_BODY_DECOMPRESSION_RATIO
     short: Final = named_trace.LookaheadBudget(max_bytes=len(sent["body"]) + decoded_limit - 1)
     enough: Final = named_trace.LookaheadBudget(max_bytes=len(sent["body"]) + decoded_limit)
 
     async with named_trace.read_named_trace(GZIP_JSON_POST, _sends(sent), short) as (named, replay):
-        assert named is None
+        assert named == named_trace.TraceNaming(skipped="budget_spent")
         assert await replay() == sent
     for _ in range(2):
         async with named_trace.read_named_trace(GZIP_JSON_POST, _sends(sent), enough) as (named, _):
-            assert named == UUID
+            assert named == NAMED
 
 
 @pytest.mark.asyncio
@@ -750,8 +915,6 @@ async def test_a_compressed_body_is_not_held_up_by_another_requests_decoding(mon
     import threading
 
     import anyio
-
-    from litellm.integrations.otel.plumbing import named_trace
 
     slow_body: Final = _named_body(OTHER_HEX)
     slow_decoding: Final = threading.Event()
@@ -775,7 +938,7 @@ async def test_a_compressed_body_is_not_held_up_by_another_requests_decoding(mon
             group.start_soon(decode, slow_body)
             await anyio.sleep(0.05)
             with anyio.fail_after(5):
-                assert await decode(_named_body()) == UUID
+                assert await decode(_named_body()) == NAMED
             slow_decoding.set()
     finally:
         slow_decoding.set()
@@ -783,8 +946,6 @@ async def test_a_compressed_body_is_not_held_up_by_another_requests_decoding(mon
 
 @pytest.mark.asyncio
 async def test_a_body_declared_over_the_apps_size_limit_is_never_read():
-    from litellm.integrations.otel.plumbing import named_trace
-
     body: Final = _named_body()
     scope: Final = {**JSON_POST, "headers": [*JSON_POST["headers"], (b"content-length", b"%d" % len(body))]}
 
@@ -795,21 +956,19 @@ async def test_a_body_declared_over_the_apps_size_limit_is_never_read():
         named,
         replay,
     ):
-        assert named is None
+        assert named == named_trace.TraceNaming(skipped="body_too_large")
         assert replay is receive
     sent: Final = {"type": "http.request", "body": body, "more_body": False}
     async with named_trace.read_named_trace(scope, _sends(sent), named_trace.LookaheadBudget(), len(body)) as (
         named,
         _,
     ):
-        assert named == UUID
+        assert named == NAMED
 
 
 @pytest.mark.asyncio
 async def test_a_compressed_body_decoding_past_the_apps_size_limit_names_no_trace():
     import gzip
-
-    from litellm.integrations.otel.plumbing import named_trace
 
     body: Final = b'{"metadata": {"trace_id": "%s"}, "input": "%s"}' % (UUID.encode(), b"x" * 1000)
     sent: Final = {"type": "http.request", "body": gzip.compress(body), "more_body": False}
@@ -820,23 +979,77 @@ async def test_a_compressed_body_decoding_past_the_apps_size_limit_names_no_trac
         named,
         replay,
     ):
-        assert named is None
+        assert named == named_trace.TraceNaming(skipped="decoded_too_large")
         assert await replay() == sent
     async with named_trace.read_named_trace(GZIP_JSON_POST, _sends(sent), named_trace.LookaheadBudget(), len(body)) as (
         named,
         _,
     ):
-        assert named == UUID
+        assert named == NAMED
 
 
 def test_the_apps_size_limit_for_each_request_bounds_its_lookahead(monkeypatch):
     body: Final = _named_body()
-    client, exporter = _instrumented(
+    rig: Final = _instrumented(
         monkeypatch, max_request_body_bytes=lambda scope: len(body) - 1 if scope["path"] == PATHS[1] else None
     )
+    client, exporter = rig.client, rig.langfuse
 
     over_limit: Final = client.post(PATHS[1], content=body, headers={"content-type": "application/json"})
     within_limit: Final = client.post(PATHS[0], content=body, headers={"content-type": "application/json"})
 
     assert over_limit.content == within_limit.content == body
     assert _trace_ids(exporter).count(UUID_HEX) == 1
+
+
+def _llm_call_kwargs(credentials):
+    return {
+        "standard_logging_object": {
+            "call_type": "acompletion",
+            "custom_llm_provider": "openai",
+            "model": "gpt-4o",
+            "litellm_call_id": "call-lit11186",
+            "status": "success",
+            "metadata": {},
+            "hidden_params": {},
+        },
+        "litellm_params": {"metadata": {}},
+        "standard_callback_dynamic_params": credentials,
+        "api_call_start_time": time.time(),
+    }
+
+
+@pytest.mark.parametrize("opened_at_pre_call", [True, False], ids=["opened-at-pre-call", "opened-at-success"])
+def test_a_call_sent_to_a_request_level_langfuse_account_joins_the_trace_its_request_named(opened_at_pre_call):
+    routed: Final = {}
+    register_exporter_factory(EXPORTER_KIND, lambda spec: routed.setdefault(spec.headers, InMemorySpanExporter()))
+    logger: Final = OpenTelemetryV2(
+        config=OpenTelemetryV2Config(
+            exporters=[
+                ExporterSpec(
+                    kind=EXPORTER_KIND,
+                    endpoint="http://langfuse.local",
+                    owner=ExporterOwner.LANGFUSE_OTEL,
+                    use_simple_processor=True,
+                )
+            ]
+        ),
+        callback_name="langfuse_otel",
+    )
+    with named_trace.named_trace_scope(int(UUID_HEX, 16)):
+        request_span: Final = logger._tracer_provider.get_tracer("test").start_span("request")
+    kwargs: Final = _llm_call_kwargs({"langfuse_public_key": "pk-team", "langfuse_secret_key": "sk-team"})
+
+    with trace.use_span(request_span, end_on_exit=False):
+        if opened_at_pre_call:
+            logger.log_pre_api_call(model="gpt-4o", messages=[], kwargs=kwargs)
+        asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    request_span.end()
+
+    operator: Final = routed.pop(None)
+    ((team_headers, team),) = routed.items()
+    (llm,) = team.get_finished_spans()
+    assert "authorization" in parse_headers(team_headers)
+    assert (llm.parent, f"{llm.context.trace_id:032x}") == (None, UUID_HEX)
+    assert [span.name for span in operator.get_finished_spans()] == ["request"]
+    assert request_span.get_span_context() in [link.context for link in llm.links]

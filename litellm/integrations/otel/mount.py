@@ -83,11 +83,11 @@ class _RequestTraceExclusionMiddleware:
             return
         started_ns: Final = time.time_ns()
         async with read_named_trace(scope, receive, self.lookahead_budget, self.max_request_body_bytes(scope)) as (
-            name,
+            naming,
             request_receive,
         ):
             _stamp_read_ahead(scope, time.time_ns() - started_ns)
-            with request_trace_scope(excluded), request_trace_naming(name, started_ns):
+            with request_trace_scope(excluded), request_trace_naming(naming, started_ns):
                 await self.app(scope, request_receive, send)
 
 

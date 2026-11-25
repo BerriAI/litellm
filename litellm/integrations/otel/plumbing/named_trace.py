@@ -1,11 +1,13 @@
-"""The trace a proxy request's caller named, so the request's server span starts in it.
+"""The trace a caller named for a proxy request or an SDK call, so Langfuse exporters export the call in it.
 
 A caller names a trace with a ``langfuse_trace_id`` header, else with ``trace_id`` in the request body's metadata,
 the route's own metadata field first, the way the ``langfuse`` callback reads them. A request that asks to join a
-trace with ``existing_trace_id`` names none: joining a trace without becoming its root is not something a root
-server span can do. The server span starts before any route reads the body, so the name is read here, at the
-outermost ASGI layer, and handed to the tracer provider's id generator through a context variable. A trace the
-request continues from its propagation headers wins: the name is not read when they carry a valid one.
+trace with ``existing_trace_id`` names none: joining a trace without becoming its root is not something a root span
+can do. Every span keeps its own random trace id, so every other exporter, the ``traceresponse`` header and the spend
+log see the trace they always saw. The first root span a call starts carries the name as an attribute, every span
+under it inherits it, and a Langfuse exporter moves the spans that carry it into the named trace. The server span
+starts before any route reads the body, so the name is read here, at the outermost ASGI layer. A trace the request
+continues from its propagation headers wins: the name is not read when they carry a valid one.
 """
 
 from __future__ import annotations
@@ -15,41 +17,77 @@ import json
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping, Sequence
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias
 
+import anyio
 import anyio.to_thread
-from opentelemetry.sdk.trace.id_generator import RandomIdGenerator
-from opentelemetry.trace import Link, Span, SpanKind, Tracer, TracerProvider
-from typing_extensions import LiteralString
+from opentelemetry.sdk.trace import ReadableSpan, SpanProcessor
+from opentelemetry.trace import Link, Span, SpanKind, Tracer, TracerProvider, get_current_span
 
 from litellm._logging import verbose_logger
 from litellm.integrations.langfuse.trace_id import resolve_trace_id
+from litellm.integrations.otel.model.semconv import LiteLLM
 from litellm.integrations.otel.model.utils import as_str_mapping
 
 if TYPE_CHECKING:
     from opentelemetry.context import Context
+    from opentelemetry.sdk.trace import Span as SDKSpan
     from opentelemetry.util._decorator import (
         _AgnosticContextManager,  # pyright: ignore[reportPrivateUsage]  # the return type the Tracer ABC declares
     )
     from opentelemetry.util.types import Attributes
     from starlette.types import Message, Receive, Scope
 
-_named_trace_id: Final[ContextVar[int | None]] = ContextVar("litellm_otel_named_trace_id", default=None)
-_request_named_trace_id: Final[ContextVar[int | None]] = ContextVar("litellm_otel_request_named_trace_id", default=None)
-_request_trace_name: Final[ContextVar[str | None]] = ContextVar("litellm_otel_request_trace_name", default=None)
+    from litellm.proxy.common_utils.http_parsing_utils import RequestBodyKind
+
+SkipReason: TypeAlias = Literal[
+    "existing_trace_id",
+    "body_too_large",
+    "budget_spent",
+    "timed_out",
+    "unknown_encoding",
+    "undecodable",
+    "decoded_too_large",
+]
+
+_SKIP_MESSAGES: Final[Mapping[SkipReason, str]] = MappingProxyType(
+    {
+        "existing_trace_id": "a request asked to join a trace with existing_trace_id, which OTel V2 does not support",
+        "body_too_large": "a request body over the trace lookahead limit was not read",
+        "budget_spent": "the worker's trace lookahead budget was spent",
+        "timed_out": "a request body that took longer than the trace lookahead deadline to arrive was not read",
+        "unknown_encoding": "a request body in a Content-Encoding the proxy does not decode was not read",
+        "undecodable": "a request body that did not decode was not read",
+        "decoded_too_large": "a request body that decodes past the trace lookahead limit was not read",
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TraceNaming:
+    """The trace a call's caller named, else why the proxy read no name for it."""
+
+    trace_id: int | None = None
+    skipped: SkipReason | None = None
+
+
+_NOT_NAMED: Final = TraceNaming()
+
+_pending_naming: Final[ContextVar[TraceNaming | None]] = ContextVar("litellm_otel_pending_naming", default=None)
 _request_started_ns: Final[ContextVar[int | None]] = ContextVar("litellm_otel_request_started_ns", default=None)
-_last_trace_id_named: Final[ContextVar[bool]] = ContextVar("litellm_otel_last_trace_id_named", default=False)
 
 _TRACE_HEADER_PREFIX: Final = "langfuse_"
 _TRACE_KEY: Final = "trace_id"
 _JOIN_KEY: Final = "existing_trace_id"
 _TRACE_KEY_MARKER: Final = _TRACE_KEY.encode()
 # The body is read ahead of the proxy's request size limit, admission control and auth, so what is held here is
-# capped per request, by the proxy's own size limit too, and per worker: past a cap a body is handed to the app
-# unread and gets its own trace.
+# capped per request, in bytes, by the proxy's own size limit too, and in time, and per worker: past a cap a body is
+# handed to the app with what was read so far and gets its own trace.
 _MAX_LOOKAHEAD_BYTES: Final = 16 * 1024 * 1024
 _MAX_LOOKAHEAD_BYTES_IN_FLIGHT: Final = 4 * _MAX_LOOKAHEAD_BYTES
+_LOOKAHEAD_DEADLINE_SECONDS: Final = 10.0
 _NO_BODY: Final[Mapping[str, object]] = MappingProxyType({})
 
 
@@ -89,58 +127,63 @@ class _Hold:
         self.size = 0
 
 
-class NamedTraceIdGenerator(RandomIdGenerator):
-    """Starts the first root span of a request in the trace its caller named, and every other root span in a
-    random one. The name is spent on that first span, so work the request detaches into its own trace (spend
-    tracking, the response cache write) keeps its own trace id. A named trace id is the caller's choice, so its
-    span does not carry the W3C random trace id flag."""
+class NamedTraceSpanProcessor(SpanProcessor):
+    """Marks every span of a trace its caller named with the named trace id. The first root span a call starts takes
+    the name and every span under it inherits it from its parent, so work the call detaches into its own trace (spend
+    tracking, the response cache write) keeps its own. A root span the proxy read no name for says why."""
 
-    def generate_trace_id(self) -> int:
-        named: Final = _named_trace_id.get()
-        _last_trace_id_named.set(named is not None)
-        if named is None:
-            return super().generate_trace_id()
-        _named_trace_id.set(None)
-        return named
+    def on_start(self, span: SDKSpan, parent_context: Context | None = None) -> None:
+        naming: Final = _take_pending() if span.parent is None else TraceNaming(named_trace_of(parent_context))
+        if naming.trace_id is not None:
+            span.set_attribute(LiteLLM.NAMED_TRACE_ID, format(naming.trace_id, "032x"))
+        if naming.skipped is not None:
+            span.set_attribute(LiteLLM.TRACE_ID_SKIPPED, naming.skipped)
 
-    def is_trace_id_random(self) -> bool:
-        return not _last_trace_id_named.get()
+
+def _take_pending() -> TraceNaming:
+    pending: Final = _pending_naming.get()
+    if pending is None:
+        return _NOT_NAMED
+    _pending_naming.set(None)
+    return pending
+
+
+def named_trace_of(context: Context | None) -> int | None:
+    """The trace its caller named for the span current in ``context``, ``None`` when they named none."""
+    span: Final = get_current_span(context)
+    return named_trace_id_of(span) if isinstance(span, ReadableSpan) else None
+
+
+def named_trace_id_of(span: ReadableSpan) -> int | None:
+    named: Final = (span.attributes or _NO_BODY).get(LiteLLM.NAMED_TRACE_ID)
+    if not isinstance(named, str):
+        return None
+    try:
+        return int(named, 16) or None
+    except ValueError:
+        return None
 
 
 @contextmanager
 def named_trace_scope(trace_id: int | None) -> Generator[None]:
-    token: Final = _named_trace_id.set(trace_id)
+    """Names the trace of the next root span started inside it, ``None`` naming none."""
+    token: Final = _pending_naming.set(None if trace_id is None else TraceNaming(trace_id))
     try:
         yield
     finally:
-        _named_trace_id.reset(token)
+        _pending_naming.reset(token)
 
 
 @contextmanager
-def request_trace_naming(name: str | None, started_ns: int) -> Generator[None]:
-    """One proxy request's trace name, its trace and the moment the request reached the proxy, for as long as it
-    runs."""
-    trace_id: Final = trace_id_named(name)
-    name_token: Final = _request_trace_name.set(name)
-    request_token: Final = _request_named_trace_id.set(trace_id)
+def request_trace_naming(naming: TraceNaming, started_ns: int) -> Generator[None]:
+    """One proxy request's trace name and the moment the request reached the proxy, for as long as it runs."""
+    naming_token: Final = _pending_naming.set(naming)
     started_token: Final = _request_started_ns.set(started_ns)
     try:
-        with named_trace_scope(trace_id):
-            yield
+        yield
     finally:
         _request_started_ns.reset(started_token)
-        _request_named_trace_id.reset(request_token)
-        _request_trace_name.reset(name_token)
-
-
-def request_named_trace_id() -> int | None:
-    """The trace the running proxy request's caller named, ``None`` when it named none."""
-    return _request_named_trace_id.get()
-
-
-def request_trace_name() -> str | None:
-    """The trace id the running proxy request's caller sent, as they sent it, ``None`` when they sent none."""
-    return _request_trace_name.get()
+        _pending_naming.reset(naming_token)
 
 
 def trace_id_named(name: str | None) -> int | None:
@@ -223,15 +266,15 @@ def _arrival(kind: SpanKind, start_time: int | None) -> int | None:
 
 def forget_named_trace() -> None:
     """Drop a name no span took, once the request's server span exists: it either took the name or has a parent."""
-    if _named_trace_id.get() is not None:
-        _named_trace_id.set(None)
+    if _pending_naming.get() is not None:
+        _pending_naming.set(None)
 
 
 def sdk_named_trace_id(litellm_params: Mapping[str, object]) -> int | None:
     """The trace an SDK call's caller named in its metadata. A proxy request's name is read at its server span."""
     if litellm_params.get("proxy_server_request"):
         return None
-    return trace_id_named(_named_in(_metadata_layers(litellm_params, ("metadata", "litellm_metadata"))))
+    return _named_in(_metadata_layers(litellm_params, ("metadata", "litellm_metadata"))).trace_id
 
 
 def _continues_a_trace(scope: Scope) -> bool:
@@ -245,16 +288,22 @@ def _continues_a_trace(scope: Scope) -> bool:
     return trace.get_current_span(carried).get_span_context().is_valid
 
 
-def _named(headers: Mapping[str, str], body: Mapping[str, object], route: str) -> str | None:
+def _named(headers: Mapping[str, str], body: Mapping[str, object], route: str) -> TraceNaming:
     return _named_in((_header_trace_fields(headers), *_metadata_layers(body, _metadata_keys(route, body))))
 
 
-def _named_in(layers: tuple[Mapping[str, object], ...]) -> str | None:
+def _named_in(layers: tuple[Mapping[str, object], ...]) -> TraceNaming:
     if _first(_JOIN_KEY, layers) is not None:
-        _skip("a request asked to join a trace with existing_trace_id, which OTel V2 does not support")
-        return None
+        return _skip("existing_trace_id")
     named: Final = _first(_TRACE_KEY, layers)
-    return named if isinstance(named, str) and named else None
+    trace_id: Final = trace_id_named(named) if isinstance(named, str) and named else None
+    return _NOT_NAMED if trace_id is None else TraceNaming(trace_id)
+
+
+def _unread(headers: Mapping[str, str], route: str, reason: SkipReason) -> TraceNaming:
+    """The trace the request's headers name, since its body was not read, else why it names none."""
+    named: Final = _named(headers, _NO_BODY, route)
+    return named if named != _NOT_NAMED else _skip(reason)
 
 
 def _first(key: str, layers: tuple[Mapping[str, object], ...]) -> object:
@@ -278,25 +327,35 @@ def _metadata_layers(body: Mapping[str, object], keys: tuple[str, str]) -> tuple
     return tuple(as_str_mapping(body.get(key)) or _NO_BODY for key in keys)
 
 
-def _skip(reason: LiteralString) -> None:
-    verbose_logger.debug("OTel V2 named trace: %s", reason)
+def _skip(reason: SkipReason) -> TraceNaming:
+    verbose_logger.debug("OTel V2 named trace: %s", _SKIP_MESSAGES[reason])
     _warn_once(reason)
+    return TraceNaming(skipped=reason)
 
 
 @functools.cache
-def _warn_once(reason: LiteralString) -> None:
+def _warn_once(reason: SkipReason) -> None:
     verbose_logger.warning(
-        "OTel V2: %s, so a trace_id the request names is not applied and the request gets its own trace. "
-        "Later requests that skip naming for this reason are logged at debug level",
+        "OTel V2: %s, so a trace_id the request names is not applied and the request gets its own trace, whose root "
+        "span carries %s=%s. Later requests that skip naming for this reason are logged at debug level",
+        _SKIP_MESSAGES[reason],
+        LiteLLM.TRACE_ID_SKIPPED,
         reason,
     )
 
 
-def _json_object(body: bytes) -> Mapping[str, object]:
-    """The request's JSON object, parsed only when the body spells a trace key, so a request naming no trace
-    pays one substring scan. A body that does not parse names no trace and is left for the route to reject."""
+async def _body_named(kind: RequestBodyKind, scope: Scope, headers: Mapping[str, str], body: bytes) -> TraceNaming:
+    """The trace a request's body names, parsed the way the proxy parses it and only when the body spells a trace
+    key, so a request naming no trace pays one substring scan."""
+    route: Final = str(scope.get("path", ""))
     if _TRACE_KEY_MARKER not in body:
-        return _NO_BODY
+        return _named(headers, _NO_BODY, route)
+    parsed: Final = await _form_object(scope, body) if kind == "form" else _json_object(body)
+    return _named(headers, parsed, route)
+
+
+def _json_object(body: bytes) -> Mapping[str, object]:
+    """A body that does not parse names no trace and is left for the route to reject."""
     try:
         parsed: Final[object] = _loads(body)
     except (ValueError, RecursionError):
@@ -312,22 +371,93 @@ def _loads(body: bytes) -> object:
     return orjson.loads(body)
 
 
+async def _form_object(scope: Scope, body: bytes) -> Mapping[str, object]:
+    """The form's ``metadata`` field. A form that does not parse names no trace and is left for the route to
+    reject."""
+    from starlette.datastructures import Headers
+    from starlette.formparsers import MultiPartException
+    from starlette.requests import Request
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.common_utils.http_parsing_utils import parse_form_metadata
+
+    async def receive() -> Message:
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    request: Final = Request({"type": "http", "method": "POST", "headers": Headers(scope=scope).raw}, receive)
+    try:
+        form: Final = await request.form()
+    except MultiPartException:
+        return _NO_BODY
+    try:
+        metadata: Final = form.get("metadata")
+        return MappingProxyType({"metadata": parse_form_metadata(metadata)}) if isinstance(metadata, str) else _NO_BODY
+    except ProxyException:
+        return _NO_BODY
+    finally:
+        await form.close()
+
+
+class _Lookahead:
+    """The body read ahead of the app, held as one buffer, so a body sent in many tiny pieces costs its bytes and
+    not a message per piece."""
+
+    def __init__(self, receive: Receive, hold: _Hold, cap: int) -> None:
+        self.receive: Final = receive
+        self.hold: Final = hold
+        self.cap: Final = cap
+        self.held: Final = bytearray()
+        self.more_body = True
+        self.within_budget = True
+        self.after: Message | None = None
+
+    async def read(self) -> None:
+        while self.more_body and self.within_budget and len(self.held) <= self.cap:
+            message = await self.receive()
+            if message["type"] != "http.request":
+                self.after = message
+                return
+            piece = message.get("body", b"")
+            self.held.extend(piece)
+            self.more_body = message.get("more_body", False)
+            self.within_budget = self.hold.grow(len(piece))
+
+    def taken(self) -> tuple[bytes, Receive]:
+        """What was read, and the ``receive`` that hands the app those bytes back as one message, then the rest of
+        the stream, so it reads the same body."""
+        sent: Final = bytes(self.held)
+        self.held.clear()
+        whole: Final[Message] = {"type": "http.request", "body": sent, "more_body": self.more_body}
+        replayed: Final = iter((whole,) if self.after is None else (whole, self.after))
+        hold: Final = self.hold
+        receive: Final = self.receive
+
+        async def replay() -> Message:
+            hold.release()
+            message: Final = next(replayed, None)
+            return message if message is not None else await receive()
+
+        return sent, _as_receive(replay)
+
+
 @asynccontextmanager
 async def read_named_trace(
-    scope: Scope, receive: Receive, budget: LookaheadBudget, max_body_bytes: int | None = None
-) -> AsyncGenerator[tuple[str | None, Receive]]:
-    """The trace id an HTTP request's caller named, as they sent it, and the ``receive`` the app must read the request from,
-    for as long as the request runs.
+    scope: Scope,
+    receive: Receive,
+    budget: LookaheadBudget,
+    max_body_bytes: int | None = None,
+    deadline_seconds: float = _LOOKAHEAD_DEADLINE_SECONDS,
+) -> AsyncGenerator[tuple[TraceNaming, Receive]]:
+    """The trace an HTTP request's caller named and the ``receive`` the app must read the request from, for as long
+    as the request runs.
 
-    Only a JSON ``POST`` that continues no trace has its body read before the app runs, and only up to
-    ``_MAX_LOOKAHEAD_BYTES``, the ``max_body_bytes`` the app accepts, and what ``budget`` has left. What was read
-    is held as one buffer, so a body sent in
-    many tiny pieces costs its bytes and not a message per piece, and the app gets those bytes back as one
-    message, then the rest of the stream, so it reads the same body.
+    Only a ``POST`` that continues no trace and is no binary upload has its body read before the app runs, and only
+    up to ``_MAX_LOOKAHEAD_BYTES``, the ``max_body_bytes`` the app accepts, what ``budget`` has left and
+    ``deadline_seconds``.
     """
     hold: Final = _Hold(budget)
     try:
-        yield await _read_named_trace(scope, receive, hold, _lookahead_cap(max_body_bytes))
+        yield await _read_named_trace(scope, receive, hold, _lookahead_cap(max_body_bytes), deadline_seconds)
     finally:
         hold.release()
 
@@ -336,61 +466,47 @@ def _lookahead_cap(max_body_bytes: int | None) -> int:
     return _MAX_LOOKAHEAD_BYTES if max_body_bytes is None else min(max_body_bytes, _MAX_LOOKAHEAD_BYTES)
 
 
-async def _read_named_trace(scope: Scope, receive: Receive, hold: _Hold, cap: int) -> tuple[str | None, Receive]:
+async def _read_named_trace(
+    scope: Scope, receive: Receive, hold: _Hold, cap: int, deadline_seconds: float
+) -> tuple[TraceNaming, Receive]:
     from starlette.datastructures import Headers
 
+    from litellm.proxy.common_utils.http_parsing_utils import request_body_kind
+
     if _continues_a_trace(scope):
-        return None, receive
+        return _NOT_NAMED, receive
     headers: Final = dict(Headers(scope=scope))
     route: Final = str(scope.get("path", ""))
-    if scope.get("method") != "POST" or not headers.get("content-type", "").lower().startswith("application/json"):
+    kind: Final = request_body_kind(headers.get("content-type", ""))
+    if scope.get("method") != "POST" or kind == "binary":
         return _named(headers, _NO_BODY, route), receive
     if _declared_length(headers) > cap:
-        _skip("a request body over the trace lookahead limit was not read")
-        return _named(headers, _NO_BODY, route), receive
-    held: Final = bytearray()
-    more_body = True  # rebind-ok: whether the body goes on past what was read, as its last piece said
-    within_budget = True  # rebind-ok: whether the worker's budget had room for every piece read so far
-    after: Message | None = None  # rebind-ok: a message that is not body, read while looking for the end of it
-    while more_body and within_budget and len(held) <= cap:
-        message = await receive()
-        if message["type"] != "http.request":
-            after = message
-            break
-        piece = message.get("body", b"")
-        held.extend(piece)
-        more_body = message.get("more_body", False)
-        within_budget = hold.grow(len(piece))
-    sent: Final = bytes(held)
-    held.clear()
-    whole: Final[Message] = {"type": "http.request", "body": sent, "more_body": more_body}
-    replayed: Final = iter((whole,) if after is None else (whole, after))
-
-    async def replay() -> Message:
-        hold.release()
-        message: Final = next(replayed, None)
-        return message if message is not None else await receive()
-
-    if not within_budget:
-        _skip("the worker's trace lookahead budget was spent")
-        return _named(headers, _NO_BODY, route), _as_receive(replay)
+        return _unread(headers, route, "body_too_large"), receive
+    lookahead: Final = _Lookahead(receive, hold, cap)
+    with anyio.move_on_after(deadline_seconds) as reading:
+        await lookahead.read()
+    sent, replay = lookahead.taken()
+    if reading.cancelled_caught:
+        return _unread(headers, route, "timed_out"), replay
+    if not lookahead.within_budget:
+        return _unread(headers, route, "budget_spent"), replay
     if len(sent) > cap:
-        _skip("a request body over the trace lookahead limit was not read")
-        return _named(headers, _NO_BODY, route), _as_receive(replay)
-    if more_body:
-        return _named(headers, _NO_BODY, route), _as_receive(replay)
+        return _unread(headers, route, "body_too_large"), replay
+    if lookahead.more_body:
+        return _named(headers, _NO_BODY, route), replay
     coding: Final = headers.get("content-encoding", "").strip().lower()
     if not coding:
-        return _named(headers, _json_object(sent), route), _as_receive(replay)
+        return await _body_named(kind, scope, headers, sent), replay
     limit: Final = _decoded_limit(sent, cap)
     if not hold.budget.try_hold(limit):
-        _skip("the worker's trace lookahead budget was spent")
-        return _named(headers, _NO_BODY, route), _as_receive(replay)
+        return _unread(headers, route, "budget_spent"), replay
     try:
-        named: Final = await anyio.to_thread.run_sync(_named_in_encoded, headers, coding, sent, limit, route)
+        decoded: Final = await anyio.to_thread.run_sync(_decoded, coding, sent, limit)
+        if isinstance(decoded, str):
+            return _unread(headers, route, decoded), replay
+        return await _body_named(kind, scope, headers, decoded), replay
     finally:
         hold.budget.release(limit)
-    return named, _as_receive(replay)
 
 
 def _decoded_limit(sent: bytes, cap: int) -> int:
@@ -399,13 +515,12 @@ def _decoded_limit(sent: bytes, cap: int) -> int:
     return min(cap, len(sent) * MAX_REQUEST_BODY_DECOMPRESSION_RATIO)
 
 
-def _named_in_encoded(headers: Mapping[str, str], coding: str, sent: bytes, limit: int, route: str) -> str | None:
-    """The trace id named by a body sent with a ``Content-Encoding``, which the proxy only decodes further in.
+def _decoded(coding: str, sent: bytes, limit: int) -> bytes | SkipReason:
+    """A body sent with a ``Content-Encoding``, which the proxy only decodes further in, else why it was not read.
 
-    This runs ahead of the proxy's own decoding and the memory it budgets for it, so a body is decoded to at
-    most ``limit``, which the caller holds in the lookahead budget, and dropped once read. One that is larger,
-    damaged or in a coding the proxy does not decode names no trace, and one that is not actually encoded is
-    read as it was sent, as the proxy reads it.
+    This runs ahead of the proxy's own decoding and the memory it budgets for it, so a body is decoded to at most
+    ``limit``, which the caller holds in the lookahead budget. One that is larger, damaged or in a coding the proxy
+    does not decode is not read, and one that is not actually encoded is read as it was sent, as the proxy reads it.
     """
     from litellm.proxy.middleware.request_body_decompression_middleware import (
         AVAILABLE_CODECS,
@@ -416,21 +531,18 @@ def _named_in_encoded(headers: Mapping[str, str], coding: str, sent: bytes, limi
     name: Final = CODING_ALIASES.get(coding, coding)
     starts_encoded: Final = CODING_SIGNATURES.get(name)
     if starts_encoded is not None and not starts_encoded(sent):
-        return _named(headers, _json_object(sent), route)
+        return sent
     codec: Final = AVAILABLE_CODECS.get(name)
     if codec is None:
-        _skip("a request body in a Content-Encoding the proxy does not decode was not read")
-        return _named(headers, _NO_BODY, route)
+        return "unknown_encoding"
     decompressor: Final = codec.new_decompressor()
     try:
         decoded: Final = decompressor.decompress(sent, max_length=limit + 1)
     except codec.error:
-        _skip("a request body that did not decode was not read")
-        return _named(headers, _NO_BODY, route)
+        return "undecodable"
     if not decompressor.eof or len(decoded) > limit:
-        _skip("a request body that decodes past the trace lookahead limit was not read")
-        return _named(headers, _NO_BODY, route)
-    return _named(headers, _json_object(decoded), route)
+        return "decoded_too_large"
+    return decoded
 
 
 def _declared_length(headers: Mapping[str, str]) -> int:

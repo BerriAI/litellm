@@ -3,12 +3,14 @@ import json
 import os
 import uuid
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
 from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, runtime_checkable
 
+from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.sdk import trace as sdk_trace
@@ -225,14 +227,30 @@ def _as_trace_root(span: ReadableSpan) -> ReadableSpan:
     )
 
 
+@dataclass(frozen=True, slots=True)
+class _RequestTraceLink:
+    """The request trace another OTel logger keeps a call in, for the call hung under its named trace's anchor."""
+
+    anchor_span_id: int
+    request_span: trace.SpanContext
+
+
+_REQUEST_TRACE_LINK: Final = otel_context.create_key("litellm-langfuse-otel-request-trace-link")
+
+
 class _NamedTraceRoots(SpanProcessor):
     """Exports a call that hangs under its named trace's anchor as a root of that trace, since the anchor itself is
-    never exported and Langfuse takes a trace's input and output from its root."""
+    never exported and Langfuse takes a trace's input and output from its root. A call another OTel logger also keeps
+    in the request's own trace is linked to it there."""
 
     def __init__(self, inner: SpanProcessor) -> None:
         self.inner: Final = inner
 
     def on_start(self, span: sdk_trace.Span, parent_context: Context | None = None) -> None:
+        link: Final = otel_context.get_value(_REQUEST_TRACE_LINK, parent_context)
+        parent: Final = span.parent
+        if isinstance(link, _RequestTraceLink) and parent is not None and parent.span_id == link.anchor_span_id:
+            span.add_link(link.request_span)
         self.inner.on_start(span, parent_context=parent_context)
 
     def on_end(self, span: ReadableSpan) -> None:
@@ -690,7 +708,12 @@ class LangfuseOtelLogger(OpenTelemetry):
         anchor: Final = _caller_trace_anchor(kwargs)
         if anchor is None:
             return inherited
-        return trace.set_span_in_context(trace.NonRecordingSpan(anchor[0]), inherited[0]), None
+        anchored: Final = trace.set_span_in_context(trace.NonRecordingSpan(anchor[0]), inherited[0])
+        request_span: Final = parent.get_span_context()
+        if not request_span.is_valid:
+            return anchored, None
+        link: Final = _RequestTraceLink(anchor[0].span_id, request_span)
+        return otel_context.set_value(_REQUEST_TRACE_LINK, link, anchored), None
 
     def _get_span_processor(
         self,
