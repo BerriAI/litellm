@@ -501,10 +501,11 @@ fn create_may_exist() -> AttemptError {
 
 fn over_every_tpm_limit() -> AttemptError {
     let mut failed = failure(FailureKind::RateLimit, 429);
-    failed.classes = vec![
+    failed.classes = [
         "RequestOverDeploymentTpmError".into(),
         "RateLimitError".into(),
-    ];
+    ]
+    .into();
     failed
 }
 
@@ -4530,10 +4531,11 @@ async fn every_event_of_a_retried_and_fallen_back_call_serializes_tagged_by_its_
 
 fn queue_rejected() -> AttemptError {
     let mut rejected = AttemptError::new(FailureKind::QueueRejected, Some(503));
-    rejected.classes = vec![
+    rejected.classes = [
         "DynamicQueueFullError".into(),
         "ServiceUnavailableError".into(),
-    ];
+    ]
+    .into();
     rejected
 }
 

@@ -441,7 +441,7 @@ pub struct AttemptError {
     pub detail: Option<Arc<str>>,
     /// The exception's class names, most specific first (its `__mro__`), for the rules Python
     /// decides by `isinstance`. Empty when the host reports none; the kind then stands in.
-    pub classes: Vec<Arc<str>>,
+    pub classes: Box<[Arc<str>]>,
     /// The host already recorded what this failure does to the deployment's health (a routing
     /// pre-call check's failure, which Python's attempt handles itself: a rate limit cools the
     /// deployment down, anything else records nothing), or no failure callback runs for it (it
@@ -483,7 +483,7 @@ impl AttemptError {
             num_retries: None,
             failed_deployment_id: None,
             detail: None,
-            classes: Vec::new(),
+            classes: Box::default(),
             recorded: false,
             names_provider: false,
             agentic_followup: false,

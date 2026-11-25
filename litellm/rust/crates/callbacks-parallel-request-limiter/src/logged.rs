@@ -756,6 +756,7 @@ mod tests {
             call.recovered(TokenRateLimitType::Total),
             (
                 777,
+                0,
                 Some(Usage {
                     prompt_tokens: 777,
                     completion_tokens: 0,
