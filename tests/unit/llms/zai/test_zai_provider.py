@@ -481,11 +481,13 @@ def test_zai_leaves_reasoning_effort_default_to_the_model(
     assert "reasoning_effort" not in json.loads(respx_mock.calls[0].request.content)
 
 
+@pytest.mark.parametrize("model", ["zai/glm-registered-levels-test", "zai/GLM-Registered-Levels-Test"])
 def test_zai_rounds_reasoning_effort_to_the_levels_register_model_declares(
     local_model_cost_map: None,
     respx_mock: respx.MockRouter,
     zai_response: Mapping[str, object],
     monkeypatch: pytest.MonkeyPatch,
+    model: str,
 ) -> None:
     monkeypatch.setenv("ZAI_API_KEY", "test-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -501,9 +503,7 @@ def test_zai_rounds_reasoning_effort_to_the_levels_register_model_declares(
     )
     respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
 
-    completion(
-        model="zai/glm-registered-levels-test", messages=[{"role": "user", "content": "Hello"}], reasoning_effort="medium"
-    )
+    completion(model=model, messages=[{"role": "user", "content": "Hello"}], reasoning_effort="medium")
 
     assert json.loads(respx_mock.calls[0].request.content)["reasoning_effort"] == "high"
 
@@ -534,14 +534,23 @@ def test_zai_keeps_the_callers_own_thinking_next_to_reasoning_effort_none(
 
 
 @pytest.mark.parametrize(
-    ("requested", "drop_params", "sent"),
-    [(5, True, None), (True, True, None), ({"effort": 5}, True, None), (5, False, 5)],
+    ("model", "requested", "drop_params", "sent"),
+    [
+        ("glm-5.3", 5, True, None),
+        ("glm-5.3", True, True, None),
+        ("glm-5.3", {"effort": 5}, True, None),
+        ("glm-5.3", 5, False, 5),
+        ("glm-5.1", "turbo", True, None),
+        ("glm-5.1", "turbo", False, "turbo"),
+        ("glm-5.1", "xhigh", True, "xhigh"),
+    ],
 )
 def test_zai_drops_a_reasoning_effort_that_names_no_level_only_under_drop_params(
     local_model_cost_map: None,
     respx_mock: respx.MockRouter,
     zai_response: Mapping[str, object],
     monkeypatch: pytest.MonkeyPatch,
+    model: str,
     requested: object,
     drop_params: bool,
     sent: object,
@@ -551,7 +560,7 @@ def test_zai_drops_a_reasoning_effort_that_names_no_level_only_under_drop_params
     respx_mock.post("https://api.z.ai/api/paas/v4/chat/completions").respond(json=zai_response)
 
     completion(
-        model="zai/glm-5.3",
+        model=f"zai/{model}",
         messages=[{"role": "user", "content": "Hello"}],
         reasoning_effort=requested,
         drop_params=drop_params,

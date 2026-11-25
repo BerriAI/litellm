@@ -1,11 +1,10 @@
 from collections.abc import Mapping, Sequence
-from typing import Final
+from typing import Final, get_args
 
 from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.prompt_templates.factory import response_schema_prompt
 from litellm.litellm_core_utils.reasoning_effort_capability import (
     configured_reasoning_effort_rounding,
@@ -16,8 +15,13 @@ from litellm.litellm_core_utils.reasoning_effort_strength import (
     nearest_declared_reasoning_effort,
 )
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam, ChatCompletionUserMessage
-from litellm.utils import ModelInfoLookupMiss, lookup_model_info_for_registration
+from litellm.types.llms.openai import (
+    REASONING_EFFORT,
+    AllMessageValues,
+    ChatCompletionToolParam,
+    ChatCompletionUserMessage,
+)
+from litellm.utils import ModelInfoLookupMiss, get_model_cost_key, lookup_model_info_for_registration
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -26,6 +30,7 @@ TOKEN_LIMIT_PARAMS: Final = frozenset({"max_tokens", "max_completion_tokens"})
 REWRITTEN_PARAMS: Final = TOKEN_LIMIT_PARAMS | {"reasoning_effort"}
 REASONING_OFF: Final = "none"
 PROVIDER_DEFAULT: Final = "default"
+KNOWN_REASONING_EFFORTS: Final = frozenset(get_args(REASONING_EFFORT))
 THINKING_PARAMS: Final = frozenset({"thinking"})
 
 
@@ -49,7 +54,7 @@ def _map_key_reasoning_efforts(key: str) -> tuple[str, ...] | None:
     exact: Final = declared_reasoning_efforts_for_map_key(key)
     if exact is not None:
         return exact
-    catalog_key: Final = GetModelCostMap.loaded_model_cost_map_key(key)
+    catalog_key: Final = get_model_cost_key(key)
     return None if catalog_key is None or catalog_key == key else declared_reasoning_efforts_for_map_key(catalog_key)
 
 
@@ -86,7 +91,7 @@ def _accepted_effort(
     if level == PROVIDER_DEFAULT:
         return None
     if declared is None:
-        return level
+        return level if level in KNOWN_REASONING_EFFORTS or not drop_params else None
     accepted: Final = _declared_effort(level, declared, drop_params, rounding)
     if accepted is not None and accepted != level:
         verbose_logger.debug(
