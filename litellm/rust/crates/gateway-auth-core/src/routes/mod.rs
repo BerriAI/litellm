@@ -10,5 +10,6 @@ pub use error::{MissingRouteGroup, RouteNotExposed};
 pub use exposed::ExposedRoutes;
 pub use groups::{RouteAllowlist, RouteGroups, matches_wildcard};
 pub use managed::ManagedRoute;
+pub(crate) use managed::is_managed_model_route;
 pub use table::RouteGroup;
 pub(crate) use template::RouteSet;

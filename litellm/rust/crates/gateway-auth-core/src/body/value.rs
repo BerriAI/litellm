@@ -3,7 +3,10 @@
 
 use std::fmt;
 
-use super::names::{Names, Reading};
+use super::{
+    names::{Names, Reading},
+    surface::Surface,
+};
 
 /// The prefixes `get_secret` resolves: an environment variable, and an OIDC token the proxy mints.
 const SECRET_REFERENCE_PREFIXES: [&str; 2] = ["os.environ/", OIDC_REFERENCE_PREFIX];
@@ -16,6 +19,8 @@ pub enum CallerValue {
     Text(String),
     List(Vec<CallerValue>),
     Map(Params),
+    /// A list or mapping below the depth the host reads a body to, so what it holds is unknown.
+    TooDeep,
     /// A number, a flag, an uploaded file, or a value no rule reads, such as message content.
     Other,
 }
@@ -24,21 +29,21 @@ impl CallerValue {
     pub fn text(&self) -> Option<&str> {
         match self {
             Self::Text(text) => Some(text),
-            Self::Null | Self::List(_) | Self::Map(_) | Self::Other => None,
+            Self::Null | Self::List(_) | Self::Map(_) | Self::TooDeep | Self::Other => None,
         }
     }
 
     pub fn map(&self) -> Option<&Params> {
         match self {
             Self::Map(params) => Some(params),
-            Self::Null | Self::Text(_) | Self::List(_) | Self::Other => None,
+            Self::Null | Self::Text(_) | Self::List(_) | Self::TooDeep | Self::Other => None,
         }
     }
 
     pub fn list(&self) -> Option<&[CallerValue]> {
         match self {
             Self::List(items) => Some(items),
-            Self::Null | Self::Text(_) | Self::Map(_) | Self::Other => None,
+            Self::Null | Self::Text(_) | Self::Map(_) | Self::TooDeep | Self::Other => None,
         }
     }
 
@@ -59,6 +64,26 @@ impl CallerValue {
         self.text()
             .is_some_and(|text| text.starts_with(OIDC_REFERENCE_PREFIX))
     }
+    /// The first thing here or anywhere below that keeps a check from clearing this value.
+    pub(crate) fn concealed(&self) -> Option<Concealed> {
+        match self {
+            Self::Text(_) => self
+                .is_secret_reference()
+                .then_some(Concealed::SecretReference),
+            Self::List(items) => items.iter().find_map(Self::concealed),
+            Self::Map(params) => params.iter().find_map(|(_, value)| value.concealed()),
+            Self::TooDeep => Some(Concealed::BelowReadDepth),
+            Self::Null | Self::Other => None,
+        }
+    }
+}
+
+/// Why a value cannot be cleared by a check that reads every level of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Concealed {
+    SecretReference,
+    /// Part of it sits below the depth the host read, where a reference could hide.
+    BelowReadDepth,
 }
 
 /// Shows the shape alone, since a caller's own credential may sit in the text.
@@ -69,6 +94,7 @@ impl fmt::Debug for CallerValue {
             Self::Text(_) => formatter.write_str("Text(..)"),
             Self::List(items) => formatter.debug_list().entries(items).finish(),
             Self::Map(params) => params.fmt(formatter),
+            Self::TooDeep => formatter.write_str("TooDeep"),
             Self::Other => formatter.write_str("Other"),
         }
     }
@@ -124,6 +150,7 @@ impl Params {
             CallerValue::Null
             | CallerValue::Text(_)
             | CallerValue::List(_)
+            | CallerValue::TooDeep
             | CallerValue::Other => None,
         }
     }
@@ -146,10 +173,14 @@ impl Params {
 impl Params {
     /// A request body parsed as JSON, read as far as [`Names::reading`] says a rule looks: a key
     /// no rule reads is kept as [`CallerValue::Other`], so message content is never copied.
-    pub fn read(body: &serde_json::Map<String, serde_json::Value>, names: &Names) -> Self {
+    pub fn read(
+        body: &serde_json::Map<String, serde_json::Value>,
+        names: &Names,
+        surface: &Surface,
+    ) -> Self {
         body.iter()
             .map(|(key, value)| {
-                let read = match names.reading(key) {
+                let read = match names.reading(surface, key) {
                     Reading::Unread => CallerValue::Other,
                     Reading::Shallow => match value {
                         serde_json::Value::Null => CallerValue::Null,
@@ -237,6 +268,30 @@ mod tests {
                 .map(|(key, value)| (key.to_owned(), value.to_owned()))
                 .collect())
         );
+    }
+
+    #[rstest]
+    #[case::in_a_list(
+        CallerValue::List(vec![text("plain"), text("oidc/google/aud")]),
+        Some(Concealed::SecretReference)
+    )]
+    #[case::in_a_nested_map(
+        CallerValue::Map(Params::from_iter([(
+            "parameters".to_owned(),
+            CallerValue::Map(Params::from_iter([("key".to_owned(), text("os.environ/KEY"))])),
+        )])),
+        Some(Concealed::SecretReference)
+    )]
+    #[case::below_the_read_depth(
+        CallerValue::List(vec![text("plain"), CallerValue::List(vec![CallerValue::TooDeep])]),
+        Some(Concealed::BelowReadDepth)
+    )]
+    #[case::nowhere(CallerValue::List(vec![text("plain"), CallerValue::Other]), None)]
+    fn a_value_conceals_a_reference_or_an_unread_depth_at_any_level(
+        #[case] value: CallerValue,
+        #[case] expected: Option<Concealed>,
+    ) {
+        assert_eq!(value.concealed(), expected);
     }
 
     #[test]

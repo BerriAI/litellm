@@ -52,6 +52,11 @@ configurable_clientside_auth_params."
 api_base instead, or add the destination host to `provider_url_destination_allowed_hosts` in litellm_settings."
     )]
     UrlFallbackDestination { value: String },
+    #[error(
+        "Rejected Request: {param} nests deeper than the proxy reads a request body, so it cannot be checked for \
+secret references."
+    )]
+    TooDeep { param: String },
 }
 
 /// The settings that admit single values of an override, named in its rejection.

@@ -19,11 +19,12 @@ use super::{
     grant::{MAX_OPT_IN_FALLBACK_MODELS, Reachable},
     names::{
         API_KEY, BUCKET_PARAMS, CREDENTIAL_NAME, FALLBACK_FIELDS, METADATA_KEYS,
-        NESTED_CONFIG_KEYS, Names, ROUTER_SETTINGS_OVERRIDE, VERTEX_TARGET_PARAMS,
+        NESTED_CONFIG_KEYS, Names, ROUTER_SETTINGS_OVERRIDE, VERTEX_TARGET_PARAMS, is_content_key,
+        is_metadata_key,
     },
     policy::{Deferred, Policy, allowlist},
     surface::Surface,
-    value::{CallerValue, Params},
+    value::{CallerValue, Concealed, Params},
 };
 use crate::error::body::{Rejection, ServerOwnedKind};
 
@@ -260,7 +261,7 @@ impl Check<'_> {
                 self.check_banned_params(&form_metadata(request.body, &prefix), Judged::Metadata)?;
             }
         }
-        for target in fallback_targets {
+        for target in fallback_targets.iter().copied() {
             match target {
                 CallerValue::Map(target) => {
                     self.check_banned_params(target, Judged::CallParams)?;
@@ -273,7 +274,10 @@ impl Check<'_> {
                     }
                 }
                 CallerValue::Text(target) => self.reject_url_valued_fallback_target(target)?,
-                CallerValue::Null | CallerValue::List(_) | CallerValue::Other => {}
+                CallerValue::Null
+                | CallerValue::List(_)
+                | CallerValue::TooDeep
+                | CallerValue::Other => {}
             }
         }
         for user_config_params in iter_user_config_litellm_params(request.body) {
@@ -290,6 +294,9 @@ impl Check<'_> {
         for user_config_params in user_config_litellm_params(request.body) {
             self.reject_api_key_secret_reference(&user_config_params)?;
             reject_user_config_secret_references(&user_config_params)?;
+        }
+        if request.surface.model_call && !request.surface.manages_deployments {
+            unlisted_secret_references(request.body, &fallback_targets)?;
         }
         Ok(())
     }
@@ -478,6 +485,73 @@ impl Check<'_> {
     }
 }
 
+/// Every key of a model call outside its content can reach a provider as a parameter, and
+/// providers resolve references in more parameters than any list names. So a reference anywhere a
+/// parameter can sit is refused, listed or not.
+fn unlisted_secret_references(body: &Params, fallback_targets: &[&CallerValue]) -> Checked {
+    for (key, value) in body.iter() {
+        if is_content_key(key)
+            || is_metadata_key(key)
+            || NESTED_CONFIG_KEYS.contains(&key)
+            || FALLBACK_FIELDS.contains(&key)
+            || key == USER_CONFIG
+        {
+            continue;
+        }
+        let concealed = match (key, value.map()) {
+            (ROUTER_SETTINGS_OVERRIDE, Some(settings)) => {
+                concealed_outside(settings, |name| FALLBACK_FIELDS.contains(&name))
+            }
+            (LITELLM_PARAMS, Some(params)) => concealed_outside(params, is_metadata_key),
+            _ => value.concealed(),
+        };
+        if let Some(concealed) = concealed {
+            return Err(concealing(key, concealed));
+        }
+    }
+    for config in nested_configs(body) {
+        first_concealing(&config)?;
+    }
+    for target in fallback_targets.iter().filter_map(|target| target.map()) {
+        first_concealing(target)?;
+    }
+    // A caller-supplied router resolves references in its own settings, not only in its
+    // deployments.
+    if let Some(config) = coerce_metadata_to_dict(body.get(USER_CONFIG)) {
+        first_concealing(&config)?;
+    }
+    Ok(())
+}
+
+/// A depth the host did not read is refused like a reference, since one could sit there unseen.
+fn concealing(param: &str, concealed: Concealed) -> Rejection {
+    match concealed {
+        Concealed::SecretReference => secret_reference(param),
+        Concealed::BelowReadDepth => Rejection::TooDeep {
+            param: param.to_owned(),
+        },
+    }
+}
+
+fn first_concealing(params: &Params) -> Checked {
+    match params.iter().find_map(|(param, value)| {
+        value
+            .concealed()
+            .map(|concealed| concealing(param, concealed))
+    }) {
+        Some(rejection) => Err(rejection),
+        None => Ok(()),
+    }
+}
+
+/// What the entries `skipped` does not name conceal.
+fn concealed_outside(params: &Params, skipped: impl Fn(&str) -> bool) -> Option<Concealed> {
+    params
+        .iter()
+        .filter(|(name, _)| !skipped(name))
+        .find_map(|(_, value)| value.concealed())
+}
+
 /// `iter_request_fallback_targets`: every target the body's fallback lists name, at the root and
 /// in `router_settings_override`, through targets that carry fallbacks of their own.
 fn request_fallback_targets(body: &Params) -> Result<Vec<&CallerValue>, Rejection> {
@@ -524,7 +598,10 @@ fn collect_fallback_targets<'v>(
                     }
                 }
             }
-            CallerValue::Null | CallerValue::List(_) | CallerValue::Other => {}
+            CallerValue::Null
+            | CallerValue::List(_)
+            | CallerValue::TooDeep
+            | CallerValue::Other => {}
         }
     }
     Ok(())
@@ -622,7 +699,9 @@ fn coerce_metadata_to_dict(value: Option<&CallerValue>) -> Option<Cow<'_, Params
     match value? {
         CallerValue::Map(params) => Some(Cow::Borrowed(params)),
         CallerValue::Text(text) => Params::decode(text).map(Cow::Owned),
-        CallerValue::Null | CallerValue::List(_) | CallerValue::Other => None,
+        CallerValue::Null | CallerValue::List(_) | CallerValue::TooDeep | CallerValue::Other => {
+            None
+        }
     }
 }
 
@@ -676,7 +755,9 @@ fn fallback_target_model_name(target: &CallerValue) -> Option<&str> {
     match target {
         CallerValue::Text(name) => Some(name),
         CallerValue::Map(params) => params.get("model").and_then(CallerValue::text),
-        CallerValue::Null | CallerValue::List(_) | CallerValue::Other => None,
+        CallerValue::Null | CallerValue::List(_) | CallerValue::TooDeep | CallerValue::Other => {
+            None
+        }
     }
 }
 
@@ -702,6 +783,7 @@ mod tests {
             CallerValue::Null
             | CallerValue::Text(_)
             | CallerValue::List(_)
+            | CallerValue::TooDeep
             | CallerValue::Other => Params::default(),
         }
     }
@@ -1163,7 +1245,106 @@ mod tests {
     }
 
     #[rstest]
+    #[case::unlisted_param(json!({"model": "gpt-4o", "some_provider_param": "os.environ/LITELLM_MASTER_KEY"}), "some_provider_param")]
+    #[case::below_an_unlisted_param(
+        json!({"model": "gpt-4o", "provider_options": {"auth": ["plain", {"token": "oidc/env/LITELLM_MASTER_KEY"}]}}),
+        "provider_options"
+    )]
+    #[case::unlisted_param_in_extra_body(json!({"model": "gpt-4o", "extra_body": {"some_provider_param": "os.environ/HOME"}}), "some_provider_param")]
+    #[case::below_litellm_params(json!({"model": "gpt-4o", "litellm_params": {"anything": "os.environ/HOME"}}), "litellm_params")]
+    #[case::below_router_settings(json!({"model": "gpt-4o", "router_settings_override": {"timeout": "os.environ/HOME"}}), "router_settings_override")]
+    #[case::in_a_fallback_target(json!({"model": "gpt-4o", "fallbacks": [{"model": "gpt-4o", "some_provider_param": "os.environ/HOME"}]}), "some_provider_param")]
+    fn a_model_call_carries_no_secret_reference_outside_its_content(
+        names: Names,
+        #[case] body: Value,
+        #[case] param: &str,
+    ) {
+        assert_eq!(open(body).run(&names), reference(param));
+    }
+
+    #[rstest]
+    #[case::connection_setting(json!({"redis_password": "os.environ/LITELLM_MASTER_KEY"}), "redis_password")]
+    #[case::below_a_setting(json!({"cache_kwargs": {"password": "oidc/env/LITELLM_MASTER_KEY"}}), "cache_kwargs")]
+    #[case::beside_a_deployment(
+        json!({
+            "model_list": [{"litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-own"}}],
+            "redis_url": "os.environ/LITELLM_MASTER_KEY",
+        }),
+        "redis_url"
+    )]
+    #[case::sent_as_text(json!("{\"redis_password\": \"os.environ/LITELLM_MASTER_KEY\"}"), "redis_password")]
+    fn a_caller_supplied_router_carries_no_secret_reference_in_any_setting(
+        names: Names,
+        #[case] user_config: Value,
+        #[case] param: &str,
+    ) {
+        let case = open(json!({"model": "caller-model", "user_config": user_config}));
+
+        assert_eq!(case.run(&names), reference(param));
+    }
+
+    #[rstest]
+    fn a_caller_supplied_router_may_carry_the_callers_own_settings(names: Names) {
+        let case = open(json!({
+            "model": "caller-model",
+            "user_config": {
+                "model_list": [{"litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-own"}}],
+                "redis_host": "cache.own.example",
+                "redis_password": "own-password",
+            },
+        }));
+
+        assert_eq!(case.run(&names), Ok(()));
+    }
+
+    #[rstest]
+    #[case::provider_param("some_provider_param", Err(Rejection::TooDeep { param: "some_provider_param".to_owned() }))]
+    #[case::metadata("metadata", Ok(()))]
+    #[case::content("messages", Ok(()))]
+    fn a_parameter_nested_below_the_depth_a_host_reads_is_refused_where_a_reference_would_be(
+        names: Names,
+        #[case] key: &str,
+        #[case] expected: Result<(), Rejection>,
+    ) {
+        let body = Params::from_iter([
+            ("model".to_owned(), CallerValue::Text("gpt-4o".to_owned())),
+            (
+                key.to_owned(),
+                CallerValue::List(vec![CallerValue::TooDeep]),
+            ),
+        ]);
+        let request = Request {
+            body: &body,
+            surface: Surface::of(Some(CHAT)),
+            model: "gpt-4o",
+            route_model: None,
+            deferred: Deferred::default(),
+        };
+
+        assert_eq!(
+            check(
+                &request,
+                &Reachable::default(),
+                &Credentials::default(),
+                &names,
+                &Policy::default()
+            ),
+            expected
+        );
+    }
+
+    #[rstest]
     #[case::prompt(open(json!({"model": "gpt-4o", "prompt": "os.environ/PATH is what in Python?"})))]
+    #[case::message(open(json!({"model": "gpt-4o", "messages": [{"role": "user", "content": "os.environ/HOME"}]})))]
+    #[case::tool_schema(open(json!({"model": "gpt-4o", "tools": [{"function": {"parameters": {"default": "os.environ/OPENAI_API_KEY"}}}]})))]
+    #[case::litellm_params_metadata_tag(open(json!({"model": "gpt-4o", "litellm_params": {"metadata": {"note": "os.environ/HOME"}}})))]
+    #[case::mentioned_later_in_an_unlisted_param(open(json!({"model": "gpt-4o", "some_provider_param": "read os.environ/HOME"})))]
+    #[case::fallback_model_name(open(json!({"model": "gpt-4o", "fallbacks": ["os.environ/HOME"]})))]
+    #[case::fallback_model_name_in_router_settings(
+        open(json!({"model": "gpt-4o", "router_settings_override": {"fallbacks": [{"gpt-4o": ["os.environ/HOME"]}]}}))
+    )]
+    #[case::key_management_route(on("/key/generate", json!({"key_alias": "os.environ/HOME"})))]
+    #[case::credential_route(on("/credentials", json!({"credential_values": {"api_key": "os.environ/AZURE_API_KEY"}})))]
     #[case::metadata_tag(open(json!({"model": "gpt-4o", "metadata": {"client_id": "os.environ/HOME", "note": "oidc/azure/team-a"}})))]
     #[case::mentioned_later(open(json!({"model": "gpt-4o", "client_id": "read os.environ/HOME"})))]
     #[case::callers_own_key(open(json!({"model": "gpt-4o", "api_key": "sk-caller-own-key"})))]
@@ -1426,8 +1607,16 @@ mod tests {
         }
     }
 
-    const REFUSED: bool = true;
-    const ACCEPTED: bool = false;
+    #[derive(Clone, Copy)]
+    enum Verdict {
+        Accepted,
+        /// Refused with the refusal `carried` pairs with what was sent.
+        Refused,
+        /// Refused for a secret reference, named by the root key it sits below.
+        RefusedBelow(&'static str),
+    }
+    use Verdict::{Accepted as ACCEPTED, Refused as REFUSED};
+    const BELOW_LITELLM_PARAMS: Verdict = Verdict::RefusedBelow("litellm_params");
 
     /// What a caller must never set, and the refusal each earns where it is refused.
     fn carried() -> [(Value, Rejection); 5] {
@@ -1464,35 +1653,42 @@ mod tests {
     // Columns, in the order of `carried`: a federation setting, an `oidc/` api_key, the name of a
     // federated credential, a reference in a parameter providers resolve, a reference in any other.
     #[rstest]
-    #[case::root(Place::Root, [REFUSED, REFUSED, REFUSED, REFUSED, ACCEPTED])]
-    #[case::extra_body(Place::ExtraBody, [REFUSED, REFUSED, REFUSED, REFUSED, ACCEPTED])]
-    #[case::extra_body_as_text(Place::ExtraBodyAsText, [REFUSED, REFUSED, REFUSED, REFUSED, ACCEPTED])]
-    #[case::embedding_config(Place::EmbeddingConfig, [REFUSED, REFUSED, REFUSED, REFUSED, ACCEPTED])]
-    #[case::fallback_target(Place::FallbackTarget, [REFUSED, REFUSED, REFUSED, REFUSED, ACCEPTED])]
+    #[case::root(Place::Root, [REFUSED, REFUSED, REFUSED, REFUSED, REFUSED])]
+    #[case::extra_body(Place::ExtraBody, [REFUSED, REFUSED, REFUSED, REFUSED, REFUSED])]
+    #[case::extra_body_as_text(Place::ExtraBodyAsText, [REFUSED, REFUSED, REFUSED, REFUSED, REFUSED])]
+    #[case::embedding_config(Place::EmbeddingConfig, [REFUSED, REFUSED, REFUSED, REFUSED, REFUSED])]
+    #[case::fallback_target(Place::FallbackTarget, [REFUSED, REFUSED, REFUSED, REFUSED, REFUSED])]
     #[case::metadata(Place::Metadata, [REFUSED, REFUSED, REFUSED, ACCEPTED, ACCEPTED])]
     #[case::litellm_metadata_as_text(Place::LitellmMetadataAsText, [REFUSED, REFUSED, REFUSED, ACCEPTED, ACCEPTED])]
-    #[case::litellm_params(Place::LitellmParams, [REFUSED, REFUSED, REFUSED, ACCEPTED, ACCEPTED])]
+    #[case::litellm_params(Place::LitellmParams, [REFUSED, REFUSED, REFUSED, BELOW_LITELLM_PARAMS, BELOW_LITELLM_PARAMS])]
     #[case::litellm_params_metadata(Place::LitellmParamsMetadata, [REFUSED, REFUSED, REFUSED, ACCEPTED, ACCEPTED])]
-    #[case::litellm_params_extra_body(Place::LitellmParamsExtraBody, [ACCEPTED, REFUSED, ACCEPTED, ACCEPTED, ACCEPTED])]
+    #[case::litellm_params_extra_body(
+        Place::LitellmParamsExtraBody,
+        [ACCEPTED, REFUSED, ACCEPTED, BELOW_LITELLM_PARAMS, BELOW_LITELLM_PARAMS]
+    )]
     #[case::user_config_deployment(Place::UserConfigDeployment, [REFUSED, REFUSED, REFUSED, REFUSED, REFUSED])]
     #[case::user_config_defaults(Place::UserConfigDefaults, [REFUSED, REFUSED, REFUSED, REFUSED, REFUSED])]
     #[case::user_config_search_tool(Place::UserConfigSearchTool, [ACCEPTED, REFUSED, ACCEPTED, REFUSED, REFUSED])]
     fn each_place_a_body_carries_parameters_is_judged_by_its_own_rules(
         names: Names,
         #[case] place: Place,
-        #[case] refused: [bool; 5],
+        #[case] verdicts: [Verdict; 5],
     ) {
-        let verdicts: Vec<Result<(), Rejection>> = carried()
+        let judged: Vec<Result<(), Rejection>> = carried()
             .iter()
             .map(|(params, _)| placed(place, params).run(&names))
             .collect();
         let expected: Vec<Result<(), Rejection>> = carried()
             .into_iter()
-            .zip(refused)
-            .map(|((_, rejection), refused)| if refused { Err(rejection) } else { Ok(()) })
+            .zip(verdicts)
+            .map(|((_, rejection), verdict)| match verdict {
+                Verdict::Accepted => Ok(()),
+                Verdict::Refused => Err(rejection),
+                Verdict::RefusedBelow(key) => reference(key),
+            })
             .collect();
 
-        assert_eq!(verdicts, expected);
+        assert_eq!(judged, expected);
     }
 
     #[rstest]

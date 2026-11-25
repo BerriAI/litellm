@@ -1,6 +1,8 @@
 //! What a route reads its request body as. A name that is a deployment parameter on a model call
 //! is the route's own field elsewhere, so the route decides before any name is judged.
 
+use crate::routes::is_managed_model_route;
+
 const DEPLOYMENT_MANAGEMENT_ROUTES: [&str; 4] = [
     "/model/new",
     "/model/update",
@@ -31,11 +33,13 @@ pub struct Surface {
     pub owned: &'static [&'static str],
     /// The route names the Vertex project and location it works in as part of its own request.
     pub names_vertex_target: bool,
+    /// The body is the keyword arguments of a model call, so every key outside its content can
+    /// reach a provider as a parameter.
+    pub model_call: bool,
 }
 
 impl Surface {
-    /// A body checked without a route is one a handler assembled for a model call, which owns
-    /// none of the names.
+    /// A body checked without a route is one a handler assembled for a model call.
     pub fn of(route: Option<&str>) -> Self {
         let Some(route) = route else {
             return Self {
@@ -43,6 +47,7 @@ impl Surface {
                 manages_mcp_servers: false,
                 owned: &[],
                 names_vertex_target: false,
+                model_call: true,
             };
         };
         let manages_mcp_servers = manages_mcp_servers(route);
@@ -57,6 +62,7 @@ impl Surface {
                 &[]
             },
             names_vertex_target: ROUTES_THAT_NAME_THEIR_VERTEX_TARGET.contains(&route),
+            model_call: is_managed_model_route(route),
         }
     }
 }
@@ -110,6 +116,22 @@ mod tests {
         #[case] expected: &[&str],
     ) {
         assert_eq!(Surface::of(Some(route)).owned, expected);
+    }
+
+    #[rstest]
+    #[case::chat(Some("/v1/chat/completions"), true)]
+    #[case::messages(Some("/v1/messages"), true)]
+    #[case::azure_deployment(Some("/openai/deployments/gpt-4o/chat/completions"), true)]
+    #[case::no_route(None, true)]
+    #[case::key_management(Some("/key/generate"), false)]
+    #[case::credentials(Some("/credentials"), false)]
+    #[case::provider_pass_through(Some("/vertex_ai/v1/projects/p/locations/l/endpoints/e"), false)]
+    #[case::mcp_server(Some("/v1/mcp/server"), false)]
+    fn a_body_is_a_model_call_on_a_model_route_or_with_no_route(
+        #[case] route: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(Surface::of(route).model_call, expected);
     }
 
     #[rstest]
