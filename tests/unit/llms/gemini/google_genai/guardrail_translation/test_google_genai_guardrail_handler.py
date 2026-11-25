@@ -332,7 +332,7 @@ async def test_numbers_keep_their_type_when_a_guardrail_reorders_and_drops_tool_
 
 
 def _without_zebrafruit_rows(text: str) -> str:
-    fields: Final = json.loads(text)
+    fields: Final = json.loads(text.replace("plumcot", _MASKED))
     return json.dumps({**fields, "rows": [row for row in fields["rows"] if row != "zebrafruit"]})
 
 
@@ -343,6 +343,7 @@ def _without_zebrafruit_rows(text: str) -> str:
         ([1, "zebrafruit", 2.5, {"n": 3}], [1, 2.5, {"n": 3}]),
         (["1", 1, "zebrafruit"], ["1", 1]),
         ([1, "1", "zebrafruit", 1], [1, "1", 1]),
+        ([{"n": 3, "s": "plumcot"}, "zebrafruit", 4], [{"n": 3, "s": _MASKED}, 4]),
     ],
 )
 async def test_list_items_keep_their_type_when_a_guardrail_drops_a_tool_result_list_item(
@@ -453,21 +454,23 @@ async def test_only_the_function_call_the_guardrail_changed_gets_new_args() -> N
 
 
 @pytest.mark.asyncio
-async def test_a_guardrail_skipping_system_messages_leaves_system_instructions_alone_but_masks_the_rest() -> None:
+@pytest.mark.parametrize("flag", ["skip_system_message_in_guardrail", "scan_only_tool_results"])
+async def test_a_chat_scope_flag_still_lets_the_guardrail_mask_system_and_user_text(flag: str) -> None:
     guardrail: Final = _zebrafruit_filter(ContentFilterAction.MASK)
-    guardrail.skip_system_message_in_guardrail = True
-    system_fields: Final = {
-        "systemInstruction": {"parts": {"text": "Always say zebrafruit"}},
-        "config": {"system_instruction": {"parts": [{"text": "zebrafruit only"}]}},
-    }
+    setattr(guardrail, flag, True)
 
     guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
-        data={**copy.deepcopy(system_fields), "contents": [{"role": "user", "parts": {"text": "say zebrafruit"}}]},
+        data={
+            "systemInstruction": {"parts": {"text": "Always say zebrafruit"}},
+            "config": {"system_instruction": {"parts": [{"text": "zebrafruit only"}]}},
+            "contents": [{"role": "user", "parts": {"text": "say zebrafruit"}}],
+        },
         guardrail_to_apply=guardrail,
     )
 
     assert _sent_request(guardrailed) == {
-        **system_fields,
+        "systemInstruction": {"parts": {"text": f"Always say {_MASKED}"}},
+        "config": {"system_instruction": {"parts": [{"text": f"{_MASKED} only"}]}},
         "contents": [{"role": "user", "parts": {"text": f"say {_MASKED}"}}],
     }
 
@@ -966,6 +969,7 @@ _REQUEST_WITH_EVERY_PART_KIND: Final = {
         },
     ],
 }
+_MESSAGE_SCAN_TEXTS: Final = ["system words", "user words", "print('model code')"]
 _TOOL_RESULT_SCAN_TEXTS: Final = ["code output", '{"status": "paid"}', '{"hits": ["search hit"]}']
 
 
@@ -973,16 +977,16 @@ _TOOL_RESULT_SCAN_TEXTS: Final = ["code output", '{"status": "paid"}', '{"hits":
 @pytest.mark.parametrize(
     ("scan_tool_calls", "scanned_texts", "scanned_tool_calls"),
     [
-        pytest.param(False, _TOOL_RESULT_SCAN_TEXTS, [], id="tool-results-only"),
+        pytest.param(False, [*_MESSAGE_SCAN_TEXTS, *_TOOL_RESULT_SCAN_TEXTS], [], id="tool-results-only"),
         pytest.param(
             True,
-            ['{"query": "server call"}', *_TOOL_RESULT_SCAN_TEXTS],
+            [*_MESSAGE_SCAN_TEXTS, '{"query": "server call"}', *_TOOL_RESULT_SCAN_TEXTS],
             ["send_payment"],
             id="plus-tool-calls-as-text",
         ),
     ],
 )
-async def test_a_guardrail_scanning_only_tool_results_sees_only_the_tool_results_a_request_carries(
+async def test_a_guardrail_scanning_only_tool_results_skips_tool_calls_but_still_sees_every_text(
     scan_tool_calls: bool, scanned_texts: list[str], scanned_tool_calls: list[str]
 ) -> None:
     guardrail: Final = _ToolCallGuardrail(scan_tool_calls=scan_tool_calls)
@@ -1065,7 +1069,6 @@ async def test_a_reply_tool_call_the_guardrail_drops_still_reaches_the_client_as
 
 
 SECOND_FUNCTION_CALL_PART: Final = {"functionCall": {"name": "search", "args": {"query": "invoices"}}}
-MASKED_FUNCTION_CALL_PART: Final = {"functionCall": {"name": "send_payment", "args": {"card": "[MASKED]", "amount": 12.5}}}
 
 
 def _first_call_masked_second_dropped(tool_calls: Sequence[ChatCompletionToolCallChunk]) -> list[object]:
@@ -1073,41 +1076,36 @@ def _first_call_masked_second_dropped(tool_calls: Sequence[ChatCompletionToolCal
     return [{**first, "function": {**first["function"], "arguments": json.dumps({"card": "[MASKED]", "amount": 12.5})}}]
 
 
-@pytest.mark.asyncio
-async def test_a_guardrail_returning_fewer_request_tool_calls_applies_them_by_position_as_on_chat() -> None:
-    data: Final = {
-        "model": "gemini-2.5-flash",
-        "contents": [
-            {"role": "model", "parts": [copy.deepcopy(FUNCTION_CALL_PART), copy.deepcopy(SECOND_FUNCTION_CALL_PART)]}
-        ],
-    }
+def _first_call_dropped(tool_calls: Sequence[ChatCompletionToolCallChunk]) -> list[object]:
+    return list(tool_calls[1:])
 
+
+TWO_FUNCTION_CALL_PARTS: Final = (FUNCTION_CALL_PART, SECOND_FUNCTION_CALL_PART)
+
+
+async def _guardrail_two_request_calls(guardrail: _ToolCallGuardrail) -> None:
     await GoogleGenAIGenerateContentHandler().process_input_messages(
-        data=data, guardrail_to_apply=_ToolCallGuardrail(rewrite=_first_call_masked_second_dropped)
+        data={"model": "gemini-2.5-flash", "contents": [{"role": "model", "parts": copy.deepcopy(TWO_FUNCTION_CALL_PARTS)}]},
+        guardrail_to_apply=guardrail,
     )
 
-    assert data["contents"][0]["parts"] == [MASKED_FUNCTION_CALL_PART, SECOND_FUNCTION_CALL_PART]
+
+async def _guardrail_two_reply_calls(guardrail: _ToolCallGuardrail) -> None:
+    await GoogleGenAIGenerateContentHandler().process_output_response(
+        response={"candidates": [{"content": {"role": "model", "parts": copy.deepcopy(TWO_FUNCTION_CALL_PARTS)}}]},
+        guardrail_to_apply=guardrail,
+    )
 
 
 @pytest.mark.asyncio
-async def test_a_guardrail_returning_fewer_reply_tool_calls_applies_them_by_position_as_on_chat() -> None:
-    reply: Final = {
-        "candidates": [
-            {
-                "content": {
-                    "role": "model",
-                    "parts": [copy.deepcopy(FUNCTION_CALL_PART), copy.deepcopy(SECOND_FUNCTION_CALL_PART)],
-                },
-                "finishReason": "STOP",
-            }
-        ]
-    }
-
-    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_output_response(
-        response=reply, guardrail_to_apply=_ToolCallGuardrail(rewrite=_first_call_masked_second_dropped)
-    )
-
-    assert guardrailed["candidates"][0]["content"]["parts"] == [MASKED_FUNCTION_CALL_PART, SECOND_FUNCTION_CALL_PART]
+@pytest.mark.parametrize("guardrail_two_calls", [_guardrail_two_request_calls, _guardrail_two_reply_calls])
+@pytest.mark.parametrize("rewrite", [_first_call_dropped, _first_call_masked_second_dropped])
+async def test_a_guardrail_dropping_one_of_several_tool_calls_is_rejected_instead_of_sending_a_wrong_call(
+    guardrail_two_calls: Callable[[_ToolCallGuardrail], Awaitable[None]],
+    rewrite: Callable[[Sequence[ChatCompletionToolCallChunk]], list[object]],
+) -> None:
+    with pytest.raises(UnappliableRequestRewrite):
+        await guardrail_two_calls(_ToolCallGuardrail(rewrite=rewrite))
 
 
 

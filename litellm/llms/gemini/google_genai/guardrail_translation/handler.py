@@ -14,10 +14,10 @@ objects, and raw SSE stream frames are scanned for detection without rewriting.
 
 import json
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from functools import partial
-from itertools import accumulate, chain, groupby, pairwise
+from difflib import SequenceMatcher
+from itertools import chain, groupby, pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, TypeAlias
 
@@ -31,8 +31,6 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     StreamTransformSink,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
-    effective_scan_only_tool_results_for_guardrail,
-    effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
     stream_item_field,
     tool_calls_in_guardrail_scope,
@@ -81,13 +79,11 @@ _TOOL_RESULT_PART_FIELDS: Final = (
 
 @dataclass(frozen=True, slots=True)
 class _PartScope:
-    message_parts: bool
     tool_calls: bool
     tool_results: bool
-    system_instruction: bool
 
 
-_FULL_PART_SCOPE: Final = _PartScope(message_parts=True, tool_calls=True, tool_results=True, system_instruction=True)
+_FULL_PART_SCOPE: Final = _PartScope(tool_calls=True, tool_results=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,28 +184,62 @@ def _with_original_numbers(original: object, guardrailed: object, depth: int) ->
     if original_items is None or guardrailed_items is None:
         return guardrailed
     if len(original_items) != len(guardrailed_items):
-        return _with_kept_originals(original_items, guardrailed_items)
+        return _with_kept_originals(original_items, guardrailed_items, depth)
     return [
         _with_original_numbers(item, value, depth + 1)
         for item, value in zip(original_items, guardrailed_items, strict=True)
     ]
 
 
-def _end_of_next_match(original_texts: Sequence[str], start: int, text: str) -> int:
-    return next((index + 1 for index in range(start, len(original_texts)) if original_texts[index] == text), start)
+def _json_shape(value: object) -> frozenset[str] | str:
+    fields: Final = _json_object(value)
+    if fields is not None:
+        return frozenset(fields)
+    return "array" if _as_list_or_tuple(value) is not None else "scalar"
 
 
-def _with_kept_originals(original_items: Sequence[object], guardrailed_items: Sequence[object]) -> Sequence[object]:
-    original_texts: Final = tuple(_json_scan_text(item) for item in original_items)
-    match_ends: Final = accumulate(
-        (_json_scan_text(value) for value in guardrailed_items),
-        partial(_end_of_next_match, original_texts),
-        initial=0,
+def _aligned_blocks(
+    original_items: Sequence[object], guardrailed_items: Sequence[object], key: Callable[[object], Hashable]
+) -> Iterable[tuple[str, Sequence[object], Sequence[object]]]:
+    matcher: Final = SequenceMatcher(
+        None, tuple(map(key, original_items)), tuple(map(key, guardrailed_items)), autojunk=False
     )
-    return [
-        original_items[end - 1] if end != start else value
-        for value, (start, end) in zip(guardrailed_items, pairwise(match_ends), strict=True)
-    ]
+    return ((tag, original_items[i1:i2], guardrailed_items[j1:j2]) for tag, i1, i2, j1, j2 in matcher.get_opcodes())
+
+
+def _with_paired_numbers(originals: Sequence[object], guardrailed: Sequence[object], depth: int) -> Iterable[object]:
+    return (
+        _with_original_numbers(original, value, depth + 1)
+        for original, value in zip(originals, guardrailed, strict=True)
+    )
+
+
+def _with_shape_matched_originals(
+    original_items: Sequence[object], guardrailed_items: Sequence[object], depth: int
+) -> Iterable[object]:
+    return chain.from_iterable(
+        _with_paired_numbers(originals, guardrailed, depth) if tag == "equal" else guardrailed
+        for tag, originals, guardrailed in _aligned_blocks(original_items, guardrailed_items, _json_shape)
+    )
+
+
+def _kept_block(tag: str, originals: Sequence[object], guardrailed: Sequence[object], depth: int) -> Iterable[object]:
+    if tag == "equal":
+        return originals
+    if tag == "replace":
+        return _with_shape_matched_originals(originals, guardrailed, depth)
+    return guardrailed
+
+
+def _with_kept_originals(
+    original_items: Sequence[object], guardrailed_items: Sequence[object], depth: int
+) -> Sequence[object]:
+    return list(
+        chain.from_iterable(
+            _kept_block(tag, originals, guardrailed, depth)
+            for tag, originals, guardrailed in _aligned_blocks(original_items, guardrailed_items, _json_scan_text)
+        )
+    )
 
 
 def _json_slot(container: object, key: str | int, value: object) -> tuple[_TextSlot, ...]:
@@ -237,14 +267,14 @@ def _part_text_slots(parts: Sequence[object], index: int) -> tuple[_TextSlot, ..
 
 def _scoped_part_fields(scope: _PartScope) -> tuple[_PartField, ...]:
     return (
-        *((_CODE_PART_FIELD,) if scope.message_parts else ()),
+        _CODE_PART_FIELD,
         *((_TOOL_CALL_PART_FIELD,) if scope.tool_calls else ()),
         *(_TOOL_RESULT_PART_FIELDS if scope.tool_results else ()),
     )
 
 
 def _part_slots(parts: Sequence[object], index: int, scope: _PartScope) -> tuple[_TextSlot, ...]:
-    text_slots: Final = _part_text_slots(parts, index) if scope.message_parts else ()
+    text_slots: Final = _part_text_slots(parts, index)
     field_slots: Final = chain.from_iterable(
         _part_field_slots(parts[index], part_field) for part_field in _scoped_part_fields(scope)
     )
@@ -256,28 +286,22 @@ def _content_part_slots(content: object, scope: _PartScope) -> tuple[_TextSlot, 
     return tuple(chain.from_iterable(_part_slots(parts, index, scope) for index in range(len(parts))))
 
 
-def _request_contents(data: Mapping[str, object], scope: _PartScope) -> tuple[object, ...]:
-    system_instructions: Final = (
-        chain.from_iterable(
-            _present_fields(container, _SYSTEM_INSTRUCTION_KEYS) for container in (data, data.get("config"))
-        )
-        if scope.system_instruction
-        else ()
+def _request_contents(data: Mapping[str, object]) -> tuple[object, ...]:
+    system_instructions: Final = chain.from_iterable(
+        _present_fields(container, _SYSTEM_INSTRUCTION_KEYS) for container in (data, data.get("config"))
     )
     return (*system_instructions, *_repeated_field(data.get("contents")))
 
 
 def _request_part_scope(guardrail: "CustomGuardrail") -> _PartScope:
     return _PartScope(
-        message_parts=not effective_scan_only_tool_results_for_guardrail(guardrail),
         tool_calls=tool_calls_in_guardrail_scope(guardrail),
         tool_results=not effective_skip_tool_message_for_guardrail(guardrail),
-        system_instruction=not effective_skip_system_message_for_guardrail(guardrail),
     )
 
 
 def _request_text_slots(data: Mapping[str, object], scope: _PartScope) -> tuple[_TextSlot, ...]:
-    return tuple(chain.from_iterable(_content_part_slots(content, scope) for content in _request_contents(data, scope)))
+    return tuple(chain.from_iterable(_content_part_slots(content, scope) for content in _request_contents(data)))
 
 
 def _candidate_contents(response: object) -> tuple[object, ...]:
@@ -478,9 +502,11 @@ def _text_count_differs(text_slots: Sequence[_TextSlot], returned_texts: Sequenc
 def _write_back_function_calls(
     groups: Sequence[Sequence[object]], returned_tool_calls: Sequence[object] | None, guardrail_name: str | None
 ) -> None:
-    if returned_tool_calls is None:
+    if not returned_tool_calls:
         return
-    for group, returned in zip(groups, returned_tool_calls, strict=False):
+    if len(returned_tool_calls) != len(groups):
+        raise unappliable_request_rewrite(guardrail_name)
+    for group, returned in zip(groups, returned_tool_calls, strict=True):
         if _returned_function_field(returned, "arguments") != _group_arguments_text(group):
             _write_group_args(group, _guardrailed_args(returned, guardrail_name), guardrail_name)
         _write_group_name(group, returned)
