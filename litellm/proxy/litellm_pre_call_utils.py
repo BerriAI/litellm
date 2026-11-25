@@ -1091,13 +1091,36 @@ def strip_client_guardrail_information(data: dict[str, object]) -> None:  # muta
             )
 
 
+_DEPLOYMENT_ONLY_DAYBREAK_FIELDS: Final = (
+    "enable_daybreak_access_programs",
+    "daybreak_models",
+)
+
+
 def _strip_router_reserved_metadata(
     data: dict[str, object],  # mutable-ok: strips in place on the request body the pre-call pipeline threads through
 ) -> None:
-    """Drop the router-owned fallback stamps from any client-supplied metadata bucket."""
+    """Drop router-owned stamps and deployment-only controls from client-supplied request fields."""
+    for daybreak_field in _DEPLOYMENT_ONLY_DAYBREAK_FIELDS:
+        if daybreak_field in data:
+            del data[daybreak_field]
+    if "model_info" in data:
+        if isinstance(root_model_info := data.get("model_info"), dict):
+            for daybreak_field in _DEPLOYMENT_ONLY_DAYBREAK_FIELDS:
+                if daybreak_field in root_model_info:
+                    del root_model_info[daybreak_field]
+        else:
+            del data["model_info"]
     for metadata_key in ("metadata", "litellm_metadata"):
         if not isinstance(metadata := data.get(metadata_key), dict):
             continue
+        if "model_info" in metadata:
+            if isinstance(nested_model_info := metadata.get("model_info"), dict):
+                for daybreak_field in _DEPLOYMENT_ONLY_DAYBREAK_FIELDS:
+                    if daybreak_field in nested_model_info:
+                        del nested_model_info[daybreak_field]
+            else:
+                del metadata["model_info"]
         for field in ROUTER_RESERVED_METADATA_FIELDS & metadata.keys():
             metadata.pop(field)
             verbose_proxy_logger.debug(

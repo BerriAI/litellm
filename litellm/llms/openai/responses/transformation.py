@@ -514,6 +514,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     "extra_query",
                     "extra_body",
                     "timeout",
+                    "access_programs",
                 ]
                 + list(supported_params)
             )
@@ -688,11 +689,157 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                 "model": model,
                 "input": replay_safe_input,
                 **response_api_optional_request_params,
+                **self._daybreak_access_programs_for_deployment(model, request_params, litellm_params),
                 **self._prompt_cache_options_with_original_comparison_id(request_params),
             },
         )
 
         return final_request_params
+
+    _DEFAULT_DAYBREAK_BLUE_MODELS: Final[Mapping[str, str]] = MappingProxyType(
+        {
+            "gpt-6-sol": "daybreak_blue",
+            "gpt-6-luna": "daybreak_blue",
+            "gpt-6-astra": "daybreak_blue",
+            "gpt-6.1-sol": "daybreak_blue",
+            "gpt-6.1-terra": "daybreak_blue",
+            "gpt-6.2-astra": "daybreak_blue",
+            "gpt-6.2-sol": "daybreak_blue",
+        }
+    )
+    _DEFAULT_DAYBREAK_RULES: Final[tuple[tuple[str, str], ...]] = tuple(
+        sorted(
+            _DEFAULT_DAYBREAK_BLUE_MODELS.items(),
+            key=lambda key_value_item: len(key_value_item[0]),
+            reverse=True,
+        )
+    )
+
+    @staticmethod
+    def _is_truthy_flag(val: object) -> bool:
+        if isinstance(val, bool):
+            return val
+        if isinstance(val, str):
+            return val.strip().lower() in ("1", "true", "yes", "on")
+        return False
+
+    @staticmethod
+    @lru_cache(maxsize=32)
+    def _compile_daybreak_rules(
+        include_defaults: bool,
+        config_items: tuple[tuple[str, str], ...] | None,
+        safe_json: str | None,
+    ) -> tuple[tuple[str, str], ...]:
+        merged: dict[str, str] = (
+            dict(OpenAIResponsesAPIConfig._DEFAULT_DAYBREAK_BLUE_MODELS)
+            if include_defaults
+            else {}
+        )
+        if config_items is not None:
+            for k, v in config_items:
+                normalized_key = k.strip().lower().removeprefix("openai/")
+                if normalized_key:
+                    merged[normalized_key] = v.strip()
+        if safe_json:
+            parsed_map: Final = as_str_mapping(safe_json_loads(safe_json))
+            if parsed_map is not None:
+                for k, v in parsed_map.items():
+                    if isinstance(v, str) and len(k) <= 256 and len(v) <= 64:
+                        normalized_key = k.strip().lower().removeprefix("openai/")
+                        if normalized_key:
+                            merged[normalized_key] = v.strip()
+        return tuple(
+            sorted(merged.items(), key=lambda key_value_item: len(key_value_item[0]), reverse=True)
+        )
+
+    @classmethod
+    def _extract_deployment_daybreak_rules(
+        cls, litellm_params: GenericLiteLLMParams
+    ) -> tuple[tuple[str, str], ...]:
+        direct_info: Final = deployment_model_info(litellm_params)
+        litellm_meta: Final = as_str_mapping(
+            getattr(litellm_params, "litellm_metadata", None)
+        )
+        meta_info: Final = (
+            as_str_mapping(litellm_meta.get("model_info"))
+            if litellm_meta is not None
+            else None
+        )
+        if direct_info is None and meta_info is None:
+            return ()
+
+        enabled_raw: object = (
+            direct_info.get("enable_daybreak_access_programs")
+            if direct_info is not None
+            else None
+        )
+        if enabled_raw is None and meta_info is not None:
+            enabled_raw = meta_info.get("enable_daybreak_access_programs")
+        include_defaults: Final = cls._is_truthy_flag(enabled_raw)
+
+        models_raw: object = (
+            direct_info.get("daybreak_models")
+            if direct_info is not None
+            else None
+        )
+        if models_raw is None and meta_info is not None:
+            models_raw = meta_info.get("daybreak_models")
+
+        if not include_defaults and models_raw is None:
+            return ()
+        if include_defaults and models_raw is None:
+            return cls._DEFAULT_DAYBREAK_RULES
+
+        config_map: Final = as_str_mapping(models_raw)
+        config_items: tuple[tuple[str, str], ...] | None = None
+        if config_map is not None:
+            config_items = tuple(
+                (k, v)
+                for k, v in config_map.items()
+                if isinstance(v, str) and len(k) <= 256 and len(v) <= 64
+            )
+        safe_json: Final = (
+            models_raw
+            if (isinstance(models_raw, str) and len(models_raw) <= 16384)
+            else None
+        )
+        if not include_defaults and config_items is None and safe_json is None:
+            return ()
+        return cls._compile_daybreak_rules(include_defaults, config_items, safe_json)
+
+    def _daybreak_access_programs_for_deployment(
+        self,
+        model: str,
+        params: Mapping[str, object],
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        if self.custom_llm_provider != LlmProviders.OPENAI:
+            return {}
+        rules: Final = self._extract_deployment_daybreak_rules(litellm_params)
+        if not rules:
+            return {}
+        raw_existing: Final = params.get("access_programs")
+        existing_access_programs: Final = as_str_mapping(raw_existing)
+        if raw_existing is not None and existing_access_programs is None:
+            return {}
+        if existing_access_programs is not None and existing_access_programs.get("cyber"):
+            return {}
+        normalized: Final = (
+            self._model_map_lookup_name(model).lower().removeprefix("openai/")
+        )
+        if not normalized.startswith("gpt-"):
+            return {}
+        for prefix, tier in rules:
+            if normalized == prefix or normalized.startswith(prefix + "-"):
+                if tier.lower() in ("", "none"):
+                    return {}
+                merged_access_programs: dict[str, object] = (
+                    {**existing_access_programs, "cyber": tier}
+                    if existing_access_programs is not None
+                    else {"cyber": tier}
+                )
+                return {"access_programs": merged_access_programs}
+        return {}
 
     def transform_extra_body(
         self,
