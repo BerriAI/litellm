@@ -55,6 +55,9 @@ const VERTEX_AI: &str = "vertex_ai";
 pub const REQUEST_SETTINGS: [&str; 2] = ["drop_params", "additional_drop_params"];
 
 pub async fn create<H: Host>(Checked { call, body }: Checked<H, JsonObject>) -> Response {
+    if let Ok(JsonObject(body)) = &body {
+        record::write(|entries| entries.logged_request.sent(body));
+    }
     serve::run(&call, body.map(|JsonObject(body)| body), |body| {
         MessagesAttempt::new(&call, body)
     })
@@ -188,6 +191,7 @@ impl<H: Host> RouteAttempt for MessagesAttempt<'_, H> {
                 shaping,
                 routing::attempt_body(&self.body, attempt),
                 self.headers,
+                self.gateway.max_base64_length_for_logging,
             )?
         };
         let machine = self.route.clone().machine(call, self.policy);
@@ -275,6 +279,7 @@ fn project(
     deployment_shaping: MessagesShaping,
     body: Map<String, Value>,
     headers: &HeaderMap,
+    max_base64_length: usize,
 ) -> Result<MessagesCall, Error> {
     let shaping = requested(deployment_shaping, &body);
     let tools = merged_tools(deployment, body.get(TOOLS)).map(|tools| (TOOLS.to_owned(), tools));
@@ -290,6 +295,14 @@ fn project(
         .chain(client_params)
         .chain(tools)
         .collect();
+    record::write(|entries| {
+        entries.logged_request.attempted(
+            &body,
+            &shaping.settings.additional_drop_params,
+            shaping.settings.reasoning_auto_summary,
+            max_base64_length,
+        );
+    });
     Ok(MessagesCall {
         body: messages_body(body)?,
         api_key: routing::api_key(deployment),

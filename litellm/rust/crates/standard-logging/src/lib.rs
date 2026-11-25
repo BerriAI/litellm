@@ -1,7 +1,9 @@
 mod caller;
 mod error_information;
 mod hidden_params;
+mod messages;
 mod metadata;
+mod model_parameters;
 mod payload;
 mod render;
 mod request;
@@ -14,7 +16,9 @@ pub use error_information::{
     ClientDisconnected, CooldownDeployment, ErrorInformation, LoggedErrorInformation,
 };
 pub use hidden_params::HiddenParams;
+pub use messages::{MAX_BASE64_LENGTH_FOR_LOGGING, truncate_base64, with_system_prompt};
 pub use metadata::{ClaudeSubscriptionUsage, Metadata};
+pub use model_parameters::messages_model_parameters;
 pub use payload::{ClassifierAudit, ModelInformation, StandardLoggingPayload};
 pub use request::{client_sent_oauth_token, requester_custom_headers, user_agent_tags};
 pub use served::{

@@ -1,6 +1,6 @@
 use litellm_env::Lookup;
 use litellm_python_compat::{
-    lenient::{FloatOrUnset, UintOrUnset},
+    lenient::{FloatOrUnset, LimitOrUnset, UintOrUnset},
     unicode::isspace,
 };
 use serde::{Deserialize, Deserializer};
@@ -43,6 +43,8 @@ pub struct Environment {
     #[serde_as(as = "UintOrUnset")]
     pub default_max_redis_batch_cache_size: Option<u64>,
     pub litellm_rate_limit_window_size: Option<i64>,
+    #[serde_as(as = "LimitOrUnset")]
+    pub max_base64_length_for_logging: Option<u64>,
     pub litellm_tpm_token_reservation_enabled: Option<Flag>,
     #[serde_as(as = "UintOrUnset")]
     pub proxy_batch_write_at: Option<u64>,
@@ -190,6 +192,22 @@ mod tests {
         let environment = from_variables(&[("NON_LLM_CONNECTION_TIMEOUT", raw)]).unwrap();
 
         assert_eq!(environment.non_llm_connection_timeout, expected);
+    }
+
+    #[rstest]
+    #[case::blank("", None)]
+    #[case::words("long", None)]
+    #[case::zero_turns_truncation_off("0", Some(0))]
+    #[case::a_negative_limit_turns_it_off_too("-5", Some(0))]
+    #[case::padded(" 128 ", Some(128))]
+    #[case::past_u64("99999999999999999999999", Some(u64::MAX))]
+    fn the_base64_logging_limit_is_read_the_way_python_reads_it(
+        #[case] raw: &str,
+        #[case] expected: Option<u64>,
+    ) {
+        let environment = from_variables(&[("MAX_BASE64_LENGTH_FOR_LOGGING", raw)]).unwrap();
+
+        assert_eq!(environment.max_base64_length_for_logging, expected);
     }
 
     #[rstest]
