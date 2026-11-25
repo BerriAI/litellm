@@ -2730,6 +2730,31 @@ async def test_native_deferred_tools_send_stop_sequences_to_chat_completions_wit
     assert any("stop_sequences" in warning for warning in _deferred_tools_fallback_warnings(caplog))
 
 
+@pytest.mark.asyncio
+async def test_native_deferred_tools_keep_openai_stop_sequences_requests_on_responses_with_client_tool_search(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((openai.APIError, litellm.exceptions.APIConnectionError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+                model="openai/gpt-6.2-sol",
+                api_key="deployment-key",
+                tools=_CLAUDE_CODE_TOOL_SEARCH_TOOLS,
+                model_info={"deferred_tools": "native"},
+                stop_sequences=["END"],
+            )
+
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert {call.request.url.path for call in upstream.calls} == {"/v1/responses"}
+    assert {tool["type"] for tool in chain.from_iterable(body["tools"] for body in bodies)} == {"function", "tool_search"}
+
+
 _FORECAST_TOOL: Final = {
     "name": "mcp__weather__get_forecast",
     "description": "Get the forecast for a city",

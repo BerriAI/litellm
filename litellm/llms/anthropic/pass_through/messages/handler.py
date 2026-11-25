@@ -676,8 +676,15 @@ def anthropic_messages_handler(
         )
         deferred_tools: Final = routed_deferred_tools_mode(route_model_info, custom_llm_provider, model, api_base)
         native_deferred_tools: Final = deferred_tools == "native"
+        routes_to_responses_api: Final = _should_route_to_responses_api(
+            custom_llm_provider,
+            original_model,
+            model,
+            native_deferred_tools=native_deferred_tools and not stop_sequences,
+        )
         _refuse_deferred_tools(
-            native_stop_sequences_refusal(deferred_tools, stop_sequences), drops_deferred_tools_setting
+            None if routes_to_responses_api else native_stop_sequences_refusal(deferred_tools, stop_sequences),
+            drops_deferred_tools_setting,
         )
         request_messages: Final = cast("list[dict[str, object]]", messages)  # cast-ok: the handler takes untyped dicts
         request_tool_choice: Final = cast(  # cast-ok: the handler takes untyped dicts
@@ -698,12 +705,7 @@ def anthropic_messages_handler(
         bridged_tool_choice: Final = (
             request_tool_choice if emulation is None else emulation.tool_choice(request_tool_choice)
         )
-        if kwargs.get("compaction") is None and _should_route_to_responses_api(
-            custom_llm_provider,
-            original_model,
-            model,
-            native_deferred_tools=native_deferred_tools and not stop_sequences,
-        ):
+        if kwargs.get("compaction") is None and routes_to_responses_api:
             responses_result: Final = LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 max_tokens=max_tokens,
                 messages=bridged_messages,
