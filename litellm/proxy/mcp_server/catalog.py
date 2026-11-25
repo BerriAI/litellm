@@ -286,7 +286,9 @@ class CatalogSnapshots:
         from litellm.proxy.mcp_server.mcp_server_manager import oauth_endpoints_unresolved
 
         snapshot: Final = self._shared_snapshot
-        if revision is None or revision != self._applied_revision or snapshot is None or not self._refresh_complete:
+        if snapshot is None or not self._refresh_complete:
+            return False
+        if revision is None or revision != self._applied_revision:
             return False
         return (
             snapshot.servers == (self.manager.config_mcp_servers | self.manager.registry)
