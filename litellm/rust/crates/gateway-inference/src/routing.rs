@@ -300,6 +300,7 @@ async fn answered<H: Host, O>(
         } => Ended {
             error: Box::new(raised.failure),
             routing: raised.deployment_id.as_deref().map(Routing::failed_on),
+            raised_on: raised.deployment_id,
         },
         CallError {
             error: litellm_router_core::Error::UnknownModel { model },
@@ -309,12 +310,14 @@ async fn answered<H: Host, O>(
             error: litellm_router_core::Error::NoHealthyDeployments { model, .. },
             ..
         } => no_deployments(gateway, model).await.into(),
-        CallError { error, .. } => Ended {
-            routing: error
-                .refused()
-                .map(|refused| Routing::failed_on(&refused.deployment_id)),
-            error: Box::new(Error::Routing(error)),
-        },
+        CallError { error, .. } => {
+            let refused_on = error.refused().map(|refused| refused.deployment_id.clone());
+            Ended {
+                routing: refused_on.as_deref().map(Routing::failed_on),
+                raised_on: refused_on,
+                error: Box::new(Error::Routing(error)),
+            }
+        }
     })
 }
 
@@ -331,7 +334,8 @@ async fn answered<H: Host, O>(
 ///   reached the client yet
 ///
 /// A stream closed there goes into the call's `failed_attempts`.
-/// A call that ends on an error carries the routing headers of the stream that failed.
+/// A call that ends on an error carries the routing headers of the stream that failed, and the
+/// timeout of the attempt that raised the error.
 async fn taken_over_while_held<A, RH>(
     router: &Router,
     host: &RH,
@@ -355,7 +359,7 @@ where
         let failed = match stream_hold::hold(unsent, read, stream_hold::HELD).await {
             Held::Committed(sent, first_event) => {
                 if let Some(at) = first_event {
-                    record::write(|entries| entries.see_first_event(at));
+                    record::write(|entries| entries.first_event = Some(at));
                 }
                 *chunks = sent;
                 return Ok(routed);
@@ -370,7 +374,7 @@ where
         // Python closes the attempt a take-over supersedes before the take-over runs.
         let own = ended_on(failed.closed());
         let closed = std::mem::take(&mut routed.output.response.1);
-        record::write(|entries| entries.failed(closed));
+        record::write(|entries| entries.failed_attempts.push(closed));
         let routing = Some(Routing::served(&routed));
         let answered = match take_over {
             Some(take_over) => take_over.run(host, op.clone()).await,
@@ -379,9 +383,14 @@ where
         match answered {
             Ok(answer) => routed = answer,
             Err(Unanswered { raised }) => {
+                let (error, raised_on) = match raised {
+                    Some(raised) => (raised.failure, raised.deployment_id),
+                    None => (own, Some(routed.deployment_id.clone())),
+                };
                 return Err(Ended {
-                    error: Box::new(raised.unwrap_or(own)),
+                    error: Box::new(error),
                     routing,
+                    raised_on,
                 });
             }
         }
@@ -782,7 +791,7 @@ mod tests {
         let held = async {
             let answered =
                 taken_over_while_held::<Failing, _>(router, &host, &op, &request, first).await;
-            let failed = record::read(|state| state.failed_attempts().len());
+            let failed = record::read(|state| state.failed_attempts.len());
             (answered, failed.unwrap_or_default())
         };
         record::scope(record::CallRecord::new(), held).await
@@ -929,8 +938,8 @@ mod tests {
             crate::record::read(|state| {
                 let url = |attempt: &crate::record::AttemptRecord| attempt.url.clone();
                 (
-                    state.attempt().and_then(url),
-                    state.failed_attempts().iter().map(url).collect::<Vec<_>>(),
+                    state.attempt.as_ref().and_then(url),
+                    state.failed_attempts.iter().map(url).collect::<Vec<_>>(),
                 )
             })
         })

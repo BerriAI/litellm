@@ -12,7 +12,7 @@ pub mod parallel_request_limiter;
 pub mod spend_log;
 mod spend_log_input;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use axum::http::StatusCode;
 use litellm_callbacks::{
@@ -221,8 +221,16 @@ fn refusal(abort: Abort) -> Refusal {
 
 impl Call {
     /// Runs the hook of `point` over the callbacks subscribed to it, in order. On a hook that
-    /// decides, the first to abort or fail ends it and the call.
+    /// decides, the first to abort or fail ends it and the call. The time the hook took is added
+    /// to the call's callback time.
     async fn run(&self, point: Point) -> Result<(), HookError> {
+        let began = Instant::now();
+        let ran = self.run_turns(point).await;
+        record::write(|entries| entries.callback_time += began.elapsed());
+        ran
+    }
+
+    async fn run_turns(&self, point: Point) -> Result<(), HookError> {
         let hook = point.hook();
         for (registered, state) in self.callbacks.callbacks.iter().zip(&self.states) {
             let callback = &registered.callback;
@@ -295,7 +303,7 @@ impl CallHooks for Call {
     async fn pre_call(&self, body: Map<String, Value>) -> Result<Map<String, Value>, HookError> {
         let mut unheld = Some(body);
         record::write(|entries| {
-            entries.charge_to(self.charged.clone());
+            entries.charged = self.charged.clone();
             if let Some(body) = unheld.take() {
                 entries.hold(body);
             }
@@ -305,7 +313,7 @@ impl CallHooks for Call {
             .or(unheld)
             .unwrap_or_default();
         if ran.is_ok() {
-            record::write(CallState::call_provider);
+            record::write(|entries| entries.api_call_start = Some(std::time::SystemTime::now()));
         }
         ran.map(|()| body)
     }
