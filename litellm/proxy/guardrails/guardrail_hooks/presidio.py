@@ -192,12 +192,16 @@ def _flush_unmaskable_buffer(all_chunks: list[ModelResponseStream]) -> Iterator[
 def _classify_completed_frames(pending: bytearray, classified: int, appended: int) -> tuple[bytes, bytes, int]:
     """
     Split the frames a read of ``appended`` bytes completed into ``(preface, classifiable, next classified offset)``.
-    Only a buffer with no data-bearing frame yet (``classified == 0``) has a preface, which the caller drops.
+    Only a buffer with no data-bearing frame yet (``classified == 0``) has a preface, which the caller relays and
+    removes from its buffer.
     """
     frames_end: Final = last_sse_frame_end(pending, classified, appended)
     new_frames: Final = bytes(pending[classified:frames_end])
     preface, classifiable = _split_sse_preface(new_frames) if classified == 0 else (b"", new_frames)
     return preface, classifiable, frames_end - len(preface)
+
+
+_FrameClassifier: TypeAlias = Callable[[bytearray, int, int], tuple[bytes, bytes, int]]
 
 
 def _is_responses_event(chunk: object) -> bool:
@@ -460,7 +464,9 @@ async def _processed_tool_call(
     return tool_call.model_copy(update={"function": tool_call.function.model_copy(update={"arguments": processed})})
 
 
-async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGenerator[object, None]:
+async def _coalesce_first_sse_frame(
+    stream: AsyncIterator[object], classify: _FrameClassifier = _classify_completed_frames
+) -> AsyncGenerator[object, None]:
     """
     Relay leading data-less SSE frames (comment keepalives, events with no
     data) as they complete, and join raw ``bytes`` chunks until they
@@ -478,7 +484,7 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
                 yield chunk
                 continue
             pending.extend(chunk)
-            preface, classifiable, classified = _classify_completed_frames(pending, classified, len(chunk))
+            preface, classifiable, classified = classify(pending, classified, len(chunk))
             if preface:
                 yield _SsePreface(preface)
                 del pending[: len(preface)]
