@@ -694,7 +694,7 @@ def _merged_system_runs(messages: Sequence[AllMessageValues]) -> Iterator[AllMes
 _INSTRUCTION_ROLES: Final = frozenset(("system", "developer"))
 
 
-def _leading_instruction_block_length(roles: Sequence[str | None]) -> int:
+def leading_instruction_block_length(roles: Sequence[str | None]) -> int:
     return next((index for index, role in enumerate(roles) if role not in _INSTRUCTION_ROLES), len(roles))
 
 
@@ -715,14 +715,14 @@ def hoisted_instruction_indices(roles: Sequence[str | None]) -> tuple[int, ...]:
     stays in place so the request does not end on the assistant's turn. Items without a
     role (tool calls and their outputs) count as conversation.
     """
-    leading_length: Final = _leading_instruction_block_length(roles)
+    leading_length: Final = leading_instruction_block_length(roles)
     closing_start: Final = _closing_instruction_block_start(roles, leading_length)
     moved: Final = tuple(index for index in range(leading_length, closing_start) if roles[index] == "developer")
     return (*range(leading_length), *moved)
 
 
 def closing_instruction_indices(roles: Sequence[str | None]) -> frozenset[int]:
-    closing_start: Final = _closing_instruction_block_start(roles, _leading_instruction_block_length(roles))
+    closing_start: Final = _closing_instruction_block_start(roles, leading_instruction_block_length(roles))
     return frozenset(range(closing_start, len(roles)))
 
 
