@@ -3,6 +3,7 @@ import json
 from collections.abc import Callable
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,6 +27,16 @@ from litellm.router import Router
 from litellm.types.search import SearchToolInfoResponse
 
 client = TestClient(app)
+
+
+def test_dashboard_omits_the_litellm_proxy_provider_its_form_cannot_configure() -> None:
+    with _override_auth(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)):
+        response: Final = client.get("/search_tools/ui/available_providers")
+
+    assert response.status_code == 200, response.text
+    provider_names: Final = [provider["provider_name"] for provider in response.json()["providers"]]
+    assert "tavily" in provider_names
+    assert "litellm_proxy" not in provider_names
 
 
 @pytest.mark.asyncio

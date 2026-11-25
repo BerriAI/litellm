@@ -28,6 +28,9 @@ class LiteLLMProxySearchConfig(BaseSearchConfig):
     def forwarded_litellm_params(self) -> frozenset[str]:
         return _FORWARDED_LITELLM_PARAMS
 
+    def dashboard_configurable(self) -> bool:
+        return False
+
     def validate_environment(
         self,
         headers: dict[str, str],  # mutable-ok: BaseSearchConfig.validate_environment signature

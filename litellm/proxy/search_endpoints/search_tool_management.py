@@ -711,7 +711,7 @@ async def get_available_search_providers():
                 # Get the config class for this provider
                 config = ProviderConfigManager.get_provider_search_config(provider=provider)
 
-                if config is not None:
+                if config is not None and config.dashboard_configurable():
                     # Get the UI-friendly name from the config class
                     ui_name = config.ui_friendly_name()
 
