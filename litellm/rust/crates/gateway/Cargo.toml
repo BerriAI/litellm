@@ -32,6 +32,7 @@ litellm-coroutine.workspace = true
 litellm-callbacks-budgets.workspace = true
 litellm-spend-log-writer.workspace = true
 parking_lot.workspace = true
+moka.workspace = true
 arc-swap.workspace = true
 litellm-config.workspace = true
 litellm-config-load.workspace = true
@@ -76,6 +77,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 chrono.workspace = true
+jsonwebtoken = { workspace = true, features = ["rust_crypto", "use_pem"] }
 litellm-gateway = { workspace = true, features = ["test-support"] }
 litellm-gateway-inference = { workspace = true, features = ["test-support"] }
 litellm-redis-testing.workspace = true
@@ -84,11 +86,13 @@ sqlx.workspace = true
 litellm-yaml.workspace = true
 serde_yaml_ng = "0.10.0"
 litellm-http = { workspace = true, features = ["test-support"] }
+rcgen = "0.14.10"
 rstest.workspace = true
 litellm-cost = { workspace = true, features = ["test-support"] }
 litellm-callbacks-spend-log.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync", "test-util"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["aws_lc_rs"] }
 flate2 = "1.1.10"
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
 wiremock.workspace = true

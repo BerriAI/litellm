@@ -1,0 +1,52 @@
+# JWTs the native app verifies itself under an enterprise license: one that names no team or key
+# mapping is served, and one the core refuses goes to Python over the core's error.
+enterprise: true
+
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    enable_jwt_auth: true
+    litellm_jwtauth:
+      admin_allowed_routes: [/v1/messages]
+
+requests:
+  - name: a proxy admin JWT
+    jwt: {claims: {scope: litellm_proxy_admin}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a user JWT with no team
+    jwt: {claims: {sub: user-123, iss: "https://idp.example"}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a JWT shaped like an Entra agent's, though the gateway reads no database
+    jwt: {claims: {sub: agent-1, iss: "https://login.microsoftonline.com/tenant-1/v2.0", tid: tenant-1, azp: app-1}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: an expired JWT
+    jwt: {claims: {scope: litellm_proxy_admin}, expires_in: -60}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: expired
+
+  - name: the master key beside JWT auth
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a token that is not a JWT takes the key path
+    headers: {authorization: Bearer sk-virtual}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: invalid_token

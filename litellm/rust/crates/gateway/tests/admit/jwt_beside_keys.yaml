@@ -1,0 +1,34 @@
+# With a database the gateway also reads virtual keys, and a JWT the core verifies is still served
+# natively.
+enterprise: true
+
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    enable_jwt_auth: true
+    litellm_jwtauth:
+      admin_allowed_routes: [/v1/messages]
+
+keys:
+  sk-claude: {models: [claude]}
+
+requests:
+  - name: a proxy admin JWT
+    jwt: {claims: {scope: litellm_proxy_admin}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a user JWT with no team
+    jwt: {claims: {sub: user-123}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
+
+  - name: a virtual key beside JWT auth
+    headers: {authorization: Bearer sk-claude}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust

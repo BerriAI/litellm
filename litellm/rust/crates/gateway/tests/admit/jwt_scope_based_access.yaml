@@ -1,0 +1,40 @@
+# With scope based access enforced, the core checks a JWT's scopes against the model the request
+# names, which the gateway authenticates before it reads. So a JWT goes to Python, and the master
+# key, which no scope mapping limits, is still served.
+enterprise: true
+
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    enable_jwt_auth: true
+    litellm_jwtauth:
+      admin_allowed_routes: [/v1/messages]
+      enforce_scope_based_access: true
+      scope_mappings:
+        - scope: litellm.models.other
+          models: [other-model]
+
+requests:
+  - name: a proxy admin JWT
+    jwt: {claims: {scope: litellm_proxy_admin litellm.models.other}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+    over: enforce_scope_based_access
+
+  - name: a user JWT with no team
+    jwt: {claims: {sub: user-123, scope: litellm.models.other}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+    over: enforce_scope_based_access
+
+  - name: the master key
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust

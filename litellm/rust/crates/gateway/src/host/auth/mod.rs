@@ -11,6 +11,7 @@
 mod affiliation;
 mod carried;
 mod end_user;
+mod jwt_io;
 mod key;
 mod metadata;
 mod models;
@@ -45,6 +46,7 @@ pub(crate) use affiliation::{
     unserved, unserved_membership, unserved_org, unserved_project, unserved_user,
 };
 pub(crate) use end_user::{end_user, unserved as unserved_end_user};
+pub use jwt_io::{JwtIo, client_config as jwt_client_config};
 pub use key::Key;
 pub(crate) use models::{allowed_models, layers};
 pub use store::AuthStore;
@@ -80,6 +82,9 @@ pub struct NativeAuthHost {
     /// with a database, and `general_settings.disable_budget_reservation` is on, so no call holds
     /// against it.
     own_budget: bool,
+    /// HTTP and document-cache IO for JWT verification (JWKS, OIDC discovery). `None` on a host
+    /// that authenticates no request, as the credential store is.
+    jwt_io: Option<Arc<JwtIo>>,
 }
 
 impl NativeAuthHost {
@@ -89,6 +94,7 @@ impl NativeAuthHost {
             store: None,
             master: None,
             own_budget: false,
+            jwt_io: None,
         }
     }
 
@@ -96,6 +102,21 @@ impl NativeAuthHost {
     fn store(&self, step: &'static str) -> Result<&AuthStore, Error> {
         self.store.as_deref().map_or_else(|| declined(step), Ok)
     }
+    fn jwt_io(&self, step: &'static str) -> Result<&JwtIo, Error> {
+        match &self.jwt_io {
+            Some(io) => Ok(io),
+            None => declined(step),
+        }
+    }
+}
+
+fn is_entra_agent_candidate(claims: &Value) -> bool {
+    let Some(object) = claims.as_object() else {
+        return false;
+    };
+    ["iss", "tid", "azp"]
+        .into_iter()
+        .all(|field| object.get(field).is_some_and(Value::is_string))
 }
 
 /// The request needs `step`, which this host does not answer yet.
@@ -170,14 +191,16 @@ pub fn auth(
     store: Option<Arc<AuthStore>>,
     budgets_checked: bool,
 ) -> Auth<NativeRows> {
-    auth_over(config, store, budgets_checked, false, &|_: &str| None)
+    auth_over(config, store, budgets_checked, None, false, &|_: &str| None)
 }
 
-/// Like [`auth`], with the license entitlement and environment lookup from `AppState`.
+/// Like [`auth`], with the JWT verification IO, license entitlement, and environment lookup from
+/// `AppState`.
 pub fn auth_over(
     config: &Config,
     store: Option<Arc<AuthStore>>,
     budgets_checked: bool,
+    jwt_io: Option<Arc<JwtIo>>,
     premium: bool,
     environment: &dyn Lookup,
 ) -> Auth<NativeRows> {
@@ -186,6 +209,7 @@ pub fn auth_over(
         store,
         master: master_key(config).map(|key| Token::new(key.clone()).hash()),
         own_budget: budgets_checked && config.general_settings.disable_budget_reservation,
+        jwt_io,
     };
     let keys = CoreAuthenticator::new(host, settings, Arc::new(SystemClock));
     Auth::new(Arc::new(keys)).with_extractor(Arc::new(BearerOrXApiKey))
@@ -258,20 +282,28 @@ impl AuthHost for NativeAuthHost {
         Ok(())
     }
 
-    async fn fetch_json(&self, _: &str) -> Result<Option<Value>, Error> {
-        declined("fetch_json")
+    async fn fetch_json(&self, url: &str) -> Result<Option<Value>, Error> {
+        self.jwt_io("fetch_json")?
+            .fetch_json(url)
+            .await
+            .or_else(|jwt_io::Unusable| declined("fetch_json"))
     }
 
+    /// The core reads UserInfo only for a token that is no JWT, and `plan` sends such a token down
+    /// the key path, so no request this host authenticates asks.
     async fn fetch_userinfo(&self, _: &str, _: &Token) -> Result<Option<Value>, Error> {
         declined("fetch_userinfo")
     }
 
-    async fn cached_document(&self, _: &str) -> Result<Option<Value>, Error> {
-        declined("cached_document")
+    async fn cached_document(&self, key: &str) -> Result<Option<Value>, Error> {
+        Ok(self.jwt_io("cached_document")?.cached_document(key).await)
     }
 
-    async fn cache_document(&self, _: &str, _: &Value, _: Duration) -> Result<(), Error> {
-        declined("cache_document")
+    async fn cache_document(&self, key: &str, value: &Value, ttl: Duration) -> Result<(), Error> {
+        self.jwt_io("cache_document")?
+            .cache_document(key, value, ttl)
+            .await;
+        Ok(())
     }
 
     async fn cached_key_mapping(&self, _: MappedClaim<'_>) -> Result<Option<Value>, Error> {
@@ -295,7 +327,13 @@ impl AuthHost for NativeAuthHost {
         None::<&NoOperatorCode>
     }
 
-    async fn managed_agent(&self, _: &Value) -> Result<Option<ManagedAgent<Infallible>>, Error> {
+    async fn managed_agent(
+        &self,
+        claims: &Value,
+    ) -> Result<Option<ManagedAgent<Infallible>>, Error> {
+        if !is_entra_agent_candidate(claims) {
+            return Ok(None);
+        }
         declined("managed_agent")
     }
 
@@ -540,6 +578,10 @@ impl AuthHost for NativeAuthHost {
 pub(crate) mod keys;
 
 #[cfg(test)]
+#[path = "../../../tests/jwt/mod.rs"]
+mod jwt;
+
+#[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
@@ -553,7 +595,7 @@ mod tests {
     use jiff::Timestamp;
     use litellm_gateway_auth::{Authenticated, Error as Rejected, RequireMasterKey};
     use litellm_gateway_auth_core::{
-        Credential, Holder, Named, Team,
+        Credential, Holder, JwtActor, JwtStamp, Named, Team,
         authz::{Layer, ModelList},
     };
     use litellm_redis_store::{
@@ -572,6 +614,8 @@ mod tests {
     const MASTER_KEY: &str = "sk-master-credential";
     const VIRTUAL_KEY: &str = "sk-test-credential";
     const FAR_FUTURE: &str = "2100-01-01T00:00:00";
+    /// [`FAR_FUTURE`] as the NumericDate a JWT's `exp` holds.
+    const FAR_FUTURE_SECONDS: i64 = 4_102_444_800;
 
     /// The rows a key's column may point at.
     const PARENTS: &str = r#"
@@ -733,30 +777,6 @@ mod tests {
             .await
             .err()
             .unwrap();
-
-        assert_eq!(<&'static str>::from(rejected), refused);
-    }
-
-    /// A token shaped like a JWT that names RS256, which nothing here verifies.
-    const UNVERIFIED_JWT: &str = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1In0.c2ln";
-
-    #[rstest]
-    #[case::licensed_it_reaches_the_jwks_the_environment_names(true, "not_native")]
-    #[case::unlicensed_it_is_refused(false, "forbidden")]
-    #[tokio::test]
-    async fn a_jwt_is_authenticated_under_the_license_and_environment_the_gateway_was_given(
-        #[case] premium: bool,
-        #[case] refused: &str,
-    ) {
-        let config = config(&format!(
-            "  master_key: {MASTER_KEY}\n  enable_jwt_auth: true\n"
-        ));
-        let environment = |name: &str| {
-            (name == "JWT_PUBLIC_KEY_URL").then(|| "https://idp.example/jwks.json".to_owned())
-        };
-        let gateway = auth_over(&config, None, false, premium, &environment);
-
-        let rejected = bearing(&gateway, UNVERIFIED_JWT).await.err().unwrap();
 
         assert_eq!(<&'static str>::from(rejected), refused);
     }
@@ -1699,5 +1719,86 @@ mod tests {
         let reads = (read_at("sk-third", 2).await, read_at("sk-first", 2).await);
 
         assert_eq!(reads, expected);
+    }
+
+    /// A gateway with an enterprise license that verifies a JWT against the JWKS at `jwks_url` and
+    /// lets a proxy admin call the inference route.
+    fn verifying(jwks_url: &str) -> Auth<NativeRows> {
+        let config = config(
+            "  master_key: sk-master\n  enable_jwt_auth: true\n  litellm_jwtauth:\n    admin_allowed_routes: [/v1/messages]\n",
+        );
+        let jwks_url = jwks_url.to_owned();
+        let environment =
+            move |name: &str| (name == "JWT_PUBLIC_KEY_URL").then(|| jwks_url.clone());
+        let jwt_io = Arc::new(JwtIo::new(litellm_http::Client::for_test()));
+        auth_over(&config, None, false, Some(jwt_io), true, &environment)
+    }
+
+    #[rstest]
+    #[case::a_proxy_admin(json!({"scope": "litellm_proxy_admin"}), LitellmRole::ProxyAdmin)]
+    #[case::a_user(json!({"sub": "user-123"}), LitellmRole::InternalUser)]
+    #[tokio::test]
+    async fn a_verified_jwt_is_the_caller_its_claims_name(
+        #[case] claims: Value,
+        #[case] role: LitellmRole,
+    ) {
+        let jwks = jwt::serve_jwks().await;
+        let claims = claims
+            .as_object()
+            .unwrap()
+            .clone()
+            .into_iter()
+            .chain([("exp".to_owned(), json!(FAR_FUTURE_SECONDS))])
+            .collect::<serde_json::Map<_, _>>();
+        let token = jwt::sign(&Value::Object(claims.clone()));
+
+        let caller = bearing(&verifying(&jwks.url), &token).await.unwrap();
+
+        assert_eq!(
+            (&caller.credential, caller.role()),
+            (
+                &Credential::Jwt {
+                    jwt: JwtStamp {
+                        claims,
+                        user_email: None,
+                    },
+                    actor: JwtActor::User { role },
+                },
+                role
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn the_signing_keys_are_fetched_once_for_every_jwt_they_verify() {
+        let jwks = jwt::serve_jwks().await;
+        let gateway = verifying(&jwks.url);
+        let token = jwt::issue(json!({"sub": "user-123"}).as_object().unwrap(), 3600);
+
+        let verified = (
+            bearing(&gateway, &token).await.is_ok(),
+            bearing(&gateway, &token).await.is_ok(),
+        );
+
+        assert_eq!((verified, jwks.fetches()), ((true, true), 1));
+    }
+
+    #[rstest]
+    #[case::an_issuer_a_tenant_and_a_client(
+        json!({"iss": "https://login.microsoftonline.com/tenant-1/v2.0", "tid": "tenant-1", "azp": "app-1"}),
+        true
+    )]
+    #[case::no_issuer(json!({"tid": "tenant-1", "azp": "app-1"}), false)]
+    #[case::no_tenant(json!({"iss": "https://idp.example", "azp": "app-1"}), false)]
+    #[case::no_client(json!({"iss": "https://idp.example", "tid": "tenant-1"}), false)]
+    #[case::a_tenant_that_is_no_text(
+        json!({"iss": "https://idp.example", "tid": 7, "azp": "app-1"}),
+        false
+    )]
+    fn only_a_token_naming_an_issuer_a_tenant_and_a_client_may_be_an_entra_agent(
+        #[case] claims: Value,
+        #[case] candidate: bool,
+    ) {
+        assert_eq!(is_entra_agent_candidate(&claims), candidate);
     }
 }

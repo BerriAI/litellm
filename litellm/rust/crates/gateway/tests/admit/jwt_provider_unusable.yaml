@@ -1,0 +1,27 @@
+# An identity provider that answers its JWKS URL with a failure gives the gateway no signing keys.
+# Python raises on that answer, so a JWT goes to Python, and the master key is still served.
+enterprise: true
+jwks: not_found
+
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    enable_jwt_auth: true
+
+requests:
+  - name: a user JWT with no team
+    jwt: {claims: {sub: user-123}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: not_native
+
+  - name: the master key
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust

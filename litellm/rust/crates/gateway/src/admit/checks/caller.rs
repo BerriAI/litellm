@@ -1,3 +1,4 @@
+use litellm_config::GeneralSettings;
 use litellm_gateway_auth_core::{Credential, Holder, Named, Team, Via, record::ProjectRecord};
 
 use super::{Admit, Authentication, Reason, Refused};
@@ -13,13 +14,19 @@ use crate::{
 /// host learns to serve does not compile here until it is named native or not. A credential the
 /// core did not authenticate is over the error's name. A key that holds a team, owner,
 /// organization or project stays with Python over the first unserved column or association.
-pub(super) fn caller(_: &Admit, authentication: &Authentication) -> Option<Reason> {
+/// A key a JWT maps to is held the same way. A JWT is checked against its scope mappings only
+/// for the model the request names, which the core is not handed before the body is read. With a customer
+/// claim mapped, Python resolves the customer a verified JWT names after auth, and applies that
+/// customer's budgets and models, which the native app does not.
+pub(super) fn caller(admit: &Admit, authentication: &Authentication) -> Option<Reason> {
+    let jwt_settings = || {
+        scope_mappings_enforced(&admit.config.general_settings)
+            .then(|| Reason::new(Refused::Settings, "enforce_scope_based_access"))
+            .or_else(|| customer_claims(admit))
+    };
     match authentication {
-        Ok(caller) => match &caller.credential {
-            Credential::MasterKey => None,
-            Credential::Key {
-                via: Via::OwnToken, ..
-            } => {
+        Ok(caller) => {
+            let key_team = || {
                 let project = caller.affiliation.project.as_ref();
                 charged(&caller.affiliation.holder)
                     .or_else(|| {
@@ -33,13 +40,19 @@ pub(super) fn caller(_: &Admit, authentication: &Authentication) -> Option<Reaso
                         project.map(|project| unserved_project_column(project).unwrap_or("project"))
                     })
                     .map(|over| Reason::new(Refused::Credential, over))
+            };
+            match &caller.credential {
+                Credential::MasterKey => None,
+                Credential::Key {
+                    via: Via::OwnToken, ..
+                } => key_team(),
+                Credential::Key {
+                    via: Via::MappedJwt(_),
+                    ..
+                } => key_team().or_else(jwt_settings),
+                Credential::Jwt { .. } => jwt_settings(),
             }
-            Credential::Key {
-                via: Via::MappedJwt(_),
-                ..
-            }
-            | Credential::Jwt { .. } => Some(Reason::new(Refused::Credential, "not_native")),
-        },
+        }
         Err(error) => Some(Reason::new(
             Refused::Credential,
             <&'static str>::from(error),
@@ -77,6 +90,47 @@ fn unserved_project_column(project: &Named<ProjectRecord>) -> Option<&'static st
     }
 }
 
+fn scope_mappings_enforced(general: &GeneralSettings) -> bool {
+    general.litellm_jwtauth.as_ref().is_some_and(|jwt| {
+        jwt.enforce_scope_based_access
+            && jwt
+                .scope_mappings
+                .as_deref()
+                .is_some_and(|mappings| !mappings.is_empty())
+    })
+}
+
+fn customer_claims(admit: &Admit) -> Option<Reason> {
+    maps_customer_claims(&admit.config.general_settings)
+        .then(|| Reason::new(Refused::Settings, "customer_jwt_fields"))
+}
+
+/// `_maps_customer_claims`, over the settings and every issuer.
+fn maps_customer_claims(general: &GeneralSettings) -> bool {
+    general.litellm_jwtauth.as_ref().is_some_and(|jwt| {
+        let by_issuer = jwt
+            .issuers
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .flat_map(|issuer| {
+                [
+                    &issuer.customer_org_alias_jwt_field,
+                    &issuer.customer_member_id_jwt_field,
+                    &issuer.customer_team_id_jwt_field,
+                ]
+            });
+        [
+            &jwt.customer_org_alias_jwt_field,
+            &jwt.customer_member_id_jwt_field,
+            &jwt.customer_team_id_jwt_field,
+        ]
+        .into_iter()
+        .chain(by_issuer)
+        .any(Option::is_some)
+    })
+}
+
 /// Python reserves what a call may cost against every budget its caller holds before the call
 /// runs, unless `general_settings.disable_budget_reservation` turns that off. The gateway reserves
 /// nothing, so a caller with a budget goes to Python while reservation is on.
@@ -94,10 +148,10 @@ pub(super) fn budgets(admit: &Admit, authentication: &Authentication) -> Option<
 
 #[cfg(test)]
 mod tests {
-    use litellm_config::{Config, LitellmRole};
+    use litellm_config::Config;
     use litellm_gateway_auth::Authenticated;
     use litellm_gateway_auth_core::{
-        Affiliation, Caller, JwtActor, JwtStamp,
+        Affiliation, Caller, JwtStamp,
         record::{Budget, EndUserRecord},
     };
     use rstest::rstest;
@@ -165,44 +219,76 @@ mod tests {
         );
     }
 
-    fn stamp() -> JwtStamp {
-        JwtStamp {
-            claims: serde_json::Map::new(),
-            user_email: None,
-        }
-    }
-
-    fn mapped_key() -> Credential<NativeRows> {
-        Credential::Key {
-            key: Key::stored("stored", None),
-            via: Via::MappedJwt(stamp()),
-        }
-    }
-
-    fn jwt() -> Credential<NativeRows> {
-        Credential::Jwt {
-            jwt: stamp(),
-            actor: JwtActor::User {
-                role: LitellmRole::InternalUser,
-            },
-        }
+    fn jwtauth(settings: &str) -> GeneralSettings {
+        let yaml = format!("general_settings:\n  litellm_jwtauth:\n{settings}");
+        Config::from_yaml(&yaml).unwrap().general_settings
     }
 
     #[rstest]
-    #[case::a_key_a_jwt_maps_to(mapped_key())]
-    #[case::a_jwt(jwt())]
-    fn a_caller_no_native_route_serves_yet_goes_to_python(
-        #[case] credential: Credential<NativeRows>,
+    #[case::no_customer_claim("    team_id_jwt_field: team\n", false)]
+    #[case::an_org_alias_in_the_settings("    customer_org_alias_jwt_field: customer.org\n", true)]
+    #[case::a_member_id_in_the_settings(
+        "    customer_member_id_jwt_field: customer.member\n",
+        true
+    )]
+    #[case::a_team_id_in_the_settings("    customer_team_id_jwt_field: customer.team\n", true)]
+    #[case::an_org_alias_in_an_issuer(
+        "    issuers:\n      - issuer: https://idp.example\n        customer_org_alias_jwt_field: customer.org\n",
+        true
+    )]
+    #[case::a_member_id_in_an_issuer(
+        "    issuers:\n      - issuer: https://idp.example\n        customer_member_id_jwt_field: customer.member\n",
+        true
+    )]
+    #[case::a_team_id_in_an_issuer(
+        "    issuers:\n      - issuer: https://idp.example\n        customer_team_id_jwt_field: customer.team\n",
+        true
+    )]
+    fn a_config_that_maps_a_customer_claim_is_one_python_resolves(
+        #[case] settings: &str,
+        #[case] maps: bool,
     ) {
+        assert_eq!(maps_customer_claims(&jwtauth(settings)), maps);
+    }
+
+    #[rstest]
+    #[case::enforced_with_a_mapping(
+        "    enforce_scope_based_access: true\n    scope_mappings:\n      - scope: read\n        models: [claude]\n",
+        true
+    )]
+    #[case::a_mapping_that_is_not_enforced(
+        "    scope_mappings:\n      - scope: read\n        models: [claude]\n",
+        false
+    )]
+    #[case::enforced_with_no_mappings("    enforce_scope_based_access: true\n", false)]
+    #[case::enforced_with_an_empty_list(
+        "    enforce_scope_based_access: true\n    scope_mappings: []\n",
+        false
+    )]
+    fn scope_mappings_gate_a_jwt_only_when_enforced_and_listed(
+        #[case] settings: &str,
+        #[case] enforced: bool,
+    ) {
+        assert_eq!(scope_mappings_enforced(&jwtauth(settings)), enforced);
+    }
+
+    #[test]
+    fn a_key_a_jwt_maps_to_is_served_natively() {
         let config = Config::from_yaml("general_settings:\n  master_key: gateway-key\n").unwrap();
         let authentication: Authentication = Ok(Authenticated::from(Caller {
-            credential,
+            credential: Credential::Key {
+                key: Key::stored("stored", None),
+                via: Via::MappedJwt(JwtStamp {
+                    claims: serde_json::Map::new(),
+                    user_email: None,
+                }),
+            },
             affiliation: Affiliation::nobody(),
             end_user: None,
         }));
 
         let reason = caller(&Admit::over(&config, vec![]), &authentication);
 
-        assert_eq!(reason, Some(Reason::new(Refused::Credential, "not_native")));
+        assert_eq!(reason, None);
     }
 }

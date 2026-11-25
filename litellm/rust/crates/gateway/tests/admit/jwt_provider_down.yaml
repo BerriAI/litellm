@@ -1,0 +1,27 @@
+# An identity provider nothing answers for is an outage. With no signing keys cached from before, a
+# JWT cannot be verified here and goes to Python, and the master key is still served.
+enterprise: true
+jwks: down
+
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    enable_jwt_auth: true
+
+requests:
+  - name: a user JWT with no team
+    jwt: {claims: {sub: user-123}}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: unavailable
+
+  - name: the master key
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
