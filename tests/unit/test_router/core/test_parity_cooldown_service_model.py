@@ -533,9 +533,13 @@ class _Prometheus:
     def __init__(self) -> None:
         self.cooled: Final[list[Mapping[str, object]]] = []  # mutable-ok: appended as the event runs
         self.outages: Final[list[Mapping[str, object]]] = []  # mutable-ok: same
+        self.cooldown_times: Final[list[Mapping[str, object]]] = []  # mutable-ok: same
 
     def set_deployment_complete_outage(self, **labels: object) -> None:  # kwargs-ok: the metric's labels
         self.outages.append(labels)
+
+    def set_deployment_cooldown_time(self, **cooldown: object) -> None:  # kwargs-ok: the deployment and its cooldown
+        self.cooldown_times.append(cooldown)
 
     def increment_deployment_cooled_down(self, **labels: object) -> None:  # kwargs-ok: the metric's labels
         self.cooled.append(labels)
@@ -555,6 +559,7 @@ async def test_the_event_reaches_prometheus_with_the_deployments_labels(
 
     assert [(labels["model_id"], labels["exception_status"]) for labels in prometheus.cooled] == [("a", "404")]
     assert [labels["model_id"] for labels in prometheus.outages] == ["a"]
+    assert [cooldown["model_id"] for cooldown in prometheus.cooldown_times] == ["a"]
 
 
 # --- service events -------------------------------------------------------------------------------

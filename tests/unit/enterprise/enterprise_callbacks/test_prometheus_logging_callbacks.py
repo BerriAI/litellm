@@ -1238,7 +1238,7 @@ def test_cooldown_before_any_request_series_is_cleared_by_the_next_success(
     assert deployment_state_values("dep-1") == [0.0, 0.0]
 
 
-def test_a_failure_logged_after_the_cooldown_keeps_the_series_at_two_until_the_next_success(
+def test_a_failure_logged_during_the_cooldown_keeps_the_series_at_two_until_the_next_success(
     prometheus_logger: PrometheusLogger, deployment_state_values: DeploymentStateValues
 ) -> None:
     prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)
@@ -1293,7 +1293,7 @@ def test_a_failure_after_the_deployment_recovered_from_a_cooldown_is_a_partial_o
     assert deployment_state_values("dep-1") == [1.0]
 
 
-def test_every_failure_logged_after_a_cooldown_stays_at_two(
+def test_every_failure_logged_during_a_cooldown_stays_at_two(
     prometheus_logger: PrometheusLogger, deployment_state_values: DeploymentStateValues
 ) -> None:
     prometheus_logger.set_deployment_healthy(**REQUEST_SERIES)

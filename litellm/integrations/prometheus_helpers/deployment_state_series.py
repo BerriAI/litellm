@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterable
 from contextlib import AbstractContextManager
@@ -36,6 +38,7 @@ class Serving:
 @dataclass(frozen=True, slots=True)
 class CoolingDown:
     written: tuple[DeploymentStateSeries, ...]
+    ends_at: float
 
 
 SeriesHistory: TypeAlias = Serving | CoolingDown
@@ -47,7 +50,7 @@ def including(
     return (*(known for known in written if known != series), series)
 
 
-def stuck_at_two(history: SeriesHistory) -> tuple[DeploymentStateSeries, ...]:
+def marked_by_cooldown(history: SeriesHistory) -> tuple[DeploymentStateSeries, ...]:
     match history:
         case Serving():
             return ()
@@ -60,16 +63,18 @@ def stuck_at_two(history: SeriesHistory) -> tuple[DeploymentStateSeries, ...]:
 class DeploymentStateSeriesTracker:
     """
     A cooldown marks each series written since the last success, as its config labels can differ from the request
-    labels. The next success clears them. Serving deployments are capped, and a cooling deployment is kept until its
-    next success.
+    labels. The next success clears them. A failure reads 2 until the cooldown's known length has passed, and 1 after.
+    Serving deployments are capped, and a cooling deployment is kept until its next success.
     """
 
     def __init__(
         self,
         write: Callable[[DeploymentState, str, str | None, str | None, str], None],
         lock: AbstractContextManager[object] | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._write = write
+        self._clock: Final = clock
         self._serving: OrderedDict[str | None, Serving] = OrderedDict()  # mutable-ok: O(1) LRU
         self._cooling: dict[str | None, CoolingDown] = {}  # mutable-ok: emptied by each deployment's next success
         self._lock: AbstractContextManager[object] = Lock() if lock is None else lock
@@ -77,7 +82,7 @@ class DeploymentStateSeriesTracker:
     def healthy(self, series: DeploymentStateSeries) -> None:
         with self._lock:
             history: Final = self._history(series.model_id)
-            self._write_all(DeploymentState.HEALTHY, including(stuck_at_two(history), series))
+            self._write_all(DeploymentState.HEALTHY, including(marked_by_cooldown(history), series))
             self._remember(series.model_id, Serving(written=(series,)))
 
     def partial_outage(self, series: DeploymentStateSeries) -> None:
@@ -89,10 +94,14 @@ class DeploymentStateSeriesTracker:
                 case Serving():
                     self._write_all(DeploymentState.PARTIAL_OUTAGE, (series,))
                     self._remember(series.model_id, Serving(written=tracked))
-                case CoolingDown():
+                case CoolingDown(ends_at=ends_at):
+                    cooldown_running: Final = self._clock() < ends_at
                     self._write_all(DeploymentState.HEALTHY, listed[:-MAX_SERIES_PER_DEPLOYMENT])
-                    self._write_all(DeploymentState.COMPLETE_OUTAGE, (series,))
-                    self._remember(series.model_id, CoolingDown(written=tracked))
+                    if cooldown_running:
+                        self._write_all(DeploymentState.COMPLETE_OUTAGE, (series,))
+                    else:
+                        self._write_all(DeploymentState.PARTIAL_OUTAGE, tracked)
+                    self._remember(series.model_id, CoolingDown(written=tracked, ends_at=ends_at))
                 case _:
                     assert_never(history)
 
@@ -101,7 +110,13 @@ class DeploymentStateSeriesTracker:
             history: Final = self._history(derived_from_config.model_id)
             marked: Final = history.written or (derived_from_config,)
             self._write_all(DeploymentState.COMPLETE_OUTAGE, marked)
-            self._remember(derived_from_config.model_id, CoolingDown(written=marked))
+            self._remember(derived_from_config.model_id, CoolingDown(written=marked, ends_at=math.inf))
+
+    def cooldown_lasts(self, model_id: str | None, seconds: float) -> None:
+        with self._lock:
+            cooling: Final = self._cooling.get(model_id)
+            if cooling is not None:
+                self._cooling[model_id] = CoolingDown(written=cooling.written, ends_at=self._clock() + seconds)
 
     def _write_all(self, state: DeploymentState, series: Iterable[DeploymentStateSeries]) -> None:
         for item in series:

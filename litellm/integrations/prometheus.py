@@ -4185,6 +4185,9 @@ class PrometheusLogger(CustomLogger):
             DeploymentStateSeries(litellm_model_name, model_id, api_base, api_provider)
         )
 
+    def set_deployment_cooldown_time(self, model_id: str | None, cooldown_time: float) -> None:
+        self._deployment_state_tracker.cooldown_lasts(model_id, cooldown_time)
+
     def increment_deployment_cooled_down(
         self,
         litellm_model_name: str,

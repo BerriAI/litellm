@@ -66,6 +66,10 @@ async def router_cooldown_event_callback(
             api_base=_api_base,
             api_provider=llm_provider,
         )
+        prometheusLogger.set_deployment_cooldown_time(
+            model_id=model_id,
+            cooldown_time=ctx.health().cooldowns.default_cooldown_time if cooldown_time is None else cooldown_time,
+        )
 
         prometheusLogger.increment_deployment_cooled_down(
             litellm_model_name=_model_name,

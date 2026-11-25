@@ -301,3 +301,87 @@ def test_a_write_in_flight_holds_back_the_next_state_change_of_the_deployment(
 
     assert lock.contended.is_set()
     assert gauge == expected_gauge
+
+
+class ManualClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def cooled_chat_and_streaming(
+    cooldown_seconds: float | None,
+) -> tuple[DeploymentStateSeriesTracker, Gauge, ManualClock, DeploymentStateSeries, DeploymentStateSeries]:
+    gauge: Final[Gauge] = {}
+    clock: Final = ManualClock()
+    tracker: Final = DeploymentStateSeriesTracker(write=gauge_writer(gauge), clock=clock)
+    chat: Final = request_series("dep-1")
+    streaming: Final = request_series("dep-1", "https://api.example/v1/streaming")
+    tracker.healthy(chat)
+    tracker.partial_outage(streaming)
+    tracker.complete_outage(config_series("dep-1"))
+    if cooldown_seconds is not None:
+        tracker.cooldown_lasts("dep-1", cooldown_seconds)
+    return tracker, gauge, clock, chat, streaming
+
+
+def test_a_failure_after_the_cooldown_ended_is_a_partial_outage_on_every_series_the_cooldown_marked() -> None:
+    tracker, gauge, clock, chat, streaming = cooled_chat_and_streaming(cooldown_seconds=5.0)
+    clock.now = 5.0
+
+    tracker.partial_outage(chat)
+
+    assert gauge == {chat: PARTIAL_OUTAGE, streaming: PARTIAL_OUTAGE}
+
+    tracker.healthy(chat)
+
+    assert gauge == {chat: HEALTHY, streaming: HEALTHY}
+
+
+def test_a_failure_before_the_cooldown_ended_keeps_every_series_the_cooldown_marked_at_two() -> None:
+    tracker, gauge, clock, chat, streaming = cooled_chat_and_streaming(cooldown_seconds=5.0)
+    clock.now = 4.9
+
+    tracker.partial_outage(chat)
+
+    assert gauge == {chat: COMPLETE_OUTAGE, streaming: COMPLETE_OUTAGE}
+
+
+def test_a_cooldown_with_no_known_length_lasts_until_the_next_success() -> None:
+    tracker, gauge, clock, chat, streaming = cooled_chat_and_streaming(cooldown_seconds=None)
+    clock.now = 86_400.0
+
+    tracker.partial_outage(chat)
+
+    assert gauge == {chat: COMPLETE_OUTAGE, streaming: COMPLETE_OUTAGE}
+
+
+def test_a_new_cooldown_after_an_ended_one_marks_the_same_series_again() -> None:
+    tracker, gauge, clock, chat, streaming = cooled_chat_and_streaming(cooldown_seconds=5.0)
+    clock.now = 5.0
+    tracker.partial_outage(chat)
+
+    tracker.complete_outage(config_series("dep-1"))
+    tracker.cooldown_lasts("dep-1", 5.0)
+    tracker.partial_outage(chat)
+
+    assert gauge == {chat: COMPLETE_OUTAGE, streaming: COMPLETE_OUTAGE}
+
+    tracker.healthy(chat)
+
+    assert gauge == {chat: HEALTHY, streaming: HEALTHY}
+
+
+def test_a_cooldown_length_for_a_deployment_that_is_not_cooling_down_changes_nothing() -> None:
+    gauge: Final[Gauge] = {}
+    clock: Final = ManualClock()
+    tracker: Final = DeploymentStateSeriesTracker(write=gauge_writer(gauge), clock=clock)
+    chat: Final = request_series("dep-1")
+    tracker.healthy(chat)
+
+    tracker.cooldown_lasts("dep-1", 5.0)
+    tracker.partial_outage(chat)
+
+    assert gauge == {chat: PARTIAL_OUTAGE}
