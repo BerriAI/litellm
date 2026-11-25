@@ -575,11 +575,15 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
     @staticmethod
     def _model_cost_entry(model: str) -> Mapping[str, object]:
-        entry = litellm.model_cost.get(model)
-        if entry is None:
-            stripped: Final = model.split("/", 1)[-1]
-            entry = litellm.model_cost.get(stripped) or litellm.model_cost.get(f"gemini/{stripped}")
-        return entry or {}
+        model_cost: Final[Mapping[str, Mapping[str, object]]] = litellm.model_cost
+        stripped: Final = model.split("/", 1)[-1]
+        return (
+            model_cost.get(model)
+            or model_cost.get(stripped)
+            or model_cost.get(f"gemini/{stripped}")
+            or model_cost.get(f"vertex_ai/{stripped}")
+            or {}
+        )
 
     @staticmethod
     def _is_audio_only_live_model(model: str) -> bool:

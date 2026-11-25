@@ -126,36 +126,7 @@ class VertexAIRealtimeConfig(GeminiRealtimeConfig):
     # ------------------------------------------------------------------
 
     def session_configuration_request(self, model: str) -> str:
-        """
-        Return the JSON setup message for Vertex AI Live.
-
-        Vertex AI requires the fully-qualified model path:
-        ``projects/{project}/locations/{location}/publishers/google/models/{model}``
-
-        Also enables automatic activity detection (server VAD) and output
-        audio transcription so the proxy forwards transcript events.
-        """
-        from litellm.types.llms.gemini import BidiGenerateContentSetup
-        from litellm.types.llms.vertex_ai import GeminiResponseModalities
-
-        response_modalities: Final[list[GeminiResponseModalities]] = ["AUDIO"]
-        full_model_path: Final = f"projects/{self._project}/locations/{self._location}/publishers/google/models/{model}"
-        setup_config: Final[BidiGenerateContentSetup] = {
-            "model": full_model_path,
-            "generationConfig": {"responseModalities": response_modalities},
-            # Enable server-side VAD with sensible defaults for voice sessions.
-            "realtimeInputConfig": {
-                "automaticActivityDetection": {
-                    "disabled": False,
-                    "silenceDurationMs": 800,
-                }
-            },
-            # Return input transcript so guardrails can inspect user speech.
-            "inputAudioTranscription": {},
-            # Return output transcript so clients can read what the model said.
-            "outputAudioTranscription": {},
-        }
-        return json.dumps({"setup": setup_config})
+        return json.dumps({"setup": self._build_vertex_ai_setup_config(model, {})})
 
     # ------------------------------------------------------------------
     # Request translation
