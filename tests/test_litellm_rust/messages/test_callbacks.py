@@ -1,11 +1,12 @@
 import asyncio
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from contextvars import ContextVar
 from datetime import datetime
 from typing import Final
 
 import pytest
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.integrations.argilla import ArgillaLogger
@@ -25,6 +26,18 @@ pytestmark = pytest.mark.requires_rust_extension
 SYNC_HANDLERS_ON_ASYNC_CALLS: Final = gap("native async calls also run the sync success and failure handlers")
 _OBJECT: Final = TypeAdapter(dict[str, object])
 _HEADERS: Final = TypeAdapter(dict[str, str])
+
+
+class _LoggedHiddenParams(TypedDict):
+    additional_headers: ReadOnly[Mapping[str, object]]
+
+
+class _LoggedPayload(TypedDict):
+    response_cost: ReadOnly[float]
+    hidden_params: ReadOnly[_LoggedHiddenParams]
+
+
+_LOGGED: Final = TypeAdapter(_LoggedPayload)
 
 
 @pytest.fixture
@@ -98,6 +111,37 @@ async def test_failure_events_carry_the_error_raised_to_the_caller(server: Recor
     assert_served_natively(server)
     assert isinstance(events[0].kwargs, dict)
     assert events[0].kwargs["exception"] is raised.value
+
+
+@pytest.mark.asyncio
+async def test_success_events_carry_only_the_rate_limit_from_the_provider_headers(server: RecordingServer) -> None:
+    server.enqueue(
+        ResponseSpec(
+            body=MESSAGES_RESPONSE,
+            headers={
+                "anthropic-ratelimit-tokens-remaining": "11999000",
+                "anthropic-ratelimit-requests-remaining": "12999",
+                "set-cookie": "session=secret",
+                "x-litellm-response-cost": "0.5",
+            },
+        )
+    )
+    recorder: Final = RecordingLogger()
+
+    with rebound(litellm, "callbacks", [recorder]):
+        response: Final = await call(server)
+        events: Final = await recorder.wait_for_async("async_log_success_event")
+
+    assert_served_natively(server, response)
+    assert isinstance(events[0].kwargs, dict)
+    logged: Final = _LOGGED.validate_python(events[0].kwargs["standard_logging_object"])
+    assert 0 < logged["response_cost"] < 0.5
+    assert logged["hidden_params"]["additional_headers"] == {
+        "x_ratelimit_remaining_tokens": 11999000,
+        "x_ratelimit_remaining_requests": 12999,
+        "llm_provider-anthropic-ratelimit-tokens-remaining": "11999000",
+        "llm_provider-anthropic-ratelimit-requests-remaining": "12999",
+    }
 
 
 @pytest.mark.asyncio

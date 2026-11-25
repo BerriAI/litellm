@@ -914,6 +914,7 @@ def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: flo
 
 _HIDDEN_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
+_RATE_LIMIT_HEADER_PREFIXES: Final = ("anthropic-ratelimit-", "x-ratelimit-")
 
 
 def set_provider_response_headers_in_hidden_params(
@@ -939,3 +940,21 @@ def get_provider_response_headers_from_hidden_params(response: object) -> Mappin
         return _PROVIDER_HEADERS_ADAPTER.validate_python(validated.get("headers"))
     except ValidationError:
         return None
+
+
+def rate_limit_headers(headers: Mapping[str, str]) -> Mapping[str, str]:
+    return MappingProxyType(
+        {
+            name.lower(): value
+            for name, value in headers.items()
+            if name.lower().startswith(_RATE_LIMIT_HEADER_PREFIXES) and value.isascii()
+        }
+    )
+
+
+def get_recorded_rate_limit_headers(model_call_details: Mapping[str, object]) -> Mapping[str, str] | None:
+    try:
+        recorded: Final = _PROVIDER_HEADERS_ADAPTER.validate_python(model_call_details.get("response_headers"))
+    except ValidationError:
+        return None
+    return rate_limit_headers(recorded)

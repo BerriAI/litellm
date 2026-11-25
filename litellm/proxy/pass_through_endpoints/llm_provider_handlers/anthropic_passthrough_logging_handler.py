@@ -12,6 +12,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import ANTHROPIC_BATCHES_ROUTE
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.core_helpers import (
+    get_recorded_rate_limit_headers,
     loads_json_object,
     set_provider_response_headers_in_hidden_params,
 )
@@ -59,8 +60,6 @@ else:
     EndpointType = Any
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
-_PROVIDER_RESPONSE_HEADERS: Final = TypeAdapter(Mapping[str, str], config=ConfigDict(hide_input_in_errors=True))
-_RATE_LIMIT_HEADER_PREFIXES: Final = ("anthropic-ratelimit-", "x-ratelimit-")
 
 
 def _event_payload(event: str) -> Mapping[str, object] | None:
@@ -87,18 +86,10 @@ def _bedrock_trace_payload(all_chunks: Sequence[str | bytes]) -> Mapping[str, ob
 
 
 def _stamp_provider_response_headers(response: ModelResponse, logging_obj: LiteLLMLoggingObj) -> None:
-    try:
-        headers: Final = _PROVIDER_RESPONSE_HEADERS.validate_python(
-            logging_obj.model_call_details.get("response_headers")
-        )
-    except ValidationError:
+    headers: Final = get_recorded_rate_limit_headers(logging_obj.model_call_details)
+    if headers is None:
         return
-    rate_limit_headers: Final = {
-        name.lower(): value for name, value in headers.items() if name.lower().startswith(_RATE_LIMIT_HEADER_PREFIXES)
-    }
-    set_provider_response_headers_in_hidden_params(
-        response, rate_limit_headers, process_headers=process_anthropic_headers
-    )
+    set_provider_response_headers_in_hidden_params(response, headers, process_headers=process_anthropic_headers)
 
 
 class AnthropicPassthroughLoggingHandler:

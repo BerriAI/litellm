@@ -58,6 +58,7 @@ class _LoggedHiddenParams(TypedDict):
 
 class _LoggedPayload(TypedDict):
     hidden_params: ReadOnly[_LoggedHiddenParams]
+    response_cost: ReadOnly[float]
 
 
 class _SuccessPayloadRecorder(CustomLogger):
@@ -142,6 +143,11 @@ async def test_a_native_messages_stream_logs_the_rate_limit_from_the_provider_he
     )
 
     legacy.stream_opened(logger, head)
+    assert logger.model_call_details["response_headers"] == {
+        **TypeAdapter(Mapping[str, str]).validate_python(head["additional_headers"]),
+        "anthropic-ratelimit-tokens-remaining": "11999000",
+        "anthropic-ratelimit-requests-remaining": "12999",
+    }
     handled: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
         litellm_logging_obj=logger,
         passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
@@ -166,6 +172,95 @@ async def test_a_native_messages_stream_logs_the_rate_limit_from_the_provider_he
     assert logged_headers["x_ratelimit_remaining_tokens"] == 11999000
     assert logged_headers["x_ratelimit_remaining_requests"] == 12999
     assert not [name for name in logged_headers if name.startswith("llm_provider-llm_provider-")]
+
+
+def _native_plain_messages_logger(recorder: CustomLogger) -> Logging:
+    logger: Final = Logging(
+        model="claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime(2026, 1, 1),
+        litellm_call_id="native-plain-rate-limit",
+        function_id="native-plain-rate-limit",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logger.update_environment_variables(
+        model="claude-sonnet-5-5",
+        user="",
+        optional_params={},
+        litellm_params={"custom_llm_provider": "anthropic"},
+        custom_llm_provider="anthropic",
+    )
+    return logger
+
+
+async def _finish_native_plain_messages_call(logger: Logging) -> None:
+    await logger.dispatch_success_handlers(
+        result={
+            "id": "msg_native",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-5-5",
+            "content": [{"type": "text", "text": "hi"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 10, "output_tokens": 2},
+        },
+        start_time=datetime.datetime(2026, 1, 1),
+        end_time=datetime.datetime(2026, 1, 1, 0, 0, 1),
+        cache_hit=False,
+        prefer_async_handlers=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_native_plain_messages_call_logs_only_the_rate_limit_from_the_provider_headers() -> None:
+    recorder: Final = _SuccessPayloadRecorder()
+    logger: Final = _native_plain_messages_logger(recorder)
+
+    legacy.post_call(
+        logger,
+        "{}",
+        None,
+        {"complete_input_dict": {}, "headers": {}},
+        (
+            ("Anthropic-Ratelimit-Tokens-Remaining", "11999000"),
+            ("anthropic-ratelimit-requests-remaining", "12999"),
+            ("set-cookie", "session=secret"),
+            ("x-litellm-response-cost", "0.5"),
+            ("x-ms-is-spilled-over", "true"),
+        ),
+    )
+    await _finish_native_plain_messages_call(logger)
+    logged: Final = await asyncio.wait_for(recorder.payloads.get(), timeout=5)
+
+    assert logged["hidden_params"]["additional_headers"] == {
+        "x_ratelimit_remaining_tokens": 11999000,
+        "x_ratelimit_remaining_requests": 12999,
+        "llm_provider-anthropic-ratelimit-tokens-remaining": "11999000",
+        "llm_provider-anthropic-ratelimit-requests-remaining": "12999",
+    }
+    assert 0 < logged["response_cost"] < 0.5
+    assert logger.model_call_details["response_headers"] == {
+        "anthropic-ratelimit-tokens-remaining": "11999000",
+        "anthropic-ratelimit-requests-remaining": "12999",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("recorded", [None, {"x-ratelimit-remaining-tokens": 7}, {"x-ratelimit-note": "dépassé"}])
+async def test_a_native_plain_messages_call_is_logged_without_usable_provider_headers(recorded: object) -> None:
+    recorder: Final = _SuccessPayloadRecorder()
+    logger: Final = _native_plain_messages_logger(recorder)
+    logger.model_call_details["response_headers"] = recorded
+
+    legacy.post_call(logger, "{}", None, {"complete_input_dict": {}, "headers": {}}, (("request-id", "req_native"),))
+    await _finish_native_plain_messages_call(logger)
+    logged: Final = await asyncio.wait_for(recorder.payloads.get(), timeout=5)
+
+    assert logged["response_cost"] > 0
+    assert logger.model_call_details["response_headers"] == recorded
 
 
 def test_setup_reuses_a_supplied_logger() -> None:

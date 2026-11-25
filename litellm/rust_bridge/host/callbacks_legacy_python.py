@@ -11,7 +11,7 @@ import contextvars
 import datetime
 import traceback
 import uuid
-from collections.abc import Awaitable, Coroutine, Mapping
+from collections.abc import Awaitable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -21,6 +21,7 @@ from typing import (
     cast,  # noqa: TID251  # bounded compatibility calls into legacy Python integrations
 )
 
+import httpx
 from pydantic import TypeAdapter
 
 if TYPE_CHECKING:
@@ -223,8 +224,17 @@ def pre_call(logger: LoggingSurface, input: str, api_key: str | None, additional
 
 
 def post_call(
-    logger: LoggingSurface, original_response: str, api_key: str | None, additional_args: dict[str, object]
+    logger: Logging,
+    original_response: str,
+    api_key: str | None,
+    additional_args: dict[str, object],
+    response_headers: Sequence[tuple[str, str]],
 ) -> None:
+    from litellm.litellm_core_utils.core_helpers import rate_limit_headers
+
+    provider_limits: Final = dict(rate_limit_headers(httpx.Headers(list(response_headers))))
+    if provider_limits:
+        logger.model_call_details["response_headers"] = provider_limits  # rebind-ok: the call's logger records them
     logger.post_call(original_response=original_response, api_key=api_key, additional_args=additional_args)
 
 
@@ -351,13 +361,15 @@ class ProviderStreamHead(dict[str, object]):
 
 
 def stream_opened(logger: Logging, head: Mapping[str, object]) -> None:
+    from litellm.litellm_core_utils.core_helpers import rate_limit_headers
+
     logger.stream = True
     logger.model_call_details["stream"] = True
-    logger.model_call_details["response_headers"] = (
-        dict(head.provider_headers)
-        if isinstance(head, ProviderStreamHead)
-        else _STREAM_HEADERS.validate_python(head.get("additional_headers") or {})
-    )
+    provider_headers: Final[Mapping[str, str]] = head.provider_headers if isinstance(head, ProviderStreamHead) else {}
+    logger.model_call_details["response_headers"] = {
+        **_STREAM_HEADERS.validate_python(head.get("additional_headers") or {}),
+        **rate_limit_headers(provider_headers),
+    }
 
 
 def stream_success(
