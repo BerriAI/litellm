@@ -30,6 +30,7 @@ from litellm.llms.bedrock_mantle.common_utils import (
     mantle_supports_all_json_schema_keywords,
     mantle_url_region,
     resolve_mantle_region,
+    with_values_gemma_4_accepts,
 )
 from litellm.llms.mistral.common_utils import with_mistral_tool_call_ids
 from litellm.llms.openai.chat.gpt_reasoning_transformation import get_effort_level, is_gpt_reasoning_series_name
@@ -136,10 +137,7 @@ def _with_schemas_model_accepts(
         model, _chat_request_region(litellm_params), litellm_params, model_cost_table.published()
     ):
         return params
-    verbose_logger.debug(
-        "Bedrock Mantle %s does not support all JSON schema keywords, so the ones it rejects are dropped", model
-    )
-    return MappingProxyType({key: _chat_value_gemma_4_accepts(key, value) for key, value in params.items()})
+    return with_values_gemma_4_accepts(params, model, _chat_value_gemma_4_accepts)
 
 
 class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):

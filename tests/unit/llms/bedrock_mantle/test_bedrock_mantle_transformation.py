@@ -6,6 +6,7 @@ API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.ht
 """
 
 import json
+import logging
 import re
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
@@ -1455,6 +1456,26 @@ class TestBedrockMantleGemma4SchemaKeywords:
 
         assert body["tools"][0] == "not-a-tool"
         assert "propertyNames" not in json.dumps(body["tools"][1])
+
+    @pytest.mark.parametrize(
+        "schema, warnings",
+        [(_ask_user_question_parameters(), 1), ({"type": "object", "properties": {"x": {"type": "string"}}}, 0)],
+    )
+    def test_gemma_4_warns_once_only_when_a_schema_keyword_was_dropped(
+        self, schema: dict[str, object], warnings: int, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            BedrockMantleChatConfig().transform_request(
+                model="google.gemma-4-31b",
+                messages=[{"role": "user", "content": "hello"}],
+                optional_params={"tools": [{"type": "function", "function": {"name": "ask", "parameters": schema}}]},
+                litellm_params={},
+                headers={},
+            )
+
+        assert [
+            record.levelno for record in caplog.records if "rejects some JSON schema keywords" in record.getMessage()
+        ] == [logging.WARNING] * warnings
 
     def test_a_model_registered_without_full_schema_support_loses_the_refused_keywords(self, local_cost_map) -> None:
         litellm.register_model(

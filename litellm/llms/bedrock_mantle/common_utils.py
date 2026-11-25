@@ -13,10 +13,12 @@ global state.
 """
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from functools import partial
+from types import MappingProxyType
 from typing import Final, Literal
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.json_schema_utils import drop_schema_keywords
@@ -211,6 +213,18 @@ def drop_schema_keywords_gemma_4_rejects(schema: Mapping[str, object]) -> Mappin
     ``response_format`` or ``text.format`` schema carrying any of these keywords, which every other
     Mantle family accepts, and Claude Code's ``AskUserQuestion`` tool sends ``propertyNames``."""
     return drop_schema_keywords(schema, _GEMMA_4_REJECTED_SCHEMA_KEYWORDS)
+
+
+def with_values_gemma_4_accepts(
+    params: Mapping[str, object], model: str, accepted_value: Callable[[str, object], object]
+) -> Mapping[str, object]:
+    accepted: Final = MappingProxyType({key: accepted_value(key, value) for key, value in params.items()})
+    if accepted == params:
+        return params
+    verbose_logger.warning(
+        "Bedrock Mantle %s rejects some JSON schema keywords, so they were dropped from the request's schemas", model
+    )
+    return accepted
 
 
 def mantle_health_check_mode(model: str) -> Literal["anthropic_messages"] | None:

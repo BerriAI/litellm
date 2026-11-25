@@ -18,6 +18,8 @@ _ROOT_DEFS_POINTER: Final = "#/$defs/"
 _DYNAMIC_REF_KEYWORDS: Final = ("$dynamicRef", "$recursiveRef")
 _DEFS_CONTAINERS: Final = ("$defs", "definitions")
 _DEFINITION_BLOCKS: Final = frozenset({"$defs", "definitions", "components"})
+_REFERENCE_KEYWORDS: Final = frozenset({"$ref", *_DYNAMIC_REF_KEYWORDS})
+_NOT: Final = frozenset({"not"})
 
 
 def _schema_properties(schema: Mapping[str, object]) -> Mapping[str, object]:
@@ -377,22 +379,34 @@ def drop_schema_keywords(schema: Mapping[str, object], keywords: frozenset[str])
     property or ``$defs`` entry that is only named like a keyword stays, and so does a key
     inside ``default``, ``examples`` or ``const`` data. The root ``components.schemas`` entries
     are walked too, since a ``#/components/schemas/...`` ref reaches them. A ``not`` subschema is
-    kept as sent, since dropping a keyword under it would forbid values the caller allowed. The
-    input is never mutated, and the same object comes back when nothing was dropped.
+    kept as sent, since dropping a keyword under it would forbid values the caller allowed. For the
+    same reason, once anything is dropped, a ``not`` with a ``$ref``, ``$dynamicRef`` or
+    ``$recursiveRef`` key anywhere under it is dropped whole, since the ref may reach a schema that
+    lost a keyword. The input is never mutated, and the same object comes back when nothing was dropped.
     """
-    rewrite: Final = partial(_node_without_keywords, keywords=keywords)
-    return _with_component_schemas_rebuilt(_schema_rebuilt(schema, rewrite), rewrite)
+    keeping_every_not: Final = _schema_without_keywords(schema, keywords, drop_referencing_nots=False)
+    if keeping_every_not is schema:
+        return schema
+    return _schema_without_keywords(schema, keywords, drop_referencing_nots=True)
+
+
+def _schema_without_keywords(
+    schema: Mapping[str, object], keywords: frozenset[str], drop_referencing_nots: bool
+) -> Mapping[str, object]:
+    rewrite: Final = partial(_node_without_keywords, keywords=keywords, drop_referencing_nots=drop_referencing_nots)
+    rebuild: Final = partial(_schema_rebuilt, rewrite=rewrite, subschemas=_subschemas_outside_not)
+    return _with_component_schemas_rebuilt(rebuild(schema), rebuild)
 
 
 def _with_component_schemas_rebuilt(
     schema: Mapping[str, object],
-    rewrite: Callable[[Mapping[str, object], Mapping[int, Mapping[str, object]]], Mapping[str, object]],
+    rebuild: Callable[[Mapping[str, object]], Mapping[str, object]],
 ) -> Mapping[str, object]:
     components: Final = _schema_at(schema, "components")
     schemas: Final = None if components is None else _schema_at(components, "schemas")
     if components is None or schemas is None:
         return schema
-    rebuilt: Final = {**schemas, **{name: _schema_rebuilt(sub, rewrite) for name, sub in _named_schemas(schemas)}}
+    rebuilt: Final = {**schemas, **{name: rebuild(sub) for name, sub in _named_schemas(schemas)}}
     if all(rebuilt[name] is schemas[name] for name in schemas):
         return schema
     return {**schema, "components": {**components, "schemas": rebuilt}}
@@ -418,24 +432,31 @@ def with_sanitized_schema_at(
 def _schema_without_rejected_regex(
     schema: Mapping[str, object], rejected: Callable[[str], bool]
 ) -> Mapping[str, object]:
-    return _schema_rebuilt(schema, partial(_node_without_rejected_regex, rejected=rejected))
+    return _schema_rebuilt(schema, partial(_node_without_rejected_regex, rejected=rejected), _subschemas)
 
 
 def _schema_rebuilt(
     schema: Mapping[str, object],
     rewrite: Callable[[Mapping[str, object], Mapping[int, Mapping[str, object]]], Mapping[str, object]],
+    subschemas: Callable[[Mapping[str, object]], Iterator[Mapping[str, object]]],
 ) -> Mapping[str, object]:
     rebuilt: dict[int, Mapping[str, object]] = {}  # mutable-ok: per-call memo of rewritten nodes, deepest level first
-    for level in reversed(tuple(islice(_schema_levels(schema), _MAX_SCHEMA_NESTING))):
+    for level in reversed(tuple(islice(_schema_levels_through(schema, subschemas), _MAX_SCHEMA_NESTING))):
         rebuilt.update((id(node), rewritten) for node in level if (rewritten := rewrite(node, rebuilt)) is not node)
     return rebuilt.get(id(schema), schema)
 
 
 def _schema_levels(schema: Mapping[str, object]) -> Iterator[tuple[Mapping[str, object], ...]]:
+    return _schema_levels_through(schema, _subschemas)
+
+
+def _schema_levels_through(
+    schema: Mapping[str, object], subschemas: Callable[[Mapping[str, object]], Iterator[Mapping[str, object]]]
+) -> Iterator[tuple[Mapping[str, object], ...]]:
     frontier: tuple[Mapping[str, object], ...] = (schema,)  # rebind-ok: level-order cursor, one level a round
     while frontier:
         yield frontier
-        frontier = tuple(child for node in frontier for child in _subschemas(node))
+        frontier = tuple(child for node in frontier for child in subschemas(node))
 
 
 def schema_fragment_ref(ref: str) -> str:
@@ -566,6 +587,10 @@ def _subschemas(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
             yield value
 
 
+def _subschemas_outside_not(node: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+    return _subschemas({key: value for key, value in node.items() if key != "not"} if "not" in node else node)
+
+
 def _node_without_rejected_regex(
     node: Mapping[str, object],
     rebuilt: Mapping[int, Mapping[str, object]],
@@ -588,13 +613,19 @@ def _node_without_keywords(
     node: Mapping[str, object],
     rebuilt: Mapping[int, Mapping[str, object]],
     keywords: frozenset[str],
+    drop_referencing_nots: bool,
 ) -> Mapping[str, object]:
+    dropped: Final = (keywords | _NOT) if drop_referencing_nots and _not_holds_reference(node) else keywords
     kept: Final = {
         key: value if key == "not" else _keyword_value_rebuilt(key, value, rebuilt, _rejects_no_regex)
         for key, value in node.items()
-        if key not in keywords
+        if key not in dropped
     }
     return node if len(kept) == len(node) and all(kept[key] is node[key] for key in kept) else kept
+
+
+def _not_holds_reference(node: Mapping[str, object]) -> bool:
+    return any(not _REFERENCE_KEYWORDS.isdisjoint(sub) for sub in _json_objects(node.get("not")))
 
 
 def _rejects_no_regex(pattern: str) -> bool:

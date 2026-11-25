@@ -429,6 +429,19 @@ class TestBedrockMantleResponsesGemma4SchemaKeywords:
         assert body["text"]["format"]["schema"] == _SCHEMA_GEMMA_4_ACCEPTS
         assert body["text"]["format"]["name"] == "reply"
 
+    @pytest.mark.parametrize(
+        "schema, warnings", [(_schema_with_gemma_4_refused_keywords(), 1), (_SCHEMA_GEMMA_4_ACCEPTS, 0)]
+    )
+    def test_gemma_4_warns_once_only_when_a_schema_keyword_was_dropped(
+        self, schema: dict[str, object], warnings: int, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            self._transform("google.gemma-4-31b", {"tools": [{"type": "function", "name": "ask", "parameters": schema}]})
+
+        assert [
+            record.levelno for record in caplog.records if "rejects some JSON schema keywords" in record.getMessage()
+        ] == [logging.WARNING] * warnings
+
     def test_gemma_4_tools_hoisted_from_codex_additional_tools_lose_the_refused_keywords(self) -> None:
         body: Final = self._transform(
             "google.gemma-4-31b",
