@@ -58,6 +58,7 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
     StreamTransformSink,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    anthropic_mcp_server_name,
     anthropic_tool_name,
     anthropic_tool_names,
     effective_scan_only_tool_results_for_guardrail,
@@ -1479,9 +1480,12 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
-        """Extract every tool name in an Anthropic messages request: tools[].name, plus
-        tools[].function.name for OpenAI-format tools the bridge forwards verbatim."""
-        return [name for tool in list_field(data, "tools") for name in anthropic_tool_names(tool)]
+        """Extract every tool name in an Anthropic messages request: tools[].name,
+        tools[].function.name for OpenAI-format tools the bridge forwards verbatim, and
+        mcp_servers[].name, which the Responses bridge sends as the MCP tool's server_label."""
+        tool_names: Final = chain.from_iterable(map(anthropic_tool_names, list_field(data, "tools")))
+        server_names: Final = (name for name in map(anthropic_mcp_server_name, list_field(data, "mcp_servers")) if name)
+        return [*tool_names, *server_names]
 
     @classmethod
     def _extract_input_text_and_images(
