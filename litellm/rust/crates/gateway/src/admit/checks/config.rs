@@ -211,6 +211,7 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         allowed_routes: _,
         use_x_forwarded_for: _,
         allowed_ips: _,
+        disable_budget_reservation: _,
         completion_model,
         max_in_flight_requests_per_worker,
         max_queued_requests_per_worker,
