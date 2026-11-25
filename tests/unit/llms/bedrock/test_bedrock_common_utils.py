@@ -2889,7 +2889,7 @@ def test_get_bedrock_tool_name_context_isolation():
 
 def test_get_bedrock_tool_name_global_cache_fallback():
     """
-    Issue #54172: When request context is not set or key is not in context,
+    Issue #54172: When request context is not set (None),
     global cache fallback works when TTL is valid.
     """
     import litellm
@@ -2905,17 +2905,31 @@ def test_get_bedrock_tool_name_global_cache_fallback():
             key="valid_cached_tool", value="original:cached:tool", ttl=600
         )
         assert get_bedrock_tool_name("valid_cached_tool") == "original:cached:tool"
+    finally:
+        bedrock_tool_name_mappings_context.reset(token)
 
-        # Request context takes precedence over global cache
-        ctx_token = bedrock_tool_name_mappings_context.set(
-            {"valid_cached_tool": "ctx:override:tool"}
-        )
-        try:
-            assert get_bedrock_tool_name("valid_cached_tool") == "ctx:override:tool"
-        finally:
-            bedrock_tool_name_mappings_context.reset(ctx_token)
 
-        # After resetting request context, global cache is returned
-        assert get_bedrock_tool_name("valid_cached_tool") == "original:cached:tool"
+def test_get_bedrock_tool_name_active_context_authoritative_on_miss():
+    """
+    Issue #54172: When request context is active (even an empty mapping),
+    a miss must be authoritative and return the unchanged tool name directly,
+    NEVER falling through to another tenant's cached mapping.
+    """
+    import litellm
+    from litellm.llms.bedrock.common_utils import (
+        bedrock_tool_name_mappings_context,
+        get_bedrock_tool_name,
+    )
+
+    # Simulate another tenant's cached mapping in the global cache
+    litellm.bedrock_tool_name_mappings.set_cache(
+        key="read_file", value="read:file", ttl=600
+    )
+
+    # Active request context for a tenant that never sanitized 'read_file'
+    token = bedrock_tool_name_mappings_context.set({})
+    try:
+        # Must return 'read_file' directly, NOT 'read:file'
+        assert get_bedrock_tool_name("read_file") == "read_file"
     finally:
         bedrock_tool_name_mappings_context.reset(token)

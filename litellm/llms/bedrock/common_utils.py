@@ -1198,8 +1198,10 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
         str: The original name of the tool.
     """
     ctx_mappings = bedrock_tool_name_mappings_context.get()
-    if ctx_mappings is not None and response_tool_name in ctx_mappings:
-        return ctx_mappings[response_tool_name]
+    if ctx_mappings is not None:
+        # Request-local context is authoritative: on a miss, return the tool name unchanged
+        # so another request's cached mapping cannot leak across tenants.
+        return ctx_mappings.get(response_tool_name, response_tool_name)
 
     if hasattr(litellm, "bedrock_tool_name_mappings") and litellm.bedrock_tool_name_mappings is not None:
         cached_tool_name = litellm.bedrock_tool_name_mappings.get_cache(key=response_tool_name)
