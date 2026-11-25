@@ -7,8 +7,8 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.factory import response_schema_prompt
 from litellm.litellm_core_utils.reasoning_effort_capability import (
-    catalog_reasoning_efforts_for_model,
     configured_reasoning_effort_rounding,
+    declared_reasoning_efforts_for_map_key,
 )
 from litellm.litellm_core_utils.reasoning_effort_strength import (
     ReasoningEffortRounding,
@@ -24,6 +24,8 @@ ZAI_API_BASE: Final = "https://api.z.ai/api/paas/v4"
 TOKEN_LIMIT_PARAMS: Final = frozenset({"max_tokens", "max_completion_tokens"})
 REWRITTEN_PARAMS: Final = TOKEN_LIMIT_PARAMS | {"reasoning_effort"}
 REASONING_OFF: Final = "none"
+PROVIDER_DEFAULT: Final = "default"
+THINKING_PARAMS: Final = frozenset({"thinking"})
 
 
 def _is_json_object(
@@ -40,6 +42,11 @@ def _exceeds_output_limit(model: str, max_tokens: object) -> bool:
     info: Final = lookup_model_info_for_registration(model=model, custom_llm_provider="zai")
     limit: Final = None if isinstance(info, ModelInfoLookupMiss) else info.get("max_output_tokens")
     return isinstance(max_tokens, int) and isinstance(limit, int) and max_tokens > limit
+
+
+def _catalog_reasoning_efforts(model: str) -> tuple[str, ...] | None:
+    provider_levels: Final = declared_reasoning_efforts_for_map_key(f"zai/{model}")
+    return provider_levels if provider_levels is not None else declared_reasoning_efforts_for_map_key(model)
 
 
 def _requested_level(requested: object) -> object:
@@ -63,6 +70,8 @@ def _accepted_effort(
     level: Final = _requested_level(requested)
     if not isinstance(level, str):
         return None if drop_params else level
+    if level == PROVIDER_DEFAULT:
+        return None
     if declared is None:
         return level
     accepted: Final = _declared_effort(level, declared, drop_params, rounding)
@@ -160,14 +169,15 @@ class ZAIChatConfig(OpenAIGPTConfig):
         requested_effort: Final = sent.get("reasoning_effort")
         rounding: Final = reasoning_effort_rounding or configured_reasoning_effort_rounding()
         declared: Final = (
-            declared_reasoning_efforts
-            if declared_reasoning_efforts is not None
-            else catalog_reasoning_efforts_for_model(model, "zai")
+            declared_reasoning_efforts if declared_reasoning_efforts is not None else _catalog_reasoning_efforts(model)
         )
+        always_thinks: Final = declared is not None and REASONING_OFF not in declared
+        drops_disabled_thinking: Final = (
+            drops_unsupported and always_thinks and _json_field(sent.get("thinking"), "type") == "disabled"
+        )
+        unsent_params: Final = REWRITTEN_PARAMS | THINKING_PARAMS if drops_disabled_thinking else REWRITTEN_PARAMS
         turns_thinking_off: Final = (
-            _requested_level(requested_effort) == REASONING_OFF
-            and "thinking" not in sent
-            and (declared is None or REASONING_OFF in declared)
+            _requested_level(requested_effort) == REASONING_OFF and "thinking" not in sent and not always_thinks
         )
         reasoning_effort: Final = (
             None
@@ -176,7 +186,7 @@ class ZAIChatConfig(OpenAIGPTConfig):
         )
         return {
             **optional_params,
-            **{param: value for param, value in sent.items() if param not in REWRITTEN_PARAMS},
+            **{param: value for param, value in sent.items() if param not in unsent_params},
             **({} if max_tokens is None else {"max_tokens": max_tokens}),
             **({"thinking": {"type": "disabled"}} if turns_thinking_off else {}),
             **({} if reasoning_effort is None else {"reasoning_effort": reasoning_effort}),

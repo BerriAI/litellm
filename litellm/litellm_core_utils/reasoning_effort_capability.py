@@ -32,7 +32,6 @@ from typing import Final, TypeAlias, get_args
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
 from litellm.litellm_core_utils.reasoning_effort_strength import (
     REASONING_EFFORT_STRENGTH_ORDER,
@@ -101,12 +100,6 @@ def _declared_levels(raw: object) -> tuple[str, ...] | None:
         return None
     declared: Final = frozenset(effort for effort in raw if isinstance(effort, str))
     return tuple(effort for effort in REASONING_EFFORT_ADVERTISEMENT_ORDER if effort in declared)
-
-
-def catalog_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -> tuple[str, ...] | None:
-    catalog: Final = GetModelCostMap.loaded_model_cost_map()
-    entry: Final = catalog.get(f"{custom_llm_provider}/{model}") or catalog.get(model)
-    return declared_reasoning_efforts(entry) if entry is not None else None
 
 
 def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -> tuple[str, ...] | None:
