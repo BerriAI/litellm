@@ -272,6 +272,12 @@ impl Engine {
         }
     }
 
+    fn refresh_local(&self, entry: Entry, value: Local, ttl: Duration) {
+        if let Err(error) = self.store.refresh_local(&entry, value, ttl) {
+            tracing::warn!(%error, "rate limit memory write failed");
+        }
+    }
+
     fn slot_groups(&self, scopes: &[Scope], policy: Policy) -> Vec<Vec<usize>> {
         self.store.slot_groups(scopes, policy.force_grouping)
     }
@@ -1519,7 +1525,7 @@ impl Engine {
             return;
         }
         let operations = self.project_ops(scopes, &reserved, 0, amount, windows);
-        self.reservation_aware(&operations).await;
+        self.apply_usage(&operations, ctx).await;
     }
 
     pub fn reservation_ops(
@@ -1578,15 +1584,12 @@ impl Engine {
             .collect()
     }
 
-    pub async fn settle(&self, settlement: Settlement, ctx: Ctx<'_>, post_call: bool) {
+    pub async fn settle(&self, settlement: Settlement, ctx: Ctx<'_>) {
         match settlement {
-            Settlement::Plain(operations) if operations.is_empty() => {}
-            Settlement::Plain(operations) if post_call => {
-                self.increment_many_post_call(&operations, ctx).await;
+            Settlement::Plain(operations) => {
+                self.increment_with_ttl_preservation(&operations, ctx).await;
             }
-            Settlement::Plain(operations) => self.increment_many(&operations).await,
-            Settlement::Project(operations) if operations.is_empty() => {}
-            Settlement::Project(operations) => self.reservation_aware(&operations).await,
+            Settlement::Project(operations) => self.apply_usage(&operations, ctx).await,
         }
     }
 
@@ -1649,24 +1652,22 @@ impl Engine {
         let _guard = self.store.memory_guard();
         for operation in operations {
             let scope = &operation.counter.scope;
-            let opens_window = operation.ttl.is_some_and(|ttl| !ttl.is_zero())
-                && self.local(Entry::Window(scope.clone())).is_none();
-            if opens_window && operation.amount.as_f64() <= 0.0 {
+            let opening_ttl = operation
+                .ttl
+                .filter(|ttl| !ttl.is_zero())
+                .filter(|_| self.local(Entry::Window(scope.clone())).is_none());
+            if opening_ttl.is_some() && operation.amount.as_f64() <= 0.0 {
                 continue;
             }
-            if opens_window {
+            if let Some(ttl) = opening_ttl {
                 for kind in [Kind::Requests, Kind::Tokens] {
-                    self.set_local(
+                    self.refresh_local(
                         Entry::Counter(counter_of(scope, kind)),
                         Local::Number(Number::Int(0)),
-                        operation.ttl,
+                        ttl,
                     );
                 }
-                self.set_local(
-                    Entry::Window(scope.clone()),
-                    window_start.clone(),
-                    operation.ttl,
-                );
+                self.refresh_local(Entry::Window(scope.clone()), window_start.clone(), ttl);
             }
             let counter = Entry::Counter(operation.counter.clone());
             let current = match self.local(counter.clone()) {
@@ -1682,27 +1683,6 @@ impl Engine {
         }
     }
 
-    pub async fn increment_many(&self, operations: &[Increment]) {
-        self.labelled(
-            "async_increment_pipeline",
-            self.store.increment_many(operations),
-        )
-        .await;
-    }
-
-    pub async fn increment_many_post_call(&self, operations: &[Increment], ctx: Ctx<'_>) {
-        match self.batch(ctx) {
-            Some(request) => self.store.increment_many_post_call(request, operations),
-            None => {
-                self.labelled(
-                    "async_increment_pipeline",
-                    self.store.increment_many(operations),
-                )
-                .await
-            }
-        }
-    }
-
     pub async fn apply_usage(&self, operations: &[Op], ctx: Ctx<'_>) {
         let plain: Vec<Increment> = operations
             .iter()
@@ -1711,14 +1691,16 @@ impl Engine {
                 Op::Guarded(_) => None,
             })
             .collect();
-        let guarded: Vec<Op> = operations
+        let guarded: Vec<&GuardedOp> = operations
             .iter()
-            .filter(|operation| matches!(operation, Op::Guarded(_)))
-            .cloned()
+            .filter_map(|operation| match operation {
+                Op::Guarded(guarded) => Some(guarded),
+                Op::Plain(_) => None,
+            })
             .collect();
         self.increment_with_ttl_preservation(&plain, ctx).await;
         if !guarded.is_empty() {
-            self.reservation_aware(&guarded).await;
+            self.settle_guarded(&guarded).await;
         }
     }
 
@@ -1737,6 +1719,10 @@ impl Engine {
                 Op::Plain(_) => None,
             })
             .collect();
+        self.settle_guarded(&guarded).await;
+    }
+
+    async fn settle_guarded(&self, guarded: &[&GuardedOp]) {
         let local: Vec<&GuardedOp> = guarded
             .iter()
             .copied()

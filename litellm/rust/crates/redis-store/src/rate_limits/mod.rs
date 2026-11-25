@@ -105,6 +105,10 @@ impl RateLimits {
         Ok(self.cache.memory().set(&entry.key(), value, ttl)?)
     }
 
+    pub fn refresh_local(&self, entry: &Entry, value: Local, ttl: Duration) -> Result<(), Error> {
+        Ok(self.cache.memory().refresh(&entry.key(), value, ttl)?)
+    }
+
     /// `DualCache.async_get_cache`, backfilling memory for `backfill_ttl` or the store's default.
     /// A key `request` already read as missing from Redis is not read again.
     pub async fn get(

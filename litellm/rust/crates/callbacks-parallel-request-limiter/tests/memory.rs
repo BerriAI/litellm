@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
 };
 
 use litellm_callbacks::Abort;
@@ -29,8 +32,27 @@ impl Clock {
 }
 
 fn limiter(reservation: bool) -> (ParallelRequestLimiter, Arc<RateLimits>, Arc<Clock>) {
-    let store = Arc::new(RateLimits::new(None, None));
+    limiter_over(reservation, |_| RateLimits::new(None, None))
+}
+
+fn limiter_whose_memory_shares_its_clock(
+    reservation: bool,
+) -> (ParallelRequestLimiter, Arc<RateLimits>, Arc<Clock>) {
+    limiter_over(reservation, |clock| {
+        RateLimits::with_clock(
+            None,
+            None,
+            Arc::new(move || Duration::from_secs_f64(clock.now())),
+        )
+    })
+}
+
+fn limiter_over(
+    reservation: bool,
+    store: impl FnOnce(Arc<Clock>) -> RateLimits,
+) -> (ParallelRequestLimiter, Arc<RateLimits>, Arc<Clock>) {
     let clock = Clock::at(1_700_000_000.5);
+    let store = Arc::new(store(Arc::clone(&clock)));
     let now = Arc::clone(&clock);
     let engine = Engine::new(
         Arc::clone(&store),
@@ -296,6 +318,88 @@ async fn a_refund_into_no_window_cannot_offset_a_later_charge() {
             .await
             .is_some()
     );
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_failure_settled_after_its_window_expired_counts_toward_the_next_reservation() {
+    let (limiter, _, clock) = limiter_whose_memory_shares_its_clock(true);
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1000}}]),
+    );
+    let failed = LimiterState::default();
+    assert_eq!(
+        limiter
+            .pre_call(&failed, facts(tpm.clone(), Some(10)), None)
+            .await,
+        None
+    );
+    clock
+        .0
+        .store((1_700_000_090.5_f64).to_bits(), Ordering::SeqCst);
+    limiter
+        .post_call_failure(
+            &failed,
+            PostCallFailureFacts {
+                tpm_actual: 1092,
+                ..PostCallFailureFacts::default()
+            },
+        )
+        .await;
+
+    let refused = limiter
+        .pre_call(&LimiterState::default(), facts(tpm, Some(10)), None)
+        .await
+        .expect("admitted past tpm_limit");
+    assert_eq!(refused.headers["rate_limit_type"], "tokens");
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_window_opened_over_a_leftover_counter_holds_the_charge_for_the_whole_window() {
+    let (limiter, store, clock) = limiter_whose_memory_shares_its_clock(true);
+    store
+        .set_local(
+            &Entry::Counter(Counter {
+                scope: Scope {
+                    descriptor: "api_key".into(),
+                    value: "k".into(),
+                },
+                kind: Kind::Tokens,
+            }),
+            Local::Number(Number::Int(5)),
+            Some(Duration::from_secs(60)),
+        )
+        .unwrap();
+    clock
+        .0
+        .store((1_700_000_030.5_f64).to_bits(), Ordering::SeqCst);
+    limiter
+        .settle_turn(
+            &LimiterState::default(),
+            SuccessFacts {
+                total_tokens: 1092,
+                targets: TargetFacts {
+                    user_api_key_hash: Some("k".into()),
+                    ..TargetFacts::default()
+                },
+                ..SuccessFacts::default()
+            },
+            None,
+        )
+        .await;
+    clock
+        .0
+        .store((1_700_000_065.5_f64).to_bits(), Ordering::SeqCst);
+
+    let tpm = descriptors(
+        json!([{"key": "api_key", "value": "k", "rate_limit": {"tokens_per_unit": 1000}}]),
+    );
+    let refused = limiter
+        .pre_call(&LimiterState::default(), facts(tpm, Some(10)), None)
+        .await
+        .expect("admitted past tpm_limit");
+    assert_eq!(refused.headers["rate_limit_type"], "tokens");
 }
 
 #[rstest]
