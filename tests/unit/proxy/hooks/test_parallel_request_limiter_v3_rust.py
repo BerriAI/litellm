@@ -2711,12 +2711,12 @@ async def test_post_call_failure_hook_settles_reservation_at_a_billed_image_refu
 async def test_a_billed_refusal_after_an_earlier_hop_settled_the_reservation_still_counts_toward_key_tpm_v3(
     first_hop_error: Exception, first_hop_usage: Usage | None, first_hop_tokens: int
 ):
-    _api_key = hash_token("sk-billed-refusal-after-a-settled-hop")
-    local_cache = DualCache()
-    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
-    tokens_key = _counter("api_key", _api_key)
+    _api_key: Final = hash_token("sk-billed-refusal-after-a-settled-hop")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    tokens_key: Final = _counter("api_key", _api_key)
     await _reserve_tpm_for_owner_call(handler, local_cache, _api_key, "settled-then-refused")
-    hop_kwargs = {
+    hop_kwargs: Final = {
         "litellm_call_id": "settled-then-refused",
         "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
     }
@@ -3751,9 +3751,9 @@ async def test_failure_event_settles_project_itpm_otpm_at_recovered_partial_usag
 
 @pytest.mark.asyncio
 async def test_a_billed_refusal_after_a_5xx_settled_the_reservation_still_counts_toward_project_itpm_otpm_v3():
-    _api_key = hash_token("sk-project-io-5xx-then-refusal")
-    local_cache = DualCache()
-    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    _api_key: Final = hash_token("sk-project-io-5xx-then-refusal")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
     await handler.async_pre_call_hook(
         user_api_key_dict=UserAPIKeyAuth(
             api_key=_api_key,
@@ -3772,9 +3772,9 @@ async def test_a_billed_refusal_after_a_5xx_settled_the_reservation_still_counts
         },
         call_type="completion",
     )
-    itpm_key = _counter("model_per_project_itpm", "proj-refused:gpt-4o-mini")
-    otpm_key = _counter("model_per_project_otpm", "proj-refused:gpt-4o-mini")
-    hop_kwargs = {
+    itpm_key: Final = _counter("model_per_project_itpm", "proj-refused:gpt-4o-mini")
+    otpm_key: Final = _counter("model_per_project_otpm", "proj-refused:gpt-4o-mini")
+    hop_kwargs: Final = {
         "litellm_call_id": "project-refused-call",
         "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
     }
@@ -7666,9 +7666,9 @@ async def test_a_failed_stream_settles_the_ptu_counter_in_normalized_tokens():
 
 @pytest.mark.asyncio
 async def test_a_billed_refusal_after_a_5xx_settled_the_ptu_reservation_still_counts_in_normalized_tokens():
-    cache = DualCache()
+    cache: Final = DualCache()
     handler, ptu_key = await _reserve_a_ptu_minute(cache, "ptu-5xx-then-refusal")
-    hop_kwargs = {
+    hop_kwargs: Final = {
         "litellm_call_id": "ptu-5xx-then-refusal",
         "standard_logging_object": {
             "metadata": {"user_api_key_hash": hash_token("sk-ptu"), "user_api_key_team_id": "t"}
