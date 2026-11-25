@@ -1,8 +1,9 @@
 //! The record of one inference call: what the route, the callbacks and every later reader know of
 //! it so far. [`scoped`] makes one for each request on the inference routes and runs the handler,
 //! every layer inside it and the response body with it in a task-local, so code reaches the call's
-//! record through [`read`] and [`write`] and never takes it as a parameter. A task spawned for the
-//! call keeps it through [`spawn_in_call`].
+//! record through [`read`] and [`write`] and never takes it as a parameter. The record lives in
+//! `litellm_call_scope`'s task-local, so a task any crate spawns for the call through
+//! `litellm_call_scope::spawn_in_call` keeps it.
 
 mod entries;
 mod trace;
@@ -21,15 +22,12 @@ use axum::{
     response::Response,
 };
 use http_body::{Frame, SizeHint};
+use litellm_call_scope::Call;
 use parking_lot::Mutex;
 use serde_json::Value;
-use tokio::task::{JoinHandle, futures::TaskLocalFuture};
+use tokio::task::futures::TaskLocalFuture;
 
 pub use self::entries::{CallState, Charged, Ended, unix};
-
-tokio::task_local! {
-    static RECORD: Arc<CallRecord>;
-}
 
 /// One call as it stands. Every access is one short lock, never held across an await.
 pub struct CallRecord(Mutex<CallState>);
@@ -45,22 +43,20 @@ impl CallRecord {
 }
 
 /// Runs `future` as part of the call `record` keeps.
-pub fn scope<F: Future>(record: Arc<CallRecord>, future: F) -> TaskLocalFuture<Arc<CallRecord>, F> {
-    RECORD.scope(record, future)
+pub fn scope<F: Future>(record: Arc<CallRecord>, future: F) -> TaskLocalFuture<Call, F> {
+    litellm_call_scope::scope(record, future)
 }
 
 /// Changes the record of the call this code runs in. `None` outside a call, which is a bug.
 pub fn write<R>(change: impl FnOnce(&mut CallState) -> R) -> Option<R> {
-    RECORD
-        .try_with(|record| change(&mut record.0.lock()))
+    litellm_call_scope::with(|record: &CallRecord| change(&mut record.0.lock()))
         .map_err(missed)
         .ok()
 }
 
 /// Reads the record of the call this code runs in. `None` outside a call, which is a bug.
 pub fn read<R>(look: impl FnOnce(&CallState) -> R) -> Option<R> {
-    RECORD
-        .try_with(|record| look(&record.0.lock()))
+    litellm_call_scope::with(|record: &CallRecord| look(&record.0.lock()))
         .map_err(missed)
         .ok()
 }
@@ -70,22 +66,9 @@ pub fn add_header(name: impl Into<String>, value: impl Into<Value>) {
     write(|entries| entries.add_header(name.into(), value.into()));
 }
 
-/// Spawns `future` as part of the call this code runs in, so it reads and writes the same record.
-/// Outside a call it is spawned as it is.
-pub fn spawn_in_call<F>(future: F) -> JoinHandle<F::Output>
-where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    match RECORD.try_get() {
-        Ok(record) => tokio::spawn(RECORD.scope(record, future)),
-        Err(_) => tokio::spawn(future),
-    }
-}
-
-/// A read or write with no record in scope: a spawn that skipped [`spawn_in_call`], or code run
-/// outside a call.
-fn missed(error: impl std::fmt::Display) {
+/// A read or write with no record in scope: a spawn that skipped `litellm_call_scope::spawn_in_call`,
+/// or code run outside a call.
+fn missed(error: litellm_call_scope::Error) {
     if cfg!(debug_assertions) {
         panic!("no call record in scope: {error}");
     }
@@ -97,7 +80,7 @@ fn missed(error: impl std::fmt::Display) {
 /// hyper polls the body after the handler returned.
 pub(crate) async fn scoped(request: Request, next: Next) -> Response {
     let record = CallRecord::traced(trace::of(request.headers()));
-    let response = RECORD.scope(record.clone(), next.run(request)).await;
+    let response = scope(record.clone(), next.run(request)).await;
     response.map(|body| {
         Body::new(Scoped {
             record,
@@ -125,7 +108,7 @@ impl HttpBody for Scoped {
         let Some(body) = this.body.as_mut() else {
             return Poll::Ready(None);
         };
-        RECORD.sync_scope(this.record.clone(), || Pin::new(body).poll_frame(context))
+        litellm_call_scope::sync_scope(this.record.clone(), || Pin::new(body).poll_frame(context))
     }
 
     fn is_end_stream(&self) -> bool {
@@ -142,7 +125,7 @@ impl HttpBody for Scoped {
 impl Drop for Scoped {
     fn drop(&mut self) {
         let body = self.body.take();
-        RECORD.sync_scope(self.record.clone(), || drop(body));
+        litellm_call_scope::sync_scope(self.record.clone(), || drop(body));
     }
 }
 
@@ -220,7 +203,7 @@ mod tests {
     async fn a_task_spawned_in_a_call_writes_its_record() {
         let record = CallRecord::new();
         scope(record.clone(), async {
-            spawn_in_call(async { add_header("x-spawned", "yes") })
+            litellm_call_scope::spawn_in_call(async { add_header("x-spawned", "yes") })
                 .await
                 .unwrap();
         })

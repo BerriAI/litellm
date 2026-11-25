@@ -1,0 +1,15 @@
+[package]
+name = "litellm-call-scope"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The call a task runs for, carried across the tasks it spawns"
+
+[dependencies]
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt"] }
+
+[dev-dependencies]
+rstest.workspace = true
+tokio = { workspace = true, features = ["rt", "macros"] }
