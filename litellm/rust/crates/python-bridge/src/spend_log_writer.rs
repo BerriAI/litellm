@@ -9,7 +9,8 @@ use std::sync::Arc;
 use litellm_host_python::release_gil;
 use litellm_repositories::SpendLogRepository;
 use litellm_spend_log_writer::{
-    PgLedgerStore, QueuedSpendLog, Retention, SpendLogFlusher, SpendLogWriter, WriterSettings,
+    FlushError, PgLedgerStore, QueuedSpendLog, Retention, SpendLogFlusher, SpendLogWriter,
+    WriterSettings,
 };
 use pyo3::{exceptions::PyRuntimeError, prelude::*};
 use serde::Serialize;
@@ -52,13 +53,21 @@ fn guardrail_usage_rows(rows: &[QueuedSpendLog]) -> Vec<GuardrailUsageRow> {
 }
 
 enum PassError {
-    Database(litellm_db::Error),
+    Database(FlushError),
     Aborted(String),
 }
 
 fn map_pass_error(error: PassError) -> PyErr {
     match error {
-        PassError::Database(error) => crate::db::map_error(error),
+        PassError::Database(FlushError { error, pass }) => {
+            let failure = crate::db::map_error(error);
+            Python::attach(
+                |py| match failure.value(py).setattr("failed_spend_log_pass", pass) {
+                    Ok(()) => failure,
+                    Err(error) => error,
+                },
+            )
+        }
         PassError::Aborted(reason) => PyRuntimeError::new_err(reason),
     }
 }
@@ -148,21 +157,28 @@ impl RustSpendLogWriter {
     /// metadata to `retention` (`include`, `exclude`). The pass runs to the end even when the
     /// awaiting task is cancelled, and a failed pass requeues its rows at the head before it
     /// raises `NativeDatabaseFailure`. Returns the written logs the guardrail usage rollup reads.
-    #[pyo3(signature = (limit, retention=None))]
+    #[pyo3(signature = (limit, retention=None, *, disable_spend_logs=false, disable_error_logs=false))]
     fn flush<'py>(
         &self,
         py: Python<'py>,
         limit: usize,
         retention: Option<RetentionFields>,
+        disable_spend_logs: bool,
+        disable_error_logs: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let retention = retention.map(|(include, exclude)| Retention { include, exclude });
         let writer = Arc::clone(&self.writer);
         let pass = Box::pin(crate::db::for_caller(
             py,
             crate::logger::capture(py).instrument(async move {
-                Box::pin(writer.flush(limit, retention.as_ref()))
-                    .await
-                    .map(|rows| guardrail_usage_rows(&rows))
+                Box::pin(writer.flush_with_policy(
+                    limit,
+                    retention.as_ref(),
+                    disable_spend_logs,
+                    disable_error_logs,
+                ))
+                .await
+                .map(|rows| guardrail_usage_rows(&rows))
             }),
         )?);
         crate::execution::run_async(
@@ -196,6 +212,16 @@ impl RustSpendLogWriter {
     fn dequeue(&self, limit: usize) -> Vec<String> {
         self.writer
             .take(limit)
+            .iter()
+            .map(QueuedSpendLog::to_json)
+            .collect()
+    }
+
+    /// Takes the failed pass's queued rows without taking other pending work.
+    #[pyo3(signature = (pass_id, /))]
+    fn dequeue_failed_pass(&self, pass_id: u64) -> Vec<String> {
+        self.writer
+            .take_failed_pass(pass_id)
             .iter()
             .map(QueuedSpendLog::to_json)
             .collect()

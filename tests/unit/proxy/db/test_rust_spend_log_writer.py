@@ -60,8 +60,15 @@ class FailingWriter:
     def __len__(self) -> int:
         return len(self.rows)
 
-    async def flush(self, limit: int, retention: object) -> list[dict[str, object]]:
-        raise NativeDatabaseFailure("connection refused")
+    async def flush(
+        self, limit: int, retention: object, *, disable_spend_logs: bool = False, disable_error_logs: bool = False
+    ) -> list[dict[str, object]]:
+        error = NativeDatabaseFailure("connection refused")
+        setattr(error, "failed_spend_log_pass", limit)
+        raise error
+
+    def dequeue_failed_pass(self, pass_id: int) -> list[str]:
+        return self.dequeue(pass_id)
 
     def dequeue(self, limit: int) -> list[str]:
         taken: Final = self.rows[:limit]
@@ -79,7 +86,9 @@ class WritingWriter:
     def __len__(self) -> int:
         return len(self.written)
 
-    async def flush(self, limit: int, retention: object) -> list[dict[str, object]]:
+    async def flush(
+        self, limit: int, retention: object, *, disable_spend_logs: bool = False, disable_error_logs: bool = False
+    ) -> list[dict[str, object]]:
         return self.written
 
     async def wait_idle(self) -> None:

@@ -1367,6 +1367,49 @@ async def test_an_opaque_bearer_token_is_never_stored_in_a_delivery(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("rust", [False, True], ids=["python", "rust"])
+async def test_queued_request_detail_respects_the_policy_at_flush(
+    parity_database: str, monkeypatch: pytest.MonkeyPatch, rust: bool,
+) -> None:
+    from litellm.accounting.worker import flush_accounting_deliveries
+    from litellm.proxy.db.native_database import ServiceLoggingEvents
+    from litellm.proxy.db.rust_spend_log_writer import install_rust_spend_log_writer, uninstall_rust_spend_log_writer
+    from litellm.proxy.utils import update_spend_logs_job
+    from litellm.rust_bridge._native import DatabaseEndpoint, NativeDatabase
+
+    async with _ledger_client(parity_database, monkeypatch) as client:
+        writer = DBSpendUpdateWriter()
+        native = None
+        if rust:
+            native = await NativeDatabase.connect(
+                ServiceLoggingEvents(loop=asyncio.get_running_loop(), service_logging=lambda: None),
+                await DatabaseEndpoint.resolve(parity_database, 1),
+                None,
+            )
+        try:
+            if native is not None:
+                await install_rust_spend_log_writer(client, native, {"use_spend_logs_ledger": True})
+            await _record_call(writer, "queued-before-toggle")
+            monkeypatch.setattr(proxy_server, "disable_spend_logs", True)
+
+            await update_spend_logs_job(
+                prisma_client=client, db_writer_client=None, proxy_logging_obj=proxy_server.proxy_logging_obj,
+            )
+            await flush_accounting_deliveries(writer, client, proxy_server.proxy_logging_obj)
+
+            assert _key_spend(parity_database) == (0.25,)
+            with psycopg.connect(parity_database) as connection:
+                assert connection.execute(
+                    'SELECT request_id, state::text FROM "LiteLLM_SpendLogDelivery"'
+                ).fetchall() == [("queued-before-toggle", "applied")]
+                assert connection.execute('SELECT COUNT(*) FROM "LiteLLM_SpendLogs"').fetchone() == (0,)
+        finally:
+            if native is not None:
+                await uninstall_rust_spend_log_writer(client)
+                await native.close()
+
+
+@pytest.mark.asyncio
 async def test_an_evicted_spend_log_still_charges_its_request(parity_database: str, monkeypatch: pytest.MonkeyPatch):
     from litellm.proxy.utils import enqueue_spend_logs
 

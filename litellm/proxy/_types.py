@@ -2658,6 +2658,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         True,
         description="Apply request accounting from stored SpendLogs deliveries. Set to false to roll back to the previous in-memory and Redis spend queues.",
     )
+    disable_spend_logs: bool = Field(
+        False,
+        description="Do not persist request details to SpendLogs. Spend accounting remains enabled.",
+    )
+    disable_error_logs: bool = Field(
+        False,
+        description="Do not persist request details for failed requests. Spend accounting remains enabled.",
+    )
 
     meter_webrtc_calls: bool = Field(
         True,

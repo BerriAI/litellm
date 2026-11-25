@@ -102,6 +102,23 @@ def test_config_update_persists_optional_pre_call_checks(client, auth_as, mock_p
     assert persisted["optional_pre_call_checks"] == ["prompt_caching"]
 
 
+def test_config_update_persists_request_log_flags(client, auth_as, mock_prisma, monkeypatch):
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    config = ps.ProxyConfig()
+    monkeypatch.setattr(config, "add_deployment", AsyncMock())
+    monkeypatch.setattr(ps, "proxy_config", config)
+    flags = {"disable_spend_logs": True, "disable_error_logs": False}
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post("/config/update", json={"general_settings": flags})
+
+    assert response.status_code == 200, response.text
+    assert json.loads(table.upsert.await_args.kwargs["data"]["update"]["param_value"]) == flags
+
+
 def test_config_update_persists_model_group_affinity_config(client, auth_as, mock_prisma, monkeypatch):
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
@@ -398,6 +415,37 @@ def test_config_field_update_happy_admin(client, auth_as, mock_prisma, monkeypat
     }
 
 
+@pytest.mark.parametrize("flag", ["disable_spend_logs", "disable_error_logs"])
+def test_config_field_update_persists_request_log_flags(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[object]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+    flag: str,
+) -> None:
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    table = _install_litellm_config(mock_prisma)
+    table.find_first = AsyncMock(return_value=None)
+    table.upsert = AsyncMock(return_value={"param_value": {flag: True}})
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    _seed_settings_store(monkeypatch, {})
+    monkeypatch.setattr(ps, "general_settings", {})
+    monkeypatch.setattr(ps, "disable_spend_logs", False)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        response = client.post(
+            "/config/field/update",
+            json={"field_name": flag, "field_value": True, "config_type": "general_settings"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert json.loads(table.upsert.await_args.kwargs["data"]["update"]["param_value"]) == {flag: True}
+    assert ps.current_general_settings().get(flag) is True
+    assert ps.disable_spend_logs is (flag == "disable_spend_logs")
+
+
 def test_config_field_update_non_admin_rejected(client, auth_as, mock_prisma, monkeypatch):
     """Non-admin cannot update config fields — returns 400 with not-allowed
     detail (handler uses 400 for the auth gate, not 403)."""
@@ -670,17 +718,27 @@ def test_config_list_redacts_pass_through_secret_for_view_only(client, auth_as, 
 # ---------------------------------------------------------------------------
 
 
-def test_config_list_happy_admin(client, auth_as, mock_prisma, monkeypatch):
+def test_config_list_happy_admin(
+    client: TestClient,
+    auth_as: Callable[..., contextlib.AbstractContextManager[object]],
+    mock_prisma: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Admin gets a non-empty list of ConfigList rows for general_settings
     (one entry per known allowed_arg). Each row has the documented schema."""
+    from pydantic import TypeAdapter
+
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
     table = _install_litellm_config(mock_prisma)
     row = MagicMock()
-    row.param_value = {"max_parallel_requests": 3}
+    db_values: Final = {"max_parallel_requests": 3, "disable_spend_logs": True, "disable_error_logs": True}
+    row.param_value = db_values
     table.find_first = AsyncMock(return_value=row)
     monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    _seed_settings_store(monkeypatch, db_values)
+    monkeypatch.setattr(ps, "general_settings", ps.proxy_config.settings)
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         response = client.get("/config/list", params={"config_type": "general_settings"})
@@ -700,6 +758,15 @@ def test_config_list_happy_admin(client, auth_as, mock_prisma, monkeypatch):
         "has_field_type": True,
         "has_field_value": True,
         "has_stored_in_db": True,
+    }
+    flags: Final = {
+        entry["field_name"]: (entry["field_type"], entry["field_value"] is True, entry["stored_in_db"], entry["source"])
+        for entry in TypeAdapter(list[dict[str, object]]).validate_json(response.content)
+        if entry["field_name"] in ("disable_spend_logs", "disable_error_logs")
+    }
+    assert flags == {
+        "disable_spend_logs": ("Boolean", True, True, "db"),
+        "disable_error_logs": ("Boolean", True, True, "db"),
     }
 
 

@@ -73,12 +73,19 @@ def _parks_spend_logs(proxy_logging_obj: "ProxyLogging") -> bool:
 
 
 async def _park_failed_pass(
-    writer: RustSpendLogWriter, prisma_client: "PrismaClient", proxy_logging_obj: "ProxyLogging", rows: int
+    writer: RustSpendLogWriter, prisma_client: "PrismaClient", proxy_logging_obj: "ProxyLogging", pass_id: object
 ) -> None:
     from litellm.proxy.utils import requeue_spend_logs
 
-    if rows > 0 and _parks_spend_logs(proxy_logging_obj):
-        await requeue_spend_logs(prisma_client, proxy_logging_obj, dequeue_from_rust(writer, rows))
+    if isinstance(pass_id, int) and _parks_spend_logs(proxy_logging_obj):
+        batch: Final = writer.dequeue_failed_pass(pass_id)
+        if batch:
+            rows: Final = tuple(_ROW.validate_json(text) for text in batch)
+            try:
+                await requeue_spend_logs(prisma_client, proxy_logging_obj, rows)
+            except asyncio.CancelledError:
+                writer.enqueue(batch, True, SPEND_LOG_QUEUE_MAX_BYTES)
+                raise
 
 
 def spend_log_retention() -> tuple[tuple[str, ...] | None, tuple[str, ...] | None] | None:
@@ -97,14 +104,20 @@ async def flush_in_rust(
         process_spend_logs_guardrail_usage,
         retry_pending_guardrail_usage,
     )
+    from litellm.proxy.proxy_server import current_general_settings, disable_spend_logs
     from litellm.proxy.utils import raise_failed_update_spend_exception
 
     taken: Final = min(limit, len(writer))
     start_time: Final = time.time()
     try:
-        written: Final = await writer.flush(limit, spend_log_retention())
+        written: Final = await writer.flush(
+            limit,
+            spend_log_retention(),
+            disable_spend_logs=disable_spend_logs,
+            disable_error_logs=current_general_settings().get("disable_error_logs") is True,
+        )
     except NativeDatabaseFailure as e:
-        await _park_failed_pass(writer, prisma_client, proxy_logging_obj, taken)
+        await _park_failed_pass(writer, prisma_client, proxy_logging_obj, getattr(e, "failed_spend_log_pass", None))
         raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)
     try:
         if written:

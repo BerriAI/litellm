@@ -216,7 +216,7 @@ async def _track_guardrail_usage_of_cost_row(
         )
 
 
-def _is_settle_once_cost_row(payload: SpendLogsPayload) -> bool:
+def _is_settle_once_cost_row(payload: Mapping[str, object]) -> bool:
     """A poll of a job whose cost is charged once, by the first poll that sees it, however often it is polled.
 
     A batch's cost is known only when a retrieve sees it finished (LIT-7048). A video's cost is
@@ -228,13 +228,19 @@ def _is_settle_once_cost_row(payload: SpendLogsPayload) -> bool:
     if payload.get("status") != "success":
         return False
     call_type: Final = payload.get("call_type")
-    request_id: Final = payload["request_id"]
+    request_id: Final = payload.get("request_id")
+    if not isinstance(request_id, str):
+        return False
     if call_type == CallTypes.aretrieve_batch.value:
         return request_id.endswith(BATCH_COST_REQUEST_ID_SUFFIX)
     return call_type in VIDEO_STATUS_CALL_TYPES and request_id.endswith(VIDEO_COST_REQUEST_ID_SUFFIX)
 
 
 _COST_CLAIM_FIELDS: Final = frozenset({"request_id", "call_type", "spend", "startTime", "endTime", "status"})
+
+
+def legacy_cost_receipt(payload: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({field: value for field, value in payload.items() if field in _COST_CLAIM_FIELDS})
 
 
 def _cost_row_to_write(payload: SpendLogsPayload, disable_spend_logs: bool) -> Mapping[str, object]:
@@ -254,7 +260,7 @@ def _cost_row_to_write(payload: SpendLogsPayload, disable_spend_logs: bool) -> M
             "accounting_payload": payload["accounting_payload"],
             "accounting_log_disabled": True,
         }
-    return MappingProxyType({field: value for field, value in payload.items() if field in _COST_CLAIM_FIELDS})
+    return legacy_cost_receipt(payload)
 
 
 class _SpendIncrement(TypedDict):

@@ -33175,6 +33175,12 @@ export interface components {
              */
             disable_env_credential_login?: boolean | null;
             /**
+             * Disable Error Logs
+             * @description Do not persist request details for failed requests. Spend accounting remains enabled.
+             * @default false
+             */
+            disable_error_logs: boolean;
+            /**
              * Disable Fallbacks On Per Model Rate Limits
              * @description If true, a request rejected by a key/team/org/project per-model rate limit (model_rpm_limit / model_tpm_limit) returns 429 instead of retrying on the configured fallbacks
              */
@@ -33194,6 +33200,12 @@ export interface components {
              * @description If True, disables ownership enforcement on Responses API ids. Keys may then retrieve, cancel, delete, and chain from any response id, including ids belonging to another user or team and ids this proxy never issued. WARNING: this removes tenant isolation on /v1/responses
              */
             disable_responses_id_security?: boolean | null;
+            /**
+             * Disable Spend Logs
+             * @description Do not persist request details to SpendLogs. Spend accounting remains enabled.
+             * @default false
+             */
+            disable_spend_logs: boolean;
             /**
              * Enable Claude Code Gateway
              * @description serve the Claude Code gateway protocol (https://code.claude.com/docs/en/claude-apps-gateway) under /claude_code_gateway: OAuth device-flow sign-in reusing proxy SSO, plus managed settings and OTLP telemetry ingestion. Off by default

@@ -255,7 +255,11 @@ from litellm.proxy.db.create_views import (
     should_create_missing_views,
 )
 from litellm.proxy.db.db_span import db_span
-from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
+from litellm.proxy.db.db_spend_update_writer import (
+    DBSpendUpdateWriter,
+    _is_settle_once_cost_row,  # pyright: ignore[reportPrivateUsage]  # mirror the legacy writer's settlement policy
+    legacy_cost_receipt,
+)
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
 from litellm.proxy.db.db_url_settings import (
     DatabaseURLSettings,
@@ -9290,7 +9294,7 @@ class ProxyUpdateSpend:
         prisma_client: PrismaClient,
         db_writer_client: AsyncHTTPHandler | None,
         proxy_logging_obj: ProxyLogging,
-        logs_to_process: list[dict[str, object]] | None = None,
+        logs_to_process: Sequence[Mapping[str, object]] | None = None,
     ):
         BATCH_SIZE: Final = 1000  # Preferred size of each batch to write to the database
         MAX_LOGS_PER_INTERVAL: Final = 10000  # Maximum number of logs to flush in a single interval
@@ -9647,7 +9651,7 @@ async def _write_spend_logs_in_python(
 ) -> None:
     n_retry_times: Final = 3
 
-    logs_to_process: Final = await dequeue_spend_logs(prisma_client, max_logs)
+    logs_to_process: Final = _spend_logs_allowed_at_flush(await dequeue_spend_logs(prisma_client, max_logs))
 
     try:
         await ProxyUpdateSpend.update_spend_logs(
@@ -9972,6 +9976,23 @@ def accounting_only_spend_log(row: Mapping[str, object]) -> Mapping[str, object]
         **{key: value for key, value in row.items() if key in _ACCOUNTING_ONLY_KEYS},
         "accounting_log_disabled": True,
     }
+
+
+def _spend_logs_allowed_at_flush(rows: Sequence[Mapping[str, object]]) -> Sequence[Mapping[str, object]]:
+    from litellm.proxy.proxy_server import current_general_settings, disable_spend_logs
+
+    disable_error_logs: Final = current_general_settings().get("disable_error_logs") is True
+    if not disable_spend_logs and not disable_error_logs:
+        return rows
+
+    def row_for_flush(row: Mapping[str, object]) -> Mapping[str, object] | None:
+        if not (disable_spend_logs or row.get("status") == "failure"):
+            return row
+        if _carries_a_charge(row):
+            return accounting_only_spend_log(row)
+        return legacy_cost_receipt(row) if _is_settle_once_cost_row(row) else None
+
+    return tuple(allowed for row in rows if (allowed := row_for_flush(row)) is not None)
 
 
 async def _keep_charges_of_dropped_logs(repo: SpendLogsRepository, rows: Sequence[Mapping[str, object]]) -> None:

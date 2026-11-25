@@ -5697,8 +5697,9 @@ def _reject_required_customer_headers_update(fields: Iterable[str]) -> None:
 
 
 def _bind_general_settings_store(settings: SettingsStore) -> None:
-    global general_settings
+    global general_settings, disable_spend_logs
     general_settings = settings  # pyright: ignore[reportAssignmentType]  # legacy global accepts mappings
+    disable_spend_logs = coerce_bool(settings.get("disable_spend_logs")) is True
 
 
 def current_general_settings() -> Mapping[str, object]:
@@ -6764,7 +6765,6 @@ class ProxyConfig:
             ui_access_mode, \
             litellm_master_key_hash, \
             proxy_batch_write_at, \
-            disable_spend_logs, \
             prompt_injection_detection_obj, \
             redis_usage_cache, \
             store_model_in_db, \
@@ -7397,8 +7397,6 @@ class ProxyConfig:
             proxy_config_reload_interval_seconds = general_settings.get(
                 "proxy_config_reload_interval_seconds", proxy_config_reload_interval_seconds
             )
-            ## DISABLE SPEND LOGS ## - gives a perf improvement
-            disable_spend_logs = general_settings.get("disable_spend_logs", disable_spend_logs)
             ### BACKGROUND HEALTH CHECKS ###
             # Enable background health checks
             use_background_health_checks = general_settings.get("background_health_checks", False)
@@ -8486,6 +8484,7 @@ class ProxyConfig:
     async def _apply_boolean_settings(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
         for key in (
             "store_prompts_in_spend_logs",
+            "disable_error_logs",
             "disable_auto_add_proxy_admin_to_teams",
             "apply_user_budget_to_team_keys",
         ):
@@ -21583,6 +21582,8 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "pass_through_endpoints": "PydanticModel",
         "store_model_in_db": "Boolean",
         "return_wildcard_routes": "Boolean",
+        "disable_spend_logs": "Boolean",
+        "disable_error_logs": "Boolean",
         "store_prompts_in_spend_logs": "Boolean",
         "disable_requester_ip_address_logging": "Boolean",
         "disable_fallbacks_on_per_model_rate_limits": "Boolean",
@@ -21759,6 +21760,7 @@ async def update_config_general_settings(
     )
     await invalidate_config_param("general_settings")
     proxy_config.settings.apply_db_row("general_settings", general_settings)
+    _bind_general_settings_store(proxy_config.settings)
     if is_resource_list("general_settings", data.field_name):
         stored_endpoints: Final = general_settings.get("pass_through_endpoints")
         await proxy_config.serve_pass_through_endpoints(stored_endpoints if isinstance(stored_endpoints, list) else ())
@@ -22404,6 +22406,7 @@ async def delete_config_general_settings(
     )
     await invalidate_config_param("general_settings")
     proxy_config.settings.apply_db_row("general_settings", remaining)
+    _bind_general_settings_store(proxy_config.settings)
     if is_resource_list("general_settings", data.field_name):
         stored_endpoints: Final = remaining.get("pass_through_endpoints")
         await proxy_config.serve_pass_through_endpoints(stored_endpoints if isinstance(stored_endpoints, list) else ())
