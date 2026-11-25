@@ -11,9 +11,9 @@ from typing import Final, cast
 import httpx
 import openai
 import pytest
-from integration._support.client import Gateway
+from integration._support.client import JSON_OBJECT, Gateway, object_value, string_value
 from integration._support.wire import Reply, Request, wire_server
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 
 _PNG_BYTES: Final = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
@@ -475,3 +475,102 @@ def test_image_edit_rejects_plain_and_bracketed_spelling_together_without_callin
         assert response.status_code == 422, response.text
         assert response.json() == {"detail": detail}, response.text
         assert wire.drain() == ()
+
+
+_IMAGE_REFERENCES: Final[list[JsonValue]] = [
+    {"image_url": "https://images.example/red_circle.png"},
+    {"image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="},
+]
+_MASK_REFERENCE: Final[dict[str, JsonValue]] = {"image_url": "https://images.example/mask.png"}
+
+
+def _json_body(request: Request) -> dict[str, JsonValue]:
+    assert request.headers["content-type"].split(";")[0].strip() == "application/json", (
+        request.headers["content-type"],
+        request.body,
+    )
+    return JSON_OBJECT.validate_json(request.body)
+
+
+def test_image_edit_json_image_references_reach_openai_as_the_same_json_body(gateway: Gateway) -> None:
+    """regression: a JSON edit with image and mask references reaches OpenAI as application/json, fields unchanged."""
+    with (
+        wire_server(
+            lambda _: Reply(
+                body=json.dumps({"created": 1700000000, "data": [{"b64_json": _EDITED_IMAGE_B64}]}).encode()
+            )
+        ) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model="openai/gpt-image-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/images/edits",
+            {
+                "model": model,
+                "prompt": _PROMPT,
+                "images": _IMAGE_REFERENCES,
+                "mask": _MASK_REFERENCE,
+                "quality": "high",
+                "size": "1024x1024",
+                "output_format": "png",
+            },
+        )
+        received: Final = wire.drain()
+
+    assert [(request.method, request.target) for request in received] == [("POST", "/v1/images/edits")], (
+        response.status_code,
+        response.text,
+    )
+    assert received[0].headers["authorization"] == "Bearer synthetic-openai-key"
+    assert _json_body(received[0]) == {
+        "model": "gpt-image-1",
+        "prompt": _PROMPT,
+        "images": _IMAGE_REFERENCES,
+        "mask": _MASK_REFERENCE,
+        "quality": "high",
+        "size": "1024x1024",
+        "output_format": "png",
+    }
+    assert response.status_code == 200, response.text
+    payload: Final = _ImageResponse.model_validate_json(response.content)
+    assert [image.b64_json for image in payload.data] == [_EDITED_IMAGE_B64], response.text
+
+
+def test_image_edit_json_image_references_return_the_openai_400_error_to_the_caller(gateway: Gateway) -> None:
+    """regression: when OpenAI rejects a JSON reference edit with a 400, the caller gets that 400 and its message."""
+    upstream_message: Final = "Invalid image URL: the image at images[0] could not be downloaded."
+    upstream_error: Final = {
+        "error": {
+            "message": upstream_message,
+            "type": "invalid_request_error",
+            "param": "images",
+            "code": "invalid_image_url",
+        }
+    }
+
+    with (
+        wire_server(lambda _: Reply(status=400, body=json.dumps(upstream_error).encode())) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(
+            model="openai/gpt-image-1", api_base=f"{wire.url}/v1", api_key="synthetic-openai-key"
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/images/edits",
+            {"model": model, "prompt": _PROMPT, "images": _IMAGE_REFERENCES, "mask": _MASK_REFERENCE},
+        )
+        received: Final = wire.drain()
+
+    assert [(request.method, request.target) for request in received] == [("POST", "/v1/images/edits")], (
+        response.status_code,
+        response.text,
+    )
+    sent: Final = _json_body(received[0])
+    assert (sent.get("images"), sent.get("mask")) == (_IMAGE_REFERENCES, _MASK_REFERENCE)
+    assert response.status_code == 400, response.text
+    error: Final = object_value(JSON_OBJECT.validate_json(response.content)["error"])
+    assert upstream_message in string_value(error["message"]), response.text

@@ -1248,6 +1248,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_nova_canvas_image_edit": {"type": "boolean"},
             "supports_parallel_function_calling": {"type": "boolean"},
             "supports_parallel_tool_use_config": {"type": "boolean"},
+            "supports_tool_schema_defs": {"type": "boolean"},
             "supports_pdf_input": {"type": "boolean"},
             "supports_part_media_resolution": {"type": "boolean"},
             "supports_media_in_tool_response": {"type": "boolean"},
@@ -13261,3 +13262,18 @@ async def test_post_deployment_failure_reaches_the_legacy_hook_and_keeps_the_rea
     assert type(recorder.failures[0]) is type(raised.value)
     assert recorder.failures[0] is not raised.value
     assert seen == (["v2", "legacy"] if with_v2 else ["legacy"])
+
+
+def test_changing_a_keyed_get_model_info_result_leaves_later_lookups_alone() -> None:
+    litellm.get_model_info.cache_clear()
+    try:
+        shared_before: Final = litellm.get_model_info("gpt-4o", custom_llm_provider="openai")["max_input_tokens"]
+        keyed: Final = cast(
+            dict[str, object], litellm.get_model_info("gpt-4o", custom_llm_provider="openai", api_key="caller-key")
+        )
+        keyed["max_input_tokens"] = -1
+        shared_after: Final = litellm.get_model_info("gpt-4o", custom_llm_provider="openai")["max_input_tokens"]
+    finally:
+        litellm.get_model_info.cache_clear()
+
+    assert shared_after == shared_before

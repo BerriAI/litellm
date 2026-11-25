@@ -4,11 +4,15 @@ Transformation logic from OpenAI /v1/embeddings format to Google AI Studio /batc
 Why separate file? Make it easy to see how transformation works
 """
 
+import re
 from collections.abc import Iterator, Mapping, Sequence
+from decimal import Decimal
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias, cast
 
-from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, model_validator
+from pydantic_core import PydanticCustomError
+from typing_extensions import Self
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.core_helpers import iter_items, json_contains, require_get, subscript
@@ -144,12 +148,65 @@ def _is_data_url(s: str) -> bool:
     return s.startswith("data:") and ";base64," in s
 
 
+_DEFAULT_VIDEO_FPS: Final = 1.0
+_HALF_FRAME: Final = Decimal("0.5")
+_SHORTEST_AUDIO_ONLY_WINDOW_SECONDS: Final = Decimal(1)
+_DURATION_SECONDS: Final = re.compile(r"\s*([+-]?[0-9]+(?:\.[0-9]*)?)s")
+
+
+def _duration_seconds(duration: str) -> Decimal | None:
+    parsed: Final = _DURATION_SECONDS.fullmatch(duration)
+    return Decimal(parsed.group(1)) if parsed else None
+
+
+def _window_seconds(start_offset: str | None, end_offset: str | None) -> tuple[Decimal, Decimal] | None:
+    end: Final = _duration_seconds(end_offset) if end_offset is not None else None
+    given_start: Final = _duration_seconds(start_offset if start_offset is not None else "0s")
+    if end is None or given_start is None:
+        return None
+    return max(Decimal(0), given_start), end
+
+
 class _EmbeddingVideoMetadata(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
-    fps: float | None = None
+    fps: Annotated[float, Field(allow_inf_nan=False)] | None = None
     start_offset: str | None = None
     end_offset: str | None = None
+
+    @model_validator(mode="after")
+    def _window_ends_after_it_starts(self) -> Self:
+        window: Final = _window_seconds(self.start_offset, self.end_offset)
+        if window is not None and window[1] <= window[0]:
+            raise PydanticCustomError(
+                "window_ends_before_it_starts",
+                "end_offset ({end_offset}) must be later than the window start ({start})",
+                {"end_offset": self.end_offset, "start": f"{window[0]:g}s"},
+            )
+        return self
+
+
+def _video_frame_error(video_metadata: _EmbeddingVideoMetadata, audio_track_extraction: bool) -> str | None:
+    fps: Final = video_metadata.fps if video_metadata.fps is not None else _DEFAULT_VIDEO_FPS
+    if fps <= 0:
+        return f"file.video_metadata.fps: must be greater than 0, got {fps:g}"
+    window: Final = _window_seconds(video_metadata.start_offset, video_metadata.end_offset)
+    if window is None:
+        return None
+    start, end = window
+    if (end - start) * Decimal(fps) >= _HALF_FRAME:
+        return None
+    if audio_track_extraction and end - start >= _SHORTEST_AUDIO_ONLY_WINDOW_SECONDS:
+        return None
+    return (
+        f"file.video_metadata: end_offset - start_offset ({end - start:g}s) at {fps:g} fps rounds to 0 frames, "
+        "so widen the window or raise fps"
+    )
+
+
+def _is_video_part(part: PartType) -> bool:
+    media: Final = part.get("inline_data") or part.get("file_data")
+    return media is not None and media["mime_type"].lower().startswith("video/")
 
 
 class _EmbeddingFile(LiteLLMBaseModel):
@@ -411,6 +468,7 @@ def _build_part_for_input(
     element: GeminiEmbeddingElement,
     resolved_files: Mapping[str, Mapping[str, str]] | None = None,
     drop_params: bool = False,
+    audio_track_extraction: bool = False,
 ) -> PartType:
     """
     Build a single PartType for an input element, handling text, data URIs,
@@ -429,6 +487,11 @@ def _build_part_for_input(
     part: Final = _media_part(_file_block_source(block), block.file.format, files)
     if block.file.video_metadata is None:
         return part
+    frame_error: Final = (
+        _video_frame_error(block.file.video_metadata, audio_track_extraction) if _is_video_part(part) else None
+    )
+    if frame_error is not None:
+        raise _invalid_input(f"Invalid file content block in embedding input: {frame_error}")
     video_metadata: Final = _gemini_video_metadata(block.file.video_metadata)
     if not video_metadata:
         return part
@@ -440,7 +503,8 @@ _SUPPORTED_EMBED_PARAMS: Final = {"outputDimensionality", "taskType", "title"}
 _GEMINI_PARAM_BY_OPENAI_PARAM: Final = (("dimensions", "outputDimensionality"), ("task_type", "taskType"))
 _EMBED_CONTENT_CONFIG_FIELD: Final = "embedContentConfig"
 _EMBED_CONTENT_CONFIG_SPELLINGS: Final = (_EMBED_CONTENT_CONFIG_FIELD, "embed_content_config")
-_AUDIO_TRACK_EXTRACTION_SPELLINGS: Final = ("audioTrackExtraction", "audio_track_extraction")
+_AUDIO_TRACK_EXTRACTION_FIELD: Final = "audioTrackExtraction"
+_AUDIO_TRACK_EXTRACTION_SPELLINGS: Final = (_AUDIO_TRACK_EXTRACTION_FIELD, "audio_track_extraction")
 _GOOGLE_TRUE_VALUES: Final = frozenset({"true", "t", "yes", "y", "1", "1.0"})
 _STRING_KEYED_FIELDS: Final = TypeAdapter(Mapping[str, object])
 _ANY_KEYED_FIELDS: Final = TypeAdapter(Mapping[object, object])
@@ -463,15 +527,28 @@ def embed_content_config_fields(request_body: Mapping[str, object]) -> Mapping[s
 
 
 def audio_track_extraction_enabled(optional_params: Mapping[str, object]) -> bool:
-    request_fields: Final = {**extra_body_fields(optional_params), **_embed_content_config(optional_params)}
+    request_fields: Final = _embed_content_request_fields(optional_params)
     return any(_turns_on_audio_track_extraction(request_fields.get(field)) for field in _EMBED_CONTENT_CONFIG_SPELLINGS)
+
+
+def vertex_batch_row_audio_track_extraction_enabled(optional_params: Mapping[str, object]) -> bool:
+    config: Final = embed_content_config_fields(_embed_content_request_fields(optional_params))
+    return _is_google_true(config.get(_AUDIO_TRACK_EXTRACTION_FIELD))
+
+
+def _embed_content_request_fields(optional_params: Mapping[str, object]) -> Mapping[str, object]:
+    return {**extra_body_fields(optional_params), **_embed_content_config(optional_params)}
 
 
 def _turns_on_audio_track_extraction(config: object) -> bool:
     fields: Final[Mapping[object, object]] = (
         _ANY_KEYED_FIELDS.validate_python(config) if isinstance(config, Mapping) else {}
     )
-    return any(str(fields.get(field)).lower() in _GOOGLE_TRUE_VALUES for field in _AUDIO_TRACK_EXTRACTION_SPELLINGS)
+    return any(_is_google_true(fields.get(field)) for field in _AUDIO_TRACK_EXTRACTION_SPELLINGS)
+
+
+def _is_google_true(value: object) -> bool:
+    return str(value).lower() in _GOOGLE_TRUE_VALUES
 
 
 def _embed_content_config(optional_params: Mapping[str, object]) -> Mapping[str, object]:
@@ -536,6 +613,7 @@ def transform_openai_input_gemini_content(
     extra_body: Final = extra_body_fields(optional_params)
 
     input_list: Final = _top_level_elements(input)
+    audio_track_extraction: Final = audio_track_extraction_enabled(optional_params)
     requests: Final[list[EmbedContentRequest]] = []
 
     for element in input_list:
@@ -543,10 +621,23 @@ def transform_openai_input_gemini_content(
             if not element:
                 raise ValueError("Nested input list must not be empty")
             parts = [
-                _build_part_for_input(sub, resolved_files=resolved_files, drop_params=drop_params) for sub in element
+                _build_part_for_input(
+                    sub,
+                    resolved_files=resolved_files,
+                    drop_params=drop_params,
+                    audio_track_extraction=audio_track_extraction,
+                )
+                for sub in element
             ]
         else:
-            parts = [_build_part_for_input(element, resolved_files=resolved_files, drop_params=drop_params)]
+            parts = [
+                _build_part_for_input(
+                    element,
+                    resolved_files=resolved_files,
+                    drop_params=drop_params,
+                    audio_track_extraction=audio_track_extraction,
+                )
+            ]
         request = EmbedContentRequest(
             model=gemini_model_name,
             content=ContentType(parts=parts),
@@ -567,6 +658,7 @@ def transform_openai_input_gemini_embed_content(
     optional_params: Mapping[str, object],
     resolved_files: dict[str, dict[str, str]] | None = None,
     drop_params: bool = False,
+    audio_track_extraction: bool | None = None,
 ) -> dict[str, object]:
     """
     Transform OpenAI embedding input to Gemini embedContent format (multimodal).
@@ -576,6 +668,8 @@ def transform_openai_input_gemini_embed_content(
         model: Model name
         optional_params: Additional parameters (taskType, outputDimensionality, etc.)
         resolved_files: Dict mapping file names (files/abc) to {mime_type, uri}
+        audio_track_extraction: Whether the request Google gets turns on audio track extraction,
+            read from optional_params when None
 
     Returns:
         dict: Gemini embedContent request body with content.parts
@@ -585,6 +679,9 @@ def transform_openai_input_gemini_embed_content(
     gemini_params: Final = _filter_embed_params(optional_params)
 
     input_list: Final = _top_level_elements(input)
+    extracts_audio_track: Final = (
+        audio_track_extraction_enabled(optional_params) if audio_track_extraction is None else audio_track_extraction
+    )
     parts: Final[list[PartType]] = []
 
     for element in input_list:
@@ -593,7 +690,14 @@ def transform_openai_input_gemini_embed_content(
                 "Nested (combined) embeddings are not supported on the embedContent path. "
                 "Use the batchEmbedContents path or pass a flat list instead."
             )
-        parts.append(_build_part_for_input(element, resolved_files=resolved_files, drop_params=drop_params))
+        parts.append(
+            _build_part_for_input(
+                element,
+                resolved_files=resolved_files,
+                drop_params=drop_params,
+                audio_track_extraction=extracts_audio_track,
+            )
+        )
 
     request_body: Final[dict[str, object]] = {
         **extra_body_fields(optional_params),

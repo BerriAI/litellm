@@ -339,8 +339,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -740,9 +740,9 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         if not has_file_id_urls(messages, _PDF_URL_STARTS):
             return self.transform_request(model, messages, optional_params, litellm_params, headers)
@@ -884,10 +884,10 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -939,8 +939,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -967,8 +967,8 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -1061,7 +1061,7 @@ class OpenAIUnknownModelConfig(OpenAIGPTConfig):
     """A model the openai provider does not recognize is typically a LiteLLM proxy alias, so
     forward reasoning_effort and let the server decide whether it is supported."""
 
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: inherited contract
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: inherited contract
         return super().get_supported_openai_params(model) + ["reasoning_effort"]
 
 

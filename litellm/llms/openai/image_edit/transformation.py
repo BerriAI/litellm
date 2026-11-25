@@ -12,7 +12,7 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
-from litellm.litellm_core_utils.core_helpers import keyword_arguments
+from litellm.litellm_core_utils.core_helpers import as_object_list, keyword_arguments
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
@@ -86,6 +86,15 @@ def _build_upload_part(upload: object, default_name: str) -> tuple[object, ...]:
     return (_upload_file_name(upload, default_name), upload_content, image_content_type)
 
 
+def _is_uploaded_file(value: object) -> bool:
+    return value is not None and not isinstance(value, Mapping)
+
+
+def _has_uploaded_file(value: object) -> bool:
+    items: Final = as_object_list(value)
+    return any(map(_is_uploaded_file, items)) if items is not None else _is_uploaded_file(value)
+
+
 class OpenAIImageEditConfig(BaseImageEditConfig):
     """
     Base configuration for OpenAI image edit API.
@@ -134,6 +143,18 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         """Add an image to the files list with appropriate content type"""
         files_list.append((field_name, _build_upload_part(image, default_name)))
 
+    def uses_json_body(
+        self,
+        image: FileTypes | Sequence[FileTypes | None] | None,
+        image_edit_optional_request_params: Mapping[str, object],
+    ) -> bool:
+        return super().uses_json_body(image, image_edit_optional_request_params) or (
+            "images" in image_edit_optional_request_params
+            and not _has_uploaded_file(image)
+            and not _has_uploaded_file(image_edit_optional_request_params.get("mask"))
+            and not _has_uploaded_file(image_edit_optional_request_params.get("markup"))
+        )
+
     def transform_image_edit_request(
         self,
         model: str,
@@ -141,7 +162,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         image: FileTypes | Sequence[FileTypes | None] | None,
         image_edit_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> tuple[dict[str, object], RequestFiles]:
         """
         Transform image edit request to OpenAI API format.
@@ -158,6 +179,8 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
                 **({"prompt": prompt} if prompt is not None else {}),
             }
         )
+        if self.uses_json_body(image, request_dict):
+            return {key: value for key, value in request_dict.items() if key != "image"}, []
 
         #########################################################
         # Separate images, masks, and markup as `files` and send other parameters as `data`
@@ -222,7 +245,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         api_base: str | None = None,
     ) -> dict:
         bearer_token: Final = resolve_openai_bearer_token(
@@ -235,7 +258,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the endpoint for OpenAI responses API

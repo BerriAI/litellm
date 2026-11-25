@@ -5900,6 +5900,31 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool
     assert function_call_output["output"] == [{"type": "input_text", "text": "1 tool found"}]
 
 
+@pytest.mark.parametrize(
+    ("carried", "expected_middle"),
+    ((None, ()), ("carried", ({"type": "output_text", "text": "carried"},))),
+)
+def test_convert_chat_completion_messages_to_responses_api_sends_only_the_text_a_fallback_block_carries(
+    carried: str | None, expected_middle: tuple[dict[str, str], ...]
+) -> None:
+    fallback_block: Final = {
+        "type": "fallback",
+        "from": {"model": "first-model"},
+        "to": {"model": "second-model"},
+        "trigger": {"type": "refusal", "category": "cyber"},
+        **({} if carried is None else {"text": carried}),
+    }
+    reply: Final = {"type": "text", "text": "Hello"}
+    sent_reply: Final = {"type": "output_text", "text": "Hello"}
+
+    response, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
+        [{"role": "user", "content": "hi"}, {"role": "assistant", "content": [reply, fallback_block, reply]}]
+    )
+
+    assistant_message: Final = next(item for item in response if item.get("role") == "assistant")
+    assert assistant_message["content"] == [sent_reply, *expected_middle, sent_reply]
+
+
 def _litellm_encoded_response_id(upstream_id: str) -> str:
     from litellm.responses.utils import ResponsesAPIRequestUtils
 
@@ -6093,6 +6118,98 @@ def test_streaming_final_chunk_carries_provider_metadata():
     assert chunks[-1]["content_filters"] == content_filters
     assert "background" not in chunks[-1]
     assert all("service_tier" not in chunk for chunk in chunks[:-1])
+
+
+_RESPONSES_BODY_METADATA: Final = {
+    "access_programs": {"cyber": "daybreak_blue"},
+    "prompt_cache_options": {"mode": "implicit", "ttl": "30m"},
+    "prompt_cache_diagnostics": {"type": "cache_hit"},
+}
+_HIDDEN_RESPONSES_FIELDS: Final = {
+    "metadata": {"trace": "abc"},
+    "background": False,
+    "completed_at": 1760144905,
+    "conversation": {"id": "conv_metadata"},
+    "max_tool_calls": 3,
+    "prompt": {"id": "pmpt_metadata"},
+    "prompt_cache_key": "cache-key",
+    "prompt_cache_retention": "24h",
+    "safety_identifier": "user-hash",
+    "top_logprobs": 0,
+}
+
+
+def test_non_stream_response_keeps_provider_metadata_and_hides_responses_fields() -> None:
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import ModelResponse
+
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    output_message: Final = ResponseOutputMessage(
+        id="msg_metadata",
+        content=[ResponseOutputText(annotations=[], text="hi", type="output_text", logprobs=[])],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+    raw_response: Final = ResponsesAPIResponse(
+        id="resp_metadata",
+        created_at=1760144904,
+        model="gpt-5.6-sol",
+        object="response",
+        output=[output_message],
+        status="completed",
+        parallel_tool_calls=True,
+        tool_choice="auto",
+        tools=[],
+        **_RESPONSES_BODY_METADATA,
+        **_HIDDEN_RESPONSES_FIELDS,
+    )
+
+    result: Final = handler.transform_response(
+        model="gpt-5.6-sol",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=Mock(),
+        request_data={"model": "gpt-5.6-sol"},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"acompletion": False, "api_key": None},
+        encoding=Mock(),
+        api_key=None,
+        json_mode=None,
+    )
+
+    dumped: Final = result.model_dump()
+    assert {key: dumped.get(key) for key in _RESPONSES_BODY_METADATA} == _RESPONSES_BODY_METADATA
+    assert not set(_HIDDEN_RESPONSES_FIELDS) & set(dumped)
+
+
+def test_streaming_final_chunk_keeps_provider_metadata_and_hides_responses_fields() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    iterator.chunk_parser({"type": "response.created", "response": {"id": "resp_metadata", "output": []}})
+
+    final_chunk: Final = iterator.chunk_parser(
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_metadata",
+                "output": [{"type": "message"}],
+                "usage": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+                **_RESPONSES_BODY_METADATA,
+                **_HIDDEN_RESPONSES_FIELDS,
+            },
+        }
+    )
+
+    provider_fields: Final = final_chunk.provider_specific_fields or {}
+    assert {key: provider_fields.get(key) for key in _RESPONSES_BODY_METADATA} == _RESPONSES_BODY_METADATA
+    assert not set(_HIDDEN_RESPONSES_FIELDS) & set(provider_fields)
 
 
 def _system_input_item(text: str) -> dict[str, object]:

@@ -34,7 +34,7 @@ from litellm.types.utils import (
     Usage,
     text_tokens_without_nested_reasoning,
 )
-from litellm.utils import get_model_info
+from litellm.utils import get_model_info, get_model_info_for_call
 
 # Pre-resolved CallTypes enum values for fast membership checks
 _IMAGE_RESPONSE_CALL_TYPES: Final = frozenset(
@@ -1197,6 +1197,8 @@ def get_billed_token_rates(
     current_time: datetime | None = None,
     custom_cost_per_token: CostPerToken | None = None,
     model_info: ModelInfo | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
 ) -> BilledTokenRates | None:
     """Rates the cost calculator bills ``usage`` at, resolved exactly as the totals and the token-type
     breakdown resolve them. None when the model's pricing cannot be resolved."""
@@ -1206,7 +1208,9 @@ def get_billed_token_rates(
         resolved_model_info: Final = (
             model_info
             if model_info is not None
-            else get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+            else get_model_info_for_call(
+                model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
+            )
         )
     except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model: no rates
         return None
@@ -1231,6 +1235,8 @@ def get_token_type_cost_breakdown(
     current_time: datetime | None = None,
     custom_cost_per_token: CostPerToken | None = None,
     model_info: ModelInfo | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
 ) -> TokenTypeCostBreakdown:
     """
     Provider-agnostic cost of reasoning and cache tokens, derived from the usage
@@ -1256,6 +1262,8 @@ def get_token_type_cost_breakdown(
         current_time=current_time,
         custom_cost_per_token=custom_cost_per_token,
         model_info=model_info,
+        api_base=api_base,
+        api_key=api_key,
     )
     if rates is None:
         return TokenTypeCostBreakdown(0.0, 0.0, 0.0)
@@ -1546,7 +1554,7 @@ class CostCalculatorUtils:
         quality: str | None = None,
         n: int | None = None,
         size: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         call_type: str | None = None,
         model_info: ModelInfo | None = None,
         vertex_location: str | None = None,

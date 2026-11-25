@@ -6364,7 +6364,6 @@ export interface paths {
         /**
          * Get Ui Settings
          * @description Get UI-specific configuration flags.
-         *     All authenticated users can fetch these settings for client-side behavior.
          */
         get: operations["get_ui_settings_get_ui_settings_get"];
         put?: never;
@@ -20090,42 +20089,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/typesafe/{endpoint}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        get: operations["typesafe_proxy_route_typesafe__endpoint__get"];
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        put: operations["typesafe_proxy_route_typesafe__endpoint__put"];
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        post: operations["typesafe_proxy_route_typesafe__endpoint__post"];
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        delete: operations["typesafe_proxy_route_typesafe__endpoint__delete"];
-        options?: never;
-        head?: never;
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        patch: operations["typesafe_proxy_route_typesafe__endpoint__patch"];
-        trace?: never;
-    };
     "/update/background_chat_settings": {
         parameters: {
             query?: never;
@@ -33282,6 +33245,12 @@ export interface components {
              */
             health_check_interval: number;
             /**
+             * Health Check Skip Blocked Background Models
+             * @description When true, deployments with model_info.blocked set to true are skipped by background health checks. With background checks enabled, GET /health reads cached results and can return 503 for a skipped deployment because there is no healthy result. On-demand checks and Test Connection are unaffected.
+             * @default false
+             */
+            health_check_skip_blocked_background_models: boolean;
+            /**
              * Health Check Skip Disabled Background Models
              * @description When true, deployments with model_info.disable_background_health_check are skipped for on-demand GET /health as well as the background health loop.
              * @default false
@@ -33304,6 +33273,8 @@ export interface components {
             key_expiry_alert_days?: number | null;
             /** @description key manager to load keys from / decrypt keys with */
             key_management_system?: components["schemas"]["KeyManagementSystem"] | null;
+            /** @description Periodically synchronize LDAP groups to teams and existing users' memberships. Requires Redis. */
+            ldap_sync?: components["schemas"]["LDAPSyncSettings"] | null;
             /**
              * Master Key
              * @description require a key for all calls to proxy
@@ -37690,6 +37661,96 @@ export interface components {
             /** Service Host */
             service_host: string;
         };
+        /** LDAPSyncSettings */
+        LDAPSyncSettings: {
+            /**
+             * Allow Empty Groups
+             * @default false
+             */
+            allow_empty_groups: boolean;
+            /** Bind Dn */
+            bind_dn?: string | null;
+            /** Bind Password */
+            bind_password?: string | null;
+            /** Ca Cert Path */
+            ca_cert_path?: string | null;
+            /**
+             * Dry Run
+             * @default false
+             */
+            dry_run: boolean;
+            /**
+             * Enabled
+             * @default false
+             */
+            enabled: boolean;
+            /**
+             * Group Filter
+             * @default
+             */
+            group_filter: string;
+            /**
+             * Group Id Attribute
+             * @default cn
+             */
+            group_id_attribute: string;
+            /**
+             * Group Name Attribute
+             * @default cn
+             */
+            group_name_attribute: string;
+            /**
+             * Group Search Base
+             * @default
+             */
+            group_search_base: string;
+            /**
+             * Interval Minutes
+             * @default 30
+             */
+            interval_minutes: number;
+            /**
+             * Litellm Match Field
+             * @default user_email
+             * @enum {string}
+             */
+            litellm_match_field: "user_email" | "user_id" | "sso_user_id";
+            /**
+             * Member Attribute
+             * @default member
+             */
+            member_attribute: string;
+            /**
+             * Member Lookup Attribute
+             * @default uid
+             */
+            member_lookup_attribute: string;
+            /**
+             * Server Url
+             * @default
+             */
+            server_url: string;
+            /**
+             * Start Tls
+             * @default false
+             */
+            start_tls: boolean;
+            /**
+             * Timeout Seconds
+             * @default 30
+             */
+            timeout_seconds: number;
+            /**
+             * User Match Attribute
+             * @default mail
+             */
+            user_match_attribute: string;
+            /**
+             * User Search Base
+             * @default
+             */
+            user_search_base: string;
+        };
         /** LLMV2Calibration */
         LLMV2Calibration: {
             capable: components["schemas"]["LLMV2ProbabilityCalibration"];
@@ -39302,6 +39363,16 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Oauth Client Credentials */
+            oauth_client_credentials?: boolean | null;
+            /** Oauth Client Id */
+            oauth_client_id?: string | null;
+            /** Oauth Client Secret */
+            oauth_client_secret?: string | null;
+            /** Oauth Scope */
+            oauth_scope?: string | null;
+            /** Oauth Token Url */
+            oauth_token_url?: string | null;
             /** Ocr Cost Per Credit */
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
@@ -53788,6 +53859,12 @@ export interface components {
             source: {
                 [key: string]: "config" | "db" | "env" | "default" | "unset";
             };
+            /**
+             * Supports Similarity Threshold
+             * @description Whether the active response cache supports similarity thresholds
+             * @default false
+             */
+            supports_similarity_threshold: boolean;
             /** Values */
             values: {
                 [key: string]: unknown;
@@ -56794,6 +56871,16 @@ export interface components {
             model_info?: {
                 [key: string]: unknown;
             } | null;
+            /** Oauth Client Credentials */
+            oauth_client_credentials?: boolean | null;
+            /** Oauth Client Id */
+            oauth_client_id?: string | null;
+            /** Oauth Client Secret */
+            oauth_client_secret?: string | null;
+            /** Oauth Scope */
+            oauth_scope?: string | null;
+            /** Oauth Token Url */
+            oauth_token_url?: string | null;
             /** Ocr Cost Per Credit */
             ocr_cost_per_credit?: number | null;
             /** Ocr Cost Per Page */
@@ -85777,161 +85864,6 @@ export interface operations {
             header?: never;
             path: {
                 operation: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
             };
             cookie?: never;
         };
