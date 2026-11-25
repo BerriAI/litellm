@@ -913,19 +913,26 @@ async def test_a_pass_through_failure_seen_by_both_failure_paths_frees_only_its_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "failed_request",
+    ("running_call_type", "failed_request"),
     [
-        {"call_type": CallTypes.pass_through.value, "litellm_params": _call_kwargs("dep-a")["litellm_params"]},
-        {**_call_kwargs("dep-a", "never-started"), "call_type": CallTypes.pass_through.value},
+        (
+            CallTypes.pass_through.value,
+            {"call_type": CallTypes.pass_through.value, "litellm_params": _call_kwargs("dep-a")["litellm_params"]},
+        ),
+        (
+            CallTypes.pass_through.value,
+            {**_call_kwargs("dep-a", "never-started"), "call_type": CallTypes.pass_through.value},
+        ),
+        (CallTypes.acompletion.value, {**_call_kwargs("dep-a", "running"), "call_type": CallTypes.pass_through.value}),
     ],
-    ids=["no call id", "call id that never started"],
+    ids=["no call id", "call id that never started", "a running chat call's id"],
 )
-async def test_a_pass_through_failure_for_a_call_that_never_started_leaves_the_running_call_counted(
-    failed_request: dict[str, object],
+async def test_a_pass_through_failure_naming_no_started_pass_through_call_leaves_the_running_call_counted(
+    running_call_type: str, failed_request: dict[str, object]
 ) -> None:
     worker: Final = _worker(None)
     worker.log_pre_api_call(
-        model="m", messages=[], kwargs={**_call_kwargs("dep-a", "running"), "call_type": CallTypes.pass_through.value}
+        model="m", messages=[], kwargs={**_call_kwargs("dep-a", "running"), "call_type": running_call_type}
     )
 
     await worker.async_post_call_failure_hook(

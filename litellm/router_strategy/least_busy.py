@@ -6,7 +6,7 @@ import time
 import uuid
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextvars import ContextVar
-from typing import Final, Protocol, TypeAlias
+from typing import Final, NamedTuple, Protocol, TypeAlias
 
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -82,7 +82,14 @@ _CALL_KWARGS: Final = TypeAdapter(_CallKwargs)
 CALL_IDENTITY: Final = TypeAdapter(CallIdentity)
 _DEPLOYMENTS: Final = TypeAdapter(list[_Deployment])
 _MEMORY_COUNTS: Final[TypeAdapter[tuple[float | None, ...] | None]] = TypeAdapter(tuple[float | None, ...] | None)
-_Start: TypeAlias = tuple[float, str | None]
+
+
+class _Start(NamedTuple):
+    started_at: float
+    attempt_id: str | None
+    pass_through: bool
+
+
 _STARTS: Final[TypeAdapter[tuple[_Start, ...] | None]] = TypeAdapter(tuple[_Start, ...] | None)
 _STARTED_ATTEMPT: Final[TypeAdapter[tuple[str, str, str] | None]] = TypeAdapter(tuple[str, str, str] | None)
 _Pick: TypeAlias = tuple[float, str | None]
@@ -270,7 +277,7 @@ def _end_started_attempt(store: _ReservationStore, attempt_id: str, *, every: bo
     call_id, model_group, deployment_id = started
     key: Final = _started_attempts_key(call_id, (model_group, deployment_id))
     starts: Final = _starts(store, key)
-    own: Final = tuple(index for index, start in enumerate(starts) if start[1] == attempt_id)
+    own: Final = tuple(index for index, start in enumerate(starts) if start.attempt_id == attempt_id)
     ending: Final = frozenset(own if every else own[:1])
     _put(
         store,
@@ -281,6 +288,24 @@ def _end_started_attempt(store: _ReservationStore, attempt_id: str, *, every: bo
     if len(ending) == len(own):
         store.delete_cache(_started_attempt_key(attempt_id))
     return (model_group, deployment_id, len(ending)) if ending else None
+
+
+def _end_first_start(
+    store: _ReservationStore, cache: DualCache, call_id: str, ref: tuple[str, str], *, pass_through_only: bool
+) -> bool:
+    key: Final = _started_attempts_key(call_id, ref)
+    started: Final = _starts(store, key)
+    index: Final = next(
+        (index for index, start in enumerate(started) if start.pass_through or not pass_through_only), None
+    )
+    if index is None:
+        return False
+    attempt_id: Final = started[index].attempt_id
+    if attempt_id is not None:
+        store.delete_cache(_started_attempt_key(attempt_id))
+    _put(store, key, (*started[:index], *started[index + 1 :]), IN_FLIGHT_COUNT_TTL_SECONDS)
+    _count_locally(cache, _request_count_key(*ref), -1)
+    return True
 
 
 def _count_locally(cache: DualCache, key: str, delta: int) -> None:
@@ -395,7 +420,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                     self._record_pick(tag, deployment_ids[index])
         return healthy_deployments[index]
 
-    def _start_attempt(self, ref: tuple[str, str], call_id: str | None) -> None:
+    def _start_attempt(self, ref: tuple[str, str], call_id: str | None, pass_through: bool) -> None:
         attempt_id: Final = current_attempt_id()
         with _RESERVATIONS_LOCK:
             now: Final = self._clock()
@@ -403,7 +428,7 @@ class LeastBusyLoggingHandler(CustomLogger):
             _count_locally(self.router_cache, _request_count_key(*ref), 1)
             if call_id is not None:
                 key: Final = _started_attempts_key(call_id, ref)
-                started: Final = (*_starts(self._reservations, key), (now, attempt_id))
+                started: Final = (*_starts(self._reservations, key), _Start(now, attempt_id, pass_through))
                 _put(self._reservations, key, started, IN_FLIGHT_COUNT_TTL_SECONDS)
                 if attempt_id is not None:
                     _put(
@@ -425,16 +450,11 @@ class LeastBusyLoggingHandler(CustomLogger):
                 if ended is not None:
                     _count_locally(self.router_cache, _request_count_key(ended[0], ended[1]), -1)
             return None if ended is None else (ended[0], ended[1])
-        key: Final = _started_attempts_key(call_id, ref)
         with _RESERVATIONS_LOCK:
-            started: Final = _starts(self._reservations, key)
-            if started:
-                oldest_attempt: Final = started[0][1]
-                if oldest_attempt is not None:
-                    self._reservations.delete_cache(_started_attempt_key(oldest_attempt))
-                _put(self._reservations, key, started[1:], IN_FLIGHT_COUNT_TTL_SECONDS)
-                _count_locally(self.router_cache, _request_count_key(*ref), -1)
-            else:
+            started: Final = _end_first_start(
+                self._reservations, self.router_cache, call_id, ref, pass_through_only=False
+            )
+            if not started:
                 self._take_reservation(ref[1], call_id, self._clock())
         return ref if started else None
 
@@ -443,7 +463,7 @@ class LeastBusyLoggingHandler(CustomLogger):
         ref: Final = _deployment_ref(kwargs)
         if ref is None:
             return
-        self._start_attempt(ref, call_id_of(kwargs))
+        self._start_attempt(ref, call_id_of(kwargs), kwargs.get("call_type") == CallTypes.pass_through.value)
         self._count_shared(_request_count_key(*ref), 1)
 
     @with_service_target(ROUTER_USAGE_TARGET)
@@ -486,9 +506,20 @@ class LeastBusyLoggingHandler(CustomLogger):
         user_api_key_dict: UserAPIKeyAuth,
         traceback_str: str | None = None,
     ) -> None:
-        if request_data.get("call_type") != CallTypes.pass_through.value or call_id_of(request_data) is None:
+        if request_data.get("call_type") != CallTypes.pass_through.value:
             return
-        await self._async_settle(request_data)
+        ref: Final = _deployment_ref(request_data)
+        call_id: Final = call_id_of(request_data)
+        if ref is None or call_id is None:
+            return
+        with _RESERVATIONS_LOCK:
+            started: Final = _end_first_start(
+                self._reservations, self.router_cache, call_id, ref, pass_through_only=True
+            )
+        if started:
+            await released(
+                (release_in_background(_async_count_shared(self.router_cache, _request_count_key(*ref), -1)),)
+            )
 
     @with_service_target(ROUTER_USAGE_TARGET)
     def get_available_deployments(
