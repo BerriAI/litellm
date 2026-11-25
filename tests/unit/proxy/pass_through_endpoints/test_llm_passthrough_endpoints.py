@@ -192,9 +192,7 @@ async def test_gemini_pass_through_endpoint_forwards_key_and_body(
 
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
     endpoint: Final = "v1beta/models/gemini-2.5-flash:countTokens"
-    upstream: Final = respx_mock.post(
-        url__startswith=f"https://generativelanguage.googleapis.com/{endpoint}"
-    ).mock(
+    upstream: Final = respx_mock.post(url__startswith=f"https://generativelanguage.googleapis.com/{endpoint}").mock(
         return_value=httpx.Response(
             200,
             json={"totalTokens": 9},
@@ -234,6 +232,7 @@ async def test_gemini_pass_through_endpoint_forwards_key_and_body(
     assert outbound.url.path == f"/{endpoint}"
     assert outbound.url.params["key"] == "gemini-test-key"
     assert json.loads(outbound.content) == json.loads(body)
+
 
 class _DenyingFileAccessGuard:
     def __init__(self) -> None:
@@ -278,16 +277,47 @@ async def _call_gemini_pass_through(
     return await gemini_proxy_route(endpoint=endpoint, request=Request(scope, receive), fastapi_response=Response())
 
 
-class _AnotherCallersFilesGuard:
-    """Stands in for the managed files hook: the files in ``owned_by_another_caller`` are denied, the rest are not"""
+class _ManagedFileRows:
+    def __init__(self, rows: Sequence[object]) -> None:
+        self._rows: Final = rows
 
-    def __init__(self, *owned_by_another_caller: str) -> None:
-        self._owned_by_another_caller: Final = frozenset(owned_by_another_caller)
+    async def find_many(self, where: Mapping[str, Mapping[str, Sequence[str]]]) -> Sequence[object]:
+        unified_file_ids: Final = where.get("unified_file_id", {}).get("in", ())
+        raw_file_ids: Final = where.get("flat_model_file_ids", {}).get("hasSome", ())
+        return [
+            row
+            for row in self._rows
+            if row.unified_file_id in unified_file_ids or not set(row.flat_model_file_ids).isdisjoint(raw_file_ids)
+        ]
 
-    async def provider_file_ids_denied_to(self, file_ids: Sequence[str], user_api_key_dict: object) -> Sequence[str]:
-        from litellm.llms.gemini.files.utils import gemini_file_id
 
-        return tuple(file_id for file_id in file_ids if gemini_file_id(file_id) in self._owned_by_another_caller)
+class _ManagedFilesDatabase:
+    def __init__(self, rows: Sequence[object]) -> None:
+        self.litellm_managedfiletable: Final = _ManagedFileRows(rows)
+
+
+class _ManagedFilesPrismaClient:
+    def __init__(self, rows: Sequence[object]) -> None:
+        self.db: Final = _ManagedFilesDatabase(rows)
+
+
+def _managed_files_where_another_user_owns(*owned_by_another_caller: str) -> object:
+    """The managed files hook over a database where another user uploaded each of ``owned_by_another_caller``"""
+    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_ManagedFileTable
+
+    rows: Final = [
+        LiteLLM_ManagedFileTable(
+            unified_file_id=f"managed-{file_id}",
+            model_mappings={"model-gemini": file_id},
+            flat_model_file_ids=[file_id],
+            created_by="another-user",
+        )
+        for file_id in owned_by_another_caller
+    ]
+    return _PROXY_LiteLLMManagedFiles(DualCache(), prisma_client=_ManagedFilesPrismaClient(rows))
 
 
 _ANOTHER_CALLERS_FILE_URI: Final = "https://generativelanguage.googleapis.com/v1beta/files/abc123"
@@ -332,7 +362,7 @@ async def test_gemini_pass_through_refuses_a_request_body_that_reads_a_file_the_
     from litellm.proxy import proxy_server
 
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
-    guard: Final = _AnotherCallersFilesGuard("abc123")
+    guard: Final = _managed_files_where_another_user_owns("abc123")
     monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
     upstream: Final = respx_mock.route(host="generativelanguage.googleapis.com").mock(
         return_value=httpx.Response(200, json={})
@@ -343,6 +373,32 @@ async def test_gemini_pass_through_refuses_a_request_body_that_reads_a_file_the_
 
     assert refused.value.status_code == 403
     assert upstream.call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_gemini_pass_through_returns_the_upload_url_when_a_resumable_upload_starts(
+    respx_mock: "respx.MockRouter",
+    httpx_transport: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import httpx
+
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
+    guard: Final = _managed_files_where_another_user_owns("abc123")
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
+    upload_url: Final = "https://generativelanguage.googleapis.com/upload/v1beta/files?upload_id=u1"
+    respx_mock.route(host="generativelanguage.googleapis.com").mock(
+        return_value=httpx.Response(200, headers={"x-goog-upload-url": upload_url})
+    )
+
+    response: Final = await _call_gemini_pass_through(
+        "POST", "upload/v1beta/files", body=json.dumps({"file": {"display_name": "notes.txt"}}).encode()
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-goog-upload-url"] == upload_url
 
 
 @pytest.mark.asyncio
@@ -357,7 +413,7 @@ async def test_gemini_pass_through_refuses_a_json_body_nested_too_deeply_to_chec
     from litellm.proxy import proxy_server
 
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
-    guard: Final = _AnotherCallersFilesGuard("abc123")
+    guard: Final = _managed_files_where_another_user_owns("abc123")
     monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
     upstream: Final = respx_mock.route(host="generativelanguage.googleapis.com").mock(
         return_value=httpx.Response(200, json={})
@@ -393,7 +449,7 @@ async def test_gemini_pass_through_forwards_a_request_body_that_reads_no_file_of
     from litellm.proxy import proxy_server
 
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
-    guard: Final = _AnotherCallersFilesGuard("abc123")
+    guard: Final = _managed_files_where_another_user_owns("abc123")
     monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
     upstream: Final = respx_mock.route(host="generativelanguage.googleapis.com").mock(
         return_value=httpx.Response(200, json={"candidates": []})
@@ -420,7 +476,7 @@ async def test_gemini_pass_through_file_list_leaves_out_files_the_caller_does_no
     from litellm.proxy import proxy_server
 
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
-    guard: Final = _AnotherCallersFilesGuard("abc123")
+    guard: Final = _managed_files_where_another_user_owns("abc123")
     monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
     mine: Final = {"name": "files/mine456", "uri": "https://generativelanguage.googleapis.com/v1beta/files/mine456"}
     theirs: Final = {"name": "files/abc123", "uri": _ANOTHER_CALLERS_FILE_URI, "displayName": "secret.txt"}
@@ -446,7 +502,7 @@ async def test_gemini_pass_through_file_list_leaves_out_a_file_the_response_give
     from litellm.proxy import proxy_server
 
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
-    guard: Final = _AnotherCallersFilesGuard("abc123")
+    guard: Final = _managed_files_where_another_user_owns("abc123")
     monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
     partial_listing: Final = [{"displayName": "secret.txt", "downloadUri": "https://example.invalid/d"}]
     respx_mock.route(host="generativelanguage.googleapis.com").mock(
@@ -470,7 +526,7 @@ async def test_gemini_pass_through_refuses_a_file_list_it_cannot_read_as_json(
     from litellm.proxy import proxy_server
 
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-test-key")
-    guard: Final = _AnotherCallersFilesGuard("abc123")
+    guard: Final = _managed_files_where_another_user_owns("abc123")
     monkeypatch.setattr(proxy_server.proxy_logging_obj, "get_proxy_hook", lambda name: guard)
     respx_mock.route(host="generativelanguage.googleapis.com").mock(
         return_value=httpx.Response(200, text='callback({"files": [{"name": "files/abc123"}]})')
@@ -871,7 +927,6 @@ def test_vertex_pass_through_drops_the_configured_anthropic_beta_before_calling_
     assert json.loads(outbound.content) == _VERTEX_CLAUDE_BODY
 
 
-
 @pytest.mark.parametrize(
     "configured",
     [[f" {_VERTEX_REJECTED_BETA} "], [f"{_VERTEX_REJECTED_BETA},afk-mode-2026-01-31"]],
@@ -899,6 +954,7 @@ def test_vertex_pass_through_matches_a_configured_beta_written_the_way_the_heade
 
     assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)
     assert upstream.calls.last.request.headers["anthropic-beta"] == "claude-code-20250219,effort-2025-11-24"
+
 
 def test_vertex_pass_through_refuses_a_malformed_drop_setting_without_calling_vertex(
     vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch
@@ -946,7 +1002,9 @@ def test_vertex_pass_through_forwards_a_request_without_betas_despite_a_malforme
     assert "anthropic-beta" not in upstream.calls.last.request.headers
 
 
-_VERTEX_GEMINI_MODEL_PATH: Final = "v1/projects/deployment-project/locations/global/publishers/google/models/gemini-2.5-flash"
+_VERTEX_GEMINI_MODEL_PATH: Final = (
+    "v1/projects/deployment-project/locations/global/publishers/google/models/gemini-2.5-flash"
+)
 _VERTEX_LABEL_FIELDS: Final = ("user_api_key_alias", "user_api_key_team_alias", "spend_logs_metadata")
 _VERTEX_IDENTITY_LABELS: Final = {"user_api_key_alias": "search-bot", "user_api_key_team_alias": "search-team"}
 _VERTEX_SPEND_LOGS_LABELS: Final = {"cost_center": "cc-42"}
@@ -1074,9 +1132,9 @@ def test_vertex_pass_through_replaces_forged_labels_on_any_endpoint(
     vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "vertex_request_label_fields", list(_VERTEX_LABEL_FIELDS))
-    upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{_VERTEX_GEMINI_MODEL_PATH}:countTokens").mock(
-        return_value=httpx.Response(200, json={"totalTokens": 1})
-    )
+    upstream: Final = respx_mock.post(
+        f"https://aiplatform.googleapis.com/{_VERTEX_GEMINI_MODEL_PATH}:countTokens"
+    ).mock(return_value=httpx.Response(200, json={"totalTokens": 1}))
     body: Final = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}], "labels": _VERTEX_FORGED_LABELS}
 
     response: Final = vertex_proxy.post(
@@ -1094,9 +1152,9 @@ def test_vertex_pass_through_adds_no_labels_where_the_caller_sent_none_outside_b
     vertex_proxy: TestClient, respx_mock: "respx.MockRouter", monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "vertex_request_label_fields", list(_VERTEX_LABEL_FIELDS))
-    upstream: Final = respx_mock.post(f"https://aiplatform.googleapis.com/{_VERTEX_GEMINI_MODEL_PATH}:countTokens").mock(
-        return_value=httpx.Response(200, json={"totalTokens": 1})
-    )
+    upstream: Final = respx_mock.post(
+        f"https://aiplatform.googleapis.com/{_VERTEX_GEMINI_MODEL_PATH}:countTokens"
+    ).mock(return_value=httpx.Response(200, json={"totalTokens": 1}))
     body: Final = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
 
     response: Final = vertex_proxy.post(
@@ -1152,7 +1210,9 @@ def test_vertex_claude_pass_through_replaces_a_forged_labels_header(
     )
 
     response: Final = vertex_proxy.post(
-        f"/vertex_ai/{model_path}", json=_VERTEX_CLAUDE_BODY, headers={"x-litellm-api-key": "sk-caller", **caller_headers}
+        f"/vertex_ai/{model_path}",
+        json=_VERTEX_CLAUDE_BODY,
+        headers={"x-litellm-api-key": "sk-caller", **caller_headers},
     )
 
     assert (response.status_code, response.json()) == (200, _VERTEX_CLAUDE_REPLY)

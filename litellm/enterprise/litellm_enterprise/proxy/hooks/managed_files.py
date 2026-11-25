@@ -1231,15 +1231,20 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 ]
             ),
         )
-        denied_spellings: Final = frozenset(
-            stored_id
+        denied_files: Final = tuple(
+            managed_file
             for managed_file in managed_files
             if not can_access_resource(
                 user_api_key_dict=user_api_key_dict,
                 created_by=managed_file.created_by,
                 resource_team_id=managed_file.team_id,
             )
-            for stored_id in (managed_file.unified_file_id, *managed_file.flat_model_file_ids)
+        )
+        denied_spellings: Final = frozenset(
+            chain(
+                (managed_file.unified_file_id for managed_file in denied_files),
+                chain.from_iterable(managed_file.flat_model_file_ids for managed_file in denied_files),
+            )
         )
         return tuple(
             file_id

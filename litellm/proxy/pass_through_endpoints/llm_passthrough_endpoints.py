@@ -656,9 +656,12 @@ def _fully_decoded_path(path: str) -> str | None:
     return decoded if unquote(decoded) == decoded else None
 
 
+def _gemini_methods(method: str, headers: Mapping[str, str]) -> frozenset[str]:
+    return frozenset((method.upper(), *(headers.get(name, "").upper() for name in _METHOD_OVERRIDE_HEADERS)))
+
+
 def _is_gemini_get_or_delete(method: str, headers: Mapping[str, str]) -> bool:
-    methods: Final = {method.upper(), *(headers.get(name, "").upper() for name in _METHOD_OVERRIDE_HEADERS)}
-    return not methods.isdisjoint(("GET", "DELETE"))
+    return not _gemini_methods(method, headers).isdisjoint(("GET", "DELETE"))
 
 
 def _gemini_passthrough_file_id(decoded_path: str) -> str | None:
@@ -689,7 +692,10 @@ async def _enforce_gemini_passthrough_file_ownership(
     file_id: Final = _gemini_passthrough_file_id(decoded_path) if is_single_file_method else None
     if file_id is not None and isinstance(hook, _ProviderFileAccessGuard):
         await hook.enforce_provider_file_access(file_id, user_api_key_dict)
-    return hook if isinstance(hook, _ProviderFileListGuard) and _is_gemini_file_list(decoded_path) else None
+    lists_files: Final = "GET" in _gemini_methods(request.method, request.headers) and _is_gemini_file_list(
+        decoded_path
+    )
+    return hook if isinstance(hook, _ProviderFileListGuard) and lists_files else None
 
 
 @router.api_route(

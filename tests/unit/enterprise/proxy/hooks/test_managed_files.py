@@ -157,6 +157,14 @@ class _InMemoryManagedFileTable:
         where: Mapping[str, object],
         **_query: object,
     ) -> list[LiteLLM_ManagedFileTable]:
+        unified_file_ids: Final = where.get("unified_file_id")
+        if isinstance(unified_file_ids, Mapping) and "in" in unified_file_ids:
+            return [row for row in self.rows.values() if row.unified_file_id in unified_file_ids["in"]]
+        raw_file_ids: Final = where.get("flat_model_file_ids")
+        if isinstance(raw_file_ids, Mapping) and "hasSome" in raw_file_ids:
+            return [
+                row for row in self.rows.values() if not set(row.flat_model_file_ids).isdisjoint(raw_file_ids["hasSome"])
+            ]
         if "OR" not in where or len(where) != 1:
             return list(self.rows.values())
         return [
