@@ -459,7 +459,7 @@ pub struct AttemptError {
     /// The failure counts against no per-minute requests: `async_deployment_callback_on_failure`
     /// does not run for a sync call, and returns at once for a batch retrieve.
     pub uncounted_request: bool,
-    pub answered_tokens: u64,
+    pub answered_tokens: u32,
 }
 
 impl AttemptError {

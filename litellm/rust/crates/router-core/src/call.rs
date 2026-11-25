@@ -1498,7 +1498,7 @@ impl<H: RouterHost> Call<'_, H> {
     ) {
         let counted = if failure.answered_tokens > 0 {
             self.health()
-                .add_usage(deployment, None, failure.answered_tokens as f64, 1.0)
+                .add_usage(deployment, None, f64::from(failure.answered_tokens), 1.0)
                 .await
                 .map(|_| ())
         } else if failure.uncounted_request {

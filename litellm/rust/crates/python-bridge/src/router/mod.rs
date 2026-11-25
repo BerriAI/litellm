@@ -1403,7 +1403,7 @@ pub(crate) fn attempt_outcome(outcome: &Bound<'_, PyDict>) -> PyResult<Result<u6
     failure.outside_deployment = item::<bool>(outcome, "outside_deployment")?.unwrap_or(false);
     failure.status_absent = item::<bool>(outcome, "status_absent")?.unwrap_or(false);
     failure.uncounted_request = item::<bool>(outcome, "uncounted_request")?.unwrap_or(false);
-    failure.answered_tokens = item::<u64>(outcome, "answered_tokens")?.unwrap_or(0);
+    failure.answered_tokens = item::<u32>(outcome, "answered_tokens")?.unwrap_or(0);
     failure.caller_scoped = item::<bool>(outcome, "caller_scoped")?.unwrap_or(false);
     failure.classes = item::<Vec<String>>(outcome, "classes")?
         .unwrap_or_default()
