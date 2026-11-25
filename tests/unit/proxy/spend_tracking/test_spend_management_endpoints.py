@@ -141,7 +141,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
         code = re.search(r"error_code' = \$(\d+)", cond)
         msg = re.search(r"error_message' LIKE \$(\d+)", cond)
         credential = re.fullmatch(r"metadata->>'used_client_oauth_token' = \$(\d+)", cond)
-        sess = re.fullmatch(r"session_id LIKE \$(\d+)", cond)
+        sess = re.fullmatch(r"session_id = \$(\d+)", cond)
         status = re.fullmatch(r"status = \$(\d+)", cond)
         api_key_not_in = re.fullmatch(r"api_key NOT IN \(\$(\d+), \$(\d+)\)", cond)
         api_key_any = re.fullmatch(r"api_key = ANY\(\$(\d+)::text\[\]\)", cond)
@@ -171,7 +171,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
             elif "acreate_batch" in cond:
                 where["span_type"] = "batch"
         elif sess:
-            where["session_id"] = {"contains": str(params[int(sess.group(1)) - 1]).strip("%")}
+            where["session_id"] = {"equals": params[int(sess.group(1)) - 1]}
         elif status:
             where["status"] = {"equals": params[int(status.group(1)) - 1]}
         elif api_key_any:
@@ -1167,8 +1167,9 @@ async def test_ui_view_spend_logs_search_with_user_filter_is_not_narrowed_to_the
     [
         ("session-filter-demo-1", {"req1", "req2"}),
         ("session-filter-demo-2", {"req3"}),
-        ("session-filter", {"req1", "req2", "req3"}),
-        ("demo", {"req1", "req2", "req3"}),
+        ("session-filter-demo", set()),
+        ("session-filter", set()),
+        ("demo", set()),
         ("no-such-session", set()),
     ],
 )
@@ -1196,7 +1197,7 @@ async def test_ui_view_spend_logs_with_session_id(client, monkeypatch, session_i
         session_filter = where.get("session_id")
         if session_filter is None:
             return mock_spend_logs
-        return [log for log in mock_spend_logs if session_filter["contains"] in log["session_id"]]
+        return [log for log in mock_spend_logs if session_filter["equals"] == log["session_id"]]
 
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.prisma_client",
@@ -1219,7 +1220,7 @@ async def test_ui_view_spend_logs_with_session_id(client, monkeypatch, session_i
     data = response.json()
     assert data["total"] == len(expected_request_ids)
     assert {log["request_id"] for log in data["data"]} == expected_request_ids
-    assert all(session_id_query in log["session_id"] for log in data["data"])
+    assert all(session_id_query == log["session_id"] for log in data["data"])
 
 
 # Mock spend logs with distinct values for sorting tests.

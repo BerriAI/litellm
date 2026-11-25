@@ -2637,7 +2637,7 @@ async def ui_view_spend_logs(
     ),
     session_id: str | None = fastapi.Query(
         default=None,
-        description="Filter spend logs by session_id (partial string match)",
+        description="Filter spend logs by exact session_id",
     ),
     team_id: str | None = fastapi.Query(
         default=None,
@@ -3018,9 +3018,8 @@ async def ui_view_spend_logs(
             p += len(scope_params)
 
         if session_id is not None and isinstance(session_id, str):
-            like_escaped_session_id: Final = session_id.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            sql_conditions.append(f"session_id LIKE ${p}")
-            sql_params.append(f"%{like_escaped_session_id}%")
+            sql_conditions.append(f"session_id = ${p}")
+            sql_params.append(session_id)
             p += 1
 
         scope_api_keys: Final = (
