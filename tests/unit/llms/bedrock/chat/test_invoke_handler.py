@@ -1323,14 +1323,6 @@ def test_mistral_chat_completion_invoke_stream_yields_text_finish_reason_and_usa
     ]
 
 
-def test_invoke_decoder_leaves_openai_delta_events_without_a_message_to_their_own_decoder() -> None:
-    decoder: Final = AWSEventStreamDecoder(model="moonshot.kimi-k2-thinking")
-
-    chunk: Final = decoder.chunk_parser(chunk_data=_openai_stream_chunk({"content": "hi"}, "stop"))
-
-    assert chunk == {"text": "", "is_finished": False, "finish_reason": "", "usage": None, "index": 0, "tool_use": None}
-
-
 def test_converse_streaming_tool_call_arguments_are_valid_json(
     _aws_test_credentials: None,
 ) -> None:

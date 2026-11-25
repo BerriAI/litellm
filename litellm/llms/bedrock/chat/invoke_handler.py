@@ -108,18 +108,17 @@ class _MistralInvokeChatUsage(BaseModel):
 class _MistralInvokeChatEvent(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    choices: tuple[_MistralInvokeChatChoice, ...]
+    choices: Annotated[tuple[_MistralInvokeChatChoice, ...], Field(min_length=1)]
     usage: _MistralInvokeChatUsage | None = None
 
 
 _MISTRAL_INVOKE_CHAT_EVENT_OR_OTHER: Final[TypeAdapter[_MistralInvokeChatEvent | Mapping[str, object]]] = TypeAdapter(
     Annotated[_MistralInvokeChatEvent | Mapping[str, object], Field(union_mode="left_to_right")]
 )
-_NO_MISTRAL_INVOKE_CHAT_CHOICE: Final = _MistralInvokeChatChoice(message=_MistralInvokeChatMessage())
 
 
 def _mistral_invoke_chat_chunk(event: _MistralInvokeChatEvent) -> GChunk:
-    choice: Final = event.choices[0] if event.choices else _NO_MISTRAL_INVOKE_CHAT_CHOICE
+    choice: Final = event.choices[0]
     finish_reason: Final = choice.finish_reason or choice.stop_reason
     return GChunk(
         text=choice.message.content or "",
