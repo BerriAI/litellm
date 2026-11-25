@@ -26,6 +26,8 @@ pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 CONVERSATION_ATTEMPTS: Final = 3
 SYSTEM_PROMPT_STAND_IN: Final = "."
 RULES: Final = 160
+# On 2026-11-25 GPT-6.2 did not reuse the last ~75 tokens of the previous request (OpenAI usage.cached_tokens),
+# so the notes keep that tail after the system prompt
 NOTES_BEFORE_THE_FIRST_QUESTION: Final = 12
 QUESTIONS: Final = (
     " ".join(f"Note {index} is that the weather can wait." for index in range(NOTES_BEFORE_THE_FIRST_QUESTION))
@@ -292,8 +294,12 @@ def _messages_sender(sdk: SdkClients, key: str, model: str, store: bool | None, 
     return send
 
 
+def _direct_route(backend: Backend) -> str:
+    return "/openai_passthrough/v1" if backend.passthrough_model else "/v1"
+
+
 def _direct_sender(sdk: SdkClients, key: str, backend: Backend, model: str, store: bool | None) -> TurnSender:
-    route: Final = "/openai_passthrough/v1" if backend.passthrough_model else "/v1"
+    route: Final = _direct_route(backend)
     extra_body: Final[dict[str, object]] = {} if backend.passthrough_model else dict(NO_PROXY_CACHE)
     client: Final = OpenAI(base_url=f"{sdk.base_url}{route}", api_key=key, timeout=sdk.request_timeout, max_retries=0)
 
@@ -367,7 +373,7 @@ def _assert_bridged_conversation_caches_like_direct(
     direct: Final = _converse_until(direct_send, direct_caches, CONVERSATION_ATTEMPTS)
     assert direct_caches(direct), (
         f"{backend.id} cached less than the system prompt on a continued turn of the conversation sent as "
-        f"Responses input, so it is no yardstick: {direct}"
+        f"Responses input to {_direct_route(backend)}/responses, so it is no yardstick: {direct}"
     )
 
     bridged_other_tokens: Final = _tokens_besides_the_system_prompt(bridged)
