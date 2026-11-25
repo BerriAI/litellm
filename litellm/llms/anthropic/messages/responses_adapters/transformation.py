@@ -30,7 +30,7 @@ from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking,
 )
 from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
-from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_parts
+from litellm.llms.anthropic.messages.convertible_blocks import tool_result_text_part
 from litellm.llms.anthropic.messages.native.utils import (
     refusal_stop_details,
     responses_output_refusal_text,
@@ -75,6 +75,22 @@ def _output_item_mapping(item: object) -> Mapping[str, object]:
     if isinstance(item, BaseModel):
         return item.model_dump()
     return as_str_mapping(item) or MappingProxyType({})
+
+
+def _responses_tool_result_part(block: object) -> str | None:
+    match block:
+        case {"type": "tool_reference", "tool_name": str(tool_name)}:
+            return f"[Loaded tool: {tool_name}]"
+        case {"type": "tool_reference"}:
+            return "[Loaded tool: ]"
+        case _:
+            return tool_result_text_part(block)
+
+
+def _responses_tool_result_text_parts(tool_result: Mapping[str, object]) -> tuple[str, ...]:
+    content: Final = tool_result.get("content")
+    parts: Final = map(_responses_tool_result_part, content if isinstance(content, list) else ())
+    return tuple(part for part in parts if part is not None)
 
 
 class LiteLLMAnthropicToResponsesAPIAdapter:
@@ -396,7 +412,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             elif isinstance(inner, str):
                                 output_text = inner
                             elif isinstance(inner, list):
-                                output_text = "\n".join(tool_result_text_parts(tool_result_block))
+                                output_text = "\n".join(_responses_tool_result_text_parts(tool_result_block))
                                 if covered_image_parts or later_image_parts:
                                     output_text = (
                                         f"{output_text}\n{TOOL_RESULT_IMAGE_PLACEHOLDER}"
