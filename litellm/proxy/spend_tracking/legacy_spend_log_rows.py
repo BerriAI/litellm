@@ -898,9 +898,11 @@ def logging_payload(
         kwargs.get("litellm_call_id") or litellm_params.get("litellm_call_id"),
     )
 
+    no_log: Final = spend_tracking_utils.is_no_log_call(kwargs)
     # clean up litellm metadata
     clean_metadata = _get_spend_logs_metadata(
         persisted_metadata,
+        no_log=no_log,
         is_silent_experiment=(
             standard_logging_payload is not None
             and "is_silent_experiment" in standard_logging_payload["metadata"]
@@ -1035,6 +1037,7 @@ def logging_payload(
         clean_metadata["error_information"],
         original_exception=failure_exception,
         metadata=_SPEND_LOGS_PRIVACY_METADATA_ADAPTER.validate_python(metadata),
+        no_log=no_log,
     )
 
     if litellm.cache is None:
@@ -1056,7 +1059,6 @@ def logging_payload(
     # Extract agent_id for A2A requests (set directly on model_call_details)
     agent_id: Final[str | None] = kwargs.get("agent_id") or metadata.get("agent_id")
 
-    no_log: Final = spend_tracking_utils.is_no_log_call(kwargs)
     try:
         payload: Final[SpendLogsPayload] = SpendLogsPayload(
             request_id=str(id),

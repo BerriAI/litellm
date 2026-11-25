@@ -355,7 +355,10 @@ def test_get_logging_payload_stores_request_and_response_only_without_no_log(
         kwargs={
             **logger.model_call_details,
             "litellm_params": {"metadata": {}, "proxy_server_request": {"body": body}, "no-log": no_log},
-            "standard_logging_object": standard,
+            "standard_logging_object": {
+                **standard,
+                "guardrail_information": [{"guardrail_name": "pii", "guardrail_response": "stored prompt"}],
+            },
             "response_cost": 0.5,
         },
         response_obj=response,
@@ -367,6 +370,13 @@ def test_get_logging_payload_stores_request_and_response_only_without_no_log(
     stored_request: Final = json.loads(payload["proxy_server_request"])
     stored_response: Final = json.loads(payload["response"])
     assert (stored_request, stored_response.get("id")) == (({}, None) if no_log else (body, "chatcmpl-stored-answer"))
+    stored_metadata: Final = json.loads(payload["metadata"])
+    assert ("stored prompt" in json.dumps(stored_metadata["guardrail_information"])) is not no_log, stored_metadata
+    error: Final = sanitize_error_information_for_spend_logs(
+        {"error_message": "bad request, 'messages': [{'content': 'stored prompt'}]"}, no_log=no_log
+    )
+    assert error is not None
+    assert ("stored prompt" in error["error_message"]) is not no_log, error
 
 
 @pytest.mark.parametrize("store_prompts,redact", [(True, False), (False, False), (True, True)])
@@ -5128,9 +5138,7 @@ def test_get_logging_payload_uses_recovered_combined_usage_on_failure():
     assert payload["total_tokens"] == 31
 
 
-def _fallback_after_a_failed_follow_up(
-    cache_hit: bool, request_params: Mapping[str, object] = MappingProxyType({})
-):
+def _fallback_after_a_failed_follow_up(cache_hit: bool, request_params: Mapping[str, object] = MappingProxyType({})):
     from litellm.litellm_core_utils.hidden_params import set_hidden_param
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.types.utils import ModelResponse, Usage
@@ -5854,7 +5862,9 @@ def test_get_spend_logs_id_prefers_the_response_id_for_batch_and_file_calls(call
     ],
     ids=["charged", "free", "unpriced", "non_finite"],
 )
-def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(status_call_type, response_cost, status_id):
+def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(
+    status_call_type, response_cost, status_id
+):
     """A custom provider charges the video on the poll that sees it completed, so that poll needs
     a row apart from the create row, which answers with the same video id and would drop it on the
     skip_duplicates insert. A poll that charges nothing keeps the bare id, so it still lands on the
@@ -5875,7 +5885,10 @@ def test_get_logging_payload_gives_only_a_charged_video_poll_a_row_of_its_own(st
             start_time=datetime.datetime.now(timezone.utc),
             end_time=datetime.datetime.now(timezone.utc),
         )
-        for call_type, call_id, cost in (("avideo_generation", "call-1", 0.42), (status_call_type, "call-2", response_cost))
+        for call_type, call_id, cost in (
+            ("avideo_generation", "call-1", 0.42),
+            (status_call_type, "call-2", response_cost),
+        )
     )
 
     assert create["request_id"] == "video_abc"

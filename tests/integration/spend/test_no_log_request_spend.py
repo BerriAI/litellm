@@ -1,5 +1,5 @@
 import uuid
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Final
 
@@ -84,25 +84,33 @@ def prompt_storing_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator
         yield proxy
 
 
+def _stored_row(gateway: Gateway, key: str, alias: str, model: str, prompt: str, no_log: bool) -> Mapping[str, object]:
+    response: Final = gateway.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": model, "messages": [{"role": "user", "content": prompt}], "no-log": no_log},
+        key=key,
+    )
+    assert response.status_code == 200, response.text
+    return eventually(lambda: gateway.rows(_STORED, (alias,)), lambda rows: len(rows) == 1, seconds=70)[0]
+
+
 def test_no_log_request_spend_log_keeps_spend_and_drops_prompt_and_response(prompt_storing_gateway: Gateway) -> None:
     with prompt_storing_gateway.scenario() as scenario:
         model: Final = scenario.model(input_cost_per_token=_INPUT_COST, output_cost_per_token=_OUTPUT_COST)
         marker: Final = f"prompt-marker-{uuid.uuid4().hex}"
         aliases: Final = {no_log: f"integration-no-log-{no_log}-{uuid.uuid4().hex}" for no_log in (False, True)}
-        stored: Final = {}  # mutable-ok: one row per request, filled as each request is sent and read back
-        for no_log, alias in aliases.items():
-            response = prompt_storing_gateway.request(
-                "POST",
-                "/v1/chat/completions",
-                {"model": model, "messages": [{"role": "user", "content": f"{marker} {no_log}"}], "no-log": no_log},
-                key=scenario.key(key_alias=alias, models=[model]),
+        stored: Final = {
+            no_log: _stored_row(
+                prompt_storing_gateway,
+                scenario.key(key_alias=alias, models=[model]),
+                alias,
+                model,
+                f"{marker} {no_log}",
+                no_log,
             )
-            assert response.status_code == 200, response.text
-            stored[no_log] = eventually(
-                lambda alias=alias: prompt_storing_gateway.rows(_STORED, (alias,)),
-                lambda rows: len(rows) == 1,
-                seconds=70,
-            )[0]
+            for no_log, alias in aliases.items()
+        }
         assert marker in str(stored[False]["request"]), stored[False]
         assert str(stored[False]["response"]) != "{}", stored[False]
         assert float(str(stored[True]["spend"])) == pytest.approx(float(str(stored[False]["spend"]))), stored
