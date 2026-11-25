@@ -291,6 +291,10 @@ def get_supported_openai_params(
         from litellm.llms.gnani.audio_transcription.transformation import GnaniAudioTranscriptionConfig
 
         return GnaniAudioTranscriptionConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "oruk" and request_type == "transcription":
+        from litellm.llms.oruk.audio_transcription.transformation import OrukAudioTranscriptionConfig
+
+        return OrukAudioTranscriptionConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "soniox":
         if request_type == "transcription":
             from litellm.llms.soniox.audio_transcription.transformation import (

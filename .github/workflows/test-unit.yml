@@ -352,6 +352,7 @@ jobs:
               tests/unit/llms/opensandbox
               tests/unit/llms/opensearch
               tests/unit/llms/openrouter
+              tests/unit/llms/oruk
               tests/unit/llms/ovhcloud
               tests/unit/llms/parallel_ai
               tests/unit/llms/parasail

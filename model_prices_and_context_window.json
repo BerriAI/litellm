@@ -26511,6 +26511,23 @@
             "/v1/realtime"
         ]
     },
+    "oruk/oruk-fourier-2b": {
+        "input_cost_per_second": 0.0001333333,
+        "litellm_provider": "oruk",
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://oruk.ai/pricing",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",
