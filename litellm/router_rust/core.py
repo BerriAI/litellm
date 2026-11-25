@@ -224,7 +224,11 @@ from litellm.router_rust.surface.registry import (
     index_document,
     served_default_deployment,
 )
-from litellm.router_rust.surface.replay import track_live_registry, untrack_live_registry
+from litellm.router_rust.surface.replay import (
+    mark_request_scoped_registry,
+    track_live_registry,
+    untrack_live_registry,
+)
 from litellm.router_rust.surface.retries import (
     GroupPolicies,
     RustRetries,
@@ -2152,6 +2156,7 @@ class RustCore(
         callbacks, so it binds none either: router-core reads what they would do for the request
         (``OptionalChecks.outcome_callbacks``)."""
         if request_scoped:
+            mark_request_scoped_registry(self._hosted)
             self._serve_through_request_logging()
         if logging_obj is not None:
             self._checks.bind_to_request_logging(logging_obj)
