@@ -33,6 +33,7 @@ config:
   general_settings:
     master_key: gateway-key
     max_request_size_mb: 1
+    allowed_routes: [/health, /v1/messages]
     enable_jwt_auth: true
     store_model_in_db: false
     supported_db_objects: [models]
