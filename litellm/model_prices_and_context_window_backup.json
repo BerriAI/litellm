@@ -35693,7 +35693,7 @@
     "chatgpt/gpt-5.5": {
         "successor_model": "chatgpt/gpt-6.1-sol",
         "deprecation_date": "2026-10-14",
-        "deprecation_source": "https://developers.openai.com/codex/models",
+        "deprecation_source": "https://learn.chatgpt.com/docs/models",
         "litellm_provider": "chatgpt",
         "source": "https://platform.openai.com/docs/models/gpt-5.5",
         "max_input_tokens": 1050000,
@@ -35775,7 +35775,7 @@
     "chatgpt/gpt-5.4": {
         "successor_model": "chatgpt/gpt-6-sol",
         "deprecation_date": "2026-08-31",
-        "deprecation_source": "https://developers.openai.com/codex/models",
+        "deprecation_source": "https://learn.chatgpt.com/docs/models",
         "litellm_provider": "chatgpt",
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
@@ -35831,7 +35831,7 @@
     "chatgpt/gpt-5.3-codex-spark": {
         "successor_model": "chatgpt/gpt-5.1-codex-mini",
         "deprecation_date": "2026-09-14",
-        "deprecation_source": "https://developers.openai.com/codex/models",
+        "deprecation_source": "https://learn.chatgpt.com/docs/models",
         "litellm_provider": "chatgpt",
         "max_input_tokens": 128000,
         "max_output_tokens": 128000,
