@@ -67,3 +67,8 @@ def test_lite_opencode_runs_opencode_2_with_its_own_server_so_the_launch_key_is_
     tmp_path: Path, version_line: str, expected: list[str]
 ):
     assert _launch_lite_opencode(tmp_path, version_line, "run", "hello") == expected
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="the stand-in opencode is a POSIX shell script")
+def test_lite_opencode_service_stop_launches_without_the_flag_opencode_rejects_there(tmp_path: Path):
+    assert _launch_lite_opencode(tmp_path, "opencode v2.4.1", "service", "stop") == ["service", "stop"]

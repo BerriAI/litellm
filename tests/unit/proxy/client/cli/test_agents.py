@@ -2733,6 +2733,21 @@ class TestOpencodeStandalone:
         args, _ = _launched_args(["opencode", *user_args], run)
         assert args == ("opencode", *user_args)
 
+    @pytest.mark.parametrize(
+        ("user_args", "standalone"),
+        [
+            (["service", "stop"], False),
+            (["serve"], False),
+            (["upgrade"], False),
+            (["debug", "paths"], False),
+            (["run", "service"], True),
+        ],
+        ids=["service_stop", "serve", "upgrade", "debug", "run"],
+    )
+    def test_subcommands_that_reject_the_flag_launch_as_before(self, user_args, standalone):
+        args, _ = _launched_args(["opencode", *user_args], _OpencodeVersion())
+        assert args == (("opencode", "--standalone", *user_args) if standalone else ("opencode", *user_args))
+
     @pytest.mark.parametrize("agent", ["claude", "codex", "pi"])
     def test_other_agents_never_get_the_flag(self, agent):
         run = _OpencodeVersion()

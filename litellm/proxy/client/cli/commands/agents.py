@@ -1030,6 +1030,10 @@ def _binary_version(
 
 _OPENCODE_STANDALONE_FLAG: Final = "--standalone"
 _OPENCODE_SERVER_FLAG: Final = "--server"
+# OpenCode v2.4.1 packages/cli-rs/crates/cli/tests/fixtures/commands.json: these reject --standalone
+_OPENCODE_SUBCOMMANDS_WITHOUT_STANDALONE: Final = frozenset(
+    {"service", "serve", "upgrade", "update", "uninstall", "acp", "pair", "debug"}
+)
 _MAJOR_VERSION: Final = re.compile(r"v?(\d+)\.")
 
 
@@ -1042,6 +1046,8 @@ def opencode_standalone_args(
 ) -> tuple[str, ...]:
     """OpenCode 2.x reuses one background server that keeps the key it started with, so each launch asks for its
     own server, unless the user already picked one."""
+    if args[:1] and args[0] in _OPENCODE_SUBCOMMANDS_WITHOUT_STANDALONE:
+        return ()
     if any(
         arg in (_OPENCODE_STANDALONE_FLAG, _OPENCODE_SERVER_FLAG) or arg.startswith(f"{_OPENCODE_SERVER_FLAG}=")
         for arg in args
