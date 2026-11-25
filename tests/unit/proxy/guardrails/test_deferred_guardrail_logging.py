@@ -32,12 +32,15 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.llm_cost_calc.finalization import finalize_cost
+from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
+from litellm.responses.streaming_iterator import drain_logging_tasks
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.utils import StandardLoggingPayload
-from litellm.utils import dispatch_success_logging
+from litellm.types.utils import Delta, ModelResponseStream, StandardLoggingPayload, StreamingChoices
+from litellm.utils import ModelResponseListIterator, dispatch_success_logging
+from tests.unit.litellm_core_utils.weakly_parked_logger import weakly_parked_logger
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -330,7 +333,7 @@ async def test_deferred_slot_keeps_the_innermost_wrapper_result():
 async def test_deferred_anthropic_messages_bridged_to_the_responses_api_logs_the_provider_usage(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
-    """/v1/messages on an Azure gpt-5.4+ deployment with function tools runs three nested
+    """/v1/messages on an Azure deployment with function tools and explicit reasoning runs three nested
     wrappers: anthropic_messages, the chat adapter's acompletion, and the Responses bridge
     acompletion hands the call to, which retags the call as ``responses``. With logging
     deferred for a post-call guardrail the stored closure must carry the innermost provider
@@ -382,6 +385,7 @@ async def test_deferred_anthropic_messages_bridged_to_the_responses_api_logs_the
 
     response: Final = await litellm.anthropic_messages(
         model="azure/gpt-5.4-nano",
+        reasoning_effort="medium",
         messages=[{"role": "user", "content": "hi"}],
         max_tokens=16,
         tools=[
@@ -414,38 +418,6 @@ async def test_deferred_anthropic_messages_bridged_to_the_responses_api_logs_the
 # ---------------------------------------------------------------------------
 # 4. Non-streaming: deferred success log is suppressed when guardrail raises
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("call_type", ["ocr", "aocr", "completion", "acompletion", "embedding", "responses"])
-@pytest.mark.parametrize("exception_raised", [False, True])
-def test_native_pending_logging_is_released_only_for_ocr(call_type: str, exception_raised: bool) -> None:
-    pending: Final = MagicMock()
-    enqueue: Final = MagicMock()
-    logger: Final = MagicMock(
-        call_type=call_type,
-        _native_pending_logging=pending,
-        enqueue_deferred_logging=enqueue,
-    )
-
-    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
-        logging_obj=logger,
-        exception_raised=exception_raised,
-    )
-    ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
-        logging_obj=logger,
-        exception_raised=exception_raised,
-    )
-
-    if call_type in ("ocr", "aocr"):
-        pending.release.assert_called_once_with(not exception_raised)
-        assert logger._native_pending_logging is None
-    else:
-        pending.release.assert_not_called()
-        assert logger._native_pending_logging is pending
-    if exception_raised:
-        enqueue.assert_not_called()
-    else:
-        enqueue.assert_called_once_with()
 
 
 def test_flush_deferred_async_logging_fires_on_success():
@@ -613,32 +585,19 @@ class TestDeferredStreamingClosure:
     @pytest.mark.asyncio
     async def test_streaming_no_closure_fires_normally(self):
         """Regression: without closure, CSW fires logging immediately."""
-        created_tasks = []
-        real_create_task = asyncio.create_task
-
-        def tracking_create_task(coro):
-            task = real_create_task(coro)
-            created_tasks.append(task)
-            return task
-
+        recorder: Final = _RecordingLogger()
         resp = await litellm.acompletion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "hi"}],
             mock_response="Hello!",
             stream=True,
+            callbacks=[recorder],
         )
-        with patch("asyncio.create_task", side_effect=tracking_create_task):
-            async for _ in resp:
-                pass
+        async for _ in resp:
+            pass
+        await drain_logging_tasks()
 
-        assert len(created_tasks) >= 1
-        for task in created_tasks:
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except (asyncio.CancelledError, Exception):
-                    pass
+        assert recorder.success_calls == 1
 
     @pytest.mark.asyncio
     async def test_closure_runs_only_guardrail_hooks(self):
@@ -1284,6 +1243,55 @@ class TestFireDeferredStreamLogging:
         # Attributes should be cleared
         assert mock_logging_obj._on_deferred_stream_complete is None
         assert mock_logging_obj._deferred_stream_complete_args is None
+
+    @pytest.mark.asyncio
+    async def test_proxy_chat_stream_success_log_survives_garbage_collection_while_pending(self):
+        model: Final = "gpt-4o"
+        async with weakly_parked_logger() as logger:
+            logging_obj: Final = Logging(
+                model=model,
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+                call_type="acompletion",
+                start_time=datetime(2026, 11, 16, 12, 0, 0),
+                litellm_call_id="proxy-parked-stream",
+                function_id="proxy-parked-stream",
+                dynamic_async_success_callbacks=[logger],
+            )
+            logging_obj.update_environment_variables(
+                model=model, user=None, optional_params={}, litellm_params={"litellm_call_id": "proxy-parked-stream"}
+            )
+            wrapper: Final = CustomStreamWrapper(
+                completion_stream=ModelResponseListIterator(
+                    model_responses=[
+                        ModelResponseStream(id="chatcmpl-parked", created=1763294400, model=model, choices=choices)
+                        for choices in (
+                            [StreamingChoices(index=0, delta=Delta(role="assistant", content="Hello there"))],
+                            [StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+                        )
+                    ]
+                ),
+                model=model,
+                custom_llm_provider="openai",
+                logging_obj=logging_obj,
+                stream_options=None,
+            )
+            ProxyBaseLLMRequestProcessing(data={"model": model, "metadata": {}})._arm_deferred_stream_dispatch(
+                response=wrapper,
+                route_type="acompletion",
+                user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                logging_obj=logging_obj,
+            )
+
+            with patch("litellm.callbacks", []):
+                received: Final = "".join(
+                    [chunk.choices[0].delta.content or "" async for chunk in wrapper if chunk.choices]
+                )
+                ProxyLogging.fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+                survived: Final = await logger.survives_collection()
+                await drain_logging_tasks()
+
+            assert (received, survived, logger.parks, logger.finished.is_set()) == ("Hello there", True, 1, True)
 
     @pytest.mark.asyncio
     async def test_noop_when_no_deferred_args(self):

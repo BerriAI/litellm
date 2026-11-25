@@ -8,7 +8,7 @@ import json
 import math
 import os
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from pathlib import PurePosixPath
 from typing import (
     ClassVar,
@@ -29,6 +29,7 @@ from typing_extensions import ReadOnly, Required
 from yaml.events import AliasEvent, ScalarEvent
 from yaml.nodes import MappingNode, Node, ScalarNode
 
+from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
 from litellm.proxy.mcp_server.exceptions import (
     MCPOpenApiUpstreamError,
@@ -242,6 +243,17 @@ def _scalar_text(node: ScalarNode) -> str:
             raise ValueError("Invalid YAML OpenAPI spec")
 
 
+class _NodePairs(Protocol):
+    @property
+    def value(self) -> object: ...
+
+
+def _mapping_keys(node: MappingNode) -> Iterator[object]:
+    for pair in iter_items(require_attributes(node, _NodePairs, "value").value):
+        key, _ = iter_items(pair)
+        yield key
+
+
 class _OpenAPISafeLoader(yaml.SafeLoader):
     yaml_implicit_resolvers: ClassVar[Mapping[str | None, Sequence[tuple[str, re.Pattern[str]]]]] = {  # pyright: ignore[reportIncompatibleVariableOverride]  # PyYAML resolver tables are class state
         None: list(_YAML_SCALARS.items())
@@ -279,10 +291,10 @@ class _OpenAPISafeLoader(yaml.SafeLoader):
             node.tag == "tag:yaml.org,2002:str" and not isinstance(node, ScalarNode)
         ):
             raise ValueError("Invalid YAML OpenAPI spec")
-        if isinstance(node, MappingNode):
-            pairs: Final[Sequence[tuple[Node, Node]]] = node.value
-            if any(not isinstance(key, ScalarNode) or key.tag != "tag:yaml.org,2002:str" for key, _ in pairs):
-                raise ValueError("Invalid YAML OpenAPI spec")
+        if isinstance(node, MappingNode) and any(
+            not isinstance(key, ScalarNode) or key.tag != "tag:yaml.org,2002:str" for key in _mapping_keys(node)
+        ):
+            raise ValueError("Invalid YAML OpenAPI spec")
         return super().construct_object(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # incomplete PyYAML stubs
             node, deep
         )
@@ -398,12 +410,8 @@ def _resolve_param_list(
     raw: Sequence[_OpenAPIParameter], component_params: Mapping[str, _OpenAPIParameter]
 ) -> list[_OpenAPIParameter]:
     """Resolve $refs in a parameter list, dropping any unresolvable entries."""
-    result: Final = []
-    for p in raw:
-        resolved = _resolve_ref(p, component_params)
-        if resolved is not None and resolved.get("name"):
-            result.append(resolved)
-    return result
+    candidates: Final = (_resolve_ref(p, component_params) for p in raw)
+    return [resolved for resolved in candidates if resolved is not None and resolved.get("name")]
 
 
 def resolve_operation_params(
@@ -436,26 +444,14 @@ def resolve_operation_params(
 
 def extract_parameters(operation: _OpenAPIOperation) -> tuple[Sequence[str], Sequence[str], Sequence[str]]:
     """Extract parameter names from OpenAPI operation."""
-    path_params: Final = []
-    query_params: Final = []
-    body_params: Final = []
-
     # OpenAPI 3.x and 2.x parameters
-    if "parameters" in operation:
-        for param in operation["parameters"]:
-            if "name" not in param:
-                continue
-            param_name = param["name"]
-            if param.get("in") == "path":
-                path_params.append(param_name)
-            elif param.get("in") == "query":
-                query_params.append(param_name)
-            elif param.get("in") == "body":
-                body_params.append(param_name)
+    named: Final = tuple(param for param in operation.get("parameters", ()) if "name" in param)
+    path_params: Final = [param["name"] for param in named if param.get("in") == "path"]
+    query_params: Final = [param["name"] for param in named if param.get("in") == "query"]
+    declared_body_params: Final = [param["name"] for param in named if param.get("in") == "body"]
 
     # OpenAPI 3.x requestBody
-    if "requestBody" in operation:
-        body_params.append("body")
+    body_params: Final = [*declared_body_params, "body"] if "requestBody" in operation else declared_body_params
 
     return path_params, query_params, body_params
 
@@ -463,7 +459,7 @@ def extract_parameters(operation: _OpenAPIOperation) -> tuple[Sequence[str], Seq
 def build_input_schema(operation: _OpenAPIOperation) -> dict[str, object]:
     """Build MCP input schema from OpenAPI operation."""
     properties: Final = {}
-    required: Final = []
+    required: Final[list[str]] = []
 
     # Process parameters
     if "parameters" in operation:
@@ -535,7 +531,7 @@ def _upstream_client() -> AsyncHTTPHandler:
 
 
 def _merge_openapi_tool_request_headers(
-    static_headers: dict[str, str],
+    static_headers: Mapping[str, str],
 ) -> dict[str, str]:
     """Merge static closure headers with per-request ContextVar overrides.
 
@@ -741,7 +737,7 @@ def create_tool_function(
 def register_tools_from_openapi(spec: _OpenAPISpec, base_url: str) -> None:
     """Register MCP tools from OpenAPI specification."""
     paths: Final = spec.get("paths", {})
-    used_names: Final = set()
+    used_names: Final[set[str]] = set()
 
     for path, path_item in paths.items():
         for method in ("get", "post", "put", "delete", "patch"):
@@ -760,7 +756,7 @@ def register_tools_from_openapi(spec: _OpenAPISpec, base_url: str) -> None:
                 # by sanitized characters (e.g. "foo/list" and "foo.list")
                 # would both become "foo_list". Append _2, _3, … to keep
                 # every tool reachable, mirroring the Anthropic-side logic
-                # in _build_anthropic_tool_name_maps.
+                # in build_anthropic_tool_name_maps.
                 unique = tool_name
                 n = 1
                 while unique in used_names:

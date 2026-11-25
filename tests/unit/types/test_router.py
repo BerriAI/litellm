@@ -26,6 +26,7 @@ from litellm.types.utils import (
     github_copilot_oauth_litellm_params,
     oauth_token_exchange_litellm_params,
     openai_wif_litellm_params,
+    provider_oauth_litellm_params,
     server_owned_wif_litellm_params,
 )
 
@@ -361,12 +362,20 @@ def test_server_owned_registry_includes_anthropic_openai_and_oauth_token_exchang
         "token_exchange_profile",
         "token_exchange_scope",
     )
-    assert github_copilot_oauth_litellm_params == ("github_copilot_auth_type", "github_copilot_host")
+    assert github_copilot_oauth_litellm_params == (
+        "github_copilot_auth_type",
+        "github_copilot_host",
+        "github_copilot_app_id",
+        "github_copilot_app_installation_id",
+        "github_copilot_app_private_key_ref",
+        "github_copilot_app_private_key",
+    )
     assert server_owned_wif_litellm_params == (
         anthropic_wif_litellm_params
         + openai_wif_litellm_params
         + oauth_token_exchange_litellm_params
         + github_copilot_oauth_litellm_params
+        + provider_oauth_litellm_params
         + ("chatgpt_auth_file",)
     )
     assert set(openai_wif_litellm_params) == {

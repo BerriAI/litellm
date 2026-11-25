@@ -30,12 +30,16 @@ helper runs for real against genuinely-encoded ids, so the provider assertions
 reflect production.
 """
 
+from collections.abc import Callable, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any, Dict, Final
 from unittest.mock import MagicMock, patch
 
+from litellm.types.videos.main import VideoCreateOptionalRequestParams
+
 import pytest
+from pydantic import BaseModel
 
 
 import litellm
@@ -439,18 +443,39 @@ def test_video_generation__custom_provider_map_base_video_config_is_dispatched(m
     from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 
     class QueueVideoConfig(OpenAIVideoConfig):
-        pass
+        def map_openai_params(
+            self, video_create_optional_params: VideoCreateOptionalRequestParams, model: str, drop_params: bool
+        ) -> dict[str, object]:
+            return dict(video_create_optional_params)
 
     video_config: Final = QueueVideoConfig()
     monkeypatch.setattr(litellm, "custom_provider_map", [{"provider": "queue-video", "custom_handler": video_config}])
     monkeypatch.setattr(litellm, "_custom_providers", ["queue-video"])
     handler: Final = MagicMock(spec=BaseLLMHTTPHandler)
     with patch.object(videos_main, "base_llm_http_handler", handler):
-        videos_main.video_generation(model="queue-video/seedance-1", prompt="a cat", api_base="http://backend.test")
+        videos_main.video_generation(
+            model="queue-video/seedance-1",
+            prompt="a cat",
+            api_base="http://backend.test",
+            duration=8,
+            aspect_ratio="16:9",
+            frame_images=[{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "frame_type": "first_frame"}],
+            input_references=[{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}],
+            generate_audio=False,
+            seed=0,
+        )
     kw: Final = handler.video_generation_handler.call_args.kwargs
     assert kw["video_generation_provider_config"] is video_config
     assert kw["custom_llm_provider"] == "queue-video"
     assert kw["model"] == "seedance-1"
+    assert kw["video_generation_optional_request_params"] == {
+        "duration": 8,
+        "aspect_ratio": "16:9",
+        "frame_images": [{"type": "image_url", "image_url": {"url": "https://example.com/first.png"}, "frame_type": "first_frame"}],
+        "input_references": [{"type": "image_url", "image_url": {"url": "https://example.com/ref.png"}}],
+        "generate_audio": False,
+        "seed": 0,
+    }
 
 
 def test_video_generation__custom_provider_without_a_video_config_is_a_400(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -463,3 +488,80 @@ def test_video_generation__custom_provider_without_a_video_config_is_a_400(monke
         with pytest.raises(litellm.BadRequestError, match="video generation is not supported for image-only"):
             videos_main.video_generation(model="image-only/seedance-1", prompt="a cat")
     handler.video_generation_handler.assert_not_called()
+
+
+_VIDEO_JSON: Final = '{"id": "video_1", "object": "video", "status": "completed", "model": "sora-2"}'
+_CHARACTER_JSON: Final = '{"id": "char_1", "object": "character", "created_at": 1767225600, "name": "hero"}'
+
+
+def _fields(value: object) -> object:
+    if isinstance(value, list):
+        return [_fields(item) for item in value]
+    return value.model_dump() if isinstance(value, BaseModel) else value
+
+
+@pytest.mark.parametrize(
+    ("operation", "arguments", "mock_response", "expected"),
+    [
+        pytest.param(
+            videos_main.video_generation,
+            {"prompt": "a cat surfing", "model": "sora-2"},
+            _VIDEO_JSON,
+            VideoObject(id="video_1", object="video", status="completed", model="sora-2"),
+            id="generation",
+        ),
+        pytest.param(
+            videos_main.video_remix,
+            {"video_id": "video_1", "prompt": "make it night"},
+            _VIDEO_JSON,
+            VideoObject(id="video_1", object="video", status="completed", model="sora-2"),
+            id="remix",
+        ),
+        pytest.param(
+            videos_main.video_status,
+            {"video_id": "video_1"},
+            _VIDEO_JSON,
+            VideoObject(id="video_1", object="video", status="completed", model="sora-2"),
+            id="status",
+        ),
+        pytest.param(
+            videos_main.video_edit,
+            {"video_id": "video_1", "prompt": "add rain"},
+            _VIDEO_JSON,
+            VideoObject(id="video_1", object="video", status="completed", model="sora-2"),
+            id="edit",
+        ),
+        pytest.param(
+            videos_main.video_extension,
+            {"video_id": "video_1", "prompt": "keep going", "seconds": "4"},
+            _VIDEO_JSON,
+            VideoObject(id="video_1", object="video", status="completed", model="sora-2"),
+            id="extension",
+        ),
+        pytest.param(
+            videos_main.video_list,
+            {},
+            f"[{_VIDEO_JSON}]",
+            [VideoObject(id="video_1", object="video", status="completed", model="sora-2")],
+            id="list",
+        ),
+        pytest.param(
+            videos_main.video_create_character,
+            {"name": "hero", "video": b"\x00\x00\x00\x18ftypmp42"},
+            _CHARACTER_JSON,
+            CharacterObject(id="char_1", object="character", created_at=1767225600, name="hero"),
+            id="create-character",
+        ),
+        pytest.param(
+            videos_main.video_get_character,
+            {"character_id": "char_1"},
+            _CHARACTER_JSON,
+            CharacterObject(id="char_1", object="character", created_at=1767225600, name="hero"),
+            id="get-character",
+        ),
+    ],
+)
+def test_a_json_string_mock_response_is_parsed_into_the_typed_result(
+    operation: Callable[..., object], arguments: Mapping[str, object], mock_response: str, expected: object
+) -> None:
+    assert _fields(operation(**arguments, mock_response=mock_response)) == _fields(expected)

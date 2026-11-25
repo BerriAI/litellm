@@ -1,5 +1,6 @@
 from typing import Final
 
+from integration._support.responses_prompt import with_leading_system_message
 from integration.translation.case import TranslationTestCase
 from integration.translation.messages.templates import MESSAGES_BRIDGE_RESPONSE, MESSAGES_REQUEST
 from integration.translation.templates.openai import OPENAI_RESPONSES_REQUEST_FROM_MESSAGES, OPENAI_RESPONSES_RESPONSE
@@ -16,13 +17,16 @@ GPT_5_6_SOL_TEST_CASE: Final = TranslationTestCase(
     },
     expected_provider_endpoint="/responses",
     expected_provider_headers={"authorization": "Bearer synthetic-openai-key", "content-type": "application/json"},
-    expected_provider_request={
-        "model": "gpt-5.6-sol",
-        "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello."}]}],
-        "include": ["reasoning.encrypted_content"],
-        "instructions": "You are a terse assistant.",
-        "max_output_tokens": 64,
-    },
+    expected_provider_request=with_leading_system_message(
+        {
+            "model": "gpt-5.6-sol",
+            "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Say hello."}]}],
+            "include": ["reasoning.encrypted_content"],
+            "instructions": "You are a terse assistant.",
+            "max_output_tokens": 64,
+        },
+        role="developer",
+    ),
     mock_provider_response={
         "id": "resp_0879800c1455ba3d006ac3f0427c4c87d0a632b130c8c464ea",
         "object": "response",

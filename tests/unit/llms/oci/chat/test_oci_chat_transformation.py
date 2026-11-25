@@ -1986,6 +1986,7 @@ FUNCTION_TOOL = {
 }
 BUILTIN_TOOL = {"type": "web_search_preview"}
 SERVER_TOOL = {"type": "computer_use_preview", "display_width": 1024}
+HOSTED_MCP_TOOL = {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"}
 FORCE_BUILTIN = {"type": "function", "function": {"name": "web_search_preview"}}
 FORCE_FUNCTION = {"type": "function", "function": {"name": "get_weather"}}
 
@@ -2028,9 +2029,10 @@ class TestNonFunctionTools:
         assert params["toolChoice"] == {"type": "REQUIRED"}
 
     @pytest.mark.parametrize("tool_choice", [None, "auto", "required"])
-    def test_drop_params_rejects_a_request_with_no_function_tool_left(self, tool_choice):
+    @pytest.mark.parametrize("tools", [[BUILTIN_TOOL, SERVER_TOOL], [HOSTED_MCP_TOOL], [HOSTED_MCP_TOOL, BUILTIN_TOOL]])
+    def test_drop_params_rejects_a_request_with_no_function_tool_left(self, tools, tool_choice):
         with pytest.raises(OCIError, match="every tool") as exc_info:
-            _oci_tool_params("xai.grok-4.20", [BUILTIN_TOOL, SERVER_TOOL], tool_choice, drop_params=True)
+            _oci_tool_params("xai.grok-4.20", tools, tool_choice, drop_params=True)
         assert exc_info.value.status_code == 400
 
     @pytest.mark.parametrize(

@@ -258,8 +258,10 @@ def _responses_frames(gateway: Gateway, stream: tuple[bytes, ...]) -> tuple[http
     )
     _assert_one_attempt(served.wire, marker)
     assert served.response.status_code == 200, served.response.text
-    assert served.response.text.rstrip().endswith("data: [DONE]"), served.response.text
+    assert "data: [DONE]" not in served.response.text, served.response.text
     frames: Final = data_frames(served.response.text)
+    names: Final = tuple(name for name, _ in sse_events(served.response.text))
+    assert names == tuple(item["type"] for item in frames), served.response.text
     assert frames[-1]["type"] == "response.failed", served.response.text
     return served.response, object_value(object_value(frames[-1]["response"])["error"])
 
@@ -299,7 +301,11 @@ def _flex_outage(identity: str, kind: str) -> tuple[bytes, ...]:
 @pytest.mark.parametrize("kind", ["error", "response.failed"])
 def test_native_responses_stream_flex_outage_fails_as_a_rate_limit(gateway: Gateway, kind: str) -> None:
     response, error = _responses_frames(gateway, _flex_outage(_identity(), kind))
-    assert error["code"] == "rate_limit_exceeded" and _FLEX_MESSAGE in string_value(error["message"]), error
+    assert error == {
+        "code": "flex_unavailable",
+        "message": _FLEX_MESSAGE,
+        "provider_specific_fields": {"code": "flex_unavailable"},
+    }, error
     _assert_failure_logged(response.headers["x-litellm-call-id"], "429", _FLEX_MESSAGE)
 
 

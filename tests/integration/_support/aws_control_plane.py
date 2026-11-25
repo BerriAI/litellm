@@ -18,6 +18,8 @@ from integration._support.sigv4 import canonical_query, signature
 from integration._support.wire import Reply
 from pydantic import JsonValue
 
+from tests.integration._support.ports import allocate_port
+
 _AUTHORIZATION: Final = re.compile(
     r"^AWS4-HMAC-SHA256 Credential=(?P<key>[^/]+)/(?P<scope>[^,]+), "
     r"SignedHeaders=(?P<signed>[^,]+), Signature=(?P<signature>[0-9a-f]{64})$"
@@ -267,7 +269,7 @@ def control_plane(directory: Path, hosts: tuple[str, ...]) -> Generator[ControlP
         block_on_close = False
         request_queue_size = 128
 
-    with Server(("127.0.0.1", 0), Proxy) as server:
+    with Server(("127.0.0.1", allocate_port()), Proxy) as server:
         thread: Final = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
         thread.start()
         try:

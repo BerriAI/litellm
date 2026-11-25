@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from litellm.llms.anthropic.messages.utils import proxy_sub_call_metadata
 from litellm.router_strategy.adaptive_router.config import (
     ADAPTIVE_ROUTER_CHOSEN_MODEL_KEY,
     SIGNAL_GATE_MIN_MESSAGES,
@@ -224,6 +225,20 @@ async def test_hook_uses_explicit_session_id_when_provided():
     assert hook.adaptive_router.record_turn.await_args.kwargs["session_id"] == (
         "explicit-sess"
     )
+
+
+@pytest.mark.asyncio
+async def test_hook_never_records_a_sub_call_as_a_turn_of_the_parent_session_it_inherited():
+    hook = _make_hook()
+    kwargs = _kwargs(
+        messages=[{"role": "user", "content": "Summarize the conversation so far"}],
+        extra_litellm_params={
+            "litellm_session_id": "parent-session",
+            "litellm_metadata": proxy_sub_call_metadata({"user_api_key_hash": "key-hash"}),
+        },
+    )
+    await hook.async_log_success_event(kwargs, _resp_with_content("summary"), 0.0, 1.0)
+    hook.adaptive_router.record_turn.assert_not_awaited()
 
 
 @pytest.mark.asyncio
