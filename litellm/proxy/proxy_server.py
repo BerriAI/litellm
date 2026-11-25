@@ -184,6 +184,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.common_utils.callback_utils import (
     is_sensitive_callback_key,
+    load_configured_callback,
     normalize_callback_names,
     process_callback,
 )
@@ -6967,12 +6968,7 @@ class ProxyConfig:
                         # user passed custom_callbacks.async_on_succes_logger. They need us to import a function
                         if "." in callback:
                             litellm.logging_callback_manager.add_litellm_success_callback(
-                                _UNTYPED_VALUE.validate_python(
-                                    get_instance_fn(
-                                        value=callback,
-                                        config_file_path=config_file_path,
-                                    )
-                                )
+                                load_configured_callback(callback, config_file_path)
                             )
                         # these are litellm callbacks - "langfuse", "sentry", "wandb"
                         else:

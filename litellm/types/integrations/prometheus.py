@@ -241,7 +241,12 @@ class UserAPIKeyLabelNames(Enum):
     INPUT_SEQUENCE_LENGTH = "input_sequence_length"
 
 
+CALLBACK_LATENCY_METRIC: Final = "litellm_callback_duration_seconds"
+CALLBACK_LATENCY_LABELS: Final = ("callback_name", "hook", "execution_path")
+
+
 DEFINED_PROMETHEUS_METRICS = Literal[
+    "litellm_callback_duration_seconds",
     "litellm_llm_api_latency_metric",
     "litellm_llm_api_time_to_first_token_metric",
     "litellm_request_total_latency_metric",
@@ -1013,6 +1018,9 @@ class PrometheusMetricLabels:
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> list[str]:
         import litellm
+
+        if label_name == CALLBACK_LATENCY_METRIC:
+            return list(CALLBACK_LATENCY_LABELS)
 
         default_labels: Final = _resolve_deployment_and_latency_caller_identity_labels(
             metric_name=label_name,

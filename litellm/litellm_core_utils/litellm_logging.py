@@ -5428,38 +5428,39 @@ class Logging(LiteLLMLoggingBaseClass):
                     ),
                     custom_logger=callback,
                 )
-                if isinstance(callback, ShadowEvalLogger) and (not self.stream or delivers_final_stream_log):
-                    await callback.async_log_success_event(
-                        kwargs=model_call_details,
-                        response_obj=model_call_details["async_complete_streaming_response"]
-                        if self.stream
-                        else redacted_response_obj_for_custom_logger(result, callback),
-                        start_time=start_time,
-                        end_time=end_time,
-                        guardrail_snapshot=self.shadow_eval_request_snapshot,
-                    )
-                elif self.stream is True:
-                    if delivers_final_stream_log:
-                        await callback.async_log_success_event(
-                            kwargs=model_call_details,
-                            response_obj=model_call_details["async_complete_streaming_response"],
-                            start_time=start_time,
-                            end_time=end_time,
-                        )
-                    else:
-                        await callback.async_log_stream_event(  # [TODO]: move this to being an async log stream event function
-                            kwargs=model_call_details,
-                            response_obj=redacted_response_obj_for_custom_logger(result, callback),
-                            start_time=start_time,
-                            end_time=end_time,
-                        )
-                else:
-                    await callback.async_log_success_event(
+                if self.stream is True and not delivers_final_stream_log:
+                    await callback.async_log_stream_event(  # [TODO]: move this to being an async log stream event function
                         kwargs=model_call_details,
                         response_obj=redacted_response_obj_for_custom_logger(result, callback),
                         start_time=start_time,
                         end_time=end_time,
                     )
+                else:
+                    delivered_response: Final = (
+                        cast(object, model_call_details["async_complete_streaming_response"])  # cast-ok: legacy payload
+                        if self.stream
+                        else redacted_response_obj_for_custom_logger(result, callback)
+                    )
+                    with time_callback_hook(
+                        callback,
+                        "async_log_success_event",
+                        enabled_for_call=not self.stream and self.call_type == CallTypes.acompletion.value,
+                    ):
+                        if isinstance(callback, ShadowEvalLogger):
+                            await callback.async_log_success_event(
+                                kwargs=model_call_details,
+                                response_obj=delivered_response,
+                                start_time=start_time,
+                                end_time=end_time,
+                                guardrail_snapshot=self.shadow_eval_request_snapshot,
+                            )
+                        else:
+                            await callback.async_log_success_event(
+                                kwargs=model_call_details,
+                                response_obj=delivered_response,
+                                start_time=start_time,
+                                end_time=end_time,
+                            )
             if callable(callback):  # custom logger functions
                 global customLogger
                 if customLogger is None:
@@ -7738,6 +7739,38 @@ def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: list[CustomLogger])
         )
     except Exception as e:
         verbose_logger.warning("Failed to auto-initialize Arize Phoenix logger: %s", str(e))
+
+
+@contextmanager
+def time_callback_hook(
+    callback: CustomLogger,
+    hook: Literal["async_pre_call_hook", "async_log_success_event"],
+    *,
+    enabled_for_call: bool,
+) -> Generator[None, None, None]:
+    if not enabled_for_call or litellm.prometheus_callback_latency is not True:
+        yield
+        return
+    name: Final = callback.callback_registration_name
+    if name is None:
+        yield
+        return
+
+    started: Final = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed: Final = time.perf_counter() - started
+        try:
+            from litellm.integrations.prometheus import PrometheusLogger
+            from litellm.litellm_core_utils.logging_worker import in_background_logging_worker
+
+            logger: Final = PrometheusLogger.get_instance() or get_custom_logger_compatible_class("prometheus")
+            if isinstance(logger, PrometheusLogger):
+                path: Final = "background" if in_background_logging_worker() else "request_path"
+                logger.observe_callback_duration(name, hook, path, elapsed)
+        except Exception:  # noqa: BLE001  # metrics must preserve the hook's return or exception
+            verbose_logger.debug("Unable to observe callback duration", exc_info=True)
 
 
 def get_custom_logger_compatible_class(

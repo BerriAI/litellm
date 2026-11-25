@@ -520,6 +520,14 @@ You can use LiteLLM through either the Proxy Server or Python SDK. Both give you
 
 Support for more providers. Missing a provider or LLM Platform, raise a [feature request](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+).
 
+### Measure custom callback latency
+
+With the Prometheus integration enabled, set `litellm_settings.prometheus_callback_latency: true` in the proxy config and restart the proxy. Scrape `/metrics/` for the `litellm_callback_duration_seconds` histogram.
+
+The histogram times `async_pre_call_hook` and `async_log_success_event` on async non-streaming Chat Completions. The `callback_name` label uses the dotted callback registration from the proxy config, so two instances of the same class can have distinct names. The `hook` label identifies the method. The `execution_path` label is `request_path` for inline execution and `background` for execution in the logging worker.
+
+Each invocation records one observation, including when the hook raises or is cancelled. Skipped hooks and inherited default no-ops produce no observations.
+
 ### Deploy on AWS or GCP with Terraform
 
 Run the LiteLLM proxy as a production-ready componentized stack (gateway, backend, UI on separate services; managed Postgres + Redis + object store) using the published Terraform modules. Both modules are on the [public Terraform Registry](https://registry.terraform.io/namespaces/BerriAI) — no auth needed.

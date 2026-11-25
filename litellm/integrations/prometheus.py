@@ -136,6 +136,7 @@ UNRECOGNIZED_REQUESTED_MODEL_LABEL: Final = "other"
 
 _NON_ENUM_METRIC_LABELS: Final[frozenset[str]] = frozenset(
     (
+        *CALLBACK_LATENCY_LABELS,
         "guardrail_name",
         "status",
         "error_type",
@@ -701,6 +702,17 @@ class PrometheusLogger(CustomLogger):
                 name="litellm_proxy_total_requests_metric",
                 documentation="Total number of requests made to the proxy server - track number of client side requests",
                 labelnames=self.get_labels_for_metric("litellm_proxy_total_requests_metric"),
+            )
+
+            self.callback_duration_seconds = (
+                self._histogram_factory(
+                    CALLBACK_LATENCY_METRIC,
+                    "Wall-clock execution time of a custom callback hook in seconds",
+                    labelnames=self.get_labels_for_metric(CALLBACK_LATENCY_METRIC),
+                    buckets=self.latency_buckets,
+                )
+                if litellm.prometheus_callback_latency is True
+                else None
             )
 
             # request latency metrics
@@ -1302,6 +1314,19 @@ class PrometheusLogger(CustomLogger):
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {e}")
             raise e
+
+    def observe_callback_duration(self, callback_name: str, hook: str, execution_path: str, seconds: float) -> None:
+        histogram: Final = self.callback_duration_seconds
+        if histogram is None:
+            return
+        values: Final = MappingProxyType(
+            {"callback_name": callback_name, "hook": hook, "execution_path": execution_path}
+        )
+        labels: Final = self.get_labels_for_metric(CALLBACK_LATENCY_METRIC)
+        if labels:
+            histogram.labels(*(values[label] for label in labels)).observe(seconds)
+        elif not isinstance(histogram, _LabeledMetric):
+            histogram.observe(seconds)
 
     def _parse_prometheus_config(self) -> dict[str, list[str]]:
         """Parse prometheus metrics configuration for label filtering and enabled metrics"""

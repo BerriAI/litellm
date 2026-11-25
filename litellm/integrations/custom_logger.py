@@ -67,6 +67,12 @@ _BASE64_INLINE_PATTERN: Final = re.compile(
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
+    callback_registration_name: str | None = None
+
+    def set_callback_registration_name(self, name: str) -> None:
+        if self.callback_registration_name is None:
+            object.__setattr__(self, "callback_registration_name", name)
+
     logs_every_failed_attempt: ClassVar[bool] = False
     reads_original_response: ClassVar[bool] = False
     # Class variables or attributes
