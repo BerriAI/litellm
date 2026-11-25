@@ -328,7 +328,7 @@ _FAILURE_KINDS: Final = (
     "CallerCredentialAuthenticationError",
     "CallerCredentialRateLimitError",
 )
-_DECLINED: Final = frozenset({"MalformedRequestFieldError", "UnsupportedEndpointError"})
+_DECLINED: Final = frozenset({"MalformedRequestFieldError", "UnsupportedEndpointError", "DocumentFetchError"})
 _BATCH_API_KINDS: Final = frozenset({"batch", "cancel_batch", "create_file"})
 _BATCH_API_HANDLERS: Final = frozenset(
     {

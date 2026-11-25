@@ -10,6 +10,7 @@ use pyo3::{
 use crate::errors::{by_fault, upstream_error};
 
 const REQUEST_FORMAT_ERROR: &str = "ocr_request_format_error";
+const DOCUMENT_FETCH_ERROR: &str = "ocr_document_fetch_error";
 
 pub(super) fn to_pyerr(error: Error) -> PyErr {
     Python::attach(|py| native(py, error).unwrap_or_else(std::convert::identity))
@@ -41,6 +42,11 @@ fn native(py: Python<'_>, error: Error) -> PyResult<PyErr> {
         }
         (Error::FileRead { cause, .. }, None) => {
             PyOSError::new_err(Report::new(cause.as_ref()).to_string())
+        }
+        (_, None) if error.is_unreachable_document() => {
+            let mapped = by_fault(true, &error);
+            mapped.value(py).setattr(DOCUMENT_FETCH_ERROR, true)?;
+            mapped
         }
         (_, None) => by_fault(error.is_request(), &error),
     };
@@ -167,6 +173,37 @@ mod tests {
         });
     }
 
+    #[tokio::test]
+    async fn an_unreachable_document_is_a_flagged_bad_request() {
+        use litellm_http::{Client, media::MediaFetcher};
+        use litellm_llms::base_llm::ocr::{
+            document::inline_remote_document, transformation::OcrConnection,
+        };
+        use litellm_llms_types::formats::ocr::OcrDocument;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let error = inline_remote_document(
+            &MediaFetcher::for_test(Client::for_test()),
+            OcrDocument::DocumentUrl {
+                document_url: format!("http://{address}/document.pdf"),
+                extra_fields: Default::default(),
+            },
+            &OcrConnection::default(),
+        )
+        .await
+        .unwrap_err();
+        Python::initialize();
+        Python::attach(|py| {
+            let mapped = to_pyerr(error);
+            assert!(mapped.is_instance_of::<PyValueError>(py), "{mapped}");
+            assert_eq!(status_code(py, &mapped), Some(400));
+            let flag = mapped.value(py).getattr(DOCUMENT_FETCH_ERROR).unwrap();
+            assert!(flag.extract::<bool>().unwrap());
+        });
+    }
+
     #[rstest]
     #[case::missing_document_url(Error::MissingDocumentUrl)]
     #[case::invalid_features(Error::Features)]
@@ -179,6 +216,8 @@ mod tests {
             assert!(mapped.is_instance_of::<PyValueError>(py));
             assert_eq!(mapped.value(py).to_string(), report);
             assert_eq!(status_code(py, &mapped), Some(400));
+            let flag = mapped.value(py).getattr_opt(DOCUMENT_FETCH_ERROR).unwrap();
+            assert!(flag.is_none());
         });
     }
 

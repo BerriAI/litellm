@@ -35,6 +35,12 @@ def map_failure(error: Exception, request: Mapping[str, object], request_provide
             model=str(request["model"]).removeprefix(f"{request_provider}/"),
             llm_provider=request_provider,
         )
+    if getattr(error, "ocr_document_fetch_error", False):
+        return litellm.DocumentFetchError(
+            message=str(error),
+            model=str(request["model"]).removeprefix(f"{request_provider}/"),
+            llm_provider=request_provider,
+        )
     return failures.map_native_failure(
         error, str(request["model"]), request_provider, request, optional_str(request.get("api_base"))
     )

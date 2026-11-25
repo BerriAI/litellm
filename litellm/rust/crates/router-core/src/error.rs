@@ -337,7 +337,7 @@ pub enum FailureKind {
     #[strum(serialize = "GuardrailIntervention")]
     GuardrailIntervention,
     /// litellm rejected the request before calling the deployment (`MalformedRequestFieldError`,
-    /// `UnsupportedEndpointError`): never cools the deployment down.
+    /// `UnsupportedEndpointError`, `DocumentFetchError`): never cools the deployment down.
     #[strum(serialize = "Declined")]
     Declined,
     /// The caller's own stored credential was rejected, not the deployment's
@@ -470,6 +470,11 @@ impl AttemptError {
     /// `isinstance(error, <class named name>)`.
     pub fn is_a(&self, name: &str) -> bool {
         self.class_names().contains(&name)
+    }
+
+    /// litellm refused the request before the call, and another attempt may not be refused.
+    pub fn is_retried_refusal(&self) -> bool {
+        self.is_a("UnsupportedEndpointError") || self.is_a("DocumentFetchError")
     }
 
     /// No retry can clear the failure: a failed agentic follow-up reruns every paid round, a

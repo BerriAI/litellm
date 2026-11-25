@@ -272,13 +272,9 @@ fn is_bad_request_without_fallback(failure: &AttemptError) -> bool {
     if failure.is_a("UnsupportedParamsError") {
         return true;
     }
-    if [
-        "ContextWindowExceededError",
-        "ContentPolicyViolationError",
-        "UnsupportedEndpointError",
-    ]
-    .iter()
-    .any(|class| failure.is_a(class))
+    if failure.is_retried_refusal()
+        || failure.is_a("ContextWindowExceededError")
+        || failure.is_a("ContentPolicyViolationError")
     {
         return false;
     }

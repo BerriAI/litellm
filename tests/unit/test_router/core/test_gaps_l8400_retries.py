@@ -56,6 +56,41 @@ async def test_unsupported_endpoint_on_a_lone_deployment_is_raised_without_a_ret
     assert host.sleeps == []
 
 
+# --- DocumentFetchError: skips the deployment that failed, and a lone deployment keeps its retries --------
+
+
+def document_fetch() -> litellm.DocumentFetchError:
+    return litellm.DocumentFetchError(message="media download failed", llm_provider="azure_ai", model="doc-intel")
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_document_is_retried_on_the_other_deployment(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a"), deployment("g", "b")], num_retries=3)
+    host.answer("*", lambda **_: document_fetch(), None)
+
+    response: Final = await attempt(core)
+
+    assert not isinstance(response, Exception)
+    assert sorted(host.deployments_called("acompletion")) == ["a", "b"]
+    assert host.sleeps == [0]
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_document_on_a_lone_deployment_spends_its_retries(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    core: Final = make_core(model_list=[deployment("g", "a")], num_retries=2)
+    host.answer("*", lambda **_: document_fetch())
+
+    error: Final = await attempt(core)
+
+    assert isinstance(error, litellm.DocumentFetchError)
+    assert error.status_code == 400
+    assert host.deployments_called("acompletion") == ["a", "a", "a"]
+
+
 # --- retry breadcrumbs ----------------------------------------------------------------------------
 
 

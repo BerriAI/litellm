@@ -141,6 +141,13 @@ fn unsupported_endpoint() -> AttemptError {
     failure
 }
 
+fn document_fetch() -> AttemptError {
+    let mut failure = AttemptError::new(FailureKind::Declined, Some(400));
+    failure.classes = vec!["DocumentFetchError".into(), "BadRequestError".into()];
+    failure.names_provider = true;
+    failure
+}
+
 /// A half of the 0.75 second jitter, which every sleep of these tests takes.
 const HALF_JITTER: Duration = Duration::from_millis(375);
 
@@ -175,6 +182,44 @@ async fn the_unary_loop_sleeps_once_more_after_its_last_failed_retry() {
             Duration::from_secs(1) + HALF_JITTER
         ]
     );
+}
+
+/// Unlike an endpoint a lone deployment refuses, its document may be reachable on the next try.
+#[tokio::test]
+async fn a_lone_deployment_retries_a_document_it_could_not_fetch() {
+    let host = SleepingHost::failing("solo", vec![document_fetch(), document_fetch()]);
+    let router = router(lone_groups(), json!({"num_retries": 2}), Arc::default());
+    let response = router
+        .call(&host, Op::from("aocr"), asking_for("solo"))
+        .await
+        .unwrap();
+    assert_eq!(response.attempted_retries, 2);
+    assert_eq!(
+        *host.sleeps.lock(),
+        [
+            Duration::from_millis(500) + HALF_JITTER,
+            Duration::from_secs(1) + HALF_JITTER
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_document_that_stays_unreachable_falls_back_with_unsupported_params_fallbacks_off() {
+    let host = SleepingHost::failing("solo", vec![document_fetch()]);
+    let config = RouterConfig {
+        fallback_on_unsupported_params: Some(false),
+        ..lone_groups()
+    };
+    let router = router(
+        config,
+        json!({"num_retries": 0, "fallbacks": [{"solo": ["backup"]}]}),
+        Arc::default(),
+    );
+    let response = router
+        .call(&host, Op::from("aocr"), asking_for("solo"))
+        .await
+        .unwrap();
+    assert_eq!(response.deployment_id, "b1");
 }
 
 #[tokio::test]

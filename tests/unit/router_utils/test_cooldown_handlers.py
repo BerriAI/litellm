@@ -85,6 +85,7 @@ def _ctx_double(
     (
         (litellm.APIConnectionError, False),
         (litellm.UnsupportedEndpointError, False),
+        (litellm.DocumentFetchError, False),
         (litellm.BadRequestError, True),
     ),
 )

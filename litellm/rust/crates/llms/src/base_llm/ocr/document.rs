@@ -189,18 +189,48 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::refused(None)]
-    #[case::cut_mid_body(Some(&b"HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nabc"[..]))]
+    #[case::refused(None, Some(400), true)]
+    #[case::cut_mid_body(
+        Some("HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\nabc"),
+        Some(400),
+        true
+    )]
+    #[case::redirect_without_a_location(
+        Some("HTTP/1.1 302 Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+        Some(400),
+        true
+    )]
+    #[case::redirect_to_an_invalid_url(
+        Some(
+            "HTTP/1.1 302 Found\r\nLocation: http://\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        ),
+        Some(400),
+        true
+    )]
+    #[case::not_found(
+        Some("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+        Some(404),
+        false
+    )]
     #[tokio::test]
-    async fn an_unreachable_document_is_a_client_error(#[case] answer: Option<&'static [u8]>) {
-        use tokio::{io::AsyncWriteExt, net::TcpListener};
+    async fn a_document_that_cannot_be_fetched_is_a_client_error(
+        #[case] answer: Option<&'static str>,
+        #[case] status: Option<u16>,
+        #[case] unreachable: bool,
+    ) {
+        use tokio::{
+            io::{AsyncReadExt, AsyncWriteExt},
+            net::TcpListener,
+        };
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = answer.map(|answer| {
             tokio::spawn(async move {
                 let (mut socket, _) = listener.accept().await.unwrap();
-                socket.write_all(answer).await.unwrap();
+                let mut request = [0_u8; 1024];
+                assert!(socket.read(&mut request).await.unwrap() > 0);
+                socket.write_all(answer.as_bytes()).await.unwrap();
             })
         });
         let error = inline_remote_document(
@@ -214,11 +244,10 @@ mod tests {
             server.await.unwrap();
         }
 
-        let message = litellm_error::Report::new(&error).to_string();
-        assert_eq!(error.http_status_code(), Some(400));
-        assert!(error.is_request());
-        assert!(message.starts_with("media download failed: "), "{message}");
-        assert!(litellm_error::find::<reqwest::Error>(&error).is_some());
+        assert_eq!(error.http_status_code(), status);
+        assert_eq!(error.is_unreachable_document(), unreachable);
+        assert_eq!(error.is_request(), unreachable);
+        assert!(!error.is_response());
     }
 
     #[rstest::rstest]
@@ -236,5 +265,6 @@ mod tests {
 
         assert!(error.upstream_response().is_none());
         assert_eq!(error.http_status_code(), None);
+        assert!(!error.is_unreachable_document());
     }
 }

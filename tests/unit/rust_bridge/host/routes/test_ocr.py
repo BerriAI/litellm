@@ -32,6 +32,11 @@ class RustFormatError(Exception):
     ocr_request_format_error: Final = True
 
 
+class RustDocumentFetchError(ValueError):
+    ocr_document_fetch_error: Final = True
+    status_code: Final = 400
+
+
 def test_rust_ocr_response_retains_provider_native_response():
     provider_response = {"status": "succeeded", "analyzeResult": {"content": "native"}}
     response = build_ocr_response(
@@ -86,3 +91,16 @@ def test_map_failure_leaves_non_upstream_errors_unwrapped() -> None:
 def test_map_failure_reports_invalid_request_format_as_unsupported_params() -> None:
     with pytest.raises(litellm.UnsupportedParamsError, match="Invalid `req_format`: 'markdown'"):
         raise map_failure(RustFormatError(), REQUEST.resolved, "mistral")
+
+
+def test_map_failure_reports_an_unreachable_document_as_the_callers_bad_request() -> None:
+    error: Final = RustDocumentFetchError("media download failed: error sending request")
+
+    public_error: Final = map_failure(error, REQUEST.resolved, "mistral")
+
+    assert isinstance(public_error, litellm.DocumentFetchError)
+    assert isinstance(public_error, litellm.BadRequestError)
+    assert public_error.status_code == 400
+    assert public_error.model == "mistral-ocr-latest"
+    assert public_error.llm_provider == "mistral"
+    assert public_error.message == "litellm.BadRequestError: media download failed: error sending request"
