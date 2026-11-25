@@ -4040,6 +4040,7 @@ dependencies = [
  "struct-field-names-as-array",
  "strum",
  "thiserror 2.0.21",
+ "url",
  "veil",
 ]
 
