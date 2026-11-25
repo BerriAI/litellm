@@ -3277,6 +3277,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, models and config are stored in and loaded from the database. Default is False.",
     )
+    customer_budget_response_headers: bool | None = Field(
+        None,
+        description="If True, responses carry x-litellm-app-customer-org-* and x-litellm-app-customer-member-* headers with the spend, max budget, remaining budget and reset time the calling app holds for the request's customer organization and member, one set per budget window. A key not pinned to one customer organization reads the budget of whichever organization it names.",
+    )
     forward_client_headers_to_llm_api: bool | None = Field(
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",

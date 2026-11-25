@@ -16,6 +16,7 @@ from typing_extensions import TypedDict
 import litellm
 from litellm._internal_context import resent_on
 from litellm._logging import verbose_logger
+from litellm.caching.caching import with_caller_message_count
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
@@ -1070,7 +1071,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             top_k=top_k,
             top_p=top_p,
             output_format=output_format,
-            extra_kwargs=kwargs,
+            extra_kwargs={**kwargs, **with_caller_message_count(request_kwargs, len(messages))},
         )
         initial_kwargs, tool_name_mapping = prepare(messages=effective_messages)
         completion_kwargs, completion_response = await _acompletion_without_rejected_reasoning(
@@ -1216,7 +1217,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             top_k=top_k,
             top_p=top_p,
             output_format=output_format,
-            extra_kwargs=kwargs,
+            extra_kwargs={**kwargs, **with_caller_message_count(sync_request_kwargs, len(messages))},
         )
         initial_kwargs, tool_name_mapping = prepare(messages=effective_messages)
         completion_kwargs, completion_response = _completion_without_rejected_reasoning(

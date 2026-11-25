@@ -144,6 +144,7 @@ MAX_S3_OBJECT_DOWNLOAD_FILENAME_BYTES: Final = 1024
 S3_LOG_PROMPTS_ONLY_ENV_VAR: Final = "S3_LOG_PROMPTS_ONLY"
 MAX_FILE_LIST_LIMIT: Final = 10000
 MAX_IMAGE_FAN_OUT_REQUESTS: Final = get_env_int("MAX_IMAGE_FAN_OUT_REQUESTS", 10)
+IMAGE_CALL_TYPES: Final = frozenset({"image_generation", "aimage_generation", "image_edit", "aimage_edit"})
 ANTHROPIC_DEFAULT_FILE_LIST_LIMIT: Final = 20
 DEFAULT_SQS_FLUSH_INTERVAL_SECONDS: Final = get_env_int("DEFAULT_SQS_FLUSH_INTERVAL_SECONDS", 10)
 DEFAULT_NUM_WORKERS_LITELLM_PROXY: Final = get_env_int("DEFAULT_NUM_WORKERS_LITELLM_PROXY", 1)
@@ -707,6 +708,7 @@ HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS: Final[float] = 5.0
 SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS: Final[float] = get_env_float("SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS", 5.0)
 SEMANTIC_CACHE_PARAMS_KEY: Final = "cache_params"
 SEMANTIC_CACHE_POLICY_KEY: Final = "_semantic_cache_policy"
+CALLER_MESSAGE_COUNT_KEY: Final = "_caller_message_count"
 _request_timeout_from_env: Final = get_env_float_or_none("REQUEST_TIMEOUT")
 request_timeout: float = (
     DEFAULT_REQUEST_TIMEOUT_SECONDS if _request_timeout_from_env is None else _request_timeout_from_env
