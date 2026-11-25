@@ -67,6 +67,7 @@ from litellm.types.utils import PromptTokensDetailsWrapper
 from litellm.utils import token_counter
 from types import MappingProxyType
 from litellm.litellm_core_utils.hidden_params import served_from_cache
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
@@ -2806,38 +2807,34 @@ async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_ord
     assert [item["embedding"] for item in repeat.data] == [[float(len(text))] for text in mixed_input]
 
 
-def _serve_gemini_embeddings_echoing_output_dimensionality(
-    monkeypatch: pytest.MonkeyPatch, sent_bodies: list[dict[str, object]]
-) -> None:
+def _gemini_echoes_output_dimensionality(respx_mock: respx.MockRouter) -> respx.Route:
     """Gemini answers each request with that request's ``outputDimensionality`` as its embedding."""
-    import httpx
-
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
     def respond(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        sent_bodies.append(body)
         return httpx.Response(
             200,
-            json={"embeddings": [{"values": [float(item["outputDimensionality"])]} for item in body["requests"]]},
+            json={
+                "embeddings": [
+                    {"values": [float(item["outputDimensionality"])]}
+                    for item in json.loads(request.content)["requests"]
+                ]
+            },
         )
 
-    client = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
-    monkeypatch.setattr(
-        "litellm.llms.vertex_ai.gemini_embeddings.batch_embed_content_handler.get_async_httpx_client",
-        lambda **_: client,
-    )
+    return respx_mock.post(url__startswith="https://generativelanguage.googleapis.com/").mock(side_effect=respond)
 
 
 @pytest.mark.asyncio
 async def test_a_cached_embedding_is_not_served_to_the_same_input_under_another_extra_body_item(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
     import litellm
     from litellm.caching.caching import Cache
 
     monkeypatch.setattr(litellm, "cache", Cache(type="local"))
-    _serve_gemini_embeddings_echoing_output_dimensionality(monkeypatch, [])
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    _gemini_echoes_output_dimensionality(respx_mock)
     extra_body = {"requests": [{"outputDimensionality": 256}, {"outputDimensionality": 128}]}
 
     async def embed(input: list[str]) -> litellm.EmbeddingResponse:
@@ -2859,14 +2856,15 @@ async def test_a_cached_embedding_is_not_served_to_the_same_input_under_another_
 
 @pytest.mark.asyncio
 async def test_a_partial_embedding_cache_hit_sends_each_missed_input_with_its_own_extra_body_item(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
     import litellm
     from litellm.caching.caching import Cache
 
     monkeypatch.setattr(litellm, "cache", Cache(type="local"))
-    sent_bodies: list[dict[str, object]] = []
-    _serve_gemini_embeddings_echoing_output_dimensionality(monkeypatch, sent_bodies)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
+    route = _gemini_echoes_output_dimensionality(respx_mock)
     extra_body = {
         "requests": [{"outputDimensionality": 1}, {"outputDimensionality": 2}, {"outputDimensionality": 3}],
         "taskType": "shared",
@@ -2887,7 +2885,7 @@ async def test_a_partial_embedding_cache_hit_sends_each_missed_input_with_its_ow
     assert [item["embedding"] for item in repeated.data] == [[1.0], [2.0], [3.0]]
     assert [
         [(r["content"]["parts"][0]["text"], r["outputDimensionality"], r["taskType"]) for r in body["requests"]]
-        for body in sent_bodies
+        for body in (json.loads(call.request.content) for call in route.calls)
     ] == [[("cached", 1, "shared")], [("first miss", 2, "shared"), ("second miss", 3, "shared")]]
 
 
