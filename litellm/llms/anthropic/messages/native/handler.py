@@ -775,7 +775,7 @@ def anthropic_messages_handler(
     tools: list[dict] | None = None,
     top_k: int | None = None,
     top_p: float | None = None,
-    container: dict[str, object] | None = None,
+    container: str | dict[str, object] | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     client: AsyncHTTPHandler | None = None,
@@ -807,7 +807,7 @@ def anthropic_messages_handler(
     metadata = validate_anthropic_api_metadata(metadata)
 
     local_vars: Final = locals()
-    is_async: Final = kwargs.pop("is_async", False)
+    is_async: Final = kwargs.pop("is_async", False) is True
     # Use provided client or create a new one
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
 
@@ -998,6 +998,7 @@ def anthropic_messages_handler(
                 ),
                 top_k=top_k,
                 top_p=top_p,
+                container=container,
                 _is_async=is_async,
                 api_key=bridge.api_key,
                 api_base=bridge.api_base,
