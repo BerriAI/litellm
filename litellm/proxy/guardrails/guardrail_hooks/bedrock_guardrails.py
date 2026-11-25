@@ -16,7 +16,7 @@ import json
 import re
 import sys
 import time
-from collections.abc import AsyncGenerator, AsyncIterable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import accumulate, chain, groupby
 from types import MappingProxyType
@@ -372,17 +372,6 @@ class _JsonResponse(Protocol):
     def json(self) -> object: ...
 
 
-class _StructuredMessagesReader(Protocol):
-    def get_structured_messages(
-        self,
-        data: dict[str, object],  # mutable-ok: matches the request converters' existing dict parameter
-    ) -> Sequence[AllMessageValues] | None: ...
-
-
-def _structured_messages_reader(reader: Callable[[], _StructuredMessagesReader]) -> _StructuredMessagesReader:
-    return reader()
-
-
 def _json_body(response: _JsonResponse) -> object:
     return response.json()
 
@@ -671,9 +660,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """Texts pre_call scans in a ``/v1/messages`` request that its raw ``messages`` do not carry, which are the
         top-level ``system`` prompt and the ``tool_result`` blocks"""
         try:
-            structured: Final = (
-                _structured_messages_reader(AnthropicMessagesHandler).get_structured_messages(dict(data)) or ()
-            )
+            structured: Final = AnthropicMessagesHandler().get_structured_messages(dict(data)) or ()
         except Exception as e:  # noqa: BLE001  # a request the translation cannot read is still scanned as before
             verbose_proxy_logger.warning(
                 "Bedrock Guardrail %s: could not read the /v1/messages request as pre_call does (%s); "
