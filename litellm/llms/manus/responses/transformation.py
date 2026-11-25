@@ -1,15 +1,17 @@
 import uuid
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    _safe_convert_created_field,
+    safe_convert_created_field,
 )
-from litellm.litellm_core_utils.url_utils import encode_url_path_segment
+from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
@@ -29,6 +31,7 @@ else:
     LiteLLMLoggingObj = Any
 
 MANUS_API_BASE: Final = "https://api.manus.im"
+_JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 
 
 class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -75,7 +78,9 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         # If no slash, assume the model name itself is the agent profile
         return model
 
-    def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(
+        self, headers: dict[str, object], model: str, litellm_params: GenericLiteLLMParams | None
+    ) -> dict[str, object]:
         """
         Validate environment and set up headers for Manus API.
 
@@ -102,7 +107,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> str:
         """
         Get the complete URL for Manus Responses API endpoint.
@@ -117,8 +122,8 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         # Manus API uses /v1/responses endpoint (OpenAI-compatible)
         if api_base.endswith("/v1"):
-            return f"{api_base}/responses"
-        return f"{api_base}/v1/responses"
+            return join_api_base(api_base, "responses")
+        return join_api_base(api_base, "v1/responses")
 
     def transform_responses_api_request(
         self,
@@ -126,7 +131,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         input: str | ResponseInputParam,
         response_api_optional_request_params: dict,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, object],
     ) -> dict:
         """
         Transform the request for Manus API.
@@ -177,15 +182,15 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
             # Manus uses camelCase "createdAt" instead of snake_case "created_at"
             if "createdAt" in raw_response_json and "created_at" not in raw_response_json:
-                raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["createdAt"])
+                raw_response_json["created_at"] = safe_convert_created_field(raw_response_json["createdAt"])
 
             # Ensure created_at is set
             if "created_at" in raw_response_json:
-                raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
+                raw_response_json["created_at"] = safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
 
@@ -225,8 +230,8 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         # Store processed headers in additional_headers so they get returned to the client
-        response._hidden_params["additional_headers"] = processed_headers
-        response._hidden_params["headers"] = raw_response_headers
+        response.hidden_params["additional_headers"] = processed_headers
+        response.hidden_params["headers"] = raw_response_headers
         return response
 
     def supports_native_websocket(self) -> bool:
@@ -238,8 +243,8 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response_id: str,
         api_base: str,
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[str, dict]:
+        headers: Mapping[str, object],
+    ) -> tuple[str, dict[str, str]]:
         """
         Transform the get response API request into a URL and data.
 
@@ -250,7 +255,7 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         encoded_response_id: Final = encode_url_path_segment(response_id, field_name="response_id")
         url: Final = f"{api_base}/{encoded_response_id}"
-        data: Final[dict] = {}
+        data: Final[dict[str, str]] = {}
         return url, data
 
     def transform_get_response_api_response(
@@ -269,15 +274,15 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 original_response=raw_response.text,
                 additional_args={"complete_input_dict": {}},
             )
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _JSON_OBJECT.validate_python(raw_response.json())
 
             # Manus uses camelCase "createdAt" instead of snake_case "created_at"
             if "createdAt" in raw_response_json and "created_at" not in raw_response_json:
-                raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["createdAt"])
+                raw_response_json["created_at"] = safe_convert_created_field(raw_response_json["createdAt"])
 
             # Ensure created_at is set
             if "created_at" in raw_response_json:
-                raw_response_json["created_at"] = _safe_convert_created_field(raw_response_json["created_at"])
+                raw_response_json["created_at"] = safe_convert_created_field(raw_response_json["created_at"])
         except Exception:
             raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
 
@@ -315,6 +320,6 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
             response = ResponsesAPIResponse.model_construct(**raw_response_json)
 
         # Store processed headers in additional_headers so they get returned to the client
-        response._hidden_params["additional_headers"] = processed_headers
-        response._hidden_params["headers"] = raw_response_headers
+        response.hidden_params["additional_headers"] = processed_headers
+        response.hidden_params["headers"] = raw_response_headers
         return response

@@ -27,6 +27,7 @@ from __future__ import annotations
 import json
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -36,9 +37,9 @@ from claude_code.cli_driver import (
 
 
 BEDROCK_CONVERSE_MODELS = [
-    "claude-haiku-4-5-bedrock-converse",
-    "claude-sonnet-4-5-bedrock-converse",
-    "claude-opus-4-7-bedrock-converse",
+    "claude-haiku-5-5-bedrock-converse",
+    "claude-sonnet-5-5-bedrock-converse",
+    "claude-opus-5-5-bedrock-converse",
 ]
 
 # Minimal 1x1 red PNG, base64-encoded. We embed it directly as the
@@ -83,6 +84,16 @@ def _build_stdin_input() -> str:
 
 
 @pytest.mark.covers("llm.messages.bedrock_converse.vision.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.BEDROCK,),
+        models=tuple(BEDROCK_CONVERSE_MODELS),
+        capabilities=(Capability.VISION,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_vision_bedrock_converse(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy with an image
     attached via stream-json input and assert a non-empty reply."""

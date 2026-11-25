@@ -3,29 +3,38 @@
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from functools import partial
 from types import MappingProxyType
-from typing import Any, Final, Literal, TypedDict, cast
+from typing import Final, Literal, Protocol, SupportsFloat, SupportsIndex, TypedDict, cast
+
+from pydantic import TypeAdapter
+from typing_extensions import Buffer, ReadOnly
 
 import litellm
+from litellm._internal_context import current_billing_time
 from litellm._logging import verbose_logger
-from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import (
-    select_tier_for_input,
-    tier_rate,
-)
+from litellm.litellm_core_utils.core_helpers import attribute_or_none
+from litellm.rust_bridge._native import NativeCallContext, NativePrices, NativeQuote, NativeTokenUsage
+from litellm.types.llms.base import CachedTokensDetails
 from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
     CompletionTokensDetailsWrapper,
+    CostPerToken,
+    CustomPricingLiteLLMParams,
     DataResidency,
     ImageResponse,
     ModelInfo,
+    ModelInfoBase,
     PassthroughCallTypes,
     PromptTokensDetailsWrapper,
     ServiceTier,
     Usage,
+    text_tokens_without_nested_reasoning,
 )
-from litellm.utils import get_model_info
+from litellm.utils import get_model_info, get_model_info_for_call
 
 # Pre-resolved CallTypes enum values for fast membership checks
 _IMAGE_RESPONSE_CALL_TYPES: Final = frozenset(
@@ -38,8 +47,42 @@ _IMAGE_RESPONSE_CALL_TYPES: Final = frozenset(
     }
 )
 
-# Pre-resolved DataResidency enum values for fast membership checks
 _VALID_DATA_RESIDENCIES: Final = frozenset(r.value for r in DataResidency)
+
+_DEPLOYMENT_PRICING_KEYS: Final[frozenset[str]] = frozenset(CustomPricingLiteLLMParams.model_fields)
+_IMAGE_REQUEST_PARAMS: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
+_IMAGE_TOKEN_DETAILS: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+
+_BASE_CACHE_WRITE_RATE_KEY: Final = "cache_creation_input_token_cost"
+
+_CACHE_WRITE_RATE_KEYS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "5m": _BASE_CACHE_WRITE_RATE_KEY,
+        "30m": _BASE_CACHE_WRITE_RATE_KEY,
+        "1hr": "cache_creation_input_token_cost_above_1hr",
+        "12hr": "cache_creation_input_token_cost_above_12hr",
+    }
+)
+
+_TTL_PRICED_CACHE_WRITE_RATE_KEYS: Final[Mapping[str, str]] = MappingProxyType(
+    {ttl: key for ttl, key in _CACHE_WRITE_RATE_KEYS.items() if key != _BASE_CACHE_WRITE_RATE_KEY}
+)
+
+
+_IMAGE_TOKEN_RATE_KEYS: Final[tuple[str, ...]] = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "input_cost_per_image_token",
+    "output_cost_per_image_token",
+)
+
+
+def _deployment_prices_images_without_an_output_price(pricing: ModelInfo | None) -> bool:
+    return pricing is not None and (
+        "input_cost_per_pixel" in pricing
+        or ("input_cost_per_image" in pricing and "output_cost_per_image" not in pricing)
+    )
+
 
 # Pre-resolved service-tier cost-key suffixes (e.g. "_priority"). Used per
 # request in the cost-calc path, so the f-strings are built once here instead
@@ -52,16 +95,31 @@ _SERVICE_TIER_SUFFIXES: Final[tuple[str, ...]] = tuple(
 _SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
     {
         ServiceTier.FLEX.value: ServiceTier.FLEX.value,
+        ServiceTier.BALANCED.value: ServiceTier.BALANCED.value,
         ServiceTier.PRIORITY.value: ServiceTier.PRIORITY.value,
         ServiceTier.FAST.value: ServiceTier.PRIORITY.value,
         ServiceTier.ULTRAFAST.value: ServiceTier.ULTRAFAST.value,
     }
 )
+SERVICE_TIER_COST_KEY_SUFFIXES: Final[tuple[str, ...]] = tuple(
+    sorted(frozenset(f"_{suffix}" for suffix in _SERVICE_TIER_TO_COST_KEY_SUFFIX.values()))
+)
 
 _INCLUSIVE_THRESHOLD_PROVIDERS: Final = frozenset({"xai"})
+_BATCH_KEY_SUFFIX: Final = "_batches"
+_BATCH_RATE_PREFIXES: Final = (
+    "input_cost_per_token",
+    "output_cost_per_token",
+    "cache_read_input_token_cost",
+    "cache_read_input_image_token_cost",
+    "cache_creation_input_token_cost",
+)
+_BATCH_TIER_PREFIXES: Final = (*_BATCH_RATE_PREFIXES, *_TTL_PRICED_CACHE_WRITE_RATE_KEYS.values())
+_BATCH_TIER_KEY: Final = re.compile(rf"^({'|'.join(_BATCH_TIER_PREFIXES)})_above_(\d+k?)_tokens{_BATCH_KEY_SUFFIX}$")
+_NON_STANDARD_THRESHOLD_SUFFIXES: Final = (*_SERVICE_TIER_SUFFIXES, _BATCH_KEY_SUFFIX)
 
 
-def _uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
+def uses_inclusive_token_thresholds(custom_llm_provider: str | None) -> bool:
     return custom_llm_provider in _INCLUSIVE_THRESHOLD_PROVIDERS
 
 
@@ -73,7 +131,7 @@ def _get_token_detail_value(details: object, key: str) -> int | None:
     return value if isinstance(value, int) else None
 
 
-_IMAGE_SIZE_PATTERN: Final = re.compile(r"\d+(?:x|-x-)\d+")
+_IMAGE_SIZE_PATTERN: Final = re.compile(r"\d+(?:x|-x-|\*)\d+")
 
 
 def _requested_image_param(optional_params: Mapping[str, object] | None, key: str) -> str | None:
@@ -83,10 +141,10 @@ def _requested_image_param(optional_params: Mapping[str, object] | None, key: st
 
 def _requested_image_size(optional_params: Mapping[str, object] | None) -> str | None:
     value: Final = _requested_image_param(optional_params, "size")
-    return value if value is not None and _IMAGE_SIZE_PATTERN.fullmatch(value) else None
+    return value.replace("*", "x") if value is not None and _IMAGE_SIZE_PATTERN.fullmatch(value) else None
 
 
-def get_web_search_requests(server_tool_use: Any) -> int | None:
+def get_web_search_requests(server_tool_use: object) -> int | None:
     """
     Tolerantly read ``web_search_requests`` from a ``server_tool_use`` value
     that may be ``None``, a ``dict``, a ``ServerToolUse`` pydantic instance,
@@ -116,10 +174,13 @@ def get_web_search_requests_from_usage(usage: Usage) -> int | None:
     return get_web_search_requests(getattr(usage, "server_tool_use", None))
 
 
-def _is_above_128k(tokens: float) -> bool:
+def is_above_128k(tokens: float) -> bool:
     if tokens > 128000:
         return True
     return False
+
+
+_is_above_128k = is_above_128k
 
 
 def get_billable_input_tokens(usage: Usage) -> int:
@@ -132,15 +193,15 @@ def get_billable_input_tokens(usage: Usage) -> int:
 
 
 def select_cost_metric_for_model(
-    model_info: ModelInfo,
+    model_info: ModelInfoBase,
 ) -> Literal["cost_per_character", "cost_per_token"]:
     """
     Select 'cost_per_character' if model_info has 'input_cost_per_character'
     Select 'cost_per_token' if model_info has 'input_cost_per_token'
     """
-    if model_info.get("input_cost_per_character"):
+    if model_info.get("input_cost_per_character") is not None:
         return "cost_per_character"
-    elif model_info.get("input_cost_per_token"):
+    elif model_info.get("input_cost_per_token") is not None:
         return "cost_per_token"
     else:
         raise ValueError(
@@ -148,7 +209,7 @@ def select_cost_metric_for_model(
         )
 
 
-def _generic_cost_per_character(
+def generic_cost_per_character(
     model: str,
     custom_llm_provider: str,
     prompt_characters: float,
@@ -213,13 +274,16 @@ def _generic_cost_per_character(
     return prompt_cost, completion_cost
 
 
-def _get_service_tier_cost_key(base_key: str, service_tier: str | None) -> str:
+_generic_cost_per_character = generic_cost_per_character
+
+
+def get_service_tier_cost_key(base_key: str, service_tier: str | None) -> str:
     """
     Get the appropriate cost key based on service tier.
 
     Args:
         base_key: The base cost key (e.g., "input_cost_per_token")
-        service_tier: The service tier ("flex", "priority", "fast", "ultrafast", or None for standard)
+        service_tier: The service tier ("flex", "balanced", "priority", "fast", "ultrafast", or None for standard)
 
     Returns:
         str: The cost key to use (e.g., "input_cost_per_token_flex" or "input_cost_per_token")
@@ -234,251 +298,96 @@ def _get_service_tier_cost_key(base_key: str, service_tier: str | None) -> str:
     return f"{base_key}_{suffix}"
 
 
+_get_service_tier_cost_key = get_service_tier_cost_key
+
+
+def _parse_token_threshold(threshold: str) -> float:
+    return float(threshold.replace("k", "")) * (1000 if "k" in threshold else 1)
+
+
 def _parse_above_token_threshold(key: str) -> float:
-    threshold_str: Final = key.split("_above_")[1].split("_tokens")[0]
-    return float(threshold_str.replace("k", "")) * (1000 if "k" in threshold_str else 1)
+    return _parse_token_threshold(key.rsplit("_above_", 1)[1].split("_tokens")[0])
 
 
-def _select_priced_tier(model_info: ModelInfo, usage: Usage) -> dict | None:
-    tiered_pricing: Final = model_info.get("tiered_pricing")
-    if not isinstance(tiered_pricing, list) or not tiered_pricing:
+def _prompt_exceeds_threshold(prompt_tokens: int, threshold: float, inclusive: bool) -> bool:
+    return prompt_tokens > threshold or (inclusive and prompt_tokens == threshold)
+
+
+@dataclass(frozen=True, slots=True)
+class BatchCostRates:
+    input: float | None
+    output: float | None
+    cache_read: float | None
+    cache_creation: float | None
+    cache_creation_rates_by_ttl: Mapping[str, float] = field(default_factory=lambda: MappingProxyType({}))
+    cache_read_image: float | None = None
+
+
+def _batch_rate(model_info: ModelInfo, key: str) -> float | None:
+    value: Final = model_info.get(key)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
+        return None
+    try:
+        return float(value)
+    except ValueError:
         return None
 
-    tier: Final = select_tier_for_input(tiered_pricing=tiered_pricing, input_tokens=usage.prompt_tokens)
-    if tier is None or "input_cost_per_token" not in tier:
-        return None
-    return tier
+
+def _batch_tier_rate(model_info: ModelInfo, tier_key: str, flat_key: str) -> float | None:
+    tier_rate: Final = _batch_rate(model_info, tier_key)
+    return _batch_rate(model_info, flat_key) if tier_rate is None else tier_rate
 
 
-def _get_tiered_reasoning_rate(model_info: ModelInfo, usage: Usage) -> float | None:
-    tier: Final = _select_priced_tier(model_info=model_info, usage=usage)
-    if tier is None:
-        return None
-    if "output_cost_per_reasoning_token" not in tier and "output_cost_per_token" not in tier:
-        return None
-    return tier_rate(tier, "output_cost_per_reasoning_token", "output_cost_per_token")
-
-
-def _get_tiered_base_costs(model_info: ModelInfo, usage: Usage) -> tuple[float, float, float, float, float] | None:
-    """
-    Resolve the base rates from a model's ``tiered_pricing`` table, if it has one.
-
-    Tiered pricing is all-or-nothing: one tier is picked from the request's input tokens
-    and every token of the request is billed at that tier's rate. Rates the tier does not
-    declare fall back to the tier's input rate, so a request never mixes tiers.
-
-    An output rate is the exception: a tier table that spells out only input rates would
-    otherwise serve every completion for free, so the model's own output rate stands in.
-    """
-    tier: Final = _select_priced_tier(model_info=model_info, usage=usage)
-    if tier is None:
-        return None
-
-    cache_creation_cost: Final = tier_rate(tier, "cache_creation_input_token_cost", "input_cost_per_token")
-    completion_cost: Final = (
-        tier_rate(tier, "output_cost_per_token")
-        if "output_cost_per_token" in tier
-        else _get_cost_per_unit(model_info, "output_cost_per_token") or 0.0
-    )
-    return (
-        tier_rate(tier, "input_cost_per_token"),
-        completion_cost,
-        cache_creation_cost,
-        tier_rate(tier, "cache_creation_input_token_cost_above_1hr", "cache_creation_input_token_cost")
-        or cache_creation_cost,
-        tier_rate(tier, "cache_read_input_token_cost", "input_cost_per_token"),
+def _batch_tier_thresholds(model_info: ModelInfo, prefix: str) -> frozenset[str]:
+    return frozenset(
+        tier.group(2)
+        for key, value in model_info.items()
+        if value is not None and (tier := _BATCH_TIER_KEY.match(key)) is not None and tier.group(1) == prefix
     )
 
 
-def _get_token_base_cost(
-    model_info: ModelInfo,
-    usage: Usage,
-    service_tier: str | None = None,
-    *,
-    threshold_is_inclusive: bool = False,
-) -> tuple[float, float, float, float, float]:
-    """
-    Return prompt cost, completion cost, and cache costs for a given model and usage.
-
-    If input_tokens > threshold and `input_cost_per_token_above_[x]k_tokens` or `input_cost_per_token_above_[x]_tokens` is set,
-    then we use the corresponding threshold cost for all token types.
-
-    `threshold_is_inclusive` switches that comparison to >=, for providers such as xAI
-    that bill the higher tier once the prompt reaches the threshold.
-
-    Returns:
-        Tuple[float, float, float, float] - (prompt_cost, completion_cost, cache_creation_cost, cache_read_cost)
-    """
-    tiered_base_costs: Final = _get_tiered_base_costs(model_info=model_info, usage=usage)
-    if tiered_base_costs is not None:
-        return tiered_base_costs
-
-    # Get service tier aware cost keys
-    input_cost_key: Final = _get_service_tier_cost_key("input_cost_per_token", service_tier)
-    output_cost_key: Final = _get_service_tier_cost_key("output_cost_per_token", service_tier)
-    cache_creation_cost_key: Final = _get_service_tier_cost_key("cache_creation_input_token_cost", service_tier)
-    cache_read_cost_key: Final = _get_service_tier_cost_key("cache_read_input_token_cost", service_tier)
-
-    prompt_base_cost = cast(float, _get_cost_per_unit(model_info, input_cost_key))
-    completion_base_cost = cast(float, _get_cost_per_unit(model_info, output_cost_key))
-
-    # For image generation models that don't have output_cost_per_token,
-    # use output_cost_per_image_token as the base cost (all output tokens are image tokens)
-    if completion_base_cost == 0.0 or completion_base_cost is None:
-        output_image_cost: Final = _get_cost_per_unit(model_info, "output_cost_per_image_token", None)
-        if output_image_cost is not None:
-            completion_base_cost = cast(float, output_image_cost)
-    cache_creation_cost = cast(float, _get_cost_per_unit(model_info, cache_creation_cost_key))
-    cache_creation_cost_above_1hr = cast(
-        float,
-        _get_cost_per_unit(model_info, "cache_creation_input_token_cost_above_1hr"),
-    )
-    cache_read_cost = cast(float, _get_cost_per_unit(model_info, cache_read_cost_key))
-
-    ## CHECK IF ABOVE THRESHOLD
-    # Optimization: collect threshold keys first to avoid sorting all model_info keys.
-    # Most models don't have threshold pricing, so we can return early.
-    # Exclude service_tier-specific variants (e.g. input_cost_per_token_above_200k_tokens_priority)
-    # so that the threshold detection loop only processes standard keys.  The
-    # service_tier-specific above-threshold key is resolved later via _get_service_tier_cost_key.
-    threshold_keys: Final = [
-        k for k in model_info if k.startswith("input_cost_per_token_above_") and not k.endswith(_SERVICE_TIER_SUFFIXES)
-    ]
-    if not threshold_keys:
-        return (
-            prompt_base_cost,
-            completion_base_cost,
-            cache_creation_cost,
-            cache_creation_cost_above_1hr,
-            cache_read_cost,
-        )
-
-    # Only sort the threshold keys (typically 1-2 keys instead of 66+)
-    threshold: float | None = None
-    for key in sorted(threshold_keys, key=_parse_above_token_threshold, reverse=True):
-        value = model_info.get(key)
-        if value is not None:
-            try:
-                # Handle both formats: _above_128k_tokens and _above_128_tokens
-                threshold_str = key.split("_above_")[1].split("_tokens")[0]
-                threshold = _parse_above_token_threshold(key)
-                if usage.prompt_tokens > threshold or (threshold_is_inclusive and usage.prompt_tokens == threshold):
-                    # Prefer a service_tier-specific above-threshold key when available,
-                    # e.g. input_cost_per_token_priority_above_200k_tokens for Gemini
-                    # ON_DEMAND_PRIORITY.  Falls back to the standard key automatically
-                    # via _get_cost_per_unit's service_tier fallback logic.
-                    tiered_input_key = (
-                        _get_service_tier_cost_key(
-                            f"input_cost_per_token_above_{threshold_str}_tokens",
-                            service_tier,
-                        )
-                        if service_tier
-                        else key
-                    )
-                    prompt_base_cost = cast(
-                        float,
-                        _get_cost_per_unit(model_info, tiered_input_key, prompt_base_cost),
-                    )
-                    tiered_output_key = (
-                        _get_service_tier_cost_key(
-                            f"output_cost_per_token_above_{threshold_str}_tokens",
-                            service_tier,
-                        )
-                        if service_tier
-                        else f"output_cost_per_token_above_{threshold_str}_tokens"
-                    )
-                    completion_base_cost = cast(
-                        float,
-                        _get_cost_per_unit(
-                            model_info,
-                            tiered_output_key,
-                            completion_base_cost,
-                        ),
-                    )
-
-                    # Apply tiered pricing to cache costs
-                    cache_creation_tiered_key = (
-                        _get_service_tier_cost_key(
-                            f"cache_creation_input_token_cost_above_{threshold_str}_tokens",
-                            service_tier,
-                        )
-                        if service_tier
-                        else f"cache_creation_input_token_cost_above_{threshold_str}_tokens"
-                    )
-                    cache_creation_1hr_tiered_key = (
-                        _get_service_tier_cost_key(
-                            f"cache_creation_input_token_cost_above_1hr_above_{threshold_str}_tokens",
-                            service_tier,
-                        )
-                        if service_tier
-                        else f"cache_creation_input_token_cost_above_1hr_above_{threshold_str}_tokens"
-                    )
-                    cache_read_tiered_key = (
-                        _get_service_tier_cost_key(
-                            f"cache_read_input_token_cost_above_{threshold_str}_tokens",
-                            service_tier,
-                        )
-                        if service_tier
-                        else f"cache_read_input_token_cost_above_{threshold_str}_tokens"
-                    )
-
-                    cache_creation_cost = cast(
-                        float,
-                        _get_cost_per_unit(
-                            model_info,
-                            cache_creation_tiered_key,
-                            cache_creation_cost,
-                        ),
-                    )
-
-                    cache_creation_cost_above_1hr = cast(
-                        float,
-                        _get_cost_per_unit(
-                            model_info,
-                            cache_creation_1hr_tiered_key,
-                            cache_creation_cost_above_1hr,
-                        ),
-                    )
-
-                    cache_read_cost = cast(
-                        float,
-                        _get_cost_per_unit(model_info, cache_read_tiered_key, cache_read_cost),
-                    )
-
-                    break
-            except (IndexError, ValueError):
-                continue
-            except Exception:
-                continue
-
-    return (
-        prompt_base_cost,
-        completion_base_cost,
-        cache_creation_cost,
-        cache_creation_cost_above_1hr,
-        cache_read_cost,
+def _crossed_batch_tier(model_info: ModelInfo, prefix: str, usage: Usage, inclusive: bool) -> str | None:
+    return next(
+        (
+            threshold
+            for threshold in sorted(
+                _batch_tier_thresholds(model_info, prefix), key=_parse_token_threshold, reverse=True
+            )
+            if _prompt_exceeds_threshold(usage.prompt_tokens, _parse_token_threshold(threshold), inclusive)
+        ),
+        None,
     )
 
 
-def calculate_cost_component(model_info: ModelInfo, cost_key: str, usage_value: float | None) -> float:
-    """
-    Generic cost calculator for any usage component
-
-    Args:
-        model_info: Dictionary containing cost information
-        cost_key: The key for the cost multiplier in model_info (e.g., 'input_cost_per_audio_token')
-        usage_value: The actual usage value (e.g., number of tokens, characters, seconds)
-
-    Returns:
-        float: The calculated cost
-    """
-    cost_per_unit: Final = _get_cost_per_unit(model_info, cost_key)
-    if cost_per_unit is not None and isinstance(cost_per_unit, float) and usage_value is not None and usage_value > 0:
-        return float(usage_value) * cost_per_unit
-    return 0.0
+def _batch_rate_for_prefix(model_info: ModelInfo, prefix: str, usage: Usage, inclusive: bool) -> float | None:
+    flat_key: Final = f"{prefix}{_BATCH_KEY_SUFFIX}"
+    threshold: Final = _crossed_batch_tier(model_info, prefix, usage, inclusive)
+    if threshold is None:
+        return _batch_rate(model_info, flat_key)
+    return _batch_tier_rate(model_info, f"{prefix}_above_{threshold}_tokens{_BATCH_KEY_SUFFIX}", flat_key)
 
 
-def _get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: float | None = 0.0) -> float | None:
+def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provider: str | None) -> BatchCostRates:
+    inclusive: Final = custom_llm_provider in _INCLUSIVE_THRESHOLD_PROVIDERS
+    return BatchCostRates(
+        input=_batch_rate_for_prefix(model_info, "input_cost_per_token", usage, inclusive),
+        output=_batch_rate_for_prefix(model_info, "output_cost_per_token", usage, inclusive),
+        cache_read=_batch_rate_for_prefix(model_info, "cache_read_input_token_cost", usage, inclusive),
+        cache_creation=_batch_rate_for_prefix(model_info, "cache_creation_input_token_cost", usage, inclusive),
+        cache_creation_rates_by_ttl=MappingProxyType(
+            {
+                ttl: rate
+                for ttl, key in _TTL_PRICED_CACHE_WRITE_RATE_KEYS.items()
+                if (rate := _batch_rate_for_prefix(model_info, key, usage, inclusive)) is not None
+            }
+        ),
+        cache_read_image=_batch_rate_for_prefix(model_info, "cache_read_input_image_token_cost", usage, inclusive),
+    )
+
+
+def get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: float | None = 0.0) -> float | None:
     # Sometimes the cost per unit is a string (e.g.: If a value like "3e-7" was read from the config.yaml)
     cost_per_unit: Final = model_info.get(cost_key)
     if isinstance(cost_per_unit, float):
@@ -511,7 +420,7 @@ def _get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: floa
                         return float(fallback_cost)
                     except ValueError:
                         verbose_logger.exception(
-                            "litellm.litellm_core_utils.llm_cost_calc.utils.py::_get_cost_per_unit(): Exception occured - %s\nDefaulting to 0.0",
+                            "litellm.litellm_core_utils.llm_cost_calc.utils.py::get_cost_per_unit(): Exception occured - %s\nDefaulting to 0.0",
                             fallback_cost,
                         )
                 break  # Only try the first matching suffix
@@ -519,32 +428,91 @@ def _get_cost_per_unit(model_info: ModelInfo, cost_key: str, default_value: floa
     return default_value
 
 
+_get_cost_per_unit = get_cost_per_unit
+
+
+def deployment_pricing(model_info: ModelInfo | None) -> ModelInfo | None:
+    """The prices a deployment sets itself, as floats; None when it sets none that parse."""
+    if model_info is None:
+        return None
+    priced_keys: Final = tuple(key for key in _DEPLOYMENT_PRICING_KEYS if model_info.get(key) is not None)
+    pricing: Final = MappingProxyType(
+        {
+            key: price
+            for key in priced_keys
+            if (price := get_cost_per_unit(model_info, key, default_value=None)) is not None
+        }
+    )
+    if not pricing:
+        return None
+    return cast(ModelInfo, pricing)  # cast-ok: a read-only subset of ModelInfo pricing keys, values validated above
+
+
+def prices_tokens(model_info: ModelInfo) -> bool:
+    """Whether the price table carries any token rate, so a token-priced calculator can bill from usage."""
+    return any(model_info.get(key) is not None for key in _IMAGE_TOKEN_RATE_KEYS)
+
+
+def flat_image_cost(model_info: ModelInfo | None, image_response: ImageResponse) -> float:
+    """The per-image price times the images returned; 0.0 when the table sets no per-image price."""
+    if model_info is None:
+        return 0.0
+    output_cost_per_image: Final = get_cost_per_unit(model_info, "output_cost_per_image", default_value=None) or 0.0
+    num_images: Final = len(image_response.data) if image_response.data else 0
+    return output_cost_per_image * num_images
+
+
+def resolve_image_model_info(model: str, custom_llm_provider: str, model_info: ModelInfo | None) -> ModelInfo:
+    """The price table an image cost calculator consults for ``model``.
+
+    ``shared_backend_model_info`` keeps deployment prices off the shared ``{provider}/{model}`` key, so
+    a name lookup alone reads the public rate, and a model only the deployment prices has no entry at all.
+    """
+    if model_info is None:
+        return get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    try:
+        shared_model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model
+        return model_info
+    resolved: Final[ModelInfo] = {**shared_model_info, **model_info}
+    return resolved
+
+
 def calculate_cache_writing_cost(
     cache_creation_tokens: int,
     cache_creation_token_details: CacheCreationTokenDetails | None,
-    cache_creation_cost_above_1hr: float,
     cache_creation_cost: float,
+    cache_creation_cost_by_ttl: Mapping[str, float],
 ) -> float:
     """
-    Adjust cost of cache creation tokens based on the cache creation token details.
+    Bill cache writes per lifetime: Anthropic reports 5m and 1h counts, OpenAI reports 30m and 12h counts.
+    Writes no lifetime count covers, such as a lifetime a provider adds later, bill at the base write rate.
     """
-    total_cost: float = 0.0
-    if cache_creation_token_details is not None:
-        # get the number of 5m and 1h cache creation tokens
-        cache_creation_tokens_5m: Final = cache_creation_token_details.ephemeral_5m_input_tokens
-        cache_creation_tokens_1h: Final = cache_creation_token_details.ephemeral_1h_input_tokens
-        # add the number of 5m and 1h cache creation tokens to the cache creation tokens
-        total_cost += cache_creation_tokens_5m * cache_creation_cost if cache_creation_tokens_5m is not None else 0.0
-        total_cost += (
-            cache_creation_tokens_1h * cache_creation_cost_above_1hr if cache_creation_tokens_1h is not None else 0.0
-        )
-    else:
-        total_cost += cache_creation_tokens * cache_creation_cost
-    return total_cost
+    if cache_creation_token_details is None:
+        return cache_creation_tokens * cache_creation_cost
+    tokens_by_ttl: Final[Mapping[str, int | None]] = MappingProxyType(
+        {
+            "5m": cache_creation_token_details.ephemeral_5m_input_tokens,
+            "30m": cache_creation_token_details.ephemeral_30m_input_tokens,
+            "1hr": cache_creation_token_details.ephemeral_1h_input_tokens,
+            "12hr": cache_creation_token_details.ephemeral_12h_input_tokens,
+        }
+    )
+    unattributed_tokens: Final = max(cache_creation_tokens - sum(t or 0 for t in tokens_by_ttl.values()), 0)
+    return unattributed_tokens * cache_creation_cost + sum(
+        (tokens or 0) * cache_creation_cost_by_ttl.get(ttl, cache_creation_cost)
+        for ttl, tokens in tokens_by_ttl.items()
+    )
 
 
 class PromptTokensDetailsResult(TypedDict):
     cache_hit_tokens: int
+    cache_hit_audio_tokens: ReadOnly[int]
+
+    cached_text_tokens: ReadOnly[int]
+    cached_audio_tokens: ReadOnly[int]
+    cached_image_tokens: ReadOnly[int]
+    has_cached_tokens_details: ReadOnly[bool]
     cache_creation_tokens: int
     cache_creation_token_details: CacheCreationTokenDetails | None
     text_tokens: int
@@ -555,6 +523,7 @@ class PromptTokensDetailsResult(TypedDict):
     image_count: int
     video_length_seconds: float
     audio_length_seconds: float
+    query_count: int
 
 
 def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
@@ -574,12 +543,34 @@ def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
         )
         or None
     )
-    text_tokens: Final = (
-        cast(int | None, getattr(usage.prompt_tokens_details, "text_tokens", None))
-        or 0  # default to prompt tokens, if this field is not set
+    cached_tokens_details: Final = getattr(usage.prompt_tokens_details, "cached_tokens_details", None)
+    cached_audio_tokens: Final = min(
+        _get_token_detail_value(cached_tokens_details, "audio_tokens") or 0, cache_hit_tokens
     )
-    audio_tokens: Final = cast(int | None, getattr(usage.prompt_tokens_details, "audio_tokens", 0)) or 0
-    image_tokens: Final = cast(int | None, getattr(usage.prompt_tokens_details, "image_tokens", 0)) or 0
+    cached_text_tokens: Final = min(
+        _get_token_detail_value(cached_tokens_details, "text_tokens") or 0,
+        cache_hit_tokens - cached_audio_tokens,
+    )
+    cached_image_tokens: Final = min(
+        _get_token_detail_value(cached_tokens_details, "image_tokens") or 0,
+        cache_hit_tokens - cached_audio_tokens - cached_text_tokens,
+    )
+    text_tokens: Final = max(
+        (
+            cast(int | None, getattr(usage.prompt_tokens_details, "text_tokens", None))
+            or 0  # default to prompt tokens, if this field is not set
+        )
+        - cached_text_tokens,
+        0,
+    )
+    audio_tokens: Final = max(
+        (cast(int | None, getattr(usage.prompt_tokens_details, "audio_tokens", 0)) or 0) - cached_audio_tokens,
+        0,
+    )
+    image_tokens: Final = max(
+        (cast(int | None, getattr(usage.prompt_tokens_details, "image_tokens", 0)) or 0) - cached_image_tokens,
+        0,
+    )
     video_tokens: Final = _coerce_token_count(getattr(usage.prompt_tokens_details, "video_tokens", 0))
     character_count: Final = (
         cast(
@@ -603,9 +594,15 @@ def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
         )
         or 0.0
     )
+    query_count: Final = _coerce_token_count(getattr(usage.prompt_tokens_details, "query_count", 0))
 
     return PromptTokensDetailsResult(
         cache_hit_tokens=cache_hit_tokens,
+        cache_hit_audio_tokens=cached_audio_tokens,
+        cached_text_tokens=cached_text_tokens,
+        cached_audio_tokens=cached_audio_tokens,
+        cached_image_tokens=cached_image_tokens,
+        has_cached_tokens_details=cached_tokens_details is not None,
         cache_creation_tokens=cache_creation_tokens,
         cache_creation_token_details=cache_creation_token_details,
         text_tokens=text_tokens,
@@ -616,6 +613,7 @@ def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
         image_count=image_count,
         video_length_seconds=float(video_length_seconds),
         audio_length_seconds=float(audio_length_seconds),
+        query_count=query_count,
     )
 
 
@@ -635,7 +633,7 @@ def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResu
         )
         or 0
     )
-    text_tokens: Final = (
+    reported_text_tokens: Final = (
         cast(
             int | None,
             getattr(usage.completion_tokens_details, "text_tokens", None),
@@ -657,6 +655,12 @@ def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResu
         or 0
     )
     video_tokens: Final = _coerce_token_count(getattr(usage.completion_tokens_details, "video_tokens", 0))
+    text_tokens: Final = text_tokens_without_nested_reasoning(
+        completion_tokens=usage.completion_tokens,
+        text_tokens=reported_text_tokens,
+        reasoning_tokens=reasoning_tokens,
+        other_modality_tokens=audio_tokens + image_tokens + video_tokens,
+    )
 
     return CompletionTokensDetailsResult(
         audio_tokens=audio_tokens,
@@ -667,90 +671,33 @@ def parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResu
     )
 
 
-def _calculate_input_cost(
-    prompt_tokens_details: PromptTokensDetailsResult,
-    model_info: ModelInfo,
-    prompt_base_cost: float,
-    cache_read_cost: float,
-    cache_creation_cost: float,
-    cache_creation_cost_above_1hr: float,
-    service_tier: str | None = None,
-) -> float:
-    """
-    Calculates the input cost for a given model, prompt tokens, and completion tokens.
-    """
-    prompt_cost = float(prompt_tokens_details["text_tokens"]) * prompt_base_cost
-
-    ### CACHE READ COST - Now uses tiered pricing
-    prompt_cost += float(prompt_tokens_details["cache_hit_tokens"]) * cache_read_cost
-
-    ### AUDIO COST
-    if prompt_tokens_details["audio_tokens"]:
-        audio_cost_key: Final = _get_service_tier_cost_key("input_cost_per_audio_token", service_tier)
-        prompt_cost += calculate_cost_component(model_info, audio_cost_key, prompt_tokens_details["audio_tokens"])
-
-    ### IMAGE TOKEN COST
-    if prompt_tokens_details["image_tokens"]:
-        # For image token costs:
-        # First check if input_cost_per_image_token is available. If not, default to generic input_cost_per_token.
-        image_token_cost_key = "input_cost_per_image_token"
-        if model_info.get(image_token_cost_key) is None:
-            image_token_cost_key = "input_cost_per_token"
-        prompt_cost += calculate_cost_component(model_info, image_token_cost_key, prompt_tokens_details["image_tokens"])
-
-    ### VIDEO TOKEN COST
-    if prompt_tokens_details["video_tokens"]:
-        video_token_cost_key = "input_cost_per_video_token"
-        if model_info.get(video_token_cost_key) is None:
-            video_token_cost_key = "input_cost_per_token"
-        prompt_cost += calculate_cost_component(model_info, video_token_cost_key, prompt_tokens_details["video_tokens"])
-
-    ### CACHE WRITING COST - Now uses tiered pricing
-    if (
-        prompt_tokens_details["cache_creation_tokens"]
-        or prompt_tokens_details["cache_creation_token_details"] is not None
-    ):
-        prompt_cost += calculate_cache_writing_cost(
-            cache_creation_tokens=prompt_tokens_details["cache_creation_tokens"],
-            cache_creation_token_details=prompt_tokens_details["cache_creation_token_details"],
-            cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
-            cache_creation_cost=cache_creation_cost,
-        )
-
-    ### CHARACTER COST
-    if prompt_tokens_details["character_count"]:
-        prompt_cost += calculate_cost_component(
-            model_info,
-            "input_cost_per_character",
-            prompt_tokens_details["character_count"],
-        )
-
-    ### IMAGE COUNT COST
-    if prompt_tokens_details["image_count"]:
-        prompt_cost += calculate_cost_component(
-            model_info, "input_cost_per_image", prompt_tokens_details["image_count"]
-        )
-
-    ### VIDEO LENGTH COST
-    if prompt_tokens_details["video_length_seconds"]:
-        prompt_cost += calculate_cost_component(
-            model_info,
-            "input_cost_per_video_per_second",
-            prompt_tokens_details["video_length_seconds"],
-        )
-
-    ### AUDIO LENGTH COST
-    if prompt_tokens_details["audio_length_seconds"]:
-        prompt_cost += calculate_cost_component(
-            model_info,
-            "input_cost_per_audio_per_second",
-            prompt_tokens_details["audio_length_seconds"],
-        )
-
-    return prompt_cost
+def get_modality_token_cost_key(
+    model_info: Mapping[str, object],
+    cost_key: str,
+    prompt_tokens: int,
+    *,
+    threshold_is_inclusive: bool = False,
+) -> str:
+    suffix: Final = next((suffix for suffix in _NON_STANDARD_THRESHOLD_SUFFIXES if cost_key.endswith(suffix)), "")
+    base_key: Final = cost_key.removesuffix(suffix)
+    threshold_key: Final = max(
+        (
+            key
+            for key in model_info
+            if key.startswith(f"{base_key}_above_")
+            and key.endswith(("_tokens", f"_tokens{suffix}"))
+            and model_info.get(key) is not None
+            and _prompt_exceeds_threshold(prompt_tokens, _parse_above_token_threshold(key), threshold_is_inclusive)
+        ),
+        key=_parse_above_token_threshold,
+        default=None,
+    )
+    if threshold_key is None:
+        return cost_key
+    return f"{threshold_key.removesuffix(suffix)}{suffix}"
 
 
-def _get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | None) -> float:
+def get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str | None) -> float:
     """
     Resolve the per-model regional-processing uplift multiplier for a given
     data-residency region.
@@ -768,11 +715,18 @@ def _get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str |
     residency: Final = data_residency.lower()
     if residency not in _VALID_DATA_RESIDENCIES:
         return 1.0
-    multiplier: Final = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
+    multiplier: Final[object] = model_info.get(f"regional_processing_uplift_multiplier_{residency}")
     if multiplier is None:
         return 1.0
+    if not isinstance(multiplier, (str, Buffer, SupportsFloat, SupportsIndex)):
+        verbose_logger.error(
+            "Invalid regional_processing_uplift_multiplier_%s for model (got %s); defaulting to 1.0",
+            residency,
+            type(multiplier).__name__,
+        )
+        return 1.0
     try:
-        return float(cast(float, multiplier))
+        return float(multiplier)
     except (TypeError, ValueError):
         verbose_logger.exception(
             "Invalid regional_processing_uplift_multiplier_%s for model; defaulting to 1.0",
@@ -781,7 +735,33 @@ def _get_regional_uplift_multiplier(model_info: ModelInfo, data_residency: str |
         return 1.0
 
 
-def get_vertex_regional_endpoint_uplift(model_info: ModelInfo, vertex_location: str | None) -> float:
+_get_regional_uplift_multiplier = get_regional_uplift_multiplier
+
+
+def get_fedramp_uplift_multiplier(model_info: ModelInfo, data_residency: str | None) -> float:
+    """
+    Resolve the per-model uplift multiplier for the OpenAI FedRAMP endpoint.
+
+    OpenAI applies a flat percentage uplift (e.g. +10%) on all token costs for
+    requests served from gov.api.openai.com. The multiplier is stored on the
+    model entry as ``fedramp_uplift_multiplier`` (e.g. 1.10).
+
+    Returns 1.0 (no uplift) unless ``data_residency`` is ``"fedramp"`` and the
+    model has a multiplier configured.
+    """
+    if data_residency is None or data_residency.lower() != DataResidency.FEDRAMP.value:
+        return 1.0
+    multiplier: Final = model_info.get("fedramp_uplift_multiplier")
+    if multiplier is None:
+        return 1.0
+    try:
+        return float(multiplier)
+    except (TypeError, ValueError):
+        verbose_logger.exception("Invalid fedramp_uplift_multiplier for model; defaulting to 1.0")
+        return 1.0
+
+
+def get_vertex_regional_endpoint_uplift(model_info: Mapping[str, object], vertex_location: str | None) -> float:
     """
     Resolve the per-model uplift multiplier for Vertex AI non-global (regional and
     multi-region) endpoints.
@@ -800,7 +780,7 @@ def get_vertex_regional_endpoint_uplift(model_info: ModelInfo, vertex_location: 
     if multiplier is None:
         return 1.0
     try:
-        return float(cast(float, multiplier))
+        return float(cast(float, multiplier))  # cast-ok: pricing multiplier is external model data
     except (TypeError, ValueError):
         verbose_logger.exception(
             "Invalid regional_endpoint_uplift_multiplier for model; defaulting to 1.0",
@@ -825,21 +805,221 @@ def get_provider_specific_geo_multiplier(model_info: ModelInfo, usage: Usage) ->
     return float(provider_specific_entry.get(inference_geo.lower(), 1.0))
 
 
-def _resolve_reasoning_token_cost(
-    model_info: ModelInfo,
+def get_provider_specific_speed_multiplier(model_info: ModelInfo, usage: Usage) -> float:
+    provider_specific_entry: Final = model_info.get("provider_specific_entry")
+    if getattr(usage, "speed", None) != "fast" or not provider_specific_entry:
+        return 1.0
+    return float(provider_specific_entry.get("fast", 1.0))
+
+
+def _billed_prompt_tokens(usage: Usage) -> PromptTokensDetailsResult:
+    """Prompt-side counts with the overlap between cached and per-modality tokens removed.
+
+    Some providers (like xAI) report text_tokens = prompt_tokens, cached tokens included. That shows
+    as text + cached + other modalities adding up to more than prompt_tokens. See issues #19680,
+    #14874 and #14875. Cached and per-modality counts are both subsets of prompt_tokens and may
+    overlap, so a modality only bills what the cache did not already cover.
+    """
+    if not usage.prompt_tokens_details:
+        return PromptTokensDetailsResult(
+            cache_hit_tokens=0,
+            cache_hit_audio_tokens=0,
+            cached_text_tokens=0,
+            cached_audio_tokens=0,
+            cached_image_tokens=0,
+            has_cached_tokens_details=False,
+            cache_creation_tokens=0,
+            cache_creation_token_details=None,
+            text_tokens=usage.prompt_tokens,
+            audio_tokens=0,
+            image_tokens=0,
+            video_tokens=0,
+            character_count=0,
+            image_count=0,
+            video_length_seconds=0.0,
+            audio_length_seconds=0.0,
+            query_count=0,
+        )
+    details: Final = parse_prompt_tokens_details(usage)
+    cache_hit: Final = details["cache_hit_tokens"]
+    cache_creation: Final = details["cache_creation_tokens"]
+    text_tokens: Final = details["text_tokens"]
+    audio_tokens: Final = details["audio_tokens"]
+    image_tokens: Final = details["image_tokens"]
+    video_tokens: Final = details["video_tokens"]
+    total_details: Final = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens + video_tokens
+    if (cache_hit > 0 or cache_creation > 0) and total_details > usage.prompt_tokens:
+        uncached_budget: Final = max(usage.prompt_tokens - cache_hit - cache_creation, 0)
+        billable_audio: Final = min(audio_tokens, uncached_budget)
+        billable_image: Final = min(image_tokens, uncached_budget - billable_audio)
+        billable_video: Final = min(video_tokens, uncached_budget - billable_audio - billable_image)
+        return {
+            **details,
+            "audio_tokens": billable_audio,
+            "image_tokens": billable_image,
+            "video_tokens": billable_video,
+            "text_tokens": uncached_budget - billable_audio - billable_image - billable_video,
+        }
+    if text_tokens == 0 and details["image_count"] == 0:
+        # inconsistent streaming usage can report more parts than prompt tokens, so clamp at zero
+        remainder: Final = usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens
+        return {**details, "text_tokens": max(remainder, 0)}
+    return details
+
+
+def _billed_completion_tokens(usage: Usage) -> CompletionTokensDetailsResult:
+    """Completion-side counts. Text tokens the provider did not report are whatever the reasoning,
+    audio, image and video tokens leave, or every completion token when there is no breakdown."""
+    if usage.completion_tokens_details is None:
+        return CompletionTokensDetailsResult(
+            audio_tokens=0,
+            text_tokens=usage.completion_tokens,
+            reasoning_tokens=0,
+            image_tokens=0,
+            video_tokens=0,
+        )
+    details: Final = parse_completion_tokens_details(usage)
+    other_tokens: Final = (
+        details["reasoning_tokens"] + details["audio_tokens"] + details["image_tokens"] + details["video_tokens"]
+    )
+    if details["text_tokens"] != 0:
+        return details
+    if other_tokens > 0:
+        return {**details, "text_tokens": max(0, usage.completion_tokens - other_tokens)}
+    return {**details, "text_tokens": usage.completion_tokens}
+
+
+def _count(value: float | None) -> int:
+    return max(int(value or 0), 0)
+
+
+def _reads_explicit_cache(usage: Usage) -> bool:
+    details: Final = usage.prompt_tokens_details
+    if details is None or getattr(details, "cache_type", None) != "ephemeral":
+        return False
+    return parse_prompt_tokens_details(usage)["cache_hit_tokens"] > 0
+
+
+def billed_cache_read_rate(quote: NativeQuote, usage: Usage) -> float:
+    """The rate ``usage``'s cached tokens bill at: the explicit cache-read rate when they are reads of a
+    cache the caller created, the implicit one otherwise."""
+    return quote.explicit_cache_read if _reads_explicit_cache(usage) else quote.cache_read
+
+
+class ModalityCounts(TypedDict):
+    text: ReadOnly[int]
+    audio: ReadOnly[int]
+    image: ReadOnly[int]
+    video: ReadOnly[int]
+
+
+class CacheReadCounts(TypedDict):
+    text: ReadOnly[int]
+    audio: ReadOnly[int]
+    image: ReadOnly[int]
+    explicit: ReadOnly[bool]
+
+
+class CacheWriteCounts(TypedDict):
+    default: ReadOnly[int]
+    one_hour: ReadOnly[int]
+    twelve_hours: ReadOnly[int]
+
+
+class BilledUsage(TypedDict):
+    """The quantities one call bills on each meter, the pricing core's ``TokenUsage`` document."""
+
+    prompt_tokens: ReadOnly[int]
+    input: ReadOnly[ModalityCounts]
+    cache_read: ReadOnly[CacheReadCounts]
+    cache_write: ReadOnly[CacheWriteCounts]
+    output: ReadOnly[ModalityCounts]
+    reasoning: ReadOnly[int]
+    input_characters: ReadOnly[int]
+    input_images: ReadOnly[int]
+    input_audio_seconds: ReadOnly[float]
+    input_video_seconds: ReadOnly[float]
+    queries: ReadOnly[int]
+
+
+def billed_usage(usage: Usage) -> BilledUsage:
+    """How much of each type of token ``usage`` used, with the overlap between them factored out.
+
+    See ``BilledUsage`` above, and ``Meter`` in ``litellm/rust/crates/cost/src/price/meter.rs``,
+    for the types that exist.
+    """
+    prompt: Final = _billed_prompt_tokens(usage)
+    completion: Final = _billed_completion_tokens(usage)
+    classified_cached_tokens: Final = (
+        prompt["cached_text_tokens"] + prompt["cached_audio_tokens"] + prompt["cached_image_tokens"]
+    )
+    write_details: Final = prompt["cache_creation_token_details"]
+    one_hour_writes: Final = 0 if write_details is None else _count(write_details.ephemeral_1h_input_tokens)
+    twelve_hour_writes: Final = 0 if write_details is None else _count(write_details.ephemeral_12h_input_tokens)
+    short_lived_writes: Final = (
+        0
+        if write_details is None
+        else _count(write_details.ephemeral_5m_input_tokens) + _count(write_details.ephemeral_30m_input_tokens)
+    )
+    # writes no lifetime count covers bill at the base write rate, as the short-lived ones do
+    unattributed_writes: Final = max(
+        prompt["cache_creation_tokens"] - short_lived_writes - one_hour_writes - twelve_hour_writes, 0
+    )
+    return BilledUsage(
+        prompt_tokens=_count(usage.prompt_tokens),
+        input=ModalityCounts(
+            text=_count(prompt["text_tokens"]),
+            audio=_count(prompt["audio_tokens"]),
+            image=_count(prompt["image_tokens"]),
+            video=_count(prompt["video_tokens"]),
+        ),
+        cache_read=CacheReadCounts(
+            text=_count(prompt["cached_text_tokens"] + max(prompt["cache_hit_tokens"] - classified_cached_tokens, 0)),
+            audio=_count(prompt["cached_audio_tokens"]),
+            image=_count(prompt["cached_image_tokens"]),
+            explicit=_reads_explicit_cache(usage),
+        ),
+        cache_write=CacheWriteCounts(
+            default=_count(unattributed_writes + short_lived_writes),
+            one_hour=one_hour_writes,
+            twelve_hours=twelve_hour_writes,
+        ),
+        output=ModalityCounts(
+            text=_count(completion["text_tokens"]),
+            audio=_count(completion["audio_tokens"]),
+            image=_count(completion["image_tokens"]),
+            video=_count(completion["video_tokens"]),
+        ),
+        reasoning=_count(completion["reasoning_tokens"]),
+        input_characters=_count(prompt["character_count"]),
+        input_images=_count(prompt["image_count"]),
+        input_audio_seconds=max(float(prompt["audio_length_seconds"]), 0.0),
+        input_video_seconds=max(float(prompt["video_length_seconds"]), 0.0),
+        queries=_count(prompt["query_count"]),
+    )
+
+
+def billed_quantities(usage: Usage) -> NativeTokenUsage:
+    return NativeTokenUsage(billed_usage(usage))
+
+
+def call_context(
     service_tier: str | None,
-    completion_base_cost: float,
-) -> float:
-    tier_reasoning_key: Final = _get_service_tier_cost_key("output_cost_per_reasoning_token", service_tier)
-    if model_info.get(tier_reasoning_key) is not None:
-        tier_reasoning_cost: Final = _get_cost_per_unit(model_info, tier_reasoning_key, None)
-        if tier_reasoning_cost is not None:
-            return tier_reasoning_cost
-    tier_output_key: Final = _get_service_tier_cost_key("output_cost_per_token", service_tier)
-    if tier_output_key != "output_cost_per_token" and model_info.get(tier_output_key) is not None:
-        return completion_base_cost
-    standard_reasoning_cost: Final = _get_cost_per_unit(model_info, "output_cost_per_reasoning_token", None)
-    return standard_reasoning_cost if standard_reasoning_cost is not None else completion_base_cost
+    data_residency: str | None,
+    vertex_location: str | None,
+    current_time: datetime | None,
+) -> NativeCallContext:
+    """The call facts that pick a price. A missing ``current_time`` is the pinned billing moment, and a
+    naive one is read as UTC."""
+    reference: Final = current_time if current_time is not None else current_billing_time()
+    return NativeCallContext(
+        service_tier=service_tier,
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        at=reference.astimezone(timezone.utc)
+        if reference.tzinfo is not None
+        else reference.replace(tzinfo=timezone.utc),
+    )
 
 
 def generic_cost_per_token(
@@ -850,6 +1030,7 @@ def generic_cost_per_token(
     data_residency: str | None = None,
     model_info: ModelInfo | None = None,
     vertex_location: str | None = None,
+    current_time: datetime | None = None,
 ) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
@@ -859,187 +1040,27 @@ def generic_cost_per_token(
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing anthropic caching information
-        - data_residency: optional OpenAI data-residency region (e.g. "eu", "us"),
-          used to apply the per-model regional-processing uplift multiplier.
+        - data_residency: optional OpenAI data-residency region (e.g. "eu", "us") or
+          "fedramp", used to apply the per-model regional-processing or FedRAMP uplift multiplier.
+        - model_info: the deployment's effective rates, for a caller that already resolved them.
+          A name cannot express a per-deployment override: those are registered under the
+          deployment id and kept off the shared model-name key
         - vertex_location: optional Vertex AI location the request was served from
           (e.g. "us-east5", "global"), used to apply the per-model
           regional-endpoint uplift multiplier when non-global.
+        - current_time: the moment the request is billed at, for off_peak_pricing; defaults to now, UTC
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-
-    ## GET MODEL INFO
-    # A caller that already resolved the deployment's effective rates passes them in
-    # rather than handing back a name for this to re-resolve. A name cannot express a
-    # per-deployment override: those are registered under the deployment id and kept off
-    # the shared model-name key, so resolving from the name here reads the public rate.
-    if model_info is None:
-        model_info = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-
-    ## CALCULATE INPUT COST
-    ### Cost of processing (non-cache hit + cache hit) + Cost of cache-writing (cache writing)
-    prompt_cost = 0.0
-    ### PROCESSING COST
-    prompt_tokens_details = PromptTokensDetailsResult(
-        cache_hit_tokens=0,
-        cache_creation_tokens=0,
-        cache_creation_token_details=None,
-        text_tokens=usage.prompt_tokens,
-        audio_tokens=0,
-        image_tokens=0,
-        video_tokens=0,
-        character_count=0,
-        image_count=0,
-        video_length_seconds=0.0,
-        audio_length_seconds=0.0,
+    row: Final = (
+        get_model_info(model=model, custom_llm_provider=custom_llm_provider) if model_info is None else model_info
     )
-    if usage.prompt_tokens_details:
-        prompt_tokens_details = parse_prompt_tokens_details(usage)
-
-    ## EDGE CASE - text tokens not set or includes cached tokens (double-counting)
-    ## Some providers (like xAI) report text_tokens = prompt_tokens (including cached)
-    ## We detect this when: text_tokens + cached_tokens + other > prompt_tokens
-    ## Ref: https://github.com/BerriAI/litellm/issues/19680, #14874, #14875
-
-    cache_hit: Final = prompt_tokens_details["cache_hit_tokens"]
-    text_tokens = prompt_tokens_details["text_tokens"]
-    audio_tokens = prompt_tokens_details["audio_tokens"]
-    cache_creation: Final = prompt_tokens_details["cache_creation_tokens"]
-    image_tokens = prompt_tokens_details["image_tokens"]
-    video_tokens = prompt_tokens_details["video_tokens"]
-
-    # Check for double-counting: sum of details > prompt_tokens means overlap
-    total_details: Final = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens + video_tokens
-    has_double_counting: Final = (cache_hit > 0 or cache_creation > 0) and total_details > usage.prompt_tokens
-
-    if has_double_counting:
-        # cached and per-modality counts are both subsets of prompt_tokens and may overlap, so a
-        # modality can only bill what the cache did not already cover or the overlap is billed twice
-        uncached_budget: Final = max(usage.prompt_tokens - cache_hit - cache_creation, 0)
-        billable_audio: Final = min(audio_tokens, uncached_budget)
-        billable_image: Final = min(image_tokens, uncached_budget - billable_audio)
-        billable_video: Final = min(video_tokens, uncached_budget - billable_audio - billable_image)
-        prompt_tokens_details["audio_tokens"] = billable_audio
-        prompt_tokens_details["image_tokens"] = billable_image
-        prompt_tokens_details["video_tokens"] = billable_video
-        prompt_tokens_details["text_tokens"] = uncached_budget - billable_audio - billable_image - billable_video
-    elif text_tokens == 0 and prompt_tokens_details["image_count"] == 0:
-        # Clamp to zero: inconsistent streaming usage
-        prompt_tokens_details["text_tokens"] = max(
-            usage.prompt_tokens - cache_hit - audio_tokens - cache_creation - image_tokens - video_tokens, 0
-        )
-
-    (
-        prompt_base_cost,
-        completion_base_cost,
-        cache_creation_cost,
-        cache_creation_cost_above_1hr,
-        cache_read_cost,
-    ) = _get_token_base_cost(
-        model_info=model_info,
-        usage=usage,
-        service_tier=service_tier,
-        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+    priced: Final = NativePrices(row, custom_llm_provider).calculate(
+        billed_quantities(usage),
+        call_context(service_tier, data_residency, vertex_location, current_time),
     )
-
-    prompt_cost = _calculate_input_cost(
-        prompt_tokens_details=prompt_tokens_details,
-        model_info=model_info,
-        prompt_base_cost=prompt_base_cost,
-        cache_read_cost=cache_read_cost,
-        cache_creation_cost=cache_creation_cost,
-        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr,
-        service_tier=service_tier,
-    )
-
-    ## CALCULATE OUTPUT COST
-    text_tokens = 0
-    audio_tokens = 0
-    reasoning_tokens = 0
-    image_tokens = 0
-    video_tokens = 0
-    is_text_tokens_total = False
-    if usage.completion_tokens_details is not None:
-        completion_tokens_details: Final = parse_completion_tokens_details(usage)
-        audio_tokens = completion_tokens_details["audio_tokens"]
-        text_tokens = completion_tokens_details["text_tokens"]
-        reasoning_tokens = completion_tokens_details["reasoning_tokens"]
-        image_tokens = completion_tokens_details["image_tokens"]
-        video_tokens = completion_tokens_details["video_tokens"]
-
-    # Handle text_tokens calculation:
-    # 1. If text_tokens is explicitly provided and > 0, use it
-    # 2. If there's a breakdown (reasoning/audio/image/video tokens), calculate text_tokens as the remainder
-    # 3. If no breakdown at all, assume all completion_tokens are text_tokens
-    has_token_breakdown: Final = image_tokens > 0 or audio_tokens > 0 or reasoning_tokens > 0 or video_tokens > 0
-    if text_tokens == 0:
-        if has_token_breakdown:
-            # Calculate text tokens as remainder when we have a breakdown
-            # This handles cases like OpenAI's reasoning models where text_tokens isn't provided
-            text_tokens = max(
-                0,
-                usage.completion_tokens - reasoning_tokens - audio_tokens - image_tokens - video_tokens,
-            )
-        else:
-            # No breakdown at all, all tokens are text tokens
-            text_tokens = usage.completion_tokens
-            is_text_tokens_total = True
-    ## TEXT COST
-    completion_cost = float(text_tokens) * completion_base_cost
-
-    ## AUDIO COST
-    if not is_text_tokens_total and audio_tokens is not None and audio_tokens > 0:
-        _output_cost_per_audio_token = _get_cost_per_unit(model_info, "output_cost_per_audio_token", None)
-        _output_cost_per_audio_token = (
-            _output_cost_per_audio_token if _output_cost_per_audio_token is not None else completion_base_cost
-        )
-        completion_cost += float(audio_tokens) * _output_cost_per_audio_token
-
-    ## REASONING COST
-    if not is_text_tokens_total and reasoning_tokens and reasoning_tokens > 0:
-        tiered_reasoning_rate: Final = _get_tiered_reasoning_rate(model_info=model_info, usage=usage)
-        _output_cost_per_reasoning_token = (
-            tiered_reasoning_rate
-            if tiered_reasoning_rate is not None
-            else _resolve_reasoning_token_cost(
-                model_info=model_info,
-                service_tier=service_tier,
-                completion_base_cost=completion_base_cost,
-            )
-        )
-        completion_cost += float(reasoning_tokens) * _output_cost_per_reasoning_token
-
-    ## IMAGE COST
-    if not is_text_tokens_total and image_tokens and image_tokens > 0:
-        _output_cost_per_image_token = _get_cost_per_unit(model_info, "output_cost_per_image_token", None)
-        _output_cost_per_image_token = (
-            _output_cost_per_image_token if _output_cost_per_image_token is not None else completion_base_cost
-        )
-        completion_cost += float(image_tokens) * _output_cost_per_image_token
-
-    ## VIDEO COST
-    if not is_text_tokens_total and video_tokens and video_tokens > 0:
-        _output_cost_per_video_token = _get_cost_per_unit(model_info, "output_cost_per_video_token", None)
-        _output_cost_per_video_token = (
-            _output_cost_per_video_token if _output_cost_per_video_token is not None else completion_base_cost
-        )
-        completion_cost += float(video_tokens) * _output_cost_per_video_token
-
-    ## REGIONAL DATA-RESIDENCY UPLIFT
-    # Applied as a flat multiplier across all token costs for the request
-    # when the upstream is a regionalized OpenAI host (eu./us.api.openai.com).
-    uplift: Final = _get_regional_uplift_multiplier(model_info, data_residency)
-    if uplift != 1.0:
-        prompt_cost *= uplift
-        completion_cost *= uplift
-
-    vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
-    if vertex_uplift != 1.0:
-        prompt_cost *= vertex_uplift
-        completion_cost *= vertex_uplift
-
-    return prompt_cost, completion_cost
+    return priced.prompt_cost, priced.completion_cost
 
 
 def _coerce_token_count(value: object) -> int:
@@ -1047,10 +1068,161 @@ def _coerce_token_count(value: object) -> int:
 
 
 @dataclass(frozen=True, slots=True)
+class BilledTokenRates:
+    """Per-token rates one request's usage bills at, after token tiers, off-peak windows and the
+    regional multipliers the totals apply, so each cost line equals its token count times its rate."""
+
+    input_cost_per_token: float
+    output_cost_per_token: float
+    cache_read_input_token_cost: float
+    cache_read_input_audio_token_cost: float
+    cache_creation_input_token_cost: float
+    cache_creation_input_token_cost_by_ttl: Mapping[str, float]
+    output_cost_per_reasoning_token: float
+    cache_read_input_image_token_cost: float | None = None
+
+    def scaled(self, multiplier: float) -> "BilledTokenRates":
+        if multiplier == 1.0:
+            return self
+        return BilledTokenRates(
+            input_cost_per_token=self.input_cost_per_token * multiplier,
+            output_cost_per_token=self.output_cost_per_token * multiplier,
+            cache_read_input_token_cost=self.cache_read_input_token_cost * multiplier,
+            cache_read_input_audio_token_cost=self.cache_read_input_audio_token_cost * multiplier,
+            cache_creation_input_token_cost=self.cache_creation_input_token_cost * multiplier,
+            cache_creation_input_token_cost_by_ttl=MappingProxyType(
+                {ttl: rate * multiplier for ttl, rate in self.cache_creation_input_token_cost_by_ttl.items()}
+            ),
+            output_cost_per_reasoning_token=self.output_cost_per_reasoning_token * multiplier,
+            cache_read_input_image_token_cost=(
+                self.cache_read_input_image_token_cost * multiplier
+                if self.cache_read_input_image_token_cost is not None
+                else None
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class TokenTypeCostBreakdown:
     reasoning_cost: float
     cache_read_cost: float
     cache_creation_cost: float
+    rates: BilledTokenRates | None = None
+    """Rates these lines were billed at, so a caller reporting both cannot resolve them a second,
+    differently-argued way. None when the model's pricing could not be resolved."""
+
+
+def _reasoning_token_count(usage: Usage) -> int:
+    parsed: Final = (
+        parse_completion_tokens_details(usage)["reasoning_tokens"] if usage.completion_tokens_details is not None else 0
+    )
+    return parsed or _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
+
+
+def _cache_token_counts(usage: Usage) -> tuple[int, int, int, CacheCreationTokenDetails | None]:
+    """(cache read tokens, cached audio tokens, cache creation tokens, cache creation details): read from
+    prompt_tokens_details first, then the private top-level counters the Usage constructor mirrors cache
+    tokens onto for providers/callers that bypass the details."""
+    parsed: Final = parse_prompt_tokens_details(usage) if usage.prompt_tokens_details is not None else None
+    parsed_read: Final = parsed["cache_hit_tokens"] if parsed is not None else 0
+    parsed_creation: Final = parsed["cache_creation_tokens"] if parsed is not None else 0
+    return (
+        parsed_read or _coerce_token_count(getattr(usage, "_cache_read_input_tokens", 0)),
+        parsed["cache_hit_audio_tokens"] if parsed is not None else 0,
+        parsed_creation or _coerce_token_count(getattr(usage, "_cache_creation_input_tokens", 0)),
+        parsed["cache_creation_token_details"] if parsed is not None else None,
+    )
+
+
+def _custom_pricing_rates(custom_cost_per_token: CostPerToken) -> BilledTokenRates:
+    """Flat custom pricing has no tiers, uplifts or reasoning rate: cache tokens bill at the configured
+    cache rates (else the input rate) and reasoning at the output rate, as _cost_per_token_custom_pricing_helper does."""
+    input_rate: Final = custom_cost_per_token["input_cost_per_token"]
+    output_rate: Final = custom_cost_per_token["output_cost_per_token"]
+    cache_read_rate: Final = custom_cost_per_token.get("cache_read_input_token_cost", input_rate)
+    cache_creation_rate: Final = custom_cost_per_token.get("cache_creation_input_token_cost", input_rate)
+    return BilledTokenRates(
+        input_cost_per_token=input_rate,
+        output_cost_per_token=output_rate,
+        cache_read_input_token_cost=cache_read_rate,
+        cache_read_input_audio_token_cost=cache_read_rate,
+        cache_creation_input_token_cost=cache_creation_rate,
+        cache_creation_input_token_cost_by_ttl=MappingProxyType({}),
+        output_cost_per_reasoning_token=output_rate,
+    )
+
+
+def _cost_map_billed_rates(
+    model_info: ModelInfo,
+    usage: Usage,
+    custom_llm_provider: str | None,
+    service_tier: str | None,
+    data_residency: str | None,
+    vertex_location: str | None,
+    current_time: datetime | None,
+) -> BilledTokenRates:
+    quote: Final = NativePrices(model_info, custom_llm_provider).quote(
+        _count(usage.prompt_tokens),
+        call_context(service_tier, data_residency, vertex_location, current_time),
+    )
+    cache_read_rate: Final = billed_cache_read_rate(quote, usage)
+    multiplier: Final = (
+        quote.uplift
+        * get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
+        * get_provider_specific_speed_multiplier(model_info=model_info, usage=usage)
+    )
+    return BilledTokenRates(
+        input_cost_per_token=quote.input,
+        output_cost_per_token=quote.output,
+        cache_read_input_token_cost=cache_read_rate,
+        cache_read_input_audio_token_cost=(
+            cache_read_rate if quote.cache_read_audio is None else quote.cache_read_audio
+        ),
+        cache_creation_input_token_cost=quote.cache_write,
+        cache_creation_input_token_cost_by_ttl=MappingProxyType(
+            {"1hr": quote.cache_write_1h, "12hr": quote.cache_write_12h}
+        ),
+        output_cost_per_reasoning_token=quote.reasoning,
+        cache_read_input_image_token_cost=quote.cache_read_image,
+    ).scaled(multiplier)
+
+
+def get_billed_token_rates(
+    model: str,
+    custom_llm_provider: str | None,
+    usage: Usage,
+    service_tier: str | None = None,
+    data_residency: str | None = None,
+    vertex_location: str | None = None,
+    current_time: datetime | None = None,
+    custom_cost_per_token: CostPerToken | None = None,
+    model_info: ModelInfo | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+) -> BilledTokenRates | None:
+    """Rates the cost calculator bills ``usage`` at, resolved exactly as the totals and the token-type
+    breakdown resolve them. None when the model's pricing cannot be resolved."""
+    if custom_cost_per_token is not None:
+        return _custom_pricing_rates(custom_cost_per_token)
+    try:
+        resolved_model_info: Final = (
+            model_info
+            if model_info is not None
+            else get_model_info_for_call(
+                model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
+            )
+        )
+    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model: no rates
+        return None
+    return _cost_map_billed_rates(
+        model_info=resolved_model_info,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        service_tier=service_tier,
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        current_time=current_time,
+    )
 
 
 def get_token_type_cost_breakdown(
@@ -1060,6 +1232,11 @@ def get_token_type_cost_breakdown(
     service_tier: str | None = None,
     data_residency: str | None = None,
     vertex_location: str | None = None,
+    current_time: datetime | None = None,
+    custom_cost_per_token: CostPerToken | None = None,
+    model_info: ModelInfo | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
 ) -> TokenTypeCostBreakdown:
     """
     Provider-agnostic cost of reasoning and cache tokens, derived from the usage
@@ -1069,105 +1246,115 @@ def get_token_type_cost_breakdown(
     cost calculators bypass ``generic_cost_per_token``, because cache tokens always
     land on ``prompt_tokens_details`` (via the Usage constructor and provider
     transformations) and reasoning tokens on ``completion_tokens_details``. It reuses
-    the same rate-resolution primitives as the total-cost path so the breakdown can
-    never drift from the totals. Returns zeros (never raises) when the model or its
-    pricing cannot be resolved.
+    the same rate resolution as the total-cost path (``get_billed_token_rates``) so the
+    breakdown can never drift from the totals. A deployment billed by
+    ``custom_cost_per_token`` is priced from those flat rates instead of the cost map and,
+    like its totals, bills cache writes flat rather than by their 5m/1h split.
+    Returns zeros (never raises) when the model or its pricing cannot be resolved.
     """
-    try:
-        model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
-    except Exception:
-        return TokenTypeCostBreakdown(0.0, 0.0, 0.0)
-
-    (
-        _prompt_base_cost,
-        completion_base_cost,
-        cache_creation_cost_rate,
-        cache_creation_cost_above_1hr_rate,
-        cache_read_cost_rate,
-    ) = _get_token_base_cost(
-        model_info=model_info,
+    rates: Final = get_billed_token_rates(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
         usage=usage,
         service_tier=service_tier,
-        threshold_is_inclusive=_uses_inclusive_token_thresholds(custom_llm_provider),
+        data_residency=data_residency,
+        vertex_location=vertex_location,
+        current_time=current_time,
+        custom_cost_per_token=custom_cost_per_token,
+        model_info=model_info,
+        api_base=api_base,
+        api_key=api_key,
     )
+    if rates is None:
+        return TokenTypeCostBreakdown(0.0, 0.0, 0.0)
 
-    reasoning_tokens = (
-        parse_completion_tokens_details(usage)["reasoning_tokens"] if usage.completion_tokens_details is not None else 0
+    cache_read_tokens, cached_audio_tokens, cache_creation_tokens, cache_creation_token_details = _cache_token_counts(
+        usage
     )
-    if not reasoning_tokens:
-        reasoning_tokens = _coerce_token_count(getattr(usage, "reasoning_tokens", 0))
-
-    # Reasoning is billed at the selected tier's reasoning rate for tiered models,
-    # else at the service-tier-aware per-reasoning-token rate - this mirrors how the
-    # total completion cost is computed, so the breakdown can never diverge from it.
-    tiered_reasoning_rate: Final = _get_tiered_reasoning_rate(model_info=model_info, usage=usage)
-    reasoning_rate: Final = (
-        tiered_reasoning_rate
-        if tiered_reasoning_rate is not None
-        else _resolve_reasoning_token_cost(
-            model_info=model_info,
-            service_tier=service_tier,
-            completion_base_cost=completion_base_cost,
+    cached_image_tokens: Final = parse_prompt_tokens_details(usage)["cached_image_tokens"]
+    image_cache_read_rate: Final = (
+        rates.cache_read_input_image_token_cost
+        if rates.cache_read_input_image_token_cost is not None
+        else rates.cache_read_input_token_cost
+    )
+    cache_creation_cost: Final = (
+        float(cache_creation_tokens) * rates.cache_creation_input_token_cost
+        if custom_cost_per_token is not None
+        else calculate_cache_writing_cost(
+            cache_creation_tokens=cache_creation_tokens,
+            cache_creation_token_details=cache_creation_token_details,
+            cache_creation_cost=rates.cache_creation_input_token_cost,
+            cache_creation_cost_by_ttl=rates.cache_creation_input_token_cost_by_ttl,
         )
     )
-    reasoning_cost = float(reasoning_tokens) * reasoning_rate
-
-    cache_read_tokens = 0
-    cache_creation_tokens = 0
-    cache_creation_token_details: CacheCreationTokenDetails | None = None
-    if usage.prompt_tokens_details is not None:
-        prompt_tokens_details: Final = parse_prompt_tokens_details(usage)
-        cache_read_tokens = prompt_tokens_details["cache_hit_tokens"]
-        cache_creation_tokens = prompt_tokens_details["cache_creation_tokens"]
-        cache_creation_token_details = prompt_tokens_details["cache_creation_token_details"]
-    # Fall back to the private top-level counters the Usage constructor mirrors cache
-    # tokens onto, so providers/callers that bypass prompt_tokens_details are covered.
-    if not cache_read_tokens:
-        cache_read_tokens = _coerce_token_count(getattr(usage, "_cache_read_input_tokens", 0))
-    if not cache_creation_tokens:
-        cache_creation_tokens = _coerce_token_count(getattr(usage, "_cache_creation_input_tokens", 0))
-
-    cache_read_cost = float(cache_read_tokens) * cache_read_cost_rate
-    cache_creation_cost = calculate_cache_writing_cost(
-        cache_creation_tokens=cache_creation_tokens,
-        cache_creation_token_details=cache_creation_token_details,
-        cache_creation_cost_above_1hr=cache_creation_cost_above_1hr_rate,
-        cache_creation_cost=cache_creation_cost_rate,
-    )
-
-    # Apply the same flat regional-processing uplift the totals get, so per-type
-    # costs stay reconciled with input_cost/output_cost for regionalized OpenAI hosts.
-    uplift: Final = _get_regional_uplift_multiplier(model_info, data_residency)
-    if uplift != 1.0:
-        reasoning_cost *= uplift
-        cache_read_cost *= uplift
-        cache_creation_cost *= uplift
-
-    vertex_uplift: Final = get_vertex_regional_endpoint_uplift(model_info, vertex_location)
-    if vertex_uplift != 1.0:
-        reasoning_cost *= vertex_uplift
-        cache_read_cost *= vertex_uplift
-        cache_creation_cost *= vertex_uplift
-
-    # Mirror the provider-specific geo uplift (e.g. Anthropic us: 1.1) the totals
-    # apply, so cache and reasoning line items stay reconciled with them.
-    geo_multiplier: Final = get_provider_specific_geo_multiplier(model_info=model_info, usage=usage)
-    if geo_multiplier != 1.0:
-        reasoning_cost *= geo_multiplier
-        cache_read_cost *= geo_multiplier
-        cache_creation_cost *= geo_multiplier
-
     return TokenTypeCostBreakdown(
-        reasoning_cost=reasoning_cost,
-        cache_read_cost=cache_read_cost,
+        reasoning_cost=float(_reasoning_token_count(usage)) * rates.output_cost_per_reasoning_token,
+        cache_read_cost=(
+            float(cache_read_tokens - cached_audio_tokens - cached_image_tokens) * rates.cache_read_input_token_cost
+            + float(cached_audio_tokens) * rates.cache_read_input_audio_token_cost
+            + float(cached_image_tokens) * image_cache_read_rate
+        ),
         cache_creation_cost=cache_creation_cost,
+        rates=rates,
     )
+
+
+def calculate_prompt_caching_savings(
+    model_info: ModelInfo,
+    usage: Usage,
+    custom_llm_provider: str | None,
+    service_tier: str | None = None,
+    data_residency: str | None = None,
+    vertex_location: str | None = None,
+    billed_at: datetime | None = None,
+) -> float:
+    """Read discount minus write premium, using the biller's rate and TTL resolution.
+
+    Missing reads and unpublished (missing/zero) writes claim no saving or premium;
+    explicit zero reads remain free. An unpublished 1h price uses the ordinary write rate.
+    ``billed_at`` is the request's completion time, so off-peak windows resolve as the
+    biller saw them rather than at the later spend write.
+    """
+    quote: Final = NativePrices(model_info, custom_llm_provider).quote(
+        _count(usage.prompt_tokens),
+        call_context(service_tier, data_residency, vertex_location, billed_at),
+    )
+    prompt_base_cost: Final = quote.input
+    effective_cache_read_cost: Final = billed_cache_read_rate(quote, usage)
+    write_rate: Final = quote.cache_write or prompt_base_cost
+    prompt_tokens_details: Final = parse_prompt_tokens_details(usage)
+    cache_read_tokens: Final = max(prompt_tokens_details["cache_hit_tokens"], 0)
+    cache_creation_tokens: Final = max(prompt_tokens_details["cache_creation_tokens"], 0)
+    details: Final = prompt_tokens_details["cache_creation_token_details"]
+    cache_creation_details: Final = (
+        CacheCreationTokenDetails(
+            ephemeral_5m_input_tokens=max(details.ephemeral_5m_input_tokens or 0, 0),
+            ephemeral_30m_input_tokens=max(details.ephemeral_30m_input_tokens or 0, 0),
+            ephemeral_1h_input_tokens=max(details.ephemeral_1h_input_tokens or 0, 0),
+            ephemeral_12h_input_tokens=max(details.ephemeral_12h_input_tokens or 0, 0),
+        )
+        if details is not None
+        else None
+    )
+    read_discount: Final = cache_read_tokens * max(prompt_base_cost - effective_cache_read_cost, 0.0)
+    write_premium: Final = calculate_cache_writing_cost(
+        cache_creation_tokens=cache_creation_tokens,
+        cache_creation_token_details=cache_creation_details,
+        cache_creation_cost=write_rate - prompt_base_cost,
+        cache_creation_cost_by_ttl=MappingProxyType(
+            {"1hr": quote.cache_write_1h - prompt_base_cost, "12hr": quote.cache_write_12h - prompt_base_cost}
+        ),
+    )
+    return (read_discount - write_premium) * quote.uplift
 
 
 def calculate_image_response_cost_from_usage(
     model: str,
     image_response: ImageResponse,
     custom_llm_provider: str,
+    model_info: ModelInfo | None = None,
+    vertex_location: str | None = None,
+    service_tier: str | None = None,
 ) -> float | None:
     """
     Calculate image generation cost from usage metadata when available.
@@ -1192,45 +1379,56 @@ def calculate_image_response_cost_from_usage(
     if prompt_tokens == 0 and completion_tokens == 0 and total_tokens == 0:
         return None
 
-    input_tokens_details: Final = getattr(usage, "input_tokens_details", None)
+    if model_info is not None and not prices_tokens(model_info):
+        return None
+
+    input_tokens_details: Final[object] = getattr(usage, "input_tokens_details", None)
     prompt_tokens_details: PromptTokensDetailsWrapper | None = None
     if input_tokens_details is not None:
         # input_tokens_details may be a dict (e.g. OpenAI image edit responses)
         # or an object; read it tolerantly like the output side below, so image
         # input tokens are priced at input_cost_per_image_token instead of
         # silently falling back to the text rate.
+        input_text_tokens: Final = _get_token_detail_value(input_tokens_details, "text_tokens")
+        input_image_tokens: Final = _get_token_detail_value(input_tokens_details, "image_tokens")
+        input_cached_tokens: Final = _get_token_detail_value(input_tokens_details, "cached_tokens") or 0
+        cached_details: Final[object] = (
+            _IMAGE_TOKEN_DETAILS.validate_python(input_tokens_details).get("cached_tokens_details")
+            if isinstance(input_tokens_details, dict)
+            else getattr(input_tokens_details, "cached_tokens_details", None)
+        )
         prompt_tokens_details = PromptTokensDetailsWrapper(
-            text_tokens=_get_token_detail_value(input_tokens_details, "text_tokens"),
-            image_tokens=_get_token_detail_value(input_tokens_details, "image_tokens"),
-            cached_tokens=0,
+            text_tokens=input_text_tokens,
+            image_tokens=input_image_tokens,
+            cached_tokens=input_cached_tokens,
+            cached_tokens_details=(
+                CachedTokensDetails.model_validate(cached_details) if cached_details is not None else None
+            ),
         )
 
-    output_tokens_details = getattr(usage, "completion_tokens_details", None)
-    if output_tokens_details is None:
-        output_tokens_details = getattr(usage, "output_tokens_details", None)
+    completion_tokens_details_attr: Final[object] = getattr(usage, "completion_tokens_details", None)
+    output_tokens_details: Final[object] = (
+        getattr(usage, "output_tokens_details", None)
+        if completion_tokens_details_attr is None
+        else completion_tokens_details_attr
+    )
 
-    if output_tokens_details is None:
-        completion_tokens_details = CompletionTokensDetailsWrapper(
-            text_tokens=0,
-            image_tokens=completion_tokens,
-            reasoning_tokens=0,
-            audio_tokens=0,
-        )
-    else:
-        text_tokens = _get_token_detail_value(output_tokens_details, "text_tokens") or 0
-        image_tokens: Final = _get_token_detail_value(output_tokens_details, "image_tokens") or 0
-        audio_tokens: Final = _get_token_detail_value(output_tokens_details, "audio_tokens") or 0
-        reasoning_tokens: Final = _get_token_detail_value(output_tokens_details, "reasoning_tokens") or 0
-        known_output_tokens: Final = text_tokens + image_tokens + audio_tokens + reasoning_tokens
-        if completion_tokens > known_output_tokens:
-            text_tokens += completion_tokens - known_output_tokens
-
-        completion_tokens_details = CompletionTokensDetailsWrapper(
-            text_tokens=text_tokens,
-            image_tokens=image_tokens,
-            reasoning_tokens=reasoning_tokens,
-            audio_tokens=audio_tokens,
-        )
+    text_tokens: Final = _get_token_detail_value(output_tokens_details, "text_tokens") or 0
+    image_tokens: Final = _get_token_detail_value(output_tokens_details, "image_tokens") or 0
+    audio_tokens: Final = _get_token_detail_value(output_tokens_details, "audio_tokens") or 0
+    reasoning_tokens: Final = _get_token_detail_value(output_tokens_details, "reasoning_tokens") or 0
+    has_output_modalities: Final = any(
+        _get_token_detail_value(output_tokens_details, modality) is not None
+        for modality in ("text_tokens", "image_tokens", "audio_tokens")
+    )
+    unitemized_tokens: Final = max(completion_tokens - text_tokens - image_tokens - audio_tokens - reasoning_tokens, 0)
+    unitemized_image_tokens: Final = unitemized_tokens if not has_output_modalities and image_response.data else 0
+    completion_tokens_details: Final = CompletionTokensDetailsWrapper(
+        text_tokens=text_tokens + unitemized_tokens - unitemized_image_tokens,
+        image_tokens=image_tokens + unitemized_image_tokens,
+        reasoning_tokens=reasoning_tokens,
+        audio_tokens=audio_tokens,
+    )
 
     normalized_usage: Final = Usage(
         prompt_tokens=prompt_tokens,
@@ -1244,6 +1442,9 @@ def calculate_image_response_cost_from_usage(
         model=model,
         usage=normalized_usage,
         custom_llm_provider=custom_llm_provider,
+        model_info=model_info,
+        vertex_location=vertex_location,
+        service_tier=service_tier,
     )
     return prompt_cost + completion_cost
 
@@ -1264,7 +1465,7 @@ def calculate_image_response_web_search_cost(
     if usage is None:
         return 0.0
 
-    web_search_requests: Final = getattr(usage, "web_search_requests", None)
+    web_search_requests: Final = attribute_or_none(usage, "web_search_requests")
     if not web_search_requests:
         return 0.0
 
@@ -1281,9 +1482,58 @@ def calculate_image_response_web_search_cost(
     )
 
 
+class _ModelPricedImageCostCalculator(Protocol):
+    def __call__(self, model: str, image_response: ImageResponse, model_info: ModelInfo | None = None) -> float: ...
+
+
+def _model_priced_image_cost_calculator(
+    custom_llm_provider: str | None, model: str, pricing: ModelInfo | None
+) -> _ModelPricedImageCostCalculator | None:
+    match custom_llm_provider:
+        case litellm.LlmProviders.RECRAFT.value:
+            from litellm.llms.recraft.cost_calculator import cost_calculator as recraft_image_cost_calculator
+
+            return recraft_image_cost_calculator
+        case litellm.LlmProviders.AIML.value:
+            from litellm.llms.aiml.image_generation.cost_calculator import cost_calculator as aiml_image_cost_calculator
+
+            return aiml_image_cost_calculator
+        case litellm.LlmProviders.COMETAPI.value:
+            from litellm.llms.cometapi.image_generation.cost_calculator import (
+                cost_calculator as cometapi_image_cost_calculator,
+            )
+
+            return cometapi_image_cost_calculator
+        case litellm.LlmProviders.RUNWAYML.value:
+            from litellm.llms.runwayml.cost_calculator import cost_calculator as runwayml_image_cost_calculator
+
+            return runwayml_image_cost_calculator
+        case litellm.LlmProviders.TENCENT.value:
+            from litellm.llms.tencent.cost_calculator import image_cost_calculator as tencent_image_cost_calculator
+            from litellm.llms.tencent.image_generation.transformation import is_tokenhub_image_model
+
+            return tencent_image_cost_calculator if is_tokenhub_image_model(model) else None
+        case litellm.LlmProviders.DASHSCOPE.value:
+            if _deployment_prices_images_without_an_output_price(pricing):
+                return None
+            from litellm.llms.dashscope.image_generation.cost_calculator import (
+                cost_calculator as dashscope_image_cost_calculator,
+            )
+
+            return dashscope_image_cost_calculator
+        case litellm.LlmProviders.MINIMAX.value:
+            from litellm.llms.openai.image_generation.cost_calculator import (
+                cost_calculator as openai_gpt_image_cost_calculator,
+            )
+
+            return partial(openai_gpt_image_cost_calculator, custom_llm_provider=litellm.LlmProviders.MINIMAX.value)
+        case _:
+            return None
+
+
 class CostCalculatorUtils:
     @staticmethod
-    def _call_type_has_image_response(call_type: str) -> bool:
+    def call_type_has_image_response(call_type: str) -> bool:
         """
         Returns True if the call type has an image response
 
@@ -1294,6 +1544,8 @@ class CostCalculatorUtils:
         """
         return call_type in _IMAGE_RESPONSE_CALL_TYPES
 
+    _call_type_has_image_response = call_type_has_image_response
+
     @staticmethod
     def route_image_generation_cost_calculator(
         model: str,
@@ -1302,11 +1554,19 @@ class CostCalculatorUtils:
         quality: str | None = None,
         n: int | None = None,
         size: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: dict[str, object] | None = None,
         call_type: str | None = None,
+        model_info: ModelInfo | None = None,
+        vertex_location: str | None = None,
+        service_tier: str | None = None,
     ) -> float:
         """
         Route the image generation cost calculator based on the custom_llm_provider
+
+        ``model_info`` is the deployment's own price table. Its valid prices are laid over the shared
+        cost-map entry and handed to the provider calculator, so per-image, per-pixel and per-token
+        deployment prices all apply while provider logic (token-first billing, grounding surcharges,
+        image counting) stays in one place. An unparseable price is logged and ignored.
         """
         from litellm.cost_calculator import default_image_cost_calculator
         from litellm.llms.azure_ai.image_generation.cost_calculator import (
@@ -1317,9 +1577,6 @@ class CostCalculatorUtils:
         )
         from litellm.llms.gemini.image_generation.cost_calculator import (
             cost_calculator as gemini_image_cost_calculator,
-        )
-        from litellm.llms.recraft.cost_calculator import (
-            cost_calculator as recraft_image_cost_calculator,
         )
         from litellm.llms.vertex_ai.image_generation.cost_calculator import (
             cost_calculator as vertex_ai_image_cost_calculator,
@@ -1332,12 +1589,33 @@ class CostCalculatorUtils:
             quality or completion_response.quality or _requested_image_param(optional_params, "quality") or "standard"
         )
         resolved_n: Final = n if n is not None else (len(completion_response.data) if completion_response.data else 0)
+        pricing: Final = deployment_pricing(model_info)
+        if custom_llm_provider == litellm.LlmProviders.XAI.value:
+            from litellm.llms.xai.image_generation.cost_calculator import cost_calculator as xai_image_cost_calculator
 
+            xai_cost: Final = xai_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+                quality=quality,
+                n=resolved_n,
+                optional_params=_IMAGE_REQUEST_PARAMS.validate_python(optional_params),
+                call_type=call_type,
+                model_info=pricing,
+            )
+            if xai_cost is not None:
+                return xai_cost
+        model_priced_calculator: Final = _model_priced_image_cost_calculator(custom_llm_provider, model, pricing)
+
+        if model_priced_calculator is not None:
+            return model_priced_calculator(model=model, image_response=completion_response, model_info=pricing)
         if custom_llm_provider == litellm.LlmProviders.VERTEX_AI.value:
             if isinstance(completion_response, ImageResponse):
                 return vertex_ai_image_cost_calculator(
                     model=model,
                     image_response=completion_response,
+                    model_info=pricing,
+                    vertex_location=vertex_location,
+                    service_tier=service_tier,
                 )
         elif custom_llm_provider == litellm.LlmProviders.BEDROCK.value:
             if isinstance(completion_response, ImageResponse):
@@ -1348,33 +1626,6 @@ class CostCalculatorUtils:
                     optional_params=optional_params,
                 )
             raise TypeError("completion_response must be of type ImageResponse for bedrock image cost calculation")
-        elif custom_llm_provider == litellm.LlmProviders.RECRAFT.value:
-            from litellm.llms.recraft.cost_calculator import (
-                cost_calculator as recraft_image_cost_calculator,
-            )
-
-            return recraft_image_cost_calculator(
-                model=model,
-                image_response=completion_response,
-            )
-        elif custom_llm_provider == litellm.LlmProviders.AIML.value:
-            from litellm.llms.aiml.image_generation.cost_calculator import (
-                cost_calculator as aiml_image_cost_calculator,
-            )
-
-            return aiml_image_cost_calculator(
-                model=model,
-                image_response=completion_response,
-            )
-        elif custom_llm_provider == litellm.LlmProviders.COMETAPI.value:
-            from litellm.llms.cometapi.image_generation.cost_calculator import (
-                cost_calculator as cometapi_image_cost_calculator,
-            )
-
-            return cometapi_image_cost_calculator(
-                model=model,
-                image_response=completion_response,
-            )
         elif custom_llm_provider == litellm.LlmProviders.GEMINI.value:
             if call_type in (
                 CallTypes.image_edit.value,
@@ -1387,6 +1638,7 @@ class CostCalculatorUtils:
                 return gemini_image_edit_cost_calculator(
                     model=model,
                     image_response=completion_response,
+                    model_info=pricing,
                 )
             from litellm.llms.gemini.image_generation.cost_calculator import (
                 cost_calculator as gemini_image_cost_calculator,
@@ -1395,11 +1647,16 @@ class CostCalculatorUtils:
             return gemini_image_cost_calculator(
                 model=model,
                 image_response=completion_response,
+                model_info=pricing,
             )
         elif custom_llm_provider == litellm.LlmProviders.AZURE_AI.value:
             return azure_ai_image_cost_calculator(
                 model=model,
                 image_response=completion_response,
+                size=resolved_size,
+                n=resolved_n,
+                optional_params=optional_params,
+                model_info=pricing,
             )
         elif custom_llm_provider == litellm.LlmProviders.FAL_AI.value:
             from litellm.llms.fal_ai.cost_calculator import (
@@ -1410,15 +1667,7 @@ class CostCalculatorUtils:
                 model=model,
                 image_response=completion_response,
                 optional_params=optional_params,
-            )
-        elif custom_llm_provider == litellm.LlmProviders.RUNWAYML.value:
-            from litellm.llms.runwayml.cost_calculator import (
-                cost_calculator as runwayml_image_cost_calculator,
-            )
-
-            return runwayml_image_cost_calculator(
-                model=model,
-                image_response=completion_response,
+                model_info=pricing,
             )
         elif (
             custom_llm_provider == litellm.LlmProviders.OPENAI.value
@@ -1435,6 +1684,7 @@ class CostCalculatorUtils:
                     model=model,
                     image_response=completion_response,
                     custom_llm_provider=custom_llm_provider,
+                    model_info=pricing,
                 )
             # Fall through to default for DALL-E models
             return default_image_cost_calculator(
@@ -1444,6 +1694,7 @@ class CostCalculatorUtils:
                 n=resolved_n,
                 size=resolved_size,
                 optional_params=optional_params,
+                model_info=pricing,
             )
         else:
             return default_image_cost_calculator(
@@ -1453,5 +1704,6 @@ class CostCalculatorUtils:
                 n=resolved_n,
                 size=resolved_size,
                 optional_params=optional_params,
+                model_info=pricing,
             )
         return 0.0

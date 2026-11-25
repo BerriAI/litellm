@@ -17,7 +17,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+    _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    user_api_key_has_admin_view,
+)
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.proxy.cloudzero_endpoints import (
@@ -106,7 +109,7 @@ async def _get_cloudzero_settings():
 
     cloudzero_config: Final = await _config_table(prisma_client).find_first(where={"param_name": "cloudzero_settings"})
     if cloudzero_config is None or cloudzero_config.param_value is None:
-        return {}
+        return dict[str, str]()
 
     # Handle both dict and JSON string cases
     if isinstance(cloudzero_config.param_value, dict):
@@ -149,7 +152,7 @@ async def get_cloudzero_settings(
     Only admin users (Proxy Admin or Admin Viewer) can view CloudZero settings.
     """
     # Validation — Admin Viewer follows the read-parity rule.
-    if not _user_has_admin_view(user_api_key_dict):
+    if not user_api_key_has_admin_view(user_api_key_dict):
         raise HTTPException(
             status_code=403,
             detail={"error": CommonProxyErrors.not_allowed_access.value},

@@ -29,20 +29,28 @@ Events:
   included only when content capture is enabled).
 """
 
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
+from litellm.integrations.otel.mappers.utils import drop_none
+from litellm.integrations.otel.model.semconv import PASSTHROUGH_OPERATION_KEY, GenAIOperation
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 if TYPE_CHECKING:
+    from opentelemetry._logs import SeverityNumber as _SeverityNumber
     from opentelemetry.trace import Span as _Span
+    from opentelemetry.trace import SpanContext
 
     from litellm.integrations.opentelemetry import OpenTelemetryConfig
+    from litellm.types.utils import StandardLoggingPayload
 
-    Span = _Span | Any
+    Span = _Span
 else:
-    Span = Any
+
+    class Span(Protocol):
+        def set_attribute(self, key: str, value: object) -> None: ...
 
 
 # OTEL_SEMCONV_STABILITY_OPT_IN is a comma-separated list of category-specific
@@ -117,17 +125,17 @@ class OTELGenAISemconvMixin:
     if TYPE_CHECKING:
         config: "OpenTelemetryConfig"
 
-        def safe_set_attribute(self, span: Span, key: str, value: Any) -> None: ...
+        def safe_set_attribute(self, span: Span, key: str, value: object) -> None: ...
 
         def _capture_in_event(self) -> bool: ...
 
-        def _transform_messages_to_otel_semantic_conventions(self, messages: list[dict] | str) -> list[dict]: ...
+        def _transform_messages_to_otel_semantic_conventions(self, messages: Iterable[object] | str) -> list[dict]: ...
 
-        def _transform_choices_to_otel_semantic_conventions(self, choices: list[dict]) -> list[dict]: ...
+        def _transform_choices_to_otel_semantic_conventions(self, choices: Iterable[object]) -> list[dict]: ...
 
         def _to_ns(self, dt: datetime) -> int: ...
 
-        def _otel_log_types(self) -> tuple[Any, Any]: ...
+        def _otel_log_types(self) -> tuple[Callable[..., object], type[_SeverityNumber]]: ...
 
     @property
     def _gen_ai_semconv_latest_experimental(self) -> bool:
@@ -142,8 +150,11 @@ class OTELGenAISemconvMixin:
         """Map a LiteLLM ``call_type`` to spec ``gen_ai.operation.name``.
 
         Substring match (e.g. ``aembedding`` -> ``embeddings``); defaults to
-        ``chat``.
+        ``chat``. A pass-through call's operation, stored under ``PASSTHROUGH_OPERATION_KEY``, wins.
         """
+        passthrough_operation: Final = kwargs.get(PASSTHROUGH_OPERATION_KEY)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # kwargs is an untyped dict
+        if isinstance(passthrough_operation, GenAIOperation):
+            return passthrough_operation.value
         call_type: Final = kwargs.get("call_type", "") or ""
         match call_type:
             case s if "embedding" in s:
@@ -153,7 +164,7 @@ class OTELGenAISemconvMixin:
             case _:
                 return "chat"
 
-    def _set_semconv_request_attributes(self, span: Span, optional_params: dict) -> None:
+    def _set_semconv_request_attributes(self, span: Span, optional_params: Mapping[str, object]) -> None:
         """Add ``gen_ai.request.*`` span attributes from ``optional_params``.
 
         Covers the sampling params plus the conditionally-required
@@ -182,7 +193,9 @@ class OTELGenAISemconvMixin:
         if isinstance(n, int) and n > 1:
             self.safe_set_attribute(span=span, key="gen_ai.request.choice.count", value=n)
 
-    def _set_semconv_cache_token_attributes(self, span: Span, standard_logging_payload) -> None:
+    def _set_semconv_cache_token_attributes(
+        self, span: Span, standard_logging_payload: "StandardLoggingPayload | None"
+    ) -> None:
         """Add ``gen_ai.usage.cache_*.input_tokens`` from the usage object.
 
         No-op when the payload or the usage values are missing/zero.
@@ -195,13 +208,16 @@ class OTELGenAISemconvMixin:
             if value:
                 self.safe_set_attribute(span=span, key=semconv_key, value=value)
 
-    def _build_inference_details_attrs(self, kwargs: dict, response_obj: dict, provider: str) -> dict[str, Any]:
+    def _build_inference_details_attrs(
+        self, kwargs: dict, response_obj: dict, provider: str | None
+    ) -> dict[str, str | None]:
         """Build the attribute payload for the inference-details event.
 
-        Always includes provider/operation; input/output messages are added
+        Always includes operation and provider (None when the call carries none,
+        dropped before the event is emitted); input/output messages are added
         only when content capture is enabled and non-empty. Mixin-internal.
         """
-        attrs: Final[dict[str, Any]] = {
+        attrs: Final[dict[str, str | None]] = {
             "event_name": _INFERENCE_DETAILS_EVENT_NAME,
             "gen_ai.provider.name": provider,
             "gen_ai.operation.name": self._gen_ai_operation_name(kwargs),
@@ -219,11 +235,11 @@ class OTELGenAISemconvMixin:
 
     def _emit_inference_details_event(
         self,
-        kwargs: dict,
-        response_obj: dict,
-        provider: str,
+        kwargs: dict[str, object],
+        response_obj: dict[str, object],
+        provider: str | None,
         otel_logger,
-        parent_ctx,
+        parent_ctx: "SpanContext",
     ) -> None:
         """Emit the consolidated ``gen_ai.client.inference.operation.details``
         log event, correlated to the request span via ``parent_ctx``.
@@ -239,6 +255,6 @@ class OTELGenAISemconvMixin:
             severity_number=SeverityNumber.INFO,
             severity_text="INFO",
             body=None,
-            attributes=self._build_inference_details_attrs(kwargs, response_obj, provider),
+            attributes=drop_none(self._build_inference_details_attrs(kwargs, response_obj, provider)),
         )
         otel_logger.emit(log_record)

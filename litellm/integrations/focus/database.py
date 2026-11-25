@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Final
+from typing import Final, Protocol
 
 import polars as pl
+
+from litellm.litellm_core_utils.core_helpers import require_attributes
+
+
+class _FrameRows(Protocol):
+    def to_dicts(self) -> Sequence[Mapping[str, object]]: ...
 
 
 class FocusLiteLLMDatabase:
@@ -32,7 +39,7 @@ class FocusLiteLLMDatabase:
         client: Final = self._ensure_prisma_client()
 
         where_clauses: Final[list[str]] = []
-        query_params: Final[list[Any]] = []
+        query_params: Final[list[datetime | int]] = []
         placeholder_index = 1
         if start_time_utc:
             where_clauses.append(f"dus.updated_at >= ${placeholder_index}::timestamptz")
@@ -95,12 +102,26 @@ class FocusLiteLLMDatabase:
         """
 
         try:
-            db_response: Final = await client.db.query_raw(query, *query_params)
-            return pl.DataFrame(db_response, infer_schema_length=None)
+            from litellm.proxy.utils import query_raw_rows
+
+            db_response: Final = await query_raw_rows(client.db, query, *query_params)
+            from litellm.proxy.spend_tracking.key_metadata_recovery import (
+                fill_missing_api_key_aliases,
+            )
+
+            usage_rows: Final = (
+                require_attributes(db_response, _FrameRows, "to_dicts").to_dicts()
+                if isinstance(db_response, pl.DataFrame)
+                else db_response
+                if isinstance(db_response, list)
+                else []
+            )
+            recovered_rows: Final = await fill_missing_api_key_aliases(client, usage_rows)
+            return pl.DataFrame([dict(row) for row in recovered_rows], infer_schema_length=None)
         except Exception as exc:
             raise RuntimeError(f"Error retrieving usage data: {exc}") from exc
 
-    async def get_table_info(self) -> dict[str, Any]:
+    async def get_table_info(self) -> dict[str, object]:
         """Return metadata about the spend table for diagnostics."""
         client: Final = self._ensure_prisma_client()
 
@@ -111,7 +132,9 @@ class FocusLiteLLMDatabase:
         ORDER BY ordinal_position;
         """
         try:
-            columns_response: Final = await client.db.query_raw(info_query)
+            from litellm.proxy.utils import query_raw_rows
+
+            columns_response: Final = await query_raw_rows(client.db, info_query)
             return {"columns": columns_response, "table_name": "LiteLLM_DailyUserSpend"}
         except Exception as exc:
             raise RuntimeError(f"Error getting table info: {exc}") from exc

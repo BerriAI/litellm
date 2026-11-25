@@ -53,6 +53,7 @@ from typing import Any, Mapping, Optional, Sequence, Tuple
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -62,9 +63,10 @@ from claude_code.cli_driver import (
 
 
 AZURE_MODELS = [
-    "claude-haiku-4-5-azure",
-    "claude-sonnet-4-5-azure",
-    "claude-opus-4-7-azure",
+    "claude-haiku-5-5-azure",
+    "claude-sonnet-5-5-azure",
+    "claude-opus-5-5-azure",
+    "claude-fable-5-2-azure",
 ]
 
 # Minimal schema with one required integer field. Kept intentionally
@@ -151,6 +153,16 @@ def _validate_against_schema(
 
 
 @pytest.mark.covers("llm.messages.azure_foundry.structured_output.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.AZURE_AI,),
+        models=tuple(AZURE_MODELS),
+        capabilities=(Capability.RESPONSE_SCHEMA,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_structured_outputs_azure(compat_result):
     """Drive `claude --json-schema ...` against the LiteLLM proxy and
     assert the trailing `result` event contains a schema-conforming

@@ -18,10 +18,17 @@
 
 """Database connection and data extraction for LiteLLM."""
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import Any, Final
+from typing import Final, Protocol
 
 import polars as pl
+
+from litellm.litellm_core_utils.core_helpers import require_attributes
+
+
+class _FrameRows(Protocol):
+    def to_dicts(self) -> Sequence[Mapping[str, object]]: ...
 
 
 class LiteLLMDatabase:
@@ -80,7 +87,7 @@ class LiteLLMDatabase:
         ORDER BY dus.date DESC, dus.created_at DESC
         """
 
-        params: Final[list[Any]] = [
+        params: Final[list[object]] = [
             start_time_utc,
             end_time_utc,
         ]
@@ -93,9 +100,21 @@ class LiteLLMDatabase:
             query += " LIMIT $3"
 
         try:
-            db_response: Final = await client.db.query_raw(query, *params)
-            # Convert the response to polars DataFrame with full schema inference
-            # This prevents schema mismatch errors when data types vary across rows
-            return pl.DataFrame(db_response, infer_schema_length=None)
+            from litellm.proxy.utils import query_raw_rows
+
+            db_response: Final = await query_raw_rows(client.db, query, *params)
+            from litellm.proxy.spend_tracking.key_metadata_recovery import (
+                fill_missing_api_key_aliases,
+            )
+
+            usage_rows: Final = (
+                require_attributes(db_response, _FrameRows, "to_dicts").to_dicts()
+                if isinstance(db_response, pl.DataFrame)
+                else db_response
+                if isinstance(db_response, list)
+                else []
+            )
+            recovered_rows: Final = await fill_missing_api_key_aliases(client, usage_rows)
+            return pl.DataFrame([dict(row) for row in recovered_rows], infer_schema_length=None)
         except Exception as e:
             raise Exception(f"Error retrieving usage data: {e}")

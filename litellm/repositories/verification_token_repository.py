@@ -5,17 +5,24 @@ VerificationToken repository for database operations on LiteLLM_VerificationToke
 import json
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Final
+from types import TracebackType
+from typing import TYPE_CHECKING, Final, Protocol
 
+from pydantic import TypeAdapter
+
+from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+from litellm.litellm_core_utils.core_helpers import require_attributes
 from litellm.models.verification_token import (
     LiteLLM_VerificationToken,
 )
+from litellm.repositories import rust_database
 from litellm.repositories.base_repository import (
     BaseRepository,
     DbRecord,
     record_to_dict,
 )
 from litellm.repositories.prisma_protocols import TableActions
+from litellm.rust_bridge._native import RustKeyRepository
 
 if TYPE_CHECKING:
     from prisma.models import (
@@ -25,7 +32,38 @@ if TYPE_CHECKING:
         LiteLLM_VerificationToken as PrismaVerificationToken,
     )
 
-    from litellm.proxy.utils import PrismaClient
+
+class _VerificationTokenTables(Protocol):
+    """The two verification token tables this repository reads and writes."""
+
+    @property
+    def litellm_verificationtoken(self) -> TableActions["PrismaVerificationToken"]: ...
+
+    @property
+    def litellm_deletedverificationtoken(self) -> TableActions["PrismaDeletedVerificationToken"]: ...
+
+
+class _VerificationTokenTransactionManager(Protocol):
+    async def __aenter__(self) -> _VerificationTokenTables: ...
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> bool | None: ...
+
+
+class _PrismaVerificationTokenDb(_VerificationTokenTables, Protocol):
+    def tx(self) -> _VerificationTokenTransactionManager: ...
+
+
+class _PrismaClientView(Protocol):
+    @property
+    def db(self) -> _PrismaVerificationTokenDb: ...
+
+
+_CACHED_KEY: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
 _JSON_ENCODED_TOKEN_FIELDS: Final = (
     "aliases",
@@ -44,21 +82,30 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
     """Repository for verification token (API key) database operations."""
 
     @property
-    def prisma_client(self) -> "PrismaClient":
-        prisma_client: Final[PrismaClient] = super().prisma_client
-        return prisma_client
+    def _db(self) -> _PrismaVerificationTokenDb:
+        return require_attributes(self._connected_client(), _PrismaClientView, "db").db
 
     @property
     def table(self) -> TableActions["PrismaVerificationToken"]:
-        return self.prisma_client.db.litellm_verificationtoken
+        return self._db.litellm_verificationtoken
 
     @property
     def deleted_table(self) -> TableActions["PrismaDeletedVerificationToken"]:
-        return self.prisma_client.db.litellm_deletedverificationtoken
+        return self._db.litellm_deletedverificationtoken
 
     @property
     def model_class(self) -> type[LiteLLM_VerificationToken]:
         return LiteLLM_VerificationToken
+
+    async def find_for_auth(self, hashed_token: str, *, use_writer: bool = False) -> Mapping[str, object] | None:
+        """The key as auth reads it and as the auth cache holds it, read by the Rust repository: the
+        ``combined_view`` row shaped into ``UserAPIKeyAuth``'s fields, with no object permission nested.
+
+        A hash rotated away from a key within its grace period answers with the active key, so the deprecated
+        token fallback needs no second call. ``use_writer`` reads the writer instead of a replica."""
+        return _CACHED_KEY.validate_python(
+            await rust_database.required_repository(RustKeyRepository).find(hashed_token, use_writer=use_writer)
+        )
 
     def _to_model(self, record: DbRecord | None) -> LiteLLM_VerificationToken | None:
         """Convert a database record to a VerificationToken model."""
@@ -92,6 +139,29 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         """Find all tokens belonging to a user."""
         records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(where={"user_id": user_id})
         return self._to_model_list(records)
+
+    async def find_newest_reusable_key(self, user_id: str, team_id: str | None) -> LiteLLM_VerificationToken | None:
+        records: Final[Sequence[PrismaVerificationToken]] = await self.table.find_many(
+            where={
+                "user_id": user_id,
+                "team_id": team_id,
+                "expires": None,
+                "AND": [
+                    {"OR": [{"blocked": False}, {"blocked": None}]},
+                    {
+                        "OR": [
+                            {"team_id": None},
+                            {"team_id": {"not": UI_SESSION_TOKEN_TEAM_ID}},
+                        ]
+                    },
+                ],
+            },
+            order={"created_at": "desc"},
+        )
+        return next(
+            (key for key in self._to_model_list(records) if key.metadata.get("auto_registered") is not True),
+            None,
+        )
 
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_VerificationToken]:
         """Find all tokens belonging to a team."""
@@ -325,7 +395,7 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         archive_data["litellm_changed_by"] = litellm_changed_by
         archive_data["deleted_at"] = datetime.utcnow()
 
-        async with self.prisma_client.db.tx() as tx:
+        async with self._db.tx() as tx:
             await tx.litellm_deletedverificationtoken.create(data=archive_data)
             await tx.litellm_verificationtoken.delete(where={"token": token})
 

@@ -1,21 +1,28 @@
+import asyncio
 import base64
+import contextvars
 import hashlib
 import json
 import os
 import re
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from functools import cache, partial
 from threading import Lock
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, cast, get_args
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, ParamSpec, TypeVar, cast, get_args, overload
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
+    AWS_SIGNING_MAX_THREADS,
     BEDROCK_EMBEDDING_PROVIDERS_LITERAL,
     BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES,
     BEDROCK_IAM_CACHE_MAX_ENTRIES,
@@ -25,11 +32,21 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.aws_partition import contains_bedrock_arn, get_aws_dns_suffix
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.optional_imports import ensure_optional_import
+from litellm.llms.bedrock.session_identity import resolve_bedrock_session_identity
+from litellm.llms.bedrock.web_identity_session_policy import (
+    BEDROCK_SESSION_POLICY,
+    WebIdentitySessionPolicy,
+    session_policy_document,
+)
 from litellm.secret_managers.main import get_secret, get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams, AwsSessionTag, BearerPreparedRequest
 
 if TYPE_CHECKING:
     from botocore.awsrequest import AWSPreparedRequest
     from botocore.credentials import Credentials
+    from types_boto3_sts.type_defs import AssumeRoleResponseTypeDef
 else:
     Credentials = Any
     AWSPreparedRequest = Any
@@ -47,20 +64,88 @@ _STS_REGION_FROM_ENDPOINT_PATTERN: Final = re.compile(
 
 SIGV4_COMPUTED_HEADERS: Final = frozenset({"authorization", "x-amz-date", "x-amz-security-token", "date"})
 
+_AWS_SESSION_TAGS_ADAPTER: Final[TypeAdapter[tuple[AwsSessionTag, ...]]] = TypeAdapter(tuple[AwsSessionTag, ...])
+_AWS_REQUEST_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
-class Boto3CredentialsInfo(BaseModel):
-    credentials: Credentials
+
+def _canonical_aws_session_tags(raw_tags: object) -> tuple[AwsSessionTag, ...] | None:
+    if raw_tags is None:
+        return None
+    try:
+        validated: Final = _AWS_SESSION_TAGS_ADAPTER.validate_python(raw_tags)
+    except ValidationError as e:
+        raise ValueError(
+            "Invalid 'aws_session_tags' value. Expected a list of {'Key': <str>, 'Value': <str>} dicts, "
+            f"e.g. [{{'Key': 'team', 'Value': 'genai'}}]. Got: {raw_tags!r}"
+        ) from e
+    return tuple(sorted(validated, key=lambda tag: tag["Key"]))
+
+
+class _AssumeRoleParams(TypedDict):
+    RoleArn: ReadOnly[str]
+    RoleSessionName: ReadOnly[str]
+    ExternalId: ReadOnly[NotRequired[str]]
+    Tags: ReadOnly[NotRequired[tuple[AwsSessionTag, ...]]]
+
+
+class _StsClientKwargs(TypedDict):
+    verify: ReadOnly[bool | str]
+    endpoint_url: ReadOnly[NotRequired[str]]
+    region_name: ReadOnly[NotRequired[str]]
+
+
+def _assume_role_params(
+    aws_role_name: str,
+    aws_session_name: str,
+    aws_external_id: str | None,
+    aws_session_tags: Sequence[AwsSessionTag] | None,
+) -> _AssumeRoleParams:
+    match (aws_external_id, tuple(aws_session_tags or ())):
+        case (None, ()):
+            return _AssumeRoleParams(RoleArn=aws_role_name, RoleSessionName=aws_session_name)
+        case (None, tags):
+            return _AssumeRoleParams(RoleArn=aws_role_name, RoleSessionName=aws_session_name, Tags=tags)
+        case (external_id, ()):
+            return _AssumeRoleParams(RoleArn=aws_role_name, RoleSessionName=aws_session_name, ExternalId=external_id)
+        case (external_id, tags):
+            return _AssumeRoleParams(
+                RoleArn=aws_role_name, RoleSessionName=aws_session_name, ExternalId=external_id, Tags=tags
+            )
+
+
+def pop_aws_auth_params(
+    optional_params: MutableMapping[str, object],  # mutable-ok: pops the aws_* keys out of the caller's mapping
+) -> AwsAuthParams:
+    return AwsAuthParams.model_validate(
+        MappingProxyType({key: optional_params.pop(key, None) for key in AWS_AUTH_PARAM_KEYS})
+    )
+
+
+class BedrockRequestTarget(LiteLLMBaseModel):
     aws_region_name: str
     aws_bedrock_runtime_endpoint: str | None
 
 
-class _WebIdentityTokenClaims(BaseModel):
+class Boto3CredentialsInfo(BedrockRequestTarget):
+    credentials: Credentials
+
+
+class BearerRequestTarget(BedrockRequestTarget):
+    credentials: None = None
+
+
+def bedrock_bearer_token(api_key: str | None) -> str | None:
+    token: Final = api_key if api_key is not None else get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
+    return token or None
+
+
+class _WebIdentityTokenClaims(LiteLLMBaseModel):
     aud: str | list[str] | None = None
     iss: str | None = None
 
 
 class AwsAuthError(Exception):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message: str) -> None:
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url="https://us-west-2.console.aws.amazon.com/bedrock")
@@ -68,7 +153,11 @@ class AwsAuthError(Exception):
         super().__init__(self.message)  # Call the base class constructor with the parameters it needs
 
 
-class BaseAWSLLM:
+class SignsRequestsWithAWS:
+    pass
+
+
+class BaseAWSLLM(SignsRequestsWithAWS):
     # Process-wide IAM credential cache (shared across instances — Bedrock passthrough is per-request).
     # Storage is in-process memory only: no Redis backend unless attached elsewhere. Entry TTL: static
     # access-key + secret + region use ``_get_default_ttl_for_boto3_credentials`` (~59 minutes); ambient
@@ -76,7 +165,8 @@ class BaseAWSLLM:
     # (600 seconds / 10 minutes); web identity STS credentials use
     # ``_get_default_ttl_for_boto3_credentials`` (~59 minutes); AssumeRole STS credentials expire with
     # the STS session itself (Expiration minus a safety margin). All are keyed on all aws_* credential
-    # args plus ssl_verify, so ``aws_session_name`` scopes an entry to one attributed identity. Profiles
+    # args plus ssl_verify, and web identity entries also on the caller class's session policy, so
+    # ``aws_session_name`` scopes an entry to one attributed identity. Profiles
     # and explicit session-token tuples are not cached — see ``get_credentials`` and
     # ``_get_or_set_cached_credentials``. The bound is larger than ``InMemoryCache``'s default because
     # per-user cost attribution puts one entry per attributed identity in this cache.
@@ -93,8 +183,42 @@ class BaseAWSLLM:
         Lock() for _ in range(BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES)
     )
 
-    def __init__(self) -> None:
-        self.iam_cache = BaseAWSLLM._shared_iam_cache
+    _web_identity_session_policy: ClassVar[WebIdentitySessionPolicy] = BEDROCK_SESSION_POLICY
+    _configured_web_identity_session_policy_document: str | None = None
+
+    @classmethod
+    @cache
+    def _web_identity_session_policy_document(cls) -> str:
+        return session_policy_document(cls._web_identity_session_policy)
+
+    @property
+    def _effective_web_identity_session_policy_document(self) -> str:
+        return self._configured_web_identity_session_policy_document or self._web_identity_session_policy_document()
+
+    @overload
+    def __init__(self) -> None: ...
+
+    @overload
+    def __init__(
+        self,
+        *,
+        web_identity_session_policy: WebIdentitySessionPolicy | None,
+        credential_cache: DualCache | None = None,
+    ) -> None: ...
+
+    @overload
+    def __init__(self, *, credential_cache: DualCache) -> None: ...
+
+    def __init__(
+        self,
+        *,
+        web_identity_session_policy: WebIdentitySessionPolicy | None = None,
+        credential_cache: DualCache | None = None,
+    ) -> None:
+        self._configured_web_identity_session_policy_document = (
+            None if web_identity_session_policy is None else session_policy_document(web_identity_session_policy)
+        )
+        self.iam_cache = credential_cache if credential_cache is not None else BaseAWSLLM._shared_iam_cache
         super().__init__()
         self.aws_authentication_params = [
             "aws_access_key_id",
@@ -108,9 +232,10 @@ class BaseAWSLLM:
             "aws_sts_endpoint",
             "aws_bedrock_runtime_endpoint",
             "aws_external_id",
+            "aws_session_tags",
         ]
 
-    def _get_ssl_verify(self, ssl_verify: bool | str | None = None):
+    def _get_ssl_verify(self, ssl_verify: bool | str | None = None) -> bool | str:
         """
         Get SSL verification setting for boto3 clients.
 
@@ -125,7 +250,7 @@ class BaseAWSLLM:
 
         return get_ssl_verify(ssl_verify=ssl_verify)
 
-    def get_cache_key(self, credential_args: dict[str, str | None]) -> str:
+    def get_cache_key(self, credential_args: Mapping[str, str | bool | tuple[AwsSessionTag, ...] | None]) -> str:
         """
         Generate a unique cache key based on the credential arguments.
         """
@@ -135,9 +260,9 @@ class BaseAWSLLM:
 
     def _get_or_set_cached_credentials(
         self,
-        credential_args: dict[str, str | None],
-        credential_fetcher: Callable[[], tuple[Any, int | None]],
-    ) -> Any:
+        credential_args: Mapping[str, str | bool | tuple[AwsSessionTag, ...] | None],
+        credential_fetcher: Callable[[], tuple[Credentials, int | None]],
+    ) -> Credentials:
         """
         Read-through IAM cache on the process-wide ``DualCache``.
 
@@ -210,7 +335,9 @@ class BaseAWSLLM:
         aws_web_identity_token: str | None = None,
         aws_sts_endpoint: str | None = None,
         aws_external_id: str | None = None,
+        aws_session_tags: Sequence[AwsSessionTag] | None = None,
         ssl_verify: bool | str | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ):
         """
         Return a boto3.Credentials object
@@ -246,6 +373,13 @@ class BaseAWSLLM:
                 (aws_external_id, "AWS_EXTERNAL_ID"),
             )
         )
+        identity_tags, identity_name = resolve_bedrock_session_identity(
+            litellm_params if aws_role_name and aws_web_identity_token is None else None,
+            _canonical_aws_session_tags(aws_session_tags),
+            aws_session_name,
+        )
+        require_session_attribution: Final = aws_session_name is None and identity_name is not None
+        session_tags: Final = _canonical_aws_session_tags(identity_tags)
 
         verbose_logger.debug(
             "in get credentials\n"
@@ -258,20 +392,36 @@ class BaseAWSLLM:
             "aws_role_name=%s\n"
             "aws_web_identity_token=[set=%s]\n"
             "aws_sts_endpoint=%s\n"
-            "aws_external_id=%s",
+            "aws_external_id=%s\n"
+            "aws_session_tags=%s",
             aws_access_key_id is not None,
             aws_secret_access_key is not None,
             aws_session_token is not None,
             aws_region_name,
-            aws_session_name,
+            identity_name,
             aws_profile_name,
             aws_role_name,
             aws_web_identity_token is not None,
             aws_sts_endpoint,
             aws_external_id,
+            session_tags,
         )
 
-        args: Final = {k: v for k, v in locals().items() if k.startswith("aws_") or k == "ssl_verify"}
+        args: Final = {
+            "aws_access_key_id": aws_access_key_id,
+            "aws_secret_access_key": aws_secret_access_key,
+            "aws_session_token": aws_session_token,
+            "aws_region_name": aws_region_name,
+            "aws_session_name": identity_name,
+            "aws_profile_name": aws_profile_name,
+            "aws_role_name": aws_role_name,
+            "aws_web_identity_token": aws_web_identity_token,
+            "aws_sts_endpoint": aws_sts_endpoint,
+            "aws_external_id": aws_external_id,
+            "aws_session_tags": session_tags,
+            "ssl_verify": ssl_verify,
+            "require_session_attribution": require_session_attribution,
+        }
 
         #########################################################
         # Handle diff boto3 auth flows
@@ -283,17 +433,18 @@ class BaseAWSLLM:
         # iam_cache: static keys, ambient env (including skip-AssumeRole path), web identity, and
         # AssumeRole. Do not cache profile / explicit session-token paths here.
         #########################################################
+        ensure_optional_import("botocore")
         if self._is_auth_with_web_identity_token(
             aws_web_identity_token,
             aws_role_name,
-            aws_session_name,
+            identity_name,
         ):
             return self._get_or_set_cached_credentials(
-                args,
+                {**args, "web_identity_session_policy": self._effective_web_identity_session_policy_document},
                 lambda: self._auth_with_web_identity_token(
                     aws_web_identity_token=cast(str, aws_web_identity_token),
                     aws_role_name=cast(str, aws_role_name),
-                    aws_session_name=cast(str, aws_session_name),
+                    aws_session_name=cast(str, identity_name),
                     aws_region_name=aws_region_name,
                     aws_sts_endpoint=aws_sts_endpoint,
                     aws_external_id=aws_external_id,
@@ -308,11 +459,13 @@ class BaseAWSLLM:
                     aws_secret_access_key=aws_secret_access_key,
                     aws_session_token=aws_session_token,
                     aws_role_name=cast(str, aws_role_name),
-                    aws_session_name=aws_session_name,
+                    aws_session_name=identity_name,
                     aws_region_name=aws_region_name,
                     aws_sts_endpoint=aws_sts_endpoint,
                     aws_external_id=aws_external_id,
+                    aws_session_tags=session_tags,
                     ssl_verify=ssl_verify,
+                    require_session_attribution=require_session_attribution,
                 ),
             )
 
@@ -345,6 +498,38 @@ class BaseAWSLLM:
             )
         else:
             return self._get_or_set_cached_credentials(args, self._auth_with_env_vars)
+
+    def resolve_credentials(
+        self,
+        auth_params: AwsAuthParams,
+        aws_region_name: str | None,
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> Credentials:
+        return self.get_credentials(
+            aws_access_key_id=auth_params.aws_access_key_id,
+            aws_secret_access_key=auth_params.aws_secret_access_key,
+            aws_session_token=auth_params.aws_session_token,
+            aws_region_name=aws_region_name,
+            aws_session_name=auth_params.aws_session_name,
+            aws_profile_name=auth_params.aws_profile_name,
+            aws_role_name=auth_params.aws_role_name,
+            aws_web_identity_token=auth_params.aws_web_identity_token,
+            aws_sts_endpoint=auth_params.aws_sts_endpoint,
+            aws_external_id=auth_params.aws_external_id,
+            aws_session_tags=_canonical_aws_session_tags(auth_params.aws_session_tags),
+            litellm_params=litellm_params,
+        )
+
+    def resolve_s3_credentials(self, params: Mapping[str, object], aws_region_name: str | None) -> Credentials:
+        """S3 signing identity: the s3_* static pair as-is when both are set, otherwise the resolved aws_* params."""
+        from botocore.credentials import Credentials
+
+        from litellm.llms.bedrock.common_utils import s3_static_key_pair
+
+        s3_pair: Final = s3_static_key_pair(params)
+        if s3_pair is None:
+            return self.resolve_credentials(AwsAuthParams.model_validate(params), aws_region_name, params)
+        return Credentials(access_key=s3_pair[0], secret_key=s3_pair[1])
 
     def _get_aws_region_from_model_arn(self, model: str | None) -> str | None:
         try:
@@ -421,7 +606,10 @@ class BaseAWSLLM:
         if provider is not None:
             return provider
 
-        for provider in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
+        invoke_providers: Final[tuple[BEDROCK_INVOKE_PROVIDERS_LITERAL, ...]] = get_args(
+            BEDROCK_INVOKE_PROVIDERS_LITERAL
+        )
+        for provider in invoke_providers:
             if provider in model:
                 return provider
         return None
@@ -446,11 +634,11 @@ class BaseAWSLLM:
             # a malformed URL and cause botocore's EventStreamBuffer to receive
             # a JSON error body instead of a binary event-stream — surfaced as a
             # misleading ChecksumMismatch (0x223a7b22 == ':{"').
-            # Use strip_bedrock_routing_prefix (no break) so compound prefixes
+            # Use split_bedrock_region_path (no break) so compound prefixes
             # like "bedrock/invoke/arn:..." are fully stripped in one call.
-            from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
+            from litellm.llms.bedrock.common_utils import split_bedrock_region_path
 
-            model_id = strip_bedrock_routing_prefix(model_id)
+            model_id = split_bedrock_region_path(model_id)[1]
             # URL-encode ARNs so colons and slashes are safe in the URL path.
             if model_id.startswith("arn:"):
                 model_id = BaseAWSLLM.encode_model_id(model_id=model_id)
@@ -534,11 +722,22 @@ class BaseAWSLLM:
                 return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, potential_provider)
 
         # Fallback: check if any provider name appears in the model string
-        for provider in get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL):
+        embedding_providers: Final[tuple[BEDROCK_EMBEDDING_PROVIDERS_LITERAL, ...]] = get_args(
+            BEDROCK_EMBEDDING_PROVIDERS_LITERAL
+        )
+        for provider in embedding_providers:
             if provider in model:
-                return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, provider)
+                return provider
 
         return None
+
+    @staticmethod
+    def _get_aws_region_from_model_path(model: str | None) -> str | None:
+        if model is None:
+            return None
+        from litellm.llms.bedrock.common_utils import split_bedrock_region_path
+
+        return split_bedrock_region_path(model)[0]
 
     def _get_aws_region_name(
         self,
@@ -565,7 +764,9 @@ class BaseAWSLLM:
             if model_id is not None:
                 aws_region_name = self._get_aws_region_from_model_arn(model_id)
             else:
-                aws_region_name = self._get_aws_region_from_model_arn(model)
+                aws_region_name = self._get_aws_region_from_model_arn(model) or self._get_aws_region_from_model_path(
+                    model
+                )
             # check env #
             litellm_aws_region_name: Final = get_secret("AWS_REGION_NAME", None)
 
@@ -585,6 +786,7 @@ class BaseAWSLLM:
                 aws_region_name = standard_aws_region_name
         if aws_region_name is None:
             try:
+                ensure_optional_import("boto3")
                 import boto3
 
                 with tracer.trace("boto3.Session()"):
@@ -600,6 +802,14 @@ class BaseAWSLLM:
         self._validate_aws_region_name(aws_region_name)
         return aws_region_name
 
+    def get_aws_region_name(
+        self,
+        optional_params: dict[str, object],  # mutable-ok: mirrors override contract
+        model: str | None = None,
+        model_id: str | None = None,
+    ) -> str:
+        return self._get_aws_region_name(optional_params, model, model_id)
+
     @staticmethod
     def _validate_aws_region_name(aws_region_name: str | None) -> None:
         """
@@ -613,6 +823,13 @@ class BaseAWSLLM:
                 f"Invalid AWS region format: {aws_region_name!r}. "
                 "Region names must contain only lowercase letters, digits, and hyphens."
             )
+
+    @classmethod
+    def validate_aws_region_name(
+        cls,
+        aws_region_name: str | None,
+    ) -> None:
+        return cls._validate_aws_region_name(aws_region_name)
 
     @staticmethod
     def _parse_sts_region_from_endpoint(
@@ -643,15 +860,18 @@ class BaseAWSLLM:
         aws_sts_endpoint: str | None = None,
         ssl_verify: bool | str | None = None,
         aws_region_name: str | None = None,
-    ) -> dict:
+    ) -> _StsClientKwargs:
         """STS client kwargs with aligned endpoint_url and region_name (SigV4)."""
-        kwargs: Final[dict] = {"verify": self._get_ssl_verify(ssl_verify)}
-        if aws_sts_endpoint is not None:
-            kwargs["endpoint_url"] = aws_sts_endpoint
-        sts_region: Final = self._resolve_sts_region(aws_sts_endpoint, aws_region_name)
-        if sts_region is not None:
-            kwargs["region_name"] = sts_region
-        return kwargs
+        verify: Final = self._get_ssl_verify(ssl_verify)
+        match (aws_sts_endpoint, self._resolve_sts_region(aws_sts_endpoint, aws_region_name)):
+            case (None, None):
+                return _StsClientKwargs(verify=verify)
+            case (None, region):
+                return _StsClientKwargs(verify=verify, region_name=region)
+            case (endpoint, None):
+                return _StsClientKwargs(verify=verify, endpoint_url=endpoint)
+            case (endpoint, region):
+                return _StsClientKwargs(verify=verify, endpoint_url=endpoint, region_name=region)
 
     def get_aws_region_name_for_non_llm_api_calls(
         self,
@@ -753,6 +973,7 @@ class BaseAWSLLM:
 
         # For ECS/EC2: call sts:GetCallerIdentity to check if already running as the role
         try:
+            ensure_optional_import("boto3")
             import boto3
 
             with tracer.trace("boto3.client(sts).get_caller_identity"):
@@ -812,6 +1033,7 @@ class BaseAWSLLM:
         """
         Authenticate with AWS Web Identity Token
         """
+        ensure_optional_import("boto3")
         import boto3
 
         verbose_logger.debug(
@@ -852,65 +1074,18 @@ class BaseAWSLLM:
         # The session policy is an IAM PERMISSION CEILING — effective
         # permissions are the intersection of the role's identity policies
         # and this policy. Any action not listed here is silently denied
-        # even when the IAM role grants it. So every Bedrock route we
-        # support needs a matching action statement, or it 403s on OIDC
-        # auth only (static creds + IRSA take other code paths).
+        # even when the IAM role grants it. So each caller class's
+        # _web_identity_session_policy must list every action its routes
+        # call, or they 403 on OIDC auth only (static creds + IRSA take
+        # other code paths).
         # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
-        bedrock_session_policy: Final = {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Sid": "BedrockLiteLLM",
-                    "Effect": "Allow",
-                    "Action": [
-                        "bedrock:InvokeModel",
-                        "bedrock:InvokeModelWithResponseStream",
-                        "bedrock:CountTokens",
-                        "bedrock:ApplyGuardrail",
-                        "bedrock:GetGuardrail",
-                        "bedrock:ListGuardrails",
-                    ],
-                    "Resource": "*",
-                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
-                },
-                # Claude Platform on AWS (added by #27678 for the
-                # ``bedrock/claude_platform/<model>`` route) lives under
-                # a separate IAM action namespace; without these entries
-                # the OIDC path 403s on every claude_platform request
-                # even with a fully permissive identity policy (#30200).
-                {
-                    "Sid": "ClaudePlatformLiteLLM",
-                    "Effect": "Allow",
-                    "Action": [
-                        "aws-external-anthropic:CreateInference",
-                        "aws-external-anthropic:CreateBatchInference",
-                        "aws-external-anthropic:CancelBatchInference",
-                        "aws-external-anthropic:DeleteBatchInference",
-                        "aws-external-anthropic:CountTokens",
-                        "aws-external-anthropic:Get*",
-                        "aws-external-anthropic:List*",
-                    ],
-                    "Resource": "*",
-                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
-                },
-                {
-                    "Sid": "BedrockMantleLiteLLM",
-                    "Effect": "Allow",
-                    "Action": [
-                        "bedrock-mantle:CreateInference",
-                    ],
-                    "Resource": "*",
-                    "Condition": {"Bool": {"aws:SecureTransport": "true"}},
-                },
-            ],
-        }
         assume_role_params: Final = {
             "RoleArn": aws_role_name,
             "RoleSessionName": aws_session_name,
             "WebIdentityToken": oidc_token,
             "DurationSeconds": 3600,
-            "Policy": json.dumps(bedrock_session_policy, separators=(",", ":")),
+            "Policy": self._effective_web_identity_session_policy_document,
         }
 
         # Add ExternalId parameter if provided
@@ -956,8 +1131,10 @@ class BaseAWSLLM:
         aws_sts_endpoint: str | None = None,
         ssl_verify: bool | str | None = None,
         aws_region_name: str | None = None,
-    ) -> dict:
+        aws_session_tags: Sequence[AwsSessionTag] | None = None,
+    ) -> "AssumeRoleResponseTypeDef":
         """Handle cross-account role assumption for IRSA."""
+        ensure_optional_import("boto3")
         import boto3
 
         verbose_logger.debug("Cross-account role assumption detected")
@@ -1008,16 +1185,9 @@ class BaseAWSLLM:
 
         # Now assume the target role
         verbose_logger.debug("Attempting to assume target role: %s with session: %s", aws_role_name, aws_session_name)
-        assume_role_params: Final = {
-            "RoleArn": aws_role_name,
-            "RoleSessionName": aws_session_name,
-        }
-
-        # Add ExternalId parameter if provided
-        if aws_external_id is not None:
-            assume_role_params["ExternalId"] = aws_external_id
-
-        return sts_client_with_creds.assume_role(**assume_role_params)
+        return sts_client_with_creds.assume_role(
+            **_assume_role_params(aws_role_name, aws_session_name, aws_external_id, aws_session_tags)
+        )
 
     def _handle_irsa_same_account(
         self,
@@ -1027,8 +1197,10 @@ class BaseAWSLLM:
         aws_sts_endpoint: str | None = None,
         ssl_verify: bool | str | None = None,
         aws_region_name: str | None = None,
-    ) -> dict:
+        aws_session_tags: Sequence[AwsSessionTag] | None = None,
+    ) -> "AssumeRoleResponseTypeDef":
         """Handle same-account role assumption for IRSA."""
+        ensure_optional_import("boto3")
         import boto3
 
         irsa_sts_kwargs: Final = self._build_sts_client_kwargs(
@@ -1050,18 +1222,11 @@ class BaseAWSLLM:
 
         # Assume the role
         verbose_logger.debug("Attempting to assume role: %s with session: %s", aws_role_name, aws_session_name)
-        assume_role_params: Final = {
-            "RoleArn": aws_role_name,
-            "RoleSessionName": aws_session_name,
-        }
+        return sts_client.assume_role(
+            **_assume_role_params(aws_role_name, aws_session_name, aws_external_id, aws_session_tags)
+        )
 
-        # Add ExternalId parameter if provided
-        if aws_external_id is not None:
-            assume_role_params["ExternalId"] = aws_external_id
-
-        return sts_client.assume_role(**assume_role_params)
-
-    def _extract_credentials_and_ttl(self, sts_response: dict) -> tuple[Credentials, int | None]:
+    def _extract_credentials_and_ttl(self, sts_response: "AssumeRoleResponseTypeDef") -> tuple[Credentials, int | None]:
         """Extract credentials and TTL from STS response.
 
         The TTL carries the same safety margin as the non-IRSA assume path, so a cached entry is
@@ -1094,7 +1259,9 @@ class BaseAWSLLM:
         aws_region_name: str | None,
         aws_sts_endpoint: str | None,
         aws_external_id: str | None,
+        aws_session_tags: tuple[AwsSessionTag, ...] | None,
         ssl_verify: bool | str | None,
+        require_session_attribution: bool = False,
     ) -> tuple[Credentials, int | None]:
         """
         Resolve credentials for a target role, either from the ambient identity or via sts:AssumeRole.
@@ -1103,7 +1270,9 @@ class BaseAWSLLM:
         caller's key skips both. ``aws_session_name`` defaults inside this fetcher rather than in
         ``get_credentials`` so the cache key stays stable when the caller does not supply one.
         """
-        if self._is_already_running_as_role(aws_role_name, ssl_verify=ssl_verify):
+        if not (aws_session_tags or require_session_attribution) and self._is_already_running_as_role(
+            aws_role_name, ssl_verify=ssl_verify
+        ):
             verbose_logger.debug(
                 "Already running as target role %s, using ambient credentials",
                 aws_role_name,
@@ -1120,7 +1289,9 @@ class BaseAWSLLM:
             aws_region_name=aws_region_name,
             aws_sts_endpoint=aws_sts_endpoint,
             aws_external_id=aws_external_id,
+            aws_session_tags=aws_session_tags,
             ssl_verify=ssl_verify,
+            require_session_attribution=require_session_attribution,
         )
 
     @tracer.wrap()
@@ -1135,10 +1306,13 @@ class BaseAWSLLM:
         aws_sts_endpoint: str | None = None,
         aws_external_id: str | None = None,
         ssl_verify: bool | str | None = None,
+        aws_session_tags: Sequence[AwsSessionTag] | None = None,
+        require_session_attribution: bool = False,
     ) -> tuple[Credentials, int | None]:
         """
         Authenticate with AWS Role
         """
+        ensure_optional_import("boto3")
         import boto3
         from botocore.credentials import Credentials
 
@@ -1165,6 +1339,7 @@ class BaseAWSLLM:
                         aws_sts_endpoint=aws_sts_endpoint,
                         ssl_verify=ssl_verify,
                         aws_region_name=aws_region_name,
+                        aws_session_tags=aws_session_tags,
                     )
                 else:
                     sts_response = self._handle_irsa_same_account(
@@ -1174,6 +1349,7 @@ class BaseAWSLLM:
                         aws_sts_endpoint=aws_sts_endpoint,
                         ssl_verify=ssl_verify,
                         aws_region_name=aws_region_name,
+                        aws_session_tags=aws_session_tags,
                     )
 
                 return self._extract_credentials_and_ttl(sts_response)
@@ -1210,14 +1386,9 @@ class BaseAWSLLM:
                     **sts_client_kwargs,
                 )
 
-        assume_role_params: Final = {
-            "RoleArn": aws_role_name,
-            "RoleSessionName": aws_session_name,
-        }
-
-        # Add ExternalId parameter if provided
-        if aws_external_id is not None:
-            assume_role_params["ExternalId"] = aws_external_id
+        assume_role_params: Final = _assume_role_params(
+            aws_role_name, aws_session_name, aws_external_id, aws_session_tags
+        )
 
         try:
             sts_response = sts_client.assume_role(**assume_role_params)
@@ -1229,7 +1400,9 @@ class BaseAWSLLM:
                 # partition, and role name).  This avoids silently using the
                 # wrong identity when there is a genuine trust-policy or
                 # permission misconfiguration.
-                if self._is_already_running_as_role(aws_role_name, ssl_verify=ssl_verify):
+                if not (aws_session_tags or require_session_attribution) and self._is_already_running_as_role(
+                    aws_role_name, ssl_verify=ssl_verify
+                ):
                     verbose_logger.warning(
                         "AssumeRole failed for %s (%s). "
                         "Caller is already running as this role; "
@@ -1265,6 +1438,7 @@ class BaseAWSLLM:
         """
         Authenticate with AWS profile
         """
+        ensure_optional_import("boto3")
         import boto3
 
         # uses auth values from AWS profile usually stored in ~/.aws/credentials
@@ -1303,6 +1477,7 @@ class BaseAWSLLM:
         """
         Authenticate with AWS Access Key and Secret Key
         """
+        ensure_optional_import("boto3")
         import boto3
 
         # Check if credentials are already in cache. These credentials have no expiry time.
@@ -1323,6 +1498,7 @@ class BaseAWSLLM:
         """
         Authenticate with AWS Environment Variables
         """
+        ensure_optional_import("boto3")
         import boto3
 
         with tracer.trace("boto3.Session()"):
@@ -1346,28 +1522,16 @@ class BaseAWSLLM:
         aws_region_name: str,
         endpoint_type: Literal["runtime", "agent", "agentcore"] | None = "runtime",
     ) -> tuple[str, str]:
-        env_aws_bedrock_runtime_endpoint: Final = get_secret("AWS_BEDROCK_RUNTIME_ENDPOINT")
-        if api_base is not None:
-            endpoint_url = api_base
-        elif aws_bedrock_runtime_endpoint is not None and isinstance(aws_bedrock_runtime_endpoint, str):
-            endpoint_url = aws_bedrock_runtime_endpoint
-        elif env_aws_bedrock_runtime_endpoint and isinstance(env_aws_bedrock_runtime_endpoint, str):
-            endpoint_url = env_aws_bedrock_runtime_endpoint
-        else:
-            endpoint_url = self._select_default_endpoint_url(
-                endpoint_type=endpoint_type,
-                aws_region_name=aws_region_name,
-            )
-
-        # Determine proxy_endpoint_url
-        if aws_bedrock_runtime_endpoint is not None and isinstance(aws_bedrock_runtime_endpoint, str):
-            proxy_endpoint_url = aws_bedrock_runtime_endpoint
-        elif env_aws_bedrock_runtime_endpoint and isinstance(env_aws_bedrock_runtime_endpoint, str):
-            proxy_endpoint_url = env_aws_bedrock_runtime_endpoint
-        else:
-            proxy_endpoint_url = endpoint_url
-
-        return endpoint_url, proxy_endpoint_url
+        configured_endpoint: Final = (
+            aws_bedrock_runtime_endpoint if isinstance(aws_bedrock_runtime_endpoint, str) else None
+        )
+        runtime_endpoint: Final = configured_endpoint or get_secret_str("AWS_BEDROCK_RUNTIME_ENDPOINT")
+        endpoint_url: Final = (
+            api_base
+            or runtime_endpoint
+            or self._select_default_endpoint_url(endpoint_type=endpoint_type, aws_region_name=aws_region_name)
+        )
+        return endpoint_url, runtime_endpoint or endpoint_url
 
     def _select_default_endpoint_url(
         self,
@@ -1387,9 +1551,32 @@ class BaseAWSLLM:
         else:
             return f"https://bedrock-runtime.{aws_region_name}.{dns_suffix}"
 
+    @overload
     def _get_boto_credentials_from_optional_params(
-        self, optional_params: dict, model: str | None = None
-    ) -> Boto3CredentialsInfo:
+        self,
+        optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
+        model: str | None = None,
+        bearer_token: None = None,
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> Boto3CredentialsInfo: ...
+
+    @overload
+    def _get_boto_credentials_from_optional_params(
+        self,
+        optional_params: dict,  # mutable-ok: the implementation pops the aws_* keys out of the caller's dict in place
+        model: str | None = None,
+        *,
+        bearer_token: str,
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> BearerRequestTarget: ...
+
+    def _get_boto_credentials_from_optional_params(
+        self,
+        optional_params: dict,
+        model: str | None = None,
+        bearer_token: str | None = None,
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> Boto3CredentialsInfo | BearerRequestTarget:
         """
         Get boto3 credentials from optional params
 
@@ -1399,50 +1586,34 @@ class BaseAWSLLM:
         Returns:
             Credentials: Boto3 credentials object
         """
-        try:
-            from botocore.credentials import Credentials
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
-        ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key: Final = optional_params.pop("aws_secret_access_key", None)
-        aws_access_key_id: Final = optional_params.pop("aws_access_key_id", None)
-        aws_session_token: Final = optional_params.pop("aws_session_token", None)
         aws_region_name: Final = self._get_aws_region_name(optional_params, model)
         optional_params.pop("aws_region_name", None)
-        aws_role_name: Final = optional_params.pop("aws_role_name", None)
-        aws_session_name: Final = optional_params.pop("aws_session_name", None)
-        aws_profile_name: Final = optional_params.pop("aws_profile_name", None)
-        aws_web_identity_token: Final = optional_params.pop("aws_web_identity_token", None)
-        aws_sts_endpoint: Final = optional_params.pop("aws_sts_endpoint", None)
-        aws_bedrock_runtime_endpoint: Final = optional_params.pop(
-            "aws_bedrock_runtime_endpoint", None
-        )  # https://bedrock-runtime.{region_name}.amazonaws.com
-        aws_external_id: Final = optional_params.pop("aws_external_id", None)
+        auth_params: Final = pop_aws_auth_params(optional_params)
+        aws_bedrock_runtime_endpoint: Final = optional_params.pop("aws_bedrock_runtime_endpoint", None)
 
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-            aws_external_id=aws_external_id,
+        if bearer_token is not None:
+            return BearerRequestTarget(
+                aws_region_name=aws_region_name,
+                aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+            )
+
+        credentials: Final[Credentials] = self.resolve_credentials(
+            auth_params,
+            aws_region_name,
+            _AWS_REQUEST_PARAMS.validate_python(optional_params) if litellm_params is None else litellm_params,
         )
-
-        return Boto3CredentialsInfo(
-            credentials=credentials,
-            aws_region_name=aws_region_name,
-            aws_bedrock_runtime_endpoint=aws_bedrock_runtime_endpoint,
+        return Boto3CredentialsInfo.model_validate(
+            {
+                "credentials": credentials,
+                "aws_region_name": aws_region_name,
+                "aws_bedrock_runtime_endpoint": aws_bedrock_runtime_endpoint,
+            }
         )
 
     @tracer.wrap()
     def get_request_headers(
         self,
-        credentials: Credentials,
+        credentials: Credentials | None,
         aws_region_name: str,
         extra_headers: dict | None,
         endpoint_url: str,
@@ -1450,27 +1621,29 @@ class BaseAWSLLM:
         headers: dict,
         api_key: str | None = None,
         supports_bearer_token: bool = True,
-    ) -> AWSPreparedRequest:
-        if not supports_bearer_token:
-            aws_bearer_token: str | None = None
-        elif api_key is not None:
-            aws_bearer_token = api_key
-        else:
-            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
+    ) -> AWSPreparedRequest | BearerPreparedRequest:
+        aws_bearer_token: Final = bedrock_bearer_token(api_key) if supports_bearer_token else None
 
-        if aws_bearer_token:
-            try:
-                from botocore.awsrequest import AWSRequest
-            except ImportError:
-                raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        if aws_bearer_token is not None:
             headers["Authorization"] = f"Bearer {aws_bearer_token}"
-            request = AWSRequest(method="POST", url=endpoint_url, data=data, headers=headers)
+            bearer_request: Final = httpx.Request("POST", endpoint_url, content=data, headers=headers)
+            return BearerPreparedRequest(
+                method="POST",
+                url=str(bearer_request.url),
+                headers={
+                    name.decode("ascii"): value.decode(bearer_request.headers.encoding)
+                    for name, value in bearer_request.headers.raw
+                },
+                body=bearer_request.content,
+            )
         else:
-            try:
-                from botocore.auth import SigV4Auth
-                from botocore.awsrequest import AWSRequest
-            except ImportError:
-                raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+            ensure_optional_import("botocore")
+            from botocore.auth import SigV4Auth
+            from botocore.awsrequest import AWSRequest
+            from botocore.exceptions import NoCredentialsError
+
+            if credentials is None:
+                raise NoCredentialsError()
 
             # Filter headers for AWS signature calculation
             # AWS SigV4 only includes specific headers in signature calculation
@@ -1499,7 +1672,7 @@ class BaseAWSLLM:
 
         return prepped
 
-    def _filter_headers_for_aws_signature(self, headers: dict) -> dict:
+    def _filter_headers_for_aws_signature(self, headers: Mapping[str, object]) -> dict[str, object]:
         """
         Filter headers to only include those that AWS SigV4 includes in signature calculation.
         This Fixes forwarded client headers from breaking the signature calculation.
@@ -1537,7 +1710,7 @@ class BaseAWSLLM:
             "aws-external-anthropic",
         ],
         headers: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         request_data: dict,
         api_base: str,
         model: str | None = None,
@@ -1551,50 +1724,26 @@ class BaseAWSLLM:
         Returns:
             Tuple[dict, Optional[str]]: A tuple containing the headers and the json str body of the request
         """
-        if api_key is not None:
-            aws_bearer_token: str | None = api_key
-        else:
-            aws_bearer_token = get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
+        aws_bearer_token: Final = bedrock_bearer_token(api_key)
 
-        # If aws bearer token is set, use it directly in the header
-        if aws_bearer_token:
+        if aws_bearer_token is not None:
             headers = headers or {}
             headers["Content-Type"] = "application/json"
             headers["Authorization"] = f"Bearer {aws_bearer_token}"
             return headers, json.dumps(request_data).encode()
 
         # If no bearer token is set, proceed with the existing SigV4 authentication
-        try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
-            from botocore.credentials import Credentials
-        except ImportError:
-            raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
+        ensure_optional_import("botocore")
+        from botocore.auth import SigV4Auth
+        from botocore.awsrequest import AWSRequest
+        from botocore.credentials import Credentials
 
-        ## CREDENTIALS ##
-        # pop aws_secret_access_key, aws_access_key_id, aws_session_token, aws_region_name from kwargs, since completion calls fail with them
-        aws_secret_access_key: Final = optional_params.get("aws_secret_access_key", None)
-        aws_access_key_id: Final = optional_params.get("aws_access_key_id", None)
-        aws_session_token: Final = optional_params.get("aws_session_token", None)
-        aws_role_name: Final = optional_params.get("aws_role_name", None)
-        aws_session_name: Final = optional_params.get("aws_session_name", None)
-        aws_profile_name: Final = optional_params.get("aws_profile_name", None)
-        aws_web_identity_token: Final = optional_params.get("aws_web_identity_token", None)
-        aws_sts_endpoint: Final = optional_params.get("aws_sts_endpoint", None)
-        aws_external_id: Final = optional_params.get("aws_external_id", None)
+        auth_params: Final = AwsAuthParams.model_validate(optional_params)
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
-
-        credentials: Final[Credentials] = self.get_credentials(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_session_token=aws_session_token,
-            aws_region_name=aws_region_name,
-            aws_session_name=aws_session_name,
-            aws_profile_name=aws_profile_name,
-            aws_role_name=aws_role_name,
-            aws_web_identity_token=aws_web_identity_token,
-            aws_sts_endpoint=aws_sts_endpoint,
-            aws_external_id=aws_external_id,
+        credentials: Final[Credentials] = self.resolve_credentials(
+            auth_params,
+            aws_region_name,
+            _AWS_REQUEST_PARAMS.validate_python(optional_params) if service_name == "bedrock" else None,
         )
 
         sigv4: Final = SigV4Auth(credentials, service_name, aws_region_name)
@@ -1627,3 +1776,62 @@ class BaseAWSLLM:
             request_headers_dict["Authorization"] = incoming_authorization
 
         return request_headers_dict, request.body
+
+
+def sign_aws_request(
+    method: str,
+    get_credentials: Callable[[], Credentials],
+    service_name: str,
+    aws_region_name: str | None,
+    url: str,
+    body: str | bytes,
+    headers: Mapping[str, str],
+) -> AWSPreparedRequest:
+    ensure_optional_import("botocore")
+    from botocore.auth import SigV4Auth
+    from botocore.awsrequest import AWSRequest
+
+    aws_request: Final = AWSRequest(method=method, url=url, data=body, headers=headers)
+    SigV4Auth(get_credentials(), service_name, aws_region_name).add_auth(aws_request)
+    return aws_request.prepare()
+
+
+def sign_aws_json_post(
+    get_credentials: Callable[[], Credentials],
+    service_name: str,
+    aws_region_name: str | None,
+    url: str,
+    body: str,
+    headers: Mapping[str, str],
+) -> AWSPreparedRequest:
+    return sign_aws_request("POST", get_credentials, service_name, aws_region_name, url, body, headers)
+
+
+_SignParams = ParamSpec("_SignParams")
+_SignedRequest = TypeVar("_SignedRequest")
+
+AWS_SIGNING_EXECUTOR: Final = ThreadPoolExecutor(max_workers=AWS_SIGNING_MAX_THREADS, thread_name_prefix="aws-signing")
+
+
+async def run_aws_signing(
+    sign: Callable[_SignParams, _SignedRequest],
+    /,
+    *args: _SignParams.args,
+    **kwargs: _SignParams.kwargs,  # kwargs-ok: ParamSpec forwarding keeps the wrapped signing signature
+) -> _SignedRequest:
+    context: Final = contextvars.copy_context()
+    return await asyncio.get_running_loop().run_in_executor(
+        AWS_SIGNING_EXECUTOR, partial(context.run, sign, *args, **kwargs)
+    )
+
+
+async def run_off_loop_if_aws(
+    provider_config: object,
+    call: Callable[_SignParams, _SignedRequest],
+    /,
+    *args: _SignParams.args,
+    **kwargs: _SignParams.kwargs,  # kwargs-ok: ParamSpec forwarding keeps the wrapped call's signature
+) -> _SignedRequest:
+    if isinstance(provider_config, SignsRequestsWithAWS):
+        return await run_aws_signing(call, *args, **kwargs)
+    return call(*args, **kwargs)

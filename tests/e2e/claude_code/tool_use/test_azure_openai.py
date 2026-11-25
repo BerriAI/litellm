@@ -1,8 +1,8 @@
-"""tool_use x Azure OpenAI (GPT-5.6).
+"""tool_use x Azure OpenAI (GPT-6).
 
 Drive the real `claude` CLI against a running LiteLLM proxy that
 routes Anthropic Messages requests to Azure OpenAI deployments of the
-GPT-5.6 family (Sol, Terra, Luna), ask the model to invoke a built-in
+GPT-6 family (Sol, Terra, Luna, Astra), ask the model to invoke a built-in
 tool (`Bash`), and assert that a `tool_use` content block came back
 over the wire.
 
@@ -29,6 +29,7 @@ from typing import Any, Mapping, Sequence
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -37,9 +38,10 @@ from claude_code.cli_driver import (
 )
 
 AZURE_OPENAI_MODELS = [
-    "gpt-5-6-sol-azure-openai",
+    "gpt-6-1-sol-azure-openai",
     "gpt-5-6-terra-azure-openai",
-    "gpt-5-6-luna-azure-openai",
+    "gpt-6-luna-azure-openai",
+    "gpt-6-astra-azure-openai",
 ]
 
 TOOL_USE_PROMPT = (
@@ -67,9 +69,19 @@ def _has_tool_use_event(events: Sequence[Mapping[str, Any]]) -> bool:
     return False
 
 
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.AZURE,),
+        models=tuple(AZURE_OPENAI_MODELS),
+        capabilities=(Capability.FUNCTION_CALLING,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_tool_use_azure_openai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
-    tool call was emitted on the wire by each GPT-5.6 tier."""
+    tool call was emitted on the wire by each GPT-6 model."""
     proxy = require_proxy(compat_result)
 
     outcomes = run_claude_models_parallel(

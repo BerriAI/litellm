@@ -6,15 +6,21 @@ completion bridge that would otherwise strip the envelope.
 """
 
 import json
-from collections.abc import AsyncIterator
-from typing import Any, Final, cast
+from collections.abc import AsyncIterator, Mapping
+from typing import Final
+
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.providers.bedrock_agentcore.transformation import (
     BedrockAgentCoreA2ATransformation,
 )
+from litellm.litellm_core_utils.core_helpers import json_contains, subscript
+from litellm.llms.bedrock.base_aws_llm import run_aws_signing
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.types.llms.custom_http import httpxSpecialProvider
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class BedrockAgentCoreA2AHandler:
@@ -28,10 +34,10 @@ class BedrockAgentCoreA2AHandler:
     @staticmethod
     async def handle_non_streaming(
         request_id: str,
-        params: dict[str, Any],
-        litellm_params: dict[str, Any],
-        agent_extra_headers: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
+        params: Mapping[str, object],
+        litellm_params: dict[str, object],
+        agent_extra_headers: Mapping[str, str] | None = None,
+    ) -> dict[str, object]:
         """
         Handle non-streaming A2A request to AgentCore.
 
@@ -45,7 +51,8 @@ class BedrockAgentCoreA2AHandler:
         Returns:
             A2A JSON-RPC response dict from the AgentCore agent
         """
-        url, headers, body = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+        url, headers, body = await run_aws_signing(
+            BedrockAgentCoreA2ATransformation.get_url_and_signed_request,
             request_id=request_id,
             params=params,
             litellm_params=litellm_params,
@@ -56,7 +63,7 @@ class BedrockAgentCoreA2AHandler:
         verbose_logger.info("BedrockAgentCore A2A: Sending non-streaming request to %s", url)
 
         client: Final = get_async_httpx_client(
-            llm_provider=cast(Any, httpxSpecialProvider.A2AProvider),
+            llm_provider=httpxSpecialProvider.A2AProvider,
         )
         response: Final = await client.post(
             url,
@@ -65,19 +72,22 @@ class BedrockAgentCoreA2AHandler:
         )
         response.raise_for_status()
         response_data: Final = response.json()
+        decoded_response: Final = _DECODED_JSON.validate_python(response_data)
 
-        if "error" in response_data:
-            verbose_logger.warning("BedrockAgentCore A2A: Agent returned error: %s", response_data["error"])
+        if json_contains(decoded_response, "error"):
+            verbose_logger.warning(
+                "BedrockAgentCore A2A: Agent returned error: %s", subscript(decoded_response, "error")
+            )
 
         return response_data
 
     @staticmethod
     async def handle_streaming(
         request_id: str,
-        params: dict[str, Any],
-        litellm_params: dict[str, Any],
-        agent_extra_headers: dict[str, str] | None = None,
-    ) -> AsyncIterator[dict[str, Any]]:
+        params: Mapping[str, object],
+        litellm_params: dict[str, object],
+        agent_extra_headers: Mapping[str, str] | None = None,
+    ) -> AsyncIterator[dict[str, object]]:
         """
         Handle streaming A2A request to AgentCore.
 
@@ -91,11 +101,12 @@ class BedrockAgentCoreA2AHandler:
         Yields:
             A2A streaming response events from the AgentCore agent
         """
-        url, headers, body = BedrockAgentCoreA2ATransformation.get_url_and_signed_request(
+        url, headers, body = await run_aws_signing(
+            BedrockAgentCoreA2ATransformation.get_url_and_signed_request,
             request_id=request_id,
             params=params,
             litellm_params=litellm_params,
-            method="message/send",
+            method="message/stream",
             stream=True,
             agent_extra_headers=agent_extra_headers,
         )
@@ -103,7 +114,7 @@ class BedrockAgentCoreA2AHandler:
         verbose_logger.info("BedrockAgentCore A2A: Sending streaming request to %s", url)
 
         client: Final = get_async_httpx_client(
-            llm_provider=cast(Any, httpxSpecialProvider.A2AProvider),
+            llm_provider=httpxSpecialProvider.A2AProvider,
         )
         response: Final = await client.post(
             url,
@@ -114,7 +125,7 @@ class BedrockAgentCoreA2AHandler:
         response.raise_for_status()
 
         # Check content type — AgentCore may return JSON instead of SSE
-        content_type: Final = response.headers.get("content-type", "").lower()
+        content_type: Final = ", ".join(response.headers.get_list("content-type")).lower()
 
         if "application/json" in content_type:
             # Single JSON response fallback (not SSE)

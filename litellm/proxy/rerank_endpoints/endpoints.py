@@ -1,18 +1,33 @@
 #### Rerank Endpoints #####
 
 import asyncio
+from datetime import datetime
 from typing import Final
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse
+from pydantic import TypeAdapter
 
-from litellm._logging import verbose_proxy_logger
+import litellm
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    await_llm_call_cancelling_on_disconnect,
+    log_llm_api_exception,
+    resolve_litellm_call_id,
+)
+from litellm.proxy.common_utils.openai_error_payload import (
+    error_status_code,
+    litellm_call_id_headers,
+    openai_error_param,
+    openai_error_type,
+)
+from litellm.types.utils import CallTypes
 
 router: Final = APIRouter()
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 @router.post(
@@ -49,10 +64,11 @@ async def rerank(
         version,
     )
 
-    data = {}
+    litellm_call_id: Final = resolve_litellm_call_id(request.headers.get("x-litellm-call-id"))
+    data = {"litellm_call_id": litellm_call_id}
     try:
         body: Final = await request.body()
-        data = orjson.loads(body)
+        data = orjson.loads(body) | data
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -67,6 +83,16 @@ async def rerank(
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
         data = await proxy_logging_obj.pre_call_hook(user_api_key_dict=user_api_key_dict, data=data, call_type="rerank")
 
+        cancel_on_disconnect: Final = bool(general_settings.get("cancel_on_disconnect", False))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped general_settings
+        if cancel_on_disconnect:
+            logging_obj, data = litellm.utils.function_setup(  # rebind-ok: the except block logs this request data
+                original_function=CallTypes.arerank.value,
+                rules_obj=litellm.utils.Rules(),
+                start_time=datetime.now(),  # noqa: DTZ005  # Logging subtracts it from naive end times
+                **data,  # pyright: ignore[reportUnknownArgumentType]  # pre_call_hook returns an untyped dict
+            )
+            data["litellm_logging_obj"] = logging_obj
+
         ## ROUTE TO CORRECT ENDPOINT ##
         llm_call: Final = await route_request(
             data=data,
@@ -74,12 +100,14 @@ async def rerank(
             llm_router=llm_router,
             user_model=user_model,
         )
-        response: Final = await llm_call
+        response: Final = _DECODED_JSON.validate_python(
+            await await_llm_call_cancelling_on_disconnect(request, asyncio.ensure_future(llm_call))
+            if cancel_on_disconnect
+            else await llm_call
+        )
 
         ### ALERTING ###
-        asyncio.create_task(
-            proxy_logging_obj.update_request_status(litellm_call_id=data.get("litellm_call_id", ""), status="success")
-        )
+        asyncio.create_task(proxy_logging_obj.update_request_status(litellm_call_id=litellm_call_id, status="success"))
 
         ### RESPONSE HEADERS ###
         hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
@@ -90,7 +118,7 @@ async def rerank(
         fastapi_response.headers.update(
             ProxyBaseLLMRequestProcessing.get_custom_headers(
                 user_api_key_dict=user_api_key_dict,
-                call_id=hidden_params.get("litellm_call_id", None) or data.get("litellm_call_id", None),
+                call_id=hidden_params.get("litellm_call_id", None) or litellm_call_id,
                 model_id=model_id,
                 cache_key=cache_key,
                 api_base=api_base,
@@ -106,21 +134,26 @@ async def rerank(
         return response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
-            user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=data,
+            dispatched_call_type=CallTypes.arerank.value,
         )
-        verbose_proxy_logger.error("litellm.proxy.proxy_server.rerank(): Exception occured - %s", e)
+        log_llm_api_exception(e, litellm_call_id)
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                headers=litellm_call_id_headers(litellm_call_id),
+                code=error_status_code(e, status.HTTP_400_BAD_REQUEST),
             )
         else:
             error_msg: Final = f"{e}"
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", 500),
+                type=openai_error_type(e, error_status_code(e, 500)),
+                param=openai_error_param(e),
+                headers=litellm_call_id_headers(litellm_call_id),
+                code=error_status_code(e, 500),
             )

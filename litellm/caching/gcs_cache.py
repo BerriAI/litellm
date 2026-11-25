@@ -4,18 +4,23 @@ Supports syncing responses to Google Cloud Storage Buckets using HTTP requests.
 
 import asyncio
 import json
+from collections.abc import Iterable
 from typing import Final
 from urllib.parse import quote
+
+from pydantic import TypeAdapter
 
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
 
 from .base_cache import BaseCache
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class GCSCache(BaseCache):
@@ -31,15 +36,15 @@ class GCSCache(BaseCache):
         self.key_prefix = gcs_path.rstrip("/") + "/" if gcs_path else ""
         # create httpx clients
         self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
-        self.sync_client = _get_httpx_client()
+        self.sync_client = get_httpx_client()
 
-    def _construct_headers(self) -> dict:
+    def _construct_headers(self) -> dict[str, str]:
         base: Final = GCSBucketBase(bucket_name=self.bucket_name)
         base.path_service_account_json = self.path_service_account
         base.BUCKET_NAME = self.bucket_name
         return base.sync_construct_request_headers()
 
-    def set_cache(self, key, value, **kwargs):
+    def set_cache(self, key: str, value: object, **kwargs: object):
         try:
             print_verbose(f"LiteLLM SET Cache - GCS. Key={key}. Value={value}")
             headers: Final = self._construct_headers()
@@ -51,7 +56,7 @@ class GCSCache(BaseCache):
         except Exception as e:
             print_verbose(f"GCS Caching: set_cache() - Got exception from GCS: {e}")
 
-    async def async_set_cache(self, key, value, **kwargs):
+    async def async_set_cache(self, key: str, value: object, **kwargs: object):
         try:
             headers: Final = self._construct_headers()
             object_name: Final = self.key_prefix + key
@@ -62,7 +67,7 @@ class GCSCache(BaseCache):
         except Exception as e:
             print_verbose(f"GCS Caching: async_set_cache() - Got exception from GCS: {e}")
 
-    def get_cache(self, key, **kwargs):
+    def get_cache(self, key: str, **kwargs: object):
         try:
             headers: Final = self._construct_headers()
             object_name: Final = self.key_prefix + key
@@ -70,7 +75,7 @@ class GCSCache(BaseCache):
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{quote(object_name, safe='')}?alt=media"
             response: Final = self.sync_client.get(url=url, headers=headers)
             if response.status_code == 200:
-                cached_response: Final = json.loads(response.text)
+                cached_response: Final = _DECODED_JSON.validate_python(json.loads(response.text))
                 verbose_logger.debug(
                     "Got GCS Cache: key: %s, cached_response %s. Type Response %s",
                     key,
@@ -82,7 +87,7 @@ class GCSCache(BaseCache):
         except Exception as e:
             verbose_logger.error("GCS Caching: get_cache() - Got exception from GCS: %s", e)
 
-    async def async_get_cache(self, key, **kwargs):
+    async def async_get_cache(self, key: str, **kwargs: object):
         try:
             headers: Final = self._construct_headers()
             object_name: Final = self.key_prefix + key
@@ -90,7 +95,7 @@ class GCSCache(BaseCache):
             url = f"https://storage.googleapis.com/storage/v1/b/{bucket_name}/o/{quote(object_name, safe='')}?alt=media"
             response: Final = await self.async_client.get(url=url, headers=headers)
             if response.status_code == 200:
-                return json.loads(response.text)
+                return _DECODED_JSON.validate_python(json.loads(response.text))
             return None
         except Exception as e:
             verbose_logger.error("GCS Caching: async_get_cache() - Got exception from GCS: %s", e)
@@ -101,8 +106,6 @@ class GCSCache(BaseCache):
     async def disconnect(self):
         pass
 
-    async def async_set_cache_pipeline(self, cache_list, **kwargs):
-        tasks: Final = []
-        for val in cache_list:
-            tasks.append(self.async_set_cache(val[0], val[1], **kwargs))
+    async def async_set_cache_pipeline(self, cache_list: Iterable[tuple[str, object]], **kwargs: object):
+        tasks: Final = [self.async_set_cache(val[0], val[1], **kwargs) for val in cache_list]
         await asyncio.gather(*tasks)

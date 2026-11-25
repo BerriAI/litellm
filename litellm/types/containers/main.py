@@ -1,17 +1,43 @@
-from typing import Any, Literal
+import builtins
+from collections.abc import Callable, Mapping
+from typing import Final, Literal
 
-from pydantic import BaseModel
-from typing_extensions import TypedDict
+from pydantic import PrivateAttr, TypeAdapter
+from pydantic.main import IncEx
+from typing_extensions import ReadOnly, TypedDict, Unpack
+
+from litellm.types.llms.base import LiteLLMBaseModel
+
+_ATTRIBUTE_VALUE: Final = TypeAdapter(builtins.object)
 
 
-class ExpiresAfter(BaseModel):
+class _ModelDumpOptions(TypedDict, total=False):
+    """Keyword arguments `json` forwards to pydantic's `BaseModel.model_dump`."""
+
+    mode: ReadOnly[str]
+    include: ReadOnly[IncEx | None]
+    exclude: ReadOnly[IncEx | None]
+    context: ReadOnly[builtins.object]
+    by_alias: ReadOnly[bool | None]
+    exclude_unset: ReadOnly[bool]
+    exclude_defaults: ReadOnly[bool]
+    exclude_none: ReadOnly[bool]
+    exclude_computed_fields: ReadOnly[bool]
+    round_trip: ReadOnly[bool]
+    warnings: ReadOnly[bool | Literal["none", "warn", "error"]]
+    fallback: ReadOnly[Callable[[builtins.object], builtins.object] | None]
+    serialize_as_any: ReadOnly[bool]
+    polymorphic_serialization: ReadOnly[bool | None]
+
+
+class ExpiresAfter(LiteLLMBaseModel):
     """Container expiration settings."""
 
     anchor: Literal["last_active_at"]
     minutes: int
 
 
-class ContainerObject(BaseModel):
+class ContainerObject(LiteLLMBaseModel):
     """Represents a container object."""
 
     id: str
@@ -21,21 +47,29 @@ class ContainerObject(BaseModel):
     expires_after: ExpiresAfter | None = None
     last_active_at: int | None = None
     name: str | None = None
-    _hidden_params: dict[str, Any] = {}
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default={})
 
-    def __contains__(self, key) -> bool:
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None) -> builtins.object:
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str) -> builtins.object:
         # Allow dictionary-style access to attributes
-        return getattr(self, key)
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: Unpack[_ModelDumpOptions]):
         try:
             return self.model_dump(**kwargs)
         except Exception:
@@ -43,30 +77,30 @@ class ContainerObject(BaseModel):
             return self.dict()
 
 
-class DeleteContainerResult(BaseModel):
+class DeleteContainerResult(LiteLLMBaseModel):
     """Result of a delete container request."""
 
     id: str
     object: Literal["container.deleted"]
     deleted: bool
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None) -> builtins.object:
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
-        return getattr(self, key)
+    def __getitem__(self, key: str) -> builtins.object:
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: Unpack[_ModelDumpOptions]):
         try:
             return self.model_dump(**kwargs)
         except Exception:
             return self.dict()
 
 
-class ContainerListResponse(BaseModel):
+class ContainerListResponse(LiteLLMBaseModel):
     """Response object for list containers request."""
 
     object: Literal["list"]
@@ -75,16 +109,16 @@ class ContainerListResponse(BaseModel):
     last_id: str | None = None
     has_more: bool
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None) -> builtins.object:
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
-        return getattr(self, key)
+    def __getitem__(self, key: str) -> builtins.object:
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: Unpack[_ModelDumpOptions]):
         try:
             return self.model_dump(**kwargs)
         except Exception:
@@ -98,7 +132,7 @@ class ContainerCreateOptionalRequestParams(TypedDict, total=False):
     Params here: https://platform.openai.com/docs/api-reference/containers/create
     """
 
-    expires_after: dict[str, Any] | None  # ExpiresAfter object
+    expires_after: ReadOnly[Mapping[str, object] | None]  # ExpiresAfter object
     file_ids: list[str] | None
     extra_headers: dict[str, str] | None
     extra_body: dict[str, str] | None
@@ -128,7 +162,7 @@ class ContainerListOptionalRequestParams(TypedDict, total=False):
     extra_query: dict[str, str] | None
 
 
-class ContainerFileObject(BaseModel):
+class ContainerFileObject(LiteLLMBaseModel):
     """Represents a container file object."""
 
     id: str
@@ -138,25 +172,33 @@ class ContainerFileObject(BaseModel):
     created_at: int
     path: str
     source: str
-    _hidden_params: dict[str, Any] = {}
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default={})
 
-    def __contains__(self, key) -> bool:
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None) -> builtins.object:
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
-        return getattr(self, key)
+    def __getitem__(self, key: str) -> builtins.object:
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: Unpack[_ModelDumpOptions]):
         try:
             return self.model_dump(**kwargs)
         except Exception:
             return self.dict()
 
 
-class ContainerFileListResponse(BaseModel):
+class ContainerFileListResponse(LiteLLMBaseModel):
     """Response object for list container files request."""
 
     object: Literal["list"]
@@ -165,23 +207,23 @@ class ContainerFileListResponse(BaseModel):
     last_id: str | None = None
     has_more: bool
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None) -> builtins.object:
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
-        return getattr(self, key)
+    def __getitem__(self, key: str) -> builtins.object:
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: Unpack[_ModelDumpOptions]):
         try:
             return self.model_dump(**kwargs)
         except Exception:
             return self.dict()
 
 
-class DeleteContainerFileResponse(BaseModel):
+class DeleteContainerFileResponse(LiteLLMBaseModel):
     """Response object for delete container file request."""
 
     id: str
@@ -189,16 +231,16 @@ class DeleteContainerFileResponse(BaseModel):
     object: Literal["container.file.deleted", "container_file.deleted"]
     deleted: bool
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: builtins.object = None) -> builtins.object:
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
-        return getattr(self, key)
+    def __getitem__(self, key: str) -> builtins.object:
+        return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: Unpack[_ModelDumpOptions]):
         try:
             return self.model_dump(**kwargs)
         except Exception:

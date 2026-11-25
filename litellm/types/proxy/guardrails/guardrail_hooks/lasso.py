@@ -1,9 +1,11 @@
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .base import GuardrailConfigModel
 
 
-class LassoGuardrailConfigModelOptionalParams(BaseModel):
+class LassoGuardrailConfigModelOptionalParams(LiteLLMBaseModel):
     user_id: str | None = Field(
         default=None,
         description="The user ID for the Lasso guardrail. If not provided, the `LASSO_USER_ID` environment variable is checked.",

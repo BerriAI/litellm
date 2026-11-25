@@ -1,15 +1,38 @@
 import types
-from typing import Final, Literal
+from collections.abc import Mapping
+from typing import Final, Literal, cast  # noqa: TID251  # extra_body carries raw fields the TypedDict lacks
 
-from pydantic import BaseModel
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
+from litellm.llms.base_llm.embedding.transformation import split_extra_body
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
-from litellm.types.utils import EmbeddingResponse, Usage
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.utils import EmbeddingResponse, PromptTokensDetailsWrapper, Usage
 
 from .types import *
 
 
-class VertexAITextEmbeddingConfig(BaseModel):
+class _PredictMetadata(TypedDict, total=False):
+    billableCharacterCount: ReadOnly[int]
+
+
+class _PredictResponseMetadata(TypedDict, total=False):
+    metadata: ReadOnly[_PredictMetadata]
+
+
+_PREDICT_RESPONSE_METADATA: Final = TypeAdapter(_PredictResponseMetadata)
+
+
+def billable_character_count(response: _PredictResponseMetadata) -> int | None:
+    """
+    `metadata.billableCharacterCount` of a Vertex text embedding predict response, the count Google
+    bills per-character embedding models (text-embedding-005, text-multilingual-embedding-002) on.
+    """
+    return response.get("metadata", {}).get("billableCharacterCount")
+
+
+class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
     """
     Reference: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/text-embeddings-api#TextEmbeddingInput
 
@@ -49,16 +72,17 @@ class VertexAITextEmbeddingConfig(BaseModel):
         | None = None,
         title: str | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
     def get_config(cls):
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -75,7 +99,9 @@ class VertexAITextEmbeddingConfig(BaseModel):
     def get_supported_openai_params(self):
         return ["dimensions"]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict, kwargs: dict):
+    def map_openai_params(
+        self, non_default_params: Mapping[str, object], optional_params: dict[str, object], kwargs: dict[str, object]
+    ):
         for param, value in non_default_params.items():
             if param == "dimensions":
                 optional_params["outputDimensionality"] = value
@@ -84,13 +110,13 @@ class VertexAITextEmbeddingConfig(BaseModel):
             optional_params["task_type"] = kwargs.pop("input_type")
         return optional_params, kwargs
 
-    def get_mapped_special_auth_params(self) -> dict:
+    def get_mapped_special_auth_params(self) -> dict[str, str]:
         """
         Common auth params across bedrock/vertex_ai/azure/watsonx
         """
         return {"project": "vertex_project", "region_name": "vertex_location"}
 
-    def map_special_auth_params(self, non_default_params: dict, optional_params: dict):
+    def map_special_auth_params(self, non_default_params: Mapping[str, object], optional_params: dict[str, object]):
         mapped_params: Final = self.get_mapped_special_auth_params()
 
         for param, value in non_default_params.items():
@@ -103,7 +129,7 @@ class VertexAITextEmbeddingConfig(BaseModel):
         input: list | str,
         optional_params: dict,
         model: str,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> VertexEmbeddingRequest:
         """
         Transforms an openai request to a vertex embedding request.
@@ -141,14 +167,19 @@ class VertexAITextEmbeddingConfig(BaseModel):
             vertex_text_embedding_input_list.append(embedding_input)
 
         vertex_request["instances"] = vertex_text_embedding_input_list
-        vertex_request["parameters"] = EmbeddingParameters(**optional_params)
+        body_params, extra_body = split_extra_body(optional_params)
+        vertex_request["parameters"] = (
+            cast(  # cast-ok: extra_body carries raw Vertex fields the TypedDict does not list
+                EmbeddingParameters, {**extra_body, **body_params}
+            )
+        )
         if labels:
             vertex_request["labels"] = labels
 
         return vertex_request
 
     def _transform_openai_request_to_fine_tuned_embedding_request(
-        self, input: list | str, optional_params: dict, model: str
+        self, input: list[str] | str, optional_params: Mapping[str, object], model: str
     ) -> VertexEmbeddingRequest:
         """
         Transforms an openai request to a vertex fine-tuned embedding request.
@@ -182,7 +213,12 @@ class VertexAITextEmbeddingConfig(BaseModel):
             vertex_text_embedding_input_list.append(embedding_input)
 
         vertex_request["instances"] = vertex_text_embedding_input_list
-        vertex_request["parameters"] = TextEmbeddingFineTunedParameters(**optional_params)
+        body_params, extra_body = split_extra_body(optional_params)
+        vertex_request["parameters"] = (
+            cast(  # cast-ok: extra_body carries raw Vertex fields the TypedDict does not list
+                TextEmbeddingFineTunedParameters, {**extra_body, **body_params}
+            )
+        )
         # Remove 'shared_session' from parameters if present
         if vertex_request["parameters"] is not None and "shared_session" in vertex_request["parameters"]:
             del vertex_request["parameters"]["shared_session"]
@@ -232,7 +268,7 @@ class VertexAITextEmbeddingConfig(BaseModel):
 
         _predictions: Final = response["predictions"]
 
-        embedding_response: Final = []
+        embedding_response: Final[list[dict[str, object]]] = []
         input_tokens: int = 0
         for idx, element in enumerate(_predictions):
             embedding = element["embeddings"]
@@ -248,7 +284,15 @@ class VertexAITextEmbeddingConfig(BaseModel):
         model_response.object = "list"
         model_response.data = embedding_response
         model_response.model = model
-        usage: Final = Usage(prompt_tokens=input_tokens, completion_tokens=0, total_tokens=input_tokens)
+        billable_characters: Final = billable_character_count(_PREDICT_RESPONSE_METADATA.validate_python(response))
+        usage: Final = Usage(
+            prompt_tokens=input_tokens,
+            completion_tokens=0,
+            total_tokens=input_tokens,
+            prompt_tokens_details=(
+                None if billable_characters is None else PromptTokensDetailsWrapper(character_count=billable_characters)
+            ),
+        )
         setattr(model_response, "usage", usage)
         return model_response
 
@@ -260,7 +304,7 @@ class VertexAITextEmbeddingConfig(BaseModel):
         """
         _predictions: Final = response["predictions"]
 
-        embedding_response: Final = []
+        embedding_response: Final[list[dict[str, object]]] = []
         # For fine-tuned models, we don't get token counts in the response
         input_tokens: Final = 0
 

@@ -1,12 +1,15 @@
 import json
 import os
 import time
+from collections.abc import Mapping, Sequence, Sized
 from copy import deepcopy
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import iter_items, subscript
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
@@ -16,6 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.custom_httpx.sse_lines import iter_sse_lines
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
@@ -25,10 +29,42 @@ from ..common_utils import HuggingFaceError, hf_task_list, hf_tasks, output_pars
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LoggingClass = LiteLLMLoggingObj
 else:
     LoggingClass = Any
+
+
+class _TokenEncoding(Protocol):
+    """Tokenizer handle the caller passes in; only `encode` is used, to count completion tokens."""
+
+    def encode(self, text: str, /) -> Sequence[object]: ...
+
+
+def _header_value(headers: Mapping[str, str], key: str, default: str) -> str:
+    return headers.get(key, default)
+
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+def _json_len(value: object) -> int:
+    if isinstance(value, Sized):
+        return len(value)
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
+
+
+def _generated_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    raise AttributeError(f"'{type(value).__name__}' object has no attribute 'strip'", name="strip", obj=value)
+
+
+def _add_logprob(total: float, logprob: object) -> float:
+    if isinstance(logprob, (int, float)):
+        return total + logprob
+    raise TypeError(f"unsupported operand type(s) for +=: '{type(total).__name__}' and '{type(logprob).__name__}'")
 
 
 tgi_models_cache = None
@@ -75,19 +111,19 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         typical_p: float | None = None,
         watermark: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[dict[str, object]] = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls) -> dict[str, object]:
         return super().get_config()
 
-    def get_special_options_params(self):
+    def get_special_options_params(self) -> list[str]:
         return ["use_cache", "wait_for_model"]
 
-    def get_supported_openai_params(self, model: str):
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return [
             "stream",
             "temperature",
@@ -101,11 +137,11 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             # temperature, top_p, n, stream, stop, max_tokens, n, presence_penalty default to None
             if param == "temperature":
@@ -139,7 +175,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
     def get_hf_api_key(self) -> str | None:
         return get_secret_str("HUGGINGFACE_API_KEY")
 
-    def read_tgi_conv_models(self):
+    def read_tgi_conv_models(self) -> tuple[set[str], set[str]]:
         try:
             global tgi_models_cache, conv_models_cache
             # Check if the cache is already populated
@@ -147,7 +183,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             if (tgi_models_cache is not None) and (conv_models_cache is not None):
                 return tgi_models_cache, conv_models_cache
             # If not, read the file and populate the cache
-            tgi_models: Final = set()
+            tgi_models: Final[set[str]] = set()
             script_directory = os.path.dirname(os.path.abspath(__file__))
             script_directory = os.path.dirname(script_directory)
             # Construct the file path relative to the script's directory
@@ -170,7 +206,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                 "huggingface_llms_metadata",
                 "hf_conversational_models.txt",
             )
-            conv_models: Final = set()
+            conv_models: Final[set[str]] = set()
             with open(file_path, "r") as file:
                 for line in file:
                     conv_models.add(line.strip())
@@ -201,10 +237,10 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         task: Final = litellm_params.get("task", None)
         ## VALIDATE API FORMAT
         if task is None or not isinstance(task, str) or task not in hf_task_list:
@@ -221,9 +257,9 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         ### MAP INPUT PARAMS
         #### HANDLE SPECIAL PARAMS
         special_params: Final = self.get_special_options_params()
-        special_params_dict: Final = {}
+        special_params_dict: Final[dict[str, object]] = {}
         # Create a list of keys to pop after iteration
-        keys_to_pop: Final = []
+        keys_to_pop: Final[list[str]] = []
 
         for k, v in optional_params.items():
             if k in special_params:
@@ -237,8 +273,8 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             inference_params = deepcopy(optional_params)
             inference_params.pop("details")
             inference_params.pop("return_full_text")
-            past_user_inputs: Final = []
-            generated_responses: Final = []
+            past_user_inputs: Final[list[str]] = []
+            generated_responses: Final[list[str]] = []
             text = ""
             for message in messages:
                 if message["role"] == "user":
@@ -247,7 +283,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                     text = convert_content_list_to_str(message)
                 elif message["role"] == "assistant" or message["role"] == "system":
                     generated_responses.append(convert_content_list_to_str(message))
-            data = {
+            data: dict[str, object] = {
                 "inputs": {
                     "text": text,
                     "past_user_inputs": past_user_inputs,
@@ -314,14 +350,14 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         default_headers: Final = {
             "content-type": "application/json",
         }
@@ -341,19 +377,22 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         response: httpx.Response,
         logging_obj: LoggingClass,
         model: str,
-        data: dict,
+        data: Mapping[str, object],
         api_key: str | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> list[dict[str, str]]:
         streamed_response: Final = CustomStreamWrapper(
-            completion_stream=response.iter_lines(),
+            completion_stream=iter_sse_lines(response.iter_text()),
             model=model,
             custom_llm_provider="huggingface",
             logging_obj=logging_obj,
         )
-        content = ""
+        content: str = ""
         for chunk in streamed_response:
-            content += chunk["choices"][0]["delta"]["content"]
-        completion_response: Final[list[dict[str, Any]]] = [{"generated_text": content}]
+            delta_content = chunk.choices[0].delta.content
+            if delta_content is None:
+                raise TypeError('can only concatenate str (not "NoneType") to str')
+            content += delta_content
+        completion_response: Final[list[dict[str, str]]] = [{"generated_text": content}]
         ## LOGGING
         logging_obj.post_call(
             input=data,
@@ -369,7 +408,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         model_response: ModelResponse,
         task: hf_tasks | None,
         optional_params: dict,
-        encoding: Any,
+        encoding: "_TokenEncoding | None",
         messages: list[AllMessageValues],
         model: str,
     ):
@@ -391,33 +430,41 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
                     headers=None,
                 )
 
-            if len(completion_response[0]["generated_text"]) > 0:
-                model_response.choices[0].message.content = output_parser(completion_response[0]["generated_text"])
+            if _json_len(_DECODED_JSON.validate_python(completion_response[0]["generated_text"])) > 0:
+                model_response.choices[0].message.content = output_parser(
+                    _generated_text(_DECODED_JSON.validate_python(completion_response[0]["generated_text"]))
+                )
             ## GETTING LOGPROBS + FINISH REASON
             if "details" in completion_response[0] and "tokens" in completion_response[0]["details"]:
                 model_response.choices[0].finish_reason = completion_response[0]["details"]["finish_reason"]
                 sum_logprob = 0
-                for token in completion_response[0]["details"]["tokens"]:
-                    if token["logprob"] is not None:
-                        sum_logprob += token["logprob"]
+                for token in iter_items(_DECODED_JSON.validate_python(completion_response[0]["details"]["tokens"])):
+                    logprob = subscript(token, "logprob")
+                    if logprob is not None:
+                        sum_logprob = _add_logprob(sum_logprob, logprob)
                 setattr(model_response.choices[0].message, "_logprob", sum_logprob)
             if "best_of" in optional_params and optional_params["best_of"] > 1:
                 if "details" in completion_response[0] and "best_of_sequences" in completion_response[0]["details"]:
-                    choices_list: Final = []
-                    for idx, item in enumerate(completion_response[0]["details"]["best_of_sequences"]):
+                    choices_list: Final[list[Choices]] = []
+                    for idx, item in enumerate(
+                        iter_items(
+                            _DECODED_JSON.validate_python(completion_response[0]["details"]["best_of_sequences"])
+                        )
+                    ):
                         sum_logprob = 0
-                        for token in item["tokens"]:
-                            if token["logprob"] is not None:
-                                sum_logprob += token["logprob"]
-                        if len(item["generated_text"]) > 0:
+                        for token in iter_items(subscript(item, "tokens")):
+                            logprob = subscript(token, "logprob")
+                            if logprob is not None:
+                                sum_logprob = _add_logprob(sum_logprob, logprob)
+                        if _json_len(subscript(item, "generated_text")) > 0:
                             message_obj = Message(
-                                content=output_parser(item["generated_text"]),
+                                content=output_parser(_generated_text(subscript(item, "generated_text"))),
                                 logprobs=sum_logprob,
                             )
                         else:
                             message_obj = Message(content=None)
                         choice_obj = Choices(
-                            finish_reason=item["finish_reason"],
+                            finish_reason=subscript(item, "finish_reason"),
                             index=idx + 1,
                             message=message_obj,
                         )
@@ -426,8 +473,13 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         elif task == "text-classification":
             model_response.choices[0].message.content = json.dumps(completion_response)
         else:
-            if isinstance(completion_response, list) and len(completion_response[0]["generated_text"]) > 0:
-                model_response.choices[0].message.content = output_parser(completion_response[0]["generated_text"])
+            if (
+                isinstance(completion_response, list)
+                and _json_len(_DECODED_JSON.validate_python(completion_response[0]["generated_text"])) > 0
+            ):
+                model_response.choices[0].message.content = output_parser(
+                    _generated_text(_DECODED_JSON.validate_python(completion_response[0]["generated_text"]))
+                )
         ## CALCULATING USAGE
         prompt_tokens = 0
         try:
@@ -435,13 +487,13 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         except Exception:
             # this should remain non blocking we should not block a response returning if calculating usage fails
             pass
-        output_text: Final = model_response["choices"][0]["message"].get("content", "")
+        first_message: Final = model_response.choices[0].message
+        output_text: Final = first_message.content
         if output_text is not None and len(output_text) > 0:
             completion_tokens = 0
             try:
-                completion_tokens = len(
-                    encoding.encode(model_response["choices"][0]["message"].get("content", ""))
-                )  ##[TODO] use the llama2 tokenizer here
+                if encoding is not None:
+                    completion_tokens = len(encoding.encode(output_text))  ##[TODO] use the llama2 tokenizer here
             except Exception:
                 # this should remain non blocking we should not block a response returning if calculating usage fails
                 pass
@@ -456,7 +508,7 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
             total_tokens=prompt_tokens + completion_tokens,
         )
         setattr(model_response, "usage", usage)
-        model_response._hidden_params["original_response"] = completion_response
+        model_response.hidden_params["original_response"] = completion_response
         return model_response
 
     def transform_response(
@@ -465,18 +517,18 @@ class HuggingFaceEmbeddingConfig(BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LoggingClass,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
         ## Some servers might return streaming responses even though stream was not set to true. (e.g. Baseten)
         task: Final = litellm_params.get("task", None)
         is_streamed = False
-        if raw_response.__dict__["headers"].get("Content-Type", "") == "text/event-stream":
+        if _header_value(raw_response.headers, "Content-Type", "") == "text/event-stream":
             is_streamed = True
 
         # iterate over the complete streamed response, and return the final answer

@@ -8,14 +8,14 @@
 - async_streaming
 """
 
-from collections.abc import AsyncIterator, Callable, Coroutine, Iterator
+from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
-    Any,
     Union,
 )
 
 import httpx
+from openai.types.audio.transcription_create_params import FileTypes
 
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.utils import GenericStreamingChunk
@@ -26,13 +26,15 @@ from .base import BaseLLM
 if TYPE_CHECKING:
     from litellm import CustomStreamWrapper
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.google_genai.main import GenerateContentResponse
+    from litellm.types.router import GenericLiteLLMParams
 
 
 class CustomLLMError(Exception):  # use this for all your exceptions
     def __init__(
         self,
-        status_code,
-        message,
+        status_code: int,
+        message: str,
     ):
         self.status_code = status_code
         self.message = message
@@ -43,22 +45,52 @@ class CustomLLM(BaseLLM):
     def __init__(self) -> None:
         super().__init__()
 
+    def generate_content(
+        self,
+        model: str,
+        contents: object,
+        config: Mapping[str, object] | None,
+        tools: object | None,
+        litellm_params: "GenericLiteLLMParams",
+        logging_obj: "LiteLLMLoggingObj",
+        optional_params: Mapping[str, object],
+        api_key: str | None = None,
+        api_base: str | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> "GenerateContentResponse | Mapping[str, object]":
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
+    async def agenerate_content(
+        self,
+        model: str,
+        contents: object,
+        config: Mapping[str, object] | None,
+        tools: object | None,
+        litellm_params: "GenericLiteLLMParams",
+        logging_obj: "LiteLLMLoggingObj",
+        optional_params: Mapping[str, object],
+        api_key: str | None = None,
+        api_base: str | None = None,
+        timeout: float | httpx.Timeout | None = None,
+    ) -> "GenerateContentResponse | Mapping[str, object]":
+        raise CustomLLMError(status_code=500, message="Not implemented yet!")
+
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: Sequence[object],
         api_base: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
-        api_key,
-        logging_obj,
-        optional_params: dict,
-        acompletion=None,
-        litellm_params=None,
-        logger_fn=None,
-        headers={},
+        print_verbose: Callable[[object], object],
+        encoding: object,
+        api_key: str | None,
+        logging_obj: "LiteLLMLoggingObj",
+        optional_params: Mapping[str, object],
+        acompletion: bool | None = None,
+        litellm_params: Mapping[str, object] | None = None,
+        logger_fn: Callable[..., object] | None = None,
+        headers: Mapping[str, object] = {},
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
     ) -> Union[ModelResponse, "CustomStreamWrapper"]:
@@ -67,19 +99,19 @@ class CustomLLM(BaseLLM):
     def streaming(
         self,
         model: str,
-        messages: list,
+        messages: Sequence[object],
         api_base: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
-        api_key,
-        logging_obj,
-        optional_params: dict,
-        acompletion=None,
-        litellm_params=None,
-        logger_fn=None,
-        headers={},
+        print_verbose: Callable[[object], object],
+        encoding: object,
+        api_key: str | None,
+        logging_obj: "LiteLLMLoggingObj",
+        optional_params: Mapping[str, object],
+        acompletion: bool | None = None,
+        litellm_params: Mapping[str, object] | None = None,
+        logger_fn: Callable[..., object] | None = None,
+        headers: Mapping[str, object] = {},
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
     ) -> Iterator[GenericStreamingChunk]:
@@ -88,40 +120,42 @@ class CustomLLM(BaseLLM):
     async def acompletion(
         self,
         model: str,
-        messages: list,
+        messages: Sequence[object],
         api_base: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
-        api_key,
-        logging_obj,
-        optional_params: dict,
-        acompletion=None,
-        litellm_params=None,
-        logger_fn=None,
-        headers={},
+        print_verbose: Callable[[object], object],
+        encoding: object,
+        api_key: str | None,
+        logging_obj: "LiteLLMLoggingObj",
+        optional_params: Mapping[str, object],
+        acompletion: bool | None = None,
+        litellm_params: Mapping[str, object] | None = None,
+        logger_fn: Callable[..., object] | None = None,
+        headers: Mapping[str, object] = {},
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
-    ) -> Coroutine[Any, Any, Union[ModelResponse, "CustomStreamWrapper"]] | Union[ModelResponse, "CustomStreamWrapper"]:
+    ) -> (
+        Coroutine[None, None, Union[ModelResponse, "CustomStreamWrapper"]] | Union[ModelResponse, "CustomStreamWrapper"]
+    ):
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     async def astreaming(
         self,
         model: str,
-        messages: list,
+        messages: Sequence[object],
         api_base: str,
-        custom_prompt_dict: dict,
+        custom_prompt_dict: Mapping[str, object],
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
-        api_key,
-        logging_obj,
-        optional_params: dict,
-        acompletion=None,
-        litellm_params=None,
-        logger_fn=None,
-        headers={},
+        print_verbose: Callable[[object], object],
+        encoding: object,
+        api_key: str | None,
+        logging_obj: "LiteLLMLoggingObj",
+        optional_params: Mapping[str, object],
+        acompletion: bool | None = None,
+        litellm_params: Mapping[str, object] | None = None,
+        logger_fn: Callable[..., object] | None = None,
+        headers: Mapping[str, object] = {},
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> AsyncIterator[GenericStreamingChunk]:
@@ -134,7 +168,7 @@ class CustomLLM(BaseLLM):
         api_key: str | None,
         api_base: str | None,
         model_response: ImageResponse,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
@@ -148,7 +182,7 @@ class CustomLLM(BaseLLM):
         model_response: ImageResponse,
         api_key: str | None,  # dynamically set api_key - https://docs.litellm.ai/docs/set_keys#api_key
         api_base: str | None,  # dynamically set api_base - https://docs.litellm.ai/docs/set_keys#api_base
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
@@ -158,42 +192,42 @@ class CustomLLM(BaseLLM):
     def embedding(
         self,
         model: str,
-        input: list,
+        input: Sequence[object],
         model_response: EmbeddingResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[[object], object],
         logging_obj: "LiteLLMLoggingObj",
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
-        litellm_params=None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> EmbeddingResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     async def aembedding(
         self,
         model: str,
-        input: list,
+        input: Sequence[object],
         model_response: EmbeddingResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[[object], object],
         logging_obj: "LiteLLMLoggingObj",
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
-        litellm_params=None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> EmbeddingResponse:
         raise CustomLLMError(status_code=500, message="Not implemented yet!")
 
     def image_edit(
         self,
         model: str,
-        image: Any,
+        image: Sequence[FileTypes],
         prompt: str | None,
         model_response: ImageResponse,
         api_key: str | None,
         api_base: str | None,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
@@ -203,12 +237,12 @@ class CustomLLM(BaseLLM):
     async def aimage_edit(
         self,
         model: str,
-        image: Any,
+        image: Sequence[FileTypes],
         prompt: str | None,
         model_response: ImageResponse,
         api_key: str | None,
         api_base: str | None,
-        optional_params: dict,
+        optional_params: Mapping[str, object],
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,

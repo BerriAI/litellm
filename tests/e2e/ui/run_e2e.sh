@@ -14,7 +14,7 @@ set -euo pipefail
 #
 # Ports default to 4000 / 5432 / 8090 and can be moved when another checkout
 # already holds them:
-#   PROXY_PORT=4100 POSTGRES_PORT=5532 MOCK_LLM_PORT=8190 ./run_e2e.sh
+#   PROXY_PORT=4100 POSTGRES_PORT=5532 MOCK_LLM_PORT=8190 MOCK_PRESIDIO_PORT=8191 ./run_e2e.sh
 #
 # In CI (CI=true), expects:
 #   - PostgreSQL already running on 127.0.0.1:5432
@@ -25,22 +25,24 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
-DASHBOARD_DIR="$REPO_ROOT/ui/litellm-dashboard"
+DASHBOARD_DIR="$REPO_ROOT/litellm/ui/litellm-dashboard"
 IS_CI="${CI:-false}"
 CONTAINER_NAME="litellm-e2e-postgres-$$"
 MOCK_PID=""
+MOCK_PRESIDIO_PID=""
 PROXY_PID=""
 PROXY_LOG=""
 
 # Ports, overridable so two checkouts can run this harness at the same time --
 # otherwise a second run aborts on "port 4000 is in use" and the only way out is
 # to stop someone else's stack. Defaults are the historical values, so an unset
-# environment behaves exactly as before (CI, the CircleCI job and the docs all
+# environment behaves exactly as before (CI and the docs
 # assume 4000/5432/8090).
 PROXY_PORT="${PROXY_PORT:-4000}"
 POSTGRES_PORT="${POSTGRES_PORT:-5432}"
 MOCK_LLM_PORT="${MOCK_LLM_PORT:-8090}"
-export MOCK_LLM_PORT
+MOCK_PRESIDIO_PORT="${MOCK_PRESIDIO_PORT:-8091}"
+export MOCK_LLM_PORT MOCK_PRESIDIO_PORT
 
 # --- Ensure common tool paths are available (local dev only) ---
 if [ "$IS_CI" = "false" ]; then
@@ -54,7 +56,7 @@ if [ "$IS_CI" = "false" ]; then
   # is swallowed and the run dies later with the far less obvious
   # "sh: next: command not found".
   #
-  # So select a Node that satisfies ui/litellm-dashboard's engines.node, and if
+  # So select a Node that satisfies litellm/ui/litellm-dashboard's engines.node, and if
   # none is available say so here rather than 200 lines downstream.
   if [ -s "$HOME/.nvm/nvm.sh" ]; then
     # shellcheck disable=SC1091
@@ -68,7 +70,7 @@ if [ "$IS_CI" = "false" ]; then
         nvm use "$required_major" >/dev/null 2>&1 || nvm use --lts >/dev/null 2>&1 || true
         current_major="$(node --version 2>/dev/null | sed -E 's/^v([0-9]+).*/\1/')"
         if [ -z "$current_major" ] || [ "$current_major" -lt "$required_major" ]; then
-          echo "Error: ui/litellm-dashboard requires Node >= v${required_major}, and no such version is installed."
+          echo "Error: litellm/ui/litellm-dashboard requires Node >= v${required_major}, and no such version is installed."
           echo "       Install one with:  nvm install ${required_major}"
           exit 1
         fi
@@ -82,6 +84,7 @@ fi
 cleanup() {
   echo "Cleaning up..."
   [ -n "$MOCK_PID" ] && kill "$MOCK_PID" 2>/dev/null || true
+  [ -n "$MOCK_PRESIDIO_PID" ] && kill "$MOCK_PRESIDIO_PID" 2>/dev/null || true
   [ -n "$PROXY_PID" ] && kill "$PROXY_PID" 2>/dev/null || true
   [ -n "$PROXY_LOG" ] && rm -f "$PROXY_LOG" || true
   if [ "$IS_CI" = "false" ]; then
@@ -110,9 +113,9 @@ if [ "$IS_CI" = "false" ]; then
   # to someone else's :5432 (a psql session, a running app, a Prisma engine
   # talking to a remote database) aborts the run with "port 5432 is in use"
   # while nothing is actually bound locally.
-  for port in "$PROXY_PORT" "$POSTGRES_PORT" "$MOCK_LLM_PORT"; do
+  for port in "$PROXY_PORT" "$POSTGRES_PORT" "$MOCK_LLM_PORT" "$MOCK_PRESIDIO_PORT"; do
     if lsof -nP -iTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
-      echo "Error: port $port is in use (override with PROXY_PORT / POSTGRES_PORT / MOCK_LLM_PORT)"
+      echo "Error: port $port is in use (override with PROXY_PORT / POSTGRES_PORT / MOCK_LLM_PORT / MOCK_PRESIDIO_PORT)"
       exit 1
     fi
   done
@@ -141,8 +144,9 @@ else
 fi
 
 # --- Credentials ---
-export LITELLM_MASTER_KEY="sk-1234"
+export LITELLM_MASTER_KEY="${LITELLM_MASTER_KEY:-sk-$(openssl rand -hex 16)}"
 export MOCK_LLM_URL="http://127.0.0.1:${MOCK_LLM_PORT}/v1"
+export E2E_MOCK_PRESIDIO_URL="http://127.0.0.1:${MOCK_PRESIDIO_PORT}"
 export DISABLE_SCHEMA_UPDATE="true"
 # The suite resolves its target from E2E_UI_BASE_URL (constants.ts), which
 # otherwise defaults to :4000 -- so without this a relocated stack would be
@@ -151,6 +155,7 @@ export DISABLE_SCHEMA_UPDATE="true"
 export E2E_UI_BASE_URL="${E2E_UI_BASE_URL:-http://127.0.0.1:${PROXY_PORT}}"
 # Ensure the proxy serves UI at /ui (not behind a subpath)
 export SERVER_ROOT_PATH=""
+export PROXY_BASE_URL="$E2E_UI_BASE_URL"
 # Boot with an external logout URL so proxyLogoutUrl.spec.ts can assert the
 # redirect. This same value is exported to the Playwright process below (the
 # spec's skip guard reads it). Safe for the rest of the suite — nothing else
@@ -202,6 +207,20 @@ for i in $(seq 1 15); do
   if curl -sf http://127.0.0.1:${MOCK_LLM_PORT}/health >/dev/null 2>&1; then break; fi
   sleep 1
 done
+
+echo "=== Starting mock Presidio server ==="
+uv run --no-sync python "$SCRIPT_DIR/fixtures/mock_presidio_server/server.py" &
+MOCK_PRESIDIO_PID=$!
+
+PRESIDIO_READY=0
+for i in $(seq 1 15); do
+  if curl -sf http://127.0.0.1:${MOCK_PRESIDIO_PORT}/health >/dev/null 2>&1; then PRESIDIO_READY=1; break; fi
+  sleep 1
+done
+if [ "$PRESIDIO_READY" -ne 1 ]; then
+  echo "Mock Presidio server never answered /health on port ${MOCK_PRESIDIO_PORT}" >&2
+  exit 1
+fi
 
 # --- LiteLLM proxy ---
 echo "=== Starting LiteLLM proxy ==="

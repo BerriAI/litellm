@@ -6,16 +6,25 @@ Why separate file? Make it easy to see how transformation works
 
 import re
 from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Final, Literal
 
+from litellm.litellm_core_utils.prompt_templates.factory import convert_to_gemini_tool_call_invoke
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    is_system_message,
+    place_mid_conversation_system,
+    split_leading_system_run,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import CachedContentRequestBody
 from litellm.utils import is_cached_message
 
 from ..common_utils import get_supports_system_message
 from ..gemini.transformation import (
-    _gemini_convert_messages_with_history,
-    _transform_system_message,
+    gemini_convert_messages_with_history,
+    transform_system_message,
 )
 
 
@@ -49,7 +58,7 @@ def get_first_continuous_block_idx(
     return len(filtered_messages) - 1
 
 
-def extract_ttl_from_cached_messages(messages: list[AllMessageValues]) -> str | None:
+def extract_ttl_from_cached_messages(messages: Sequence[AllMessageValues]) -> str | None:
     """
     Extract TTL from cached messages. Returns the first valid TTL found.
 
@@ -57,7 +66,7 @@ def extract_ttl_from_cached_messages(messages: list[AllMessageValues]) -> str | 
         messages: List of messages to extract TTL from
 
     Returns:
-        Optional[str]: TTL string in format "3600s" or None if not found/invalid
+        Optional[str]: TTL normalized to Gemini's "<seconds>s" form, or None if not found/invalid
     """
     for message in messages:
         if not is_cached_message(message):
@@ -79,87 +88,125 @@ def extract_ttl_from_cached_messages(messages: list[AllMessageValues]) -> str | 
             if cache_control.get("type") != "ephemeral":
                 continue
 
-            ttl = cache_control.get("ttl")
-            if ttl and _is_valid_ttl_format(ttl):
-                return str(ttl)
+            normalized_ttl = _normalize_ttl_to_seconds(cache_control.get("ttl"))
+            if normalized_ttl is not None:
+                return normalized_ttl
 
     return None
 
 
-def _is_valid_ttl_format(ttl: str) -> bool:
-    """
-    Validate TTL format. Should be a string ending with 's' for seconds.
-    Examples: "3600s", "7200s", "1.5s"
+_TTL_PATTERN: Final = re.compile(r"^([0-9]*\.?[0-9]+)([smh])$")
+_TTL_UNIT_SECONDS: Final = MappingProxyType({"s": 1, "m": 60, "h": 3600})
+_LAST_EXPIRY_GOOGLE_ACCEPTS: Final = datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone.utc)
 
-    Args:
-        ttl: TTL string to validate
 
-    Returns:
-        bool: True if valid format, False otherwise
-    """
+def _normalize_ttl_to_seconds(ttl: object) -> str | None:
     if not isinstance(ttl, str):
-        return False
+        return None
+    match: Final = _TTL_PATTERN.match(ttl)
+    if match is None:
+        return None
+    seconds: Final = round(float(match.group(1)) * _TTL_UNIT_SECONDS[match.group(2)], 9)
+    longest_ttl: Final = (_LAST_EXPIRY_GOOGLE_ACCEPTS - datetime.now(timezone.utc)).total_seconds()
+    if not 0 < seconds <= longest_ttl:
+        return None
+    return f"{seconds:.9f}".rstrip("0").rstrip(".") + "s"
 
-    # TTL should end with 's' and contain a valid number before it
-    pattern: Final = r"^([0-9]*\.?[0-9]+)s$"
-    match: Final = re.match(pattern, ttl)
 
-    if not match:
-        return False
+def _cached_block_start(
+    messages: Sequence[AllMessageValues], leading_run_end: int, block_start: int, block_end: int
+) -> int:
+    return next(
+        (idx for idx in range(block_start, block_end) if idx < leading_run_end or not is_system_message(messages[idx])),
+        block_end,
+    )
 
-    try:
-        # Ensure the numeric part is valid and positive
-        numeric_part: Final = float(match.group(1))
-        return numeric_part > 0
-    except ValueError:
-        return False
+
+def _cached_block_end(
+    messages: Sequence[AllMessageValues], leading_run_end: int, block_start: int, block_end: int
+) -> int:
+    return next(
+        (
+            end
+            for end in range(block_end, block_start, -1)
+            if end <= leading_run_end or not is_system_message(messages[end - 1])
+        ),
+        block_start,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _MarkedBlock:
+    leading_run_end: int
+    block: range
+
+
+def _marked_block(messages: Sequence[AllMessageValues]) -> _MarkedBlock | None:
+    filtered_messages: Final = [(idx, message) for idx, message in enumerate(messages) if is_cached_message(message)]
+    if not filtered_messages:
+        return None
+    leading_system_run, _ = split_leading_system_run(messages)
+    marked_end: Final = filtered_messages[get_first_continuous_block_idx(filtered_messages)][0] + 1
+    return _MarkedBlock(len(leading_system_run), range(filtered_messages[0][0], marked_end))
+
+
+def cached_block_ttl(messages: Sequence[AllMessageValues]) -> str | None:
+    """
+    The TTL the caller marked on the leading system run or the first continuous cached block, read before
+    separate_cached_messages trims a later system run off either end of that block, so a reminder that carries
+    the only TTL still sets how long the cache lives.
+    """
+    marked: Final = _marked_block(messages)
+    if marked is None:
+        return None
+    return extract_ttl_from_cached_messages(
+        [*messages[: marked.leading_run_end], *(messages[idx] for idx in marked.block)]
+    )
 
 
 def separate_cached_messages(
     messages: list[AllMessageValues],
+    supports_system_message: bool = True,
 ) -> tuple[list[AllMessageValues], list[AllMessageValues]]:
     """
-    Returns separated cached and non-cached messages.
+    Returns the messages that go into the cachedContent and the remaining messages.
 
-    Args:
-        messages: List of messages to be separated.
-
-    Returns:
-        Tuple containing:
-        - cached_messages: List of cached messages.
-        - non_cached_messages: List of non-cached messages.
+    The cached set is the leading run of system messages plus the first continuous block of cached
+    messages, since generateContent rejects a system_instruction beside a cachedContent. Every other
+    system message comes back in the remaining messages already converted to a user turn in place, so a
+    reminder added each turn changes neither the cached set nor its cache key. A later system run that starts
+    or ends the cached block stays out of the cached set too, since the cache would put it ahead of the turns
+    it follows, or let a block that ends on a model turn reach the cache only because a reminder follows it.
+    A model without system message support gets its later system messages back as they are, so the request
+    renders them the way it does without a cache.
     """
-    cached_messages: list[AllMessageValues] = []
-    non_cached_messages: list[AllMessageValues] = []
+    marked: Final = _marked_block(messages)
+    if marked is None:
+        return [], messages
 
-    # Extract cached messages and their indices
-    filtered_messages: Final[list[tuple[int, AllMessageValues]]] = []
-    for idx, message in enumerate(messages):
-        if is_cached_message(message=message):
-            filtered_messages.append((idx, message))
-
-    # Validate only one block of continuous cached messages
-    last_continuous_block_idx: Final = get_first_continuous_block_idx(filtered_messages)
-    # Separate messages based on the block of cached messages
-    if filtered_messages and last_continuous_block_idx is not None:
-        first_cached_idx: Final = filtered_messages[0][0]
-        last_cached_idx: Final = filtered_messages[last_continuous_block_idx][0]
-
-        cached_messages = messages[first_cached_idx : last_cached_idx + 1]
-        non_cached_messages = messages[:first_cached_idx] + messages[last_cached_idx + 1 :]
-    else:
-        non_cached_messages = messages
-
-    return cached_messages, non_cached_messages
+    block_start: Final = _cached_block_start(messages, marked.leading_run_end, marked.block.start, marked.block.stop)
+    cached_block: Final = range(
+        block_start, _cached_block_end(messages, marked.leading_run_end, block_start, marked.block.stop)
+    )
+    goes_in_cache: Final = tuple(idx < marked.leading_run_end or idx in cached_block for idx in range(len(messages)))
+    remaining_messages: Final = tuple(message for message, cached in zip(messages, goes_in_cache) if not cached)
+    return (
+        [message for message, cached in zip(messages, goes_in_cache) if cached],
+        list(
+            place_mid_conversation_system(remaining_messages, supports_mid_conversation_system=False)
+            if supports_system_message
+            else remaining_messages
+        ),
+    )
 
 
 def cached_messages_end_on_supported_turn(cached_messages: Sequence[AllMessageValues]) -> bool:
     """
     The cachedContents API rejects contents ending on a model turn, which is how it
     classifies both assistant messages and tool results, with HTTP 400
-    "Requests ending with a model turn are not supported". System messages are
-    extracted into system_instruction before contents are built, so the terminal
-    turn is the last non-system message.
+    "Requests ending with a model turn are not supported". The cached set never ends on
+    a later system message, and the leading ones are extracted into system_instruction
+    before contents are built, so the terminal turn is the last non-system message.
     """
     non_system_messages: Final = tuple(message for message in cached_messages if message.get("role") != "system")
     if not non_system_messages:
@@ -167,27 +214,45 @@ def cached_messages_end_on_supported_turn(cached_messages: Sequence[AllMessageVa
     return non_system_messages[-1].get("role") not in ("assistant", "tool", "function")
 
 
+def reject_unusable_tool_call_arguments(
+    cached_messages: Sequence[AllMessageValues],
+    model: str,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+    drop_params: bool,
+) -> None:
+    if drop_params:
+        return
+    for message in cached_messages:
+        if message["role"] == "assistant":
+            convert_to_gemini_tool_call_invoke(message, model=model, custom_llm_provider=custom_llm_provider)
+
+
 def transform_openai_messages_to_gemini_context_caching(
     model: str,
     messages: list[AllMessageValues],
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     cache_key: str,
+    ttl: str | None,
     vertex_project: str | None,
     vertex_location: str | None,
+    drop_params: bool = False,
 ) -> CachedContentRequestBody:
-    # Extract TTL from cached messages BEFORE system message transformation
-    ttl: Final = extract_ttl_from_cached_messages(messages)
-
     supports_system_message: Final = get_supports_system_message(model=model, custom_llm_provider=custom_llm_provider)
 
-    transformed_system_messages, new_messages = _transform_system_message(
-        supports_system_message=supports_system_message, messages=messages
-    )
-
-    transformed_messages: Final = _gemini_convert_messages_with_history(
-        messages=new_messages,
+    transformed_system_messages, new_messages = transform_system_message(
+        supports_system_message=supports_system_message,
+        messages=messages,
+        drop_params=drop_params,
         model=model,
         custom_llm_provider=custom_llm_provider,
+    )
+
+    transformed_messages: Final = gemini_convert_messages_with_history(
+        messages=new_messages,
+        model=model,
+        litellm_params={"drop_params": drop_params},
+        custom_llm_provider=custom_llm_provider,
+        ends_request=False,
     )
 
     model_name = f"models/{model}"

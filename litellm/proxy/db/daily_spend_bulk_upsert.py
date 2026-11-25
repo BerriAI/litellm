@@ -10,11 +10,15 @@ the window in which those locks are held.
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from hashlib import sha256
 from itertools import groupby
+from json import dumps
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, TypeAlias
 
-DailySpendEntity = Literal["user", "team", "org", "tag", "end_user", "agent"]
+from pydantic import TypeAdapter
+
+DailySpendEntity: TypeAlias = Literal["user", "team", "org", "tag", "end_user", "agent", "customer_member"]
 
 SqlValue = str | int | float | None
 
@@ -30,18 +34,75 @@ class DailySpendTable:
     name: str
     entity_id_column: str
     carries_request_id: bool = False
+    parent_id_columns: tuple[str, ...] = ()
+    # The customer table arbitrates on a bounded hash of its identity (model group
+    # included) stored in ``id``, so three long customer ids never exceed an index entry
+    # and rows already written under that identity keep accumulating.
+    hashed_identity: bool = False
+    records_cache_cost: bool = False
 
 
 DAILY_SPEND_TABLES: Final[Mapping[DailySpendEntity, DailySpendTable]] = MappingProxyType(
     {
+        "customer_member": DailySpendTable(
+            name="LiteLLM_DailyCustomerMemberSpend",
+            entity_id_column="customer_member_id",
+            parent_id_columns=("customer_team_id", "customer_org_id", "app_id", "app_group_id"),
+            hashed_identity=True,
+            records_cache_cost=True,
+        ),
         "user": DailySpendTable(name="LiteLLM_DailyUserSpend", entity_id_column="user_id"),
         "team": DailySpendTable(name="LiteLLM_DailyTeamSpend", entity_id_column="team_id"),
-        "org": DailySpendTable(name="LiteLLM_DailyOrganizationSpend", entity_id_column="organization_id"),
+        "org": DailySpendTable(
+            name="LiteLLM_DailyOrganizationSpend",
+            entity_id_column="organization_id",
+        ),
         "end_user": DailySpendTable(name="LiteLLM_DailyEndUserSpend", entity_id_column="end_user_id"),
         "agent": DailySpendTable(name="LiteLLM_DailyAgentSpend", entity_id_column="agent_id"),
-        "tag": DailySpendTable(name="LiteLLM_DailyTagSpend", entity_id_column="tag", carries_request_id=True),
+        "tag": DailySpendTable(
+            name="LiteLLM_DailyTagSpend",
+            entity_id_column="tag",
+            carries_request_id=True,
+        ),
     }
 )
+
+_ENTITY_INPUT_KEYS: Final[Mapping[DailySpendEntity, str]] = MappingProxyType(
+    {
+        "customer_member": "customer_member_id",
+        "user": "user",
+        "team": "team_id",
+        "org": "organization_id",
+        "end_user": "end_user",
+        "agent": "agent_id",
+        "tag": "request_tags",
+    }
+)
+_TAGS: Final = TypeAdapter(tuple[object, ...])
+
+
+def daily_spend_entity_ids(payload: Mapping[str, object], entity: DailySpendEntity) -> tuple[str | None, ...]:
+    if entity == "customer_member" and not (
+        isinstance(payload.get("customer_org_id"), str)
+        and payload.get("customer_org_id")
+        and all(isinstance(payload.get(column), str) for column in ("customer_member_id", "customer_team_id"))
+    ):
+        return ()
+    key: Final = _ENTITY_INPUT_KEYS[entity]
+    if key not in payload:
+        return ()
+    value: Final = payload[key]
+    if entity == "tag":
+        if value is None:
+            return ()
+        tags: Final = _TAGS.validate_json(value) if isinstance(value, str) else _TAGS.validate_python(value)
+        return tuple(dict.fromkeys(tag for tag in tags if isinstance(tag, str)))
+    if value is None:
+        return (None,) if entity == "user" else ()
+    if not isinstance(value, str) or (entity == "end_user" and not value):
+        return ()
+    return (value,)
+
 
 # The unique constraint's columns after the entity id, in constraint order. A NULL can
 # never match itself in a unique index, so every one of these is normalized to '': the
@@ -57,6 +118,8 @@ _COUNTER_COLUMNS: Final = (
     "cache_read_input_tokens",
     "cache_creation_input_tokens",
     "compression_saved_tokens",
+    "total_response_time_ms",
+    "timed_requests",
 )
 _SPEND_COLUMNS: Final = (
     "spend",
@@ -64,12 +127,16 @@ _SPEND_COLUMNS: Final = (
     "prompt_caching_savings_spend",
     "gateway_injected_caching_savings_spend",
     "autorouter_savings_spend",
+    "guardrail_spend",
+    "customer_margin_spend",
 )
 
 _CASTS: Final[Mapping[str, str]] = MappingProxyType(
     {
         **{column: "bigint" for column in _COUNTER_COLUMNS},
         **{column: "double precision" for column in _SPEND_COLUMNS},
+        "cache_cost": "double precision",
+        "priced_cache_tokens": "bigint",
     }
 )
 
@@ -90,18 +157,45 @@ def _as_float(value: object) -> float:
     return float(value) if isinstance(value, (int, float)) else 0.0
 
 
+def _identity_columns(table: DailySpendTable) -> tuple[str, ...]:
+    return (
+        table.entity_id_column,
+        *table.parent_id_columns,
+        *_KEY_COLUMNS,
+        *(("model_group",) if table.hashed_identity else ()),
+    )
+
+
 def conflict_key(table: DailySpendTable, transaction: SpendRow) -> tuple[str, ...]:
     """The tuple the database arbitrates the upsert on, normalized free of NULLs."""
-    return tuple(_as_text(transaction.get(column)) for column in (table.entity_id_column, *_KEY_COLUMNS))
+    return tuple(_as_text(transaction.get(column)) for column in _identity_columns(table))
 
 
-def _merge(group: Sequence[SpendRow]) -> SpendRow:
+def hashed_row_id(table: DailySpendTable, key: tuple[str, ...]) -> str:
+    """The ``id`` of a hashed-identity row, identical for every writer of the same identity."""
+    pairs: Final = sorted(
+        (column, value)
+        for column, value in zip(_identity_columns(table), key, strict=True)
+        if column not in ("app_id", "app_group_id") or value
+    )
+    return sha256(dumps(pairs, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _merge(table: DailySpendTable, group: Sequence[SpendRow]) -> SpendRow:
     if len(group) == 1:
         return group[0]
     return {
         **group[0],
         **{column: sum(_as_int(row.get(column)) for row in group) for column in _COUNTER_COLUMNS},
         **{column: sum(_as_float(row.get(column)) for row in group) for column in _SPEND_COLUMNS},
+        **(
+            {
+                "cache_cost": sum(_as_float(row.get("cache_cost")) for row in group),
+                "priced_cache_tokens": sum(_as_int(row.get("priced_cache_tokens")) for row in group),
+            }
+            if table.records_cache_cost
+            else {}
+        ),
     }
 
 
@@ -118,7 +212,9 @@ def merge_by_conflict_key(
     key keeps concurrent writers taking row locks in the same sequence.
     """
     ordered: Final = sorted(transactions, key=lambda transaction: conflict_key(table, transaction))
-    return tuple((key, _merge(tuple(group))) for key, group in groupby(ordered, key=lambda t: conflict_key(table, t)))
+    return tuple(
+        (key, _merge(table, tuple(group))) for key, group in groupby(ordered, key=lambda t: conflict_key(table, t))
+    )
 
 
 def _row_params(
@@ -127,12 +223,18 @@ def _row_params(
     transaction: SpendRow,
 ) -> tuple[SqlValue, ...]:
     request_id: Final = transaction.get("request_id")
+    model_group: Final = transaction.get("model_group")
     return (
-        str(uuid.uuid4()),
-        *key,
-        None if transaction.get("model_group") is None else _as_text(transaction.get("model_group")),
+        hashed_row_id(table, key) if table.hashed_identity else str(uuid.uuid4()),
+        *key[: len(key) - 1 if table.hashed_identity else len(key)],
+        _as_text(model_group) if table.hashed_identity or model_group is not None else None,
         *(_as_int(transaction.get(column)) for column in _COUNTER_COLUMNS),
         *(_as_float(transaction.get(column)) for column in _SPEND_COLUMNS),
+        *(
+            (_as_float(transaction.get("cache_cost")), _as_int(transaction.get("priced_cache_tokens")))
+            if table.records_cache_cost
+            else ()
+        ),
         *((None if request_id is None else _as_text(request_id),) if table.carries_request_id else ()),
     )
 
@@ -141,10 +243,12 @@ def _insert_columns(table: DailySpendTable) -> tuple[str, ...]:
     return (
         "id",
         table.entity_id_column,
+        *table.parent_id_columns,
         *_KEY_COLUMNS,
         "model_group",
         *_COUNTER_COLUMNS,
         *_SPEND_COLUMNS,
+        *(("cache_cost", "priced_cache_tokens") if table.records_cache_cost else ()),
         *(("request_id",) if table.carries_request_id else ()),
     )
 
@@ -166,8 +270,7 @@ def build_bulk_upsert(
         for row_index in range(len(batch))
     )
     increments: Final = ", ".join(
-        f'"{column}" = {quoted_table}."{column}" + EXCLUDED."{column}"'
-        for column in (*_COUNTER_COLUMNS, *_SPEND_COLUMNS)
+        f'"{column}" = {quoted_table}."{column}" + EXCLUDED."{column}"' for column in columns if column in _CASTS
     )
     # request_id names one arbitrary contributing request, so an entry carrying none must
     # not blank out the one already recorded.
@@ -179,7 +282,7 @@ def build_bulk_upsert(
     sql: Final = (
         f'INSERT INTO {quoted_table} ({_quoted(columns)}, "updated_at")\n'
         f"VALUES {rows}\n"
-        f"ON CONFLICT ({_quoted((table.entity_id_column, *_KEY_COLUMNS))}) DO UPDATE SET\n"
+        f"ON CONFLICT ({_quoted(('id',) if table.hashed_identity else _identity_columns(table))}) DO UPDATE SET\n"
         f"  {increments}{request_id_update},\n"
         f"  \"updated_at\" = (NOW() AT TIME ZONE 'UTC')"
     )

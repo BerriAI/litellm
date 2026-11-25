@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sequence
 from typing import Final, cast
 
 from httpx import Headers, Response
@@ -19,23 +20,24 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
-from litellm.utils import _count_characters, is_base64_encoded
+from litellm.utils import count_characters, is_base64_encoded
 
-from ...base_llm.embedding.transformation import BaseEmbeddingConfig
-from ..common_utils import VertexAIError
+from ...base_llm.embedding.transformation import BaseEmbeddingConfig, extra_body_fields
+from ..common_utils import VertexAIError, pop_vertex_request_labels
+from ..request_labels import vertex_request_label_fields
 
 
 class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return ["dimensions"]
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in non_default_params.items():
             if param == "dimensions":
                 optional_params["outputDimensionality"] = value
@@ -43,14 +45,14 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         default_headers: Final = {
             "Content-Type": "application/json; charset=utf-8",
             "Authorization": f"Bearer {api_key}",
@@ -104,7 +106,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         else:
             return Instance(text=input_element)
 
-    def _try_merge_text_with_media(self, text_str: str, next_elem: str | None) -> tuple[Instance, bool]:
+    def _try_merge_text_with_media(self, text_str: str, next_elem: object) -> tuple[Instance, bool]:
         """
         Try to merge a text element with a following media element into a single instance.
 
@@ -127,7 +129,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
 
         return instance_args, False
 
-    def process_openai_embedding_input(self, _input: list | str) -> list[Instance]:
+    def process_openai_embedding_input(self, _input: Sequence[object] | str) -> list[Instance]:
         """
         Process the input for multimodal embedding requests.
 
@@ -168,9 +170,15 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         model: str,
         input: AllEmbeddingInputValues,
         optional_params: dict,
-        headers: dict,
-    ) -> dict:
+        headers: Mapping[str, object],
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         optional_params = optional_params or {}
+        labels: Final = (
+            pop_vertex_request_labels(optional_params, dict(litellm_params or {}))
+            if vertex_request_label_fields()
+            else None
+        )
 
         request_data: Final = VertexMultimodalEmbeddingRequest(instances=[])
 
@@ -189,10 +197,13 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
 
             request_data["instances"] = [vertex_request_instance]
 
+        extra_body: Final = extra_body_fields(optional_params)
         if "outputDimensionality" in optional_params:
-            request_data["parameters"] = {"dimension": optional_params["outputDimensionality"]}
+            request_data["parameters"] = {**extra_body, "dimension": optional_params["outputDimensionality"]}
+        elif extra_body:
+            request_data["parameters"] = dict(extra_body)
 
-        return cast(dict, request_data)
+        return {**request_data, "labels": labels} if labels else {**request_data}
 
     def transform_embedding_response(
         self,
@@ -201,14 +212,14 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> EmbeddingResponse:
         if raw_response.status_code != 200:
             raise Exception(f"Error: {raw_response.status_code} {raw_response.text}")
 
-        _json_response: Final = raw_response.json()
+        _json_response: Final[MultimodalPredictions] = raw_response.json()
         if "predictions" not in _json_response:
             raise InternalServerError(
                 message=f"embedding response does not contain 'predictions', got {_json_response}",
@@ -245,7 +256,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
                     prompt += text
 
         if prompt is not None:
-            character_count = _count_characters(prompt)
+            character_count = count_characters(prompt)
 
         ## Calculate image embeddings usage
         image_count = 0

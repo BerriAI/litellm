@@ -16,27 +16,26 @@ Sent to this route when `model` is in the format `vertex_ai/openai/{MODEL_ID}`
 Vertex Documentation for using the OpenAI /chat/completions endpoint: https://github.com/GoogleCloudPlatform/vertex-ai-samples/blob/main/notebooks/community/model_garden/model_garden_pytorch_llama3_deployment.ipynb
 """
 
-from collections.abc import Callable
-from typing import Final
+from collections.abc import Callable, Mapping
+from typing import TYPE_CHECKING, Final
 
 import httpx
 
+from litellm.exceptions import Timeout
+from litellm.llms.openai_like.common_utils import OpenAILikeError
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.utils import ModelResponse
 
-from ..common_utils import VertexAIError, get_vertex_base_model_name
+from ..common_utils import (
+    VertexAIError,
+    get_vertex_base_model_name,
+    vertex_model_garden_model_id_in_json_body,
+)
 from ..vertex_llm_base import VertexBase
 
-
-def _vertex_model_garden_model_id_in_json_body(model: str) -> bool:
-    """
-    Vertex catalog / publisher models are addressed as publisher/model (e.g.
-    xai/grok-4.1-fast-reasoning) on the shared OpenAPI URL, with the id in the JSON body.
-
-    Deployed Model Garden endpoints are typically a single segment (often numeric)
-    and use .../endpoints/{ENDPOINT_ID}/chat/completions with an empty model field.
-    """
-    return "/" in model
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 def create_vertex_url(
@@ -48,7 +47,7 @@ def create_vertex_url(
 ) -> str:
     """Return the api base for vertex model garden (without /chat/completions)."""
     base_url: Final = get_vertex_base_url(vertex_location)
-    if _vertex_model_garden_model_id_in_json_body(model):
+    if vertex_model_garden_model_id_in_json_body(model):
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi"
     return f"{base_url}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/{model}"
 
@@ -62,21 +61,21 @@ class VertexAIModelGardenModels(VertexBase):
         model: str,
         messages: list,
         model_response: ModelResponse,
-        print_verbose: Callable,
-        encoding,
-        logging_obj,
+        print_verbose: Callable[..., object],
+        encoding: object,
+        logging_obj: "LiteLLMLoggingObj",
         api_base: str | None,
         optional_params: dict,
         custom_prompt_dict: dict,
-        headers: dict | None,
+        headers: Mapping[str, object] | None,
         timeout: float | httpx.Timeout,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         vertex_project=None,
         vertex_location=None,
         vertex_credentials=None,
-        logger_fn=None,
+        logger_fn: object = None,
         acompletion: bool = False,
-        client=None,
+        client: "HTTPHandler | AsyncHTTPHandler | None" = None,
     ):
         """
         Handles calling Vertex AI Model Garden Models in OpenAI compatible format
@@ -124,7 +123,7 @@ class VertexAIModelGardenModels(VertexBase):
                 )
             # Publisher/catalog models: model id must be sent in the JSON body (OpenAPI route).
             # Single-segment endpoint ids: model is encoded in the URL path; body model stays empty.
-            if not _vertex_model_garden_model_id_in_json_body(model):
+            if not vertex_model_garden_model_id_in_json_body(model):
                 model = ""
             return openai_like_chat_completions.completion(
                 model=model,
@@ -145,5 +144,9 @@ class VertexAIModelGardenModels(VertexBase):
                 custom_llm_provider="vertex_ai",
             )
 
+        except (OpenAILikeError, httpx.HTTPStatusError) as e:
+            raise VertexAIError(status_code=e.response.status_code, message=str(e))
+        except Timeout as e:
+            raise VertexAIError(status_code=e.status_code, message=str(e))
         except Exception as e:
             raise VertexAIError(status_code=500, message=str(e))

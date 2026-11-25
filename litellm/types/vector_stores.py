@@ -1,10 +1,15 @@
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Annotated, Any, Final, Literal, TypeAlias
 
-from pydantic import BaseModel
-from typing_extensions import TypedDict
+from pydantic import AfterValidator, ConfigDict, Field, StrictFloat, StrictInt, StrictStr
+from typing_extensions import ReadOnly, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
+
+RETRIEVAL_QUERY_PARAMS: Final = ("retrievalQuery", "retrieval_query")
 
 
 class SupportedVectorStoreIntegrations(str, Enum):
@@ -29,7 +34,7 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
 
     vector_store_name: str | None
     vector_store_description: str | None
-    vector_store_metadata: dict[str, Any] | str | None
+    vector_store_metadata: dict[str, object] | str | None
     created_at: datetime | None
     updated_at: datetime | None
 
@@ -43,6 +48,8 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
     team_id: str | None
     user_id: str | None
 
+    is_config: ReadOnly[bool]
+
 
 class LiteLLM_ManagedVectorStoreListResponse(TypedDict, total=False):
     """Response format for listing vector stores"""
@@ -54,7 +61,7 @@ class LiteLLM_ManagedVectorStoreListResponse(TypedDict, total=False):
     total_pages: int | None
 
 
-class VectorStoreUpdateRequest(BaseModel):
+class VectorStoreUpdateRequest(LiteLLMBaseModel):
     vector_store_id: str
     custom_llm_provider: str | None = None
     vector_store_name: str | None = None
@@ -62,12 +69,29 @@ class VectorStoreUpdateRequest(BaseModel):
     vector_store_metadata: dict | None = None
 
 
-class VectorStoreDeleteRequest(BaseModel):
+class VectorStoreDeleteRequest(LiteLLMBaseModel):
     vector_store_id: str
 
 
-class VectorStoreInfoRequest(BaseModel):
+class VectorStoreInfoRequest(LiteLLMBaseModel):
     vector_store_id: str
+
+
+VectorStoreSearchImageMediaType: TypeAlias = Literal["image/jpeg", "image/png", "image/gif", "image/webp"]
+
+
+class VectorStoreSearchQueryImage(TypedDict):
+    """Base64 image to search a multimodal vector store with, in place of a text query"""
+
+    type: ReadOnly[Literal["base64"]]
+    media_type: ReadOnly[VectorStoreSearchImageMediaType]
+    data: ReadOnly[str]
+
+
+class VectorStoreResultImageSource(TypedDict):
+    type: ReadOnly[Literal["base64"]]
+    media_type: ReadOnly[str]
+    data: ReadOnly[str]
 
 
 class VectorStoreResultContent(TypedDict, total=False):
@@ -75,6 +99,7 @@ class VectorStoreResultContent(TypedDict, total=False):
 
     text: str | None
     type: str | None
+    source: ReadOnly[VectorStoreResultImageSource]
 
 
 class VectorStoreSearchResult(TypedDict, total=False):
@@ -95,6 +120,17 @@ class VectorStoreSearchResponse(TypedDict, total=False):
     data: list[VectorStoreSearchResult] | None
 
 
+VectorStoreSearchFailureMode = Literal["annotate", "error"]
+
+
+class VectorStoreSearchFailure(TypedDict):
+    """A configured vector store whose search failed, as reported back to the API caller"""
+
+    vector_store_id: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str | None]
+    error: ReadOnly[str]
+
+
 class VectorStoreSearchOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the vector store search API."""
 
@@ -102,6 +138,7 @@ class VectorStoreSearchOptionalRequestParams(TypedDict, total=False):
     max_num_results: int | None
     ranking_options: dict | None
     rewrite_query: bool | None
+    query_image: ReadOnly[VectorStoreSearchQueryImage | None]
 
 
 class VectorStoreSearchRequest(VectorStoreSearchOptionalRequestParams, total=False):
@@ -128,31 +165,31 @@ class VertexSearchDataStoreExtraBody(TypedDict, total=False):
     pageToken: str
     offset: int
     oneBoxPageSize: int
-    pageCategories: list[str]
-    imageQuery: dict[str, Any]
+    pageCategories: Sequence[str]
+    imageQuery: Mapping[str, object]
     filter: str
     canonicalFilter: str
     orderBy: str
-    userInfo: dict[str, Any]
+    userInfo: Mapping[str, object]
     languageCode: str
-    facetSpecs: list[dict[str, Any]]
-    boostSpec: dict[str, Any]
-    params: dict[str, Any]
-    queryExpansionSpec: dict[str, Any]
-    spellCorrectionSpec: dict[str, Any]
+    facetSpecs: Sequence[Mapping[str, object]]
+    boostSpec: Mapping[str, object]
+    params: Mapping[str, object]
+    queryExpansionSpec: Mapping[str, object]
+    spellCorrectionSpec: Mapping[str, object]
     userPseudoId: str
-    contentSearchSpec: dict[str, Any]
+    contentSearchSpec: Mapping[str, object]
     rankingExpression: str
     rankingExpressionBackend: str
     safeSearch: bool
-    userLabels: dict[str, str]
-    naturalLanguageQueryUnderstandingSpec: dict[str, Any]
-    searchAsYouTypeSpec: dict[str, Any]
-    displaySpec: dict[str, Any]
-    crowdingSpecs: list[dict[str, Any]]
+    userLabels: Mapping[str, str]
+    naturalLanguageQueryUnderstandingSpec: Mapping[str, object]
+    searchAsYouTypeSpec: Mapping[str, object]
+    displaySpec: Mapping[str, object]
+    crowdingSpecs: Sequence[Mapping[str, object]]
     relevanceThreshold: str
-    relevanceScoreSpec: dict[str, Any]
-    customRankingParams: dict[str, Any]
+    relevanceScoreSpec: Mapping[str, object]
+    customRankingParams: Mapping[str, object]
 
 
 class VertexSearchEngineExtraBody(VertexSearchDataStoreExtraBody, total=False):
@@ -166,7 +203,7 @@ class VertexSearchEngineExtraBody(VertexSearchDataStoreExtraBody, total=False):
     (per-store scoping/filtering) and ``numResultsPerDataStore``.
     """
 
-    dataStoreSpecs: list[dict[str, Any]]
+    dataStoreSpecs: Sequence[Mapping[str, object]]
     numResultsPerDataStore: int
 
 
@@ -248,15 +285,15 @@ class VectorStoreCreateResponse(TypedDict, total=False):
     metadata: dict[str, str] | None  # Metadata associated with the vector store
 
 
-class IndexCreateLiteLLMParams(BaseModel):
+class IndexCreateLiteLLMParams(LiteLLMBaseModel):
     vector_store_index: str
     vector_store_name: str
 
 
-class IndexCreateRequest(BaseModel):
+class IndexCreateRequest(LiteLLMBaseModel):
     index_name: str
     litellm_params: IndexCreateLiteLLMParams
-    index_info: dict[str, Any] | None = None
+    index_info: dict[str, object] | None = None
 
 
 class BaseVectorStoreAuthCredentials(TypedDict, total=False):
@@ -264,20 +301,20 @@ class BaseVectorStoreAuthCredentials(TypedDict, total=False):
     query_params: dict
 
 
-class LiteLLM_ManagedVectorStoreIndex(BaseModel):
+class LiteLLM_ManagedVectorStoreIndex(LiteLLMBaseModel):
     """LiteLLM managed vector store index object - this is is the object stored in the database"""
 
     id: str
     index_name: str
     litellm_params: IndexCreateLiteLLMParams
-    index_info: dict[str, Any] | None = None
+    index_info: dict[str, object] | None = None
     created_at: datetime | None = None
     created_by: str | None = None
     updated_at: datetime | None = None
     updated_by: str | None = None
 
 
-class IndexListResponse(BaseModel):
+class IndexListResponse(LiteLLMBaseModel):
     object: Literal["list"] = "list"
     data: tuple[LiteLLM_ManagedVectorStoreIndex, ...]
 
@@ -305,6 +342,55 @@ VECTOR_STORE_OPENAI_PARAMS = Literal[
     "max_num_results",
     "ranking_options",
     "rewrite_query",
+    "query_image",
+]
+
+
+def _require_items(items: tuple[object, ...]) -> tuple[object, ...]:
+    if not items:
+        raise ValueError("must not be empty")
+    return items
+
+
+class OpenAIEqualityFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["eq", "ne"]
+    key: str
+    value: str | bool | int | float
+
+
+class OpenAIRangeFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["gt", "gte", "lt", "lte"]
+    key: str
+    value: StrictInt | StrictFloat
+
+
+class OpenAIMembershipFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["in", "nin"]
+    key: str
+    value: Annotated[
+        tuple[StrictStr | StrictInt | StrictFloat, ...], Field(fail_fast=True), AfterValidator(_require_items)
+    ]
+
+
+OpenAIComparisonFilter: TypeAlias = OpenAIEqualityFilter | OpenAIRangeFilter | OpenAIMembershipFilter
+
+
+class OpenAICompoundFilter(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    type: Literal["and", "or"]
+    filters: Annotated[tuple["OpenAIVectorStoreFilter", ...], Field(fail_fast=True), AfterValidator(_require_items)]
+
+
+OpenAIVectorStoreFilter: TypeAlias = Annotated[
+    OpenAIComparisonFilter | OpenAICompoundFilter,
+    Field(discriminator="type"),
 ]
 
 
@@ -312,11 +398,12 @@ VECTOR_STORE_OPENAI_PARAMS = Literal[
 class VectorStoreToolParams:
     """Parameters extracted from a file_search tool definition"""
 
-    filters: dict | None = None
+    filters: Mapping[str, object] | None = None
     max_num_results: int | None = None
-    ranking_options: dict | None = None
+    ranking_options: Mapping[str, object] | None = None
+    rewrite_query: bool | None = None
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, object]:
         """Convert to dict, excluding None values"""
         return {
             k: v
@@ -324,6 +411,7 @@ class VectorStoreToolParams:
                 "filters": self.filters,
                 "max_num_results": self.max_num_results,
                 "ranking_options": self.ranking_options,
+                "rewrite_query": self.rewrite_query or None,
             }.items()
             if v is not None
         }

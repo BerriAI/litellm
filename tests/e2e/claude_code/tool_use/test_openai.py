@@ -1,8 +1,8 @@
-"""tool_use x OpenAI (GPT-5.6).
+"""tool_use x OpenAI (GPT-6).
 
 Drive the real `claude` CLI against a running LiteLLM proxy that
-routes Anthropic Messages requests to OpenAI's GPT-5.6 family (Sol,
-Terra, Luna), ask the model to invoke a built-in tool (`Bash`), and
+routes Anthropic Messages requests to OpenAI's GPT-6 family (Sol,
+Terra, Luna, Astra), ask the model to invoke a built-in tool (`Bash`), and
 assert that a `tool_use` content block came back over the wire.
 
 Claude Code declares its tools in Anthropic `tools` format; LiteLLM's
@@ -28,6 +28,7 @@ from typing import Any, Mapping, Sequence
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code._gpt_cells import skip_unless_openai_gpt_cells_enabled
 from claude_code.cli_driver import (
@@ -37,9 +38,10 @@ from claude_code.cli_driver import (
 )
 
 OPENAI_MODELS = [
-    "gpt-5-6-sol-openai",
-    "gpt-5-6-terra-openai",
-    "gpt-5-6-luna-openai",
+    "gpt-6-2-sol-openai",
+    "gpt-6-1-terra-openai",
+    "gpt-6-luna-openai",
+    "gpt-6-2-astra-openai",
 ]
 
 TOOL_USE_PROMPT = (
@@ -67,9 +69,19 @@ def _has_tool_use_event(events: Sequence[Mapping[str, Any]]) -> bool:
     return False
 
 
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.OPENAI,),
+        models=tuple(OPENAI_MODELS),
+        capabilities=(Capability.FUNCTION_CALLING,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_tool_use_openai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a
-    tool call was emitted on the wire by each GPT-5.6 tier."""
+    tool call was emitted on the wire by each GPT-6 model."""
     skip_unless_openai_gpt_cells_enabled()
     proxy = require_proxy(compat_result)
 

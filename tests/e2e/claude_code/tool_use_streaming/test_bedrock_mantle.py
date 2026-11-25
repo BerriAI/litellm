@@ -1,8 +1,8 @@
-"""tool_use_streaming x AWS Bedrock Mantle (GPT-5.6).
+"""tool_use_streaming x AWS Bedrock Mantle (GPT-6).
 
 Drive the real `claude` CLI in headless `--output-format stream-json`
 mode against a running LiteLLM proxy that routes Anthropic Messages
-requests to OpenAI's GPT-5.6 family (Sol, Terra, Luna) on AWS
+requests to OpenAI's GPT-6 family (Sol, Terra, Luna, Astra) on AWS
 Bedrock's Mantle endpoint, ask the model to invoke a built-in tool
 (`Bash`), and assert that the upstream (a) emitted a `tool_use`
 content block and (b) streamed the tool input incrementally as
@@ -34,6 +34,7 @@ from typing import Any, Mapping, Sequence
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code._gpt_cells import skip_unless_mantle_cells_enabled
 from claude_code.cli_driver import (
@@ -43,9 +44,10 @@ from claude_code.cli_driver import (
 )
 
 BEDROCK_MANTLE_MODELS = [
-    "gpt-5-6-sol-bedrock-mantle",
-    "gpt-5-6-terra-bedrock-mantle",
-    "gpt-5-6-luna-bedrock-mantle",
+    "gpt-6-2-sol-bedrock-mantle",
+    "gpt-6-1-terra-bedrock-mantle",
+    "gpt-6-luna-bedrock-mantle",
+    "gpt-6-2-astra-bedrock-mantle",
 ]
 
 TOOL_USE_PROMPT = (
@@ -92,6 +94,16 @@ def _count_input_json_deltas(events: Sequence[Mapping[str, Any]]) -> int:
     )
 
 
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.BEDROCK_MANTLE,),
+        models=tuple(BEDROCK_MANTLE_MODELS),
+        capabilities=(Capability.FUNCTION_CALLING,),
+        mode=Mode.STREAM,
+    )
+)
 def test_tool_use_streaming_bedrock_mantle(compat_result):
     skip_unless_mantle_cells_enabled()
     proxy = require_proxy(compat_result)

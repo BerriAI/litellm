@@ -4,7 +4,10 @@ Builds on top of PromptManagementBase to provide .prompt file support.
 """
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.integrations.prompt_management_base import PromptManagementClient
@@ -17,7 +20,12 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-from .prompt_manager import PromptManager, PromptTemplate
+from .prompt_manager import PromptJsonEntry, PromptManager, PromptTemplate
+
+
+class _PromptJsonData(TypedDict, total=False):
+    content: ReadOnly[str]
+    metadata: ReadOnly[dict[str, object]]
 
 
 class DotpromptManager(CustomPromptManagement):
@@ -46,9 +54,11 @@ class DotpromptManager(CustomPromptManagement):
         prompt_file: str | None = None,
         prompt_data: dict | str | None = None,
         prompt_id: str | None = None,
+        ignore_prompt_manager_optional_params: bool | None = False,
     ):
         import litellm
 
+        self.ignore_prompt_manager_optional_params = ignore_prompt_manager_optional_params
         self.prompt_directory = prompt_directory or litellm.global_prompt_directory
         # Support for JSON-based prompts stored in memory/database
         if isinstance(prompt_data, str):
@@ -105,7 +115,7 @@ class DotpromptManager(CustomPromptManagement):
         self,
         prompt_id: str | None,
         prompt_spec: PromptSpec | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
@@ -160,7 +170,7 @@ class DotpromptManager(CustomPromptManagement):
     async def async_compile_prompt_helper(
         self,
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: Mapping[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -186,16 +196,16 @@ class DotpromptManager(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         from litellm.integrations.prompt_management_base import PromptManagementBase
 
         return PromptManagementBase.get_chat_completion_prompt(
@@ -217,9 +227,9 @@ class DotpromptManager(CustomPromptManagement):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         prompt_spec: PromptSpec | None = None,
@@ -228,7 +238,7 @@ class DotpromptManager(CustomPromptManagement):
         prompt_version: int | None = None,
         ignore_prompt_manager_model: bool | None = False,
         ignore_prompt_manager_optional_params: bool | None = False,
-    ) -> tuple[str, list[AllMessageValues], dict]:
+    ) -> tuple[str, list[AllMessageValues], dict[str, object]]:
         """
         Async version - delegates to PromptManagementBase async implementation.
         """
@@ -264,7 +274,7 @@ class DotpromptManager(CustomPromptManagement):
         content: Final = rendered_content.strip()
 
         # Try to parse role-based format (System: ..., User: ..., etc.)
-        messages: Final = []
+        messages: Final[list[AllMessageValues]] = []
         current_role = None
         current_content = []
 
@@ -317,13 +327,13 @@ class DotpromptManager(CustomPromptManagement):
             "content": content,
         }
 
-    def _extract_optional_params(self, template: PromptTemplate) -> dict:
+    def _extract_optional_params(self, template: PromptTemplate) -> dict[str, object]:
         """
         Extract optional parameters from the prompt template metadata.
 
         Includes parameters like temperature, max_tokens, etc.
         """
-        optional_params: Final = {}
+        optional_params: Final[dict[str, object]] = {}
 
         # Extract common parameters from metadata
         if template.optional_params is not None:
@@ -341,20 +351,20 @@ class DotpromptManager(CustomPromptManagement):
         if self._prompt_manager:
             self._prompt_manager.reload_prompts()
 
-    def add_prompt_from_json(self, prompt_id: str, json_data: dict[str, Any]) -> None:
+    def add_prompt_from_json(self, prompt_id: str, json_data: _PromptJsonData) -> None:
         """Add a prompt from JSON data."""
         content: Final = json_data.get("content", "")
         metadata: Final = json_data.get("metadata", {})
         self.prompt_manager.add_prompt(prompt_id, content, metadata)
 
-    def load_prompts_from_json(self, prompts_data: dict[str, dict[str, Any]]) -> None:
+    def load_prompts_from_json(self, prompts_data: Mapping[str, object]) -> None:
         """Load multiple prompts from JSON data."""
         self.prompt_manager.load_prompts_from_json_data(prompts_data)
 
-    def get_prompts_as_json(self) -> dict[str, dict[str, Any]]:
+    def get_prompts_as_json(self) -> dict[str, PromptJsonEntry]:
         """Get all prompts in JSON format."""
         return self.prompt_manager.get_all_prompts_as_json()
 
-    def convert_prompt_file_to_json(self, file_path: str) -> dict[str, Any]:
+    def convert_prompt_file_to_json(self, file_path: str) -> Mapping[str, object]:
         """Convert a .prompt file to JSON format."""
         return self.prompt_manager.prompt_file_to_json(file_path)

@@ -21,9 +21,8 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.types.utils import ModelResponse
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -111,11 +110,11 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI parameters to Moonshot AI parameters for Bedrock.
 
@@ -136,10 +135,10 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform the request for Bedrock Moonshot AI models.
 
@@ -149,19 +148,15 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         - Temperature and parameter validation
 
         """
-        # Filter out AWS credentials using the existing method from BaseAWSLLM
-        self._get_boto_credentials_from_optional_params(optional_params, model)
+        inference_params: Final = {k: v for k, v in optional_params.items() if k not in self.aws_authentication_params}
 
-        # Strip routing prefixes to get the actual model ID
         clean_model_id: Final = self._get_model_id(model)
 
-        # Use Moonshot's transform_request which handles message transformation
-        # and tool_choice="required" workaround
         return MoonshotChatConfig.transform_request(
             self,
             model=clean_model_id,
             messages=messages,
-            optional_params=optional_params,
+            optional_params=inference_params,
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -198,11 +193,11 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         raw_response: httpx.Response,
         model_response: "ModelResponse",
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> "ModelResponse":
@@ -249,6 +244,8 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
 
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BedrockError:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BedrockError:
         """Return the appropriate error class for Bedrock."""
-        return BedrockError(status_code=status_code, message=error_message)
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)

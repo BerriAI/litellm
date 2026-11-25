@@ -1,0 +1,481 @@
+{
+  "rows": [
+    {
+      "input": "null",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null
+    },
+    {
+      "input": "true",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true
+    },
+    {
+      "input": "false",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false
+    },
+    {
+      "input": "0",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false
+    },
+    {
+      "input": "1",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true
+    },
+    {
+      "input": "2",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": null
+    },
+    {
+      "input": "-1",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": null
+    },
+    {
+      "input": "0.0",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false
+    },
+    {
+      "input": "0.5",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": null
+    },
+    {
+      "input": "1.0",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true
+    },
+    {
+      "input": "[]",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null
+    },
+    {
+      "input": "[false]",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": null
+    },
+    {
+      "input": "{}",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null
+    },
+    {
+      "input": "{\"a\": null}",
+      "str_to_bool": null,
+      "redis_str_to_bool": null,
+      "lower_is_true": null,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": null
+    },
+    {
+      "input": "\"\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null
+    },
+    {
+      "input": "\" \"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null
+    },
+    {
+      "input": "\"true\"",
+      "str_to_bool": true,
+      "redis_str_to_bool": true,
+      "lower_is_true": true,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true
+    },
+    {
+      "input": "\"True\"",
+      "str_to_bool": true,
+      "redis_str_to_bool": true,
+      "lower_is_true": true,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true
+    },
+    {
+      "input": "\"TRUE\"",
+      "str_to_bool": true,
+      "redis_str_to_bool": true,
+      "lower_is_true": true,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true
+    },
+    {
+      "input": "\"tRuE\"",
+      "str_to_bool": true,
+      "redis_str_to_bool": true,
+      "lower_is_true": true,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true
+    },
+    {
+      "input": "\" true \"",
+      "str_to_bool": true,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true
+    },
+    {
+      "input": "\"\\ttrue\\n\"",
+      "str_to_bool": true,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true
+    },
+    {
+      "input": "\"\\u001ctrue\\u001f\"",
+      "str_to_bool": true,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": true,
+      "lax_bool": true
+    },
+    {
+      "input": "\"\\u00a0false\\u2003\"",
+      "str_to_bool": false,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false
+    },
+    {
+      "input": "\"true\\u200b\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null
+    },
+    {
+      "input": "\"false\"",
+      "str_to_bool": false,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false
+    },
+    {
+      "input": "\"False\"",
+      "str_to_bool": false,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false
+    },
+    {
+      "input": "\"FALSE\"",
+      "str_to_bool": false,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false
+    },
+    {
+      "input": "\" false\"",
+      "str_to_bool": false,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false
+    },
+    {
+      "input": "\"1\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": true,
+      "lower_is_true": false,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true
+    },
+    {
+      "input": "\"0\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false
+    },
+    {
+      "input": "\" 1\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true
+    },
+    {
+      "input": "\"yes\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": true,
+      "lower_is_true": false,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true
+    },
+    {
+      "input": "\"Yes\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": true,
+      "lower_is_true": false,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true
+    },
+    {
+      "input": "\"YES\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": true,
+      "lower_is_true": false,
+      "coerces_to_true": true,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true
+    },
+    {
+      "input": "\" yes\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true
+    },
+    {
+      "input": "\"no\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false
+    },
+    {
+      "input": "\"on\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true
+    },
+    {
+      "input": "\"On\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true
+    },
+    {
+      "input": "\"off\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false
+    },
+    {
+      "input": "\"t\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true
+    },
+    {
+      "input": "\"f\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false
+    },
+    {
+      "input": "\"y\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": true
+    },
+    {
+      "input": "\"n\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": false
+    },
+    {
+      "input": "\"2\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null
+    },
+    {
+      "input": "\"-1\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null
+    },
+    {
+      "input": "\"1.0\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null
+    },
+    {
+      "input": "\"truthy\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null
+    },
+    {
+      "input": "\"maybe\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null
+    },
+    {
+      "input": "\"None\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null
+    },
+    {
+      "input": "\"null\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null
+    },
+    {
+      "input": "\"\\u0130\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null
+    },
+    {
+      "input": "\"tru\\u212a\"",
+      "str_to_bool": null,
+      "redis_str_to_bool": false,
+      "lower_is_true": false,
+      "coerces_to_true": false,
+      "str_to_bool_or_truthy": false,
+      "lax_bool": null
+    }
+  ]
+}

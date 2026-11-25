@@ -1,8 +1,18 @@
-from typing import Literal
+from dataclasses import dataclass
+from typing import Final, Literal
 
 from pydantic import BaseModel, Field
 
 from .base import GuardrailConfigModel
+
+HEADROOM_REQUEST_CONTEXT_KEY: Final = "_headroom_request_context"
+
+
+@dataclass(frozen=True, slots=True)
+class HeadroomRequestContext:
+    issued_hashes: frozenset[str]
+    affinity: str | None
+    expires_at: float
 
 
 class HeadroomGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
@@ -25,6 +35,10 @@ class HeadroomGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
             "'fail_closed' raises an error (default). 'fail_open' logs a critical error and "
             "forwards the request uncompressed instead of blocking it."
         ),
+    )
+    ccr_retrieval: bool = Field(
+        default=True,
+        description="Inject the Headroom retrieval tool for hashes declared by the compression service.",
     )
 
     @staticmethod

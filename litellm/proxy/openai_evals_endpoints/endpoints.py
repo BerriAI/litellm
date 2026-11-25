@@ -35,7 +35,7 @@ async def create_eval(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Create a new evaluation.
 
@@ -107,7 +107,7 @@ async def create_eval(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -131,7 +131,7 @@ async def list_evals(
     order_by: str | None = None,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     List evaluations with pagination.
 
@@ -208,7 +208,7 @@ async def list_evals(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -228,7 +228,7 @@ async def get_eval(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Get a specific evaluation by ID.
 
@@ -296,7 +296,7 @@ async def get_eval(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -316,7 +316,7 @@ async def update_eval(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Update an evaluation.
 
@@ -386,7 +386,7 @@ async def update_eval(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -406,7 +406,7 @@ async def delete_eval(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Delete an evaluation.
 
@@ -474,7 +474,7 @@ async def delete_eval(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -494,7 +494,7 @@ async def cancel_eval(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Cancel a running evaluation.
 
@@ -562,7 +562,7 @@ async def cancel_eval(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -587,7 +587,7 @@ async def create_run(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Create a new run for an evaluation.
 
@@ -666,7 +666,7 @@ async def create_run(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -690,7 +690,7 @@ async def list_runs(
     order: str | None = None,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     List all runs for an evaluation with pagination.
 
@@ -759,7 +759,7 @@ async def list_runs(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -780,7 +780,7 @@ async def get_run(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Get a specific run by ID.
 
@@ -846,7 +846,7 @@ async def get_run(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -867,7 +867,7 @@ async def cancel_run(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Cancel a running run.
 
@@ -935,7 +935,7 @@ async def cancel_run(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
@@ -956,7 +956,7 @@ async def delete_run(
     request: Request,
     custom_llm_provider: str | None = "openai",
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
+) -> object:
     """
     Delete a run.
 
@@ -1024,7 +1024,7 @@ async def delete_run(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

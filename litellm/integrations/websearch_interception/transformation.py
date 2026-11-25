@@ -5,11 +5,24 @@ Transforms between Anthropic/OpenAI tool_use format and LiteLLM search format.
 """
 
 import json
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final
+
+from pydantic import TypeAdapter
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
+from litellm.exceptions import BadRequestError, RateLimitError
 from litellm.llms.base_llm.search.transformation import SearchResponse
+from litellm.types.integrations.websearch_interception import (
+    SearchFailed,
+    SearchOutcome,
+    SearchSucceeded,
+    WebSearchToolResultErrorCode,
+)
+
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class WebSearchTransformation:
@@ -24,10 +37,10 @@ class WebSearchTransformation:
 
     @staticmethod
     def transform_request(
-        response: Any,
+        response: object,
         stream: bool,
         response_format: str = "anthropic",
-    ) -> tuple[bool, list[dict]]:
+    ) -> tuple[bool, list[dict[str, object]]]:
         """
         Transform model response to extract WebSearch tool calls.
 
@@ -66,8 +79,8 @@ class WebSearchTransformation:
 
     @staticmethod
     def _detect_from_responses_response(
-        response: Any,
-    ) -> tuple[bool, list[dict]]:
+        response: object,
+    ) -> tuple[bool, list[dict[str, object]]]:
         """Parse a Responses API response for ``litellm_web_search`` function calls.
 
         After pre-request conversion the native web search tool is replaced by a
@@ -82,7 +95,7 @@ class WebSearchTransformation:
         if not isinstance(output, list):
             return False, []
 
-        tool_calls: Final[list[dict]] = []
+        tool_calls: Final[list[dict[str, object]]] = []
         for item in output:
             if isinstance(item, dict):
                 item_type = item.get("type")
@@ -128,8 +141,8 @@ class WebSearchTransformation:
 
     @staticmethod
     def _detect_from_non_streaming_response(
-        response: Any,
-    ) -> tuple[bool, list[dict]]:
+        response: object,
+    ) -> tuple[bool, list[dict[str, object]]]:
         """Parse non-streaming response for WebSearch tool_use"""
 
         # Handle both dict and object responses
@@ -139,14 +152,14 @@ class WebSearchTransformation:
             if not hasattr(response, "content"):
                 verbose_logger.debug("WebSearchInterception: Response has no content attribute")
                 return False, []
-            content = response.content or []
+            content = getattr(response, "content", None) or []
 
         if not content:
             verbose_logger.debug("WebSearchInterception: Response has empty content")
             return False, []
 
         # Find all WebSearch tool_use blocks
-        tool_calls: Final = []
+        tool_calls: Final[list[dict[str, object]]] = []
         for block in content:
             # Handle both dict and object blocks
             if isinstance(block, dict):
@@ -171,7 +184,7 @@ class WebSearchTransformation:
                 "web_search",
             ):
                 # Convert to dict for easier handling
-                tool_call = {
+                tool_call: dict[str, object] = {
                     "id": block_id,
                     "type": "tool_use",
                     "name": block_name,  # Preserve original name
@@ -184,8 +197,8 @@ class WebSearchTransformation:
 
     @staticmethod
     def _detect_from_openai_response(
-        response: Any,
-    ) -> tuple[bool, list[dict]]:
+        response: object,
+    ) -> tuple[bool, list[dict[str, object]]]:
         """Parse OpenAI-style response for WebSearch tool_calls"""
 
         # Handle both dict and ModelResponse objects
@@ -195,7 +208,7 @@ class WebSearchTransformation:
             if not hasattr(response, "choices"):
                 verbose_logger.debug("WebSearchInterception: Response has no choices attribute")
                 return False, []
-            choices = response.choices or []
+            choices = getattr(response, "choices", None) or []
 
         if not choices:
             verbose_logger.debug("WebSearchInterception: Response has empty choices")
@@ -223,7 +236,7 @@ class WebSearchTransformation:
             return False, []
 
         # Find all WebSearch tool calls
-        tool_calls: Final = []
+        tool_calls: Final[list[dict[str, object]]] = []
         for tool_call in openai_tool_calls:
             # Handle both dict and object tool calls
             if isinstance(tool_call, dict):
@@ -237,9 +250,9 @@ class WebSearchTransformation:
             else:
                 tool_id = getattr(tool_call, "id", None)
                 tool_type = getattr(tool_call, "type", None)
-                function = getattr(tool_call, "function", None)
-                function_name = getattr(function, "name", None) if function else None
-                function_arguments = getattr(function, "arguments", None) if function else None
+                function_obj: object = getattr(tool_call, "function", None)
+                function_name = getattr(function_obj, "name", None) if function_obj else None
+                function_arguments = getattr(function_obj, "arguments", None) if function_obj else None
 
             # Detect function-style web search tool_calls. ``WebSearch`` is
             # intentionally omitted — see is_web_search_tool for the Cowork
@@ -252,7 +265,7 @@ class WebSearchTransformation:
                 # Parse arguments (might be JSON string)
                 if isinstance(function_arguments, str):
                     try:
-                        arguments = json.loads(function_arguments)
+                        arguments = _DECODED_JSON.validate_python(json.loads(function_arguments))
                     except json.JSONDecodeError:
                         verbose_logger.warning(
                             "WebSearchInterception: Failed to parse function arguments: %s", function_arguments
@@ -262,7 +275,7 @@ class WebSearchTransformation:
                     arguments = function_arguments or {}
 
                 # Convert to internal format (similar to Anthropic)
-                tool_call_dict = {
+                tool_call_dict: dict[str, object] = {
                     "id": tool_id,
                     "type": "function",
                     "name": function_name,
@@ -279,11 +292,11 @@ class WebSearchTransformation:
 
     @staticmethod
     def transform_response(
-        tool_calls: list[dict],
-        search_results: list[str],
+        tool_calls: Sequence[Mapping[str, object]],
+        search_results: Sequence[str],
         response_format: str = "anthropic",
-        thinking_blocks: list[dict] | None = None,
-    ) -> tuple[dict, dict | list[dict]]:
+        thinking_blocks: Sequence[Mapping[str, object]] | None = None,
+    ) -> tuple[dict[str, object], dict[str, object] | list[dict[str, object]]]:
         """
         Transform LiteLLM search results to Anthropic/OpenAI tool_result format.
 
@@ -313,13 +326,13 @@ class WebSearchTransformation:
 
     @staticmethod
     def _transform_response_anthropic(
-        tool_calls: list[dict],
-        search_results: list[str],
-        thinking_blocks: list[dict] | None = None,
-    ) -> tuple[dict, dict]:
+        tool_calls: Sequence[Mapping[str, object]],
+        search_results: Sequence[str],
+        thinking_blocks: Sequence[Mapping[str, object]] | None = None,
+    ) -> tuple[dict[str, object], dict[str, object]]:
         """Transform to Anthropic format (single user message with tool_result blocks)"""
         # Build assistant message content
-        assistant_content: Final[list[dict]] = []
+        assistant_content: Final[list[Mapping[str, object]]] = []
 
         # Prepend thinking blocks if present.
         # When extended thinking is enabled, Anthropic requires the assistant
@@ -341,13 +354,13 @@ class WebSearchTransformation:
             ]
         )
 
-        assistant_message: Final = {
+        assistant_message: Final[dict[str, object]] = {
             "role": "assistant",
             "content": assistant_content,
         }
 
         # Build user message with tool_result blocks
-        user_message: Final = {
+        user_message: Final[dict[str, object]] = {
             "role": "user",
             "content": [
                 {
@@ -363,12 +376,12 @@ class WebSearchTransformation:
 
     @staticmethod
     def _transform_response_openai(
-        tool_calls: list[dict],
-        search_results: list[str],
-    ) -> tuple[dict, list[dict]]:
+        tool_calls: Sequence[Mapping[str, object]],
+        search_results: Sequence[str],
+    ) -> tuple[dict[str, object], list[dict[str, object]]]:
         """Transform to OpenAI format (assistant with tool_calls, separate tool messages)"""
         # Build assistant message with tool_calls
-        assistant_message: Final = {
+        assistant_message: Final[dict[str, object]] = {
             "role": "assistant",
             "tool_calls": [
                 {
@@ -384,7 +397,7 @@ class WebSearchTransformation:
         }
 
         # Build separate tool messages (one per tool call)
-        tool_messages: Final = [
+        tool_messages: Final[list[dict[str, object]]] = [
             {
                 "role": "tool",
                 "tool_call_id": tool_calls[i]["id"],
@@ -399,7 +412,8 @@ class WebSearchTransformation:
     def build_web_search_tool_result_block(
         tool_use_id: str,
         search_response: SearchResponse | None,
-    ) -> dict[str, Any]:
+        with_snippets: bool = True,
+    ) -> dict[str, object]:
         """
         Build an Anthropic-native ``web_search_tool_result`` content block.
 
@@ -432,8 +446,10 @@ class WebSearchTransformation:
                 ``litellm.asearch()``. If None or empty, the block is still
                 emitted with an empty result list (signals "search ran, no
                 results" rather than "search did not run").
+            with_snippets: False when a text block in the same reply already
+                carries the snippets.
         """
-        items: Final[list[dict[str, Any]]] = []
+        items: Final[list[dict[str, object]]] = []
         if search_response is not None:
             results: Final = getattr(search_response, "results", None) or []
             for r in results:
@@ -447,7 +463,7 @@ class WebSearchTransformation:
                         "title": title,
                         "page_age": page_age,
                         "encrypted_content": "",
-                        "snippet": getattr(r, "snippet", "") or "",
+                        **({"snippet": getattr(r, "snippet", "") or ""} if with_snippets else {}),
                     }
                 )
         return {
@@ -455,6 +471,70 @@ class WebSearchTransformation:
             "tool_use_id": tool_use_id,
             "content": items,
         }
+
+    @staticmethod
+    def build_web_search_tool_result_error_block(
+        tool_use_id: str,
+        error_code: WebSearchToolResultErrorCode,
+    ) -> dict[str, object]:
+        return {
+            "type": "web_search_tool_result",
+            "tool_use_id": tool_use_id,
+            "content": {"type": "web_search_tool_result_error", "error_code": error_code},
+        }
+
+    @staticmethod
+    def build_web_search_outcome_block(
+        tool_use_id: str, outcome: SearchOutcome, with_snippets: bool = True
+    ) -> dict[str, object]:
+        match outcome:
+            case SearchSucceeded(response=response):
+                return WebSearchTransformation.build_web_search_tool_result_block(
+                    tool_use_id=tool_use_id,
+                    search_response=response,
+                    with_snippets=with_snippets,
+                )
+            case SearchFailed(error_code=error_code):
+                return WebSearchTransformation.build_web_search_tool_result_error_block(
+                    tool_use_id=tool_use_id,
+                    error_code=error_code,
+                )
+            case _:
+                assert_never(outcome)
+
+    @staticmethod
+    def search_error_code(error: BaseException) -> WebSearchToolResultErrorCode:
+        match error:
+            case RateLimitError():
+                return "too_many_requests"
+            case BadRequestError():
+                return "invalid_tool_input"
+            case _:
+                return "unavailable"
+
+    @staticmethod
+    def search_outcome(result: object) -> SearchOutcome:
+        match result:
+            case BaseException():
+                verbose_logger.error("WebSearchInterception: Search failed with error: %s", result)
+                return SearchFailed(error_code=WebSearchTransformation.search_error_code(result), message=str(result))
+            case (str() as text, SearchResponse() as response):
+                return SearchSucceeded(text=text, response=response)
+            case (str() as text, None):
+                return SearchSucceeded(text=text, response=None)
+            case _:
+                verbose_logger.debug("WebSearchInterception: Unexpected search result type %s", type(result))
+                return SearchSucceeded(text=str(result), response=None)
+
+    @staticmethod
+    def search_outcome_text(outcome: SearchOutcome) -> str:
+        match outcome:
+            case SearchSucceeded(text=text):
+                return text
+            case SearchFailed(message=message):
+                return f"Search failed: {message}"
+            case _:
+                assert_never(outcome)
 
     @staticmethod
     def format_search_response(result: SearchResponse) -> str:
@@ -465,7 +545,8 @@ class WebSearchTransformation:
             result: SearchResponse from litellm.asearch()
 
         Returns:
-            Formatted text with Title, URL, Snippet for each result
+            Formatted text with Title, URL, Snippet for each result, or the response
+            without its provider_metadata (the caller's billing envelope) when there are no results
         """
         # Convert SearchResponse to string
         if hasattr(result, "results") and result.results:
@@ -474,6 +555,9 @@ class WebSearchTransformation:
                 [f"Title: {r.title}\nURL: {r.url}\nSnippet: {r.snippet}" for r in result.results]
             )
         else:
-            search_result_text = str(result)
+            fields: Final[Mapping[str, object]] = dict(result)
+            search_result_text = " ".join(
+                f"{key}={value!r}" for key, value in fields.items() if key != "provider_metadata"
+            )
 
         return search_result_text

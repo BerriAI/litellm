@@ -31,8 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from pydantic import BaseModel
-
+from cli_harness.rate_limiter import RateLimiter, get_default_limiter
 from e2e_http import (
     NetworkError,
     RateLimitedError,
@@ -42,6 +41,7 @@ from e2e_http import (
     UnknownApiError,
     ValidationError,
 )
+from e2e_metadata import step
 from models import (
     AnthropicAssistantTurn,
     AnthropicCustomTool,
@@ -58,12 +58,9 @@ from models import (
     JsonSchemaProperty,
     ToolInputSchema,
 )
+from pydantic import BaseModel
 
-from claude_code.rate_limiter import (
-    RateLimiter,
-    get_default_limiter,
-    infer_provider,
-)
+from claude_code.cli_driver import infer_provider
 
 if TYPE_CHECKING:
     from proxy_client import ProxyClient
@@ -109,6 +106,7 @@ def _acquire(model: str, rate_limiter: RateLimiter | None) -> None:
     limiter.acquire(infer_provider(model))
 
 
+@step('Count tokens with /v1/messages/count_tokens for {model} on the message "{message}"')
 def probe_count_tokens(
     *,
     client: ProxyClient,
@@ -132,6 +130,7 @@ def probe_count_tokens(
     )
 
 
+@step("Send a /v1/messages request to {model} with the tool_search tool declared")
 def probe_tool_search(
     *,
     client: ProxyClient,
@@ -228,6 +227,10 @@ def _replay_history(answer: AnthropicMessagesResponse) -> tuple[AnthropicMessage
     )
 
 
+@step(
+    "Send a /v1/messages request to {model} with the tool_search tool declared,"
+    " then send its answer back as history in a second request"
+)
 def probe_tool_search_multiturn(
     *,
     client: ProxyClient,

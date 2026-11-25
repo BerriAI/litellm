@@ -7,10 +7,10 @@ from collections.abc import AsyncIterator, Iterator
 from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
-    import tiktoken
     from pydantic import BaseModel
 
     from litellm import LiteLLMLoggingObj, ModelResponse
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
     from litellm.types.llms.openai import AllMessageValues
 
@@ -21,11 +21,11 @@ class CompletionTransformationBridge(ABC):
         self,
         model: str,
         messages: list["AllMessageValues"],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
         litellm_logging_obj: "LiteLLMLoggingObj",
-    ) -> dict:
+    ) -> dict[str, object]:
         """Transform /chat/completions api request to another request"""
 
     @abstractmethod
@@ -35,11 +35,11 @@ class CompletionTransformationBridge(ABC):
         raw_response: "BaseModel",  # the response from the other API
         model_response: "ModelResponse",
         logging_obj: "LiteLLMLoggingObj",
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list["AllMessageValues"],
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> "ModelResponse":

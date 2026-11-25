@@ -42,6 +42,11 @@ That's it! The provider will be automatically loaded and available.
     // Optional: Override base_url via environment variable
     "api_base_env": "YOUR_PROVIDER_API_BASE",
     
+    // Optional: User-Agent sent on chat requests. {version} and {python}
+    // expand to the running litellm and Python versions. LITELLM_USER_AGENT
+    // replaces it, and a User-Agent the caller sets always wins
+    "user_agent": "litellm/{version} Python/{python}",
+
     // Optional: Which base class to use (default: "openai_gpt")
     "base_class": "openai_gpt",  // or "openai_like"
     
@@ -54,12 +59,27 @@ That's it! The provider will be automatically loaded and available.
     "constraints": {
       "temperature_max": 1.0,
       "temperature_min": 0.0,
-      "temperature_min_with_n_gt_1": 0.3
+      "temperature_min_with_n_gt_1": 0.3,
+      // /v1/messages providers only: keep Anthropic cache_control extensions
+      // such as ttl instead of stripping them down to {"type": ...}
+      "cache_control_ttl": true
     },
     
     // Optional: Special handling flags
+    // convert_content_list_to_string keeps only the text of every content list
+    // convert_text_content_list_to_string joins a list of only text parts with
+    // newlines and sends a list with any other part as it is
+    // round_reasoning_effort_to_declared_levels sends reasoning_effort as the
+    // nearest level in the model's reasoning_effort_levels cost map row, and
+    // drops a level the row does not declare under drop_params
     "special_handling": {
       "convert_content_list_to_string": true
+    },
+
+    // Optional: Capabilities every model of this provider has, used when a
+    // model has no cost map row or its row leaves the field unset
+    "provider_info": {
+      "supports_function_calling": true
     }
   }
 }
@@ -115,6 +135,48 @@ This enables `litellm.responses(model="your_provider/model-name", ...)` with zer
 The provider inherits all request/response handling from OpenAI's Responses API config.
 
 If `supported_endpoints` is omitted, it defaults to `[]` (only chat completions, which is always enabled for JSON providers).
+
+When only some models serve an endpoint natively, list them under `model_supported_endpoints`. Every other model reaches `/v1/responses` and `/v1/messages` through chat completions:
+
+```json
+{
+  "your_provider": {
+    "supported_endpoints": ["/v1/chat/completions"],
+    "model_supported_endpoints": {
+      "model-a": ["/v1/messages"],
+      "model-b": ["/v1/responses"]
+    }
+  }
+}
+```
+
+When some models are served at a different base URL than the rest, list them under `model_base_urls`. A deployment's `api_base` and the provider's `api_base_env` still take precedence:
+
+```json
+{
+  "your_provider": {
+    "base_url": "https://api.example.com/v2",
+    "model_base_urls": {
+      "legacy-model": "https://api.example.com/v1"
+    }
+  }
+}
+```
+
+When only some models need a `special_handling` flag, set it under `model_special_handling`. A model's flags override the provider's:
+
+```json
+{
+  "your_provider": {
+    "model_special_handling": {
+      "legacy-model": {"convert_content_list_to_string": true},
+      "vendor/*": {"reads_prompt_cache_breakpoint": true}
+    }
+  }
+}
+```
+
+A key ending in `/*` covers every model whose name starts with that prefix, including models added after the JSON was written. An exact model key wins over a prefix key
 
 ### How It Works
 

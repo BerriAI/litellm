@@ -1,16 +1,24 @@
 # stdlib imports
+import functools
 import os
-import sys
-from typing import Final
+import re
+from typing import Final, TypeAlias
 
 # third party imports
 import click
 
 from litellm._logging import verbose_logger
+from litellm.proxy.common_utils.banner import show_banner
+
+from .commands.auth import cli_context_obj, context_secret_vault
+
+ShellScope: TypeAlias = tuple[str, ...]
+SHELL_WORD: Final = re.compile(r"""(?P<prefix>[\w-]+=)?(?P<quoted>"[^"]*"|'[^']*')(?P<rest>\S*)|\S+""")
+OPENING_QUOTE: Final = re.compile(r"""(?:[\w-]+=)?["']""")
 
 
-def styled_prompt():
-    """Create a styled blue box prompt for user input."""
+def styled_prompt(scope: ShellScope = ()):
+    """Create a styled blue box prompt for user input, labelled with the group the shell is in."""
 
     # Get terminal height to ensure we have enough space
     try:
@@ -40,7 +48,7 @@ def styled_prompt():
     # Create styled elements
     left_border: Final = click.style(vertical, fg="blue", bold=True)
     right_border: Final = click.style(vertical, fg="blue", bold=True)
-    prompt_text: Final = click.style("> ", fg="cyan", bold=True)
+    prompt_text: Final = click.style(" ".join((*scope, "> ")), fg="cyan", bold=True)
 
     # Display the complete box structure first to reserve space
     click.echo(click.style(top_line, fg="blue", bold=True))
@@ -108,12 +116,10 @@ def show_commands():
 
 def setup_shell(ctx: click.Context):
     """Set up the interactive shell with banner and initial info."""
-    from litellm.proxy.common_utils.banner import show_banner
-
     show_banner()
 
     # Show server connection info
-    base_url: Final = ctx.obj.get("base_url")
+    base_url: Final = cli_context_obj(ctx).get("base_url")
     click.secho(f"Connected to LiteLLM server: {base_url}\n", fg="green")
 
     show_commands()
@@ -130,8 +136,6 @@ def handle_special_commands(user_input: str) -> bool:
         return True
     elif user_input.lower() == "clear":
         click.clear()
-        from litellm.proxy.common_utils.banner import show_banner
-
         show_banner()
         show_commands()
         return True
@@ -139,35 +143,60 @@ def handle_special_commands(user_input: str) -> bool:
     return False
 
 
-def execute_command(user_input: str, ctx: click.Context):
-    """Parse and execute a command."""
-    # Parse command and arguments
-    parts: Final = user_input.split()
-    command: Final = parts[0]
-    args: Final = parts[1:] if len(parts) > 1 else []
+def _subgroup(group: click.Group | None, name: str) -> click.Group | None:
+    if group is None:
+        return None
+    child: Final = group.commands.get(name)
+    return child if isinstance(child, click.Group) else None
 
-    # Import cli here to avoid circular import
-    from . import main
 
-    cli: Final = main.cli
+def _group_at(group: click.Group, path: ShellScope) -> click.Group | None:
+    """The group `path` names under `group`, or None when it names a plain command or nothing"""
+    return functools.reduce(_subgroup, path, group)
 
-    # Check if command exists
-    if command not in cli.commands:
-        click.echo(f"Unknown command: {command}")
-        click.echo("Type 'help' to see available commands.")
-        return
 
-    # Execute the command
+def split_shell_line(line: str) -> ShellScope:
+    """Split on spaces and unwrap a quote that opens a word or follows its leading `name=`, keeping the rest as typed"""
+    words: Final = tuple(SHELL_WORD.finditer(line))
+    if any(word["quoted"] is None and OPENING_QUOTE.match(word.group()) for word in words):
+        raise ValueError("No closing quotation")
+    return tuple(
+        word.group() if word["quoted"] is None else f"{word['prefix'] or ''}{word['quoted'][1:-1]}{word['rest']}"
+        for word in words
+    )
+
+
+def resolve_command_path(words: ShellScope, scope: ShellScope, cli: click.Group) -> ShellScope:
+    """The full command path a line names: from the top after a leading `lite`, else inside the shell's group"""
+    if words[0] == "lite":
+        return words[1:]
+    scope_group: Final = _group_at(cli, scope)
+    if scope and scope_group is not None and (words[0] in scope_group.commands or words[0].startswith("-")):
+        return (*scope, *words)
+    return words
+
+
+def scope_after(path: ShellScope, scope: ShellScope, cli: click.Group) -> ShellScope:
+    """A group typed alone becomes the scope, a command run inside the scope keeps it, anything else leaves it"""
+    group: Final = _group_at(cli, path)
+    if path and group is not None and not group.invoke_without_command:
+        return path
+    return scope if path[: len(scope)] == scope else ()
+
+
+def execute_command(path: ShellScope, ctx: click.Context, cli: click.Group) -> None:
+    """Run a resolved command path as `lite` would, so its usage and errors name `lite <command>`."""
     try:
-        # Create a new argument list for click to parse
-        sys.argv = ["lite"] + [command] + args
-
-        # Get the command object and invoke it
-        cmd: Final = cli.commands[command]
-
-        # Create a new context for the subcommand
+        if path[0].startswith("-"):
+            cli.main(
+                ["--base-url", cli_context_obj(ctx)["base_url"], *path],
+                prog_name="lite",
+                obj={"secret_vault": context_secret_vault(ctx)},
+                standalone_mode=False,
+            )
+            return
         with ctx.scope():
-            cmd.main(args, parent=ctx, standalone_mode=False)
+            cli.commands[path[0]].main(list(path[1:]), prog_name=path[0], parent=ctx, standalone_mode=False)
 
     except click.ClickException as e:
         e.show()
@@ -180,9 +209,33 @@ def execute_command(user_input: str, ctx: click.Context):
         click.echo(f"Error executing command: {e}")
 
 
-def interactive_shell(ctx: click.Context):
+def run_shell_line(user_input: str, scope: ShellScope, ctx: click.Context, cli: click.Group) -> ShellScope:
+    """Run one line typed at the prompt and return the scope the next prompt starts in."""
+    try:
+        words: Final = split_shell_line(user_input)
+    except ValueError as e:
+        click.echo(f"Could not read that command: {e}")
+        return scope
+    if not words:
+        return scope
+
+    path: Final = resolve_command_path(words, scope, cli)
+    if not path:
+        show_commands()
+        return ()
+    if path[0] not in cli.commands and not path[0].startswith("-"):
+        click.echo(f"Unknown command: {path[0]}")
+        click.echo("Type 'help' to see available commands.")
+        return scope
+
+    execute_command(path, ctx, cli)
+    return scope_after(path, scope, cli)
+
+
+def interactive_shell(ctx: click.Context, cli: click.Group):
     """Run the interactive shell."""
     setup_shell(ctx)
+    scope: ShellScope = ()  # rebind-ok: a group typed alone stays the scope for the prompts after it
 
     while True:
         try:
@@ -190,7 +243,7 @@ def interactive_shell(ctx: click.Context):
             click.echo("\n")  # Extra spacing
 
             # Show styled prompt
-            user_input = styled_prompt()
+            user_input = styled_prompt(scope)
 
             if not user_input:
                 continue
@@ -199,10 +252,10 @@ def interactive_shell(ctx: click.Context):
             if handle_special_commands(user_input):
                 if user_input.lower() in ["exit", "quit"]:
                     break
+                scope = ()
                 continue
 
-            # Execute regular commands
-            execute_command(user_input, ctx)
+            scope = run_shell_line(user_input, scope, ctx, cli)
 
         except (KeyboardInterrupt, EOFError):
             click.echo("\nGoodbye!")

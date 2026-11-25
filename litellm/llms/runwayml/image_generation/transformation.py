@@ -1,14 +1,19 @@
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
     RUNWAYML_DEFAULT_API_VERSION,
     RUNWAYML_POLLING_TIMEOUT,
 )
+from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -20,13 +25,38 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ImageObject, ImageResponse
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class _RunwayMLTask(TypedDict, total=False):
+    """The RunwayML task payload returned by POST /v1/text_to_image and GET /v1/tasks/{id}."""
+
+    id: ReadOnly[str]
+    status: ReadOnly[str]
+    output: ReadOnly[Sequence[str | Mapping[str, str | None]] | None]
+    failure: ReadOnly[str | None]
+    failureCode: ReadOnly[str | None]
+
+
+_JSON_VALUE: Final = TypeAdapter(object)
+
+
+def _decoded_json(response: httpx.Response) -> object:
+    return _JSON_VALUE.validate_python(response.json())
+
+
+def _runway_task(decoded: object) -> _RunwayMLTask:
+    task: Final = decoded_json_object(decoded)
+    return cast(_RunwayMLTask, task)  # cast-ok: the payload passes through unvalidated, as before it was typed
+
+
+def _parse_runway_task(response: httpx.Response) -> _RunwayMLTask:
+    return _runway_task(_decoded_json(response))
 
 
 class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
@@ -42,8 +72,8 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -51,23 +81,19 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
 
         Some providers need `model` in `api_base`
         """
-        complete_url: str = api_base or get_secret_str("RUNWAYML_API_BASE") or self.DEFAULT_BASE_URL
-
-        complete_url = complete_url.rstrip("/")
-        if self.IMAGE_GENERATION_ENDPOINT:
-            complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
-        return complete_url
+        base_url: Final = api_base or get_secret_str("RUNWAYML_API_BASE") or self.DEFAULT_BASE_URL
+        return join_api_base(base_url, self.IMAGE_GENERATION_ENDPOINT)
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         final_api_key: Final[str | None] = (
             api_key or get_secret_str("RUNWAYML_API_SECRET") or get_secret_str("RUNWAYML_API_KEY")
         )
@@ -80,7 +106,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
 
     @staticmethod
     def _transform_runwayml_response_to_openai(
-        response_data: dict[str, Any],
+        response_data: _RunwayMLTask,
         model_response: ImageResponse,
     ) -> ImageResponse:
         """
@@ -155,7 +181,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
             raise TimeoutError(f"RunwayML task polling timed out after {timeout_secs} seconds")
 
     @staticmethod
-    def _check_task_status(response_data: dict[str, Any]) -> str:
+    def _check_task_status(response_data: _RunwayMLTask) -> str:
         """
         Check RunwayML task status from response.
 
@@ -209,14 +235,13 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         Returns:
             Final response with completed task
         """
-        from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+        from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
-        client: Final = _get_httpx_client()
+        client: Final = get_httpx_client()
         start_time: Final = time.time()
 
         # Build task status URL
-        api_base = api_base.rstrip("/")
-        task_url: Final = f"{api_base}/v1/tasks/{task_id}"
+        task_url: Final = join_api_base(api_base, f"v1/tasks/{task_id}")
 
         verbose_logger.debug("Polling RunwayML task: %s", task_url)
 
@@ -227,7 +252,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
             response = client.get(url=task_url, headers=headers)
             response.raise_for_status()
 
-            response_data = response.json()
+            response_data: _RunwayMLTask = _parse_runway_task(response)
 
             # Check task status
             status = self._check_task_status(response_data=response_data)
@@ -264,8 +289,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         start_time: Final = time.time()
 
         # Build task status URL
-        api_base = api_base.rstrip("/")
-        task_url: Final = f"{api_base}/v1/tasks/{task_id}"
+        task_url: Final = join_api_base(api_base, f"v1/tasks/{task_id}")
 
         verbose_logger.debug("Polling RunwayML task (async): %s", task_url)
 
@@ -276,7 +300,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
             response = await client.get(url=task_url, headers=headers)
             response.raise_for_status()
 
-            response_data = response.json()
+            response_data: _RunwayMLTask = _parse_runway_task(response)
 
             # Check task status
             status = self._check_task_status(response_data=response_data)
@@ -293,10 +317,10 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        request_data: dict[str, object],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -322,13 +346,14 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         }
         """
         try:
-            response_data = raw_response.json()
+            decoded: Final = _decoded_json(raw_response)
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
+        response_data: _RunwayMLTask = _runway_task(decoded)
 
         verbose_logger.debug("RunwayML starting polling...")
 
@@ -352,7 +377,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         )
 
         # Update response_data with polled result
-        response_data = raw_response.json()
+        response_data = _parse_runway_task(raw_response)
 
         verbose_logger.debug("RunwayML polling complete, transforming to OpenAI format")
 
@@ -368,10 +393,10 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        request_data: dict[str, object],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
@@ -382,13 +407,14 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         We need to poll the task until it completes (status SUCCEEDED) using async polling.
         """
         try:
-            response_data = raw_response.json()
+            decoded: Final = _decoded_json(raw_response)
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
+        response_data: _RunwayMLTask = _runway_task(decoded)
 
         verbose_logger.debug("RunwayML starting polling (async)...")
 
@@ -412,7 +438,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         )
 
         # Update response_data with polled result
-        response_data = raw_response.json()
+        response_data = _parse_runway_task(raw_response)
 
         verbose_logger.debug("RunwayML polling complete (async), transforming to OpenAI format")
 
@@ -432,18 +458,18 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
 
         # Map OpenAI 'size' parameter to RunwayML 'ratio' parameter
         if "size" in non_default_params:
             size: Final = non_default_params["size"]
             # Map common OpenAI sizes to RunwayML ratios
-            size_to_ratio_map: Final = {
+            size_to_ratio_map: Final[dict[object, str]] = {
                 "1024x1024": "1024:1024",
                 "1792x1024": "1792:1024",
                 "1024x1792": "1024:1792",
@@ -469,10 +495,10 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform the image generation request to the RunwayML image generation request body
 
@@ -481,7 +507,7 @@ class RunwayMLImageGenerationConfig(BaseImageGenerationConfig):
         - promptText: The text prompt
         - ratio: The aspect ratio (e.g., '1920:1080', '1080:1920', '1024:1024')
         """
-        runwayml_request_body: Final = {
+        runwayml_request_body: Final[dict[str, object]] = {
             "model": model or "gen4_image",
             "promptText": prompt,
         }

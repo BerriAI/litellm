@@ -1,0 +1,444 @@
+"""
+Tests for the at-rest credential encryption chokepoint.
+
+Covers the AES-256-GCM (``v2:gcm:``) path, the ``encryption_algorithm`` config
+gate, and the backward-compatibility guarantees that let legacy XSalsa20-Poly1305
+(nacl) ciphertext and new AES values coexist and decrypt correctly.
+"""
+
+import _hashlib
+import base64
+import hmac
+import re
+from collections.abc import Callable
+from traceback import walk_tb
+from typing import Final
+
+import pytest
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from litellm.proxy import proxy_server
+from litellm.proxy.common_utils import encrypt_decrypt_utils
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    V2_GCM_PREFIX,
+    decrypt_bearer_token,
+    decrypt_if_encrypted_with,
+    decrypt_value_helper,
+    derive_key_from_salt_key,
+    encrypt_bearer_token,
+    encrypt_value,
+    encrypt_value_helper,
+)
+
+
+def _use_aes(monkeypatch):
+    """Flip the write-time algorithm to AES-256-GCM for the duration of a test."""
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "aes-256-gcm"})
+
+
+@pytest.fixture(autouse=True)
+def _salt_key(monkeypatch):
+    # Dominant convention in the test_litellm/ tree: set the key via env.
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-aes-1234")
+    # Ensure the legacy default is in force unless a test opts into AES.
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    yield
+
+
+def test_aes_gcm_round_trip(monkeypatch):
+    """A value written under AES-256-GCM is tagged v2:gcm: and decrypts back."""
+    _use_aes(monkeypatch)
+
+    ct = encrypt_value_helper("super-secret")
+
+    assert ct.startswith(V2_GCM_PREFIX)
+    assert decrypt_value_helper(ct, key="t") == "super-secret"
+
+
+def test_default_is_legacy_algorithm(monkeypatch):
+    """With no config, writes stay on the legacy algorithm (no v2: marker)."""
+    ct = encrypt_value_helper("legacy-secret")
+
+    assert not ct.startswith(V2_GCM_PREFIX)
+    assert decrypt_value_helper(ct, key="t") == "legacy-secret"
+
+
+def test_legacy_nacl_value_still_decrypts_after_flag_flip(monkeypatch):
+    """A value written under the old algorithm decrypts unchanged once AES is on.
+
+    This is the mixed-format readback guarantee: decrypt is format-detecting, so
+    flipping the flag forward never strands previously-written data.
+    """
+    legacy = encrypt_value_helper("legacy-secret")  # default = xsalsa20
+    assert not legacy.startswith(V2_GCM_PREFIX)
+
+    _use_aes(monkeypatch)
+    # New writes are now AES, but the old value must still come back.
+    assert decrypt_value_helper(legacy, key="t") == "legacy-secret"
+    assert encrypt_value_helper("fresh").startswith(V2_GCM_PREFIX)
+
+
+def test_v2_prefix_is_idempotent_marker(monkeypatch):
+    """The migration's skip-check: an already-v2 value is recognized by its prefix.
+
+    Re-encrypting an AES value yields a fresh (different nonce) AES value, but the
+    prefix is what lets a migration skip already-migrated rows without decrypting.
+    """
+    _use_aes(monkeypatch)
+
+    ct = encrypt_value_helper("secret")
+    assert ct.startswith(V2_GCM_PREFIX)
+
+    # Round-tripping does not change the plaintext, and the marker is stable.
+    again = encrypt_value_helper(decrypt_value_helper(ct, key="t"))
+    assert again.startswith(V2_GCM_PREFIX)
+    assert decrypt_value_helper(again, key="t") == "secret"
+
+
+def test_aes_decrypt_failure_returns_none_not_raise(monkeypatch):
+    """Decrypt contract preserved: a garbled v2 value returns None, never raises."""
+    _use_aes(monkeypatch)
+
+    garbled = V2_GCM_PREFIX + "not-valid-base64-or-ciphertext!!!"
+    # exception_type="debug" exercises the swallow path; must not raise.
+    assert decrypt_value_helper(garbled, key="t", exception_type="debug") is None
+
+
+def test_aes_decrypt_failure_returns_original_when_requested(monkeypatch):
+    """With return_original_value=True a bad v2 value comes back as-is, not None."""
+    _use_aes(monkeypatch)
+
+    garbled = V2_GCM_PREFIX + "###"
+    assert decrypt_value_helper(garbled, key="t", exception_type="debug", return_original_value=True) == garbled
+
+
+def test_empty_string_round_trips_under_aes(monkeypatch):
+    """Empty string is preserved through the AES path (parity with legacy)."""
+    _use_aes(monkeypatch)
+
+    ct = encrypt_value_helper("")
+    assert ct.startswith(V2_GCM_PREFIX)
+    assert decrypt_value_helper(ct, key="t") == ""
+
+
+def test_callback_prefix_composes_with_v2(monkeypatch):
+    """litellm_enc:: + v2:gcm:... round-trips through the callback read path.
+
+    Callback vars are stored as ``litellm_enc::<helper output>``; the read path
+    strips ``litellm_enc::`` then calls the helper, so the value handed to the
+    helper is ``v2:gcm:...``. Ordering must work end to end.
+    """
+    from litellm.proxy.common_utils.callback_utils import (
+        CALLBACK_VAR_ENCRYPTED_PREFIX,
+        _decrypt_or_passthrough,
+        _encrypt_if_plaintext,
+    )
+
+    _use_aes(monkeypatch)
+
+    # "gcs_path_service_account" is a known-sensitive callback key.
+    stored = _encrypt_if_plaintext("gcs_path_service_account", "my-sa-secret")
+
+    assert stored.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX)
+    inner = stored[len(CALLBACK_VAR_ENCRYPTED_PREFIX) :]
+    assert inner.startswith(V2_GCM_PREFIX)
+    assert _decrypt_or_passthrough("gcs_path_service_account", stored) == "my-sa-secret"
+
+
+def test_unknown_algorithm_falls_back_to_legacy(monkeypatch):
+    """An unrecognized encryption_algorithm value does not produce v2 writes."""
+    monkeypatch.setattr(proxy_server, "general_settings", {"encryption_algorithm": "rot13"})
+
+    ct = encrypt_value_helper("secret")
+    assert not ct.startswith(V2_GCM_PREFIX)
+    assert decrypt_value_helper(ct, key="t") == "secret"
+
+
+def test_decrypt_failure_debug_log_omits_raw_value(monkeypatch):
+    """Regression for LIT-4152: the decrypt-failure debug breadcrumb must not
+    embed the raw value.
+
+    A DB ``environment_variables`` secret (e.g. a ``DATABASE_URL`` connection
+    string) reaches this path when it cannot be decrypted, for example after a
+    salt or master key change, and previously printed in cleartext when the
+    module regex scrubber was bypassed. The failing key still names the pair so
+    the breadcrumb keeps its debugging value. Uses a dedicated handler rather
+    than caplog because caplog is unreliable under pytest-xdist.
+    """
+    import logging
+
+    import litellm._logging as _logging_module
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setattr(_logging_module, "_ENABLE_SECRET_REDACTION", False)
+
+    secret = "postgresql://leak_user:leak_pw_decrypt@leak-host:5432/leak_db"
+
+    class LogRecordHandler(logging.Handler):
+        def __init__(self) -> None:
+            super().__init__()
+            self.records: list[logging.LogRecord] = []
+
+        def emit(self, record: logging.LogRecord) -> None:
+            self.records.append(record)
+
+    handler = LogRecordHandler()
+    handler.setLevel(logging.DEBUG)
+    original_level = verbose_proxy_logger.level
+    verbose_proxy_logger.setLevel(logging.DEBUG)
+    verbose_proxy_logger.addHandler(handler)
+    try:
+        result = decrypt_value_helper(secret, key="DATABASE_URL", return_original_value=True)
+        rendered = " ".join(record.getMessage() for record in handler.records)
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+        verbose_proxy_logger.setLevel(original_level)
+
+    assert secret not in rendered, f"raw value leaked in decrypt-failure log: {rendered!r}"
+    assert "leak_pw_decrypt" not in rendered
+    assert any("DATABASE_URL" in record.getMessage() for record in handler.records), (
+        "the failing key should still be named in the breadcrumb"
+    )
+    assert result == secret
+
+
+@pytest.mark.parametrize("use_aes", [False, True])
+def test_explicit_key_decrypt_reads_only_values_written_under_that_key(monkeypatch, use_aes: bool):
+    if use_aes:
+        _use_aes(monkeypatch)
+    written_with_previous_key = encrypt_value_helper("stored-secret", new_encryption_key="sk-9876")
+
+    assert decrypt_if_encrypted_with(written_with_previous_key, "sk-9876") == "stored-secret"
+    assert decrypt_if_encrypted_with(written_with_previous_key, "sk-another-key") is None
+    assert decrypt_value_helper(written_with_previous_key, key="t", exception_type="debug") is None
+
+
+@pytest.mark.parametrize(
+    "not_a_ciphertext",
+    [
+        "",
+        "gpt-5.4-mini",
+        "https://example.invalid/v1",
+        "v2:gcm:",
+        "aGVsbG8=",
+        "*",
+        "-",
+        "_",
+        "...",
+        " ",
+        "{}",
+        "[]",
+        "=",
+    ],
+)
+def test_explicit_key_decrypt_rejects_values_that_are_not_ciphertexts(not_a_ciphertext: str):
+    assert decrypt_if_encrypted_with(not_a_ciphertext, "sk-9876") is None
+
+
+@pytest.mark.parametrize("use_aes", [False, True])
+def test_explicit_key_decrypt_tells_an_encrypted_empty_string_from_no_ciphertext(monkeypatch, use_aes: bool):
+    if use_aes:
+        _use_aes(monkeypatch)
+
+    assert decrypt_if_encrypted_with(encrypt_value_helper("", new_encryption_key="sk-9876"), "sk-9876") == ""
+
+
+def test_explicit_key_decrypt_supports_the_empty_master_key():
+    written_with_empty_key = encrypt_value(value="stored-secret", signing_key="")
+
+    assert decrypt_if_encrypted_with(base64.urlsafe_b64encode(written_with_empty_key).decode(), "") == "stored-secret"
+
+
+def test_bearer_token_opens_only_under_its_own_prefix():
+    token = encrypt_bearer_token("session", prefix="kind_a_")
+    relabeled = "kind_b_" + token.removeprefix("kind_a_")
+
+    assert decrypt_bearer_token(token, prefix="kind_a_") == "session"
+    assert decrypt_bearer_token(token, prefix="kind_b_") is None
+    assert decrypt_bearer_token(relabeled, prefix="kind_b_") is None
+
+
+@pytest.mark.parametrize("use_aes", [False, True])
+def test_stored_value_is_not_a_bearer_token_even_when_reshaped(monkeypatch, use_aes: bool):
+    if use_aes:
+        _use_aes(monkeypatch)
+    stored = encrypt_value_helper("stored-secret")
+
+    for candidate in (stored, "kind_a_" + stored.removeprefix(V2_GCM_PREFIX).rstrip("=")):
+        assert decrypt_bearer_token(candidate, prefix="kind_a_") is None
+
+
+@pytest.mark.parametrize("length", range(6))
+def test_bearer_token_uses_only_header_safe_characters(length: int):
+    token = encrypt_bearer_token("x" * length, prefix="kind_a_")
+
+    assert re.fullmatch(r"kind_a_[A-Za-z0-9_-]+", token), token
+    assert decrypt_bearer_token(token, prefix="kind_a_") == "x" * length
+
+
+_needs_shared_openssl: Final = pytest.mark.skipif(
+    not hasattr(_hashlib, "__file__"), reason="this Python links OpenSSL statically, out of ctypes reach"
+)
+
+
+@_needs_shared_openssl
+@pytest.mark.usefixtures("fips_openssl")
+@pytest.mark.parametrize(
+    "salt_key",
+    ["sk-" + bytes(range(32)).hex(), "fourteen-bytes", "é" * 7],
+    ids=["openssl-rand-hex-32", "14-ascii-bytes", "14-utf8-bytes-in-7-characters"],
+)
+def test_derive_key_from_salt_key_is_sp800_108_counter_mode_hmac_sha256_over_the_salt_key_bytes(
+    monkeypatch: pytest.MonkeyPatch, salt_key: str
+) -> None:
+    label: Final = b"litellm-test:label:"
+    context: Final = b"sk-test-master-key"
+    monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
+    fixed_input: Final = (1).to_bytes(4, "big") + label + b"\x00" + context + (256).to_bytes(4, "big")
+    assert derive_key_from_salt_key(label, context) == hmac.digest(salt_key.encode(), fixed_input, "sha256").hex()
+
+
+@_needs_shared_openssl
+@pytest.mark.skipif(_hashlib.get_fips_mode() == 1, reason="this OpenSSL runs a FIPS provider")
+def test_derive_key_from_salt_key_refuses_an_openssl_without_a_fips_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-" + bytes(range(32)).hex())
+    with pytest.raises(ValueError, match="OpenSSL could not run KBKDF"):
+        derive_key_from_salt_key(b"litellm-test:label:", b"sk-test-master-key")
+
+
+@pytest.mark.parametrize(
+    "salt_key", ["thirteen-byte", "é" * 6 + "x", "", None], ids=["13-ascii-bytes", "13-utf8-bytes", "empty", "unset"]
+)
+def test_derive_key_from_salt_key_refuses_a_salt_key_under_112_bits(
+    monkeypatch: pytest.MonkeyPatch, salt_key: str | None
+) -> None:
+    monkeypatch.delenv("LITELLM_SALT_KEY")
+    if salt_key is not None:
+        monkeypatch.setenv("LITELLM_SALT_KEY", salt_key)
+    with pytest.raises(ValueError, match=r"LITELLM_SALT_KEY must be set and at least 112 bits \(14 bytes\)"):
+        derive_key_from_salt_key(b"litellm-test:label:", b"sk-test-master-key")
+
+
+_FRAME_SECRET: Final = "frame-secret"
+
+
+def test_a_refused_derive_key_from_salt_key_leaves_the_salt_key_in_no_frame_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _FRAME_SECRET)
+    with pytest.raises(ValueError, match="LITELLM_SALT_KEY must be set") as refused:
+        derive_key_from_salt_key(b"litellm-test:label:", b"litellm-test:context")
+    held_by: Final = tuple(
+        frame.f_code.co_name for frame, _ in walk_tb(refused.tb) if _FRAME_SECRET in repr(frame.f_locals)
+    )
+    assert held_by == ()
+
+
+_FIPS_SALT_KEY: Final = "sk-" + bytes(range(32)).hex()
+_FIPS_AT_REST_KEY: Final = hmac.digest(
+    _FIPS_SALT_KEY.encode(),
+    (1).to_bytes(4, "big") + b"litellm-at-rest:aes-256-gcm:" + b"\x00" + (256).to_bytes(4, "big"),
+    "sha256",
+)
+
+
+@_needs_shared_openssl
+@pytest.mark.usefixtures("fips_mode")
+@pytest.mark.parametrize("settings", [{}, {"encryption_algorithm": "xsalsa20-poly1305"}])
+@pytest.mark.parametrize("plaintext", ["sk-secret-value", "", "ключ-🔑" * 50])
+def test_fips_mode_writes_aes_gcm_under_the_kbkdf_key_with_a_nonce_from_openssl(
+    monkeypatch: pytest.MonkeyPatch, settings: dict[str, str], plaintext: str
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _FIPS_SALT_KEY)
+    monkeypatch.setattr(proxy_server, "general_settings", settings)
+    first: Final = encrypt_value_helper(plaintext)
+    second: Final = encrypt_value_helper(plaintext)
+    assert first.startswith(V2_GCM_PREFIX)
+    sealed: Final = base64.urlsafe_b64decode(first.removeprefix(V2_GCM_PREFIX))
+    assert AESGCM(_FIPS_AT_REST_KEY).decrypt(sealed[:12], sealed[12:], None).decode() == plaintext
+    assert sealed[:12] != base64.urlsafe_b64decode(second.removeprefix(V2_GCM_PREFIX))[:12]
+    assert decrypt_value_helper(first, key="k") == plaintext
+    assert decrypt_if_encrypted_with(first, _FIPS_SALT_KEY) == plaintext
+
+
+@_needs_shared_openssl
+def test_fips_mode_refuses_values_it_did_not_write(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _FIPS_SALT_KEY)
+    legacy: Final = encrypt_value_helper("sk-secret-value")
+    _use_aes(monkeypatch)
+    standard_gcm: Final = encrypt_value_helper("sk-secret-value")
+    request.getfixturevalue("fips_mode")
+    assert decrypt_value_helper(legacy, key="k") is None
+    assert decrypt_value_helper(standard_gcm, key="k") is None
+    assert decrypt_if_encrypted_with(legacy, _FIPS_SALT_KEY) is None
+
+
+@_needs_shared_openssl
+@pytest.mark.usefixtures("fips_mode")
+def test_fips_mode_encrypts_under_an_explicit_new_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _FIPS_SALT_KEY)
+    new_key: Final = "ab" * 32
+    rotated: Final = encrypt_value_helper("sk-secret-value", new_encryption_key=new_key)
+    assert decrypt_if_encrypted_with(rotated, new_key) == "sk-secret-value"
+    assert decrypt_if_encrypted_with(rotated, _FIPS_SALT_KEY) is None
+
+
+@pytest.mark.usefixtures("fips_mode")
+def test_fips_mode_refuses_to_encrypt_under_a_salt_key_under_112_bits(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "thirteen-byte")
+    with pytest.raises(ValueError, match=r"the salt key must be at least 112 bits \(14 bytes\)"):
+        encrypt_value_helper("sk-secret-value")
+
+
+@pytest.mark.parametrize("key_bytes", [0, 16, 24, 31, 33])
+def test_fips_aes_gcm_refuses_a_key_that_is_not_32_bytes(key_bytes: int) -> None:
+    with pytest.raises(ValueError, match=f"AES-256-GCM needs a 32-byte key, got {key_bytes} bytes"):
+        encrypt_decrypt_utils._fips_seal_aes_gcm(b"k" * key_bytes, b"sk-secret-value")
+
+
+def _store_callback_var(secret: str) -> object:
+    from litellm.proxy.common_utils.callback_utils import _encrypt_if_plaintext
+
+    return _encrypt_if_plaintext("gcs_path_service_account", secret)
+
+
+def _store_guardrail_param(secret: str) -> object:
+    from litellm.proxy.guardrails.guardrail_registry import _encrypted_param
+
+    return _encrypted_param("api_key", secret, None)
+
+
+def _store_search_tool_value(secret: str) -> object:
+    from litellm.proxy.search_endpoints.search_tool_registry import _encrypted_search_tool_value
+
+    return _encrypted_search_tool_value(secret)
+
+
+@pytest.mark.parametrize("store", [_store_callback_var, _store_guardrail_param, _store_search_tool_value])
+def test_fips_mode_never_stores_a_secret_as_written_when_it_cannot_be_encrypted(
+    monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest, store: Callable[[str], object]
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "thirteen-byte")
+    monkeypatch.setattr("litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value", _raise_no_key)
+    assert store("my-secret") == "my-secret"
+    request.getfixturevalue("fips_mode")
+    with pytest.raises(ValueError, match=r"the salt key must be at least 112 bits \(14 bytes\)"):
+        store("my-secret")
+
+
+def _raise_no_key(value: str, signing_key: str | None) -> bytes:
+    raise ValueError("no salt key or master key configured")
+
+
+@_needs_shared_openssl
+@pytest.mark.skipif(_hashlib.get_fips_mode() == 1, reason="this OpenSSL runs a FIPS provider")
+@pytest.mark.usefixtures("fips_mode")
+def test_fips_mode_refuses_to_encrypt_on_an_openssl_without_a_fips_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _FIPS_SALT_KEY)
+    key: Final = encrypt_decrypt_utils._fips_at_rest_key(_FIPS_SALT_KEY)
+    monkeypatch.setattr(encrypt_decrypt_utils, "_FIPS_PROPERTIES", b"fips=yes")
+    monkeypatch.setattr(encrypt_decrypt_utils, "_fips_at_rest_key", lambda signing_key: key)
+    with pytest.raises(ValueError, match="OpenSSL could not run AES-256-GCM"):
+        encrypt_value_helper("sk-secret-value")

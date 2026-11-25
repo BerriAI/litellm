@@ -20,10 +20,11 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import get_model_info, supports_reasoning
 
 from ...openai.chat.o_series_transformation import OpenAIOSeriesConfig
+from .gpt_transformation import sanitized_tools_update
 
 
 class AzureOpenAIO1Config(OpenAIOSeriesConfig):
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the supported OpenAI params for the Azure O-Series models
         """
@@ -41,13 +42,13 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         all_openai_params.extend(o_series_only_param)
         return [param for param in all_openai_params if param not in non_supported_params]
 
-    def _get_o_series_only_params(self, model: str) -> list:
+    def _get_o_series_only_params(self, model: str) -> list[str]:
         """
         Helper function to get the o-series only params for the model
 
         - reasoning_effort
         """
-        o_series_only_param: Final = []
+        o_series_only_param: Final[list[str]] = []
 
         #########################################################
         # Case 1: If the model is recognized and in litellm model cost map
@@ -103,9 +104,13 @@ class AzureOpenAIO1Config(OpenAIOSeriesConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         model = model.replace("o_series/", "")  # handle o_series/my-random-deployment-name
-        return super().transform_request(model, messages, optional_params, litellm_params, headers)
+        flattened_params: Final = {
+            **optional_params,
+            **sanitized_tools_update(optional_params),
+        }
+        return super().transform_request(model, messages, flattened_params, litellm_params, headers)

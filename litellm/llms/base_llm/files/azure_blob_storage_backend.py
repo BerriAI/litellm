@@ -7,14 +7,37 @@ to reuse all authentication and Azure Storage operations.
 """
 
 import time
-from typing import Final
+from pathlib import Path
+from typing import TYPE_CHECKING, Final
 from urllib.parse import quote, urlparse
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLogger
+from litellm.litellm_core_utils.path_utils import safe_filename
 
 from .storage_backend import BaseFileStorageBackend
+
+if TYPE_CHECKING:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+
+def _safe_basename(original_filename: str) -> str:
+    try:
+        return safe_filename(original_filename)
+    except ValueError:
+        return "file"
+
+
+def _safe_extension(original_filename: str) -> str:
+    """The extension off a basename, with no path separators or traversal sequences.
+
+    original_filename.split(".")[-1] does not parse path structure, so a filename
+    like "a.jsonl/../../etc/cron.d/x" would put "../../etc/cron.d/x" straight into
+    the blob path built below. Path.suffix only ever looks at the last path
+    component, so routing through safe_filename() first closes that off.
+    """
+    return Path(_safe_basename(original_filename)).suffix.lstrip(".")
 
 
 class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
@@ -66,13 +89,13 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         # Do nothing - this class is used for file storage, not logging
         return
 
-    async def async_log_success_event(self, *args, **kwargs):
+    async def async_log_success_event(self, *args: object, **kwargs: object):
         """
         Override to do nothing - we're not using this as a logger.
         """
         # Do nothing - this class is used for file storage, not logging
 
-    async def async_log_failure_event(self, *args, **kwargs):
+    async def async_log_failure_event(self, *args: object, **kwargs: object):
         """
         Override to do nothing - we're not using this as a logger.
         """
@@ -81,16 +104,15 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
     def _generate_file_name(self, original_filename: str, file_naming_strategy: str) -> str:
         """Generate file name based on naming strategy."""
         if file_naming_strategy == "original_filename":
-            # Use original filename, but sanitize it
-            return quote(original_filename, safe="")
+            return quote(_safe_basename(original_filename), safe="")
         elif file_naming_strategy == "timestamp":
             # Use timestamp
-            extension = original_filename.split(".")[-1] if "." in original_filename else ""
+            extension = _safe_extension(original_filename)
             timestamp: Final = int(time.time() * 1000)  # milliseconds
             return f"{timestamp}.{extension}" if extension else str(timestamp)
         else:  # default to "uuid"
             # Use UUID
-            extension = original_filename.split(".")[-1] if "." in original_filename else ""
+            extension = _safe_extension(original_filename)
             file_uuid: Final = str(uuid.uuid4())
             return f"{file_uuid}.{extension}" if extension else file_uuid
 
@@ -203,7 +225,7 @@ class AzureBlobStorageBackend(BaseFileStorageBackend, AzureBlobStorageLogger):
         blob_url = f"{self.azure_storage_blob_endpoint}/{self.azure_storage_file_system}/{full_path}"
         return blob_url
 
-    async def _append_data_bytes(self, client, base_url: str, file_content: bytes):
+    async def _append_data_bytes(self, client: "AsyncHTTPHandler", base_url: str, file_content: bytes):
         """Append binary data to file using REST API."""
         from litellm.constants import AZURE_STORAGE_MSFT_VERSION
 

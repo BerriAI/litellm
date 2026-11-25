@@ -1,6 +1,6 @@
 import json
-from collections.abc import Coroutine
-from typing import Any, Final, Literal, cast, overload
+from collections.abc import Coroutine, Mapping, Sequence
+from typing import Final, Literal, cast, overload
 
 import litellm
 from litellm.constants import MIN_NON_ZERO_TEMPERATURE
@@ -21,36 +21,36 @@ class DeepInfraConfig(OpenAIGPTConfig):
         return "deepinfra"
 
     frequency_penalty: int | None = None
-    function_call: str | dict | None = None
-    functions: list | None = None
-    logit_bias: dict | None = None
+    function_call: str | dict[str, object] | None = None
+    functions: list[object] | None = None
+    logit_bias: dict[str, object] | None = None
     max_tokens: int | None = None
     n: int | None = None
     presence_penalty: int | None = None
-    stop: str | list | None = None
+    stop: str | list[object] | None = None
     temperature: int | None = None
     top_p: int | None = None
-    response_format: dict | None = None
-    tools: list | None = None
-    tool_choice: str | dict | None = None
+    response_format: dict[str, object] | None = None
+    tools: list[object] | None = None
+    tool_choice: str | dict[str, object] | None = None
 
     def __init__(
         self,
         frequency_penalty: int | None = None,
-        function_call: str | dict | None = None,
-        functions: list | None = None,
-        logit_bias: dict | None = None,
+        function_call: str | Mapping[str, object] | None = None,
+        functions: Sequence[object] | None = None,
+        logit_bias: Mapping[str, object] | None = None,
         max_tokens: int | None = None,
         n: int | None = None,
         presence_penalty: int | None = None,
-        stop: str | list | None = None,
+        stop: str | Sequence[object] | None = None,
         temperature: int | None = None,
         top_p: int | None = None,
-        response_format: dict | None = None,
-        tools: list | None = None,
-        tool_choice: str | dict | None = None,
+        response_format: Mapping[str, object] | None = None,
+        tools: Sequence[object] | None = None,
+        tool_choice: str | Mapping[str, object] | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -87,11 +87,11 @@ class DeepInfraConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if (
@@ -130,7 +130,8 @@ class DeepInfraConfig(OpenAIGPTConfig):
         - Input:  {"role": "tool", "content": [{"type": "text", "text": "result"}]}
         - Output: {"role": "tool", "content": "[{\"type\": \"text\", \"text\": \"result\"}]"}
         """
-        for message in messages:
+        copied_messages: Final = [message.copy() for message in messages]
+        for message in copied_messages:
             if message.get("role") == "tool":
                 content = message.get("content")
 
@@ -149,12 +150,12 @@ class DeepInfraConfig(OpenAIGPTConfig):
                         # For complex content, serialize the entire array as JSON string
                         message["content"] = json.dumps(content)
 
-        return messages
+        return copied_messages
 
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -166,7 +167,7 @@ class DeepInfraConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         Transform messages for DeepInfra compatibility.
         Handles both sync and async transformations.
@@ -197,3 +198,10 @@ class DeepInfraConfig(OpenAIGPTConfig):
         api_base = api_base or get_secret_str("DEEPINFRA_API_BASE") or "https://api.deepinfra.com/v1/openai"
         dynamic_api_key: Final = api_key or get_secret_str("DEEPINFRA_API_KEY")
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)

@@ -5,6 +5,8 @@ Canonical definition for ``litellm_objectpermissiontable``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
+from collections.abc import Sequence
+
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
@@ -23,3 +25,5 @@ class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
     blocked_tools: list[str] | None = []
     search_tools: list[str] | None = []
     mcp_tool_search_enabled: bool | None = None
+    skills: list[str] | None = None
+    apps: Sequence[str] | None = None

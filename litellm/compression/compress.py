@@ -4,7 +4,7 @@ scoring, message stubbing, and retrieval tool injection.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, cast
+from typing import Final, cast
 
 from litellm.caching.dual_cache import DualCache
 from litellm.compression.message_stubbing import (
@@ -44,7 +44,7 @@ def _is_anthropic_call_type(call_type: str) -> bool:
     return call_type in _ANTHROPIC_CALL_TYPES
 
 
-def _build_retrieval_tools(keys: list[str], call_type: str) -> list[dict]:
+def _build_retrieval_tools(keys: list[str], call_type: str) -> list[dict[str, object]]:
     """
     Build retrieval tool definitions in the target request schema.
 
@@ -62,11 +62,11 @@ def _build_retrieval_tools(keys: list[str], call_type: str) -> list[dict]:
     # module import for non-Anthropic call paths.
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
-    anthropic_tools, _mcp_servers = AnthropicConfig()._map_tools(openai_tools)
+    anthropic_tools, _mcp_servers = AnthropicConfig().map_tools(openai_tools)
     return cast(list[dict], anthropic_tools)
 
 
-def _content_to_text(content: Any) -> str:
+def _content_to_text(content: object) -> str:
     """
     Convert OpenAI/Anthropic message content blocks to plain text.
 
@@ -78,7 +78,7 @@ def _content_to_text(content: Any) -> str:
     Implemented iteratively (stack-based) to avoid unbounded recursion.
     """
     parts: Final[list[str]] = []
-    stack: Final[list[Any]] = [content]
+    stack: Final[list[object]] = [content]
     while stack:
         item = stack.pop()
         if isinstance(item, str):
@@ -97,9 +97,9 @@ def _content_to_text(content: Any) -> str:
 
 
 def _normalize_messages_for_compression(
-    messages: list[dict],
+    messages: Sequence[Mapping[str, object]],
     call_type: str,
-) -> tuple[list[dict], list[dict]]:
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     """
     Normalize each original message to a text-surrogate content for scoring.
 
@@ -111,9 +111,9 @@ def _normalize_messages_for_compression(
             f"Unsupported call_type={call_type!r} for compression. Expected one of: {sorted(_SUPPORTED_CALL_TYPES)}."
         )
 
-    original_messages: Final[list[dict[str, Any]]] = [dict(m) for m in messages]
+    original_messages: Final[list[dict[str, object]]] = [dict(m) for m in messages]
 
-    normalized_messages: Final[list[dict]] = []
+    normalized_messages: Final[list[dict[str, object]]] = []
     for msg in original_messages:
         normalized_messages.append(
             {
@@ -124,7 +124,7 @@ def _normalize_messages_for_compression(
     return normalized_messages, original_messages
 
 
-def _extract_last_user_message(messages: list[dict]) -> str:
+def _extract_last_user_message(messages: Sequence[Mapping[str, object]]) -> str:
     """Return the text content of the last user message."""
     for msg in reversed(messages):
         if msg.get("role") == "user":
@@ -132,7 +132,7 @@ def _extract_last_user_message(messages: list[dict]) -> str:
     return ""
 
 
-def _extract_tool_use_ids(content: Any) -> list[str]:
+def _extract_tool_use_ids(content: object) -> list[str]:
     if not isinstance(content, list):
         return []
     tool_use_ids: Final[list[str]] = []
@@ -147,7 +147,7 @@ def _extract_tool_use_ids(content: Any) -> list[str]:
     return tool_use_ids
 
 
-def _extract_tool_result_ids(content: Any) -> set[str]:
+def _extract_tool_result_ids(content: object) -> set[str]:
     if not isinstance(content, list):
         return set()
     tool_result_ids: Final[set[str]] = set()
@@ -163,7 +163,7 @@ def _extract_tool_result_ids(content: Any) -> set[str]:
 
 
 def _extract_anthropic_tool_exchange_spans(
-    messages: list[dict],
+    messages: Sequence[Mapping[str, object]],
 ) -> tuple[list[set[int]], str | None]:
     """
     Return atomic 2-message spans for Anthropic tool exchanges.
@@ -205,21 +205,42 @@ def _extract_anthropic_tool_exchange_spans(
     return spans, None
 
 
+def _message_has_cache_control(message: Mapping[str, object]) -> bool:
+    if message.get("cache_control") is not None:
+        return True
+    content: Final = message.get("content")
+    if isinstance(content, list):
+        return any(isinstance(part, Mapping) and part.get("cache_control") is not None for part in content)
+    return False
+
+
+def _cached_prefix_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
+    last_breakpoint: Final = max(
+        (index for index, msg in enumerate(messages) if _message_has_cache_control(msg)),
+        default=-1,
+    )
+    return tuple(range(last_breakpoint + 1))
+
+
 def get_protected_indices(messages: Sequence[Mapping[str, object]]) -> tuple[int, ...]:
     """
     Return indices of messages that must never be compressed:
     - All system messages
     - The last user message
     - The last assistant message
+    - Every message up to and including the last one carrying an Anthropic cache_control breakpoint
 
     The last user message is what the model is being asked to act on right now,
     so compressing it replaces the live instruction with a marker. Compression
-    guardrails share this policy; see the Headroom guardrail.
+    guardrails share this policy; see the Headroom guardrail. A cache_control
+    breakpoint pins the provider's prompt-cache prefix to the exact bytes of every
+    row up to it, so rewriting any row inside that prefix turns the next request's
+    cache read into a cache write.
     """
     system_indices: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "system")
     last_user: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "user")[-1:]
-    last_assistant = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "assistant")[-1:]
-    return system_indices + last_user + last_assistant
+    assistant_indices: Final = tuple(index for index, msg in enumerate(messages) if msg.get("role", "") == "assistant")
+    return tuple(dict.fromkeys(system_indices + last_user + assistant_indices[-1:] + _cached_prefix_indices(messages)))
 
 
 def _combine_scores(
@@ -245,14 +266,14 @@ def _combine_scores(
 
 
 def _select_kept_indices_for_budget(
-    normalized_messages: list[dict],
-    original_messages: list[dict],
+    normalized_messages: Sequence[Mapping[str, object]],
+    original_messages: Sequence[dict[str, object]],
     combined_scores: list[float],
     compression_target: int,
     model: str,
     initial_kept_indices: set[int],
     tool_exchange_spans: list[set[int]],
-) -> tuple[set[int], dict[int, dict]]:
+) -> tuple[set[int], dict[int, dict[str, object]]]:
     kept_indices: Final = set(initial_kept_indices)
     current_tokens = 0
     for i in kept_indices:
@@ -265,7 +286,7 @@ def _select_kept_indices_for_budget(
     # A unit is either:
     # 1) a single message index, or
     # 2) an Anthropic tool-exchange span that must be kept/dropped atomically.
-    truncated_overrides: Final[dict[int, dict]] = {}  # idx -> truncated message dict
+    truncated_overrides: Final[dict[int, dict[str, object]]] = {}  # idx -> truncated message dict
     span_id_by_index: Final[dict[int, int]] = {}
     for span_id, span in enumerate(tool_exchange_spans):
         for idx in span:
@@ -331,13 +352,13 @@ def _get_dropped_tool_span_indices(kept_indices: set[int], tool_exchange_spans: 
 
 
 def compress(
-    messages: list[dict],
+    messages: Sequence[Mapping[str, object]],
     model: str,
     call_type: CallTypes | str = CallTypes.completion,
     compression_trigger: int = 200_000,
     compression_target: int | None = None,
     embedding_model: str | None = None,
-    embedding_model_params: dict[str, Any] | None = None,
+    embedding_model_params: Mapping[str, object] | None = None,
     compression_cache: DualCache | None = None,
 ) -> CompressedResult:
     """
@@ -383,7 +404,7 @@ def compress(
 
     original_tokens: Final = token_counter(
         model=model,
-        messages=cast(list[Any], original_messages),
+        messages=original_messages,
     )
 
     # Pass through if below trigger
@@ -421,7 +442,7 @@ def compress(
         combined_scores = bm25_scores
 
     # Protected messages are never compressed
-    protected_indices: Final = get_protected_indices(normalized_messages)
+    protected_indices: Final = get_protected_indices(original_messages)
     kept_indices: set[int] = set(protected_indices)
 
     tool_exchange_spans: list[set[int]] = []
@@ -454,7 +475,7 @@ def compress(
     )
 
     # Build compressed messages and cache
-    compressed_messages: Final[list[dict]] = []
+    compressed_messages: Final[list[dict[str, object]]] = []
     cache: Final[dict[str, str]] = {}
     used_keys: Final[set[str]] = set()
     dropped_tool_span_indices: Final = _get_dropped_tool_span_indices(
@@ -478,7 +499,7 @@ def compress(
 
     compressed_tokens: Final = token_counter(
         model=model,
-        messages=cast(list[Any], compressed_messages),
+        messages=compressed_messages,
     )
 
     return CompressedResult(

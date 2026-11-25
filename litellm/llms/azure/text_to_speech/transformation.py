@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 import httpx
 
 import litellm
+from litellm.litellm_core_utils.url_utils import ensure_api_route, join_api_base
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,
     TextToSpeechRequestData,
@@ -19,6 +20,7 @@ from litellm.secret_managers.main import get_secret_str
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
     from litellm.types.llms.openai import HttpxBinaryResponseContent
 else:
     LiteLLMLoggingObj = Any
@@ -31,6 +33,8 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
 
     Reference: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/rest-text-to-speech
     """
+
+    supports_streaming = True
 
     # Azure endpoint domains
     DEFAULT_VOICE = "en-US-AriaNeural"
@@ -63,19 +67,20 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         model: str,
         input: str,
         voice: str | dict | None,
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params_dict: dict,
         logging_obj: "LiteLLMLoggingObj",
         timeout: float | httpx.Timeout,
-        extra_headers: dict[str, Any] | None,
-        base_llm_http_handler: Any,
+        extra_headers: dict[str, object] | None,
+        base_llm_http_handler: "BaseLLMHTTPHandler",
         aspeech: bool,
         api_base: str | None,
         api_key: str | None,
-        **kwargs: Any,
+        stream: bool = False,
+        **kwargs: object,
     ) -> Union[
         "HttpxBinaryResponseContent",
-        Coroutine[Any, Any, "HttpxBinaryResponseContent"],
+        Coroutine[object, object, "HttpxBinaryResponseContent"],
     ]:
         """
         Dispatch method to handle Azure AVA TTS requests
@@ -128,11 +133,12 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             extra_headers=extra_headers,
             client=None,
             _is_async=aspeech,
+            stream=stream,
         )
 
         return response
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Azure AVA TTS supports these OpenAI parameters
 
@@ -181,7 +187,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         if not (style or styledegree or role):
             return content
 
-        express_as_attrs: Final = []
+        express_as_attrs: Final[list[str]] = []
         if style:
             express_as_attrs.append(f"style='{style}'")
         if styledegree:
@@ -227,7 +233,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         optional_params: dict,
         voice: str | dict | None = None,
         drop_params: bool = False,
-        kwargs: dict = {},
+        kwargs: dict[str, object] = {},
     ) -> tuple[str | None, dict]:
         """
         Map OpenAI parameters to Azure AVA TTS parameters
@@ -280,11 +286,11 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate Azure environment and set up authentication headers
         """
@@ -313,7 +319,7 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the complete URL for Azure AVA TTS request
@@ -328,8 +334,6 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
                 f"https://{{region}}.{self.TTS_SPEECH_DOMAIN}"
             )
 
-        # Remove trailing slash and parse URL
-        api_base = api_base.rstrip("/")
         parsed_url: Final = urlparse(api_base)
         hostname: Final = parsed_url.hostname or ""
 
@@ -338,14 +342,10 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
             region: Final = self._extract_region_from_hostname(hostname=hostname, domain=self.COGNITIVE_SERVICES_DOMAIN)
             return self._build_tts_url(region=region)
 
-        # Check if it's already a TTS endpoint
         if self._is_tts_endpoint(hostname=hostname):
-            if not api_base.endswith(self.TTS_ENDPOINT_PATH):
-                return f"{api_base}{self.TTS_ENDPOINT_PATH}"
-            return api_base
+            return ensure_api_route(api_base, self.TTS_ENDPOINT_PATH)
 
-        # Assume it's a custom endpoint, append the path
-        return f"{api_base}{self.TTS_ENDPOINT_PATH}"
+        return join_api_base(api_base, self.TTS_ENDPOINT_PATH)
 
     def _is_cognitive_services_endpoint(self, hostname: str) -> bool:
         """Check if hostname is a Cognitive Services endpoint"""
@@ -387,8 +387,8 @@ class AzureAVATextToSpeechConfig(BaseTextToSpeechConfig):
         input: str,
         voice: str | None,
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        litellm_params: dict[str, object],
+        headers: dict[str, str],
     ) -> TextToSpeechRequestData:
         """
         Transform OpenAI TTS request to Azure AVA TTS SSML format

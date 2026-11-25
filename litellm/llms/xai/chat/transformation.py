@@ -1,17 +1,22 @@
+import copy
 from collections.abc import AsyncIterator, Iterator, Mapping
-from typing import Any, Final
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, Protocol, SupportsIndex, SupportsInt, runtime_checkable
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import Buffer
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
 from litellm.exceptions import AuthenticationError
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
     strip_name_from_messages,
 )
-from litellm.llms.xai.common_utils import XAIModelInfo
+from litellm.llms.xai.common_utils import XAIModelInfo, xai_reported_cost_in_usd
 from litellm.llms.xai.cost_calculator import (
     apply_server_side_tool_usage_details_to_usage,
 )
@@ -29,6 +34,42 @@ from ...openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
 
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
+
+_RESPONSE_BODY: Final = TypeAdapter(dict[object, object], config=ConfigDict(hide_input_in_errors=True))
+_FILTERED_TOOL: Final = TypeAdapter(object)
+
+
+@runtime_checkable
+class _SupportsTrunc(Protocol):
+    def __trunc__(self) -> int: ...
+
+
+def _token_count(value: object) -> int:
+    if isinstance(value, (str, Buffer, SupportsInt, SupportsIndex, _SupportsTrunc)):
+        return int(value)
+    raise TypeError(
+        f"int() argument must be a string, a bytes-like object or a real number, not '{type(value).__name__}'"
+    )
+
+
+def _reasoning_tokens(details: object) -> int:
+    if not details:
+        return 0
+    details_fields: Final = as_str_mapping(details)
+    if details_fields is not None and isinstance(details, dict):
+        return _token_count(details_fields.get("reasoning_tokens") or 0)
+    return _token_count(attribute_or_none(details, "reasoning_tokens") or 0)
+
+
+def _usage_restated_from_xai_ticks(usage: Usage | None) -> Usage | None:
+    reported_cost: Final = xai_reported_cost_in_usd(getattr(usage, "cost_in_usd_ticks", None))
+    if usage is None or reported_cost is None:
+        return None
+    return usage.model_copy(update=MappingProxyType({"cost": reported_cost}))
+
 
 class XAIChatConfig(OpenAIGPTConfig):
     @property
@@ -42,16 +83,23 @@ class XAIChatConfig(OpenAIGPTConfig):
         dynamic_api_key: Final = XAIModelInfo.get_api_key(api_key)
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         from litellm.llms.xai.oauth import (
             XAIOAuthAuthenticator,
             XAIOAuthError,
@@ -87,8 +135,8 @@ class XAIChatConfig(OpenAIGPTConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
@@ -106,10 +154,11 @@ class XAIChatConfig(OpenAIGPTConfig):
             stream=stream,
         )
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         base_openai_params: Final = [
             "logit_bias",
             "logprobs",
+            "max_completion_tokens",
             "max_tokens",
             "n",
             "parallel_tool_calls",
@@ -155,6 +204,12 @@ class XAIChatConfig(OpenAIGPTConfig):
             return False
         return True
 
+    def supports_stop_reason(
+        self,
+        model: str,
+    ) -> bool:
+        return self._supports_stop_reason(model)
+
     def _supports_frequency_penalty(self, model: str) -> bool:
         """
         From manual testing grok-4 does not support `frequency_penalty`
@@ -170,20 +225,23 @@ class XAIChatConfig(OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool = False,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_openai_params: Final = self.get_supported_openai_params(model=model)
         for param, value in non_default_params.items():
             if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             elif param == "tools" and value is not None:
-                tools = []
-                for tool in value:
-                    tool = filter_value_from_dict(tool, "strict")
-                    if tool is not None:
-                        tools.append(tool)
+                tools = [
+                    filtered_tool
+                    for filtered_tool in (
+                        _FILTERED_TOOL.validate_python(filter_value_from_dict(copy.deepcopy(tool), "strict"))  # pyright: ignore[reportUnknownArgumentType]  # tools arrive untyped through the bare-dict params
+                        for tool in value
+                    )
+                    if filtered_tool is not None
+                ]
                 if len(tools) > 0:
                     optional_params["tools"] = tools
             elif param in supported_openai_params:
@@ -196,7 +254,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "XAIChatCompletionStreamingHandler":
         return XAIChatCompletionStreamingHandler(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -207,17 +265,21 @@ class XAIChatConfig(OpenAIGPTConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
-        """
-        Handle https://github.com/BerriAI/litellm/issues/9720
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
+        """Handle https://github.com/BerriAI/litellm/issues/9720"""
+        if "web_search_options" in optional_params:
+            verbose_logger.warning(
+                "XAI no longer supports web search on /chat/completions (Live Search is deprecated). "
+                "Dropping 'web_search_options'. Use the Responses API for XAI web search."
+            )
 
-        Filter out 'name' from messages
-        """
-        messages = strip_name_from_messages(messages)
-        return super().transform_request(model, messages, optional_params, litellm_params, headers)
+        chat_params: Final = {key: value for key, value in optional_params.items() if key != "web_search_options"}
+        return super().transform_request(
+            model, strip_name_from_messages(messages), chat_params, litellm_params, headers
+        )
 
     @staticmethod
     def _fix_choice_finish_reason_for_tool_calls(choice: Choices) -> None:
@@ -235,12 +297,12 @@ class XAIChatConfig(OpenAIGPTConfig):
         model: str,
         raw_response: httpx.Response,
         model_response: ModelResponse,
-        logging_obj,
-        request_data: dict,
+        logging_obj: "LiteLLMLoggingObj",
+        request_data: dict[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        encoding,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -276,18 +338,21 @@ class XAIChatConfig(OpenAIGPTConfig):
 
         # Handle X.AI web search usage tracking
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _RESPONSE_BODY.validate_python(raw_response.json())
             self._enhance_usage_with_xai_web_search_fields(response, raw_response_json)
         except Exception as e:
             verbose_logger.debug("Error extracting X.AI web search usage: %s", e)
 
-        self._fold_reasoning_tokens_into_completion(response)
+        self.fold_reasoning_tokens_into_completion(response)
         self._normalize_openai_compatible_usage_totals(getattr(response, "usage", None))
+        restated_usage: Final = _usage_restated_from_xai_ticks(getattr(response, "usage", None))
+        if restated_usage is not None:
+            response.usage = restated_usage
         return response
 
     @staticmethod
-    def _fold_reasoning_tokens_into_completion(
-        target: ModelResponse | Usage | dict[str, Any] | None,
+    def fold_reasoning_tokens_into_completion(
+        target: ModelResponse | Usage | dict[str, object] | None,
     ) -> None:
         """Reconcile xAI Usage to the OpenAI invariant.
 
@@ -304,24 +369,20 @@ class XAIChatConfig(OpenAIGPTConfig):
             return
 
         if isinstance(target, ModelResponse):
-            usage: Usage | dict[str, Any] | None = getattr(target, "usage", None)
+            usage: Usage | dict[str, object] | None = getattr(target, "usage", None)
         else:
             usage = target
         if usage is None:
             return
 
         if isinstance(usage, dict):
-            details = usage.get("completion_tokens_details") or {}
-            if isinstance(details, dict):
-                reasoning_tokens = int(details.get("reasoning_tokens") or 0)
-            else:
-                reasoning_tokens = int(getattr(details, "reasoning_tokens", 0) or 0)
+            reasoning_tokens = _reasoning_tokens(usage.get("completion_tokens_details"))
             if reasoning_tokens <= 0:
                 return
 
-            prompt_tokens = int(usage.get("prompt_tokens") or 0)
-            completion_tokens = int(usage.get("completion_tokens") or 0)
-            total_tokens = int(usage.get("total_tokens") or 0)
+            prompt_tokens = _token_count(usage.get("prompt_tokens") or 0)
+            completion_tokens = _token_count(usage.get("completion_tokens") or 0)
+            total_tokens = _token_count(usage.get("total_tokens") or 0)
 
             if total_tokens == prompt_tokens + completion_tokens:
                 return
@@ -333,8 +394,8 @@ class XAIChatConfig(OpenAIGPTConfig):
             usage["completion_tokens"] = completion_tokens + reasoning_tokens
             return
 
-        details = getattr(usage, "completion_tokens_details", None)
-        reasoning_tokens = int(getattr(details, "reasoning_tokens", 0) or 0) if details else 0
+        details = attribute_or_none(usage, "completion_tokens_details")
+        reasoning_tokens = _token_count(attribute_or_none(details, "reasoning_tokens") or 0) if details else 0
         if reasoning_tokens <= 0:
             return
 
@@ -351,7 +412,9 @@ class XAIChatConfig(OpenAIGPTConfig):
 
         usage.completion_tokens = completion_tokens + reasoning_tokens
 
-    def _enhance_usage_with_xai_web_search_fields(self, model_response: ModelResponse, raw_response_json: dict) -> None:
+    def _enhance_usage_with_xai_web_search_fields(
+        self, model_response: ModelResponse, raw_response_json: dict[object, object]
+    ) -> None:
         """
         Copy usage.server_side_tool_usage_details from the provider usage block
         onto model_response.usage for tool cost calculation.
@@ -370,15 +433,15 @@ class XAIChatConfig(OpenAIGPTConfig):
 
     @staticmethod
     def _normalize_openai_compatible_usage_totals(
-        usage: Usage | dict[str, Any] | None,
+        usage: Usage | dict[str, object] | None,
     ) -> None:
         if usage is None:
             return
         if isinstance(usage, dict):
-            prompt_tokens = int(usage.get("prompt_tokens") or 0)
-            completion_tokens = int(usage.get("completion_tokens") or 0)
+            prompt_tokens = _token_count(usage.get("prompt_tokens") or 0)
+            completion_tokens = _token_count(usage.get("completion_tokens") or 0)
             expected_total = prompt_tokens + completion_tokens
-            if int(usage.get("total_tokens") or 0) < expected_total:
+            if _token_count(usage.get("total_tokens") or 0) < expected_total:
                 usage["total_tokens"] = expected_total
             return
         prompt_tokens = int(usage.prompt_tokens or 0)
@@ -386,6 +449,13 @@ class XAIChatConfig(OpenAIGPTConfig):
         expected_total = prompt_tokens + completion_tokens
         if int(usage.total_tokens or 0) < expected_total:
             usage.total_tokens = expected_total
+
+    @classmethod
+    def normalize_openai_compatible_usage_totals(
+        cls,
+        usage: Usage | dict[str, object] | None,  # mutable-ok: mirrors override contract
+    ) -> None:
+        return cls._normalize_openai_compatible_usage_totals(usage)
 
 
 class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
@@ -408,7 +478,11 @@ class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
             chunk["choices"] = [{"index": 0, "delta": {}, "finish_reason": None}]
 
         if "usage" in chunk and chunk["usage"] is not None:
-            XAIChatConfig._fold_reasoning_tokens_into_completion(chunk["usage"])
-            XAIChatConfig._normalize_openai_compatible_usage_totals(chunk["usage"])
+            XAIChatConfig.fold_reasoning_tokens_into_completion(chunk["usage"])
+            XAIChatConfig.normalize_openai_compatible_usage_totals(chunk["usage"])
 
-        return super().chunk_parser(chunk)
+        parsed_chunk: Final = super().chunk_parser(chunk)
+        restated_usage: Final = _usage_restated_from_xai_ticks(getattr(parsed_chunk, "usage", None))
+        if restated_usage is not None:
+            parsed_chunk.usage = restated_usage
+        return parsed_chunk

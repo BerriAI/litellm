@@ -8,7 +8,8 @@
 import json
 import os
 import uuid
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Literal, TypedDict
 
 try:
     import ulid
@@ -30,12 +31,22 @@ from fastapi import HTTPException
 
 import litellm
 from litellm import DualCache
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
+    GUARDRAIL_SESSIONS_TARGET,
     CustomGuardrail,
     log_guardrail_information,
 )
 from litellm.integrations.custom_guardrail import dc as global_cache
+from litellm.litellm_core_utils.core_helpers import iter_items
+from litellm.llms.anthropic.common_utils import (
+    anthropic_server_tool_call_params,
+    anthropic_server_tool_calls,
+    with_server_tool_call_arguments,
+    write_anthropic_server_tool_calls,
+    write_request_server_tool_calls,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -46,6 +57,8 @@ from litellm.proxy.guardrails._content_utils import (
     has_non_string_content,
 )
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import ChatCompletionAssistantToolCall
+from litellm.types.utils import LLMResponseTypes
 
 
 class LassoResponse(TypedDict):
@@ -120,7 +133,7 @@ class LassoGuardrail(CustomGuardrail):
         super().__init__(**kwargs)
 
     @staticmethod
-    def _get_field(obj: Any, field: str, default: object = None) -> Any:
+    def _get_field(obj: object, field: str, default: object = None) -> object:
         """Get a field from either a dict or a Pydantic object."""
         if isinstance(obj, dict):
             return obj.get(field, default)
@@ -128,8 +141,8 @@ class LassoGuardrail(CustomGuardrail):
 
     @staticmethod
     def _extract_tool_call_fields(
-        call: Any,
-    ) -> tuple[str | None, str | None, dict[str, object] | None]:
+        call: object,
+    ) -> tuple[object, object, dict[str, object] | None]:
         """Extract (call_id, name, parsed_input) from a tool call.
 
         Handles both dict-style and Pydantic object-style tool_calls.
@@ -145,7 +158,7 @@ class LassoGuardrail(CustomGuardrail):
         input_data: dict[str, object] | None = None
         if args_str:
             try:
-                parsed = json.loads(args_str)
+                parsed = json.loads(args_str) if isinstance(args_str, (str, bytes, bytearray)) else None
             except (json.JSONDecodeError, TypeError):
                 parsed = None
             if isinstance(parsed, dict):
@@ -173,7 +186,7 @@ class LassoGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,  # Deprecated, use global_cache instead (kept to align with CustomGuardrail interface)
-        data: dict,
+        data: dict[str, object],
         call_type: Literal[
             "completion",
             "text_completion",
@@ -205,7 +218,7 @@ class LassoGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
             "completion",
@@ -233,9 +246,9 @@ class LassoGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
-        response,
+        response: LLMResponseTypes,
     ):
         """
         Runs after the LLM API call to validate the response.
@@ -255,7 +268,7 @@ class LassoGuardrail(CustomGuardrail):
                 msg = choice.message
                 if msg.content:
                     response_messages.append({"role": "assistant", "content": msg.content})
-                for call in getattr(msg, "tool_calls", None) or []:
+                for call in (*anthropic_server_tool_calls(msg), *(getattr(msg, "tool_calls", None) or ())):
                     call_id, name, input_data = self._extract_tool_call_fields(call)
                     if not call_id or not name:
                         continue
@@ -273,7 +286,7 @@ class LassoGuardrail(CustomGuardrail):
 
             if response_messages:
                 # Include litellm_call_id from original data for conversation_id consistency
-                response_data: Final = {
+                response_data: Final[dict[str, object]] = {
                     "messages": response_messages,
                     "litellm_call_id": data.get("litellm_call_id"),
                 }
@@ -309,7 +322,8 @@ class LassoGuardrail(CustomGuardrail):
 
         return response
 
-    def _get_or_generate_conversation_id(self, data: dict, cache: DualCache) -> str:
+    @with_service_target(GUARDRAIL_SESSIONS_TARGET)
+    def _get_or_generate_conversation_id(self, data: dict[str, object], cache: DualCache) -> str:
         """
         Get or generate a conversation_id for this request.
 
@@ -393,13 +407,15 @@ class LassoGuardrail(CustomGuardrail):
             HTTPException: If blocking violations are detected
         """
         raw_messages: Final[list[dict[str, object]]] = data.get("messages") or []
-        messages: list[dict[str, Any]] = self._expand_messages_for_classification(raw_messages) if raw_messages else []
-        messages_count: Final = len(messages)
-        if data.get("input") is not None:
-            # Responses-API payloads carry text in data["input"]. Inspect it
-            # alongside any "messages" array — otherwise a caller can attach
-            # benign messages and stash blocked content in input to bypass.
-            messages.extend(build_inspection_messages({"input": data["input"]}))
+        expanded_messages: Final = self._expand_messages_for_classification(raw_messages) if raw_messages else []
+        messages_count: Final = len(expanded_messages)
+        # Responses-API payloads carry text in data["input"]. Inspect it
+        # alongside any "messages" array — otherwise a caller can attach
+        # benign messages and stash blocked content in input to bypass.
+        input_messages: Final = (
+            build_inspection_messages({"input": data["input"]}) if data.get("input") is not None else []
+        )
+        messages: Final[Sequence[Mapping[str, object]]] = [*expanded_messages, *input_messages]
         if not messages:
             return data
 
@@ -414,11 +430,11 @@ class LassoGuardrail(CustomGuardrail):
 
     async def _handle_classification(
         self,
-        data: dict,
+        data: dict[str, object],
         cache: DualCache,
         message_type: Literal["PROMPT", "COMPLETION"],
-        messages: list[dict[str, object]],
-    ) -> dict:
+        messages: Sequence[Mapping[str, object]],
+    ) -> dict[str, object]:
         """Handle classification without masking."""
         try:
             headers: Final = self._prepare_headers(data, cache)
@@ -435,9 +451,9 @@ class LassoGuardrail(CustomGuardrail):
         data: dict,
         cache: DualCache,
         message_type: Literal["PROMPT", "COMPLETION"],
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         messages_count: int,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Handle masking with classifix endpoint.
 
         ``messages_count`` is the number of inspected items derived from
@@ -466,7 +482,7 @@ class LassoGuardrail(CustomGuardrail):
                     text_parts = [msg["content"] for msg in masked_for_input if isinstance(msg.get("content"), str)]
                     if text_parts:
                         data["input"] = "\n".join(text_parts)
-                self._log_masking_applied(message_type, dict(response))
+                self._log_masking_applied(message_type, response)
 
             return data
         except Exception as e:
@@ -475,8 +491,8 @@ class LassoGuardrail(CustomGuardrail):
 
     def _map_masked_messages_back(
         self,
-        original_messages: list[dict[str, Any]],
-        masked_messages: list[dict[str, Any]],
+        original_messages: Sequence[Mapping[str, object]],
+        masked_messages: Sequence[Mapping[str, object]],
     ) -> list[dict[str, object]]:
         """Map Lasso-format masked messages back onto the original OpenAI-format messages.
 
@@ -487,8 +503,8 @@ class LassoGuardrail(CustomGuardrail):
         while preserving the original structure.
         """
         # Index masked content by type so we can look up by id without caring about order.
-        masked_tool_use: Final[dict[str, dict[str, object]]] = {}
-        masked_tool_result: Final[dict[str, str]] = {}
+        masked_tool_use: Final[dict[object, dict[str, object]]] = {}
+        masked_tool_result: Final[dict[object, str]] = {}
         masked_text: Final[list[str]] = []
 
         for msg in masked_messages:
@@ -557,18 +573,27 @@ class LassoGuardrail(CustomGuardrail):
             elif role == "assistant" and not content and orig_msg.get("tool_calls"):
                 msg["tool_calls"] = self._update_tool_calls_from_masked(orig_msg["tool_calls"], masked_tool_use)
 
+            if role == "assistant":
+                write_request_server_tool_calls(
+                    msg,
+                    tuple(
+                        self._masked_server_tool_call(server_tool_call, masked_tool_use)
+                        for server_tool_call in anthropic_server_tool_call_params(orig_msg)
+                    ),
+                )
+
             result.append(msg)
 
         return result
 
     def _update_tool_calls_from_masked(
         self,
-        tool_calls: list[object],
-        masked_tool_use: dict[str, dict[str, object]],
+        tool_calls: object,
+        masked_tool_use: Mapping[object, Mapping[str, object]],
     ) -> list[object]:
         """Replace tool_call arguments with masked values returned by Lasso."""
         updated: Final = []
-        for call in tool_calls:
+        for call in iter_items(tool_calls):
             call_id = self._get_field(call, "id")
             if call_id and call_id in masked_tool_use:
                 masked_input = masked_tool_use[call_id].get("input")
@@ -623,7 +648,7 @@ class LassoGuardrail(CustomGuardrail):
     def _log_masking_applied(
         self,
         message_type: Literal["PROMPT", "COMPLETION"],
-        response: dict[str, Any],
+        response: LassoResponse,
     ) -> None:
         """Log masking application with structured context."""
         conversation_id: Final = getattr(self, "conversation_id", "unknown")
@@ -633,12 +658,12 @@ class LassoGuardrail(CustomGuardrail):
                 "guardrail_name": getattr(self, "guardrail_name", "unknown"),
                 "message_type": message_type,
                 "violations_count": len(response.get("findings", {})),
-                "masked_fields": len(response.get("messages", [])),
+                "masked_fields": len(response.get("messages") or []),
                 "conversation_id": conversation_id,
             },
         )
 
-    def _expand_messages_for_classification(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _expand_messages_for_classification(self, messages: Sequence[Mapping[str, object]]) -> list[dict[str, object]]:
         """
         Convert raw OpenAI-format messages to Lasso API format with content blocks.
 
@@ -646,7 +671,7 @@ class LassoGuardrail(CustomGuardrail):
         - role=tool messages → developer role + tool_result block
         - plain text messages pass through unchanged
         """
-        expanded: Final[list[dict[str, Any]]] = []
+        expanded: Final[list[dict[str, object]]] = []
         for msg in messages:
             role = msg.get("role", "")
             content = msg.get("content")
@@ -697,7 +722,7 @@ class LassoGuardrail(CustomGuardrail):
                 expanded.append({"role": role, "content": content})
 
             if role == "assistant":
-                for call in msg.get("tool_calls") or []:
+                for call in (*anthropic_server_tool_call_params(msg), *iter_items(msg.get("tool_calls") or [])):
                     call_id, name, input_data = self._extract_tool_call_fields(call)
                     if not call_id or not name:
                         verbose_proxy_logger.warning(
@@ -719,7 +744,7 @@ class LassoGuardrail(CustomGuardrail):
 
         return expanded
 
-    def _prepare_headers(self, data: dict, cache: DualCache) -> dict[str, str]:
+    def _prepare_headers(self, data: dict[str, object], cache: DualCache) -> dict[str, str]:
         """Prepare headers for the Lasso API request."""
         if not self.lasso_api_key:
             raise LassoGuardrailMissingSecrets(
@@ -745,7 +770,7 @@ class LassoGuardrail(CustomGuardrail):
 
     def _prepare_payload(
         self,
-        messages: list[dict[str, object]],
+        messages: Sequence[Mapping[str, object]],
         data: dict,
         cache: DualCache,
         message_type: Literal["PROMPT", "COMPLETION"] = "PROMPT",
@@ -813,7 +838,7 @@ class LassoGuardrail(CustomGuardrail):
             url=url,
             headers=headers,
             json=payload,
-            timeout=10.0,
+            timeout=self.timeout if self.timeout is not None else 10.0,
         )
         response.raise_for_status()
         return response.json()
@@ -917,11 +942,11 @@ class LassoGuardrail(CustomGuardrail):
     def _apply_masking_to_model_response(
         self,
         model_response: litellm.ModelResponse,
-        masked_messages: list[dict[str, Any]],
+        masked_messages: Sequence[Mapping[str, object]],
     ) -> None:
         """Apply masking to the actual model response when mask=True and masked content is available."""
         # Index masked tool_use blocks by id for O(1) lookup.
-        masked_tool_use: Final[dict[str, dict[str, object]]] = {}
+        masked_tool_use: Final[dict[object, dict[str, object]]] = {}
         masked_text: Final[list[str]] = []
         for masked_msg in masked_messages:
             content = masked_msg.get("content")
@@ -955,6 +980,14 @@ class LassoGuardrail(CustomGuardrail):
                 text_cursor += 1
                 verbose_proxy_logger.debug("Applied masked text content to choice %s", text_cursor)
 
+            write_anthropic_server_tool_calls(
+                msg,
+                tuple(
+                    self._masked_server_tool_call(server_tool_call, masked_tool_use)
+                    for server_tool_call in anthropic_server_tool_call_params(msg)
+                ),
+            )
+
             for call in getattr(msg, "tool_calls", None) or []:
                 call_id = self._get_field(call, "id")
                 if call_id and call_id in masked_tool_use:
@@ -969,6 +1002,16 @@ class LassoGuardrail(CustomGuardrail):
                             if func:
                                 func.arguments = json.dumps(masked_input)
                         verbose_proxy_logger.debug("Applied masked tool_call arguments for call_id=%s", call_id)
+
+    @staticmethod
+    def _masked_server_tool_call(
+        server_tool_call: ChatCompletionAssistantToolCall,
+        masked_tool_use: Mapping[object, Mapping[str, object]],
+    ) -> ChatCompletionAssistantToolCall:
+        masked_input: Final = masked_tool_use.get(server_tool_call["id"], {}).get("input")
+        if masked_input is None:
+            return server_tool_call
+        return with_server_tool_call_arguments(server_tool_call, json.dumps(masked_input))
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:

@@ -1,22 +1,62 @@
+import json
+from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Final, Literal
+from typing import Annotated, Any, Final, Literal, TypeAlias
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import AfterValidator, ConfigDict, Field, HttpUrl, TypeAdapter, field_validator, model_validator
+from typing_extensions import Self
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
     MCPAuth,
     MCPAuthType,
     MCPTokenEndpointAuthMethod,
     MCPTransportType,
+    MCPUpstreamProtocol,
     normalize_upstream_header_name,
+    validate_mcp_protocol_transport,
 )
 
+MAX_TOOLS_LIST_CACHE_TTL_SECONDS: Final = 365 * 24 * 60 * 60
+_TOOLS_LIST_CACHE_TTL_SECONDS: Final = TypeAdapter[int](
+    Annotated[int, Field(ge=0, le=MAX_TOOLS_LIST_CACHE_TTL_SECONDS)]
+)
+
+
 # MCPInfo now allows arbitrary additional fields for custom metadata
-MCPInfo = dict[str, Any]
+def _validate_mcp_protocol_metadata(value: dict[str, object]) -> dict[str, object]:
+    if "protocol_version" in value:
+        TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(value["protocol_version"])
+    if "skip_tool_output_validation" in value:
+        TypeAdapter[bool](bool).validate_python(value["skip_tool_output_validation"], strict=True)
+    if "tools_list_cache_ttl_seconds" in value:
+        _TOOLS_LIST_CACHE_TTL_SECONDS.validate_python(value["tools_list_cache_ttl_seconds"], strict=True)
+    return value
 
 
-class MCPOAuthMetadata(BaseModel):
+MCPInfo = Annotated[dict[str, Any], AfterValidator(_validate_mcp_protocol_metadata)]
+
+
+def _validate_event_callback_base(value: str) -> str:
+    url: Final = HttpUrl(value)
+    if (
+        url.scheme != "https"
+        or not urlsplit(value).netloc
+        or any(part is not None for part in (url.username, url.password, url.query, url.fragment))
+    ):
+        raise ValueError(
+            "MCP Events callback base must be an absolute HTTPS URL without credentials, query or fragment"
+        )
+    return str(url).rstrip("/")
+
+
+MCPEventCallbackBase: TypeAlias = Annotated[str, AfterValidator(_validate_event_callback_base)]
+
+
+class MCPOAuthMetadata(LiteLLMBaseModel):
+    authorization_server_metadata: Mapping[str, object] | None = Field(default=None, exclude=True)
     scopes: list[str] | None = None
     """Resource-driven scopes for the authorization request: the RFC 9728 protected-resource
     ``scopes_supported``, or the ``scope`` from the WWW-Authenticate 401 challenge when the resource
@@ -27,6 +67,8 @@ class MCPOAuthMetadata(BaseModel):
     authorization_url: str | None = None
     token_url: str | None = None
     registration_url: str | None = None
+    client_id_metadata_document_supported: bool | None = None
+    authorization_response_iss_parameter_supported: bool = False
     discovered_issuer: str | None = None
     """The ``issuer`` the authorization-server metadata document self-attests (RFC 8414). Persisted
     trust-on-first-use as the server's ``issuer`` when none is configured, so that later rebuilds
@@ -38,13 +80,64 @@ class MCPOAuthMetadata(BaseModel):
     usable in memory but must never be persisted as configuration."""
 
 
-class MCPServer(BaseModel):
+class MCPOAuthIdentityBinding(LiteLLMBaseModel):
+    """Per-server policy binding stored per-user OAuth credentials to the authenticated LiteLLM caller.
+
+    When enabled for an interactive oauth2 server, the token relay validates the upstream OIDC
+    ``id_token`` (signature via the pinned issuer's JWKS, issuer, audience, expiry, nonce) and compares its
+    principal claim to the LiteLLM caller's trusted identity before the token is returned, stored,
+    or cached. ``audit`` logs mismatches without changing behavior; ``enforce`` fails closed with
+    403 ``oauth_principal_mismatch`` and disables the direct ``oauth-user-credential`` POST, which
+    would otherwise bypass validation with an arbitrary opaque token.
+    """
+
+    mode: Literal["disabled", "audit", "enforce"] = "disabled"
+    issuer: str
+    jwks_url: str | None = None
+    audiences: list[str] = Field(min_length=1)  # mutable-ok: public Pydantic schema requires list values
+    principal_claim: str = "email"
+    caller_field: Literal["user_email", "user_id"] = "user_email"
+    require_email_verified: bool = True
+
+
+class MCPServerEventsConfig(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = False
+    allowed_events: tuple[str, ...] | None = Field(
+        default=None,
+        min_length=1,
+        description="Event names or globs this server may publish. Omit for every event; set enabled false for none.",
+    )
+    min_poll_interval_ms: int = Field(default=1000, ge=0)
+    legacy_webhook_id_equals_event_id: bool = False
+
+
+class PinnedMCPTool(LiteLLMBaseModel):
+    """One tool of an admin-pinned catalog: the description and input schema tools/list keeps serving."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    description: str = ""
+    input_schema: dict[str, object] = Field(default_factory=dict)
+
+
+_PINNED_TOOLS: Final[TypeAdapter[dict[str, PinnedMCPTool] | None]] = TypeAdapter(dict[str, PinnedMCPTool] | None)
+
+
+def parse_pinned_tools(value: object) -> dict[str, PinnedMCPTool] | None:
+    decoded: Final = json.loads(value) if isinstance(value, str) and value else value
+    return _PINNED_TOOLS.validate_python(decoded or None)
+
+
+class MCPServer(LiteLLMBaseModel):
     server_id: str
     name: str
     alias: str | None = None
     server_name: str | None = None
     url: str | None = None
     transport: MCPTransportType
+    protocol_version: MCPUpstreamProtocol = "auto"
     spec_path: str | None = None
     auth_type: MCPAuthType | None = None
     authentication_token: str | None = None
@@ -57,17 +150,23 @@ class MCPServer(BaseModel):
     disallowed_tools: list[str] | None = None
     tool_name_to_display_name: dict[str, str] | None = None
     tool_name_to_description: dict[str, str] | None = None
+    pinned_tools: dict[str, PinnedMCPTool] | None = None
     allowed_params: dict[str, list[str]] | None = None  # map of tool names to allowed parameter lists
     static_headers: dict[str, str] | None = None  # static headers to forward to the MCP server
     # Admin-configured env vars. Each entry is {name, value, scope, description}.
     # scope=="global" values are interpolated into static_headers using ${NAME}.
     # scope=="user" values must be supplied per-user.
-    env_vars: list[dict[str, Any]] | None = None
+    env_vars: list[dict[str, object]] | None = None
     # OAuth-specific fields
+    authorization_server_metadata: Mapping[str, object] | None = Field(default=None, exclude=True)
     client_id: str | None = None
     client_secret: str | None = None
     issuer: str | None = None
     issuer_is_anchored: bool = False
+    client_id_metadata_document_supported: bool | None = None
+    authorization_response_iss_parameter_supported: bool = False
+    dcr_issuer: str | None = None
+    dcr_server_url: str | None = None
     scopes: list[str] | None = None
     authorization_url: str | None = None
     token_url: str | None = None
@@ -78,6 +177,7 @@ class MCPServer(BaseModel):
     configured_authorization_url: str | None = None
     configured_token_url: str | None = None
     configured_registration_url: str | None = None
+    configured_scopes: tuple[str, ...] | None = None
     # How the gateway authenticates to the upstream token endpoint. When
     # "client_secret_basic" the credentials go in an HTTP Basic Authorization
     # header (omitted from the body); None defaults to "client_secret_post".
@@ -121,6 +221,15 @@ class MCPServer(BaseModel):
     # posts the ID-JAG assertion to id_jag_resource_token_endpoint.
     id_jag_resource_token_endpoint: str | None = None
     id_jag_resource: str | None = None
+    id_jag_subject_source: str | None = None
+    id_jag_resource_client_id: str | None = Field(
+        default=None,
+        description="OAuth client identifier used at the ID-JAG resource authorization server.",
+    )
+    id_jag_resource_client_secret: str | None = Field(
+        default=None,
+        description="OAuth client secret used at the ID-JAG resource authorization server.",
+    )
     client_private_key: str | None = None
     client_private_key_id: str | None = None
     client_assertion_signing_alg: str = "RS256"
@@ -134,11 +243,11 @@ class MCPServer(BaseModel):
     access_groups: list[str] | None = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
-    # Explicit opt-in to upstream-delegated authentication for ``oauth2``
-    # servers. When ``auth_type == oauth2`` and this is ``True``, MCP requests
-    # bypass LiteLLM API-key/SSO auth (and the pre-emptive 401) so the client
-    # completes PKCE directly with the upstream MCP server. See
-    # ``MCPRequestHandler._target_servers_delegate_auth_to_upstream``.
+    # Deprecated opt-in to upstream-delegated authentication for ``oauth2``
+    # servers. A bare ``Authorization`` that is not a LiteLLM credential is the
+    # upstream token and is forwarded; see
+    # ``MCPRequestHandler._admit_legacy_delegate_bearer``. New servers should use
+    # ``true_passthrough`` or ``oauth_delegate``.
     #
     # Honored only for ``auth_type == oauth2``; ignored for any other
     # ``auth_type``. OAuth pass-through for non-oauth2 servers
@@ -158,8 +267,9 @@ class MCPServer(BaseModel):
     # be set explicitly to avoid regressing servers that did not opt in.
     oauth_passthrough: bool = False
     dcr_bridge: bool | None = None
+    per_server_oauth_discovery: bool = False
     is_byok: bool = False
-    byok_description: list[str] = []
+    byok_description: list[str] = Field(default=[])
     byok_api_key_help_url: str | None = None
     source_url: str | None = None
     created_at: datetime | None = None
@@ -171,7 +281,8 @@ class MCPServer(BaseModel):
     # token_validation: key-value pairs that must match fields in the OAuth token
     # response (supports dot-notation for nested fields, e.g. "team.enterprise_id").
     # Tokens that fail validation are rejected before storage.
-    token_validation: dict[str, Any] | None = None
+    token_validation: dict[str, object] | None = None
+    oauth_identity_binding: MCPOAuthIdentityBinding | None = None
     # Optional TTL override (seconds) for the Redis per-user token cache, capped
     # at the token's expires_in minus the expiry buffer so a cached entry never
     # outlives the token. Defaults to the token's expires_in minus the expiry
@@ -181,14 +292,16 @@ class MCPServer(BaseModel):
     # Max concurrent outbound tool calls to this server; excess calls queue.
     # None or a value <= 0 means unlimited.
     max_concurrent_requests: int | None = None
+    rpm: int | None = None
     # Resolved short-ID tool prefix when LITELLM_USE_SHORT_MCP_TOOL_PREFIX is
-    # enabled.  Set by ``MCPServerManager._assign_unique_short_prefix`` at
+    # enabled.  Set by ``MCPServerManager.assign_unique_short_prefix`` at
     # registration time so that natural-hash collisions between two
     # different ``server_id`` values are bumped deterministically.  Left
     # ``None`` in default-prefix mode.
     short_prefix: str | None = None
     allow_sampling: bool = False
     allow_elicitation: bool = False
+    events: MCPServerEventsConfig | None = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __repr__(self) -> str:
@@ -225,6 +338,32 @@ class MCPServer(BaseModel):
         return self.oauth2_flow == "client_credentials"
 
     @property
+    def skip_tool_output_validation(self) -> bool:
+        return (self.mcp_info or {}).get("skip_tool_output_validation") is True
+
+    @property
+    def tools_list_cache_ttl_seconds(self) -> int | None:
+        configured: Final[object] = (self.mcp_info or {}).get("tools_list_cache_ttl_seconds")
+        return configured if isinstance(configured, int) else None
+
+    @model_validator(mode="after")
+    def resolve_protocol_version(self) -> Self:
+        if "protocol_version" not in self.model_fields_set and self.mcp_info is not None:
+            self.protocol_version = TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
+                self.mcp_info.get("protocol_version", "auto")
+            )
+        validate_mcp_protocol_transport(self.protocol_version, self.transport)
+        return self
+
+    @model_validator(mode="after")
+    def validate_identity_binding_mode(self) -> Self:
+        binding: Final = self.oauth_identity_binding
+        if binding is not None and binding.mode != "disabled":
+            if not self.needs_user_oauth_token or self.delegate_auth_to_upstream:
+                raise ValueError("oauth_identity_binding requires gateway-managed per-user OAuth2 credentials")
+        return self
+
+    @property
     def needs_user_oauth_token(self) -> bool:
         """True if this is an OAuth2 server that relies on per-user tokens (no client_credentials)."""
         return self.auth_type == MCPAuth.oauth2 and not self.has_client_credentials
@@ -240,6 +379,32 @@ class MCPServer(BaseModel):
         DCR-bridge, and token-exchange servers are their own auth types and client-forwarded,
         so they are excluded by construction."""
         return self.auth_type == MCPAuth.oauth2 and not self.delegate_auth_to_upstream
+
+    @property
+    def uses_per_server_oauth_relay(self) -> bool:
+        """Whether named discovery should advertise the configured per-server OAuth relay."""
+        return self.per_server_oauth_discovery and self.auth_type == MCPAuth.oauth2 and not self.has_client_credentials
+
+    @property
+    def advertises_gateway_authorization_server(self) -> bool:
+        """Whether named discovery should advertise the aggregate gateway authorization server."""
+        if self.auth_type == MCPAuth.oauth2:
+            return self.is_gateway_managed_oauth2 and not self.uses_per_server_oauth_relay
+        if self.auth_type not in (
+            None,
+            MCPAuth.none,
+            MCPAuth.api_key,
+            MCPAuth.bearer_token,
+            MCPAuth.basic,
+            MCPAuth.authorization,
+            MCPAuth.token,
+            MCPAuth.aws_sigv4,
+        ):
+            return False
+        return not any(
+            header.lower() in ("authorization", "x-api-key", "api-key", "apikey")
+            for header in (self.extra_headers or ())
+        )
 
     @property
     def is_true_passthrough(self) -> bool:
@@ -260,6 +425,12 @@ class MCPServer(BaseModel):
         discovered ``authorization_url`` / ``token_url`` enriches only the gateway's own OAuth front
         door and is never a precondition for opening a session."""
         return self.is_true_passthrough or self.is_oauth_delegate
+
+    @property
+    def reauthorizes_in_client(self) -> bool:
+        """True when a caller can fix an upstream 401 by authenticating again: the client-forwarded
+        token modes and gateway-vaulted per-user OAuth."""
+        return self.is_client_forwarded_token or (self.is_gateway_managed_oauth2 and self.needs_user_oauth_token)
 
     @property
     def is_dcr_bridge(self) -> bool:

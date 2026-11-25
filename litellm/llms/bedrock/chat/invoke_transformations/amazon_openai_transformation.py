@@ -7,10 +7,12 @@ Model format: bedrock/openai/<model-id>
 Example: bedrock/openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.request_metadata import (
@@ -73,7 +75,7 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         api_key: str | None,
         model: str,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -97,18 +99,13 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         # Encode model ID for ARNs (e.g., :imported-model/ -> :imported-model%2F)
         model_id = CommonUtils.encode_bedrock_runtime_modelid_arn(model_id)
 
-        # Build the invoke URL
-        if stream:
-            endpoint_url = f"{endpoint_url}/model/{model_id}/invoke-with-response-stream"
-        else:
-            endpoint_url = f"{endpoint_url}/model/{model_id}/invoke"
-
-        return endpoint_url
+        invoke_route: Final = "invoke-with-response-stream" if stream else "invoke"
+        return join_api_base(endpoint_url, f"model/{model_id}/{invoke_route}")
 
     def sign_request(
         self,
-        headers: dict,
-        optional_params: dict,
+        headers: dict[str, object],
+        optional_params: dict[str, object],
         request_data: dict,
         api_base: str,
         api_key: str | None = None,
@@ -135,10 +132,10 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         """
         Transform the request to OpenAI Chat Completions format for Bedrock imported models.
 
@@ -162,14 +159,14 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate the environment and return headers.
 
@@ -180,6 +177,8 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
         return merge_bedrock_invoke_headers(headers, (), metadata_headers, owned_names)
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BedrockError:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BedrockError:
         """Return the appropriate error class for Bedrock."""
-        return BedrockError(status_code=status_code, message=error_message)
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)

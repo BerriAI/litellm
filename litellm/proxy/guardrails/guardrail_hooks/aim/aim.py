@@ -7,10 +7,10 @@
 import asyncio
 import json
 import os
-from collections.abc import AsyncGenerator, AsyncIterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, TypeAlias
+from collections.abc import AsyncGenerator, AsyncIterator, Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 from websockets.asyncio.client import ClientConnection, connect
 
@@ -18,6 +18,7 @@ from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm._version import version as litellm_version
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_attributes, require_get, subscript
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -27,6 +28,8 @@ from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
     has_non_string_content,
+    is_non_conversational_call_type,
+    is_string_batch_input,
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import (
@@ -71,6 +74,10 @@ class AimRedactedChat(TypedDict):
     all_redacted_messages: ReadOnly[Sequence[AimRedactedMessage]]
 
 
+_REDACTED_CHAT_ADAPTER: Final = TypeAdapter(AimRedactedChat)
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 class AimAnalyzeResponse(TypedDict):
     """Body returned by Aim's ``POST /fw/v1/analyze``."""
 
@@ -82,7 +89,7 @@ class AimAnalyzeResponse(TypedDict):
 class AimOutputGuardrailResult(TypedDict, total=False):
     """Outcome of inspecting one model completion with Aim."""
 
-    detection_message: ReadOnly[str]
+    detection_message: ReadOnly[object]
     redacted_output: ReadOnly[str]
 
 
@@ -97,6 +104,14 @@ class AimStreamMessage(TypedDict, total=False):
 AimStreamChunk: TypeAlias = BaseModel | Mapping[str, object] | str | bytes
 
 
+class _SupportsKeys(Protocol):
+    def keys(self) -> Iterable[object]: ...
+
+
+def _keys_of(value: object) -> Iterable[object]:
+    return require_attributes(value, _SupportsKeys, "keys").keys()
+
+
 class AimGuardrail(CustomGuardrail):
     @classmethod
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
@@ -106,8 +121,15 @@ class AimGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
         ]
 
-    def __init__(self, api_key: str | None = None, api_base: str | None = None, **kwargs):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        inspect_embeddings: bool | None = None,
+        **kwargs,
+    ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
+        self.inspect_embeddings: Final = inspect_embeddings is True
         ssl_verify: Final = kwargs.pop("ssl_verify", None)
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
@@ -122,7 +144,7 @@ class AimGuardrail(CustomGuardrail):
             raise AimGuardrailMissingSecrets(msg)
         self.api_base = api_base or os.environ.get("AIM_API_BASE") or "https://api.aim.security"
         self.ws_api_base = self.api_base.replace("http://", "ws://").replace("https://", "wss://")
-        self.dlp_entities: list[dict] = []
+        self.dlp_entities: list[dict[str, object]] = []
         self._max_dlp_entities = 100
         super().__init__(**kwargs)
 
@@ -130,24 +152,33 @@ class AimGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         verbose_proxy_logger.debug("Inside AIM Pre-Call Hook")
+        # /embeddings carries ``input`` — documents being indexed, not a prompt — which
+        # the flatten lifts into synthetic chat messages. A verdict on that text then
+        # blocks or silently rewrites a request that was never a conversation.
+        if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
+            verbose_proxy_logger.debug("Aim: skipping non-conversational call type %s", call_type)
+            return data
         return await self.call_aim_guardrail(data, hook="pre_call", key_alias=user_api_key_dict.key_alias)
 
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         verbose_proxy_logger.debug("Inside AIM Moderation Hook")
+        if is_non_conversational_call_type(call_type) and not self.inspect_embeddings:
+            verbose_proxy_logger.debug("Aim: skipping non-conversational call type %s", call_type)
+            return data
 
         await self.call_aim_guardrail(data, hook="moderation", key_alias=user_api_key_dict.key_alias)
         return data
 
-    async def call_aim_guardrail(self, data: dict, hook: str, key_alias: str | None) -> dict:
+    async def call_aim_guardrail(self, data: dict, hook: str, key_alias: str | None) -> dict[str, object]:
         user_email: Final = data.get("metadata", {}).get("headers", {}).get("x-aim-user-email")
         call_id: Final = data.get("litellm_call_id")
         headers: Final = self._build_aim_headers(
@@ -160,18 +191,19 @@ class AimGuardrail(CustomGuardrail):
             f"{self.api_base}/fw/v1/analyze",
             headers=headers,
             json={"messages": self._build_aim_inspection_messages(data)},
+            timeout=self.timeout,
         )
         response.raise_for_status()
-        res: Final[AimAnalyzeResponse] = response.json()
+        res: Final = require_get(_DECODED_JSON.validate_python(response.json()))
         required_action: Final = res.get("required_action")
-        action_type: Final = required_action and required_action.get("action_type", None)
+        action_type: Final = required_action and require_get(required_action).get("action_type", None)
         if action_type is None:
             verbose_proxy_logger.debug("Aim: No required action specified")
             return data
         if action_type == "monitor_action":
             verbose_proxy_logger.info("Aim: monitor action")
         elif action_type == "block_action":
-            self._handle_block_action(res["analysis_result"], required_action)
+            self._handle_block_action(subscript(res, "analysis_result"), require_get(required_action))
         elif action_type == "anonymize_action":
             return self._anonymize_request(res, data)
         else:
@@ -179,7 +211,7 @@ class AimGuardrail(CustomGuardrail):
         return data
 
     @staticmethod
-    def _build_aim_inspection_messages(data: dict) -> list[dict[str, str]]:
+    def _build_aim_inspection_messages(data: dict[str, object]) -> list[dict[str, str]]:
         """AIM validates against the OpenAI chat schema. Bare ``role: "tool"``
         without ``tool_call_id`` and bare ``role: "function"`` without ``name``
         are rejected; the flatten drops those fields, so any role outside
@@ -197,16 +229,16 @@ class AimGuardrail(CustomGuardrail):
             openai_code=openai_code,
         )
 
-    def _handle_block_action(self, analysis_result: AimAnalysisResult, required_action: AimRequiredAction) -> None:
+    def _handle_block_action(self, analysis_result: object, required_action: SupportsGet) -> None:
         detection_message: Final = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Aim: Violation detected enabled policies: {policies}".format(
-                policies=list(analysis_result["policy_drill_down"].keys()),
+                policies=list(_keys_of(subscript(analysis_result, "policy_drill_down"))),
             ),
         )
-        raise self._rejection(detection_message, openai_code="content_policy_violation")
+        raise self._rejection(str(detection_message), openai_code="content_policy_violation")
 
-    def _anonymize_request(self, res: AimAnalyzeResponse, data: dict) -> dict:
+    def _anonymize_request(self, res: SupportsGet, data: dict[str, object]) -> dict[str, object]:
         verbose_proxy_logger.info("Aim: anonymize action")
         redacted_chat: Final = res.get("redacted_chat")
         if not redacted_chat:
@@ -215,24 +247,36 @@ class AimGuardrail(CustomGuardrail):
         # ``data["messages"]`` with that would silently strip image/audio
         # parts from a multimodal request — degrade to block so the
         # multimodal payload is never silently rewritten.
-        if has_non_string_content(data):
+        if has_non_string_content(data) and not is_string_batch_input(data):
             raise self._rejection(
                 "Aim: anonymize action requested for multimodal input "
                 "but mask-in-place would drop non-text parts. Send the "
                 "request with plain string content to use anonymize, "
                 "or rely on block-mode policies."
             )
-        redacted_messages: Final = [
-            {
-                "role": message["role"],
-                "content": message["content"],
-            }
-            for message in redacted_chat["all_redacted_messages"]
-        ]
+        try:
+            redacted_chat_model: Final = _REDACTED_CHAT_ADAPTER.validate_python(redacted_chat)
+        except ValidationError:
+            raise self._rejection(
+                "Aim: anonymize action returned malformed redacted messages, "
+                "so the request cannot be rewritten without forwarding unredacted text."
+            ) from None
+        redacted_messages: Final = list(redacted_chat_model["all_redacted_messages"])
+        if len(redacted_messages) != len(build_inspection_messages(data)):
+            raise self._rejection(
+                "Aim: anonymize action returned a redacted batch of a different "
+                "size than the inspected input, so the request cannot be "
+                "rewritten without forwarding unredacted text."
+            )
         # Write back to ``messages`` AND ``input``. The Responses-API
         # backend reads ``input``; writing only to ``messages`` would let
         # unredacted text reach the LLM for ``/v1/responses`` calls.
-        apply_redacted_messages_back(data, redacted_messages)
+        if not apply_redacted_messages_back(data, redacted_messages):
+            raise self._rejection(
+                "Aim: anonymize action returned a redacted batch of a different "
+                "size than the inspected input, so the request cannot be "
+                "rewritten without forwarding unredacted text."
+            )
         return data
 
     async def call_aim_guardrail_on_output(
@@ -252,27 +296,48 @@ class AimGuardrail(CustomGuardrail):
                 "messages": self._build_aim_inspection_messages(request_data)
                 + [{"role": "assistant", "content": output}]
             },
+            timeout=self.timeout,
         )
         response.raise_for_status()
-        res: Final[AimAnalyzeResponse] = response.json()
+        res: Final = require_get(_DECODED_JSON.validate_python(response.json()))
         required_action: Final = res.get("required_action")
-        action_type: Final = required_action and required_action.get("action_type", None)
+        action_type: Final = required_action and require_get(required_action).get("action_type", None)
         if action_type and action_type == "block_action":
-            return self._handle_block_action_on_output(res["analysis_result"], required_action)
+            return self._handle_block_action_on_output(subscript(res, "analysis_result"), require_get(required_action))
         redacted_chat: Final = res.get("redacted_chat", None)
 
-        if action_type and action_type == "anonymize_action" and redacted_chat:
-            return {"redacted_output": redacted_chat["all_redacted_messages"][-1]["content"]}
-        return {"redacted_output": output}
+        if action_type != "anonymize_action":
+            return {"redacted_output": output}
+        try:
+            redacted_chat_model: Final = _REDACTED_CHAT_ADAPTER.validate_python(redacted_chat)
+        except ValidationError:
+            raise self._rejection(
+                "Aim: anonymize action returned malformed redacted output, "
+                "so the response cannot be rewritten without forwarding unredacted text."
+            ) from None
+        redacted_messages: Final = redacted_chat_model["all_redacted_messages"]
+        inspected_messages: Final = self._build_aim_inspection_messages(request_data)
+        if len(redacted_messages) != len(inspected_messages) + 1:
+            raise self._rejection(
+                "Aim: anonymize action returned an invalid redacted output count, "
+                "so the response cannot be rewritten without forwarding unredacted text."
+            )
+        redacted_output: Final = redacted_messages[-1]["content"]
+        if not redacted_output:
+            raise self._rejection(
+                "Aim: anonymize action returned empty redacted output, "
+                "so the response cannot be rewritten without forwarding unredacted text."
+            )
+        return {"redacted_output": redacted_output}
 
     def _handle_block_action_on_output(
-        self, analysis_result: AimAnalysisResult, required_action: AimRequiredAction
+        self, analysis_result: object, required_action: SupportsGet
     ) -> AimOutputGuardrailResult | None:
         detection_message: Final = required_action.get("detection_message", None)
         verbose_proxy_logger.info(
             "Aim: detected: {detected}, enabled policies: {policies}".format(
                 detected=True,
-                policies=list(analysis_result["policy_drill_down"].keys()),
+                policies=list(_keys_of(subscript(analysis_result, "policy_drill_down"))),
             ),
         )
         return {"detection_message": detection_message}
@@ -312,7 +377,7 @@ class AimGuardrail(CustomGuardrail):
 
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ) -> LLMResponseTypes:
@@ -347,7 +412,7 @@ class AimGuardrail(CustomGuardrail):
                 detection_message := aim_output_guardrail_result.get("detection_message")
             ):
                 raise self._rejection(
-                    detection_message,
+                    str(detection_message),
                     openai_code="content_policy_violation",
                 )
             if aim_output_guardrail_result and aim_output_guardrail_result.get("redacted_output"):
@@ -373,7 +438,7 @@ class AimGuardrail(CustomGuardrail):
         ) as websocket:
             sender: Final = asyncio.create_task(self.forward_the_stream_to_aim(websocket, response))
             while True:
-                result: AimStreamMessage = json.loads(await websocket.recv())
+                result: SupportsGet = require_get(_DECODED_JSON.validate_python(json.loads(await websocket.recv())))
                 if verified_chunk := result.get("verified_chunk"):
                     yield ModelResponseStream.model_validate(verified_chunk)
                 else:
@@ -401,7 +466,7 @@ class AimGuardrail(CustomGuardrail):
         await websocket.send(json.dumps({"done": True}))
 
     @staticmethod
-    def get_config_model() -> type["GuardrailConfigModel"] | None:
+    def get_config_model() -> type["GuardrailConfigModel[BaseModel]"] | None:
         from litellm.types.proxy.guardrails.guardrail_hooks.aim import (
             AimGuardrailConfigModel,
         )

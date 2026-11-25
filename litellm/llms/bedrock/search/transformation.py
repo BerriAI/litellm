@@ -37,9 +37,10 @@ from collections.abc import Iterator, Mapping, Sequence
 from typing import Final
 
 import httpx
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_get
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.transformation import (
     BaseSearchConfig,
     SearchResponse,
@@ -47,6 +48,7 @@ from litellm.llms.base_llm.search.transformation import (
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.custom_httpx.sse_lines import split_sse_lines
 from litellm.secret_managers.main import get_secret_str
 
 # AgentCore web-search rejects queries longer than 200 characters
@@ -81,6 +83,8 @@ _GATEWAY_HOST_PATTERN: Final = re.compile(r"[a-z0-9-]+\.gateway\.bedrock-agentco
 _SSE_EVENT_SEPARATOR: Final = re.compile(r"\r?\n[ \t]*\r?\n")
 
 _SSE_LINE_PREFIXES: Final = ("event:", "data:", ":", "id:", "retry:")
+
+_JSON_VALUE: Final = TypeAdapter(object)
 
 
 def _gateway_host_match(api_base: str) -> re.Match[str] | None:
@@ -129,7 +133,7 @@ def _parse_result_items(raw_text: object) -> tuple[Mapping[str, object], ...]:
     if not isinstance(raw_text, str):
         return ()
     try:
-        parsed: Final = json.loads(raw_text)
+        parsed: Final = _JSON_VALUE.validate_python(json.loads(raw_text))
     except json.JSONDecodeError:
         return ()
     return _result_items(parsed)
@@ -144,11 +148,13 @@ def _iter_sse_events(text: str) -> Iterator[Mapping[str, object]]:
     progress notifications before the JSON-RPC response.
     """
     for chunk in _SSE_EVENT_SEPARATOR.split(text):
-        payload = "\n".join(line[len("data:") :].lstrip() for line in chunk.splitlines() if line.startswith("data:"))
+        payload = "\n".join(
+            line[len("data:") :].lstrip() for line in split_sse_lines(chunk) if line.startswith("data:")
+        )
         if not payload:
             continue
         try:
-            parsed = json.loads(payload)
+            parsed = _JSON_VALUE.validate_python(json.loads(payload))
         except json.JSONDecodeError:
             continue
         if isinstance(parsed, dict):
@@ -166,11 +172,11 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: BaseSearchConfig hands providers the mutable request header dict
+        headers: dict[str, str],  # mutable-ok: BaseSearchConfig hands providers the mutable request header dict
         api_key: str | None = None,
         api_base: str | None = None,
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.validate_environment forwards provider-specific extras
-    ) -> dict:  # mutable-ok: the handler passes these headers straight to httpx, which wants a dict
+    ) -> dict[str, object]:  # mutable-ok: the handler passes these headers straight to httpx, which wants a dict
         """
         Set MCP transport headers. Per the MCP Streamable HTTP transport spec,
         the client MUST accept both application/json and text/event-stream, and
@@ -179,7 +185,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         Authentication itself happens in sign_request(): bearer token for
         CUSTOM_JWT gateways, AWS SigV4 for AWS_IAM gateways.
         """
-        return {  # mutable-ok: httpx request headers are a dict
+        return {
             **headers,
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
@@ -190,7 +196,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
     def get_complete_url(
         self,
         api_base: str | None,
-        optional_params: dict,  # mutable-ok: BaseSearchConfig passes optional params as a dict
+        optional_params: dict[str, object],  # mutable-ok: BaseSearchConfig passes optional params as a dict
         data: dict | list[dict] | None = None,  # mutable-ok: BaseSearchConfig request bodies are JSON dicts
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.get_complete_url forwards provider-specific extras
     ) -> str:
@@ -208,7 +214,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         query: str | list[str],  # mutable-ok: BaseSearchConfig accepts a list of queries
         optional_params: dict,  # mutable-ok: BaseSearchConfig passes optional params as a dict
         **kwargs: object,  # kwargs-ok: BaseSearchConfig.transform_search_request forwards provider-specific extras
-    ) -> dict:  # mutable-ok: the JSON-RPC body is serialized as a JSON object
+    ) -> dict[str, object]:  # mutable-ok: the JSON-RPC body is serialized as a JSON object
         """
         Transform Search request to an MCP tools/call request.
 
@@ -235,13 +241,13 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
                 "Other gateway tools cannot be invoked through this provider."
             )
 
-        return {  # mutable-ok: JSON-RPC request bodies are JSON objects
+        return {
             "jsonrpc": "2.0",
             "id": 1,
             "method": "tools/call",
-            "params": {  # mutable-ok: JSON-RPC request bodies are JSON objects
+            "params": {
                 "name": tool_name,
-                "arguments": {  # mutable-ok: JSON-RPC request bodies are JSON objects
+                "arguments": {
                     "query": joined_query[:AGENTCORE_MAX_QUERY_LENGTH],
                     "maxResults": optional_params.get("max_results", AGENTCORE_DEFAULT_MAX_RESULTS),
                 },
@@ -287,7 +293,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
             default_api_base=api_base if gateway_host_match else None,
         )
         if bearer_token:
-            bearer_headers: Final = {  # mutable-ok: httpx request headers are a dict
+            bearer_headers: Final = {
                 **headers,
                 "Authorization": f"Bearer {bearer_token}",
             }
@@ -303,7 +309,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         signing_params: Final = (
             optional_params
             if optional_params.get("aws_region_name") is not None
-            else {  # mutable-ok: BaseAWSLLM._sign_request takes optional params as a dict
+            else {
                 **optional_params,
                 "aws_region_name": self._signing_region(api_base),
             }
@@ -380,6 +386,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
             raise BedrockError(
                 status_code=raw_response.status_code if raw_response.status_code >= 400 else 502,
                 message=f"AgentCore gateway MCP error: {error}",
+                headers=raw_response.headers,
             )
 
         # A failed tools/call is reported in-band, as HTTP 200 with result.isError
@@ -389,6 +396,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
             raise BedrockError(
                 status_code=raw_response.status_code if raw_response.status_code >= 400 else 502,
                 message=f"AgentCore web search tool error: {self._tool_error_message(response_json)}",
+                headers=raw_response.headers,
             )
 
         text_items: Final = tuple(
@@ -397,18 +405,18 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         structured: Final = result.get("structuredContent") if isinstance(result, Mapping) else None
         items: Final = text_items or _result_items(structured)
 
-        results: Final = [_to_search_result(item) for item in items]  # mutable-ok: pydantic list field
+        results: Final = [_to_search_result(item) for item in items]
 
         return SearchResponse(results=results, object="search")
 
-    def _tool_error_message(self, response_json: Mapping[str, object]) -> str:
+    def _tool_error_message(self, response_json: Mapping[str, object] | SupportsGet) -> str:
         texts: Final = tuple(
             text for block in self._text_blocks(response_json) if isinstance(text := block.get("text"), str)
         )
         return " ".join(texts) if texts else json.dumps(response_json.get("result"))[:500]
 
     @staticmethod
-    def _text_blocks(response_json: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+    def _text_blocks(response_json: Mapping[str, object] | SupportsGet) -> tuple[Mapping[str, object], ...]:
         result: Final = response_json.get("result")
         content: Final = result.get("content") if isinstance(result, dict) else None
         if not isinstance(content, Sequence) or isinstance(content, (str, bytes)):
@@ -416,7 +424,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         return tuple(block for block in content if isinstance(block, dict) and block.get("type") == "text")
 
     @staticmethod
-    def _parse_mcp_body(raw_response: httpx.Response) -> Mapping[str, object]:
+    def _parse_mcp_body(raw_response: httpx.Response) -> Mapping[str, object] | SupportsGet:
         """
         Parse a JSON or SSE-framed (Streamable HTTP transport) MCP response.
 
@@ -426,7 +434,7 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         """
         text: Final = raw_response.text
         if not text.lstrip().startswith(_SSE_LINE_PREFIXES):
-            return raw_response.json()
+            return require_get(_JSON_VALUE.validate_python(raw_response.json()))
 
         events: Final = tuple(_iter_sse_events(text))
         response_event: Final = next(
@@ -440,15 +448,16 @@ class AgentCoreSearchConfig(BaseSearchConfig, BaseAWSLLM):
         raise BedrockError(
             status_code=502,
             message=f"AgentCore gateway returned SSE without a JSON data frame: {text[:200]}",
+            headers=raw_response.headers,
         )
 
     def get_error_class(
         self,
         error_message: str,
         status_code: int,
-        headers: dict,  # mutable-ok: BaseSearchConfig.get_error_class takes the response headers as a dict
+        headers: dict[str, object],  # mutable-ok: BaseSearchConfig.get_error_class takes the response headers as a dict
     ) -> Exception:
-        return BaseLLMException(
+        return BedrockError(
             status_code=status_code,
             message=error_message,
             headers=headers,

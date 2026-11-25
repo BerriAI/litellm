@@ -4,7 +4,7 @@ SSE Stream Iterator for Vertex AI Agent Engine.
 Handles Server-Sent Events (SSE) streaming responses from Vertex AI Reasoning Engines.
 """
 
-from typing import Any, Final
+from typing import Final
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.types.llms.openai import ChatCompletionUsageBlock
@@ -24,7 +24,7 @@ class VertexAgentEngineResponseIterator(BaseModelResponseIterator):
     We just need to implement chunk_parser to parse Vertex Agent Engine response format.
     """
 
-    def __init__(self, streaming_response: Any, sync_stream: bool) -> None:
+    def __init__(self, streaming_response: object, sync_stream: bool) -> None:
         super().__init__(streaming_response=streaming_response, sync_stream=sync_stream)
 
     def chunk_parser(self, chunk: dict) -> GenericStreamingChunk | ModelResponseStream:

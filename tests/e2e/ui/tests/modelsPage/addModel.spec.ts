@@ -5,6 +5,11 @@ import { navigateToPage } from "../../helpers/navigation";
 import { Page } from "../../fixtures/pages";
 import { captureRequestBody, readBack } from "../../helpers/roundTrip";
 import { sendChatCompletion } from "../../helpers/traffic";
+import { proxyIsPremium } from "../../helpers/premium";
+
+/** Four probes 13s apart span 39s, one PROXY_CONFIG_RELOAD_INTERVAL_SECONDS (30s) plus margin. */
+const CREDENTIAL_PROBE_SUCCESSES = 4;
+const CREDENTIAL_PROBE_SPACING_MS = 13_000;
 
 /** The mock LLM as the proxy reaches it: same host locally, a sidecar in the deployed stack. */
 const MOCK_LLM_BASE = `http://127.0.0.1:${process.env.MOCK_LLM_PORT ?? "8090"}/v1`;
@@ -35,7 +40,10 @@ async function selectProvider(page: PlaywrightPage, providerName: string) {
   const providerDropdown = page.getByRole("combobox", { name: "Provider", exact: true });
   await providerDropdown.click();
   await providerDropdown.fill(providerName);
-  await page.getByRole("option").filter({ hasText: exactly(providerName) }).click();
+  await page
+    .getByRole("option")
+    .filter({ hasText: exactly(providerName) })
+    .click();
   await expect(providerDropdown).toHaveValue(providerName);
 }
 
@@ -78,6 +86,9 @@ test.describe("Add Model", () => {
   });
 
   test("Edit team model TPM and RPM limits", async ({ page }) => {
+    // /model/new refuses a team-scoped deployment on an unlicensed proxy, so there this fails in
+    // setup on a product gate rather than on a regression in the edit it covers.
+    test.skip(!proxyIsPremium(), "proxy under test is unlicensed — team-scoped models are premium");
     const masterKey = users[Role.ProxyAdmin].password;
     const modelName = `e2e-team-model-${Date.now()}`;
 
@@ -106,9 +117,9 @@ test.describe("Add Model", () => {
     const createdModelId = (await createResponse.json()).model_info?.id;
     expect(createdModelId, "model id from /model/new").toBeTruthy();
 
-    // Navigate to Models + Endpoints
+    // Navigate to Model Management
     await page.goto("/ui");
-    await page.getByText("Models + Endpoints").click();
+    await page.getByText("Model Management").click();
 
     // The Model ID cell is the drill-in control; the row itself is not clickable.
     const modelIdCell = page.getByTestId(`model-id-${createdModelId}`);
@@ -226,8 +237,11 @@ test.describe("Add Model", () => {
     });
     expect(createCred.ok(), `POST /credentials failed (${createCred.status()}): ${await createCred.text()}`).toBe(true);
 
-    // Multi-instance stacks propagate a new credential to the probe-serving instances on a periodic
-    // sync; consecutive successes guard against a load balancer alternating synced and stale replicas
+    // The proxy's periodic credential refresh prunes its in-memory list against a database snapshot
+    // it took before this credential landed, so a credential that resolves right after POST
+    // /credentials can stop resolving until the refresh after that. Successes spanning a whole
+    // PROXY_CONFIG_RELOAD_INTERVAL_SECONDS prove it survived a refresh, after which it stays.
+    // Resolution fails open onto the ambient key, so losing it reads as a confusing upstream 404.
     let consecutiveProbeSuccesses = 0;
     await expect
       .poll(
@@ -249,11 +263,12 @@ test.describe("Add Model", () => {
           return consecutiveProbeSuccesses;
         },
         {
-          message: `stored credential ${credentialName} never became usable for a connection test`,
-          timeout: 60_000,
+          message: `stored credential ${credentialName} never stayed usable across a config reload`,
+          intervals: [0, CREDENTIAL_PROBE_SPACING_MS],
+          timeout: 110_000,
         },
       )
-      .toBeGreaterThanOrEqual(3);
+      .toBeGreaterThanOrEqual(CREDENTIAL_PROBE_SUCCESSES);
 
     try {
       await navigateToPage(page, Page.Models);
@@ -347,7 +362,7 @@ test.describe("Add Model", () => {
     await expect(page.getByText(/Connection to .* failed/)).toBeVisible({ timeout: 30_000 });
   });
 
-  test("Add specific model and verify it appears in All Models", async ({ page }) => {
+  test("Add specific model and verify it appears in Deployed Models", async ({ page }) => {
     await navigateToPage(page, Page.Models);
     await page.getByRole("tab", { name: "Add Model" }).click();
 
@@ -374,9 +389,9 @@ test.describe("Add Model", () => {
     // Wait for success notification
     await expect(page.getByText("created successfully")).toBeVisible({ timeout: 15_000 });
 
-    // Navigate to All Models tab
-    await page.getByRole("tab", { name: "All Models" }).click();
-    await page.waitForLoadState("networkidle");
+    // Navigate to Deployed Models tab
+    await page.getByRole("tab", { name: "Deployed Models" }).click();
+    await expect(page.getByPlaceholder("Search model names")).toBeVisible();
 
     // Search for the model we just added
     await page.getByPlaceholder("Search model names").fill("claude-haiku-4-5");
@@ -454,11 +469,11 @@ test.describe("Add Model", () => {
       });
 
       // The Models table renders team-scoped models with the team id in the row.
-      await page.getByRole("tab", { name: "All Models" }).click();
-      await page.waitForLoadState("networkidle");
+      await page.getByRole("tab", { name: "Deployed Models" }).click();
+      await expect(page.getByPlaceholder("Search model names")).toBeVisible();
 
       await page.getByPlaceholder("Search model names").fill("cohere");
-  
+
       // Clearer failure than timing out on a row assertion when the table is empty.
       await expect(page.getByTestId("pagination-range")).toHaveText(/Showing \d+-\d+ of \d+/, {
         timeout: 15_000,
@@ -466,17 +481,14 @@ test.describe("Add Model", () => {
 
       // Pin to one row carrying both the name and the team, so the sibling test's
       // team-less cohere row can't satisfy it.
-      const teamCohereRow = page
-        .getByRole("row")
-        .filter({ hasText: "cohere/" })
-        .filter({ hasText: E2E_TEAM_CRUD_ID });
+      const teamCohereRow = page.getByRole("row").filter({ hasText: "cohere/" }).filter({ hasText: E2E_TEAM_CRUD_ID });
       await expect(teamCohereRow).toHaveCount(1, { timeout: 15_000 });
     } finally {
       await deleteTeamScopedCohereModels();
     }
   });
 
-  test("Add wildcard route and verify it appears in All Models", async ({ page }) => {
+  test("Add wildcard route and verify it appears in Deployed Models", async ({ page }) => {
     await navigateToPage(page, Page.Models);
     await page.getByRole("tab", { name: "Add Model" }).click();
 
@@ -501,9 +513,9 @@ test.describe("Add Model", () => {
     // Wait for success notification
     await expect(page.getByText("created successfully")).toBeVisible({ timeout: 15_000 });
 
-    // Navigate to All Models tab
-    await page.getByRole("tab", { name: "All Models" }).click();
-    await page.waitForLoadState("networkidle");
+    // Navigate to Deployed Models tab
+    await page.getByRole("tab", { name: "Deployed Models" }).click();
+    await expect(page.getByPlaceholder("Search model names")).toBeVisible();
 
     // Search for the wildcard model
     await page.getByPlaceholder("Search model names").fill("cohere");

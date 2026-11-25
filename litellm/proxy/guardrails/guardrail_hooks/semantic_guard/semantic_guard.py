@@ -6,13 +6,17 @@ via embedding similarity. Smarter than regex (understands intent), lighter
 than an LLM call (~20-50ms per request for embedding).
 """
 
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Final, Protocol
+
+from typing_extensions import ReadOnly, TypedDict, Unpack
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.litellm_core_utils.core_helpers import attribute_items, attribute_or_none, require_attributes
 from litellm.proxy.guardrails.guardrail_hooks.semantic_guard.route_loader import (
     SemanticGuardRouteLoader,
 )
@@ -30,6 +34,25 @@ if TYPE_CHECKING:
     from litellm.caching import DualCache
     from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.router import Router
+    from litellm.types.utils import LLMResponseTypes
+
+
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Keyword options ``CustomGuardrail.__init__`` accepts beyond the ones this guardrail sets itself."""
+
+    mask_request_content: ReadOnly[bool]
+    mask_response_content: ReadOnly[bool]
+    violation_message_template: ReadOnly[str | None]
+    end_session_after_n_fails: ReadOnly[int | None]
+    on_violation: ReadOnly[str | None]
+    realtime_violation_message: ReadOnly[str | None]
+    on_sensitive_data: ReadOnly[str | None]
+    sensitive_data_route_to_model: ReadOnly[str | None]
+    sticky_session_routing: ReadOnly[bool]
+    run_in_parallel: ReadOnly[bool]
+    scan_raw_request: ReadOnly[bool]
+    only_scan_new_messages: ReadOnly[bool]
+    timeout: ReadOnly[float | None]
 
 
 class SemanticGuardrail(CustomGuardrail):
@@ -50,11 +73,11 @@ class SemanticGuardrail(CustomGuardrail):
         similarity_threshold: float,
         route_templates: list[str] | None = None,
         custom_routes_file: str | None = None,
-        custom_routes: list[dict[str, Any]] | None = None,
+        custom_routes: list[dict[str, object]] | None = None,
         on_flagged_action: str = "block",
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
-        **kwargs,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ):
         super().__init__(
             guardrail_name=guardrail_name,
@@ -108,7 +131,7 @@ class SemanticGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: "UserAPIKeyAuth",
         cache: "DualCache",
-        data: dict,
+        data: dict[str, object],
         call_type: str,
     ):
         """Check user messages against semantic routes before LLM call."""
@@ -135,9 +158,9 @@ class SemanticGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: "UserAPIKeyAuth",
-        response,
+        response: "LLMResponseTypes",
     ):
         """Optionally check LLM response for attack patterns."""
         response_text: Final = _extract_response_text(response)
@@ -157,7 +180,14 @@ class SemanticGuardrail(CustomGuardrail):
         return response
 
 
-def _get_top_route_choice(result: Any) -> Any:
+class _RouteChoice(Protocol):
+    """The semantic-router match this guardrail reads: the route that fired, if any."""
+
+    @property
+    def name(self) -> str | None: ...
+
+
+def _get_top_route_choice(result: _RouteChoice | list[_RouteChoice] | None) -> _RouteChoice | None:
     """Extract the top RouteChoice from SemanticRouter result.
 
     SemanticRouter.__call__ can return RouteChoice or List[RouteChoice].
@@ -169,7 +199,7 @@ def _get_top_route_choice(result: Any) -> Any:
     return result
 
 
-def _extract_user_text(messages: list) -> str:
+def _extract_user_text(messages: Sequence[object]) -> str:
     """Extract the latest user message text."""
     for msg in reversed(messages):
         if isinstance(msg, dict) and msg.get("role") == "user":
@@ -181,20 +211,24 @@ def _extract_user_text(messages: list) -> str:
     return ""
 
 
-def _extract_response_text(response: Any) -> str:
+class _MessageContent(Protocol):
+    @property
+    def content(self) -> object: ...
+
+
+def _extract_response_text(response: object) -> str:
     """Extract text from every LLM response choice."""
-    if hasattr(response, "choices") and response.choices:
-        text_parts: Final[list[str]] = []
-        for choice in response.choices:
-            if hasattr(choice, "message") and choice.message:
-                text = _content_to_text(choice.message.content)
-                if text:
-                    text_parts.append(text)
-        return "\n".join(text_parts)
-    return ""
+    text_parts: Final[list[str]] = []
+    for choice in attribute_items(response, "choices"):
+        message = attribute_or_none(choice, "message")
+        if message:
+            text = _content_to_text(require_attributes(message, _MessageContent, "content").content)
+            if text:
+                text_parts.append(text)
+    return "\n".join(text_parts)
 
 
-def _content_to_text(content: Any) -> str:
+def _content_to_text(content: object) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -210,7 +244,7 @@ def _handle_match(
     route_name: str,
     similarity_score: float | None,
     user_text: str,
-    data: dict,
+    data: dict[str, object],
 ) -> None:
     """Block or passthrough based on config."""
     violation_msg = f"Request blocked by semantic guardrail '{guardrail.guardrail_name}'. Matched route: {route_name}"

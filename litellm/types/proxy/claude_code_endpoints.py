@@ -2,36 +2,38 @@
 Claude Code Marketplace endpoint types for LiteLLM Proxy
 """
 
-from pydantic import BaseModel, Field
+from datetime import datetime
+from typing import Final, Literal, TypeAlias
+
+from pydantic import AliasChoices, ConfigDict, Field, TypeAdapter, model_validator
+
+from litellm.types.llms.base import LiteLLMBaseModel
+
+InstallationPreference: TypeAlias = Literal["available", "auto_install", "required"]
+_BOTH_PREFERENCE_SPELLINGS: Final = frozenset({"installation_preference", "installationPreference"})
+_REQUEST_KEYS: Final = TypeAdapter(dict[str, object])
 
 
-class PluginAuthor(BaseModel):
+class PluginAuthor(LiteLLMBaseModel):
     """Plugin author information."""
 
     name: str = Field(..., description="Author name")
     email: str | None = Field(None, description="Author email")
 
 
-class PluginOwner(BaseModel):
+class PluginOwner(LiteLLMBaseModel):
     """Marketplace owner information."""
 
     name: str = Field(..., description="Owner name")
     email: str | None = Field(None, description="Owner email")
 
 
-class PluginSpec(BaseModel):
+class PluginMetadata(LiteLLMBaseModel):
     """Mutable fields shared by plugin create and update requests."""
 
-    source: dict[str, str] = Field(
-        ...,
-        description=(
-            "Git source reference. Supported formats:\n"
-            "- GitHub: {'source': 'github', 'repo': 'org/repo'}\n"
-            "- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n"
-            "- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}"
-        ),
-    )
-    version: str | None = Field("1.0.0", description="Semantic version")
+    model_config = ConfigDict(frozen=True)
+
+    version: str | None = Field("1.0.0", description="Semantic version, defaults to 1.0.0 on creation")
     description: str | None = Field(None, description="Plugin description")
     author: PluginAuthor | None = Field(None, description="Plugin author")
     homepage: str | None = Field(None, description="Plugin homepage URL")
@@ -39,6 +41,44 @@ class PluginSpec(BaseModel):
     category: str | None = Field(None, description="Plugin category")
     domain: str | None = Field(None, description="Skill domain (e.g., 'Productivity')")
     namespace: str | None = Field(None, description="Skill namespace within domain (e.g., 'workflows')")
+    installation_preference: InstallationPreference | None = Field(
+        None,
+        validation_alias=AliasChoices("installation_preference", "installationPreference"),
+        description=(
+            "Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, "
+            "the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' "
+            "also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share "
+            "its inference gateway origin"
+        ),
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_both_preference_spellings(cls, data: object) -> object:
+        if not isinstance(data, dict):
+            return data
+        fields: Final = _REQUEST_KEYS.validate_python(data)
+        if not _BOTH_PREFERENCE_SPELLINGS.issubset(fields):
+            return fields
+        if all(fields[key] is not None for key in _BOTH_PREFERENCE_SPELLINGS):
+            raise ValueError("send installation_preference or installationPreference, not both")
+        return {
+            key: value for key, value in fields.items() if key not in _BOTH_PREFERENCE_SPELLINGS or value is not None
+        }
+
+
+class PluginSpec(PluginMetadata):
+    source: dict[str, str] = Field(
+        ...,
+        description=(
+            "Plugin source reference. Supported formats:\n"
+            "- GitHub: {'source': 'github', 'repo': 'org/repo'}\n"
+            "- Git URL: {'source': 'url', 'url': 'https://github.com/org/repo.git'}\n"
+            "- Git Subdir: {'source': 'git-subdir', 'url': 'https://github.com/org/repo.git', 'path': 'plugins/plugin-name'}\n"
+            "- Zip archive on any https host (e.g. S3): "
+            "{'source': 'archive', 'url': 'https://bucket.s3.amazonaws.com/plugin.zip', 'sha256': '<optional hex digest>'}"
+        ),
+    )
 
 
 class RegisterPluginRequest(PluginSpec):
@@ -46,7 +86,7 @@ class RegisterPluginRequest(PluginSpec):
     Request body for registering a plugin in the marketplace.
 
     LiteLLM acts as a registry/discovery layer. Plugins are hosted on
-    GitHub/GitLab/Bitbucket and referenced by their git source.
+    GitHub/GitLab/Bitbucket or as a zip archive on any https host and referenced by their source.
     """
 
     name: str = Field(
@@ -56,31 +96,39 @@ class RegisterPluginRequest(PluginSpec):
     )
 
 
+class UploadPluginRequest(PluginMetadata):
+    name: str = Field(..., pattern=r"^[a-z0-9-]+$", description="Skill name (kebab-case)")
+
+
 class UpdatePluginRequest(PluginSpec):
     """
     Request body for replacing an existing plugin.
 
     The plugin name is the resource identity and is supplied as the path
     parameter, so it cannot be changed here. This is a full replace: omitted
-    fields reset to their defaults, so version is cleared rather than
-    defaulting to the create-time "1.0.0".
+    fields reset to their defaults, except version which automatically increments
+    the published patch version when omitted or null.
     """
 
-    version: str | None = Field(None, description="Semantic version; cleared if omitted")
+    version: str | None = Field(None, description="Explicit higher SemVer, or omit/null for an automatic patch bump")
+    expected_updated_at: datetime | None = Field(
+        None, description="Published updated_at read by the editor. A stale value returns 409", exclude=True
+    )
 
 
-class PluginResponse(BaseModel):
+class PluginResponse(LiteLLMBaseModel):
     """Plugin information in API responses."""
 
     id: str = Field(..., description="Plugin unique ID")
     name: str = Field(..., description="Plugin name")
     version: str | None = Field(None, description="Plugin version")
     description: str | None = Field(None, description="Plugin description")
-    source: dict[str, str] = Field(..., description="Git source reference")
+    source: dict[str, str] = Field(..., description="Plugin source reference")
+    installation_preference: InstallationPreference | None = Field(None, description="Plugin installation preference")
     enabled: bool = Field(..., description="Whether plugin is enabled")
 
 
-class RegisterPluginResponse(BaseModel):
+class RegisterPluginResponse(LiteLLMBaseModel):
     """Response from plugin registration."""
 
     status: str = Field(..., description="Operation status")
@@ -88,7 +136,7 @@ class RegisterPluginResponse(BaseModel):
     plugin: PluginResponse = Field(..., description="Plugin information")
 
 
-class PluginListItem(BaseModel):
+class PluginListItem(LiteLLMBaseModel):
     """Plugin item in list responses."""
 
     id: str
@@ -102,19 +150,26 @@ class PluginListItem(BaseModel):
     category: str | None = None
     domain: str | None = None
     namespace: str | None = None
+    installation_preference: InstallationPreference | None = None
     enabled: bool
     created_at: str | None
     updated_at: str | None
+    created_by: str | None = None
+    approved_by: str | None = None
+    published_by: str | None = None
+    security_scan_passed: bool = False
+    download_count: int | None = None
+    has_agent_skill_metadata: bool = Field(default=False, exclude=True)
 
 
-class ListPluginsResponse(BaseModel):
+class ListPluginsResponse(LiteLLMBaseModel):
     """Response from listing plugins."""
 
     plugins: list[PluginListItem]
     count: int
 
 
-class MarketplacePluginEntry(BaseModel):
+class MarketplacePluginEntry(LiteLLMBaseModel):
     """Plugin entry in marketplace.json."""
 
     name: str
@@ -125,9 +180,10 @@ class MarketplacePluginEntry(BaseModel):
     homepage: str | None = None
     keywords: list[str] | None = None
     category: str | None = None
+    installationPreference: InstallationPreference | None = None
 
 
-class MarketplaceResponse(BaseModel):
+class MarketplaceResponse(LiteLLMBaseModel):
     """
     Marketplace catalog response.
 

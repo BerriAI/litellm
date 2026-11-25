@@ -1,10 +1,17 @@
+from __future__ import annotations
+
 from abc import abstractmethod
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, NoReturn
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, NoReturn, Protocol, runtime_checkable
 
 import httpx
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import EmbeddingResponse
 from litellm.types.vector_stores import (
     VECTOR_STORE_OPENAI_PARAMS,
     BaseVectorStoreAuthCredentials,
@@ -17,6 +24,7 @@ from litellm.types.vector_stores import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.router import Router
 
     from ..chat.transformation import BaseLLMException as _BaseLLMException
 
@@ -27,20 +35,148 @@ else:
     BaseLLMException = Any
 
 
+@runtime_checkable
+class VectorStoreEmbeddingExecutor(Protocol):
+    def embed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse: ...
+
+    async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse: ...
+
+
+@dataclass(frozen=True, slots=True)
+class LiteLLMVectorStoreEmbeddingExecutor:
+    def embed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        import litellm
+
+        return litellm.embedding(  # pyright: ignore[reportCallIssue, reportUnknownMemberType, reportUnknownVariableType]  # provider kwargs are intentionally dynamic
+            model=model,
+            input=[query],
+            **dict(configuration),  # pyright: ignore[reportArgumentType]  # provider-specific embedding config is validated downstream
+        )
+
+    async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        import litellm
+
+        return await litellm.aembedding(  # pyright: ignore[reportUnknownMemberType]  # provider kwargs are intentionally dynamic
+            model=model,
+            input=[query],
+            **dict(configuration),  # pyright: ignore[reportArgumentType]  # provider-specific embedding config is validated downstream
+        )
+
+
+class EmbedOnceExecutor:
+    def __init__(self, executor: VectorStoreEmbeddingExecutor) -> None:
+        self._executor: Final = executor
+        self._embedded: tuple[str, str, EmbeddingResponse] | None = None
+
+    def _reused(self, model: str, query: str) -> EmbeddingResponse | None:
+        embedded: Final = self._embedded
+        return embedded[2] if embedded is not None and embedded[:2] == (model, query) else None
+
+    def embed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        reused: Final = self._reused(model, query)
+        if reused is not None:
+            return reused
+        response: Final = self._executor.embed(model, query, configuration)
+        self._embedded = (model, query, response)
+        return response
+
+    async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        reused: Final = self._reused(model, query)
+        if reused is not None:
+            return reused
+        response: Final = await self._executor.aembed(model, query, configuration)
+        self._embedded = (model, query, response)
+        return response
+
+
+_REQUEST_METADATA: Final = TypeAdapter(dict[str, object])
+
+
+def vector_store_request_metadata(kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    litellm_metadata: Final = kwargs.get("litellm_metadata")
+    if isinstance(litellm_metadata, dict):
+        return _REQUEST_METADATA.validate_python(litellm_metadata)
+    metadata: Final = kwargs.get("metadata")
+    if isinstance(metadata, dict):
+        return _REQUEST_METADATA.validate_python(metadata)
+    return MappingProxyType({})
+
+
+@dataclass(frozen=True, slots=True)
+class RouterVectorStoreEmbeddingExecutor:
+    router: Router
+    metadata: Mapping[str, object]
+
+    def _embedding_kwargs(self, configuration: Mapping[str, object]) -> Mapping[str, object]:
+        configured_metadata: Final = configuration.get("metadata")
+        metadata: Final = {
+            **(as_str_mapping(configured_metadata) or {}),
+            **self.metadata,
+        }
+        return {
+            **{key: value for key, value in configuration.items() if key not in ("input", "metadata", "model")},
+            "metadata": metadata,
+        }
+
+    def _router_serves(self, model: str) -> bool:
+        team_id: Final = self.metadata.get("user_api_key_team_id")
+        registry: Final = self.router.registry()
+        resolved: Final = registry.names(
+            model, kind="litellm_models", team_id=team_id if isinstance(team_id, str) else None
+        )
+        deployment_models: Final = (
+            deployment.get("litellm_params", {}).get("model") for deployment in registry.deployments() or ()
+        )
+        return bool(resolved) or model in deployment_models
+
+    def embed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        embedding_kwargs: Final = self._embedding_kwargs(configuration)
+        if not self._router_serves(model):
+            return LiteLLMVectorStoreEmbeddingExecutor().embed(model, query, embedding_kwargs)
+        return self.router.embedding(  # pyright: ignore[reportUnknownMemberType]  # Router embedding input retains a legacy untyped list
+            model=model,
+            input=[query],
+            **embedding_kwargs,  # pyright: ignore[reportArgumentType]  # provider kwargs are intentionally dynamic
+        )
+
+    async def aembed(self, model: str, query: str, configuration: Mapping[str, object]) -> EmbeddingResponse:
+        embedding_kwargs: Final = self._embedding_kwargs(configuration)
+        if not self._router_serves(model):
+            return await LiteLLMVectorStoreEmbeddingExecutor().aembed(model, query, embedding_kwargs)
+        return await self.router.aembedding(  # pyright: ignore[reportUnknownMemberType]  # Router embedding input retains a legacy untyped list
+            model=model,
+            input=[query],
+            **embedding_kwargs,  # pyright: ignore[reportArgumentType]  # provider kwargs are intentionally dynamic
+        )
+
+
 class BaseVectorStoreConfig:
+    def combine_search_filters(self, registered: object, requested: object) -> object:
+        if registered is None:
+            return requested
+        if requested is None or registered == requested:
+            return registered
+        return {"type": "and", "filters": [registered, requested]}
+
+    def validate_create_vector_store(self) -> None:
+        return None
+
+    def get_async_httpx_client_params(self) -> Mapping[str, object]:
+        return MappingProxyType({})
+
     def get_supported_openai_params(self, model: str) -> list[VECTOR_STORE_OPENAI_PARAMS]:
         return []
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         return optional_params
 
     @abstractmethod
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: dict[str, object]) -> BaseVectorStoreAuthCredentials:
         pass
 
     @abstractmethod
@@ -55,9 +191,9 @@ class BaseVectorStoreConfig:
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
-    ) -> tuple[str, dict]:
+        litellm_params: dict[str, object],
+        extra_body: dict[str, object] | None = None,
+    ) -> tuple[str, dict[str, object]]:
         pass
 
     async def atransform_search_vector_store_request(
@@ -67,9 +203,9 @@ class BaseVectorStoreConfig:
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
-        extra_body: dict[str, Any] | None = None,
-    ) -> tuple[str, dict]:
+        litellm_params: dict[str, object],
+        extra_body: dict[str, object] | None = None,
+    ) -> tuple[str, dict[str, object]]:
         """
         Optional async version of transform_search_vector_store_request.
         If not implemented, the handler will fall back to the sync version.
@@ -97,7 +233,7 @@ class BaseVectorStoreConfig:
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         pass
 
     @abstractmethod
@@ -112,7 +248,7 @@ class BaseVectorStoreConfig:
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         OPTIONAL
@@ -125,7 +261,17 @@ class BaseVectorStoreConfig:
             raise ValueError("api_base is required")
         return api_base
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_vector_store_url(self, api_base: str, encoded_vector_store_id: str) -> str:
+        """Url of one vector store for retrieve, update and delete. Providers whose
+        ``get_complete_url`` adds a query string, like Azure, override this."""
+        return f"{api_base}/{encoded_vector_store_id}"
+
+    def get_vector_store_list_url(self, api_base: str) -> str:
+        return api_base
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         from ..chat.transformation import BaseLLMException
 
         raise BaseLLMException(
@@ -136,12 +282,12 @@ class BaseVectorStoreConfig:
 
     def sign_request(
         self,
-        headers: dict,
-        optional_params: dict,
-        request_data: dict,
+        headers: dict[str, object],
+        optional_params: dict[str, object],
+        request_data: dict[str, object],
         api_base: str,
         api_key: str | None = None,
-    ) -> tuple[dict, bytes | None]:
+    ) -> tuple[dict[str, object], bytes | None]:
         """Optionally sign or modify the request before sending.
 
         Providers like AWS Bedrock require SigV4 signing. Providers that don't
@@ -150,11 +296,146 @@ class BaseVectorStoreConfig:
         """
         return headers, None
 
+    def resolve_search_params(
+        self,
+        vector_store_id: str,
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        api_base: str,
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+        get: Callable[[str, Mapping[str, object]], httpx.Response],
+    ) -> VectorStoreSearchOptionalRequestParams:
+        return vector_store_search_optional_params
+
+    async def aresolve_search_params(
+        self,
+        vector_store_id: str,
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        api_base: str,
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+        get: Callable[[str, Mapping[str, object]], Awaitable[httpx.Response]],
+    ) -> VectorStoreSearchOptionalRequestParams:
+        return vector_store_search_optional_params
+
+    def recover_rejected_search(
+        self,
+        rejection: httpx.Response,
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        litellm_params: Mapping[str, object],
+    ) -> VectorStoreSearchOptionalRequestParams | BaseLLMException | None:
+        return None
+
     def calculate_vector_store_cost(
         self,
         response: VectorStoreSearchResponse,
     ) -> tuple[float, float]:
         return 0.0, 0.0
+
+
+_EMPTY_EMBEDDING_CONFIGURATION: Final[Mapping[str, object]] = MappingProxyType({})
+_QUERY_VECTOR: Final = TypeAdapter(list[float])
+
+
+class BaseQueryEmbeddingVectorStoreConfig(BaseVectorStoreConfig):
+    @abstractmethod
+    def transform_search_vector_store_request(
+        self,
+        vector_store_id: str,
+        query: str | Sequence[str],
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        api_base: str,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: Mapping[str, object],
+        extra_body: Mapping[str, object] | None = None,
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
+    ) -> tuple[str, dict[str, object]]:
+        pass
+
+    async def atransform_search_vector_store_request(
+        self,
+        vector_store_id: str,
+        query: str | Sequence[str],
+        vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
+        api_base: str,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        litellm_params: Mapping[str, object],
+        extra_body: Mapping[str, object] | None = None,
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
+    ) -> tuple[str, dict[str, object]]:
+        return self.transform_search_vector_store_request(
+            vector_store_id=vector_store_id,
+            query=query,
+            vector_store_search_optional_params=vector_store_search_optional_params,
+            api_base=api_base,
+            litellm_logging_obj=litellm_logging_obj,
+            litellm_params=litellm_params,
+            extra_body=extra_body,
+            embedding_executor=embedding_executor,
+        )
+
+    @staticmethod
+    def query_text(query: str | Sequence[str]) -> str:
+        return query if isinstance(query, str) else " ".join(query)
+
+    @staticmethod
+    def query_embedding_model(litellm_params: Mapping[str, object]) -> str:
+        embedding_model: Final = litellm_params.get("litellm_embedding_model")
+        if isinstance(embedding_model, str) and embedding_model:
+            return embedding_model
+        raise ValueError(
+            "litellm_embedding_model is required in litellm_params for this vector store. "
+            "Example: litellm_params['litellm_embedding_model'] = 'openai/text-embedding-3-small'"
+        )
+
+    @staticmethod
+    def query_embedding_configuration(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+        configuration: Final = litellm_params.get("litellm_embedding_config")
+        if isinstance(configuration, Mapping):
+            return {str(key): value for key, value in configuration.items()}  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]  # litellm_params is an untyped dict, keys are re-validated as str here
+        return _EMPTY_EMBEDDING_CONFIGURATION
+
+    @staticmethod
+    def query_embedding_executor(
+        embedding_executor: VectorStoreEmbeddingExecutor | None,
+        router: Router | None,
+        request_metadata: Mapping[str, object] = MappingProxyType({}),
+    ) -> VectorStoreEmbeddingExecutor:
+        if embedding_executor is not None:
+            return embedding_executor
+        if router is not None:
+            return RouterVectorStoreEmbeddingExecutor(router=router, metadata=request_metadata)
+        return LiteLLMVectorStoreEmbeddingExecutor()
+
+    def embed_query(
+        self,
+        query_text: str,
+        litellm_params: Mapping[str, object],
+        embedding_executor: VectorStoreEmbeddingExecutor | None,
+    ) -> Sequence[float]:
+        model: Final = self.query_embedding_model(litellm_params)
+        configuration: Final = self.query_embedding_configuration(litellm_params)
+        executor: Final = self.query_embedding_executor(embedding_executor, None)
+        try:
+            response: Final = executor.embed(model, query_text, configuration)
+        except Exception as e:
+            raise Exception(f"Failed to generate embedding for query: {e}")
+        return _QUERY_VECTOR.validate_python(response.data[0]["embedding"])  # pyright: ignore[reportUnknownMemberType]  # EmbeddingResponse.data is an untyped list, the vector is validated here
+
+    async def aembed_query(
+        self,
+        query_text: str,
+        litellm_params: Mapping[str, object],
+        embedding_executor: VectorStoreEmbeddingExecutor | None,
+    ) -> Sequence[float]:
+        model: Final = self.query_embedding_model(litellm_params)
+        configuration: Final = self.query_embedding_configuration(litellm_params)
+        executor: Final = self.query_embedding_executor(embedding_executor, None)
+        try:
+            response: Final = await executor.aembed(model, query_text, configuration)
+        except Exception as e:
+            raise Exception(f"Failed to generate embedding for query: {e}")
+        return _QUERY_VECTOR.validate_python(response.data[0]["embedding"])  # pyright: ignore[reportUnknownMemberType]  # EmbeddingResponse.data is an untyped list, the vector is validated here
 
 
 class BaseDirectVectorStoreConfig(BaseVectorStoreConfig):
@@ -172,6 +453,7 @@ class BaseDirectVectorStoreConfig(BaseVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> VectorStoreSearchResponse:
         pass
@@ -184,6 +466,7 @@ class BaseDirectVectorStoreConfig(BaseVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: Mapping[str, object],
+        embedding_executor: VectorStoreEmbeddingExecutor | None = None,
         timeout: float | httpx.Timeout | None = None,
     ) -> VectorStoreSearchResponse:
         pass
@@ -226,4 +509,4 @@ class BaseDirectVectorStoreConfig(BaseVectorStoreConfig):
         return BaseVectorStoreAuthCredentials()
 
     def get_vector_store_endpoints_by_type(self) -> VectorStoreIndexEndpoints:
-        return VectorStoreIndexEndpoints(read=[], write=[])  # mutable-ok: the TypedDict declares list fields
+        return VectorStoreIndexEndpoints(read=[], write=[])

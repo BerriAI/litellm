@@ -6,10 +6,70 @@ Supports Docker, Podman, and Kubernetes backends.
 """
 
 import base64
+import json
 import os
-from typing import Any, Final
+from collections.abc import Iterator, Mapping, Sequence
+from typing import Final, Protocol, TypedDict
+
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import iter_items, require_attributes
+
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _SandboxRunResult(Protocol):
+    """Result of running code inside an llm-sandbox session."""
+
+    @property
+    def exit_code(self) -> int: ...
+
+    @property
+    def stdout(self) -> str | None: ...
+
+    @property
+    def stderr(self) -> str | None: ...
+
+
+class _SandboxSession(Protocol):
+    """The subset of an llm-sandbox session used while collecting generated files."""
+
+    def run(self, code: str, /) -> _SandboxRunResult: ...
+
+    def copy_to_runtime(self, src: str, dest: str, /) -> object: ...
+
+    def copy_from_runtime(self, src: str, dest: str, /) -> object: ...
+
+
+class _GeneratedFile(TypedDict):
+    """A file produced inside the sandbox and carried back out as base64."""
+
+    name: ReadOnly[str]
+    path: ReadOnly[str]
+    content_base64: ReadOnly[str]
+    mime_type: ReadOnly[str]
+
+
+class _SandboxExecution(TypedDict):
+    success: ReadOnly[bool]
+    output: ReadOnly[str]
+    error: ReadOnly[str]
+    files: ReadOnly[Sequence[_GeneratedFile]]
+
+
+def _decoded_listing(stdout: str) -> object:
+    try:
+        return _DECODED_JSON.validate_python(json.loads(stdout))
+    except json.JSONDecodeError:
+        return []
+
+
+def _listed_sandbox_paths(stdout: str) -> Iterator[str]:
+    for listed_path in iter_items(_decoded_listing(stdout)):
+        if listed_path:
+            yield require_attributes(listed_path, str, "replace")
 
 
 class SkillsSandboxExecutor:
@@ -44,10 +104,10 @@ class SkillsSandboxExecutor:
 
     def execute(
         self,
-        code: str,
+        code: object,
         skill_files: dict[str, bytes],
         requirements: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> _SandboxExecution:
         """
         Execute code with skill files in sandbox.
 
@@ -77,7 +137,7 @@ class SkillsSandboxExecutor:
 
         try:
             # Create sandbox session
-            session_kwargs: Final[dict[str, Any]] = {
+            session_kwargs: Final[dict[str, object]] = {
                 "lang": "python",
                 "verbose": False,
             }
@@ -86,105 +146,7 @@ class SkillsSandboxExecutor:
                 session_kwargs["image"] = self.image
 
             with SandboxSession(**session_kwargs) as session:
-                # 1. Copy skill files into sandbox using copy_to_runtime
-                import tempfile
-
-                # Create a temp directory to stage files
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    tmpdir_abs: Final = os.path.abspath(tmpdir)
-                    for path, content in skill_files.items():
-                        # Create the file in temp directory
-                        local_path = os.path.abspath(os.path.join(tmpdir, path))
-                        if not local_path.startswith(tmpdir_abs + os.sep):
-                            verbose_logger.warning("SkillsSandboxExecutor: Skipping file with invalid path: %s", path)
-                            continue
-                        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                        with open(local_path, "wb") as f:
-                            f.write(content)
-
-                        # Copy to sandbox
-                        sandbox_path = f"/sandbox/{path}"
-                        session.copy_to_runtime(local_path, sandbox_path)
-
-                verbose_logger.debug("SkillsSandboxExecutor: Copied %s files to sandbox", len(skill_files))
-
-                # 2. Install requirements if present. Let pip parse the
-                # requirements file inside the sandbox so standard syntax like
-                # `-r`, `-e`, VCS URLs, and inline `#egg=` fragments continue to
-                # work.
-                requirements_filename: str | None = None
-                if requirements:
-                    with tempfile.NamedTemporaryFile(
-                        mode="w",
-                        encoding="utf-8",
-                        delete=False,
-                    ) as f:
-                        f.write(requirements)
-                        local_requirements_path: Final = f.name
-                    session.copy_to_runtime(
-                        local_requirements_path,
-                        "/sandbox/.litellm_requirements.txt",
-                    )
-                    os.unlink(local_requirements_path)
-                    requirements_filename = ".litellm_requirements.txt"
-                elif "requirements.txt" in skill_files:
-                    requirements_filename = "requirements.txt"
-
-                if requirements_filename:
-                    pip_code: Final = f"""
-import subprocess
-import sys
-subprocess.run(
-    [sys.executable, '-m', 'pip', 'install', '-r', '{requirements_filename}'],
-    check=True,
-    cwd='/sandbox',
-)
-"""
-                    install_result: Final = session.run(pip_code)
-                    if install_result.exit_code != 0:
-                        verbose_logger.debug("SkillsSandboxExecutor: Requirements installation failed")
-                        return {
-                            "success": False,
-                            "output": install_result.stdout or "",
-                            "error": install_result.stderr or "",
-                            "files": [],
-                        }
-                    verbose_logger.debug("SkillsSandboxExecutor: Installed requirements")
-
-                # 3. Execute the code
-                # Wrap code to run from /sandbox directory
-                wrapped_code: Final = f"""
-import os
-os.chdir('/sandbox')
-import sys
-sys.path.insert(0, '/sandbox')
-
-{code}
-"""
-                result: Final = session.run(wrapped_code)
-
-                success: Final = result.exit_code == 0
-                output: Final = result.stdout or ""
-                error: Final = result.stderr or ""
-
-                if success:
-                    verbose_logger.debug("SkillsSandboxExecutor: Code execution succeeded")
-                else:
-                    verbose_logger.debug(
-                        "SkillsSandboxExecutor: Code execution failed with exit code %s", result.exit_code
-                    )
-                    verbose_logger.debug("SkillsSandboxExecutor: stderr: %s", error[:500] if error else "No stderr")
-                    verbose_logger.debug("SkillsSandboxExecutor: stdout: %s", output[:500] if output else "No stdout")
-
-                # 4. Collect generated files
-                generated_files: Final = self._collect_generated_files(session, skill_files)
-
-                return {
-                    "success": success,
-                    "output": output,
-                    "error": error,
-                    "files": generated_files,
-                }
+                return self._execute_in_session(session, code, skill_files, requirements)
 
         except Exception as e:
             verbose_logger.error("SkillsSandboxExecutor: Execution failed: %s", e)
@@ -195,11 +157,117 @@ sys.path.insert(0, '/sandbox')
                 "files": [],
             }
 
+    def _execute_in_session(
+        self,
+        session: _SandboxSession,
+        code: object,
+        skill_files: Mapping[str, bytes],
+        requirements: str | None,
+    ) -> _SandboxExecution:
+        """Stage the skill files in an open sandbox session, run the code and collect what it generated."""
+        # 1. Copy skill files into sandbox using copy_to_runtime
+        import tempfile
+
+        # Create a temp directory to stage files
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_abs: Final = os.path.abspath(tmpdir)
+            for path, content in skill_files.items():
+                # Create the file in temp directory
+                local_path = os.path.abspath(os.path.join(tmpdir, path))
+                if not local_path.startswith(tmpdir_abs + os.sep):
+                    verbose_logger.warning("SkillsSandboxExecutor: Skipping file with invalid path: %s", path)
+                    continue
+                os.makedirs(os.path.dirname(local_path), exist_ok=True)
+                with open(local_path, "wb") as f:
+                    f.write(content)
+
+                # Copy to sandbox
+                sandbox_path = f"/sandbox/{path}"
+                session.copy_to_runtime(local_path, sandbox_path)
+
+        verbose_logger.debug("SkillsSandboxExecutor: Copied %s files to sandbox", len(skill_files))
+
+        # 2. Install requirements if present. Let pip parse the
+        # requirements file inside the sandbox so standard syntax like
+        # `-r`, `-e`, VCS URLs, and inline `#egg=` fragments continue to
+        # work.
+        requirements_filename: str | None = None
+        if requirements:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                delete=False,
+            ) as f:
+                f.write(requirements)
+                local_requirements_path: Final = f.name
+            session.copy_to_runtime(
+                local_requirements_path,
+                "/sandbox/.litellm_requirements.txt",
+            )
+            os.unlink(local_requirements_path)
+            requirements_filename = ".litellm_requirements.txt"
+        elif "requirements.txt" in skill_files:
+            requirements_filename = "requirements.txt"
+
+        if requirements_filename:
+            pip_code: Final = f"""
+import subprocess
+import sys
+subprocess.run(
+    [sys.executable, '-m', 'pip', 'install', '-r', '{requirements_filename}'],
+    check=True,
+    cwd='/sandbox',
+)
+"""
+            install_result: Final = session.run(pip_code)
+            if install_result.exit_code != 0:
+                verbose_logger.debug("SkillsSandboxExecutor: Requirements installation failed")
+                return {
+                    "success": False,
+                    "output": install_result.stdout or "",
+                    "error": install_result.stderr or "",
+                    "files": [],
+                }
+            verbose_logger.debug("SkillsSandboxExecutor: Installed requirements")
+
+        # 3. Execute the code
+        # Wrap code to run from /sandbox directory
+        wrapped_code: Final = f"""
+import os
+os.chdir('/sandbox')
+import sys
+sys.path.insert(0, '/sandbox')
+
+{code}
+"""
+        result: Final = session.run(wrapped_code)
+
+        success: Final = result.exit_code == 0
+        output: Final = result.stdout or ""
+        error: Final = result.stderr or ""
+
+        if success:
+            verbose_logger.debug("SkillsSandboxExecutor: Code execution succeeded")
+        else:
+            verbose_logger.debug("SkillsSandboxExecutor: Code execution failed with exit code %s", result.exit_code)
+            verbose_logger.debug("SkillsSandboxExecutor: stderr: %s", error[:500] if error else "No stderr")
+            verbose_logger.debug("SkillsSandboxExecutor: stdout: %s", output[:500] if output else "No stdout")
+
+        # 4. Collect generated files
+        generated_files: Final = self._collect_generated_files(session, skill_files)
+
+        return {
+            "success": success,
+            "output": output,
+            "error": error,
+            "files": generated_files,
+        }
+
     def _collect_generated_files(
         self,
-        session: Any,
-        original_files: dict[str, bytes],
-    ) -> list[dict[str, Any]]:
+        session: _SandboxSession,
+        original_files: Mapping[str, bytes],
+    ) -> list[_GeneratedFile]:
         """
         Collect files generated during execution.
 
@@ -213,7 +281,7 @@ sys.path.insert(0, '/sandbox')
         Returns:
             List of generated files with base64 content
         """
-        generated_files: Final[list[dict[str, Any]]] = []
+        generated_files: Final[list[_GeneratedFile]] = []
 
         try:
             import tempfile
@@ -232,17 +300,7 @@ print(json.dumps(files))
             result: Final = session.run(list_code)
 
             if result.exit_code == 0 and result.stdout:
-                import json
-
-                try:
-                    filepaths = json.loads(result.stdout.strip())
-                except json.JSONDecodeError:
-                    filepaths = []
-
-                for filepath in filepaths:
-                    if not filepath:
-                        continue
-
+                for filepath in _listed_sandbox_paths(result.stdout.strip()):
                     # Get relative path
                     rel_path = filepath.replace("/sandbox/", "")
 

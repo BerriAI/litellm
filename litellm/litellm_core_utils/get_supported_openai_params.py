@@ -3,6 +3,7 @@ from typing import Final, Literal
 import litellm
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
+from litellm.llms.bedrock_mantle.chat.claude_transformation import bedrock_mantle_chat_config
 from litellm.types.utils import LlmProviders, LlmProvidersSet
 
 
@@ -26,15 +27,15 @@ def get_supported_openai_params(
             friendly Bedrock alias). It is additive: the result is the union of the
             params supported by ``model`` and by ``base_model``, so a hint can only
             add capabilities, never strip ones the real model already supports.
+            The exception is a gpt-5-family base_model on a custom-named azure_ai
+            deployment, which sets the request shape, so its params are the whole answer.
 
     Returns:
     - List if custom_llm_provider is mapped
     - None if unmapped
     """
     if not custom_llm_provider:
-        custom_llm_provider = declared_authenticating_provider(
-            model
-        )  # rebind-ok: resolving would run the provider's OAuth flow
+        custom_llm_provider = declared_authenticating_provider(model)
     if not custom_llm_provider:
         try:
             custom_llm_provider = litellm.get_llm_provider(model=model)[1]
@@ -57,8 +58,13 @@ def get_supported_openai_params(
         provider_config = None
 
     if provider_config and request_type == "chat_completion":
-        supported_params = provider_config.get_supported_openai_params(model=model)
-        if base_model and base_model != model:
+        azure_ai_gpt_5_base_model: Final = (
+            provider_config.gpt_5_base_model(model, base_model)
+            if isinstance(provider_config, litellm.AzureAIStudioConfig)
+            else None
+        )
+        supported_params = provider_config.get_supported_openai_params(model=azure_ai_gpt_5_base_model or model)
+        if azure_ai_gpt_5_base_model is None and base_model and base_model != model:
             base_model_params: Final = provider_config.get_supported_openai_params(model=base_model)
             supported_params = list(dict.fromkeys([*supported_params, *base_model_params]))
         return supported_params
@@ -93,6 +99,8 @@ def get_supported_openai_params(
             return litellm.nvidiaNimEmbeddingConfig.get_supported_openai_params()
     elif custom_llm_provider == "cerebras":
         return litellm.CerebrasConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "nadir":
+        return litellm.NadirConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "baseten":
         return litellm.BasetenConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "xai":
@@ -104,7 +112,7 @@ def get_supported_openai_params(
     elif custom_llm_provider == "groq":
         return litellm.GroqChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "bedrock_mantle":
-        return litellm.BedrockMantleChatConfig().get_supported_openai_params(model=model)
+        return bedrock_mantle_chat_config(model).get_supported_openai_params(model=model)
     elif custom_llm_provider == "hosted_vllm":
         return litellm.HostedVLLMChatConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "vllm":
@@ -190,7 +198,7 @@ def get_supported_openai_params(
     elif custom_llm_provider == "vertex_ai" or custom_llm_provider == "vertex_ai_beta":
         if request_type == "chat_completion":
             if model.startswith("mistral"):
-                return litellm.MistralConfig().get_supported_openai_params(model=model)
+                return litellm.VertexAIMistralConfig().get_supported_openai_params(model=model)
             elif model.startswith("codestral"):
                 return litellm.CodestralTextCompletionConfig().get_supported_openai_params(model=model)
             elif model.startswith("claude"):
@@ -279,9 +287,17 @@ def get_supported_openai_params(
             )
 
             return ElevenLabsAudioTranscriptionConfig().get_supported_openai_params(model=model)
+    elif custom_llm_provider == "gnani" and request_type == "transcription":
+        from litellm.llms.gnani.audio_transcription.transformation import GnaniAudioTranscriptionConfig
+
+        return GnaniAudioTranscriptionConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider == "soniox":
         if request_type == "transcription":
-            return litellm.SonioxAudioTranscriptionConfig().get_supported_openai_params(model=model)
+            from litellm.llms.soniox.audio_transcription.transformation import (
+                SonioxAudioTranscriptionConfig,
+            )
+
+            return SonioxAudioTranscriptionConfig().get_supported_openai_params(model=model)
     elif custom_llm_provider in litellm._custom_providers:
         if request_type == "chat_completion":
             provider_config = litellm.ProviderConfigManager.get_provider_chat_config(

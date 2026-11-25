@@ -3,19 +3,25 @@ Helper util for handling perplexity-specific cost calculation
 - e.g.: citation tokens, search queries
 """
 
+from datetime import datetime
 from typing import Final
 
+from litellm.litellm_core_utils.core_helpers import finite_reported_cost
+from litellm.litellm_core_utils.llm_cost_calc.utils import call_context
+from litellm.rust_bridge._native import NativePrices
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
 
-def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
+def cost_per_token(model: str, usage: Usage, current_time: datetime | None = None) -> tuple[float, float]:
     """
     Calculates the cost per token for a given model, prompt tokens, and completion tokens.
+    The manual fallback swaps in the model's off_peak_pricing rates while one of its windows is open.
 
     Input:
         - model: str, the model name without provider prefix
         - usage: LiteLLM Usage block, containing perplexity-specific usage information
+        - current_time: the moment the request is billed at; defaults to now, UTC
 
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
@@ -30,10 +36,9 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
         total_cost = cost_info.get("total_cost")
     elif isinstance(cost_info, (int, float)) and not isinstance(cost_info, bool):
         total_cost = float(cost_info)
-    if total_cost is not None:
-        # Return total cost as completion_cost (prompt_cost=0) since Perplexity
-        # doesn't break down by input/output in their cost object
-        return (0.0, float(total_cost))
+    reported_cost: Final = None if total_cost is None else finite_reported_cost(float(total_cost))
+    if reported_cost is not None:
+        return (0.0, reported_cost)
 
     ## FALLBACK: Calculate cost manually if Perplexity doesn't provide it
     ## GET MODEL INFO
@@ -48,9 +53,20 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
         except (ValueError, TypeError):
             return default
 
+    quote: Final = NativePrices(model_info, "perplexity").quote(0, call_context(None, None, None, current_time))
+    input_cost_per_token: Final = quote.input
+    output_cost_per_token: Final = quote.output
+
     ## CALCULATE INPUT COST
-    input_cost_per_token: Final = _safe_float_cast(model_info.get("input_cost_per_token"))
-    prompt_cost: float = (usage.prompt_tokens or 0) * input_cost_per_token
+    prompt_tokens: Final = usage.prompt_tokens or 0
+    reported_cached_tokens: Final = (
+        usage.prompt_tokens_details.cached_tokens or 0 if usage.prompt_tokens_details is not None else 0
+    )
+    cached_tokens: Final = min(prompt_tokens, reported_cached_tokens)
+    cache_read_cost_per_token: Final = quote.cache_read
+    prompt_cost: float = (
+        prompt_tokens - cached_tokens
+    ) * input_cost_per_token + cached_tokens * cache_read_cost_per_token
 
     ## ADD CITATION TOKENS COST (if present)
     citation_tokens: Final = getattr(usage, "citation_tokens", 0) or 0
@@ -60,8 +76,6 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
         prompt_cost += citation_tokens * citation_cost_per_token
 
     ## CALCULATE OUTPUT COST
-    output_cost_per_token: Final = _safe_float_cast(model_info.get("output_cost_per_token"))
-
     reasoning_tokens = getattr(usage, "reasoning_tokens", 0) or 0
     if reasoning_tokens == 0 and hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details:
         reasoning_tokens = getattr(usage.completion_tokens_details, "reasoning_tokens", 0) or 0
@@ -85,8 +99,9 @@ def cost_per_token(model: str, usage: Usage) -> tuple[float, float]:
         num_search_queries = getattr(usage.prompt_tokens_details, "web_search_requests", 0) or 0
 
     # Check both possible keys for search cost (legacy and current)
-    search_cost_value: Final = model_info.get("search_queries_cost_per_query") or model_info.get(
-        "search_context_cost_per_query"
+    legacy_search_cost: Final = model_info.get("search_queries_cost_per_query")
+    search_cost_value: Final = (
+        model_info.get("search_context_cost_per_query") if legacy_search_cost is None else legacy_search_cost
     )
     if num_search_queries > 0 and search_cost_value is not None:
         # Handle both dict and float formats

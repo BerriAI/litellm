@@ -12,8 +12,12 @@ Endpoint
 - https://dashscope.aliyuncs.com/compatible-api/v1/reranks
 
 Note: chat/embed live under `/compatible-mode/v1/`, but DashScope's rerank
-route is exposed under `/compatible-api/v1/reranks` per the docs. Override
-with `DASHSCOPE_API_BASE_RERANK` to point at a different host or path.
+route is exposed under `/compatible-api/v1/reranks` per the docs. A chat-shaped
+`.aliyuncs.com/compatible-mode/v1` base reaching this config (the chat default
+from `get_llm_provider`, or a `DASHSCOPE_API_BASE` env var) is redirected to
+the same host's rerank route, since `/compatible-mode/v1/reranks` is a dead
+route on every DashScope host. Override with `DASHSCOPE_API_BASE_RERANK` to
+point at a different host or path.
 
 Empirically, qwen3-rerank accepts `return_documents=true` and echoes
 `results[].document.text` back, even though the public docs list the flag
@@ -22,13 +26,15 @@ as supported only for gte-rerank-v2 / qwen3-vl-rerank.
 Docs - https://help.aliyun.com/zh/model-studio/text-rerank-api
 """
 
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Iterable, Mapping
+from typing import Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
@@ -40,9 +46,15 @@ from litellm.types.rerank import (
     RerankTokens,
 )
 
-from ..common_utils import DashScopeError
+from ..common_utils import DashScopeError, resolve_dashscope_family_rerank_api_base
 
 DEFAULT_RERANK_URL: Final = "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_JSON_OBJECTS: Final = TypeAdapter(Iterable[Mapping[str, object]], config=ConfigDict(hide_input_in_errors=True))
+_OPTIONAL_INT: Final[TypeAdapter[int | None]] = TypeAdapter(int | None)
+_STR: Final = TypeAdapter(str)
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class DashScopeRerankConfig(BaseRerankConfig):
@@ -58,60 +70,62 @@ class DashScopeRerankConfig(BaseRerankConfig):
     def __init__(self) -> None:
         pass
 
+    def _resolve_api_key(self, api_key: str | None) -> str:
+        resolved_api_key: Final = api_key if api_key is not None else get_secret_str("DASHSCOPE_API_KEY")
+        if resolved_api_key is None:
+            raise ValueError(
+                "DashScope API key is required. Set 'DASHSCOPE_API_KEY' env var or pass api_key explicitly."
+            )
+        return resolved_api_key
+
+    def _resolve_rerank_api_base(self, api_base: str | None) -> str:
+        return resolve_dashscope_family_rerank_api_base(api_base, "DASHSCOPE_API_BASE_RERANK", DEFAULT_RERANK_URL)
+
     def get_complete_url(
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
-        if api_base is None:
-            api_base = get_secret_str("DASHSCOPE_API_BASE_RERANK") or DEFAULT_RERANK_URL
+        resolved_api_base: Final = self._resolve_rerank_api_base(api_base)
+        if resolved_api_base == DEFAULT_RERANK_URL:
+            return resolved_api_base
 
-        if api_base == DEFAULT_RERANK_URL:
-            return DEFAULT_RERANK_URL
-
-        cleaned: Final = api_base.rstrip("/")
+        cleaned: Final = resolved_api_base.rstrip("/")
         if cleaned.endswith("/reranks") or cleaned.endswith("/rerank"):
             return cleaned
 
         if cleaned.endswith("/v1"):
-            return f"{cleaned}/reranks"
+            return join_api_base(cleaned, "reranks")
 
         # Unknown base: append /reranks rather than silently ignoring the caller's api_base.
-        return f"{cleaned}/reranks"
+        return join_api_base(cleaned, "reranks")
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
-        if api_key is None:
-            api_key = get_secret_str("DASHSCOPE_API_KEY")
-        if api_key is None:
-            raise ValueError(
-                "DashScope API key is required. Set 'DASHSCOPE_API_KEY' env var or pass api_key explicitly."
-            )
-
-        default_headers: Final = {
-            "Authorization": f"Bearer {api_key}",
+    ) -> dict[str, object]:
+        return {
+            "Authorization": f"Bearer {self._resolve_api_key(api_key)}",
             "accept": "application/json",
             "content-type": "application/json",
+            **headers,
         }
-        return {**default_headers, **headers}
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         return ["query", "documents", "top_n", "return_documents"]
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict | None,
+        non_default_params: Mapping[str, object] | None,
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,
@@ -119,7 +133,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         # qwen3-rerank accepts query/documents/top_n/return_documents. The
         # rest (rank_fields, max_*_per_doc) are silently dropped.
         params: Final[OptionalRerankParams] = OptionalRerankParams(
@@ -135,16 +149,16 @@ class DashScopeRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,
-        headers: dict,
-        litellm_params: dict | None = None,
-    ) -> dict:
+        optional_rerank_params: Mapping[str, object],
+        headers: Mapping[str, object],
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         if "query" not in optional_rerank_params:
             raise ValueError("query is required for DashScope rerank")
         if "documents" not in optional_rerank_params:
             raise ValueError("documents is required for DashScope rerank")
 
-        request: Final[dict[str, Any]] = {
+        request: Final[dict[str, object]] = {
             "model": model,
             "query": optional_rerank_params["query"],
             "documents": optional_rerank_params["documents"],
@@ -162,9 +176,9 @@ class DashScopeRerankConfig(BaseRerankConfig):
         model_response: RerankResponse,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
-        request_data: dict | None = None,
-        optional_params: dict | None = None,
-        litellm_params: dict | None = None,
+        request_data: Mapping[str, object] | None = None,
+        optional_params: Mapping[str, object] | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> RerankResponse:
         request_data = request_data or {}
         optional_params = optional_params or {}
@@ -176,22 +190,24 @@ class DashScopeRerankConfig(BaseRerankConfig):
                 status_code=raw_response.status_code,
                 message=raw_response.text,
             )
+        decoded_response: Final = _DECODED_JSON.validate_python(response_json)
 
         logging_obj.post_call(
             input=request_data.get("query"),
             api_key=api_key,
             additional_args={"complete_input_dict": request_data},
-            original_response=response_json,
+            original_response=decoded_response,
         )
 
         # DashScope error envelope: {"code": "...", "message": "...", "request_id": "..."}
         if "code" in response_json and "results" not in response_json:
             raise DashScopeError(
                 status_code=raw_response.status_code,
-                message=response_json.get("message", str(response_json)),
+                message=response_json.get("message", str(decoded_response)),
             )
 
-        results: Final = response_json.get("results")
+        payload: Final = _JSON_OBJECT.validate_python(response_json)
+        results: Final = payload.get("results")
         if results is None:
             raise DashScopeError(
                 status_code=raw_response.status_code,
@@ -204,8 +220,8 @@ class DashScopeRerankConfig(BaseRerankConfig):
         #   "document": {"text": "..."}
         # which already matches LiteLLM's RerankResponseDocument shape.
         transformed_results: Final[list[dict]] = []
-        for r in results:
-            item: dict[str, Any] = {
+        for r in _JSON_OBJECTS.validate_python(results):
+            item: dict[str, object] = {
                 "index": r["index"],
                 "relevance_score": r["relevance_score"],
             }
@@ -217,14 +233,14 @@ class DashScopeRerankConfig(BaseRerankConfig):
                 item["document"] = {"text": doc}
             transformed_results.append(item)
 
-        usage: Final = response_json.get("usage") or {}
-        total_tokens: Final = usage.get("total_tokens")
+        usage: Final = _JSON_OBJECT.validate_python(payload.get("usage") or {})
+        total_tokens: Final = _OPTIONAL_INT.validate_python(usage.get("total_tokens"))
         billed_units: Final = RerankBilledUnits(total_tokens=total_tokens)
         tokens: Final = RerankTokens(input_tokens=total_tokens)
         meta: Final = RerankResponseMeta(billed_units=billed_units, tokens=tokens)
 
         return RerankResponse(
-            id=response_json.get("id") or str(uuid.uuid4()),
+            id=_STR.validate_python(payload.get("id") or str(uuid.uuid4())),
             results=transformed_results,
             meta=meta,
         )

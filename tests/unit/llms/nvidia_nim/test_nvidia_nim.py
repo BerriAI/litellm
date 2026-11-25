@@ -1,0 +1,488 @@
+import json
+from collections.abc import Callable
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import pytest
+from openai.types import CreateEmbeddingResponse, Embedding
+from openai.types.create_embedding_response import Usage as EmbeddingUsage
+
+import litellm
+from litellm import ModelResponse, completion
+from tests.capturing_transport import CapturingTransport
+
+
+def test_embedding_nvidia_nim():
+    litellm.set_verbose = True
+    from openai import OpenAI
+
+    transport: Final = CapturingTransport(
+        CreateEmbeddingResponse(
+            object="list",
+            data=(Embedding(object="embedding", index=0, embedding=(0.1, 0.2, 0.3)),),
+            model="nvidia/nv-embedqa-e5-v5",
+            usage=EmbeddingUsage(prompt_tokens=6, total_tokens=6),
+        )
+    )
+    client: Final = OpenAI(api_key="fake-api-key", http_client=httpx.Client(transport=transport))
+    response: Final = litellm.embedding(
+        model="nvidia_nim/nvidia/nv-embedqa-e5-v5",
+        input="What is the meaning of life?",
+        input_type="passage",
+        dimensions=1024,
+        client=client,
+    )
+    request_body: Final = transport.request_bodies[0]
+    assert request_body["input"] == "What is the meaning of life?"
+    assert request_body["model"] == "nvidia/nv-embedqa-e5-v5"
+    assert request_body["input_type"] == "passage"
+    assert request_body["dimensions"] == 1024
+    assert "encoding_format" not in request_body
+    assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
+
+
+def test_chat_completion_nvidia_nim_with_tools():
+    from openai import OpenAI
+
+    litellm.set_verbose = True
+    model_name = "nvidia_nim/meta/llama3-70b-instruct"
+    client = OpenAI(
+        api_key="fake-api-key",
+    )
+
+    # Define tools
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {
+                            "type": "string",
+                            "enum": ["celsius", "fahrenheit"],
+                            "description": "The unit of temperature to use",
+                        },
+                    },
+                    "required": ["location"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_time",
+                "description": "Get the current time in a given timezone",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "timezone": {
+                            "type": "string",
+                            "description": "The timezone, e.g. EST, PST",
+                        },
+                    },
+                    "required": ["timezone"],
+                },
+            },
+        },
+    ]
+
+    with patch.object(client, "post") as mock_client:
+        try:
+            completion(
+                model=model_name,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "What's the weather like in Boston today and what time is it in EST?",
+                    }
+                ],
+                tools=tools,
+                tool_choice="auto",
+                parallel_tool_calls=True,
+                temperature=0.7,
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        # Add assertions to check the request
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs["body"]
+
+        print("request_body: ", request_body)
+
+        assert request_body["messages"] == [
+            {
+                "role": "user",
+                "content": "What's the weather like in Boston today and what time is it in EST?",
+            },
+        ]
+        assert request_body["model"] == "meta/llama3-70b-instruct"
+        assert request_body["temperature"] == 0.7
+        assert request_body["tools"] == tools
+        assert request_body["tool_choice"] == "auto"
+        assert request_body["parallel_tool_calls"] == True
+
+
+@pytest.mark.asyncio()
+async def test_nvidia_nim_rerank_ranking_endpoint():
+    """
+    Test that using "nvidia_nim/ranking/<model>" forces the /v1/ranking endpoint.
+
+    This allows users to explicitly use the /v1/ranking endpoint for models like
+    nvidia/llama-3.2-nv-rerankqa-1b-v2.
+
+    Reference: https://build.nvidia.com/nvidia/llama-3_2-nv-rerankqa-1b-v2/deploy
+    """
+    mock_response = AsyncMock()
+
+    def return_val():
+        return {
+            "rankings": [
+                {"index": 0, "logit": 0.95},
+                {"index": 1, "logit": 0.75},
+            ],
+        }
+
+    mock_response.json = return_val
+    mock_response.headers = {"key": "value"}
+    mock_response.status_code = 200
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=mock_response,
+    ) as mock_post:
+        # Use "ranking/" prefix to force /v1/ranking endpoint
+        response = await litellm.arerank(
+            model="nvidia_nim/ranking/nvidia/llama-3.2-nv-rerankqa-1b-v2",
+            query="What is the GPU memory bandwidth?",
+            documents=[
+                "H100 delivers 3TB/s memory bandwidth",
+                "A100 has 2TB/s memory bandwidth",
+            ],
+            top_n=2,
+            api_key="fake-api-key",
+        )
+
+        mock_post.assert_called_once()
+
+        args_to_api = mock_post.call_args.kwargs["data"]
+        _url = mock_post.call_args.kwargs["url"]
+        print("url = ", _url)
+
+        # Verify URL is /v1/ranking
+        assert _url == "https://ai.api.nvidia.com/v1/ranking"
+
+        # Verify request body structure
+        request_data = json.loads(args_to_api)
+        print("request_data=", request_data)
+
+        # Query should be an object with 'text' field
+        assert request_data["query"] == {"text": "What is the GPU memory bandwidth?"}
+
+        # Documents should be 'passages'
+        assert request_data["passages"] == [
+            {"text": "H100 delivers 3TB/s memory bandwidth"},
+            {"text": "A100 has 2TB/s memory bandwidth"},
+        ]
+
+        # Model name in body should NOT have "ranking/" prefix
+        assert request_data["model"] == "nvidia/llama-3.2-nv-rerankqa-1b-v2"
+
+
+def test_completion_nvidia_nim():
+    from openai import OpenAI
+
+    litellm.set_verbose = True
+    model_name = "nvidia_nim/databricks/dbrx-instruct"
+    client = OpenAI(
+        api_key="fake-api-key",
+    )
+
+    with patch.object(client, "post") as mock_client:
+        try:
+            completion(
+                model=model_name,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": "What's the weather like in Boston today in Fahrenheit?",
+                    }
+                ],
+                presence_penalty=0.5,
+                frequency_penalty=0.1,
+                client=client,
+            )
+        except Exception as e:
+            print(e)
+
+        mock_client.assert_called_once()
+        request_body = mock_client.call_args.kwargs["body"]
+
+        assert request_body["messages"] == [
+            {
+                "role": "user",
+                "content": "What's the weather like in Boston today in Fahrenheit?",
+            },
+        ]
+        assert request_body["model"] == "databricks/dbrx-instruct"
+        assert request_body["frequency_penalty"] == 0.1
+        assert request_body["presence_penalty"] == 0.5
+
+
+def test_completion_nvidia_nim_forwards_logprobs_and_returns_them():
+    from openai import OpenAI
+    from openai.types.chat import ChatCompletion
+    from openai.types.chat.chat_completion import Choice, ChoiceLogprobs
+    from openai.types.chat.chat_completion_message import ChatCompletionMessage
+    from openai.types.chat.chat_completion_token_logprob import ChatCompletionTokenLogprob, TopLogprob
+
+    token_logprob: Final = ChatCompletionTokenLogprob(
+        token="hi",
+        logprob=-0.25,
+        bytes=[104, 105],
+        top_logprobs=[TopLogprob(token="hi", logprob=-0.25, bytes=[104, 105])],
+    )
+    transport: Final = CapturingTransport(
+        ChatCompletion(
+            id="chatcmpl-nim",
+            object="chat.completion",
+            created=1,
+            model="openai/gpt-oss-20b",
+            choices=[
+                Choice(
+                    index=0,
+                    finish_reason="stop",
+                    message=ChatCompletionMessage(role="assistant", content="hi"),
+                    logprobs=ChoiceLogprobs(content=[token_logprob]),
+                )
+            ],
+        )
+    )
+    client: Final = OpenAI(api_key="fake-api-key", http_client=httpx.Client(transport=transport))
+
+    response: Final = completion(
+        model="nvidia_nim/openai/gpt-oss-20b",
+        messages=[{"role": "user", "content": "Say hi"}],
+        logprobs=True,
+        top_logprobs=1,
+        client=client,
+    )
+
+    request_body: Final = transport.request_bodies[0]
+    assert request_body["logprobs"] is True
+    assert request_body["top_logprobs"] == 1
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].logprobs.content[0].token == token_logprob.token
+    assert response.choices[0].logprobs.content[0].logprob == token_logprob.logprob
+
+
+def _nim_chat_transport() -> CapturingTransport:
+    from openai.types.chat import ChatCompletion
+    from openai.types.chat.chat_completion import Choice
+    from openai.types.chat.chat_completion_message import ChatCompletionMessage
+
+    return CapturingTransport(
+        ChatCompletion(
+            id="chatcmpl-nim",
+            object="chat.completion",
+            created=1,
+            model="openai/gpt-oss-20b",
+            choices=[
+                Choice(
+                    index=0,
+                    finish_reason="stop",
+                    message=ChatCompletionMessage(role="assistant", content="hi"),
+                )
+            ],
+        )
+    )
+
+
+def _sent_logprobs_params(transport: CapturingTransport) -> dict[str, object]:
+    request_body: Final = transport.request_bodies[0]
+    return {key: request_body[key] for key in ("logprobs", "top_logprobs") if key in request_body}
+
+
+@pytest.mark.parametrize(
+    ("logprobs", "top_logprobs", "drop_params", "global_drop_params", "allowed_openai_params", "expected_body"),
+    [
+        (None, 2, True, False, None, {}),
+        (None, 2, None, True, None, {}),
+        (False, 2, True, False, None, {"logprobs": False}),
+        (True, 2, True, False, None, {"logprobs": True, "top_logprobs": 2}),
+        (True, 2, None, False, None, {"logprobs": True, "top_logprobs": 2}),
+        (2, None, True, False, None, {}),
+        (None, 2, None, False, ["top_logprobs"], {"top_logprobs": 2}),
+        (2, None, None, False, ["logprobs"], {"logprobs": 2}),
+    ],
+)
+def test_completion_nvidia_nim_sends_logprobs_params_nim_accepts(
+    monkeypatch: pytest.MonkeyPatch,
+    logprobs: bool | int | None,
+    top_logprobs: int | None,
+    drop_params: bool | None,
+    global_drop_params: bool,
+    allowed_openai_params: list[str] | None,
+    expected_body: dict[str, object],
+):
+    from openai import OpenAI
+
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+    transport: Final = _nim_chat_transport()
+    client: Final = OpenAI(api_key="fake-api-key", http_client=httpx.Client(transport=transport))
+
+    completion(
+        model="nvidia_nim/openai/gpt-oss-20b",
+        messages=[{"role": "user", "content": "Say hi"}],
+        logprobs=logprobs,
+        top_logprobs=top_logprobs,
+        drop_params=drop_params,
+        allowed_openai_params=allowed_openai_params,
+        client=client,
+    )
+
+    assert _sent_logprobs_params(transport) == expected_body
+
+
+@pytest.mark.parametrize(
+    ("logprobs", "top_logprobs", "rejected_param"),
+    [
+        (None, 2, "top_logprobs"),
+        (False, 2, "top_logprobs"),
+        (2, None, "logprobs"),
+    ],
+)
+def test_completion_nvidia_nim_rejects_logprobs_params_nim_cannot_take_without_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+    logprobs: bool | int | None,
+    top_logprobs: int | None,
+    rejected_param: str,
+):
+    from openai import OpenAI
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    transport: Final = _nim_chat_transport()
+    client: Final = OpenAI(api_key="fake-api-key", http_client=httpx.Client(transport=transport))
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=rejected_param):
+        completion(
+            model="nvidia_nim/openai/gpt-oss-20b",
+            messages=[{"role": "user", "content": "Say hi"}],
+            logprobs=logprobs,
+            top_logprobs=top_logprobs,
+            client=client,
+        )
+
+    assert transport.request_bodies == ()
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected_body"),
+    [
+        (True, {}),
+        (None, None),
+    ],
+)
+def test_completion_nvidia_nim_treats_logprobs_as_unsupported_for_models_the_cost_map_flags(
+    monkeypatch: pytest.MonkeyPatch,
+    drop_params: bool | None,
+    expected_body: dict[str, object] | None,
+):
+    from openai import OpenAI
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "nvidia_nim/acme/no-logprobs-chat",
+        {"litellm_provider": "nvidia_nim", "mode": "chat", "supports_logprobs": False},
+    )
+    transport: Final = _nim_chat_transport()
+    client: Final = OpenAI(api_key="fake-api-key", http_client=httpx.Client(transport=transport))
+
+    def send() -> None:
+        completion(
+            model="nvidia_nim/acme/no-logprobs-chat",
+            messages=[{"role": "user", "content": "Say hi"}],
+            logprobs=True,
+            top_logprobs=2,
+            drop_params=drop_params,
+            client=client,
+        )
+
+    if expected_body is None:
+        with pytest.raises(litellm.UnsupportedParamsError, match="logprobs"):
+            send()
+        assert transport.request_bodies == ()
+        return
+    send()
+    assert _sent_logprobs_params(transport) == expected_body
+
+
+@pytest.mark.parametrize(
+    "read_supported_params",
+    [
+        pytest.param(
+            lambda: litellm.get_supported_openai_params(model="nvidia_nim/acme/no-logprobs-chat"),
+            id="prefixed_model",
+        ),
+        pytest.param(
+            lambda: litellm.get_supported_openai_params(
+                model="acme/no-logprobs-chat", custom_llm_provider="nvidia_nim"
+            ),
+            id="provider_argument",
+        ),
+        pytest.param(
+            lambda: litellm.get_model_info("nvidia_nim/acme/no-logprobs-chat")["supported_openai_params"],
+            id="model_info",
+        ),
+    ],
+)
+def test_nvidia_nim_supported_params_leave_out_logprobs_for_models_the_cost_map_flags(
+    monkeypatch: pytest.MonkeyPatch,
+    read_supported_params: Callable[[], list[str] | None],
+):
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "nvidia_nim/acme/no-logprobs-chat",
+        {"litellm_provider": "nvidia_nim", "mode": "chat", "supports_logprobs": False},
+    )
+
+    supported_params: Final = read_supported_params() or []
+
+    assert "tools" in supported_params
+    assert "logprobs" not in supported_params
+    assert "top_logprobs" not in supported_params
+
+
+def test_embedding_nvidia_nim_sends_extra_body_fields_without_an_extra_body_key():
+    from openai import OpenAI
+
+    transport: Final = CapturingTransport(
+        CreateEmbeddingResponse(
+            object="list",
+            data=(Embedding(object="embedding", index=0, embedding=(0.1, 0.2, 0.3)),),
+            model="nvidia/nv-embedqa-e5-v5",
+            usage=EmbeddingUsage(prompt_tokens=6, total_tokens=6),
+        )
+    )
+    client: Final = OpenAI(api_key="fake-api-key", http_client=httpx.Client(transport=transport))
+
+    litellm.embedding(
+        model="nvidia_nim/nvidia/nv-embedqa-e5-v5",
+        input="What is the meaning of life?",
+        extra_body={"input_type": "query", "truncate": "END"},
+        client=client,
+    )
+
+    request_body: Final = transport.request_bodies[0]
+    assert "extra_body" not in request_body
+    assert (request_body["input_type"], request_body["truncate"]) == ("query", "END")

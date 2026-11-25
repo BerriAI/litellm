@@ -11,8 +11,8 @@ The (feature, provider) for this cell is inferred from the file path by
                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^      ^^^^^^^^^
                        feature_id                          provider
 
-Per the PRD, every cell exercises Claude Haiku 4.5, Sonnet 4.6, and Opus
-4.7; the cell only goes green if all three pass. The shared
+Per the PRD, every cell exercises Claude Haiku 5.5, Sonnet 5.5, and Opus
+5.5; the cell only goes green if all three pass. The shared
 `run_basic_messaging_cell` helper fans the three model runs out in
 parallel and reports one `compat_result.add(...)` entry per model so
 the matrix builder still sees three rows for this (feature, provider).
@@ -21,6 +21,7 @@ the matrix builder still sees three rows for this (feature, provider).
 from __future__ import annotations
 
 import pytest
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._basic_messaging import run_basic_messaging_cell
 
 # Per-model aliases registered in the LiteLLM proxy's routing config to
@@ -28,13 +29,22 @@ from claude_code._basic_messaging import run_basic_messaging_cell
 # the alias; the proxy is the one that knows the upstream publisher
 # model id and the GCP region.
 VERTEX_AI_MODELS = [
-    "claude-haiku-4-5-vertex",
-    "claude-sonnet-4-5-vertex",
-    "claude-opus-4-7-vertex",
+    "claude-haiku-5-5-vertex",
+    "claude-sonnet-5-5-vertex",
+    "claude-opus-5-5-vertex",
 ]
 
 
 @pytest.mark.covers("llm.messages.vertex.basic.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.VERTEX_AI,),
+        models=tuple(VERTEX_AI_MODELS),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_basic_messaging_non_streaming_vertex_ai(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert a reply."""
     run_basic_messaging_cell(

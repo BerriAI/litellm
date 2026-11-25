@@ -13,10 +13,21 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
+
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    attribute_or_none,
+    int_of,
+    iter_items,
+    require_attributes,
+)
+from litellm.litellm_core_utils.internal_call_metadata import inherits_parent_session
 from litellm.router_strategy.adaptive_router.adaptive_router import AdaptiveRouter
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.adaptive_router.config import (
@@ -25,6 +36,9 @@ from litellm.router_strategy.adaptive_router.config import (
     SIGNAL_GATE_MIN_MESSAGES,
 )
 from litellm.router_strategy.adaptive_router.signals import Turn
+
+if TYPE_CHECKING:
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 # Identity fields hashed into a derived session key so the same conversation
 # from the same caller produces a stable key, while different keys/teams/users
@@ -37,13 +51,29 @@ _IDENTITY_FIELDS: Final = (
 )
 
 
-def _resolve_session_key(kwargs: dict[str, Any]) -> str | None:
+class _LoggedCallKwargs(TypedDict, total=False):
+    litellm_params: ReadOnly[Mapping[str, object]]
+    messages: ReadOnly[Sequence[Mapping[str, object]] | None]
+    response_status: ReadOnly[object]
+    exception: ReadOnly[object]
+
+
+def _explicit_session_id(litellm_params: Mapping[str, object]) -> str | None:
+    metadata: Final = as_str_mapping(litellm_params.get("metadata")) or {}
+    session: Final = (
+        litellm_params.get("litellm_session_id") or metadata.get("session_id") or metadata.get("litellm_session_id")
+    )
+    return str(session) if session else None
+
+
+def _resolve_session_key(kwargs: _LoggedCallKwargs) -> str | None:
     """Pick a stable per-conversation key for owner-cache attribution.
 
     Order:
       1. Honor a client-supplied session id (`litellm_session_id` on either
          `litellm_params` or `litellm_params.metadata`, or `session_id` on
-         metadata) — backward compat for callers already wired up.
+         metadata) — backward compat for callers already wired up. A sub-call
+         that inherited its parent request's session skips this step.
       2. Otherwise derive a sha256 over (identity fields, first
          SIGNAL_GATE_MIN_MESSAGES messages) so the key is stable across turns
          and only materialises once there is enough context for the bandit to
@@ -52,14 +82,10 @@ def _resolve_session_key(kwargs: dict[str, Any]) -> str | None:
     Returns None if the conversation is shorter than SIGNAL_GATE_MIN_MESSAGES.
     """
     litellm_params: Final = kwargs.get("litellm_params") or {}
-    sid = litellm_params.get("litellm_session_id")
-    if sid:
-        return str(sid)
-    metadata: Final = litellm_params.get("metadata") or {}
-    if isinstance(metadata, dict):
-        sid = metadata.get("session_id") or metadata.get("litellm_session_id")
-        if sid:
-            return str(sid)
+    explicit: Final = None if inherits_parent_session(litellm_params) else _explicit_session_id(litellm_params)
+    if explicit:
+        return explicit
+    metadata: Final = _dict_fields(litellm_params.get("metadata") or {})
 
     messages: Final = kwargs.get("messages") or []
     if len(messages) < SIGNAL_GATE_MIN_MESSAGES:
@@ -68,7 +94,7 @@ def _resolve_session_key(kwargs: dict[str, Any]) -> str | None:
         # crediting the bandit for conversations that are too short to signal.
         return None
 
-    identity = ":".join(str(metadata.get(f) or "") if isinstance(metadata, dict) else "" for f in _IDENTITY_FIELDS)
+    identity: Final = ":".join(str(metadata.get(f) or "") if metadata is not None else "" for f in _IDENTITY_FIELDS)
     anchor: Final = messages[:SIGNAL_GATE_MIN_MESSAGES]
     payload: Final = (
         identity
@@ -82,7 +108,7 @@ def _resolve_session_key(kwargs: dict[str, Any]) -> str | None:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _last_user_content(messages: list[dict[str, Any]] | None) -> str | None:
+def _last_user_content(messages: Sequence[Mapping[str, object]] | None) -> str | None:
     if not messages:
         return None
     for msg in reversed(messages):
@@ -100,8 +126,8 @@ def _last_user_content(messages: list[dict[str, Any]] | None) -> str | None:
 
 
 def _recent_tool_results(
-    messages: list[dict[str, Any]] | None,
-) -> list[dict[str, Any]]:
+    messages: Sequence[Mapping[str, object]] | None,
+) -> list[dict[str, object]]:
     """Extract the current turn's tool result payloads from the request messages.
 
     Tool results are `role == "tool"` messages that sit at the tail of the
@@ -115,7 +141,7 @@ def _recent_tool_results(
     """
     if not messages:
         return []
-    results: Final[list[dict[str, Any]]] = []
+    results: Final[list[dict[str, object]]] = []
     for msg in reversed(messages):
         if not isinstance(msg, dict):
             break
@@ -131,54 +157,81 @@ def _recent_tool_results(
     return results
 
 
-def _assistant_content_and_tool_calls(response_obj: Any) -> tuple:
+@runtime_checkable
+class _SupportsGetItem(Protocol):
+    def __getitem__(self, index: int, /) -> object: ...
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+class _SupportsModelDump(Protocol):
+    def model_dump(self) -> Mapping[str, object]: ...
+
+
+def _first_item(value: object) -> object:
+    if isinstance(value, _SupportsGetItem):
+        return value[0]
+    raise TypeError(f"'{type(value).__name__}' object is not subscriptable")
+
+
+def _dict_fields(value: object) -> Mapping[str, object] | None:
+    fields: Final = as_str_mapping(value)
+    return fields if isinstance(value, dict) else None
+
+
+def _attribute_or_dict_field(source: object, name: str) -> object:
+    attribute: Final = attribute_or_none(source, name)
+    fields: Final = _dict_fields(source)
+    return fields.get(name) if attribute is None and fields is not None else attribute
+
+
+def _tool_call_fields(tool_call: object) -> Mapping[str, object]:
+    fields: Final = _dict_fields(tool_call)
+    if fields is not None:
+        return fields
+    try:
+        return require_attributes(tool_call, _SupportsModelDump, "model_dump").model_dump()
+    except Exception:
+        return {"name": getattr(tool_call, "name", ""), "arguments": ""}
+
+
+def _assistant_content_and_tool_calls(response_obj: object) -> tuple[object, Sequence[Mapping[str, object]]]:
     """Return (assistant_text, tool_calls_list) extracted from a ModelResponse-ish object."""
     if response_obj is None:
         return None, []
     try:
-        choices: Final = getattr(response_obj, "choices", None) or response_obj.get("choices")
+        choices: Final = attribute_or_none(response_obj, "choices") or require_attributes(
+            response_obj, _SupportsGet, "get"
+        ).get("choices")
     except Exception:
         return None, []
     if not choices:
         return None, []
 
-    msg = choices[0]
-    msg = getattr(msg, "message", None) or (msg.get("message") if isinstance(msg, dict) else None)
+    first_choice: Final = _first_item(choices)
+    choice_fields: Final = _dict_fields(first_choice)
+    msg: Final = attribute_or_none(first_choice, "message") or (
+        choice_fields.get("message") if choice_fields is not None else None
+    )
     if msg is None:
         return None, []
 
-    content = getattr(msg, "content", None)
-    if content is None and isinstance(msg, dict):
-        content = msg.get("content")
-
-    raw_tool_calls = getattr(msg, "tool_calls", None)
-    if raw_tool_calls is None and isinstance(msg, dict):
-        raw_tool_calls = msg.get("tool_calls")
-    tool_calls: Final[list[dict[str, Any]]] = []
-    for tc in raw_tool_calls or []:
-        if isinstance(tc, dict):
-            tool_calls.append(tc)
-        else:
-            try:
-                tool_calls.append(tc.model_dump())
-            except Exception:
-                tool_calls.append({"name": getattr(tc, "name", ""), "arguments": ""})
+    content: Final = _attribute_or_dict_field(msg, "content")
+    raw_tool_calls: Final = _attribute_or_dict_field(msg, "tool_calls")
+    tool_calls: Final = [_tool_call_fields(tc) for tc in iter_items(raw_tool_calls or [])]
     return content, tool_calls
 
 
-class AdaptiveRouterPostCallHook(CustomLogger):
-    """One hook instance per AdaptiveRouter. Registered into litellm.callbacks."""
-
-    def __init__(self, adaptive_router: AdaptiveRouter) -> None:
-        self.adaptive_router = adaptive_router
-
+class AdaptiveRouterResponseHeaderHook(CustomLogger):
     async def async_post_call_response_headers_hook(
         self,
-        data: dict[str, Any],
-        user_api_key_dict: Any,
-        response: Any,
+        data: Mapping[str, object],
+        user_api_key_dict: UserAPIKeyAuth,
+        response: object,
         request_headers: dict[str, str] | None = None,
-        litellm_call_info: dict[str, Any] | None = None,
+        litellm_call_info: dict[str, object] | None = None,
     ) -> dict[str, str] | None:
         """
         Surface the chosen logical model as the `x-litellm-adaptive-router-model`
@@ -196,20 +249,31 @@ class AdaptiveRouterPostCallHook(CustomLogger):
             return None
         return {ADAPTIVE_ROUTER_RESPONSE_HEADER: chosen}
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+
+class AdaptiveRouterPostCallHook(CustomLogger):
+    """One hook instance per AdaptiveRouter. Registered into litellm.callbacks."""
+
+    def __init__(self, adaptive_router: AdaptiveRouter) -> None:
+        self.adaptive_router = adaptive_router
+
+    async def async_log_success_event(
+        self, kwargs: _LoggedCallKwargs, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         await self._record(kwargs, response_obj, response_status=200)
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(
+        self, kwargs: _LoggedCallKwargs, response_obj: object, start_time: object, end_time: object
+    ) -> None:
         status = kwargs.get("response_status")
         if status is None:
             exc: Final = kwargs.get("exception")
             status = getattr(exc, "status_code", 500) if exc is not None else 500
-        await self._record(kwargs, response_obj, response_status=int(status))
+        await self._record(kwargs, response_obj, response_status=int_of(status))
 
     async def _record(
         self,
-        kwargs: dict[str, Any],
-        response_obj: Any,
+        kwargs: _LoggedCallKwargs,
+        response_obj: object,
         response_status: int,
     ) -> None:
         try:

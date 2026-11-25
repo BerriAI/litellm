@@ -4,7 +4,6 @@ from typing import Final
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
-# GigaChat API endpoint
 GIGACHAT_BASE_URL: Final = "https://gigachat.devices.sberbank.ru/api/v1"
 
 
@@ -22,5 +21,5 @@ def convert_usage(usage_data: Mapping[str, int]) -> Usage:
     )
 
 
-def get_api_base(api_base: str | None = None) -> str | None:
-    return api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
+def get_api_base(api_base: str | None = None) -> str:
+    return (api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL).rstrip("/")

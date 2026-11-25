@@ -1,0 +1,58 @@
+{
+  "domain": {
+    "cost-map": { "color": "1C6E5B", "description": "A model is missing, priced wrong, or has a stale capability flag or context limit" },
+    "llm-translation": { "color": "1C6E5B", "description": "A provider returns the wrong shape, drops a param, or breaks on streaming, tools, images, reasoning" },
+    "routing": { "color": "1C6E5B", "description": "Wrong deployment picked, fallbacks, retries, cooldowns, model group aliases, the auto router" },
+    "caching": { "color": "1C6E5B", "description": "Response cache served or skipped wrongly, Redis or semantic cache misconfigured, key collisions" },
+    "proxy-core": { "color": "1C6E5B", "description": "Proxy startup, config.yaml, health checks, middleware, timeouts, non-chat route handlers" },
+    "proxy-auth": { "color": "1C6E5B", "description": "Keys, JWT, SSO, SCIM, roles and memberships accepted or rejected wrongly" },
+    "management": { "color": "1C6E5B", "description": "Creating, updating, listing or deleting keys, teams, users, orgs, models, credentials, tags" },
+    "spend-tracking": { "color": "1C6E5B", "description": "Spend amount wrong or zero, spend logs missing or duplicated, cost on the wrong key or team" },
+    "budgets-rate-limits": { "color": "1C6E5B", "description": "429s or budget blocks fired wrongly, budgets not resetting, tpm/rpm counted wrong" },
+    "db": { "color": "1C6E5B", "description": "Migrations, Prisma connections, slow queries, unbounded tables, schema drift" },
+    "logging": { "color": "1C6E5B", "description": "Callbacks, Langfuse, Datadog, OTel, Prometheus, alerting, redaction" },
+    "guardrails": { "color": "1C6E5B", "description": "Guardrail blocked or missed wrongly, PII masking, policies, moderation providers" },
+    "mcp": { "color": "1C6E5B", "description": "MCP servers, tool calls, tool authorisation, OAuth to MCP servers" },
+    "agents": { "color": "1C6E5B", "description": "Agent endpoints, the A2A gateway, the agentic loop, skills, workflows" },
+    "vector-stores": { "color": "1C6E5B", "description": "Vector stores, knowledge bases, RAG ingestion, file search, vector store backends" },
+    "passthrough": { "color": "1C6E5B", "description": "A raw provider URL forwarded through the proxy behaves differently from the provider" },
+    "ui": { "color": "1C6E5B", "description": "A page in the Admin UI shows the wrong thing, a form does not save, a button does nothing" },
+    "sdk": { "color": "1C6E5B", "description": "The Python package itself: install, wheels, dependency pins, imports, exceptions, token_counter" },
+    "deploy": { "color": "1C6E5B", "description": "Docker images, Helm charts, compose files, Terraform; the pip package is sdk" },
+    "docs": { "color": "1C6E5B", "description": "The docs say something the code does not do, or miss something it does" },
+    "unknown": { "color": "1C6E5B", "description": "The issue does not say enough to place it" }
+  },
+  "provider": {
+    "openai": { "color": "0E5FA8", "description": "OpenAI" },
+    "anthropic": { "color": "0E5FA8", "description": "Anthropic" },
+    "bedrock": { "color": "0E5FA8", "description": "AWS Bedrock, including Bedrock Mantle" },
+    "vertex_ai": { "color": "0E5FA8", "description": "Google Vertex AI" },
+    "azure": { "color": "0E5FA8", "description": "Azure OpenAI" },
+    "gemini": { "color": "0E5FA8", "description": "Google AI Studio (Gemini API)" },
+    "vllm": { "color": "0E5FA8", "description": "vLLM, including hosted_vllm" },
+    "ollama": { "color": "0E5FA8", "description": "Ollama, including ollama_chat" },
+    "openrouter": { "color": "0E5FA8", "description": "OpenRouter" },
+    "azure_ai": { "color": "0E5FA8", "description": "Azure AI catalogue models" }
+  },
+  "kind": {
+    "bug": { "color": "5319E7", "description": "Something in our code does the wrong thing" },
+    "feature": { "color": "5319E7", "description": "Something we do not do yet, including a provider or model we never supported" },
+    "question": { "color": "5319E7", "description": "A local setup problem with nothing yet shown broken in our code" }
+  },
+  "priority": {
+    "p0": { "color": "B60205", "description": "We broke it or it is bleeding: regression, leak, endpoint down, wrong cache hit, security, data loss" },
+    "p1": { "color": "D93F0B", "description": "A supported path does the wrong thing and there is no real way around it" },
+    "p2": { "color": "FBCA04", "description": "Broken, but a workaround keeps the feature working or only a corner case hits it" },
+    "p3": { "color": "C5DEF5", "description": "Nothing is broken: a feature, a question, a docs gap, cosmetics" }
+  },
+  "lift": {
+    "small": { "color": "BFD4F2", "description": "At most half a day: one file, reproduction included, clear fix" },
+    "medium": { "color": "BFD4F2", "description": "One to three days: one subsystem, reproduction has to be built" },
+    "large": { "color": "BFD4F2", "description": "More than three days: new provider, migration, auth change, needs design" }
+  },
+  "needs": {
+    "template": { "color": "E99695", "description": "Required sections of the issue template are missing or empty" },
+    "version": { "color": "E99695", "description": "No LiteLLM version anywhere in the issue" },
+    "repro": { "color": "E99695", "description": "A bug with no command, output or screenshot to reproduce it" }
+  }
+}

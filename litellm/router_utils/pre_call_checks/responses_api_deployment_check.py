@@ -37,13 +37,13 @@ class ResponsesApiDeploymentCheck(CustomLogger):
         messages: list[AllMessageValues] | None,
         request_kwargs: dict | None = None,
         parent_otel_span: Span | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         request_kwargs = request_kwargs or {}
         previous_response_id: Final = request_kwargs.get("previous_response_id", None)
         if previous_response_id is None:
             return healthy_deployments
 
-        decoded_response: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+        decoded_response: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(
             response_id=previous_response_id,
         )
         model_id: Final = decoded_response.get("model_id")

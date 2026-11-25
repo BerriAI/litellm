@@ -7,10 +7,12 @@ confidence scoring and a tunable threshold (only block when confidence >= thresh
 """
 
 import re
+from collections.abc import Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
+from typing import TYPE_CHECKING, Final, Literal, Optional, cast
 
 from fastapi import HTTPException
+from typing_extensions import TypedDict, Unpack
 
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -281,7 +283,7 @@ def _normalize_language(tag: str) -> str:
 
 def _is_blocked_language(
     tag: str,
-    blocked_languages: list[str] | None,
+    blocked_languages: Sequence[str] | None,
     block_all: bool,
 ) -> bool:
     """True if this language tag should be considered blocked."""
@@ -314,6 +316,10 @@ def _confidence_for_block(
     return 0.0
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Base-class constructor options this guardrail forwards untouched to CustomGuardrail."""
+
+
 class BlockCodeExecutionGuardrail(CustomGuardrail):
     """
     Guardrail that detects fenced code blocks (markdown ```) and blocks or masks them
@@ -332,7 +338,7 @@ class BlockCodeExecutionGuardrail(CustomGuardrail):
         detect_execution_intent: bool = True,
         event_hook: Literal["pre_call", "post_call", "during_call"] | list[str] | None = None,
         default_on: bool = False,
-        **kwargs: Any,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ) -> None:
         # Normalize to type expected by CustomGuardrail
         _event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | None = None

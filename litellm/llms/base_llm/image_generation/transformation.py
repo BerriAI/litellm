@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -11,9 +12,8 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import ImageResponse
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
@@ -28,11 +28,11 @@ class BaseImageGenerationConfig(ABC):
     @abstractmethod
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         pass
 
     def get_complete_url(
@@ -40,8 +40,8 @@ class BaseImageGenerationConfig(ABC):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -58,8 +58,8 @@ class BaseImageGenerationConfig(ABC):
         headers: dict,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -76,10 +76,10 @@ class BaseImageGenerationConfig(ABC):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         headers: dict,
-    ) -> dict:
+    ) -> dict[str, object]:  # mutable-ok: inherited contract
         raise NotImplementedError(
             "ImageVariationConfig implementa 'transform_request_image_variation' for image variation models"
         )
@@ -90,16 +90,50 @@ class BaseImageGenerationConfig(ABC):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        request_data: dict[str, object],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ImageResponse:
         raise NotImplementedError(
             "ImageVariationConfig implements 'transform_response_image_variation' for image variation models"
         )
+
+    async def async_transform_image_generation_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ImageResponse,
+        logging_obj: LiteLLMLoggingObj,
+        request_data: dict[str, object],  # mutable-ok: inherited contract
+        optional_params: dict[str, object],  # mutable-ok: inherited contract
+        litellm_params: dict[str, object],  # mutable-ok: inherited contract
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
+    ) -> ImageResponse:
+        return self.transform_image_generation_response(  # pyright: ignore[reportUnknownMemberType]  # legacy sync hook has untyped dict params
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
+
+    def get_request_count(self, model: str, optional_params: Mapping[str, object]) -> int:
+        """
+        Number of identical upstream requests the handler sends and merges into one response.
+
+        Override for providers that return one image per call, so a caller's `n` still yields `n` images.
+        """
+        return 1
 
     def use_multipart_form_data(self) -> bool:
         """

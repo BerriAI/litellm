@@ -1,11 +1,15 @@
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
-from typing_extensions import ReadOnly, Required, TypedDict, override
+from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, override
 
-from .openai import ChatCompletionToolCallChunk
+from litellm.types.llms.base import LiteLLMBaseModel
+
+from .openai import ChatCompletionFileObjectFile, ChatCompletionImageUrlObject, ChatCompletionToolCallChunk
 
 
 class CachePointBlock(TypedDict, total=False):
@@ -13,13 +17,38 @@ class CachePointBlock(TypedDict, total=False):
     ttl: str
 
 
+class GuardrailConverseTextBlock(TypedDict, total=False):
+    text: str
+
+
+class GuardrailConverseContentBlock(TypedDict, total=False):
+    """Content block for selective guardrail evaluation in Bedrock Converse API"""
+
+    text: GuardrailConverseTextBlock
+
+
 class SystemContentBlock(TypedDict, total=False):
     text: str
     cachePoint: CachePointBlock
+    guardContent: ReadOnly[GuardrailConverseContentBlock]
 
 
-class SourceBlock(TypedDict):
-    bytes: str | None  # base 64 encoded string
+class S3Location(TypedDict):
+    uri: ReadOnly[str]
+    bucketOwner: NotRequired[ReadOnly[str]]
+
+
+class SourceBlock(TypedDict, total=False):
+    bytes: ReadOnly[str | None]  # base 64 encoded string
+    s3Location: ReadOnly[S3Location]
+
+
+class S3MediaImageUrlObject(ChatCompletionImageUrlObject, total=False):
+    bucket_owner: ReadOnly[object]
+
+
+class S3MediaFileObjectFile(ChatCompletionFileObjectFile, total=False):
+    bucket_owner: ReadOnly[object]
 
 
 BedrockImageTypes = Literal["png", "jpeg", "gif", "webp"]
@@ -64,6 +93,7 @@ class SearchResultBlock(TypedDict, total=False):
 class ToolResultContentBlock(TypedDict, total=False):
     image: ImageBlock
     document: DocumentBlock
+    video: ReadOnly[VideoBlock]
     searchResult: SearchResultBlock
     json: dict
     text: str
@@ -99,16 +129,6 @@ class BedrockConverseReasoningContentBlockDelta(TypedDict, total=False):
 
 class BedrockConverseGptReasoningEffortBlock(TypedDict):
     effort: ReadOnly[str]
-
-
-class GuardrailConverseTextBlock(TypedDict, total=False):
-    text: str
-
-
-class GuardrailConverseContentBlock(TypedDict, total=False):
-    """Content block for selective guardrail evaluation in Bedrock Converse API"""
-
-    text: GuardrailConverseTextBlock
 
 
 class CitationWebLocationBlock(TypedDict, total=False):
@@ -231,7 +251,7 @@ class CacheDetailBlock(TypedDict):
 class ConverseTokenUsageBlock(TypedDict, total=False):
     inputTokens: Required[ReadOnly[int]]
     outputTokens: Required[ReadOnly[int]]
-    totalTokens: Required[ReadOnly[int]]
+    totalTokens: ReadOnly[int]
     cacheReadInputTokenCount: ReadOnly[int]
     cacheReadInputTokens: ReadOnly[int]
     cacheWriteInputTokenCount: ReadOnly[int]
@@ -240,7 +260,7 @@ class ConverseTokenUsageBlock(TypedDict, total=False):
 
 
 class ServiceTierBlock(TypedDict):
-    type: Literal["priority", "default", "flex"]
+    type: ReadOnly[Literal["priority", "default", "flex", "reserved"]]
 
 
 class ConverseResponseBlock(TypedDict, total=False):
@@ -252,11 +272,17 @@ class ConverseResponseBlock(TypedDict, total=False):
     serviceTier: ServiceTierBlock  # Optional - only present when serviceTier was sent in request
 
 
-class ToolJsonSchemaBlock(TypedDict, total=False):
-    type: Literal["object"]
-    properties: dict
-    required: list[str]
-    additionalProperties: bool
+ToolJsonSchemaBlock: Final = TypedDict(
+    "ToolJsonSchemaBlock",
+    {
+        "type": ReadOnly[Literal["object"]],
+        "properties": ReadOnly[dict],
+        "required": ReadOnly[list[str]],
+        "additionalProperties": ReadOnly[bool],
+        "$defs": ReadOnly[Mapping[str, object]],
+    },
+    total=False,
+)
 
 
 class ToolInputSchemaBlock(TypedDict):
@@ -301,14 +327,21 @@ class BedrockToolSpec(dict):
         strict: bool | None,
         supports_strict_tools: bool,
     ) -> None:
+        additional_properties: Final = parameters.get("additionalProperties")
+        defs: Final = parameters.get("$defs")
+        strict_fields: Final[ToolJsonSchemaBlock] = (
+            {"additionalProperties": additional_properties}
+            if supports_strict_tools and additional_properties is not None
+            else {}
+        )
+        defs_fields: Final[ToolJsonSchemaBlock] = {"$defs": defs} if isinstance(defs, dict) else {}
         json_schema: Final[ToolJsonSchemaBlock] = {
             "type": parameters["type"],
             "properties": parameters.get("properties", {}),
             "required": parameters.get("required", []),
+            **strict_fields,
+            **defs_fields,
         }
-        additional_properties: Final = parameters.get("additionalProperties")
-        if supports_strict_tools and additional_properties is not None:
-            json_schema["additionalProperties"] = additional_properties
 
         tool_spec: Final[ToolSpecBlock] = {
             "inputSchema": {"json": json_schema},
@@ -377,7 +410,7 @@ class ContentBlockDeltaEvent(TypedDict, total=False):
 
 
 class PerformanceConfigBlock(TypedDict):
-    latency: Literal["optimized", "throughput"]
+    latency: Literal["standard", "optimized"]
 
 
 class JsonSchemaDefinition(TypedDict, total=False):
@@ -450,6 +483,9 @@ class Document(TypedDict):
     snippet: str
 
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
 class ServerSentEvent:
     def __init__(
         self,
@@ -483,8 +519,8 @@ class ServerSentEvent:
     def data(self) -> str:
         return self._data
 
-    def json(self) -> Any:
-        return json.loads(self.data)
+    def json(self) -> object:
+        return _DECODED_JSON.validate_python(json.loads(self.data))
 
     @override
     def __repr__(self) -> str:
@@ -501,6 +537,8 @@ class CohereEmbeddingRequest(TypedDict, total=False):
     truncate: Literal["NONE", "START", "END"]
     embedding_types: Literal["float", "int8", "uint8", "binary", "ubinary"]
     output_dimension: int
+    max_tokens: ReadOnly[int]
+    priority: ReadOnly[int]
 
 
 class CohereEmbeddingRequestWithModel(CohereEmbeddingRequest):
@@ -557,7 +595,6 @@ class AmazonTitanMultimodalEmbeddingResponse(TypedDict):
     message: str  # Specifies any errors that occur during generation.
 
 
-# TwelveLabs Marengo Embed 2.7 types
 TWELVELABS_EMBEDDING_INPUT_TYPES = Literal["text", "image", "video", "audio"]
 TWELVELABS_EMBEDDING_OPTIONS = Literal["visual-text", "visual-image", "audio"]
 
@@ -591,6 +628,113 @@ class TwelveLabsMarengoEmbeddingResponse(TypedDict):
     endSec: float
 
 
+TWELVELABS_MARENGO_3_INPUT_TYPES: TypeAlias = Literal["text", "image", "video", "audio", "text_image", "multi_input"]
+TWELVELABS_MARENGO_3_EMBEDDING_OPTIONS: TypeAlias = Literal["visual", "audio", "transcription"]
+TWELVELABS_MARENGO_3_EMBEDDING_TYPES: TypeAlias = Literal["separate_embedding", "fused_embedding"]
+TWELVELABS_MARENGO_3_EMBEDDING_SCOPES: TypeAlias = Literal["clip", "asset"]
+
+
+class TwelveLabsMarengo3FixedSegmentationConfig(TypedDict):
+    durationSec: ReadOnly[int]
+
+
+class TwelveLabsMarengo3FixedSegmentation(TypedDict):
+    method: ReadOnly[Literal["fixed"]]
+    fixed: ReadOnly[TwelveLabsMarengo3FixedSegmentationConfig]
+
+
+class TwelveLabsMarengo3DynamicSegmentationConfig(TypedDict):
+    minDurationSec: ReadOnly[int]
+
+
+class TwelveLabsMarengo3DynamicSegmentation(TypedDict):
+    method: ReadOnly[Literal["dynamic"]]
+    dynamic: ReadOnly[TwelveLabsMarengo3DynamicSegmentationConfig]
+
+
+TwelveLabsMarengo3Segmentation: TypeAlias = TwelveLabsMarengo3FixedSegmentation | TwelveLabsMarengo3DynamicSegmentation
+
+
+class TwelveLabsMarengo3TextInput(TypedDict):
+    inputText: ReadOnly[str]
+
+
+class TwelveLabsMarengo3ImageInput(TypedDict):
+    mediaSource: ReadOnly[TwelveLabsMediaSource]
+
+
+class TwelveLabsMarengo3TimedMediaOptions(TypedDict, total=False):
+    startSec: ReadOnly[float]
+    endSec: ReadOnly[float]
+    segmentation: ReadOnly[TwelveLabsMarengo3Segmentation]
+    embeddingOption: ReadOnly[Sequence[TWELVELABS_MARENGO_3_EMBEDDING_OPTIONS]]
+    embeddingType: ReadOnly[Sequence[TWELVELABS_MARENGO_3_EMBEDDING_TYPES]]
+    embeddingScope: ReadOnly[Sequence[TWELVELABS_MARENGO_3_EMBEDDING_SCOPES]]
+
+
+class TwelveLabsMarengo3TimedMediaInput(TwelveLabsMarengo3TimedMediaOptions):
+    mediaSource: Required[ReadOnly[TwelveLabsMediaSource]]
+
+
+class TwelveLabsMarengo3TextImageInput(TypedDict):
+    inputText: ReadOnly[str]
+    mediaSource: ReadOnly[TwelveLabsMediaSource]
+
+
+class TwelveLabsMarengo3NamedMediaSource(TwelveLabsMediaSource):
+    name: Required[ReadOnly[str]]
+    mediaType: Required[ReadOnly[Literal["image"]]]
+
+
+class TwelveLabsMarengo3MultiInput(TypedDict, total=False):
+    inputText: ReadOnly[str]
+    mediaSources: Required[ReadOnly[Sequence[TwelveLabsMarengo3NamedMediaSource]]]
+
+
+class TwelveLabsMarengo3RequestBase(TypedDict, total=False):
+    inferenceId: ReadOnly[str]
+
+
+class TwelveLabsMarengo3TextRequest(TwelveLabsMarengo3RequestBase):
+    inputType: ReadOnly[Literal["text"]]
+    text: ReadOnly[TwelveLabsMarengo3TextInput]
+
+
+class TwelveLabsMarengo3ImageRequest(TwelveLabsMarengo3RequestBase):
+    inputType: ReadOnly[Literal["image"]]
+    image: ReadOnly[TwelveLabsMarengo3ImageInput]
+
+
+class TwelveLabsMarengo3VideoRequest(TwelveLabsMarengo3RequestBase):
+    inputType: ReadOnly[Literal["video"]]
+    video: ReadOnly[TwelveLabsMarengo3TimedMediaInput]
+
+
+class TwelveLabsMarengo3AudioRequest(TwelveLabsMarengo3RequestBase):
+    inputType: ReadOnly[Literal["audio"]]
+    audio: ReadOnly[TwelveLabsMarengo3TimedMediaInput]
+
+
+class TwelveLabsMarengo3TextImageRequest(TwelveLabsMarengo3RequestBase):
+    inputType: ReadOnly[Literal["text_image"]]
+    text_image: ReadOnly[TwelveLabsMarengo3TextImageInput]
+
+
+class TwelveLabsMarengo3MultiInputRequest(TwelveLabsMarengo3RequestBase):
+    inputType: ReadOnly[Literal["multi_input"]]
+    multi_input: ReadOnly[TwelveLabsMarengo3MultiInput]
+
+
+TwelveLabsMarengo3EmbeddingRequest: TypeAlias = (
+    TwelveLabsMarengo3TextRequest
+    | TwelveLabsMarengo3ImageRequest
+    | TwelveLabsMarengo3VideoRequest
+    | TwelveLabsMarengo3AudioRequest
+    | TwelveLabsMarengo3TextImageRequest
+    | TwelveLabsMarengo3MultiInputRequest
+)
+
+
 class TwelveLabsS3OutputDataConfig(TypedDict):
     s3Uri: str
 
@@ -601,7 +745,7 @@ class TwelveLabsOutputDataConfig(TypedDict):
 
 class TwelveLabsAsyncInvokeRequest(TypedDict):
     modelId: str
-    modelInput: TwelveLabsMarengoEmbeddingRequest
+    modelInput: ReadOnly[TwelveLabsMarengoEmbeddingRequest | TwelveLabsMarengo3EmbeddingRequest]
     outputDataConfig: TwelveLabsOutputDataConfig
 
 
@@ -900,13 +1044,21 @@ else:
     AWSPreparedRequest = Any
 
 
+@dataclass(frozen=True)
+class BearerPreparedRequest:
+    method: str
+    url: str
+    headers: Mapping[str, str]
+    body: bytes
+
+
 class BedrockPreparedRequest(TypedDict):
     """
     Internal/Helper class for preparing the request for bedrock image generation
     """
 
     endpoint_url: str
-    prepped: AWSPreparedRequest
+    prepped: AWSPreparedRequest | BearerPreparedRequest
     body: bytes
     data: dict
 
@@ -974,6 +1126,7 @@ class BedrockS3InputDataConfig(TypedDict):
     """S3 input data configuration for Bedrock batch jobs."""
 
     s3Uri: str
+    s3BucketOwner: NotRequired[ReadOnly[str]]
 
 
 class BedrockInputDataConfig(TypedDict):
@@ -987,6 +1140,7 @@ class BedrockS3OutputDataConfig(TypedDict, total=False):
 
     s3Uri: str
     s3EncryptionKeyId: str | None
+    s3BucketOwner: ReadOnly[str]
 
 
 class BedrockOutputDataConfig(TypedDict):
@@ -998,6 +1152,31 @@ class BedrockOutputDataConfig(TypedDict):
 class BedrockTag(TypedDict):
     key: str
     value: str
+
+
+class AwsSessionTag(TypedDict):
+    Key: str  # writable-ok: boto3's STS stubs type assume_role Tags as writable TagTypeDef, which rejects ReadOnly
+    Value: str  # writable-ok: boto3's STS stubs type assume_role Tags as writable TagTypeDef, which rejects ReadOnly
+
+
+class AwsAuthParams(LiteLLMBaseModel):
+    """Every credential-shaped aws_* param BaseAWSLLM.get_credentials accepts; region is resolved separately."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_session_token: str | None = None
+    aws_session_name: str | None = None
+    aws_profile_name: str | None = None
+    aws_role_name: str | None = None
+    aws_web_identity_token: str | None = None
+    aws_sts_endpoint: str | None = None
+    aws_external_id: str | None = None
+    aws_session_tags: object = None
+
+
+AWS_AUTH_PARAM_KEYS: Final[tuple[str, ...]] = tuple(AwsAuthParams.model_fields)
 
 
 class BedrockCreateBatchRequest(TypedDict, total=False):
@@ -1103,6 +1282,7 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     thinking: dict
     metadata: dict
     output_config: dict
+    safeguards: list
 
     # `context_management` is allowed for Bedrock InvokeModel only when it
     # carries `compact_20260112` edits paired with the `compact-2026-01-12`
@@ -1110,6 +1290,13 @@ class BedrockInvokeAnthropicMessagesRequest(TypedDict, total=False):
     # supported subset and strips the field entirely when nothing remains, so
     # other edit types (e.g. `clear_thinking_20251015`) never reach Bedrock.
     context_management: dict
+
+    # `compaction` ({"type": "summarize", "instructions"?: str}) is the
+    # `compact-2026-09-04` beta: one summarization call that returns a single
+    # signed compaction block. Bedrock rejects it together with
+    # `context_management`. Ref:
+    # https://docs.aws.amazon.com/bedrock/latest/userguide/claude-messages-compaction.html
+    compaction: ReadOnly[Mapping[str, object]]
 
 
 class BedrockBatchRecordKind(Enum):

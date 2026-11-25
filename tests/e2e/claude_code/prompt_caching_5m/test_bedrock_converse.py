@@ -15,22 +15,24 @@ The (feature, provider) for this cell is inferred from the file path by
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from typing import Any, Dict, Final, Mapping, Optional, Sequence
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
+    ModelResult,
     failure_diagnostic,
     run_claude_models_parallel,
 )
 
 
 BEDROCK_CONVERSE_MODELS = [
-    "claude-haiku-4-5-bedrock-converse",
-    "claude-sonnet-4-5-bedrock-converse",
-    "claude-opus-4-7-bedrock-converse",
+    "claude-haiku-5-5-bedrock-converse",
+    "claude-sonnet-5-5-bedrock-converse",
+    "claude-opus-5-5-bedrock-converse",
 ]
 
 
@@ -46,17 +48,36 @@ def _cache_tokens(usage: Optional[Mapping[str, Any]]) -> int:
 
 
 @pytest.mark.covers("llm.messages.bedrock_converse.prompt_cache_5m.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.BEDROCK,),
+        models=tuple(BEDROCK_CONVERSE_MODELS),
+        capabilities=(Capability.PROMPT_CACHING,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_prompt_caching_5m_bedrock_converse(compat_result):
     """Drive the `claude` CLI against the LiteLLM proxy and assert the
     upstream usage block surfaces a non-zero cache token count."""
     base_url, api_key = require_proxy(compat_result)
 
-    outcomes = run_claude_models_parallel(
-        models=BEDROCK_CONVERSE_MODELS,
-        prompt="Reply with the single word 'pong' and nothing else.",
-        base_url=base_url,
-        api_key=api_key,
+    def run(models: Sequence[str]) -> Dict[str, ModelResult]:
+        return run_claude_models_parallel(
+            models=models,
+            prompt="Reply with the single word 'pong' and nothing else.",
+            base_url=base_url,
+            api_key=api_key,
+        )
+
+    first: Final = run(BEDROCK_CONVERSE_MODELS)
+    uncached: Final = tuple(
+        model
+        for model, outcome in first.items()
+        if not isinstance(outcome, ClaudeCLIError) and outcome.exit_code == 0 and _cache_tokens(outcome.usage) <= 0
     )
+    outcomes: Final = {**first, **run(uncached)} if uncached else first
 
     failures = []
     for model in BEDROCK_CONVERSE_MODELS:

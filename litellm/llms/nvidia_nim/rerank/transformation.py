@@ -1,12 +1,14 @@
 from collections.abc import Mapping
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import Required, TypedDict
 
 import litellm
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
@@ -44,6 +46,14 @@ class NvidiaNimRerankResponse(TypedDict):
     rankings: Required[list[NvidiaNimRankingResult]]
 
 
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+_NUMBER: Final[TypeAdapter[bool | int | float]] = TypeAdapter(
+    bool | int | float, config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
+_BILLED_UNITS: Final = TypeAdapter(RerankBilledUnits)
+_STR: Final = TypeAdapter(str)
+
+
 class NvidiaNimRerankConfig(BaseRerankConfig):
     """
     Reference: https://docs.api.nvidia.com/nim/reference/nvidia-llama-3_2-nv-rerankqa-1b-v2-infer
@@ -72,7 +82,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         self,
         api_base: str | None,
         model: str,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
     ) -> str:
         """
         Construct the Nvidia NIM rerank URL.
@@ -97,9 +107,9 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         # Strip nvidia_nim/ prefix from model name if present
         clean_model: Final = self._get_clean_model_name(model)
 
-        return f"{api_base}/v1/retrieval/{clean_model}/reranking"
+        return join_api_base(api_base, f"v1/retrieval/{clean_model}/reranking")
 
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:
         """
         Nvidia NIM supports these rerank parameters.
         """
@@ -111,11 +121,11 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
 
     def map_cohere_rerank_params(
         self,
-        non_default_params: dict | None,
+        non_default_params: dict[str, object] | None,
         model: str,
         drop_params: bool,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         custom_llm_provider: str | None = None,
         top_n: int | None = None,
         rank_fields: list[str] | None = None,
@@ -123,7 +133,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         max_chunks_per_doc: int | None = None,
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map Cohere/OpenAI rerank params to Nvidia NIM format.
 
@@ -133,7 +143,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         Nvidia NIM specific params (passed through as-is from non_default_params):
         - truncate: How to truncate input if too long (NONE, END)
         """
-        optional_nvidia_nim_rerank_params: Final[dict[str, Any]] = {
+        optional_nvidia_nim_rerank_params: Final[dict[str, object]] = {
             "query": query,
             "documents": documents,
         }
@@ -152,9 +162,9 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         headers: dict,
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         litellm_params: Mapping[str, object] | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate that the Nvidia NIM API key is present.
         """
@@ -181,9 +191,9 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         self,
         model: str,
         optional_rerank_params: dict,
-        headers: dict,
-        litellm_params: dict | None = None,
-    ) -> dict:
+        headers: dict[str, object],
+        litellm_params: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         """
         Transform request to Nvidia NIM format.
 
@@ -215,7 +225,7 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
             elif isinstance(doc, dict):
                 # Preserve only the structured passage fields supported by the
                 # selected rerank route.
-                supported_fields: NvidiaNimPassageObject = {}  # mutable-ok: assembling a request TypedDict
+                supported_fields: NvidiaNimPassageObject = {}
                 if "text" in self.SUPPORTED_PASSAGE_FIELDS and "text" in doc:
                     supported_fields["text"] = doc["text"]
                 if "image" in self.SUPPORTED_PASSAGE_FIELDS and "image" in doc:
@@ -265,8 +275,8 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None = None,
         request_data: dict = {},
-        optional_params: dict = {},
-        litellm_params: dict = {},
+        optional_params: dict[str, object] = {},
+        litellm_params: dict[str, object] = {},
     ) -> RerankResponse:
         """
         Transform Nvidia NIM rerank response to LiteLLM format.
@@ -327,20 +337,25 @@ class NvidiaNimRerankConfig(BaseRerankConfig):
 
         # Construct metadata with billed_units
         # Nvidia NIM uses "usage" field with "total_tokens"
-        usage: Final = raw_response_json.get("usage", {})
-        total_tokens: Final = usage.get("total_tokens", 0)
+        payload: Final = _JSON_OBJECT.validate_python(raw_response_json)
+        usage: Final = _JSON_OBJECT.validate_python(payload.get("usage", {}))
+        total_tokens: Final = _NUMBER.validate_python(usage.get("total_tokens", 0))
 
-        billed_units: Final[RerankBilledUnits] = {"total_tokens": total_tokens if total_tokens > 0 else len(results)}
+        billed_units: Final = _BILLED_UNITS.validate_python(
+            {"total_tokens": total_tokens if total_tokens > 0 else len(results)}
+        )
 
         meta: Final[RerankResponseMeta] = {"billed_units": billed_units}
 
         return RerankResponse(
-            id=raw_response_json.get("id") or str(uuid.uuid4()),
+            id=_STR.validate_python(payload.get("id") or str(uuid.uuid4())),
             results=results,
             meta=meta,
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return BaseLLMException(
             status_code=status_code,
             message=error_message,

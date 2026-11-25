@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Coroutine
 from copy import deepcopy
 from typing import Final
 
@@ -57,6 +58,16 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
         self.update_queue: asyncio.Queue[dict[str, BaseDailySpendTransaction]] = asyncio.Queue(
             maxsize=LITELLM_ASYNCIO_QUEUE_MAXSIZE
         )
+        self.interrupted_commits: set[asyncio.Task[None]] = set()
+
+    def track_interrupted_commit(self, settle: Coroutine[object, object, None]) -> None:
+        task: Final = asyncio.ensure_future(settle)
+        self.interrupted_commits.add(task)
+        task.add_done_callback(self.interrupted_commits.discard)
+
+    async def settle_interrupted_commits(self) -> None:
+        while self.interrupted_commits:
+            await asyncio.wait(tuple(self.interrupted_commits))
 
     async def add_update(self, update: dict[str, BaseDailySpendTransaction]):
         """Enqueue an update."""
@@ -81,7 +92,8 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
         self,
     ) -> dict[str, BaseDailySpendTransaction]:
         """Get all updates from the queue and return all updates aggregated by daily_transaction_key. Works for both user and team spend updates."""
-        updates: Final = await self.flush_all_updates_from_in_memory_queue()
+        await self.settle_interrupted_commits()
+        updates: Final[list[dict[str, BaseDailySpendTransaction]]] = await self.flush_all_updates_from_in_memory_queue()
         if len(updates) > 0:
             verbose_proxy_logger.info(
                 "Spend tracking - flushed %d daily spend update items from in-memory queue",
@@ -141,6 +153,30 @@ class DailySpendUpdateQueue(BaseUpdateQueue):
                     daily_transaction["autorouter_savings_spend"] = (
                         payload.get("autorouter_savings_spend", 0) or 0
                     ) + daily_transaction.get("autorouter_savings_spend", 0)
+
+                    daily_transaction["guardrail_spend"] = (
+                        payload.get("guardrail_spend", 0) or 0
+                    ) + daily_transaction.get("guardrail_spend", 0)
+
+                    daily_transaction["customer_margin_spend"] = (
+                        payload.get("customer_margin_spend", 0) or 0
+                    ) + daily_transaction.get("customer_margin_spend", 0)
+                    if "cache_cost" in payload:
+                        daily_transaction["cache_cost"] = (
+                            daily_transaction.get("cache_cost", 0.0) + payload["cache_cost"]
+                        )
+                    if "priced_cache_tokens" in payload:
+                        daily_transaction["priced_cache_tokens"] = (
+                            daily_transaction.get("priced_cache_tokens", 0) + payload["priced_cache_tokens"]
+                        )
+
+                    daily_transaction["total_response_time_ms"] = (
+                        payload.get("total_response_time_ms", 0) or 0
+                    ) + daily_transaction.get("total_response_time_ms", 0)
+
+                    daily_transaction["timed_requests"] = (
+                        payload.get("timed_requests", 0) or 0
+                    ) + daily_transaction.get("timed_requests", 0)
 
                 else:
                     aggregated_daily_spend_update_transactions[_key] = deepcopy(payload)

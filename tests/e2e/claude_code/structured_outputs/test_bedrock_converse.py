@@ -53,6 +53,8 @@ from typing import Any, Mapping, Optional, Sequence, Tuple
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
+
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -62,9 +64,9 @@ from claude_code.cli_driver import (
 
 
 BEDROCK_CONVERSE_MODELS = [
-    "claude-haiku-4-5-bedrock-converse",
-    "claude-sonnet-4-5-bedrock-converse",
-    "claude-opus-4-7-bedrock-converse",
+    "claude-haiku-5-5-bedrock-converse",
+    "claude-sonnet-5-5-bedrock-converse",
+    "claude-opus-5-5-bedrock-converse",
 ]
 
 # Minimal schema with one required integer field. Kept intentionally
@@ -151,6 +153,16 @@ def _validate_against_schema(
 
 
 @pytest.mark.covers("llm.messages.bedrock_converse.structured_output.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.BEDROCK,),
+        models=tuple(BEDROCK_CONVERSE_MODELS),
+        capabilities=(Capability.RESPONSE_SCHEMA,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_structured_outputs_bedrock_converse(compat_result):
     """Drive `claude --json-schema ...` against the LiteLLM proxy and
     assert the trailing `result` event contains a schema-conforming

@@ -2,12 +2,15 @@
 Azure Anthropic messages transformation config - extends AnthropicMessagesConfig with Azure authentication
 """
 
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final
 
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.messages.api_versions import requested_api_version
+from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure.common_utils import BaseAzureLLM
+from litellm.llms.azure_ai.anthropic.transformation import azure_anthropic_messages_url
 from litellm.types.router import GenericLiteLLMParams
 
 
@@ -25,16 +28,19 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
     def should_strip_billing_metadata(self) -> bool:
         return True
 
+    def anthropic_api_version(self, headers: Mapping[str, object], api_base: str | None) -> str | None:
+        return requested_api_version(headers)
+
     def validate_anthropic_messages_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
-        messages: list[Any],
-        optional_params: dict,
-        litellm_params: dict,
+        messages: Sequence[object],
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object] | GenericLiteLLMParams | None,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> tuple[dict, str | None]:
+    ) -> tuple[dict[str, str], str | None]:
         """
         Validate environment and set up Azure authentication headers for /v1/messages endpoint.
         Azure Anthropic uses x-api-key header (not api-key).
@@ -50,7 +56,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
                 litellm_params_obj.api_key = api_key
 
         # Use Azure authentication logic
-        headers = BaseAzureLLM._base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
+        headers = BaseAzureLLM.base_validate_azure_environment(headers=headers, litellm_params=litellm_params_obj)
 
         # Azure Anthropic uses x-api-key header (not api-key)
         # Convert api-key to x-api-key if present
@@ -68,6 +74,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         headers = self._update_headers_with_anthropic_beta(
             headers=headers,
             optional_params=optional_params,
+            messages=messages,
         )
 
         return headers, api_base
@@ -77,8 +84,8 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -94,65 +101,16 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
                 "Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
             )
 
-        # Ensure the URL ends with /v1/messages
-        api_base = api_base.rstrip("/")
-        if api_base.endswith("/v1/messages") or api_base.endswith("/anthropic/v1/messages"):
-            # Already correct
-            pass
-        else:
-            # Check if /anthropic is already in the path
-            if "/anthropic" in api_base:
-                # /anthropic exists, ensure we end with /anthropic/v1/messages
-                # Extract the base URL up to and including /anthropic
-                parts: Final = api_base.split("/anthropic", 1)
-                api_base = parts[0] + "/anthropic"
-            else:
-                # /anthropic not in path, add it
-                api_base = api_base + "/anthropic"
-            # Add /v1/messages
-            api_base = api_base + "/v1/messages"
-
-        return api_base
-
-    def _remove_scope_from_cache_control(self, anthropic_messages_request: dict) -> None:
-        """
-        Remove `scope` field from cache_control for Azure AI Foundry.
-
-        Azure AI Foundry's Anthropic endpoint does not support the `scope` field
-        (e.g., "global" for cross-request caching). Only `type` and `ttl` are supported.
-
-        Processes both `system` and `messages` content blocks.
-        """
-
-        def _sanitize(cache_control: Any) -> None:
-            if isinstance(cache_control, dict):
-                cache_control.pop("scope", None)
-
-        def _process_content_list(content: list) -> None:
-            for item in content:
-                if isinstance(item, dict) and "cache_control" in item:
-                    _sanitize(item["cache_control"])
-
-        if "system" in anthropic_messages_request:
-            system: Final = anthropic_messages_request["system"]
-            if isinstance(system, list):
-                _process_content_list(system)
-
-        if "messages" in anthropic_messages_request:
-            for message in anthropic_messages_request["messages"]:
-                if isinstance(message, dict) and "content" in message:
-                    content = message["content"]
-                    if isinstance(content, list):
-                        _process_content_list(content)
+        return azure_anthropic_messages_url(api_base)
 
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        messages: list[dict[str, object]],
+        anthropic_messages_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
+        headers: dict[str, str],
+    ) -> dict[str, object]:
         anthropic_messages_request: Final = super().transform_anthropic_messages_request(
             model=model,
             messages=messages,
@@ -160,6 +118,8 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
             litellm_params=litellm_params,
             headers=headers,
         )
-        self._normalize_system_role_messages(anthropic_messages_request, model=model)
+        self._normalize_system_role_messages(
+            anthropic_messages_request, model=model, drop_params=getattr(litellm_params, "drop_params", None)
+        )
         self._remove_scope_from_cache_control(anthropic_messages_request)
         return anthropic_messages_request

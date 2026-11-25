@@ -47,12 +47,16 @@ import os
 import threading
 import time
 import uuid
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from datetime import datetime
+from typing import Final, Protocol
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import float_of, has_attributes, require_attributes
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+from litellm.llms.anthropic.common_utils import tool_calls_with_server_tool_calls
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm.types.utils import Message, ModelResponse, StandardLoggingPayload
@@ -61,6 +65,14 @@ try:
     import newrelic.agent as _newrelic_agent
 except ImportError:
     _newrelic_agent = None
+
+
+class _SupportsTimestamp(Protocol):
+    def timestamp(self) -> float: ...
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
 
 
 class NewRelicLogger(CustomLogger):
@@ -124,13 +136,13 @@ class NewRelicLogger(CustomLogger):
                 verbose_logger.error("Failed to initialize New Relic agent: %s. Integration will be disabled.", e)
                 self.enabled = False
 
-    def _get_newrelic_params(self) -> dict:
+    def _get_newrelic_params(self) -> Mapping[str, object]:
         """
         Get the newrelic_params from litellm.newrelic_params
 
         These are params specific to initializing the NewRelicLogger e.g. turn_off_message_logging
         """
-        dict_newrelic_params: dict = {}
+        dict_newrelic_params: Mapping[str, object] = {}
         if litellm.newrelic_params is not None:
             if isinstance(litellm.newrelic_params, NewRelicInitParams):
                 dict_newrelic_params = litellm.newrelic_params.model_dump()
@@ -340,7 +352,7 @@ class NewRelicLogger(CustomLogger):
 
     def _get_model_names(
         self,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
         response_obj: ModelResponse,
         standard_logging_object: StandardLoggingPayload | None = None,
     ) -> tuple[str, str]:
@@ -365,7 +377,7 @@ class NewRelicLogger(CustomLogger):
         self,
         response_obj: ModelResponse,
         standard_logging_object: StandardLoggingPayload | None = None,
-    ) -> dict[str, int]:
+    ) -> Mapping[str, object]:
         """Extract usage statistics, preferring StandardLoggingPayload."""
         if standard_logging_object:
             prompt: Final = standard_logging_object.get("prompt_tokens")
@@ -378,14 +390,15 @@ class NewRelicLogger(CustomLogger):
                     "total_tokens": total or 0,
                 }
 
-        usage: Final = response_obj.get("usage", None)
+        usage: Final[object] = response_obj.get("usage", None)
         if not usage:
             return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
+        usage_fields: Final = require_attributes(usage, _SupportsGet, "get")
         return {
-            "prompt_tokens": usage.get("prompt_tokens") or 0,
-            "completion_tokens": usage.get("completion_tokens") or 0,
-            "total_tokens": usage.get("total_tokens") or 0,
+            "prompt_tokens": usage_fields.get("prompt_tokens") or 0,
+            "completion_tokens": usage_fields.get("completion_tokens") or 0,
+            "total_tokens": usage_fields.get("total_tokens") or 0,
         }
 
     def _get_finish_reason(self, response_obj: ModelResponse) -> str:
@@ -399,17 +412,17 @@ class NewRelicLogger(CustomLogger):
             return choices[0].get("finish_reason") or "unknown"
         return "unknown"
 
-    def _to_epoch_ms(self, t: Any) -> float:
+    def _to_epoch_ms(self, t: datetime | float) -> float:
         """Convert a datetime or float timestamp to epoch milliseconds."""
-        if hasattr(t, "timestamp"):
+        if has_attributes(t, _SupportsTimestamp, "timestamp"):
             return t.timestamp() * 1000.0
         return float(t) * 1000.0
 
     def _get_duration(
         self,
-        kwargs: dict,
-        start_time: Any,
-        end_time: Any,
+        kwargs: Mapping[str, object],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
         standard_logging_object: StandardLoggingPayload | None = None,
     ) -> float | None:
         """
@@ -427,7 +440,7 @@ class NewRelicLogger(CustomLogger):
 
         duration_ms: Final = kwargs.get("llm_api_duration_ms")
         if duration_ms is not None:
-            return float(duration_ms)
+            return float_of(duration_ms)
 
         if start_time is not None and end_time is not None:
             return self._to_epoch_ms(end_time) - self._to_epoch_ms(start_time)
@@ -436,9 +449,9 @@ class NewRelicLogger(CustomLogger):
 
     def _get_request_params(
         self,
-        kwargs: dict,
+        kwargs: Mapping[str, object],
         standard_logging_object: StandardLoggingPayload | None = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Extract request parameters like temperature and max_tokens, preferring
         StandardLoggingPayload.model_parameters.
@@ -450,19 +463,21 @@ class NewRelicLogger(CustomLogger):
         else:
             source_params = kwargs.get("optional_params") or {}
 
-        params: Final = {}
+        params: Final[dict[str, object]] = {}
 
-        temperature: Final = source_params.get("temperature")
+        readable_params: Final = require_attributes(source_params, _SupportsGet, "get")
+
+        temperature: Final = readable_params.get("temperature")
         if temperature is not None:
             params["temperature"] = temperature
 
-        max_tokens: Final = source_params.get("max_tokens")
+        max_tokens: Final = readable_params.get("max_tokens")
         if max_tokens is not None:
             params["max_tokens"] = max_tokens
 
         return params
 
-    def _extract_message_content(self, message: Message | dict) -> str:
+    def _extract_message_content(self, message: Message | Mapping[str, object]) -> str:
         """
         Extract content from a message, handling various formats.
 
@@ -472,11 +487,11 @@ class NewRelicLogger(CustomLogger):
         content: Final = message.get("content")
 
         # Handle tool calls
-        if message.get("tool_calls"):
+        if tool_calls := tool_calls_with_server_tool_calls(message):
             try:
-                return json.dumps(message["tool_calls"])
+                return json.dumps([tool_call.model_dump() for tool_call in tool_calls])
             except Exception:
-                return str(message["tool_calls"])
+                return str(tool_calls)
 
         # Handle None or missing content
         if content is None:
@@ -502,7 +517,7 @@ class NewRelicLogger(CustomLogger):
         response_model: str,
         vendor: str,
         standard_logging_object: StandardLoggingPayload | None = None,
-    ) -> list[dict[str, Any]]:
+    ) -> Sequence[Mapping[str, object]]:
         """
         Extract all messages (request + response) with sequence numbers and timestamps.
 
@@ -512,17 +527,17 @@ class NewRelicLogger(CustomLogger):
         Adds timestamps from StandardLoggingPayload (preferred) or kwargs if available
         (converted to epoch milliseconds).
         """
-        messages: Final = []
+        messages: Final[list[dict[str, object]]] = []
         sequence = 0
 
         # Extract timestamps, preferring StandardLoggingPayload
-        start_time = None
+        start_time: datetime | float | None = None
         if standard_logging_object:
             start_time = standard_logging_object.get("startTime")
         if not start_time:
             start_time = kwargs.get("start_time")
 
-        end_time = None
+        end_time: datetime | float | None = None
         if standard_logging_object:
             end_time = standard_logging_object.get("endTime")
         if not end_time:
@@ -544,7 +559,7 @@ class NewRelicLogger(CustomLogger):
         else:
             request_messages = kwargs.get("messages") or []
         for msg in request_messages:
-            message_data = {
+            message_data: dict[str, object] = {
                 "role": msg.get("role") or "user",
                 "sequence": sequence,
                 "response.model": response_model,
@@ -597,13 +612,13 @@ class NewRelicLogger(CustomLogger):
         vendor: str,
         finish_reason: str,
         num_messages: int,
-        usage: dict[str, int],
+        usage: Mapping[str, object],
         duration: float | None = None,
-        request_params: dict[str, Any] | None = None,
+        request_params: Mapping[str, object] | None = None,
     ):
         """Record LlmChatCompletionSummary event to New Relic."""
         try:
-            event_data: Final = {
+            event_data: Final[dict[str, object]] = {
                 "id": request_id,
                 "request_id": request_id,
                 "request.model": request_model,
@@ -647,7 +662,7 @@ class NewRelicLogger(CustomLogger):
         request_id: str,
         llm_response_id: str,
         trace_id: str | None,
-        messages: list[dict[str, Any]],
+        messages: Sequence[Mapping[str, object]],
     ):
         """Record LlmChatCompletionMessage events to New Relic.
 
@@ -666,7 +681,7 @@ class NewRelicLogger(CustomLogger):
 
             for message in messages:
                 sequence = message["sequence"]
-                event_data = {
+                event_data: dict[str, object] = {
                     "id": f"{llm_response_id}-{sequence}",
                     "request_id": request_id,
                     "completion_id": request_id,
@@ -722,8 +737,8 @@ class NewRelicLogger(CustomLogger):
         self,
         kwargs: dict,
         response_obj: ModelResponse,
-        start_time: float | None = None,
-        end_time: float | None = None,
+        start_time: datetime | float | None = None,
+        end_time: datetime | float | None = None,
     ):
         """
         Core logic for processing successful LLM calls.
@@ -831,13 +846,19 @@ class NewRelicLogger(CustomLogger):
 
     # CustomLogger interface implementation
 
-    def log_pre_api_call(self, model, messages, kwargs):
+    def log_pre_api_call(self, model: object, messages: object, kwargs: object):
         """Unused per spec."""
 
-    def log_post_api_call(self, kwargs, response_obj, start_time, end_time):
+    def log_post_api_call(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         """Unused per spec."""
 
-    def log_success_event(self, kwargs, response_obj, start_time, end_time):
+    def log_success_event(
+        self,
+        kwargs,
+        response_obj,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ):
         """
         Main success path for non-streaming requests.
 
@@ -850,7 +871,13 @@ class NewRelicLogger(CustomLogger):
             verbose_logger.warning("Error in New Relic log_success_event: %s", e)
             self.handle_callback_failure("newrelic")
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self,
+        kwargs,
+        response_obj,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ):
         """
         Main success path for async/streaming requests.
 
@@ -863,7 +890,7 @@ class NewRelicLogger(CustomLogger):
             verbose_logger.warning("Error in New Relic async_log_success_event: %s", e)
             self.handle_callback_failure("newrelic")
 
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    def log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         """
         Log error metric for failed LLM calls (sync).
 
@@ -876,7 +903,7 @@ class NewRelicLogger(CustomLogger):
             verbose_logger.warning("Error in New Relic log_failure_event: %s", e)
             self.handle_callback_failure("newrelic")
 
-    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_failure_event(self, kwargs: object, response_obj: object, start_time: object, end_time: object):
         """
         Log error metric for failed LLM calls (async).
 

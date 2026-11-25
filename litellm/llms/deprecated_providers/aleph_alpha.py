@@ -1,17 +1,36 @@
 import json
 import time
 import types
-from collections.abc import Callable
-from typing import Final
+from collections.abc import Callable, Mapping, Sequence, Sized
+from typing import TYPE_CHECKING, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import iter_items, json_contains, subscript
 from litellm.utils import Choices, Message, ModelResponse, Usage
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+_DECODED_JSON: Final = TypeAdapter(object)
+_STR: Final = TypeAdapter(str)
+
+
+def _has_length(value: object) -> bool:
+    if isinstance(value, Sized):
+        return len(value) > 0
+    raise TypeError(f"object of type '{type(value).__name__}' has no len()")
+
+
+def _completion_message(item: object) -> Message:
+    completion: Final = subscript(item, "completion")
+    return Message(content=_STR.validate_python(completion) if _has_length(completion) else None)
 
 
 class AlephAlphaError(Exception):
-    def __init__(self, status_code, message):
+    def __init__(self, status_code: int, message: object):
         self.status_code = status_code
         self.message = message
         self.request = httpx.Request(method="POST", url="https://api.aleph-alpha.com/complete")
@@ -93,14 +112,14 @@ class AlephAlphaConfig:
     penalty_exceptions_include_stop_sequences: bool | None = None
     best_of: int | None = None
     n: int | None = None
-    logit_bias: dict | None = None
+    logit_bias: Mapping[object, object] | None = None
     log_probs: int | None = None
-    stop_sequences: list | None = None
+    stop_sequences: Sequence[object] | None = None
     tokens: bool | None = None
     raw_completion: bool | None = None
     disable_optimizations: bool | None = None
-    completion_bias_inclusion: list | None = None
-    completion_bias_exclusion: list | None = None
+    completion_bias_inclusion: Sequence[object] | None = None
+    completion_bias_exclusion: Sequence[object] | None = None
     completion_bias_inclusion_first_token_only: bool | None = None
     completion_bias_exclusion_first_token_only: bool | None = None
     contextual_control_threshold: int | None = None
@@ -127,29 +146,30 @@ class AlephAlphaConfig:
         penalty_exceptions_include_stop_sequences: bool | None = None,
         best_of: int | None = None,
         n: int | None = None,
-        logit_bias: dict | None = None,
+        logit_bias: Mapping[object, object] | None = None,
         log_probs: int | None = None,
-        stop_sequences: list | None = None,
+        stop_sequences: Sequence[object] | None = None,
         tokens: bool | None = None,
         raw_completion: bool | None = None,
         disable_optimizations: bool | None = None,
-        completion_bias_inclusion: list | None = None,
-        completion_bias_exclusion: list | None = None,
+        completion_bias_inclusion: Sequence[object] | None = None,
+        completion_bias_exclusion: Sequence[object] | None = None,
         completion_bias_inclusion_first_token_only: bool | None = None,
         completion_bias_exclusion_first_token_only: bool | None = None,
         contextual_control_threshold: int | None = None,
         control_log_additive: bool | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = types.MappingProxyType(locals().copy())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
 
     @classmethod
-    def get_config(cls):
+    def get_config(cls) -> dict[str, object]:
+        class_attributes: Final[Mapping[str, object]] = types.MappingProxyType(cls.__dict__)
         return {
             k: v
-            for k, v in cls.__dict__.items()
+            for k, v in class_attributes.items()
             if not k.startswith("__")
             and not isinstance(
                 v,
@@ -164,7 +184,7 @@ class AlephAlphaConfig:
         }
 
 
-def validate_environment(api_key):
+def validate_environment(api_key: object):
     headers: Final = {
         "accept": "application/json",
         "content-type": "application/json",
@@ -179,14 +199,14 @@ def completion(
     messages: list,
     api_base: str,
     model_response: ModelResponse,
-    print_verbose: Callable,
+    print_verbose: Callable[[str], object],
     encoding,
-    api_key,
-    logging_obj,
+    api_key: object,
+    logging_obj: "LiteLLMLoggingObj",
     optional_params: dict,
-    litellm_params=None,
-    logger_fn=None,
-    default_max_tokens_to_sample=None,
+    litellm_params: object = None,
+    logger_fn: object = None,
+    default_max_tokens_to_sample: object = None,
 ):
     headers: Final = validate_environment(api_key)
 
@@ -248,22 +268,19 @@ def completion(
         )
         print_verbose(f"raw model_response: {response.text}")
         ## RESPONSE OBJECT
-        completion_response: Final = response.json()
-        if "error" in completion_response:
+        completion_response: Final = _DECODED_JSON.validate_python(response.json())
+        if json_contains(completion_response, "error"):
             raise AlephAlphaError(
-                message=completion_response["error"],
+                message=subscript(completion_response, "error"),
                 status_code=response.status_code,
             )
         else:
             try:
                 choices_list: Final = []
-                for idx, item in enumerate(completion_response["completions"]):
-                    if len(item["completion"]) > 0:
-                        message_obj = Message(content=item["completion"])
-                    else:
-                        message_obj = Message(content=None)
+                for idx, item in enumerate(iter_items(subscript(completion_response, "completions"))):
+                    message_obj = _completion_message(item)
                     choice_obj = Choices(
-                        finish_reason=item["finish_reason"],
+                        finish_reason=subscript(item, "finish_reason"),
                         index=idx + 1,
                         message=message_obj,
                     )
@@ -277,12 +294,7 @@ def completion(
 
         ## CALCULATING USAGE - baseten charges on time, not tokens - have some mapping of cost here.
         prompt_tokens: Final = len(encoding.encode(prompt))
-        completion_tokens: Final = len(
-            encoding.encode(
-                model_response["choices"][0]["message"]["content"],
-                disallowed_special=(),
-            )
-        )
+        completion_tokens: Final = len(encoding.encode(model_response["choices"][0]["message"]["content"]))
 
         model_response.created = int(time.time())
         model_response.model = model

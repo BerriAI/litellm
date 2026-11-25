@@ -45,6 +45,8 @@ from __future__ import annotations
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
+
 from claude_code._env import require_proxy_client
 from claude_code.http_probe import (
     assert_tool_search_shape,
@@ -53,13 +55,23 @@ from claude_code.http_probe import (
 
 
 BEDROCK_CONVERSE_MODELS = [
-    "claude-haiku-4-5-bedrock-converse",
-    "claude-sonnet-4-5-bedrock-converse",
-    "claude-opus-4-7-bedrock-converse",
+    "claude-haiku-5-5-bedrock-converse",
+    "claude-sonnet-5-5-bedrock-converse",
+    "claude-opus-5-5-bedrock-converse",
 ]
 
 
 @pytest.mark.covers("llm.messages.bedrock_converse.tool_search.nonstream.works")
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.BEDROCK,),
+        models=tuple(BEDROCK_CONVERSE_MODELS),
+        capabilities=(Capability.TOOL_SEARCH,),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_tool_search_bedrock_converse(compat_result):
     """Probe `/v1/messages` with a `tool_search_tool_regex_20251119`
     tool and assert the proxy + upstream accept it for every Bedrock (Converse)
