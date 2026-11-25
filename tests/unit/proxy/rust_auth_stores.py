@@ -54,6 +54,18 @@ def native_database_failure(kind: Literal["unreachable", "capacity", "other"]) -
     return failure
 
 
+def _key_view_json(view: LiteLLM_VerificationTokenView) -> str:
+    """Timestamps end in ``+00:00`` like the Rust key repository writes them, which Python 3.10 can read back."""
+    timestamps: Final = {
+        name: (value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc))
+        .astimezone(timezone.utc)
+        .isoformat()
+        for name, value in view
+        if isinstance(value, datetime)
+    }
+    return json.dumps({**view.model_dump(mode="json"), **timestamps})
+
+
 @dataclass
 class FakeKeyStore:
     """``combined_view`` rows by hash, written the way the Prisma row was, shaped through the view model."""
@@ -68,7 +80,7 @@ class FakeKeyStore:
         row = source.get(token)
         if isinstance(row, Exception):
             raise row
-        return None if row is None else LiteLLM_VerificationTokenView(**row).model_dump_json()
+        return None if row is None else _key_view_json(LiteLLM_VerificationTokenView(**row))
 
 
 @dataclass(frozen=True)
