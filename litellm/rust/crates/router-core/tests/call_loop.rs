@@ -2193,6 +2193,28 @@ fn a_request_content_policy_list_can_take_over_a_stream(config: RouterConfig) {
 }
 
 #[rstest]
+#[case::for_the_group(json!({"context_window_fallbacks": [{"primary": ["backup"]}]}), false, true, false)]
+#[case::for_another_group(json!({"context_window_fallbacks": [{"other": ["backup"]}]}), false, false, false)]
+#[case::fallbacks_disabled(json!({"context_window_fallbacks": [{"primary": ["backup"]}]}), true, false, false)]
+#[case::regular_fallbacks_only(json!({"fallbacks": [{"primary": ["backup"]}]}), false, false, true)]
+fn a_context_window_list_for_the_group_can_take_over_a_stream_apart_from_the_regular_fallbacks(
+    config: RouterConfig,
+    #[case] settings: serde_json::Value,
+    #[case] disable_fallbacks: bool,
+    #[case] context_window_fallback: bool,
+    #[case] can_fall_back: bool,
+) {
+    let router = router(config, settings, Arc::new(ScriptedHost::default()));
+    let request = RouterRequest {
+        disable_fallbacks,
+        ..request()
+    };
+    let policy = router.stream_policy(&request, &stream_origin(), None);
+    assert_eq!(policy.context_window_fallback, context_window_fallback);
+    assert_eq!(policy.can_fall_back, can_fall_back);
+}
+
+#[rstest]
 #[case::cleared(None)]
 #[case::another_group(Some(json!([{"other": ["backup"]}])))]
 fn a_request_fallback_list_replaces_the_router_list_for_a_stream(

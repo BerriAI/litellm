@@ -660,7 +660,7 @@ async def test_a_last_retry_cut_inside_its_message_start_sends_no_second_message
     assert seen == [MESSAGE_START]
 
 
-async def test_a_context_window_fallback_after_a_live_message_start_drops_the_fallbacks_message_start(
+async def test_a_context_window_fallback_answers_with_its_own_message_start(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
     bridged_cut: Final = MidStreamFallbackError(
@@ -671,10 +671,10 @@ async def test_a_context_window_fallback_after_a_live_message_start_drops_the_fa
         is_pre_first_chunk=True,
     )
     host.answer("openai/a", anthropic_stream(MESSAGE_START, error=bridged_cut))
-    host.answer("openai/b", fallback_ok())
+    host.answer("openai/b", anthropic_stream(RETRY_MESSAGE_START, text_delta("B"), MESSAGE_STOP))
     core = make_core(model_list=GROUPS_AB, context_window_fallbacks=[{"a": ["b"]}], num_retries=2)
     frames = await collect_bytes(await open_stream(core))
-    assert frames == [MESSAGE_START, text_delta("B"), MESSAGE_STOP]
+    assert frames == [RETRY_MESSAGE_START, text_delta("B"), MESSAGE_STOP]
     assert host.deployments_called() == ["a", "b"]
 
 

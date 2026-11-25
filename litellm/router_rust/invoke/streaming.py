@@ -1282,17 +1282,17 @@ def _anthropic_stream_sends_message_start_live(policy: Mapping[str, object], req
         policy.get("can_retry") is True
         and policy.get("can_fall_back") is not True
         and policy.get("refusal_fallback") is not True
+        and policy.get("context_window_fallback") is not True
         and request.get("thread") is None
     )
 
 
-_SSE_FRAME_TERMINATORS: Final = (b"\n\n", b"\r\n\r\n")
-
-
 def _is_sse_comment_frame(chunk: object) -> bool:
+    from litellm.llms.anthropic.messages.native.streaming_iterator import SSE_FRAME_TERMINATORS
+
     return (
         isinstance(chunk, (bytes, bytearray))
-        and chunk.endswith(_SSE_FRAME_TERMINATORS)
+        and chunk.endswith(SSE_FRAME_TERMINATORS)
         and all(line.startswith(b":") or not line.strip() for line in chunk.splitlines())
     )
 
@@ -1313,8 +1313,10 @@ def _opens_message_start(chunk: object) -> bool:
 
 
 def _is_whole_message_start(chunk: object) -> bool:
+    from litellm.llms.anthropic.messages.native.streaming_iterator import SSE_FRAME_TERMINATORS
+
     return _opens_message_start(chunk) and (
-        not isinstance(chunk, (bytes, bytearray)) or chunk.endswith(_SSE_FRAME_TERMINATORS)
+        not isinstance(chunk, (bytes, bytearray)) or chunk.endswith(SSE_FRAME_TERMINATORS)
     )
 
 
