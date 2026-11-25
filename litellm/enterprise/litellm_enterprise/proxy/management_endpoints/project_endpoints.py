@@ -12,6 +12,7 @@ Endpoints for /project operations
 
 import json
 from collections.abc import Mapping, Sequence
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -20,6 +21,7 @@ from litellm_enterprise.proxy.management_endpoints.project_model_quota import (
     missing_project_model_quota,
 )
 from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
@@ -49,7 +51,7 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
     validate_scalar_budget_attachment,
 )
-from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy
+from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy, query_raw_within_statement_timeout
 from litellm.repositories.base_repository import record_to_dict
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
@@ -1128,6 +1130,58 @@ async def delete_project(
         raise handle_exception_on_proxy(e)
 
 
+_PROJECT_MODEL_SPEND_TIMEOUT: Final = timedelta(seconds=5)
+_PROJECT_MODEL_SPEND_SQL: Final = """
+    SELECT COALESCE(NULLIF(model_group, ''), model) AS model, SUM(spend)::float AS spend
+    FROM "LiteLLM_SpendLogs"
+    WHERE "startTime" >= $2::timestamp
+        AND metadata->>'user_api_key_project_id' = $1
+    GROUP BY 1
+"""
+
+
+class _ProjectModelSpendRow(TypedDict):
+    model: ReadOnly[str]
+    spend: ReadOnly[float]
+
+
+_PROJECT_MODEL_SPEND_ROWS: Final = TypeAdapter(tuple[_ProjectModelSpendRow, ...])
+
+
+def _utc_spend_log_time(moment: datetime) -> str:
+    utc: Final = moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment.astimezone(timezone.utc)
+    return utc.replace(tzinfo=None).isoformat()
+
+
+async def _with_recorded_model_spend(
+    project: "prisma_models.LiteLLM_ProjectTable", prisma_client: PrismaClient
+) -> "prisma_models.LiteLLM_ProjectTable":
+    if project.model_spend:
+        return project
+    try:
+        rows: Final = _PROJECT_MODEL_SPEND_ROWS.validate_python(
+            await query_raw_within_statement_timeout(
+                prisma_client,
+                _PROJECT_MODEL_SPEND_SQL,
+                project.project_id,
+                _utc_spend_log_time(project.created_at),
+                what="Project spend by model",
+                hint="The project is returned without its model breakdown",
+                timeout=_PROJECT_MODEL_SPEND_TIMEOUT,
+            )
+        )
+    except Exception as e:  # noqa: BLE001  # the breakdown is optional, so a failed read still returns the project
+        verbose_proxy_logger.warning(
+            "Could not read spend by model for project_id=%s, returning the project without it: %s",
+            project.project_id,
+            e,
+        )
+        return project
+    if not rows:
+        return project
+    return project.model_copy(update={"model_spend": {row["model"]: row["spend"] for row in rows}})
+
+
 @router.get(
     "/project/info",
     tags=["project management"],
@@ -1138,12 +1192,16 @@ async def project_info(
     project_id: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     team_access: TeamAccess = Depends(get_team_access),
+    include_model_spend: bool = False,
 ):
     """
     Get information about a specific project
 
     Parameters:
     - project_id: *str* - The project id to fetch info for
+    - include_model_spend: *bool* - When the stored `model_spend` is empty, fill it with the spend logs recorded for
+      this project since it was created, summed per model. Pruned or disabled spend logs are not counted, so it can
+      differ from `spend`, which budget resets set back to zero. Defaults to false.
 
     Example:
     ```bash
@@ -1180,7 +1238,9 @@ async def project_info(
                 detail={"error": "You don't have access to this project"},
             )
 
-        return project
+        if not include_model_spend:
+            return project
+        return await _with_recorded_model_spend(project, prisma_client)
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.management_endpoints.project_endpoints.project_info(): Exception occured - {}".format(str(e))

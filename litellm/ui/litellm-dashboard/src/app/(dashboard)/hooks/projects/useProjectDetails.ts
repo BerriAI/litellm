@@ -8,7 +8,7 @@ import { ProjectResponse, projectKeys } from "./useProjects";
 
 const fetchProjectDetails = async (accessToken: string, projectId: string): Promise<ProjectResponse> => {
   const baseUrl = getProxyBaseUrl();
-  const url = `${baseUrl}/project/info?project_id=${encodeURIComponent(projectId)}`;
+  const url = `${baseUrl}/project/info?project_id=${encodeURIComponent(projectId)}&include_model_spend=true`;
 
   const response = await fetch(url, {
     method: "GET",

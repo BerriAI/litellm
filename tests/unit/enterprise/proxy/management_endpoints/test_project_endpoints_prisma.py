@@ -1,13 +1,14 @@
 import asyncio
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Final
 from litellm._uuid import uuid
 from unittest import mock
 
 from dotenv import load_dotenv
 from fastapi import HTTPException, Request
+from prisma.errors import PrismaError
 
 from litellm.constants import PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS
 from litellm.proxy.db.db_lookup_gate import db_lookup_stall_tracker
@@ -1985,6 +1986,183 @@ async def test_project_info_missing_project_is_404_even_for_org_admins(project_a
         )
 
     assert str(exc_info.value.code) == "404"
+
+
+_PROJECT_CREATED_AT: Final = datetime(2026, 3, 1, 9, 30, tzinfo=timezone(timedelta(hours=2)))
+
+
+def _stored_project(project_id: str, team_id: str, model_spend: dict[str, float] | None) -> LiteLLM_ProjectTable:
+    return LiteLLM_ProjectTable(
+        project_id=project_id,
+        team_id=team_id,
+        spend=7.5,
+        model_spend=model_spend,
+        metadata={"owner": "qa"},
+        created_by="admin",
+        updated_by="admin",
+        created_at=_PROJECT_CREATED_AT,
+    )
+
+
+class _SpendLogsReadDb:
+    def __init__(self, rows: tuple[dict[str, object], ...] = (), error: BaseException | None = None) -> None:
+        self._rows = rows
+        self._error = error
+        self.queries: list[tuple[object, ...]] = []
+
+    def tx(self, max_wait: timedelta, timeout: timedelta) -> "_SpendLogsReadDb":
+        return self
+
+    async def __aenter__(self) -> "_SpendLogsReadDb":
+        return self
+
+    async def __aexit__(self, *exc_info: object) -> None:
+        return None
+
+    async def execute_raw(self, sql: str) -> int:
+        return 0
+
+    async def query_raw(self, sql: str, *params: object) -> tuple[dict[str, object], ...]:
+        self.queries.append(params)
+        if self._error is not None:
+            raise self._error
+        return self._rows
+
+
+class _StoredProjectTable:
+    def __init__(self, projects: tuple[LiteLLM_ProjectTable, ...]) -> None:
+        self._projects = {project.project_id: project for project in projects}
+
+    async def find_unique(self, where: Mapping[str, str], include: object = None) -> LiteLLM_ProjectTable | None:
+        return self._projects.get(where["project_id"])
+
+
+def _install_project_db(monkeypatch, stored: LiteLLM_ProjectTable, read_db: _SpendLogsReadDb) -> None:
+    db = mock.MagicMock(litellm_teamtable=_FakeTeamTable(), litellm_projecttable=_StoredProjectTable((stored,)))
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", mock.MagicMock(db=db, read_db=read_db))
+
+
+async def _member_project_info(project_id: str, include_model_spend: bool) -> LiteLLM_ProjectTable:
+    return await project_info(
+        project_id=project_id,
+        user_api_key_dict=_caller("member"),
+        team_access=await _team_access_over_cached_users(),
+        include_model_spend=include_model_spend,
+    )
+
+
+@pytest.mark.asyncio
+async def test_project_info_without_opt_in_returns_the_stored_project_and_reads_no_spend_logs(monkeypatch):
+    stored = _stored_project("p-a1", "team-a1", model_spend={})
+    read_db = _SpendLogsReadDb(rows=({"model": "claude-haiku", "spend": 1.25},))
+    _install_project_db(monkeypatch, stored, read_db)
+
+    project = await project_info(
+        project_id="p-a1",
+        user_api_key_dict=_caller("member"),
+        team_access=await _team_access_over_cached_users(),
+    )
+
+    assert project is stored
+    assert project.model_spend == {}
+    assert read_db.queries == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_model_spend", [{}, None], ids=["empty", "null"])
+async def test_project_info_opted_in_fills_empty_model_spend_from_the_projects_spend_logs(
+    monkeypatch, stored_model_spend
+):
+    stored = _stored_project("p-a1", "team-a1", model_spend=stored_model_spend)
+    read_db = _SpendLogsReadDb(
+        rows=(
+            {"model": "claude-haiku", "spend": 1.25},
+            {"model": "gpt-5-mini", "spend": 0.0},
+            {"model": "refunded-model", "spend": -0.5},
+        )
+    )
+    _install_project_db(monkeypatch, stored, read_db)
+
+    project = await _member_project_info("p-a1", include_model_spend=True)
+
+    assert project.model_spend == {"claude-haiku": 1.25, "gpt-5-mini": 0.0, "refunded-model": -0.5}
+    assert read_db.queries == [("p-a1", "2026-03-01T07:30:00")], "read this project's logs since its UTC creation"
+    assert project.model_dump(exclude={"model_spend"}) == stored.model_dump(exclude={"model_spend"})
+    assert stored.model_spend == stored_model_spend, "the stored project must not be mutated"
+
+
+@pytest.mark.asyncio
+async def test_project_info_opted_in_keeps_a_stored_nonempty_model_spend_without_reading_spend_logs(monkeypatch):
+    stored = _stored_project("p-a1", "team-a1", model_spend={"stored-model": 3.0})
+    read_db = _SpendLogsReadDb(rows=({"model": "claude-haiku", "spend": 1.25},))
+    _install_project_db(monkeypatch, stored, read_db)
+
+    project = await _member_project_info("p-a1", include_model_spend=True)
+
+    assert project is stored
+    assert project.model_spend == {"stored-model": 3.0}
+    assert read_db.queries == []
+
+
+@pytest.mark.asyncio
+async def test_project_info_opted_in_with_no_recorded_spend_returns_the_stored_project(monkeypatch):
+    stored = _stored_project("p-a1", "team-a1", model_spend=None)
+    _install_project_db(monkeypatch, stored, _SpendLogsReadDb(rows=()))
+
+    project = await _member_project_info("p-a1", include_model_spend=True)
+
+    assert project is stored
+    assert project.model_spend is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "error",
+    [
+        RuntimeError("connection reset"),
+        PrismaError("canceling statement due to statement timeout"),
+    ],
+    ids=["db_error", "statement_timeout"],
+)
+async def test_project_info_opted_in_still_returns_the_project_when_the_spend_log_read_fails(monkeypatch, error):
+    stored = _stored_project("p-a1", "team-a1", model_spend={})
+    read_db = _SpendLogsReadDb(error=error)
+    _install_project_db(monkeypatch, stored, read_db)
+
+    project = await _member_project_info("p-a1", include_model_spend=True)
+
+    assert project is stored
+    assert project.model_spend == {}
+    assert len(read_db.queries) == 1
+
+
+@pytest.mark.asyncio
+async def test_project_info_opted_in_propagates_cancellation_of_the_spend_log_read(monkeypatch):
+    stored = _stored_project("p-a1", "team-a1", model_spend={})
+    _install_project_db(monkeypatch, stored, _SpendLogsReadDb(error=asyncio.CancelledError()))
+
+    with pytest.raises(asyncio.CancelledError):
+        await _member_project_info("p-a1", include_model_spend=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("project_id", "expected_code"),
+    [("p-a2", "403"), ("p-missing", "404")],
+    ids=["forbidden", "missing"],
+)
+async def test_project_info_opted_in_reads_no_spend_logs_for_a_denied_or_missing_project(
+    monkeypatch, project_id, expected_code
+):
+    stored = _stored_project("p-a2", "team-a2", model_spend={})
+    read_db = _SpendLogsReadDb(rows=({"model": "claude-haiku", "spend": 1.25},))
+    _install_project_db(monkeypatch, stored, read_db)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _member_project_info(project_id, include_model_spend=True)
+
+    assert str(exc_info.value.code) == expected_code
+    assert read_db.queries == []
 
 
 @pytest.mark.asyncio

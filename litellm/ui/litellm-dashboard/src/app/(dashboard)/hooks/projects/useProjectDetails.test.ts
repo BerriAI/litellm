@@ -86,6 +86,14 @@ describe("useProjectDetails", () => {
     expect(url).toContain("project_id=proj-1");
   });
 
+  it("should ask /project/info for the spend by model breakdown", async () => {
+    (global.fetch as any).mockResolvedValue({ ok: true, json: async () => mockProject });
+    renderHook(() => useProjectDetails("proj-1"), { wrapper: makeWrapper(queryClient) });
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+    const [url] = (global.fetch as any).mock.calls[0];
+    expect(new URL(url, "http://proxy.test").searchParams.get("include_model_spend")).toBe("true");
+  });
+
   it("should not fetch when projectId is missing", () => {
     const { result } = renderHook(() => useProjectDetails(undefined), {
       wrapper: makeWrapper(queryClient),
