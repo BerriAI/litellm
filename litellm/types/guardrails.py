@@ -1409,7 +1409,7 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         check_fields=False,
     )
     @classmethod
-    def normalize_lowercase(cls, v):
+    def normalize_lowercase(cls, v: object) -> object:
         """Normalize string and list fields to lowercase for ALL guardrail types."""
         if isinstance(v, str):
             return v.lower()
@@ -1523,11 +1523,11 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: object = None):
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: str):
         # Allow dictionary-style access to attributes
         return getattr(self, key)
 
@@ -1564,7 +1564,7 @@ class GuardrailInfoResponse(LiteLLMBaseModel):
     updated_at: datetime | None = None
     guardrail_definition_location: GUARDRAIL_DEFINITION_LOCATION = GUARDRAIL_DEFINITION_LOCATION.CONFIG
 
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, **kwargs: object) -> None:
         super().__init__(**kwargs)
 
 

@@ -34,11 +34,11 @@ use crate::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
         ANTHROPIC_BASE_URL_ENV, OauthHandling, OauthToken,
         anthropic_request_errors_on_thinking_binding_mismatch, complete_anthropic_url,
-        existing_betas, get_api_key, get_auth_header, has_advisor_tool, has_anthropic_credential,
-        is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
-        is_claude_strict_tools_rejection, is_tool_search_used, map_messages, merge_beta_headers,
-        minted_oauth_environment, optionally_handle_anthropic_oauth,
-        requires_native_compaction_beta, strip_advisor_blocks,
+        drop_advisor_blocks, drop_raw_advisor_blocks, existing_betas, get_api_key, get_auth_header,
+        has_advisor_tool, has_anthropic_credential, is_anthropic_invalid_thinking_block_error,
+        is_anthropic_thinking_binding_mismatch_error, is_claude_strict_tools_rejection,
+        is_tool_search_used, map_messages, merge_beta_headers, minted_oauth_environment,
+        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
         strip_encrypted_reasoning_blocks_restoring_redacted_data, strip_raw_advisor_blocks,
         strip_raw_encrypted_reasoning_blocks, strip_raw_unsigned_thinking_blocks,
         strip_thinking_blocks_from_anthropic_messages_request, strip_unsigned_thinking_blocks,
@@ -69,6 +69,15 @@ impl MessagesEndpoint for AnthropicMessagesConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         Ok(complete_anthropic_url(api_base, env_lookup))
+    }
+
+    fn checks_claude_signatures(
+        &self,
+        api_base: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        !url_host(&complete_anthropic_url(api_base, env_lookup))
+            .is_some_and(|host| replays_unsigned_thinking(&host))
     }
 
     fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
@@ -213,6 +222,14 @@ const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
 ];
 
 const ANTHROPIC_API_HOST: &str = "api.anthropic.com";
+const UNSIGNED_THINKING_HOST_SUFFIXES: [&str; 6] = [
+    "deepseek.com",
+    "minimax.io",
+    "minimaxi.com",
+    "tencentcloudmaas.com",
+    "z.ai",
+    "bigmodel.cn",
+];
 
 fn url_host(url: &str) -> Option<String> {
     let absolute = if url.contains("://") {
@@ -227,6 +244,12 @@ fn url_host(url: &str) -> Option<String> {
 
 fn is_foundry_host(host: &str) -> bool {
     FOUNDRY_HOST_SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+fn replays_unsigned_thinking(host: &str) -> bool {
+    UNSIGNED_THINKING_HOST_SUFFIXES
         .iter()
         .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
 }
@@ -370,6 +393,12 @@ pub(crate) fn transform_messages_request(
         || continues_message_thread(&request.params)
     {
         request.messages
+    } else if context.drops_unsupported_params {
+        map_messages(
+            request.messages,
+            drop_advisor_blocks,
+            drop_raw_advisor_blocks,
+        )
     } else {
         map_messages(
             request.messages,
@@ -387,7 +416,9 @@ pub(crate) fn transform_messages_request(
         strip_encrypted_reasoning_blocks_restoring_redacted_data,
         strip_raw_encrypted_reasoning_blocks,
     );
-    let messages = if context.claude_base_model || is_claude_model(&request.model) {
+    let messages = if (context.claude_base_model || is_claude_model(&request.model))
+        && !context.keeps_unsigned_thinking
+    {
         map_messages(
             messages,
             strip_unsigned_thinking_blocks,
@@ -719,7 +750,7 @@ pub fn drop_unsupported_params(
     let speed = match &params.speed {
         Some(speed) if !capabilities.supports_speed => {
             reject("speed", speed_repr(speed), "")?;
-            litellm_tracing::warn!(
+            tracing::warn!(
                 "Dropping unsupported `speed` for model={model} (drop_params=True). Fast mode is only supported on select Opus models."
             );
             None
@@ -1494,6 +1525,66 @@ mod tests {
         );
     }
 
+    fn web_search_use() -> Value {
+        json!({"type": "server_tool_use", "id": "srvtoolu_ws", "name": "web_search", "input": {"query": "pools"}})
+    }
+
+    #[rstest]
+    #[case::list_id_kept_without_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."}]),
+        false,
+        json!([{"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."}])
+    )]
+    #[case::list_id_dropped_under_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."}]),
+        true,
+        json!([])
+    )]
+    #[case::unmatched_result_kept_without_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}]),
+        false,
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}])
+    )]
+    #[case::unmatched_result_dropped_under_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}]),
+        true,
+        json!([])
+    )]
+    fn advisor_history_left_unpaired_is_dropped_only_under_drop_params(
+        #[case] unpaired: Value,
+        #[case] drops_unsupported_params: bool,
+        #[case] kept: Value,
+        unmapped: MessagesModelCapabilities,
+    ) {
+        let context = MessagesTransformContext {
+            drops_unsupported_params,
+            ..MessagesTransformContext::with_lookup(unmapped, false, &no_env)
+        };
+        let content = [
+            vec![json!({"type": "server_tool_use", "id": "srvtoolu_1", "name": "advisor", "input": {}})],
+            unpaired.as_array().unwrap().clone(),
+            vec![web_search_use(), json!({"type": "text", "text": "Done."})],
+        ]
+        .concat();
+        let history = json!([
+            {"role": "user", "content": "Build a worker pool."},
+            {"role": "assistant", "content": content}
+        ]);
+        let transformed = ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(request(json!({"messages": history})), &context)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(transformed).unwrap()["messages"][1]["content"],
+            json!(
+                [
+                    kept.as_array().unwrap().clone(),
+                    vec![web_search_use(), json!({"type": "text", "text": "Done."})]
+                ]
+                .concat()
+            )
+        );
+    }
+
     #[rstest]
     #[case::continue_turn(json!({"type": "continue", "previous_message_id": "msg_1"}), false)]
     #[case::continue_without_a_previous_message_id(json!({"type": "continue"}), false)]
@@ -1585,6 +1676,22 @@ mod tests {
     }
 
     #[rstest]
+    #[case::anthropic("https://api.anthropic.com", true)]
+    #[case::gateway("https://llm-gateway.example.com/anthropic", true)]
+    #[case::foundry("https://example.services.ai.azure.com/anthropic", true)]
+    #[case::deepseek("https://api.deepseek.com/anthropic", false)]
+    #[case::z_ai("https://api.z.ai/api/anthropic", false)]
+    fn only_an_anthropic_compatible_host_gets_unsigned_thinking_back(
+        #[case] api_base: &str,
+        #[case] checks: bool,
+    ) {
+        assert_eq!(
+            ANTHROPIC_MESSAGES_CONFIG.checks_claude_signatures(Some(api_base), &|_| None),
+            checks
+        );
+    }
+
+    #[rstest]
     fn unsigned_thinking_is_still_replayed_to_an_open_model(unmapped: MessagesModelCapabilities) {
         let messages = tool_turn(Some(
             json!({"type": "thinking", "thinking": "open model plan", "signature": ""}),
@@ -1646,6 +1753,7 @@ mod tests {
                     drops_unsupported_params: false,
                     global_drop_params: false,
                     claude_base_model: false,
+                    keeps_unsigned_thinking: false,
                 }
             );
             return;

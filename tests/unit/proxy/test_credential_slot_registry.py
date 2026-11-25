@@ -140,6 +140,9 @@ DEPLOYMENT_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingPr
         "openai_identity_token_file": Unplanted(),
         "github_copilot_app_private_key": Unplanted(),
         "github_copilot_app_private_key_ref": Unplanted(),
+        "oauth_client_credentials": NotSecret("boolean switch for the OAuth client credentials grant"),
+        "oauth_token_url": NotSecret("OAuth token endpoint URL"),
+        "oauth_client_secret": Unplanted(),
     }
 )
 

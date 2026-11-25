@@ -182,7 +182,7 @@ async def block_user(data: BlockUsers):
     from litellm.proxy.proxy_server import prisma_client
 
     try:
-        records: Final = []
+        records: Final[list[PrismaEndUserRow]] = []
         if prisma_client is not None:
             for id in data.user_ids:
                 record = await _typed_table(EndUserRepository(prisma_client)).upsert(

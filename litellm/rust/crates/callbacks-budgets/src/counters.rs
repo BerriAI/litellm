@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 
 use litellm_redis_store::{auth_cache::AuthObject, spend_counters::SpendCounter};
-use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use sha2::{Digest, Sha256};
 
 use crate::charge::{CounterStep, WindowSource};
@@ -32,12 +32,28 @@ pub(crate) fn counter_keys<'de, D: Deserializer<'de>>(
         .collect()
 }
 
+/// Writes a counter as its `spend:*` key, the form [`counter_key`] reads.
+pub(crate) fn counter_key_text<S: Serializer>(
+    counter: &SpendCounter,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&counter.key())
+}
+
+/// [`counter_key_text`] for a list of counters.
+pub(crate) fn counter_keys_text<S: Serializer>(
+    counters: &[SpendCounter],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(counters.iter().map(SpendCounter::key))
+}
+
 /// A customer hierarchy budget counter the request was admitted against. Only the ones with a
 /// `window_duration` are window counters the fan-out charges.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CustomerWindow {
-    #[serde(deserialize_with = "counter_key")]
+    #[serde(deserialize_with = "counter_key", serialize_with = "counter_key_text")]
     pub counter_key: SpendCounter,
     pub entity_type: String,
     pub entity_id: String,
@@ -49,10 +65,10 @@ pub struct CustomerWindow {
 }
 
 /// A customer scope's lifetime or period counter and the spend its auth snapshot recorded.
-#[derive(Clone, Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CustomerScopeSpend {
-    #[serde(deserialize_with = "counter_key")]
+    #[serde(deserialize_with = "counter_key", serialize_with = "counter_key_text")]
     pub counter_key: SpendCounter,
     pub spend: f64,
 }

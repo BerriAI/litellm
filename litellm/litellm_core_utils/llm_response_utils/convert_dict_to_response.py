@@ -5,6 +5,7 @@ import time
 import traceback
 from collections.abc import Generator, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
 from typing import Final, Literal, cast
@@ -21,7 +22,7 @@ from litellm.constants import (
     VLLM_CHOICE_FIELDS,
 )
 from litellm.litellm_core_utils.core_helpers import iter_items, subscript
-from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_extra_attribute
 from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     extract_reasoning_content,
 )
@@ -33,6 +34,7 @@ from litellm.types.llms.openai import (
     ImageURLListItem,
     OpenAIModerationResponse,
 )
+from litellm.types.rerank import provider_usage_or_none
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageCustomToolCall,
@@ -63,9 +65,9 @@ from litellm.types.utils import Logprobs as TextCompletionLogprobs
 
 from .get_headers import get_response_headers
 
-_MESSAGE_FIELDS: Final[frozenset] = frozenset(Message.model_fields.keys())
-_CHOICES_FIELDS: Final[frozenset] = frozenset(Choices.model_fields.keys())
-_MODEL_RESPONSE_FIELDS: Final[frozenset] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
+_MESSAGE_FIELDS: Final[frozenset[str]] = frozenset(Message.model_fields.keys())
+_CHOICES_FIELDS: Final[frozenset[str]] = frozenset(Choices.model_fields.keys())
+_MODEL_RESPONSE_FIELDS: Final[frozenset[str]] = frozenset(ModelResponse.model_fields.keys()) | {"usage"}
 
 
 _ANNOTATION_ENTRIES: Final = TypeAdapter(tuple[object, ...])
@@ -102,7 +104,7 @@ def partition_annotations(annotations: object) -> tuple[object, tuple[object, ..
 
 
 def _normalize_images_for_message(
-    images: list[dict] | None,
+    images: list[dict[str, object]] | None,
 ) -> list[ImageURLListItem] | None:
     """
     Ensure each image has an 'index' field, as required by ImageURLListItem.
@@ -538,6 +540,7 @@ class _PromptCacheTokenCounts(TypedDict, total=False):
 _CACHED_MESSAGE_PROVIDER_FIELDS: Final = TypeAdapter(_CachedMessageProviderFields)
 _CACHED_USAGE_DETAILS: Final = TypeAdapter(_CachedUsageDetails)
 _FIELD_MAP: Final = TypeAdapter(dict[str, object])
+_RERANK_RESPONSE_FIELDS: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
 _COMPLETION_TOKENS_DETAILS: Final = TypeAdapter(CompletionTokensDetailsWrapper)
 _PROMPT_TOKENS_DETAILS: Final = TypeAdapter(PromptTokensDetailsWrapper)
 _PROMPT_CACHE_TOKEN_COUNTS: Final = TypeAdapter(_PromptCacheTokenCounts)
@@ -651,7 +654,7 @@ class LiteLLMResponseObjectHandler:
     def convert_to_image_response(
         response_object: dict,
         model_response_object: ImageResponse | None = None,
-        hidden_params: dict | None = None,
+        hidden_params: Mapping[str, object] | None = None,
     ) -> ImageResponse:
         response_object.update({"hidden_params": hidden_params})
 
@@ -792,9 +795,9 @@ def convert_to_model_response_object(
     response_type: Literal[
         "completion", "embedding", "image_generation", "audio_transcription", "rerank"
     ] = "completion",
-    stream=False,
-    start_time=None,
-    end_time=None,
+    stream: object = False,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
     hidden_params: dict | None = None,
     _response_headers: dict | None = None,
     convert_tool_call_to_json_mode: bool | None = None,  # used for supporting 'json_schema' on older models
@@ -1110,7 +1113,7 @@ def convert_to_model_response_object(
                 raise Exception("Error in response object format")
 
             if model_response_object is None:
-                model_response_object = RerankResponse(**response_object)
+                model_response_object = RerankResponse.model_validate(response_object)
                 return model_response_object
 
             if "id" in response_object:
@@ -1122,6 +1125,13 @@ def convert_to_model_response_object(
             if "results" in response_object:
                 model_response_object.results = response_object["results"]
 
+            rerank_fields: Final = _RERANK_RESPONSE_FIELDS.validate_python(response_object)
+            if "usage" in rerank_fields or "provider_usage" in rerank_fields:
+                set_extra_attribute(
+                    model_response_object,
+                    "provider_usage",
+                    provider_usage_or_none(rerank_fields.get("usage", rerank_fields.get("provider_usage"))),
+                )
             return model_response_object
     except Exception as e:
         from litellm.exceptions import APIError

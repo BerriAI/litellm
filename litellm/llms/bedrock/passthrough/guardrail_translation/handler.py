@@ -1191,7 +1191,7 @@ async def _post_call_rewritten_texts(
     """Run the post_call guardrails on a buffered stream's texts as one Converse response with a content block per
     group, and return each group's text as the guardrails left it, or None when the response came back in another
     shape."""
-    synthetic_response: Final[dict] = {
+    synthetic_response: Final[dict[str, object]] = {
         "output": {
             "message": {
                 "role": "assistant",
@@ -1514,7 +1514,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         guardrail_to_apply: "CustomGuardrail",
         litellm_logging_obj: Optional["LiteLLMLoggingObj"] = None,
         user_api_key_dict: Optional["UserAPIKeyAuth"] = None,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ) -> object:
         endpoint: Final[object] = (request_data or {}).get("endpoint", "")
         if (

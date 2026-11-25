@@ -98,7 +98,12 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPAuth, MCPAuthType, MCPUpstreamProtocol
-from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer, PinnedMCPTool
+from litellm.types.mcp_server.mcp_server_manager import (
+    MCPOAuthMetadata,
+    MCPServer,
+    MCPServerEventsConfig,
+    PinnedMCPTool,
+)
 
 _TSessionResult = TypeVar("_TSessionResult")
 
@@ -19518,9 +19523,8 @@ async def test_catalog_reload_preserves_concurrent_config_discovery_and_routes(a
         }
     )
 
-    async def hydrate(target: MCPServer) -> bool:
-        target.client_id = "persisted-client"
-        return True
+    async def hydrate(targets: tuple[MCPServer, ...]) -> None:
+        targets[0].client_id = "persisted-client"
 
     async def read_rows(**_kwargs):
         assert manager._publish_resolved_oauth_server(resolved, generation) is resolved
@@ -19534,7 +19538,7 @@ async def test_catalog_reload_preserves_concurrent_config_discovery_and_routes(a
     with (
         patch("litellm.proxy.proxy_server.prisma_client", prisma),
         patch(
-            "litellm.proxy.mcp_server.discoverable_endpoints.hydrate_config_server_dcr_client",
+            "litellm.proxy.mcp_server.discoverable_endpoints.hydrate_config_dcr_clients",
             side_effect=hydrate,
         ),
     ):
@@ -20278,12 +20282,12 @@ async def test_catalog_cancelled_config_hydration_preserves_published_credential
     )
     manager.config_mcp_servers = {server.server_id: server}
 
-    async def cancelled_hydration(target: MCPServer) -> bool:
-        target.client_id = "unpublished-client"
+    async def cancelled_hydration(targets: tuple[MCPServer, ...]) -> None:
+        targets[0].client_id = "unpublished-client"
         raise asyncio.CancelledError()
 
     with patch(
-        "litellm.proxy.mcp_server.discoverable_endpoints.hydrate_config_server_dcr_client",
+        "litellm.proxy.mcp_server.discoverable_endpoints.hydrate_config_dcr_clients",
         side_effect=cancelled_hydration,
     ):
         with pytest.raises(asyncio.CancelledError):
@@ -23227,3 +23231,46 @@ async def test_pre_call_guardrail_bearer_never_carries_the_admission_key(
 
     hook_kwargs: Final = proxy_logging_obj.create_mcp_request_object_from_kwargs.call_args.args[0]
     assert hook_kwargs["incoming_bearer_token"] == expected_bearer
+
+
+@pytest.mark.parametrize(
+    ("stored", "enabled"),
+    (
+        ('{"enabled": true}', True),
+        ({"enabled": True, "allowed_events": ["build.*"]}, True),
+        ({"enabled": False}, False),
+        ('{"enabled": "maybe-not"}', None),
+        ("", None),
+        (None, None),
+        (object(), None),
+    ),
+)
+def test_stored_events_config_accepts_json_or_mappings_and_ignores_anything_else(
+    stored: object, enabled: bool | None
+) -> None:
+    from litellm.proxy.mcp_server.mcp_server_manager import _stored_events_config
+
+    config: Final = _stored_events_config(stored)
+    assert (config.enabled if config is not None else None) is enabled
+
+
+@pytest.mark.parametrize(
+    "events",
+    (None, MCPServerEventsConfig(enabled=True, allowed_events=("build.*",)), MCPServerEventsConfig(enabled=False)),
+)
+def test_the_server_listing_row_carries_the_events_config(events: MCPServerEventsConfig | None) -> None:
+    server: Final = MCPServer(
+        server_id="events-server",
+        name="ci",
+        url="https://example.com/mcp",
+        transport=MCPTransport.http,
+        events=events,
+    )
+
+    assert MCPServerManager().build_mcp_server_table(server).events == events
+
+
+def test_a_yaml_server_with_an_unreadable_events_block_loads_with_events_off() -> None:
+    from litellm.proxy.mcp_server.mcp_server_manager import _stored_events_config
+
+    assert _stored_events_config({"enabled": True, "allowed_events": []}) is None

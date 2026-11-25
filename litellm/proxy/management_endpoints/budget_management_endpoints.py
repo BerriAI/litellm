@@ -524,7 +524,7 @@ async def budget_settings(
         "budget_limits": {"type": "Object"},
     }
 
-    return_val: Final = []
+    return_val: Final[list[ConfigList]] = []
 
     for field_name, field_info in BudgetWriteRequest.model_fields.items():
         if field_name in allowed_args:

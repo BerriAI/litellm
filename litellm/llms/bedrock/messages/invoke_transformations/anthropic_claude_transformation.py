@@ -24,6 +24,7 @@ from litellm.llms.anthropic.common_utils import (
     carried_thinking_keys,
     carries_signed_compaction_block,
     validated_object_mapping,
+    without_unsupported_server_side_fallback_beta,
 )
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
@@ -38,6 +39,7 @@ from litellm.llms.bedrock.common_utils import (
     BEDROCK_INVOKE_CONTEXT_MANAGEMENT_EDIT_BETAS,
     BedrockError,
     apply_bedrock_invoke_structured_output,
+    bedrock_capability_model,
     bedrock_supports_per_turn_control,
     bedrock_supports_tool_search,
     ensure_bedrock_anthropic_messages_tool_names,
@@ -120,15 +122,15 @@ class AmazonAnthropicClaudeMessagesConfig(
     ) -> BedrockError:
         return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs: object):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
         AmazonInvokeConfig.__init__(self, **kwargs)
 
     def sign_request(
         self,
-        headers: dict,
+        headers: dict[str, object],
         optional_params: dict,
-        request_data: dict,
+        request_data: dict[str, object],
         api_base: str,
         api_key: str | None = None,
         model: str | None = None,
@@ -260,7 +262,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     def _ensure_thinking_for_clear_thinking_context_management(
         self,
-        anthropic_messages_request: dict,
+        anthropic_messages_request: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> bool:
@@ -353,7 +355,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         return "low"
 
     def _inject_adaptive_thinking_for_clear_thinking(
-        self, anthropic_messages_request: dict, budget_tokens: int, model: str, drop_params: bool
+        self, anthropic_messages_request: dict[str, object], budget_tokens: int, model: str, drop_params: bool
     ) -> None:
         """Adaptive-thinking models (Opus 4.7/4.8, Fable 5) reject
         ``thinking.type=enabled`` on Bedrock. Use ``thinking.type=adaptive`` plus
@@ -523,9 +525,9 @@ class AmazonAnthropicClaudeMessagesConfig(
     def _get_bedrock_invoke_anthropic_beta_headers(
         self,
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         anthropic_messages_optional_request_params: dict,
-        headers: dict,
+        headers: Mapping[str, object],
         anthropic_messages_request: dict,
         injected_thinking_for_clear_thinking: bool,
         litellm_params: GenericLiteLLMParams,
@@ -623,7 +625,15 @@ class AmazonAnthropicClaudeMessagesConfig(
                 dropped_user_betas,
             )
 
-        return filtered_betas
+        return list(
+            without_unsupported_server_side_fallback_beta(
+                filtered_betas,
+                model=bedrock_capability_model(model, getattr(litellm_params, "base_model", None)),
+                custom_llm_provider="bedrock",
+                model_info=_MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None)),
+                drop_params=getattr(litellm_params, "drop_params", None),
+            )
+        )
 
     @staticmethod
     def _reject_unsupported_web_search_tools(anthropic_messages_request: dict[str, object], model: str) -> None:
@@ -701,9 +711,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         self,
         model: str,
         messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        anthropic_messages_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
+        headers: dict[str, str],
     ) -> dict:
         requested_thinking: Final = anthropic_messages_optional_request_params.get("thinking")
         requested_display_updates: Final = AnthropicModelInfo().is_thinking_display_updates_used(requested_thinking)

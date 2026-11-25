@@ -10,6 +10,7 @@ include = ["Cargo.toml", "README.md", "src/**", ".sqlx/**"]
 [dependencies]
 chrono = { workspace = true, features = ["serde"] }
 jiff.workspace = true
+litellm-core-utils.workspace = true
 litellm-db.workspace = true
 litellm-error.workspace = true
 litellm-python-compat.workspace = true

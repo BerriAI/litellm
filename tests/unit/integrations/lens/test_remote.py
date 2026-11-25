@@ -81,6 +81,18 @@ async def _read_case(
                     "cursor": "next",
                 },
             )
+        case "conversation":
+            return (
+                await store.get_conversation("trace", scope, "ref", "next", 17),
+                {
+                    "operation": operation,
+                    "scope": scope,
+                    "trace_id": "trace",
+                    "trace_ref": "ref",
+                    "cursor": "next",
+                    "page_size": 17,
+                },
+            )
         case "sql":
             return (
                 json.loads(await store.query_sql("SELECT 1", query_scope, "unused-local-secret")),
@@ -99,7 +111,7 @@ async def _read_case(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("operation", ("list", "trace", "span", "span_error", "sql", "help", "query"))
+@pytest.mark.parametrize("operation", ("list", "trace", "span", "span_error", "conversation", "sql", "help", "query"))
 async def test_remote_reads_preserve_scope_and_pagination(operation: str) -> None:
     scope: Final = TraceScope(all_teams=0, user_id="owner", team_ids=("team",))
     query_scope: Final = AllQueryScope(kind="all")

@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from litellm.router_rust.surface.registry import HostRegistry
 
 _live_registries: Final[weakref.WeakSet[HostRegistry]] = weakref.WeakSet()
+_request_scoped_registries: Final[weakref.WeakSet[HostRegistry]] = weakref.WeakSet()
 
 
 def track_live_registry(registry: HostRegistry) -> None:
@@ -24,6 +25,15 @@ def untrack_live_registry(registry: HostRegistry) -> None:
 
 def live_registries() -> tuple[HostRegistry, ...]:
     return tuple(_live_registries)
+
+
+def mark_request_scoped_registry(registry: HostRegistry) -> None:
+    _request_scoped_registries.add(registry)
+
+
+def operator_registries() -> tuple[HostRegistry, ...]:
+    """The live registries an operator configured, without the ones a request's ``user_config`` built."""
+    return tuple(registry for registry in _live_registries if registry not in _request_scoped_registries)
 
 
 def _replay_live_registries() -> None:
