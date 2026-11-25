@@ -47,24 +47,6 @@ _CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "
 CODEX_RESPONSES_LITE_HEADER: Final = "x-openai-internal-codex-responses-lite"
 _FALSY_HEADER_VALUES: Final = frozenset({"", "0", "false", "no"})
 _OBJECT_DICT: Final = TypeAdapter(dict[str, object])
-_CHATGPT_REQUEST_KEYS: Final = frozenset(
-    {
-        "model",
-        "input",
-        "instructions",
-        "stream",
-        "store",
-        "include",
-        "tools",
-        "tool_choice",
-        "parallel_tool_calls",
-        "reasoning",
-        "previous_response_id",
-        "truncation",
-        "text",
-        "max_output_tokens",
-    }
-)
 
 
 def _responses_lite_reasoning(reasoning: object) -> Mapping[str, object]:
@@ -98,9 +80,6 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.CHATGPT
-
-    def starts_background_runs(self, model: str) -> bool:
-        return "background" in _CHATGPT_REQUEST_KEYS
 
     def validate_environment(
         self,
@@ -169,6 +148,23 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             include.append("reasoning.encrypted_content")
         request["include"] = include
 
+        allowed_keys: Final = {
+            "model",
+            "input",
+            "instructions",
+            "stream",
+            "store",
+            "include",
+            "tools",
+            "tool_choice",
+            "parallel_tool_calls",
+            "reasoning",
+            "previous_response_id",
+            "truncation",
+            "text",
+            "max_output_tokens",
+        }
+
         service_tier: Final = _CHATGPT_SERVICE_TIERS.get(request.get("service_tier"))
         lite_overrides: Final = (
             {
@@ -179,7 +175,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             else {}
         )
         return {
-            **{k: v for k, v in request.items() if k in _CHATGPT_REQUEST_KEYS},
+            **{k: v for k, v in request.items() if k in allowed_keys},
             **({"service_tier": service_tier} if service_tier is not None else {}),
             **lite_overrides,
         }

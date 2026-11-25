@@ -920,23 +920,33 @@ def will_bridge_to_chat_completions(
     )
 
 
-def dispatched_responses_api_config(
+@dataclass(frozen=True, slots=True)
+class NativeResponsesDispatch:
+    provider_config: BaseResponsesAPIConfig
+    model: str
+    custom_llm_provider: str
+    api_base: str | None
+
+    def fakes_stream(self) -> bool:
+        return self.provider_config.should_fake_stream(
+            model=self.model, stream=True, custom_llm_provider=self.custom_llm_provider
+        )
+
+    def starts_background_runs(self) -> bool:
+        return self.provider_config.starts_background_runs(self.model, self.api_base)
+
+
+def native_responses_dispatch(
     model: str, custom_llm_provider: str, model_info: object, api_base: str | None
-) -> BaseResponsesAPIConfig | None:
-    normalized_model: Final = _normalize_openai_chat_completions_responses_model(model)
+) -> NativeResponsesDispatch | None:
+    normalized_model, use_chat_completions_api = _normalize_openai_chat_completions_responses_model(model)
+    dispatched_model: Final = _dispatched_model_name(normalized_model, custom_llm_provider)
     provider_config: Final = _resolve_responses_api_provider_config(
-        _dispatched_model_name(normalized_model[0], custom_llm_provider), custom_llm_provider, model_info, api_base
+        dispatched_model, custom_llm_provider, model_info, api_base
     )
-    return None if _bridges_to_chat_completions(provider_config, normalized_model[1]) else provider_config
-
-
-def starts_background_run_upstream(
-    model: str, custom_llm_provider: str, model_info: object, api_base: str | None
-) -> bool:
-    provider_config: Final = dispatched_responses_api_config(model, custom_llm_provider, model_info, api_base)
-    return provider_config is not None and provider_config.starts_background_runs(
-        _dispatched_model_name(model, custom_llm_provider)
-    )
+    if provider_config is None or _bridges_to_chat_completions(provider_config, use_chat_completions_api):
+        return None
+    return NativeResponsesDispatch(provider_config, dispatched_model, custom_llm_provider, api_base)
 
 
 def provider_stores_the_conversation(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:

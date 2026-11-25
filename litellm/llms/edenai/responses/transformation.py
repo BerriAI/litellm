@@ -34,7 +34,7 @@ class EdenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.EDENAI
 
-    def starts_background_runs(self, model: str) -> bool:
+    def starts_background_runs(self, model: str, api_base: str | None) -> bool:
         upstream, separator, _ = model.partition("/")
         return (upstream if separator else inferred_provider(model)) in _UPSTREAMS_STARTING_BACKGROUND_RUNS
 

@@ -572,24 +572,32 @@ def test_bridged_chat_rejects_background_on_a_model_the_provider_cannot_stream_l
     assert upstream.call_count == 0
 
 
-def test_bridged_chat_rejects_background_on_a_deployment_that_passes_responses_through(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    "api_base",
+    ["https://api.openai.com/v1", "https://eu.api.openai.com/v1", "https://my-resource.openai.azure.com/openai/v1"],
+)
+@pytest.mark.parametrize("stream", [False, True], ids=["not-streamed", "stream-the-model-cannot-serve-live"])
+def test_bridged_chat_rejects_background_on_a_pass_through_deployment_openai_serves(
+    monkeypatch: pytest.MonkeyPatch, stream: bool, api_base: str
 ) -> None:
     model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
     monkeypatch.setitem(
-        model_cost, "custom_openai/passthrough-model", {"litellm_provider": "custom_openai", "mode": "responses"}
+        model_cost,
+        "custom_openai/passthrough-model",
+        {"litellm_provider": "custom_openai", "mode": "responses", "supports_native_streaming": False},
     )
 
     with respx.mock(assert_all_called=False) as router:
-        upstream: Final = router.post(url__startswith="https://example.invalid/v1/responses").mock(
+        upstream: Final = router.post(url__startswith=api_base).mock(
             return_value=httpx.Response(200, json=_searched_responses_body("passthrough-model"))
         )
         with pytest.raises(litellm.UnsupportedParamsError) as raised:
             litellm.completion(
                 model="custom_openai/passthrough-model",
                 messages=[{"role": "user", "content": "ping"}],
-                api_base="https://example.invalid/v1",
+                api_base=api_base,
                 api_key="test-key",
+                stream=stream,
                 background=True,
                 model_info={"mode": "responses", "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]},
             )
@@ -599,39 +607,18 @@ def test_bridged_chat_rejects_background_on_a_deployment_that_passes_responses_t
     assert upstream.call_count == 0
 
 
-def test_bridged_chat_rejects_background_on_a_pass_through_model_that_cannot_stream_live(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
-    monkeypatch.setitem(
-        model_cost,
-        "custom_openai/faked-stream-passthrough-model",
-        {"litellm_provider": "custom_openai", "mode": "responses", "supports_native_streaming": False},
-    )
+_PASS_THROUGH_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType(
+    {"mode": "responses", "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]}
+)
 
-    with respx.mock(assert_all_called=False) as router:
-        upstream: Final = router.post(url__startswith="https://example.invalid/v1/responses").mock(
-            return_value=httpx.Response(200, json=_searched_responses_body("faked-stream-passthrough-model"))
-        )
-        with pytest.raises(litellm.UnsupportedParamsError) as raised:
-            litellm.completion(
-                model="custom_openai/faked-stream-passthrough-model",
-                messages=[{"role": "user", "content": "ping"}],
-                api_base="https://example.invalid/v1",
-                api_key="test-key",
-                stream=True,
-                background=True,
-                model_info={"mode": "responses", "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]},
-            )
-
-    assert raised.value.status_code == 400
-    assert "background" in raised.value.message
-    assert upstream.call_count == 0
-
-
-@pytest.mark.parametrize(
+_INLINE_SERVERS: Final = pytest.mark.parametrize(
     "model",
     [
+        "openai/self-hosted-model",
+        "openai/responses/self-hosted-model",
+        "custom_openai/self-hosted-model",
+        "hosted_vllm/self-hosted-model",
+        "litellm_proxy/self-hosted-model",
         "openrouter/openai/gpt-5.3-codex",
         "refuseless/deepseek-v4.1-flash-fast",
         "openinfer/@oi/Qwen3.5-9B",
@@ -640,48 +627,227 @@ def test_bridged_chat_rejects_background_on_a_pass_through_model_that_cannot_str
         "edenai/google-model-without-a-prefix",
     ],
 )
-def test_bridged_chat_sends_background_to_a_provider_that_answers_it_inline(model: str) -> None:
+
+
+def _inline_request(model: str) -> Mapping[str, object]:
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "api_base": "https://inline-server.invalid/v1",
+        "api_key": "test-key",
+        "background": True,
+        "model_info": dict(_PASS_THROUGH_MODEL_INFO),
+    }
+
+
+@_INLINE_SERVERS
+def test_bridged_chat_sends_background_to_a_server_not_known_to_start_a_run(model: str) -> None:
     with respx.mock(assert_all_called=True) as router:
-        upstream: Final = router.post(url__startswith="https://inline-provider.invalid/").mock(
-            return_value=httpx.Response(200, json=_searched_responses_body(model.split("/", 1)[1]))
+        upstream: Final = router.post(url__regex=r"https://inline-server\.invalid/.*/responses").mock(
+            return_value=httpx.Response(200, json=_searched_responses_body("self-hosted-model"))
         )
-        response: Final = litellm.completion(
-            model=model,
-            messages=[{"role": "user", "content": "ping"}],
-            api_base="https://inline-provider.invalid/v1",
-            api_key="test-key",
-            background=True,
-            model_info={"mode": "responses"},
-        )
+        response: Final = litellm.completion(**_inline_request(model))
 
     assert isinstance(response, ModelResponse)
     assert response.choices[0].message.content == "pong"
     assert json.loads(upstream.calls.last.request.content)["background"] is True
 
 
+def test_bridged_chat_keeps_serving_a_faked_stream_with_background_on_a_server_not_known_to_start_a_run() -> None:
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith="https://inline-server.invalid/v1/responses").mock(
+            return_value=httpx.Response(200, json=_searched_responses_body("self-hosted-model"))
+        )
+        stream: Final = litellm.completion(**_inline_request("openai/self-hosted-model"), stream=True)
+        assert isinstance(stream, CustomStreamWrapper)
+        text: Final = "".join(chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices)
+
+    assert text == "pong"
+    assert json.loads(upstream.calls.last.request.content)["background"] is True
+
+
 @pytest.mark.parametrize(
-    "model",
+    "drop_kwargs",
+    [{"drop_params": True}, {"additional_drop_params": ["background"]}],
+    ids=["drop-params", "additional-drop-params"],
+)
+@_INLINE_SERVERS
+def test_bridged_chat_drops_background_on_any_server_when_the_caller_asks_to(
+    drop_kwargs: Mapping[str, object], model: str
+) -> None:
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith="https://inline-server.invalid/").mock(
+            return_value=httpx.Response(200, json=_searched_responses_body("self-hosted-model"))
+        )
+        response: Final = litellm.completion(**_inline_request(model), **drop_kwargs)
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    assert "background" not in json.loads(upstream.calls.last.request.content)
+
+
+def _unfinished_run_body(status: str) -> Mapping[str, object]:
+    return {
+        "id": "resp_unfinished_run",
+        "object": "response",
+        "created_at": 1789788253,
+        "status": status,
+        "background": True,
+        "model": "self-hosted-model",
+        "output": [],
+        "usage": None,
+    }
+
+
+async def _background_call_to_a_retried_queueing_server(caller: str) -> object:
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "queueing-server",
+                "litellm_params": {
+                    "model": "openai/self-hosted-model",
+                    "api_base": "https://queueing-server.invalid/v1",
+                    "api_key": "test-key",
+                },
+                "model_info": {"mode": "responses"},
+            }
+        ],
+        num_retries=2,
+        retry_after=0,
+    )
+    request: Final = {
+        "model": "queueing-server",
+        "messages": [{"role": "user", "content": "ping"}],
+        "background": True,
+    }
+    if caller == "acompletion":
+        return await router.acompletion(**request)
+    return router.completion(**request)
+
+
+@pytest.mark.parametrize("status", ["queued", "in_progress"])
+@pytest.mark.parametrize("caller", ["completion", "acompletion"])
+@pytest.mark.asyncio
+async def test_bridged_chat_answers_400_after_one_run_when_an_unknown_server_starts_it(
+    monkeypatch: pytest.MonkeyPatch, caller: str, status: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith="https://queueing-server.invalid/v1/responses").mock(
+            return_value=httpx.Response(200, json=_unfinished_run_body(status))
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            await _background_call_to_a_retried_queueing_server(caller)
+
+    assert raised.value.status_code == 400
+    assert "background" in raised.value.message
+    assert "started a background run" in raised.value.message
+    assert upstream.call_count == 1
+
+
+@pytest.mark.parametrize(
+    ("model", "api_base"),
     [
-        "edenai/openai/gpt-5.3-codex",
-        "edenai/azure/gpt-5.3-codex",
-        "edenai/microsoft/mai-model",
-        "edenai/meta/muse-model",
-        "edenai/gpt-5.3-codex",
+        ("edenai/openai/gpt-5.3-codex", "https://run-starter.invalid/v3"),
+        ("edenai/azure/gpt-5.3-codex", "https://run-starter.invalid/v3"),
+        ("edenai/microsoft/mai-model", "https://run-starter.invalid/v3"),
+        ("edenai/meta/muse-model", "https://run-starter.invalid/v3"),
+        ("edenai/gpt-5.3-codex", "https://run-starter.invalid/v3"),
+        ("sail/any-model", "https://run-starter.invalid/v1"),
+        ("neosantara/any-model", "https://run-starter.invalid/v1"),
+        ("meta/any-model", "https://run-starter.invalid/v1"),
+        ("manus/any-model", "https://run-starter.invalid"),
+        ("perplexity/any-model", "https://run-starter.invalid"),
+        ("azure_ai/any-model", "https://my-resource.services.ai.azure.com"),
+        ("openai/any-model", "https://my-resource.openai.azure.com/openai/v1"),
+        ("openai/any-model", "https://my-resource.services.ai.azure.com/openai/v1"),
+        ("openai/responses/any-model", "https://api.openai.com/v1"),
     ],
 )
-def test_bridged_chat_rejects_background_on_an_eden_ai_upstream_that_starts_a_run(model: str) -> None:
+def test_bridged_chat_rejects_background_on_a_provider_that_starts_a_run(model: str, api_base: str) -> None:
     with respx.mock(assert_all_called=False) as router:
-        upstream: Final = router.post(url__startswith="https://eden.invalid/").mock(
+        upstream: Final = router.post(url__startswith=api_base).mock(
             return_value=httpx.Response(200, json=_searched_responses_body(model.split("/", 1)[1]))
         )
         with pytest.raises(litellm.UnsupportedParamsError) as raised:
             litellm.completion(
                 model=model,
                 messages=[{"role": "user", "content": "ping"}],
-                api_base="https://eden.invalid/v3",
+                api_base=api_base,
                 api_key="test-key",
                 background=True,
+                allowed_openai_params=["background"],
                 model_info={"mode": "responses"},
+            )
+
+    assert raised.value.status_code == 400
+    assert "background" in raised.value.message
+    assert upstream.call_count == 0
+
+
+_FUNCTION_TOOL: Final[Mapping[str, object]] = MappingProxyType(
+    {
+        "type": "function",
+        "function": {"name": "lookup", "parameters": {"type": "object", "properties": {"q": {"type": "string"}}}},
+    }
+)
+
+
+@pytest.mark.parametrize("deployment", ["gpt-5.5-demo1", "gpt-5.5-o4"])
+def test_bridged_chat_streams_the_run_of_an_azure_deployment_bridged_for_its_tools(deployment: str) -> None:
+    api_base: Final = "https://my-resource.openai.azure.com"
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith=f"{api_base}/openai/responses").mock(
+            return_value=httpx.Response(
+                200,
+                text=_responses_sse(_searched_responses_body(deployment)),
+                headers={"content-type": "text/event-stream"},
+            )
+        )
+        stream: Final = litellm.completion(
+            model=f"azure/{deployment}",
+            messages=[{"role": "user", "content": "ping"}],
+            api_base=api_base,
+            api_key="test-key",
+            api_version="2025-04-01-preview",
+            tools=[dict(_FUNCTION_TOOL)],
+            reasoning_effort="low",
+            stream=True,
+            background=True,
+        )
+        assert isinstance(stream, CustomStreamWrapper)
+        text: Final = "".join(chunk.choices[0].delta.content or "" for chunk in stream if chunk.choices)
+
+    sent: Final = json.loads(upstream.calls.last.request.content)
+    assert text == "pong"
+    assert (sent["stream"], sent["background"]) == (True, True)
+
+
+def test_bridged_chat_rejects_background_on_a_model_bridged_for_its_tools_that_cannot_stream_live(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
+    monkeypatch.setitem(
+        model_cost,
+        "gpt-5.5-faked-stream",
+        {"litellm_provider": "openai", "mode": "chat", "supports_native_streaming": False},
+    )
+
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.post(url__startswith="https://api.openai.com/v1/").mock(
+            return_value=httpx.Response(200, json=_searched_responses_body("gpt-5.5-faked-stream"))
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            litellm.completion(
+                model="openai/gpt-5.5-faked-stream",
+                messages=[{"role": "user", "content": "ping"}],
+                api_key="test-key",
+                tools=[dict(_FUNCTION_TOOL)],
+                reasoning_effort="low",
+                stream=True,
+                background=True,
             )
 
     assert raised.value.status_code == 400

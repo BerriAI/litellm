@@ -126,6 +126,9 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.AZURE
 
+    def starts_background_runs(self, model: str, api_base: str | None) -> bool:
+        return True
+
     @staticmethod
     def _is_gpt_5_model(model: str) -> bool:
         return AzureOpenAIGPT5Config.is_model_gpt_5_model(model)

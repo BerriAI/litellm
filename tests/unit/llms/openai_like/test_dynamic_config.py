@@ -249,21 +249,26 @@ class TestModelSpecialHandling:
 
 class TestBackgroundRuns:
     @pytest.mark.parametrize(
-        ("model", "starts_runs"),
-        [("inline-model", False), ("queueing-model", True), ("background_runs/queueing-model", True)],
+        ("provider_flag", "model", "starts_runs"),
+        [
+            (False, "any-model", False),
+            (True, "any-model", True),
+            (True, "inline-model", False),
+            (True, "background_runs/inline-model", False),
+        ],
     )
-    def test_one_model_can_start_runs_on_a_provider_that_answers_background_inline(
-        self, model: str, starts_runs: bool
+    def test_only_a_flagged_provider_starts_runs_and_one_model_can_opt_out(
+        self, provider_flag: bool, model: str, starts_runs: bool
     ) -> None:
         config: Final = create_responses_config_class(
             _provider(
                 "background_runs",
-                special_handling={"answers_background_inline": True},
-                model_special_handling={"queueing-model": {"answers_background_inline": False}},
+                special_handling={"starts_background_runs": provider_flag},
+                model_special_handling={"inline-model": {"starts_background_runs": False}},
             )
         )()
 
-        assert config.starts_background_runs(model) is starts_runs
+        assert config.starts_background_runs(model, None) is starts_runs
 
 
 class TestReasoningEffortRounding:

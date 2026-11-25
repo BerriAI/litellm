@@ -48,9 +48,6 @@ class OpenRouterResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.OPENROUTER
 
-    def starts_background_runs(self, model: str) -> bool:
-        return False
-
     def transform_response_api_response(
         self,
         model: str,

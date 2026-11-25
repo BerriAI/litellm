@@ -143,9 +143,6 @@ class BigModelResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BIGMODEL
 
-    def starts_background_runs(self, model: str) -> bool:
-        return False
-
     def supports_native_file_search(self) -> bool:
         return False
 

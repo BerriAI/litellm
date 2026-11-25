@@ -1508,18 +1508,14 @@ def _completion_fakes_stream(
     fake_stream_requested: bool,
     base_model: str | None,
     bridges_to_responses_api: bool,
-    api_base: str | None,
-    deployment_model_info: Mapping[str, object] | None,
 ) -> bool:
     if fake_stream_requested or optional_params.get("fake_stream") is True:
         return True
     if custom_llm_provider is None:
         return False
     if bridges_to_responses_api:
-        from litellm.responses.main import dispatched_responses_api_config
-
-        responses_config: Final = dispatched_responses_api_config(
-            f"{custom_llm_provider}/{model}", custom_llm_provider, deployment_model_info, api_base
+        responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
+            provider=custom_llm_provider, model=model
         )
         return responses_config is not None and responses_config.should_fake_stream(
             model=model, stream=True, custom_llm_provider=custom_llm_provider
@@ -5754,26 +5750,35 @@ def _bridge_params_without_unretrievable_background_run(
     optional_params: dict[str, object],  # mutable-ok: completion's optional_params, which the Responses bridge takes
     *,
     streams_upstream: bool | None,
-    fakes_stream: Callable[[Mapping[str, object]], bool],
     routing_kwargs: Mapping[str, object],
     model: str,
     custom_llm_provider: str,
     api_base: str | None,
     deployment_model_info: Mapping[str, object] | None,
 ) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
-    from litellm.responses.main import starts_background_run_upstream
-
-    extra_body: Final = as_str_mapping(optional_params.get("extra_body")) or {}
-    if extra_body.get("stream", streams_upstream) is True and not fakes_stream(optional_params):
-        return optional_params
-    if not starts_background_run_upstream(
-        f"{custom_llm_provider}/{model}", custom_llm_provider, deployment_model_info, api_base
-    ):
-        return optional_params
-    from litellm.completion_extras.litellm_responses_transformation.transformation import without_background_run
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        requests_background_run,
+        unretrievable_background_run,
+        without_background,
+    )
     from litellm.litellm_core_utils.tool_fields import drop_policy
+    from litellm.responses.main import native_responses_dispatch
 
-    return without_background_run(optional_params, drop_policy(routing_kwargs), model, custom_llm_provider)
+    if not requests_background_run(optional_params):
+        return optional_params
+    dispatch: Final = native_responses_dispatch(
+        f"{custom_llm_provider}/{model}", custom_llm_provider, deployment_model_info, api_base
+    )
+    if dispatch is None:
+        return optional_params
+    extra_body: Final = as_str_mapping(optional_params.get("extra_body")) or {}
+    if extra_body.get("stream", streams_upstream) is True and not dispatch.fakes_stream():
+        return optional_params
+    if drop_policy(routing_kwargs).drops("background"):
+        return without_background(optional_params)
+    if dispatch.starts_background_runs():
+        raise unretrievable_background_run(model, custom_llm_provider)
+    return optional_params
 
 
 def _responses_bridge_optional_params(
@@ -5782,7 +5787,6 @@ def _responses_bridge_optional_params(
     requested: RequestedReasoningEffort,
     *,
     streams_upstream: bool | None,
-    fakes_stream: Callable[[Mapping[str, object]], bool],
     routing_kwargs: Mapping[str, object],
     custom_llm_provider: str,
     model: str,
@@ -5794,7 +5798,6 @@ def _responses_bridge_optional_params(
     optional_params: Final = _bridge_params_without_unretrievable_background_run(
         mapped_params,
         streams_upstream=streams_upstream,
-        fakes_stream=fakes_stream,
         routing_kwargs=routing_kwargs,
         model=model,
         custom_llm_provider=custom_llm_provider,
@@ -6498,10 +6501,6 @@ def completion(
             fake_stream_requested=control_options.fake_stream is True,
             base_model=deployment_base_model,
             bridges_to_responses_api=bridges_to_responses_api is True,
-            api_base=api_base,
-            deployment_model_info=str_keyed_mapping(
-                cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
-            ),
         )
         resolve_timeout: Final = partial(
             CompletionTimeout.resolve,
@@ -6767,7 +6766,6 @@ def completion(
                 rs_val,
                 resolved_reasoning_effort,
                 streams_upstream=dispatch_stream,
-                fakes_stream=fakes_stream,
                 routing_kwargs=routing_kwargs,
                 custom_llm_provider=custom_llm_provider,
                 model=model,
