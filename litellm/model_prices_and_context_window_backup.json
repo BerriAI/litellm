@@ -41913,6 +41913,31 @@
         "mode": "audio_transcription",
         "output_cost_per_second": 0.0
     },
+    "groq/meta-models/muse-spark-open": {
+        "litellm_provider": "groq",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "source": "https://console.groq.com/docs/model/meta-models/muse-spark-open",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_reasoning": true
+    },
+    "groq/minimaxai/minimax-m2.7": {
+        "litellm_provider": "groq",
+        "max_input_tokens": 196608,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "source": "https://console.groq.com/docs/model/minimaxai/minimax-m2.7",
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true
+    },
     "heroku/claude-3-5-haiku": {
         "litellm_provider": "heroku",
         "mode": "chat",
@@ -76437,6 +76462,14 @@
         "cache_read_input_token_cost": 1e-07,
         "source": "https://docs.perplexity.ai/docs/agent-api/models"
     },
+    "perplexity/google/gemini-4-neon": {
+        "cache_read_input_token_cost": 1.5e-07,
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "perplexity",
+        "mode": "responses",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://docs.perplexity.ai/docs/agent-api/models"
+    },
     "perplexity/google/gemini-3.6-flash": {
         "litellm_provider": "perplexity",
         "mode": "responses",
@@ -87777,7 +87810,10 @@
         "max_input_tokens": 262144,
         "mode": "decisions",
         "output_cost_per_token": 0.0,
-        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested"
+        "source": "https://docs.fireworks.ai/serverless/pricing#decision-models",
+        "supported_endpoints": [
+            "/v1/systemone"
+        ]
     },
     "bedrock_mantle/openai.gpt-6.1-terra": {
         "cache_creation_input_token_cost": 1.375e-06,

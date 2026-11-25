@@ -45,7 +45,7 @@ def test_qwen3_asr_is_available_for_openai_compatible_transcription(local_model_
     assert litellm.supports_audio_input(model)
 
 
-@pytest.mark.parametrize("model", ("hy4-flash", "inkling-2-small", "qwen4-max"))
+@pytest.mark.parametrize("model", ("hy4-flash", "inkling-2-small", "qwen4-max", "rune"))
 def test_fireworks_serverless_model_resolves_to_its_registry_row(
     local_model_cost_map: None, prices: CostMap, model: str
 ) -> None:
@@ -59,6 +59,21 @@ def test_fireworks_serverless_model_resolves_to_its_registry_row(
         row["output_cost_per_token"],
     )
     assert info.get("supported_endpoints") == row.get("supported_endpoints")
+
+
+@pytest.mark.parametrize(
+    ("model", "provider", "mode"),
+    (
+        ("groq/meta-models/muse-spark-open", "groq", "chat"),
+        ("groq/minimaxai/minimax-m2.7", "groq", "chat"),
+        ("perplexity/google/gemini-4-neon", "perplexity", "responses"),
+    ),
+)
+def test_provider_model_info_resolves_in_its_published_mode(
+    local_model_cost_map: None, model: str, provider: str, mode: str
+) -> None:
+    info: Final = litellm.get_model_info(model)
+    assert (info["litellm_provider"], info["mode"]) == (provider, mode)
 
 
 @pytest.mark.parametrize(
