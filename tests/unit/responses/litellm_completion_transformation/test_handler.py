@@ -622,7 +622,16 @@ async def test_refused_follow_ups_do_not_count_toward_the_deployments_failure_ra
         pytest.param({"default_fallbacks": ["native"]}, id="default_fallbacks"),
     ],
 )
-async def test_a_refused_follow_up_is_neither_retried_nor_sent_to_a_fallback(fallback_settings: Mapping[str, object]):
+@pytest.mark.parametrize(
+    ("previous_response_id", "refusal"),
+    [
+        pytest.param(_TURN_ONE_ID, "not found", id="unresolvable_id"),
+        pytest.param(123, "expected a string, got int", id="non_string_id"),
+    ],
+)
+async def test_a_refused_follow_up_is_neither_retried_nor_sent_to_a_fallback(
+    fallback_settings: Mapping[str, object], previous_response_id: object, refusal: str
+):
     router: Final = litellm.Router(
         model_list=[
             {
@@ -650,8 +659,8 @@ async def test_a_refused_follow_up_is_neither_retried_nor_sent_to_a_fallback(fal
     )
 
     with patch("litellm.proxy.proxy_server.prisma_client", None):
-        with pytest.raises(litellm.BadRequestError, match="not found") as refused:
-            await router.aresponses(model="bridged", input="Double it", previous_response_id=_TURN_ONE_ID)
+        with pytest.raises(litellm.BadRequestError, match=refusal) as refused:
+            await router.aresponses(model="bridged", input="Double it", previous_response_id=previous_response_id)
 
     assert not getattr(refused.value, "num_retries", None)
 

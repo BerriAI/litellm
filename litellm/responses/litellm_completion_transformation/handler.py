@@ -11,7 +11,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 import litellm
-from litellm.exceptions import UnresolvablePreviousResponseError
+from litellm.exceptions import UnknownPreviousResponseError, UnresolvablePreviousResponseError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import unenforced_allowed_tools_tool_choice
 from litellm.litellm_core_utils.core_helpers import attribute_or_none, drops_unsupported_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -99,9 +99,9 @@ def _sync_follow_up_refusal(
 
 def _invalid_previous_response_id(
     previous_response_id: object, model: str, provider: str | None
-) -> litellm.BadRequestError:
+) -> UnknownPreviousResponseError:
     message: Final = invalid_type_message("previous_response_id", previous_response_id)
-    return litellm.BadRequestError(
+    return UnknownPreviousResponseError(
         message=message,
         model=model,
         llm_provider=provider,
