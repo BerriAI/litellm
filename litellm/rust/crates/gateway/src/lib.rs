@@ -7,6 +7,7 @@ mod gateway_requests;
 mod health;
 pub mod host;
 mod license;
+mod live;
 pub mod middleware;
 mod periodic;
 mod redis;
@@ -23,6 +24,7 @@ pub use callbacks::{
 };
 pub use error::Error;
 pub use gateway_requests::{Category, GatewayRequests};
+pub use live::{Live, Served};
 pub use periodic::PeriodicJob;
 pub use redis::RedisClients;
 pub use resources::Resources;

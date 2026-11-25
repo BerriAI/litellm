@@ -89,7 +89,11 @@ pub enum Error {
     /// The pre-call checks found no deployment whose context window fits the prompt; `detail`
     /// names each one dropped for it.
     #[error("no deployment of `{model}` has a context window large enough for this call")]
-    ContextWindowExceeded { model: String, detail: String },
+    ContextWindowExceeded {
+        model: String,
+        detail: String,
+        held_for_fallback: bool,
+    },
     /// The pre-call checks found no deployment of `model` that takes the requested `params`.
     #[error("no deployment of `{model}` supports {params:?}")]
     UnsupportedParams { model: String, params: Vec<String> },
@@ -270,9 +274,14 @@ impl Error {
                 until: until.clone(),
                 timezone: timezone.clone(),
             },
-            Self::ContextWindowExceeded { model, detail } => Self::ContextWindowExceeded {
+            Self::ContextWindowExceeded {
+                model,
+                detail,
+                held_for_fallback,
+            } => Self::ContextWindowExceeded {
                 model: model.clone(),
                 detail: detail.clone(),
+                held_for_fallback: *held_for_fallback,
             },
             Self::UnsupportedParams { model, params } => Self::UnsupportedParams {
                 model: model.clone(),
