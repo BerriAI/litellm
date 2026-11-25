@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.routing_common_utils import without_router_only_
 from litellm.responses.input_items_query import INPUT_ITEMS_QUERY_KEYS
 from litellm.responses.retrieve_stream_query import without_retrieve_stream_defaults
 from litellm.router_api import RoutingContext
+from litellm.router_rust.invoke.cache_controls import report_ignored_cache_controls, with_model_cache_controls
 from litellm.router_rust.invoke.shaping import (
     ROUTER_CLIENTS_TARGET,
     STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
@@ -130,6 +131,10 @@ class EndpointCore(Protocol):
 
     def group_members(self, model_name: str) -> Sequence[tuple[object, object]] | None: ...
 
+    def served_deployments(self) -> tuple[Mapping[str, object], ...]:
+        """Every deployment as a pick serves it, with the litellm_params values its JSON record carries as text."""
+        ...
+
     def routed_name(self, model: object) -> str:
         """``RustCore.routed_name``: what a ``model`` that is no string raises, or the name it routes under."""
         ...
@@ -157,6 +162,7 @@ class EndpointCore(Protocol):
         specific_deployment: bool | None = None,
         messages: object = None,
         batch_upload: bool = False,
+        batch_api: bool = False,
     ) -> Mapping[str, object] | Sequence[Mapping[str, object]]: ...
 
     async def acompletion(self, *args: object, **kwargs: object) -> object: ...  # kwargs-ok: endpoint payload
@@ -700,6 +706,74 @@ def is_batch_upload(request: Mapping[str, object]) -> bool:
     return request.get("purpose") == "batch"
 
 
+_TARGET_MODEL_NAMES_KEY: Final = "target_model_names"
+_COVERED_TARGET_MODEL_NAMES_KEY: Final = "covered_target_model_names"
+_TARGET_MODEL_NAMES_BY_DEPLOYMENT_KEY: Final = "target_model_names_by_deployment"
+_TARGET_MODEL_NAMES: Final[TypeAdapter[tuple[str, ...]]] = TypeAdapter(tuple[str, ...])
+_NO_SERVED_NAMES: Final[Mapping[str, str]] = MappingProxyType({})
+_TARGET_ORDER_KEY: Final = "_target_order"
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _TargetRouting:
+    own: Mapping[str, Mapping[str, str]]
+    at_reached_order: Mapping[str, Mapping[str, str]]
+
+
+_NO_TARGET_ROUTING: Final = _TargetRouting(own=MappingProxyType({}), at_reached_order=MappingProxyType({}))
+
+
+def _deployment_id(deployment: Mapping[str, object]) -> str:
+    return str(as_dict(deployment.get("model_info")).get("id"))
+
+
+def _covered_targets(
+    names_by_target: Mapping[str, Mapping[str, str]],
+    deployment_ids: frozenset[str],
+    targets_by_proxy_deployment: Mapping[str, tuple[str, ...]],
+) -> tuple[str, ...]:
+    return tuple(
+        target
+        for target, served in names_by_target.items()
+        if served
+        and served.keys() <= deployment_ids
+        and all(_copy_names_target(target, targets_by_proxy_deployment.get(deployment_id)) for deployment_id in served)
+    )
+
+
+def _copy_names_target(target: str, served_targets: tuple[str, ...] | None) -> bool:
+    return served_targets is None or target in served_targets
+
+
+def _served_targets(
+    deployment_id: str,
+    targets: Sequence[str],
+    requested_target: str,
+    names_by_target: Mapping[str, Mapping[str, str]],
+) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            target
+            for target in targets
+            if target == requested_target or deployment_id in names_by_target.get(target, _NO_SERVED_NAMES)
+        )
+    )
+
+
+def _served_target_names(
+    deployment_id: str,
+    targets: Sequence[str],
+    requested: tuple[str, str],
+    names_by_target: Mapping[str, Mapping[str, str]],
+) -> str:
+    requested_target, requested_name = requested
+    names: Final = (
+        requested_name if target == requested_target else names_by_target[target][deployment_id]
+        for target in _served_targets(deployment_id, targets, requested_target, names_by_target)
+    )
+    return ",".join(dict.fromkeys(names))
+
+
 def endpoint_names() -> frozenset[str]:
     """Every endpoint name ``RustEndpoints.member`` may serve: what ``dir()`` of a router lists."""
     return frozenset(
@@ -778,6 +852,7 @@ class AttemptCall:
     group: str
     # `_embedding`'s batch-size refusal, raised by the driver in place of the host call.
     refused: Exception | None = None
+    ignored_cache_controls: tuple[str, ...] = ()
 
 
 def reports_own_success(call: AttemptCall) -> bool:
@@ -891,6 +966,34 @@ def _validate_decisions_connection(plan: Plan, data: Mapping[str, object], reque
 
 
 def attempt_call(
+    core: EndpointCore,
+    plan: Plan,
+    request: Mapping[str, object],
+    deployment: Mapping[str, object],
+    *,
+    group: str,
+    requested: str,
+    fallback_model_group: str | None = None,
+    authenticated: Mapping[str, object] | None = None,
+) -> AttemptCall:
+    """``authenticated`` is the request before a fallback's own params went over it, the only place the
+    virtual key's cache controls are read from."""
+    params, merged_request, ignored = with_model_cache_controls(
+        as_dict(deployment.get("litellm_params")), request, authenticated
+    )
+    call: Final = _attempt_call(
+        core,
+        plan,
+        merged_request,
+        {**deployment, "litellm_params": params},
+        group=group,
+        requested=requested,
+        fallback_model_group=fallback_model_group,
+    )
+    return dataclasses.replace(call, ignored_cache_controls=ignored) if ignored else call
+
+
+def _attempt_call(
     core: EndpointCore,
     plan: Plan,
     request: Mapping[str, object],
@@ -1138,6 +1241,11 @@ def failover_fields(plan: Plan) -> Mapping[str, object]:
 _PYTHON_HANDLER_NAMES: Final[Mapping[str, str]] = MappingProxyType({"acreate_file": "_acreate_file"})
 
 
+def python_handler_name(plan: Plan) -> str:
+    function_name: Final = plan.function_name or plan.host_op
+    return _PYTHON_HANDLER_NAMES.get(function_name, function_name)
+
+
 def scoped_fallback_fields(plan: Plan, request: Mapping[str, object]) -> Mapping[str, object]:
     """A request that creates or names a resource only one provider holds (a file upload, a batch
     on an uploaded file, a fine-tuning job) falls back within its own model group only
@@ -1147,9 +1255,8 @@ def scoped_fallback_fields(plan: Plan, request: Mapping[str, object]) -> Mapping
         references_provider_scoped_resource,
     )
 
-    function_name: Final = plan.function_name or plan.host_op
     handlers: Final = {
-        "original_function": _Handler(_PYTHON_HANDLER_NAMES.get(function_name, function_name)),
+        "original_function": _Handler(python_handler_name(plan)),
         "original_generic_function": _Handler(plan.host_op),
     }
     kwargs: Final = {**request, **handlers}
@@ -1615,7 +1722,7 @@ class RustEndpoints:
 
     def _group(self, name: str) -> list[Mapping[str, object]]:  # mutable-ok: a fresh list
         """`_core_get_model_list(model_name=name)`: the deployments of the group ``name``."""
-        records: Final = self._core.handle.deployments()
+        records: Final = self._core.served_deployments()
         return [record for record in (as_dict(r) for r in records) if record.get("model_name") == name]
 
     def _is_model_group(self, name: str) -> bool:
@@ -2242,18 +2349,23 @@ class RustEndpoints:
                 specific_deployment=kwargs.pop("specific_deployment", None),  # pyright: ignore[reportArgumentType]  # the request's value, as given
                 request_kwargs=kwargs,
             )
-        data: Final = as_dict(deployment.get("litellm_params"))
+        data, merged, ignored = with_model_cache_controls(as_dict(deployment.get("litellm_params")), kwargs)
+        call_kwargs: Final = dict(merged)
         for key, value in self._core.resolved.default_litellm_params.items():
-            if key not in kwargs:
-                kwargs[key] = value
+            if key not in call_kwargs:
+                call_kwargs[key] = value
             elif key == "metadata":
-                metadata_bucket(kwargs, key).update(
-                    metadata_defaults_under_request(defaults=as_dict(value), request_metadata=as_dict(kwargs[key]))
+                metadata_bucket(call_kwargs, key).update(
+                    metadata_defaults_under_request(defaults=as_dict(value), request_metadata=as_dict(call_kwargs[key]))
                 )
         pinned: Final = deployment_model_id_pin(data)
         if pinned is not None:
-            kwargs["model_id"] = pinned
-        return self._invoke("text_completion")(**{**data, "prompt": prompt, "caching": self._cache_responses, **kwargs})
+            call_kwargs["model_id"] = pinned
+        response: Final = self._invoke("text_completion")(
+            **{**data, "prompt": prompt, "caching": self._cache_responses, **call_kwargs}
+        )
+        report_ignored_cache_controls(response, ignored)
+        return response
 
     async def aadapter_completion(
         self,
@@ -2298,9 +2410,10 @@ class RustEndpoints:
                 kind="healthy",
                 specific_deployment=bool(specific) or None,
                 messages=_user_message("retrieve-api-fake-text"),
+                batch_api=True,
             )
         else:
-            healthy = [as_dict(r) for r in self._core.handle.deployments()]  # rebind-ok: as Python rebinds it
+            healthy = [as_dict(r) for r in self._core.served_deployments()]  # rebind-ok: as Python rebinds it
         errors: Final[list[BaseException]] = []  # mutable-ok: the request kwargs the Python router mutates in place
 
         async def try_retrieve(deployment: Mapping[str, object]) -> object:
@@ -2385,20 +2498,32 @@ class RustEndpoints:
         from litellm.litellm_core_utils.routing_common_utils import (
             add_model_file_id_mappings,  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
         )
+        from litellm.llms.openai.common_utils import CreatedOnSomeDeployments, create_may_already_exist
         from litellm.types.utils import LlmProviders
 
+        target_model_names: Final = _TARGET_MODEL_NAMES.validate_python(kwargs.get(_TARGET_MODEL_NAMES_KEY, ()))
+        request: Final = without(kwargs, _TARGET_MODEL_NAMES_KEY)
         healthy: Final = await self._core.select(
             requested,
-            dict(kwargs),
+            dict(request),
             kind="healthy",
             specific_deployment=bool(specific) or None,
             messages=_user_message(_PICK_TEXTS["create_file"]),
-            batch_upload=is_batch_upload(kwargs),
+            batch_upload=is_batch_upload(request),
+            batch_api=True,
         )
         deployments: Final = list(healthy) if isinstance(healthy, Sequence) else [healthy]
+        routing: Final = await self._target_routing(
+            request,
+            tuple(target for target in dict.fromkeys(target_model_names) if target != requested),
+            deployments,
+        )
+        ordered_targets: Final = (
+            target_model_names if requested in target_model_names else (requested, *target_model_names)
+        )
 
         async def create_for(deployment: Mapping[str, object]) -> object:
-            kwargs_copy: Final = safe_deep_copy(dict(kwargs))  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
+            kwargs_copy: Final = safe_deep_copy(dict(request))  # pyright: ignore[reportUnknownVariableType]  # litellm's untyped helpers and request values
             update_kwargs_with_deployment(
                 self._core.shaping,
                 deployment,
@@ -2409,18 +2534,14 @@ class RustEndpoints:
             data: Final = as_dict(deployment.get("litellm_params"))
             model_name: Final = str(data.get("model"))
             self.counters.total_calls[model_name] += 1
-            declared: Final = data.get("custom_llm_provider")
-            stripped, inferred, _, _ = self._core.host.invoke("get_llm_provider")(
-                model=data["model"], custom_llm_provider=declared
-            )
-            provider: Final = declared or inferred
-            purpose: Final = kwargs.get("purpose")
-            file: object = kwargs.get("file")  # rebind-ok: rewritten for the deployment
+            stripped, provider = self._stripped_model_and_provider(data)
+            purpose: Final = request.get("purpose")
+            file: object = request.get("file")  # rebind-ok: rewritten for the deployment
             if not file or not purpose:
                 raise Exception("file and file_purpose are required for create_file")  # noqa: TRY002  # as the Python router
             replaces: Final = batch_utils.should_replace_model_in_jsonl(
                 purpose=purpose,  # pyright: ignore[reportArgumentType]  # the caller's purpose
-                passthrough=kwargs.get("passthrough") is True,
+                passthrough=request.get("passthrough") is True,
             )
             if replaces:
                 file = batch_utils.replace_model_in_jsonl(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # an untyped helper  # rebind-ok: rewritten for the deployment
@@ -2430,8 +2551,14 @@ class RustEndpoints:
                 )
                 kwargs_copy["file"] = file
             if provider == LlmProviders.LITELLM_PROXY.value:
+                served_names: Final = _served_target_names(
+                    _deployment_id(deployment),
+                    ordered_targets,
+                    (requested, stripped),
+                    routing.at_reached_order,
+                )
                 kwargs_copy["extra_body"] = MappingProxyType(
-                    {**as_dict(kwargs_copy.get("extra_body")), "target_model_names": stripped}  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # litellm's untyped helpers and request values
+                    {**as_dict(kwargs_copy.get("extra_body")), _TARGET_MODEL_NAMES_KEY: served_names}  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # litellm's untyped helpers and request values
                 )
             if "gcs_bucket_name" in data:
                 metadata_bucket(kwargs_copy, "litellm_metadata")["gcs_bucket_name"] = data["gcs_bucket_name"]  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
@@ -2451,7 +2578,14 @@ class RustEndpoints:
             self.counters.success_calls[model_name] += 1
             return response
 
-        responses: Final = await asyncio.gather(*(create_for(as_dict(d)) for d in deployments))
+        outcomes: Final = await asyncio.gather(*(create_for(as_dict(d)) for d in deployments), return_exceptions=True)
+        failures: Final = tuple(outcome for outcome in outcomes if isinstance(outcome, BaseException))
+        if failures:
+            failure: Final = next((each for each in failures if create_may_already_exist(each)), failures[0])
+            if len(failures) < len(outcomes):
+                raise failure from CreatedOnSomeDeployments(failure)
+            raise failure
+        responses: Final = [outcome for outcome in outcomes if not isinstance(outcome, BaseException)]
         if len(responses) == 0:
             raise Exception("No healthy deployments found.")  # noqa: TRY002  # as the Python router
         mapping: Final = add_model_file_id_mappings(healthy_deployments=deployments, responses=responses)  # pyright: ignore[reportArgumentType, reportUnknownVariableType]  # deployment records
@@ -2459,7 +2593,72 @@ class RustEndpoints:
         hidden: Final = get_hidden_params(returned)
         if hidden is not None:
             hidden["model_file_id_mapping"] = mapping
+            targets_by_proxy_deployment: Final = {
+                _deployment_id(as_dict(d)): _served_targets(
+                    _deployment_id(as_dict(d)), ordered_targets, requested, routing.at_reached_order
+                )
+                for d in deployments
+                if self._is_litellm_proxy(d)
+            }
+            hidden[_COVERED_TARGET_MODEL_NAMES_KEY] = _covered_targets(
+                routing.own,
+                frozenset(_deployment_id(as_dict(d)) for d in deployments),
+                targets_by_proxy_deployment,
+            )
+            hidden[_TARGET_MODEL_NAMES_BY_DEPLOYMENT_KEY] = targets_by_proxy_deployment
         return returned
+
+    def _stripped_model_and_provider(self, params: Mapping[str, object]) -> tuple[str, object]:
+        declared: Final = params.get("custom_llm_provider")
+        stripped, inferred, _, _ = self._core.host.invoke("get_llm_provider")(
+            model=params["model"], custom_llm_provider=declared
+        )
+        return stripped, declared or inferred
+
+    def _is_litellm_proxy(self, deployment: object) -> bool:
+        from litellm.types.utils import LlmProviders
+
+        params: Final = as_dict(as_dict(deployment).get("litellm_params"))
+        return self._stripped_model_and_provider(params)[1] == LlmProviders.LITELLM_PROXY.value
+
+    async def _target_routing(
+        self, request: Mapping[str, object], targets: Sequence[str], deployments: Sequence[object]
+    ) -> _TargetRouting:
+        if not targets or is_batch_upload(request) or not any(self._is_litellm_proxy(d) for d in deployments):
+            return _NO_TARGET_ROUTING
+        own_routing: Final = without(request, _TARGET_ORDER_KEY)
+        if _TARGET_ORDER_KEY not in request:
+            own: Final = await self._stripped_names_by_target(own_routing, targets)
+            return _TargetRouting(own=own, at_reached_order=own)
+        own_and_reached: Final = await asyncio.gather(
+            self._stripped_names_by_target(own_routing, targets), self._stripped_names_by_target(request, targets)
+        )
+        return _TargetRouting(own=own_and_reached[0], at_reached_order=own_and_reached[1])
+
+    async def _stripped_names_by_target(
+        self, request: Mapping[str, object], targets: Sequence[str]
+    ) -> Mapping[str, Mapping[str, str]]:
+        served: Final = await asyncio.gather(*(self._stripped_names_by_deployment(t, request) for t in targets))
+        return MappingProxyType(dict(zip(targets, served, strict=True)))
+
+    async def _stripped_names_by_deployment(self, target: str, request: Mapping[str, object]) -> Mapping[str, str]:
+        try:
+            healthy: Final = await self._core.select(
+                target,
+                dict(request),
+                kind="healthy",
+                messages=_user_message(_PICK_TEXTS["create_file"]),
+                batch_upload=is_batch_upload(request),
+            )
+        except Exception:  # noqa: BLE001  # a target the router cannot serve now is served by no deployment, as `healthy_deployments` treats it
+            return _NO_SERVED_NAMES
+        records: Final = healthy if isinstance(healthy, Sequence) else (healthy,)
+        return MappingProxyType(
+            {
+                _deployment_id(record): self._stripped_model_and_provider(as_dict(record.get("litellm_params")))[0]
+                for record in records
+            }
+        )
 
     # -- search tools -------------------------------------------------------------------------
 

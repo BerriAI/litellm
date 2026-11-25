@@ -105,7 +105,7 @@ impl DatabaseEndpoint {
                 .await
                 .map_err(|error| PyValueError::new_err(error.to_string()))?;
             for ignored in &ignored {
-                litellm_tracing::warn!(
+                tracing::warn!(
                     "Database setting {} is ignored by the native pool: {}",
                     ignored.setting,
                     ignored.consequence

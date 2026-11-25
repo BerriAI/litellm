@@ -252,7 +252,7 @@ pub fn vertex_connection_params(
 /// `get_vertex_region`'s warning when it overrides a configured location the model does not
 /// support.
 fn warn_unsupported_region(model: &str, configured: &str, supported: &[String], routed: &str) {
-    litellm_tracing::warn!(
+    tracing::warn!(
         "Vertex AI model {model} is not served in {configured}, so the call goes to {routed} (served in {}).",
         supported.join(", ")
     );
@@ -926,7 +926,8 @@ mod tests {
             detail.to_string(),
             format!(
                 "claude-sonnet-4-5 does not support anthropic-version={requested}. \
-                 To drop unsupported params, set `litellm.drop_params = True`."
+                 To drop unsupported params, set `litellm.drop_params = True`, or `drop_params: true` \
+                 under `litellm_settings` in the proxy config."
             )
         );
     }
@@ -993,7 +994,8 @@ mod tests {
             detail.to_string(),
             "claude-sonnet-4-5 does not support temperature=1.0. anthropic-version 2026-10-21 \
              removed temperature, top_p and top_k. To drop unsupported params, set \
-             `litellm.drop_params = True`."
+             `litellm.drop_params = True`, or `drop_params: true` under `litellm_settings` in the \
+             proxy config."
         );
     }
 

@@ -118,7 +118,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
 
   if (isLoading) {
     return (
-      <div className="p-6 px-12">
+      <div>
         <div className="flex min-h-[300px] items-center justify-center">
           <UiLoadingSpinner className="size-8 text-primary" />
         </div>
@@ -128,7 +128,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
 
   if (!accessGroup) {
     return (
-      <div className="p-6 px-12">
+      <div>
         <Button
           variant="ghost"
           size="icon"
@@ -156,7 +156,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
   const displayedTeams = showAllTeams ? teams : teams.slice(0, MAX_PREVIEW);
 
   return (
-    <div className="p-6 px-12">
+    <div>
       <div className="mb-6 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="icon" aria-label={t("accessGroups.detail.back")} onClick={onBack}>

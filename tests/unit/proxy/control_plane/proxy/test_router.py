@@ -106,6 +106,8 @@ def test_writes_need_proxy_write_go_out_once_and_are_audited() -> None:
     created: Final = client.post("/api/v1/dataplanes/eu/proxy/key/generate", json={"key_alias": "x"}, headers=editor)
     assert (created.status_code, created.json()["token_id"]) == (200, "t1")
     assert transport.writes == [("POST", f"{EU}/key/generate", {"key_alias": "x"})]
+    forwarded_headers: Final = transport.calls[0][2]
+    assert forwarded_headers is not None and forwarded_headers["X-LiteLLM-Impersonate-User"] == "alice"
     timed_out: Final = client.patch("/api/v1/dataplanes/eu/proxy/team/update", json={"team_id": "t"}, headers=editor)
     assert timed_out.status_code == 502 and "1 attempt" in timed_out.json()["detail"]
     failed: Final = client.delete("/api/v1/dataplanes/eu/proxy/key/delete", headers=editor)

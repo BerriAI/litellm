@@ -7,14 +7,20 @@ config:
         api_key: provider-key
         api_base: https://api.anthropic.com
         rpm: 300
+        tpd: 1000000
+        rpd: 10000
+        daily_reset_time: "09:00"
         weight: 2
         timeout: 30
       model_info:
         id: claude-a
+        max_input_tokens: 200000
   router_settings:
     routing_strategy: simple-shuffle
+    enable_pre_call_checks: true
     num_retries: 1
     enable_cross_model_group_collision_check: true
+    optional_pre_call_checks: [enforce_model_rate_limits]
     redis_host: localhost
     redis_port: 6379
     redis_password: redis-key
@@ -29,8 +35,14 @@ config:
     max_request_size_mb: 1
     enable_jwt_auth: true
     store_model_in_db: false
+    supported_db_objects: [models]
+    token_rate_limit_type: output
   environment_variables:
     SOME_KEY: value
+  credential_list:
+    - credential_name: unused
+      credential_values: {api_key: other-key}
+      credential_info: {}
 
 requests:
   - name: plain

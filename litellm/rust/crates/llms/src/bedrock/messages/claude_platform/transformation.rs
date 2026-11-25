@@ -169,7 +169,7 @@ impl MessagesDialect for BedrockClaudePlatformMessagesConfig {
         params: &LitellmParams,
     ) -> Result<MessagesRequest, Error> {
         if let Some(type_name) = params.claude_platform.ignored_override_type() {
-            litellm_tracing::warn!(
+            tracing::warn!(
                 "bedrock/claude_platform: ignoring claude_platform_unsupported_params of type {type_name}; expected a list of param names. Using the default unsupported-param set."
             );
         }
@@ -322,7 +322,7 @@ fn without_params(request: MessagesRequest, names: &[&str]) -> Result<MessagesRe
         .into_iter()
         .partition(|(name, _)| names.contains(&name.as_str()));
     if !dropped.is_empty() {
-        litellm_tracing::warn!(
+        tracing::warn!(
             "bedrock/claude_platform: dropping unsupported Messages API param(s) {} from the request body; the Claude Platform on AWS endpoint rejects unknown fields. The request will proceed without them.",
             python_tuple(dropped.iter().map(|(name, _)| name.as_str()))
         );

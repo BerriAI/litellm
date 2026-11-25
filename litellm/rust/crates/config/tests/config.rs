@@ -137,7 +137,7 @@ fn empty_config_matches_python_defaults() {
     );
     assert_eq!(
         config.general_settings.proxy_config_reload_interval_seconds,
-        30
+        None
     );
     assert_eq!(config.general_settings.health_check_interval, 300);
 }

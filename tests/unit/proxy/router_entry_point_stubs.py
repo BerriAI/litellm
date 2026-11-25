@@ -134,7 +134,7 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
         if field == "deployment_model_info":
             return router.get_routable_deployment_model_info(name, **_given(team_id=team_id))
         if field == "listing_info":
-            return router.get_model_listing_info(name)
+            return router.get_model_listing_info(name, **_given(team_id=team_id))
         if field == "mode":
             return router.get_configured_mode(name)
         if field == "token_limits":
@@ -152,7 +152,7 @@ def route_entry_points_to_stubs(router: _RouterDouble) -> _RouterDouble:
     registry.deployment.side_effect = lambda id: router.get_deployment(model_id=id)
     registry.deployment_dict.side_effect = lambda id: router.get_model_info(id=id)
     registry.has_deployment.side_effect = lambda id: router.has_model_id(id)
-    registry.discovered_model_info.side_effect = lambda id: router.get_discovered_model_info(id)
+    registry.discovered_model_info.side_effect = lambda id, model=None: router.get_discovered_model_info(id, model)
     registry.routing_group.side_effect = lambda name: router.get_routing_group(name)
     registry.client.side_effect = lambda deployment, *, client_type=None: router._get_client(
         deployment=deployment, kwargs={}, client_type=client_type

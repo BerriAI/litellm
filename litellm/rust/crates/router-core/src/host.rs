@@ -93,6 +93,11 @@ pub struct RouterRequest {
     /// cool down, are paused, or fail their health check, so the file never lands on a deployment
     /// that cannot run its batch.
     pub batch_upload: bool,
+    /// A batch, file, fine-tuning, vector store, or container call, which Azure scopes to the
+    /// resource rather than the deployment: the Azure deployments declared `model_info.mode: batch`
+    /// stay candidates. Every other call skips them while its group has any other deployment, since
+    /// they serve only batches, unless it is pinned to one ([`Self::pinned_deployment_id`]).
+    pub batch_api: bool,
     /// An embedding pick: the host keeps the candidates whose `max_embedding_batch_size` admits
     /// the input (`deployments_admitting_embedding_batch`).
     pub embedding_batch: bool,
@@ -323,6 +328,8 @@ pub struct Attempt {
     pub max_retries: u32,
     /// How many deployments `get_model_list` lists for the level's group (`model_group_size`).
     pub model_group_size: usize,
+    pub refused_ids: Vec<String>,
+    pub provider_refused_window: bool,
 }
 
 /// What a successful attempt returns: the host's own response, which the core hands back
@@ -592,6 +599,11 @@ pub enum RouterEvent {
         model: String,
         cause: RetryCause,
     },
+    ContextWindowRaised {
+        level: u32,
+        deployment_id: Option<String>,
+        stream_origin: bool,
+    },
     /// The first failure of a hop serving `model` read a request `num_retries` that raises
     /// ([`UncountedRetries::Raises`]): the hop ends with that error (the host raises it, from the
     /// failure `cause` names), and falls back as from any plain exception.
@@ -751,6 +763,11 @@ pub trait RouterHost: Send + Sync {
     ) -> impl Future<Output = Result<PreCallFacts, Error>> + Send {
         let _ = (ctx, candidates);
         async { Ok(PreCallFacts::default()) }
+    }
+
+    fn provider_model_id<'a>(&self, model_id: &'a str, provider: &str) -> &'a str {
+        let _ = provider;
+        model_id
     }
 
     /// `f"{provider}/{model}"` for `ctx.name`, which `PatternMatchRouter.get_pattern` tries when
