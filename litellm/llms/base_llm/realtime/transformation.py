@@ -135,6 +135,9 @@ class BaseRealtimeConfig(ABC):
     def session_refusal(self) -> Exception | None:
         return None
 
+    def client_event_starts_response(self, client_event: Mapping[str, object]) -> bool:
+        return client_event.get("type") == "response.create"
+
     async def open_backend(self, url: str, headers: Mapping[str, str]) -> RealtimeBackend | None:
         return None
 

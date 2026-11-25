@@ -241,7 +241,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         acompletion: object = None,
-        litellm_params: dict = {},
+        litellm_params: dict[str, object] = {},
         logger_fn: object = None,
         headers: dict | None = None,
         timeout: float | httpx.Timeout | None = None,

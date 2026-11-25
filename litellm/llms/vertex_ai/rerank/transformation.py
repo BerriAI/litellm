@@ -124,7 +124,7 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         model: str,
         optional_rerank_params: dict,
         headers: Mapping[str, object],
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> dict:
         """
         Transform the request from Cohere format to Vertex AI Discovery Engine format

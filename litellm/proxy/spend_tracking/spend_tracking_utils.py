@@ -640,7 +640,7 @@ def _snapshotless_cost_breakdown(  # pyright: ignore[reportUnusedFunction]  # sh
 
 
 def get_logging_payload(
-    kwargs: dict | None,
+    kwargs: dict[str, object] | None,
     response_obj: object,
     start_time: datetime,
     end_time: datetime,

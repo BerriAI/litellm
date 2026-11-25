@@ -48,7 +48,7 @@ class VertexEmbedding(VertexBase):
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
         gemini_api_key: str | None = None,
         extra_headers: Mapping[str, str] | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> EmbeddingResponse:
         if aembedding is True:
             return self.async_embedding(
@@ -156,7 +156,7 @@ class VertexEmbedding(VertexBase):
         gemini_api_key: str | None = None,
         extra_headers: Mapping[str, str] | None = None,
         encoding: object = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
     ) -> EmbeddingResponse:
         """
         Async embedding implementation
