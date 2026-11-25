@@ -32,7 +32,7 @@ use super::{
 };
 use crate::{
     RedisClients,
-    host::{Rows, RustSpendLogHost},
+    host::{FreeModels, Rows, RustSpendLogHost},
 };
 
 /// `PROXY_BATCH_WRITE_AT` when unset.
@@ -128,12 +128,13 @@ impl SpendLog {
         Reserver::new(self.budgets.clone(), self.rows.clone(), disabled)
     }
 
-    /// The read-time budget checks over the counters this callback charges.
-    pub(crate) fn budget_check(&self) -> Arc<BudgetCheck> {
-        BudgetCheck::new(SpendReader::new(
-            self.budgets.store().clone(),
-            self.rows.clone(),
-        ))
+    /// The read-time budget checks over the counters this callback charges, skipped for a call
+    /// to a model `free` holds free.
+    pub(crate) fn budget_check(&self, free: Arc<FreeModels>) -> Arc<BudgetCheck> {
+        BudgetCheck::new(
+            SpendReader::new(self.budgets.store().clone(), self.rows.clone()),
+            free,
+        )
     }
 
     /// The spend counters the callback charges and a reservation holds against, which a spend

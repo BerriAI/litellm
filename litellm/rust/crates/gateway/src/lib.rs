@@ -129,6 +129,7 @@ pub(crate) async fn inference_over(
     let deployments = router.registry().deployments(&DeploymentFilter::default());
     let windows = host::ContextWindows::read(&catalog, &deployments).await;
     let prices = Arc::new(host::HoldPrices::read(&catalog, &deployments).await);
+    let free = Arc::new(host::FreeModels::read(&catalog, &router.registry()).await);
     let limits = parallel_request_limiter::Settings::read(config, variables);
     let key_limiter = KeyLimiter::new(limits, counters.clone(), router.clone());
     let licensed = resources.environment.get(LICENSE).is_some();
@@ -141,7 +142,7 @@ pub(crate) async fn inference_over(
     });
     let budgets = spend_log.map(|spend_log| {
         [
-            spend_log.budget_check().registered(),
+            spend_log.budget_check(free).registered(),
             spend_log
                 .reserver(config.general_settings.disable_budget_reservation)
                 .registered(),
@@ -269,7 +270,6 @@ mod tests {
                 input_cost: 0.5,
                 input_tokens: 9,
             }),
-            free: false,
         };
         let body: Map<String, Value> = Map::from_iter([("model".to_owned(), json!("held-model"))]);
 

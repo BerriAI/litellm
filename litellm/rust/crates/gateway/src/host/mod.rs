@@ -6,6 +6,7 @@
 pub mod auth;
 mod boot;
 mod capacity;
+mod free;
 mod hold;
 mod model_info;
 mod precall;
@@ -18,6 +19,7 @@ pub(crate) use auth::Key;
 pub use auth::NativeRows;
 pub use boot::NativeBootHost;
 pub use capacity::NativeCapacityHost;
+pub use free::FreeModels;
 #[cfg(test)]
 pub(crate) use hold::test_prices;
 pub use hold::{Hold, HoldPrices, Unheld};

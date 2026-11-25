@@ -5,7 +5,10 @@
 //! key path checks the member's own budget and then the key's, then `common_checks` the project's,
 //! then the team's, organization's, user's, team member's and end user's.
 //!
-//! A call to a free model is checked against no budget, as `request_skips_budget_checks` skips it.
+//! A call to a free model is checked against no budget, as `request_skips_budget_checks`
+//! (`litellm/proxy/auth/auth_checks.py`) skips it. The model is the one the body names before
+//! anything routes it, as `get_model_from_request` reads it, and [`FreeModels`] says whether it is
+//! free. An unknown model, or one whose rates are missing, is checked as paid.
 //! No throttle or alert is decided, since a config that sets `budget_exceeded_throttle_percentage`
 //! or `alerting` goes to Python, and a decision of either fails the call rather than letting it
 //! through unchecked.
@@ -19,8 +22,8 @@ use std::sync::Arc;
 
 use futures_util::future::{BoxFuture, join_all};
 use litellm_callbacks::{
-    Callback, CallbackError, Hook, HookInput, HookOutput, Manifest, Selection, Subscription,
-    Verdict,
+    Callback, CallbackError, Field, FieldSet, Hook, HookInput, HookOutput, Manifest, Selection,
+    Subscription, Verdict, typed,
 };
 use litellm_callbacks_budgets::{Check, Decision, PyNumber, SpendReader, decide};
 use litellm_gateway_auth::Authenticated;
@@ -29,7 +32,7 @@ use litellm_redis_store::spend_counters::SpendCounter;
 use serde_json::Value;
 
 use super::{Registered, budget_reservation, budgets};
-use crate::{Admitted, host::NativeRows};
+use crate::host::{FreeModels, NativeRows};
 
 pub(crate) const NAME: &str = "budget_check";
 
@@ -37,6 +40,7 @@ pub(crate) const NAME: &str = "budget_check";
 pub struct BudgetCheck {
     manifest: Manifest,
     spend: SpendReader,
+    free: Arc<FreeModels>,
 }
 
 /// What a budget is checked as. The variants are in the order Python checks them.
@@ -125,7 +129,7 @@ struct Held {
     entities: Vec<Entity>,
 }
 
-/// The budgets one request's caller is checked against, none for a call to a free model.
+/// The budgets one request's caller is checked against.
 pub struct Budgeted {
     held: Vec<Held>,
 }
@@ -175,10 +179,7 @@ fn entities(identity: &Authenticated<NativeRows>, counter: &SpendCounter) -> Vec
     }
 }
 
-fn budgeted(identity: &Authenticated<NativeRows>, admitted: Option<&Admitted>) -> Budgeted {
-    if admitted.is_some_and(|admitted| admitted.free) {
-        return Budgeted { held: Vec::new() };
-    }
+fn budgeted(identity: &Authenticated<NativeRows>) -> Budgeted {
     let held = budgets::counters(identity, budgets::Settings::default())
         .into_iter()
         .filter_map(|planned| {
@@ -217,6 +218,7 @@ fn manifest() -> Manifest {
     Manifest {
         selection: Selection::named(NAME),
         subscriptions: vec![Subscription {
+            reads: FieldSet::of(&[Field::Model]),
             may_abort: true,
             ..Subscription::on(Hook::PreCall)
         }],
@@ -225,18 +227,22 @@ fn manifest() -> Manifest {
 }
 
 impl BudgetCheck {
-    pub fn new(spend: SpendReader) -> Arc<Self> {
+    pub fn new(spend: SpendReader, free: Arc<FreeModels>) -> Arc<Self> {
         Arc::new(Self {
             manifest: manifest(),
             spend,
+            free,
         })
     }
 
     pub(crate) fn registered(self: &Arc<Self>) -> Registered {
-        Registered::for_caller(self.clone(), budgeted)
+        Registered::for_caller(self.clone(), |identity, _| budgeted(identity))
     }
 
-    async fn pre_call(&self, budgeted: &Budgeted) -> HookOutput {
+    async fn pre_call(&self, model: Option<&str>, budgeted: &Budgeted) -> HookOutput {
+        if model.is_some_and(|model| self.free.is_free(model)) {
+            return Ok(None);
+        }
         let spends = join_all(budgeted.held.iter().map(|held| {
             self.spend
                 .current(&held.counter, held.fallback_spend, Some(held.max_budget))
@@ -276,7 +282,10 @@ impl Callback for BudgetCheck {
     ) -> BoxFuture<'a, HookOutput> {
         Box::pin(async move {
             match (input.hook, state) {
-                (Hook::PreCall, Some(budgeted)) => self.pre_call(budgeted).await,
+                (Hook::PreCall, Some(budgeted)) => {
+                    let model = input.fields.get::<typed::Model>()?;
+                    self.pre_call(model.as_deref(), budgeted).await
+                }
                 _ => Ok(None),
             }
         })
@@ -305,6 +314,7 @@ mod tests {
 
     use super::*;
     use crate::{
+        Admitted,
         callbacks::{Callbacks, budget_reservation::Reserver},
         host::{Hold, Key},
     };
@@ -460,8 +470,11 @@ mod tests {
         })
     }
 
-    fn check(store: &Arc<SpendCounters>) -> Arc<BudgetCheck> {
-        BudgetCheck::new(SpendReader::new(store.clone(), Arc::new(NoRow)))
+    fn check(store: &Arc<SpendCounters>, free: FreeModels) -> Arc<BudgetCheck> {
+        BudgetCheck::new(
+            SpendReader::new(store.clone(), Arc::new(NoRow)),
+            Arc::new(free),
+        )
     }
 
     /// The status, entity type and message the call is refused with.
@@ -477,14 +490,12 @@ mod tests {
         (refusal.status, entity_type, refusal.message)
     }
 
-    /// What one pre-call check of `identity` refuses the call with, `None` when it lets it on.
-    async fn checked(
-        identity: &Authenticated<NativeRows>,
-        admitted: Option<Admitted>,
-    ) -> Option<(StatusCode, String, String)> {
-        let check = check(&Arc::new(SpendCounters::new(None)));
+    /// What one pre-call check of `identity` refuses a call to a paid model with, `None` when it
+    /// lets it on.
+    async fn checked(identity: &Authenticated<NativeRows>) -> Option<(StatusCode, String, String)> {
+        let check = check(&Arc::new(SpendCounters::new(None)), FreeModels::default());
         let verdict = check
-            .pre_call(&budgeted(identity, admitted.as_ref()))
+            .pre_call(Some("held-model"), &budgeted(identity))
             .await
             .unwrap();
         match verdict {
@@ -524,7 +535,7 @@ mod tests {
             Spent::Over => (MAX + 0.5, true),
         };
 
-        let refusal = checked(&caller(holds(budget(MAX, spend))), None).await;
+        let refusal = checked(&caller(holds(budget(MAX, spend)))).await;
 
         assert_eq!(
             refusal.as_ref().map(|(status, kind, message)| (
@@ -548,7 +559,7 @@ mod tests {
         #[case] holds: Holds,
         #[case] refused_as: Option<&str>,
     ) {
-        let refusal = checked(&caller(holds), None).await;
+        let refusal = checked(&caller(holds)).await;
 
         assert_eq!(
             refusal.as_ref().map(|(_, kind, _)| kind.as_str()),
@@ -568,7 +579,7 @@ mod tests {
     #[case::a_project_at_infinity(project(budget(f64::INFINITY, 100.0)))]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_budget_that_is_not_a_finite_number_refuses_nothing(#[case] holds: Holds) {
-        assert_eq!(checked(&caller(holds), None).await, None);
+        assert_eq!(checked(&caller(holds)).await, None);
     }
 
     fn over() -> Option<Budget> {
@@ -589,7 +600,7 @@ mod tests {
         #[case] holds: Holds,
         #[case] named: &str,
     ) {
-        let refusal = checked(&caller(holds), None).await;
+        let refusal = checked(&caller(holds)).await;
 
         assert!(
             refusal
@@ -607,7 +618,7 @@ mod tests {
             key(budget(MAX, MAX)),
         );
 
-        let refusal = checked(&identity, None).await;
+        let refusal = checked(&identity).await;
 
         assert_eq!(
             refusal.map(|(.., message)| message),
@@ -618,32 +629,41 @@ mod tests {
         );
     }
 
-    #[rstest]
-    #[case::a_free_model(Some(Admitted { hold: None, free: true }), false)]
-    #[case::a_priced_model(Some(Admitted { hold: None, free: false }), true)]
-    #[case::a_call_admit_did_not_see(None, true)]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_call_to_a_free_model_is_checked_against_no_budget(
-        #[case] admitted: Option<Admitted>,
-        #[case] refuses: bool,
-    ) {
-        let identity = caller(Holds {
-            key: over(),
-            team: over(),
-            ..Holds::default()
-        });
-
-        assert_eq!(checked(&identity, admitted).await.is_some(), refuses);
-    }
-
     const HELD: f64 = 1.0;
 
-    /// What a call from a caller with `key_budget` comes to with the checks and then the
-    /// reservation registered, as the gateway registers them: what it is refused with, and what
-    /// the key's counter holds once the pre-call hook ends.
+    const PRICED: &str = "model_list:
+  - model_name: held-model
+    litellm_params:
+      model: anthropic/held-model
+      api_key: provider-key
+  - model_name: declared-free
+    litellm_params:
+      model: anthropic/held-model
+      api_key: provider-key
+    model_info:
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+  - model_name: free-input-only
+    litellm_params:
+      model: anthropic/held-model
+      api_key: provider-key
+    model_info:
+      input_cost_per_token: 0
+  - model_name: free-by-the-cost-map
+    litellm_params:
+      model: anthropic/free-model
+      api_key: provider-key
+";
+
+    /// What a call to `model` from a caller with `key_budget` comes to with the checks and then
+    /// the reservation registered, as the gateway registers them: what it is refused with, and
+    /// what the key's counter holds once the pre-call hook ends. The key has no row, so its cold
+    /// counter holds only what the reservation adds. A paid model holds [`HELD`], and a free one
+    /// nothing, as admit prices them.
     async fn checked_then_held(
         key_budget: Budget,
         disabled: bool,
+        model: &str,
     ) -> (Option<String>, Option<f64>) {
         let store = Arc::new(SpendCounters::new(None));
         let reserver = Reserver::new(
@@ -651,24 +671,25 @@ mod tests {
             Arc::new(NoRow),
             disabled,
         );
+        let free = FreeModels::of(PRICED).await;
+        let hold = (!free.is_free(model)).then_some(Hold {
+            reservation_cost: HELD,
+            input_cost: HELD / 2.0,
+            input_tokens: 9,
+        });
         let callbacks = Arc::new(
-            Callbacks::new(vec![check(&store).registered(), reserver.registered()]).unwrap(),
+            Callbacks::new(vec![
+                check(&store, free).registered(),
+                reserver.registered(),
+            ])
+            .unwrap(),
         );
-        let admitted = Admitted {
-            hold: Some(Hold {
-                reservation_cost: HELD,
-                input_cost: HELD / 2.0,
-                input_tokens: 9,
-            }),
-            free: false,
-        };
-        let Value::Object(body) = json!({"model": "held-model", "max_tokens": 16, "messages": []})
-        else {
+        let Value::Object(body) = json!({"model": model, "max_tokens": 16, "messages": []}) else {
             unreachable!("the body is an object")
         };
         let body: Map<String, Value> = body;
         record::scope(CallRecord::new(), async {
-            let call = callbacks.begin(&caller(key(key_budget)), Some(&admitted));
+            let call = callbacks.begin(&caller(key(key_budget)), Some(&Admitted { hold }));
             let refused = match call.pre_call(body).await {
                 Ok(_) => None,
                 Err(HookError::Refused(refusal)) => Some(refusal.message),
@@ -688,12 +709,12 @@ mod tests {
         "Budget has been exceeded! Key=key Current cost: 10.0, Max budget: 10.0";
 
     #[rstest]
-    #[case::under_its_budget_it_is_held(budget(MAX, 9.0), false, None, Some(9.0 + HELD))]
+    #[case::under_its_budget_it_is_held(budget(MAX, 9.0), false, None, Some(HELD))]
     #[case::at_its_budget_the_check_refuses_before_any_hold(
         budget(MAX, MAX),
         false,
         Some(AT_ITS_BUDGET),
-        Some(MAX)
+        None
     )]
     #[case::at_a_budget_of_zero_the_check_refuses_what_nothing_holds(
         budget(0.0, 0.0),
@@ -701,12 +722,12 @@ mod tests {
         Some("Budget has been exceeded! Key=key Current cost: 0.0, Max budget: 0.0"),
         None
     )]
-    #[case::without_reservation_nothing_is_held(budget(MAX, 9.0), true, None, Some(9.0))]
+    #[case::without_reservation_nothing_is_held(budget(MAX, 9.0), true, None, None)]
     #[case::without_reservation_the_check_still_refuses(
         budget(MAX, MAX),
         true,
         Some(AT_ITS_BUDGET),
-        Some(MAX)
+        None
     )]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_call_is_checked_and_then_held_unless_reservation_is_disabled(
@@ -716,8 +737,24 @@ mod tests {
         #[case] held: Option<f64>,
     ) {
         assert_eq!(
-            checked_then_held(key_budget, disabled).await,
+            checked_then_held(key_budget, disabled, "held-model").await,
             (refused.map(str::to_owned), held)
         );
+    }
+
+    #[rstest]
+    #[case::a_free_model_is_served_and_holds_nothing("declared-free", false)]
+    #[case::an_unknown_model_is_checked_as_paid("no-such-model", true)]
+    #[case::a_free_input_with_a_paid_output_is_paid("free-input-only", true)]
+    #[case::a_model_free_only_in_the_cost_map_is_paid("free-by-the-cost-map", true)]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_caller_over_its_budget_is_refused_unless_the_model_is_free(
+        #[case] model: &str,
+        #[case] refused: bool,
+        #[values(false, true)] disabled: bool,
+    ) {
+        let (refusal, held) = checked_then_held(budget(MAX, MAX + 1.0), disabled, model).await;
+
+        assert_eq!((refusal.is_some(), held), (refused, None), "{refusal:?}");
     }
 }

@@ -432,7 +432,7 @@ mod tests {
             .await
             .hold(model, &body(model))
             .ok()?;
-        Some(Admitted { hold, free: false })
+        Some(Admitted { hold })
     }
 
     struct Reserved {

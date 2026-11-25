@@ -10,7 +10,7 @@
 //! is one, so any other call with a budget goes to Python.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     sync::{Arc, LazyLock},
 };
 
@@ -65,12 +65,10 @@ pub struct Hold {
     pub input_tokens: i64,
 }
 
-/// The group rates of each model group the gateway holds for natively, and which of them are
-/// free.
+/// The group rates of each model group the gateway holds for natively.
 #[derive(Default)]
 pub struct HoldPrices {
     groups: HashMap<String, GroupRates>,
-    free: HashSet<String>,
 }
 
 impl HoldPrices {
@@ -92,32 +90,13 @@ impl HoldPrices {
                 groups
             },
         );
-        let flat = deployments
-            .iter()
-            .filter(|deployment| prices_flat_capacity(deployment))
-            .map(|deployment| deployment.model_name.as_str())
-            .collect::<HashSet<_>>();
-        let groups = by_group
-            .into_iter()
-            .filter(|(group, _)| reads_anthropic_tokens(catalog, group))
-            .filter_map(|(group, rates)| Some((group.to_owned(), rates?)))
-            .collect::<HashMap<_, _>>();
-        let free = groups
-            .iter()
-            .filter(|(group, rates)| prices_nothing(rates) && !flat.contains(group.as_str()))
-            .map(|(group, _)| group.clone())
-            .collect();
-        Self { groups, free }
-    }
-
-    /// `is_model_cost_zero` for a group the gateway prices: its widened input and output rates are
-    /// both set to zero, and none of its deployments bills reserved capacity at a flat rate. A
-    /// call to a free group is checked against no budget.
-    pub(crate) fn free(&self, model: &str) -> Result<bool, Unheld> {
-        if !self.groups.contains_key(model) {
-            return Err(Unheld);
+        Self {
+            groups: by_group
+                .into_iter()
+                .filter(|(group, _)| reads_anthropic_tokens(catalog, group))
+                .filter_map(|(group, rates)| Some((group.to_owned(), rates?)))
+                .collect(),
         }
-        Ok(self.free.contains(model))
     }
 
     /// `_bound` for a `/v1/messages` call. `Ok(None)` is a call the proxy holds nothing for, as
@@ -219,24 +198,6 @@ fn held(deployment: &Deployment, info: &Map<String, Value>) -> bool {
         && info
             .get("tiered_pricing")
             .is_none_or(|tiers| tiers.as_array().is_none_or(Vec::is_empty))
-}
-
-fn prices_nothing(rates: &GroupRates) -> bool {
-    let zero = |rate: Option<UnitPrice>| rate.is_some_and(|rate| rate.get() <= 0.0);
-    zero(rates.input) && zero(rates.output)
-}
-
-/// `_has_ptu_flat_cost`: the deployment bills reserved PTU capacity, so its zero token rates do
-/// not make it free.
-fn prices_flat_capacity(deployment: &Deployment) -> bool {
-    let set = |field: &str| {
-        deployment
-            .model_info
-            .raw
-            .get(field)
-            .is_some_and(|value| !value.is_null())
-    };
-    set("ptu_count") && set("cost_per_ptu_per_hour")
 }
 
 /// `uses_anthropic_tokenizer`: the cost map lists `group` under Anthropic, and not as a Claude 3.
@@ -451,38 +412,5 @@ mod tests {
         ]);
 
         assert_eq!(prices().await.hold("held-model", &sent), Err(Unheld));
-    }
-
-    const PRICED_AT_ZERO: &str = "model_list:
-  - model_name: free-model
-    litellm_params:
-      model: anthropic/free-model
-      api_key: provider-key
-  - model_name: held-model
-    litellm_params:
-      model: anthropic/held-model
-      api_key: provider-key
-    model_info:
-      input_cost_per_token: 0
-  - model_name: wider-model
-    litellm_params:
-      model: anthropic/free-model
-      api_key: provider-key
-    model_info:
-      ptu_count: 1
-      cost_per_ptu_per_hour: 2.0
-";
-
-    #[rstest]
-    #[case::both_rates_zero("free-model", Ok(true))]
-    #[case::one_rate_above_zero("held-model", Ok(false))]
-    #[case::reserved_capacity_billed_flat("wider-model", Ok(false))]
-    #[case::a_group_it_does_not_price("other", Err(Unheld))]
-    #[tokio::test(flavor = "multi_thread")]
-    async fn a_group_is_free_only_when_both_rates_are_zero_and_it_bills_no_flat_capacity(
-        #[case] model: &str,
-        #[case] expected: Result<bool, Unheld>,
-    ) {
-        assert_eq!(HoldPrices::of(PRICED_AT_ZERO).await.free(model), expected);
     }
 }
