@@ -1,13 +1,14 @@
-use axum::http::StatusCode;
+use axum::http::{HeaderName, HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::{
     Extension, Json,
     response::{AppendHeaders, IntoResponse, Response},
 };
-use litellm_gateway_auth_core::authz::Denied;
+use litellm_gateway_auth_core::AuthzDenial;
 use litellm_inference::Error as InferenceError;
 use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use litellm_llms_types::formats::messages::MessagesErrorType;
 use litellm_python_compat::{Value as PyValue, repr::repr};
+use litellm_router_core::FailureKind;
 use serde_json::{Map, Value, json};
 
 use crate::{
@@ -19,7 +20,7 @@ use crate::{
 pub enum Error {
     /// The auth core found a model list of the caller's that does not reach the model.
     #[error("operation is not permitted")]
-    ModelAccess(#[from] Denied),
+    ModelAccess(#[from] AuthzDenial),
     #[error("invalid request body")]
     InvalidBody(#[from] BodyError),
     #[error(
@@ -149,6 +150,7 @@ impl Ended {
             ErrorFormat::Anthropic => (
                 self.error.status(),
                 self.routing(),
+                AppendHeaders(self.error.retry_after()),
                 Json(self.error.body(request_id)),
             )
                 .into_response(),
@@ -198,8 +200,19 @@ impl Error {
                 body,
             )
                 .into_response(),
-            other => (other.status(), body).into_response(),
+            other => (other.status(), AppendHeaders(other.retry_after()), body).into_response(),
         }
+    }
+
+    /// `retry-after` in whole seconds on a refusal the router made itself, as it refuses a
+    /// deployment past its declared rate limits.
+    pub(crate) fn retry_after(&self) -> Option<(HeaderName, HeaderValue)> {
+        let Self::Routing(error) = self else {
+            return None;
+        };
+        let after = error.refused()?.resets_in;
+        let seconds = after.as_secs() + u64::from(after.subsec_nanos() > 0);
+        Some((RETRY_AFTER, HeaderValue::from(seconds)))
     }
 
     /// A refusal names its own `type` and `code` when the proxy's exception does.
@@ -249,6 +262,7 @@ impl Error {
         match self {
             Self::Refused(refusal) => refusal.message.clone(),
             Self::ModelAccess(_) => self.to_string(),
+            Self::Routing(error) if let Some(refused) = rate_limit_refusal(error) => refused,
             Self::InvalidBody(_)
             | Self::UnknownModel { .. }
             | Self::Route(_)
@@ -262,12 +276,23 @@ impl Error {
     }
 }
 
+/// The message Python's proxy answers a pre-call check's `RateLimitError` with.
+fn rate_limit_refusal(error: &litellm_router_core::Error) -> Option<String> {
+    error.refused()?;
+    let failure = error.attempt()?;
+    let detail = failure.detail.as_deref()?;
+    (failure.kind == FailureKind::RateLimit).then(|| format!("litellm.{}: {detail}", failure.kind))
+}
+
 fn route_status(error: &InferenceError) -> StatusCode {
     if error.declined().is_some() {
         return StatusCode::NOT_IMPLEMENTED;
     }
     if let Some((status, _)) = error.upstream_response() {
         return StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+    }
+    if error.timeout().is_some() {
+        return StatusCode::REQUEST_TIMEOUT;
     }
     if error.is_missing_credential() {
         return StatusCode::UNAUTHORIZED;

@@ -346,15 +346,6 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
     setIsMakeMcpPublicModalVisible(true);
   };
 
-  const handleOk = () => {
-    setIsModalVisible(false);
-    setSelectedModel(null);
-    setIsAgentModalVisible(false);
-    setSelectedAgent(null);
-    setIsMcpModalVisible(false);
-    setSelectedMcpServer(null);
-  };
-
   const handleCancel = () => {
     setIsModalVisible(false);
     setSelectedModel(null);

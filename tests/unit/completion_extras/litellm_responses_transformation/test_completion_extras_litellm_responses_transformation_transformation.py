@@ -586,10 +586,12 @@ async def test_bridged_chat_stream_keeps_the_upstream_headers_when_its_output_ca
         ({"store": True, "truncation": "auto"}, {"store": True, "truncation": "auto"}, True),
     ],
 )
+@pytest.mark.parametrize("history", [(), (("earlier", "answer"),)], ids=["first_turn", "continued_turn"])
 async def test_acompletion_system_goes_in_input_unless_truncation_may_cut_it(
     request_params: dict[str, object],
     wire_controls: dict[str, object],
     preserve_instructions: bool,
+    history: tuple[tuple[str, str], ...],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -616,7 +618,11 @@ async def test_acompletion_system_goes_in_input_unless_truncation_may_cut_it(
         )
         await litellm.acompletion(
             model="openai/responses/gpt-6.2-sol",
-            messages=[{"role": "system", "content": "Stable prefix"}, {"role": "user", "content": "hi"}],
+            messages=[
+                {"role": "system", "content": "Stable prefix"},
+                *_chat_history(history),
+                {"role": "user", "content": "hi"},
+            ],
             api_key="sk-test",
             cache={"no-cache": True},
             **request_params,
@@ -631,10 +637,10 @@ async def test_acompletion_system_goes_in_input_unless_truncation_may_cut_it(
     user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
     if preserve_instructions:
         assert request_body["instructions"] == "Stable prefix"
-        assert request_body["input"] == [user_input]
+        assert request_body["input"] == [*_history_input(history), user_input]
     else:
         assert "instructions" not in request_body
-        assert request_body["input"] == [_system_input_item("Stable prefix"), user_input]
+        assert request_body["input"] == [_system_input_item("Stable prefix"), *_history_input(history), user_input]
 
 
 @pytest.mark.parametrize("request_shape", ["system_only", "json_object", "midturn_system", "marked_system"])
@@ -6120,8 +6126,121 @@ def test_streaming_final_chunk_carries_provider_metadata():
     assert all("service_tier" not in chunk for chunk in chunks[:-1])
 
 
+_RESPONSES_BODY_METADATA: Final = {
+    "access_programs": {"cyber": "daybreak_blue"},
+    "prompt_cache_options": {"mode": "implicit", "ttl": "30m"},
+    "prompt_cache_diagnostics": {"type": "cache_hit"},
+}
+_HIDDEN_RESPONSES_FIELDS: Final = {
+    "metadata": {"trace": "abc"},
+    "background": False,
+    "completed_at": 1760144905,
+    "conversation": {"id": "conv_metadata"},
+    "max_tool_calls": 3,
+    "prompt": {"id": "pmpt_metadata"},
+    "prompt_cache_key": "cache-key",
+    "prompt_cache_retention": "24h",
+    "safety_identifier": "user-hash",
+    "top_logprobs": 0,
+}
+
+
+def test_non_stream_response_keeps_provider_metadata_and_hides_responses_fields() -> None:
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import ModelResponse
+
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    output_message: Final = ResponseOutputMessage(
+        id="msg_metadata",
+        content=[ResponseOutputText(annotations=[], text="hi", type="output_text", logprobs=[])],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+    raw_response: Final = ResponsesAPIResponse(
+        id="resp_metadata",
+        created_at=1760144904,
+        model="gpt-5.6-sol",
+        object="response",
+        output=[output_message],
+        status="completed",
+        parallel_tool_calls=True,
+        tool_choice="auto",
+        tools=[],
+        **_RESPONSES_BODY_METADATA,
+        **_HIDDEN_RESPONSES_FIELDS,
+    )
+
+    result: Final = handler.transform_response(
+        model="gpt-5.6-sol",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=Mock(),
+        request_data={"model": "gpt-5.6-sol"},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"acompletion": False, "api_key": None},
+        encoding=Mock(),
+        api_key=None,
+        json_mode=None,
+    )
+
+    dumped: Final = result.model_dump()
+    assert {key: dumped.get(key) for key in _RESPONSES_BODY_METADATA} == _RESPONSES_BODY_METADATA
+    assert not set(_HIDDEN_RESPONSES_FIELDS) & set(dumped)
+
+
+def test_streaming_final_chunk_keeps_provider_metadata_and_hides_responses_fields() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    iterator.chunk_parser({"type": "response.created", "response": {"id": "resp_metadata", "output": []}})
+
+    final_chunk: Final = iterator.chunk_parser(
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_metadata",
+                "output": [{"type": "message"}],
+                "usage": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+                **_RESPONSES_BODY_METADATA,
+                **_HIDDEN_RESPONSES_FIELDS,
+            },
+        }
+    )
+
+    provider_fields: Final = final_chunk.provider_specific_fields or {}
+    assert {key: provider_fields.get(key) for key in _RESPONSES_BODY_METADATA} == _RESPONSES_BODY_METADATA
+    assert not set(_HIDDEN_RESPONSES_FIELDS) & set(provider_fields)
+
+
 def _system_input_item(text: str) -> dict[str, object]:
     return {"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]}
+
+
+def _chat_history(history: tuple[tuple[str, str], ...]) -> tuple[dict[str, str], ...]:
+    return tuple(
+        itertools.chain.from_iterable(
+            ({"role": "user", "content": question}, {"role": "assistant", "content": answer})
+            for question, answer in history
+        )
+    )
+
+
+def _history_input(history: tuple[tuple[str, str], ...]) -> tuple[dict[str, object], ...]:
+    return tuple(
+        itertools.chain.from_iterable(
+            (
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": question}]},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": answer}]},
+            )
+            for question, answer in history
+        )
+    )
 
 
 @pytest.mark.asyncio

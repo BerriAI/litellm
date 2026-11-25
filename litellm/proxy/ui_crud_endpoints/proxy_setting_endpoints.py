@@ -427,6 +427,9 @@ class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
 
     source: dict[str, FieldSource]
+    supports_similarity_threshold: bool = Field(
+        default=False, description="Whether the active response cache supports similarity thresholds"
+    )
 
 
 # Allowlist of UI settings that can be stored
@@ -489,6 +492,8 @@ def _derived_ui_setting_value(key: str) -> object:
 
 # Flags that must be synced from the persisted UISettings into
 # general_settings at runtime (on both read and write).
+# The Rust gateway keeps a copy in litellm/rust/crates/config/src/db/settings/keys.rs, which
+# test_rust_gateway_copy_of_db_settings_keys_matches_python in tests/unit/proxy/test_proxy_server.py enforces.
 _RUNTIME_GENERAL_SETTINGS_FLAGS: Final = [
     "disable_model_add_for_internal_users",
     "allow_public_health_readiness_details",
@@ -2081,10 +2086,12 @@ async def get_ui_settings():
             for key in values
         }
     )
+    response_cache: Final = litellm.cache
     return UISettingsResponse(
         values=values,
         field_schema=resolved_settings.field_schema,
         source=source,
+        supports_similarity_threshold=response_cache is not None and response_cache.is_semantic_cache(),
     )
 
 

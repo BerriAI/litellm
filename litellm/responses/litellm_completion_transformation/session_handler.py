@@ -19,10 +19,17 @@ from litellm.constants import (
     REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER,
 )
 from litellm.litellm_core_utils.cold_storage_handler import ColdStorageHandler
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, require_attributes
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    attribute_or_none,
+    require_attributes,
+)
 from litellm.litellm_core_utils.tool_fields import (
     SentToolNames,
+    chat_member_name,
     declared_function_names,
+    truncate_tool_name,
     with_renamed_tool_calls,
     with_tool_calls_named_as_declared,
 )
@@ -482,8 +489,9 @@ def _tool_names_by_turn(proxy_server_requests: Sequence[Mapping[str, object] | N
 
 
 def _rebuilt_from_cold_storage(spend_log: Mapping[str, object], proxy_server_request: Mapping[str, object]) -> bool:
-    return "input" not in proxy_server_request and LITELLM_TRUNCATED_PAYLOAD_FIELD in str(
-        spend_log.get("proxy_server_request")
+    stored_request: Final = str(spend_log.get("proxy_server_request") or "{}")
+    return "input" not in proxy_server_request and (
+        stored_request == "{}" or LITELLM_TRUNCATED_PAYLOAD_FIELD in stored_request
     )
 
 
@@ -494,6 +502,32 @@ def _declared_tool_names(
         return frozenset()
     model_parameters: Final = as_str_mapping(proxy_server_request.get("model_parameters"))
     return frozenset() if model_parameters is None else declared_function_names(model_parameters.get("tools"))
+
+
+def _sent_name(name: str, namespace: object) -> str | None:
+    if not namespace:
+        return truncate_tool_name(name)
+    return chat_member_name(name, name) if namespace == name else None
+
+
+def _input_item_named_as_declared(item: object, declared_names: frozenset[str]) -> object:
+    fields: Final = as_str_mapping(item)
+    if fields is None or fields.get("type") != "function_call":
+        return item
+    name: Final = fields.get("name")
+    if not isinstance(name, str) or name in declared_names:
+        return item
+    sent_name: Final = _sent_name(name, fields.get("namespace"))
+    if sent_name is None or sent_name not in declared_names:
+        return item
+    return {**{key: value for key, value in fields.items() if key != "namespace"}, "name": sent_name}
+
+
+def _input_named_as_declared(stored_input: object, declared_names: frozenset[str]) -> object:
+    items: Final = as_object_list(stored_input)
+    if not declared_names or items is None:
+        return stored_input
+    return [_input_item_named_as_declared(item, declared_names) for item in items]
 
 
 def _stored_instructions(proxy_server_request: Mapping[str, object] | None) -> str | None:
@@ -739,14 +773,16 @@ class ResponsesSessionHandler:
         )
 
         response_input_param: str | ResponseInputParam | None = None
+        declared_tool_names: Final = _declared_tool_names(spend_log, proxy_server_request_dict)
 
         ############################################################
         # Add Input messages for this Spend Log
         ############################################################
         if proxy_server_request_dict:
             stored_request_input: Final = proxy_server_request_dict.get("input")
-            _response_input_param: Final = (
-                proxy_server_request_dict.get("messages") if stored_request_input is None else stored_request_input
+            _response_input_param: Final = _input_named_as_declared(
+                proxy_server_request_dict.get("messages") if stored_request_input is None else stored_request_input,
+                declared_tool_names,
             )
             if isinstance(_response_input_param, (str, list)):
                 response_input_param = _response_input_param
@@ -759,7 +795,7 @@ class ResponsesSessionHandler:
         output_messages: Final = ResponsesSessionHandler._stored_output_messages(
             _stored_response(spend_log),
             tool_names,
-            _declared_tool_names(spend_log, proxy_server_request_dict),
+            declared_tool_names,
             item_cache_control,
             tool_call_provider_fields,
         )

@@ -120,6 +120,15 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
     ]
 
 
+def _messages_history(history: tuple[tuple[str, str], ...]) -> tuple[dict[str, str], ...]:
+    return tuple(
+        chain.from_iterable(
+            ({"role": "user", "content": question}, {"role": "assistant", "content": answer})
+            for question, answer in history
+        )
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "request_params,wire_controls,preserve_instructions",
@@ -181,10 +190,12 @@ def test_explicit_caller_instructions_are_combined_with_preserved_system_text(
         ),
     ],
 )
+@pytest.mark.parametrize("history", [(), (("earlier", "answer"),)], ids=["first_turn", "continued_turn"])
 async def test_messages_system_goes_in_input_unless_a_conversation_or_truncation_holds_it(
     request_params: dict[str, object],
     wire_controls: dict[str, object],
     preserve_instructions: bool,
+    history: tuple[tuple[str, str], ...],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -216,14 +227,14 @@ async def test_messages_system_goes_in_input_unless_a_conversation_or_truncation
             model="openai/responses/gpt-6.2-sol",
             max_tokens=16,
             system="Stable prefix",
-            messages=[{"role": "user", "content": "hi"}],
+            messages=[*_messages_history(history), {"role": "user", "content": "hi"}],
             api_key="sk-test",
             cache={"no-cache": True},
             **request_params,
         )
         await OpenAITokenCounter().count_tokens(
             model_to_use="gpt-6.2-sol",
-            messages=[{"role": "user", "content": "hi"}],
+            messages=[*_messages_history(history), {"role": "user", "content": "hi"}],
             contents=None,
             system="Stable prefix",
             messages_format="anthropic",
@@ -241,13 +252,23 @@ async def test_messages_system_goes_in_input_unless_a_conversation_or_truncation
         if key in request_body
     } == wire_controls
     user_input: Final = {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]}
+    earlier_input: Final = tuple(
+        chain.from_iterable(
+            (
+                {"type": "message", "role": "user", "content": [{"type": "input_text", "text": question}]},
+                {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": answer}]},
+            )
+            for question, answer in history
+        )
+    )
     if preserve_instructions:
         assert request_body["instructions"] == "Stable prefix"
-        assert request_body["input"] == [user_input]
+        assert request_body["input"] == [*earlier_input, user_input]
     else:
         assert "instructions" not in request_body
         assert request_body["input"] == [
             {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "Stable prefix"}]},
+            *earlier_input,
             user_input,
         ]
 
@@ -1218,6 +1239,24 @@ def test_drop_params_drops_a_malformed_tool_result_text(text_block: Mapping[str,
     assert responses_kwargs["input"] == [
         {"type": "function_call_output", "call_id": "toolu_log", "output": "build ok\ndone"},
     ]
+
+
+@pytest.mark.parametrize("text_block", MALFORMED_TEXT_BLOCKS)
+def test_non_string_user_text_answers_400_naming_its_field(text_block: Mapping[str, object]) -> None:
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        _build_responses_kwargs(
+            model="openai/gpt-5.6",
+            extra_kwargs=OPENAI_API,
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": "run the build"},
+                {"role": "assistant", "content": "on it"},
+                {"role": "user", "content": [{"type": "text", "text": "and test"}, dict(text_block)]},
+            ],
+        )
+
+    assert rejected.value.status_code == 400
+    assert "messages.2.content.1.text: Input should be a valid string" in rejected.value.message
 
 
 def test_tool_result_text_block_without_text_still_reaches_the_model_as_empty_text() -> None:

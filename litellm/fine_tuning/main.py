@@ -69,7 +69,7 @@ def _prepare_azure_extra_body(
 async def acreate_fine_tuning_job(
     model: str,
     training_file: str,
-    hyperparameters: dict | None = {},
+    hyperparameters: dict[str, object] | None = {},
     suffix: str | None = None,
     validation_file: str | None = None,
     integrations: list[str] | None = None,

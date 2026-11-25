@@ -466,6 +466,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_image_token: float | None
     output_cost_per_image_token_batches: ReadOnly[float | None]
     output_cost_per_image_token_priority: ReadOnly[float | None]
+    output_cost_per_image_token_flex: ReadOnly[float | None]
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
     output_cost_per_reasoning_token: float | None
@@ -4365,6 +4366,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_image_token: float | None = None
     output_cost_per_image_token_batches: float | None = None
     output_cost_per_image_token_priority: float | None = None
+    output_cost_per_image_token_flex: float | None = None
     output_cost_per_video_token: float | None = None
     output_cost_per_reasoning_token: float | None = None
     output_cost_per_reasoning_token_flex: float | None = None
@@ -4579,6 +4581,13 @@ oauth_token_exchange_litellm_params: Final = (
     "token_exchange_profile",
     "token_exchange_scope",
 )
+provider_oauth_litellm_params: Final = (
+    "oauth_client_credentials",
+    "oauth_token_url",
+    "oauth_client_id",
+    "oauth_client_secret",
+    "oauth_scope",
+)
 github_copilot_oauth_litellm_params: Final = (
     "github_copilot_auth_type",
     "github_copilot_host",
@@ -4695,10 +4704,14 @@ server_owned_wif_litellm_params: Final = (
     + openai_wif_litellm_params
     + oauth_token_exchange_litellm_params
     + github_copilot_oauth_litellm_params
+    + provider_oauth_litellm_params
     + ("chatgpt_auth_file",)
 )
 secret_bearing_wif_litellm_params: Final = tuple(
-    sorted(WIF_SECRET_BEARING_KEYS | {"github_copilot_app_private_key_ref", "github_copilot_app_private_key"})
+    sorted(
+        WIF_SECRET_BEARING_KEYS
+        | {"github_copilot_app_private_key_ref", "github_copilot_app_private_key", "oauth_client_secret"}
+    )
 )
 
 all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it
@@ -4942,6 +4955,7 @@ class LlmProviders(str, Enum):
     REKA = "reka"
     STREAMLAKE = "streamlake"
     WALLY = "wally"
+    HUAWEI_MAAS = "huawei_maas"
     SARVAM = "sarvam"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
@@ -5031,6 +5045,11 @@ class LiteLLMLoggingBaseClass:
 
 
 TokenCountMessagesFormat: TypeAlias = Literal["openai", "anthropic"]
+
+
+@dataclass(frozen=True, slots=True)
+class FailureLoggedCost:
+    cost: float
 
 
 @dataclass(frozen=True, slots=True)

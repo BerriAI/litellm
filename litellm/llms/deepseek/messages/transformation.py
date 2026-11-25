@@ -147,7 +147,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         litellm_params: object,
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> tuple[dict, str | None]:
+    ) -> tuple[dict[str, str], str | None]:
         dynamic_api_key: Final = self.get_api_key(api_key=api_key)
 
         if "x-api-key" not in headers and "authorization" not in headers and dynamic_api_key is not None:
@@ -212,7 +212,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         model: str,
         messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        anthropic_messages_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
     ) -> dict[str, object]:
