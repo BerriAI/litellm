@@ -1,4 +1,7 @@
-use std::{cmp::Ordering, collections::BTreeMap};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, BTreeSet},
+};
 
 use litellm_python_compat::truthy::json_truthy;
 use serde::Deserialize;
@@ -33,6 +36,8 @@ pub struct AuthMetadata {
     pub model_max_budget: Value,
     pub team_model_rpm_limit: Value,
     pub team_model_tpm_limit: Value,
+    /// The team's models whose cache-read prompt tokens count against `team_model_tpm_limit`.
+    pub team_model_tpm_limit_counts_cached_tokens: BTreeMap<String, bool>,
     pub organization_model_rpm_limit: Value,
     pub organization_model_tpm_limit: Value,
     pub project_model_rpm_limit: Value,
@@ -116,6 +121,8 @@ pub struct Request<'a> {
 
 pub struct Built {
     pub descriptors: Vec<Value>,
+    /// The team model scopes that count cache-read prompt tokens against their TPM limit.
+    pub cached_counting_scopes: BTreeSet<(String, String)>,
     pub ptu_ceiling: Option<Ceiling>,
 }
 
@@ -537,6 +544,28 @@ impl Request<'_> {
             .collect()
     }
 
+    fn cached_counting_scopes(&self) -> BTreeSet<(String, String)> {
+        let counts = &self.metadata.team_model_tpm_limit_counts_cached_tokens;
+        self.lookups
+            .candidates
+            .iter()
+            .filter_map(|candidate| self.model(candidate))
+            .filter(|model| {
+                counts
+                    .get(&model.requested)
+                    .or_else(|| counts.get(&model.group))
+                    .copied()
+                    .unwrap_or(false)
+            })
+            .map(|model| {
+                (
+                    "model_per_team".to_owned(),
+                    format!("{}:{}", text(self.attribute("team_id")), model.group),
+                )
+            })
+            .collect()
+    }
+
     fn model_per_team(&self, candidate: &str) -> Result<Option<Value>, BuildError> {
         let Some(model) = self.model(candidate) else {
             return Ok(None);
@@ -795,6 +824,7 @@ impl Request<'_> {
         descriptors.extend(self.tags_from_database());
         Ok(Built {
             descriptors,
+            cached_counting_scopes: self.cached_counting_scopes(),
             ptu_ceiling,
         })
     }
