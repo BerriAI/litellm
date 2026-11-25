@@ -40,7 +40,7 @@ class AzureAudioTranscription(AzureChatCompletion):
         custom_llm_provider: str = "azure",
     ) -> TranscriptionResponse | Coroutine[Any, Any, TranscriptionResponse]:
         data: Final = {"model": model, "file": audio_file, **optional_params}
-        deployment_api_version: Final = (
+        client_api_version: Final = (
             None
             if self.is_api_version_opt_out(api_version) or self.is_azure_v1_api_version((api_version or "").lower())
             else api_version
@@ -54,7 +54,7 @@ class AzureAudioTranscription(AzureChatCompletion):
                 timeout=timeout,
                 api_key=api_key,
                 api_base=api_base,
-                api_version=deployment_api_version,
+                api_version=client_api_version,
                 client=client,
                 max_retries=max_retries,
                 logging_obj=logging_obj,
@@ -64,7 +64,7 @@ class AzureAudioTranscription(AzureChatCompletion):
             )
 
         azure_client: Final = self.get_azure_openai_client(
-            api_version=deployment_api_version,
+            api_version=client_api_version,
             api_base=api_base,
             api_key=api_key,
             model=model,
