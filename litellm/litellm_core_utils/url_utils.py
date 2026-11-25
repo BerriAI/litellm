@@ -147,13 +147,6 @@ def join_api_base(api_base: str, route: str) -> str:
     return f"{_strip_trailing_slashes_keeping_the_scheme(api_base)}/{route.lstrip('/')}"
 
 
-def ensure_api_route(api_base: str, route: str) -> str:
-    base: Final = _strip_trailing_slashes_keeping_the_scheme(api_base)
-    if urlsplit(base).path.endswith(f"/{route.lstrip('/')}"):
-        return base
-    return join_api_base(base, route)
-
-
 def _is_blocked_ip(addr: str) -> bool:
     """Return True for any IP not safe to reach from a user-supplied URL.
 
