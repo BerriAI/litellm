@@ -1032,13 +1032,10 @@ def _deployment_call_params(
 def _passthrough_route_model_id(
     core: EndpointCore, model_name: str, provider: str | None, kwargs: Mapping[str, object]
 ) -> str:
-    from litellm.litellm_core_utils.model_latest_aliases import resolve_model_latest_alias
-    from litellm.llms.bedrock.common_utils import split_bedrock_region_path
     from litellm.types.utils import LlmProviders
 
     if provider == LlmProviders.BEDROCK.value:
-        _, model_id = split_bedrock_region_path(model_name)
-        return resolve_model_latest_alias(model_id, provider)
+        return _bedrock_model_id(model_name)
     try:
         stripped, _, _, _ = core.host.invoke("get_llm_provider")(
             model=model_name,
@@ -1048,6 +1045,17 @@ def _passthrough_route_model_id(
     except Exception:  # noqa: BLE001  # as the Python router: an unresolvable model is used as is
         return model_name
     return str(stripped)
+
+
+def _bedrock_model_id(model_name: str) -> str:
+    from litellm.litellm_core_utils.model_latest_aliases import resolve_model_latest_alias
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+    from litellm.llms.bedrock.common_utils import split_bedrock_region_path
+    from litellm.types.utils import LlmProviders
+
+    _, model_id = split_bedrock_region_path(model_name)
+    resolved: Final = resolve_model_latest_alias(model_id, LlmProviders.BEDROCK.value)
+    return BaseAWSLLM.get_bedrock_model_id({}, BaseAWSLLM.get_bedrock_invoke_provider(resolved), resolved)
 
 
 def _generic_attempt(

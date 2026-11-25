@@ -612,6 +612,27 @@ async def test_llm_passthrough_drops_the_region_path_from_a_bedrock_model(
     assert host.calls[0].kwargs["endpoint"] == "/model/us.anthropic.claude-sonnet-5-5/invoke"
 
 
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        (
+            "bedrock/llama/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123def456",
+            "/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Aimported-model%2Fabc123def456/invoke",
+        ),
+        (
+            "bedrock/invoke/arn:aws:bedrock:us-east-1:123456789012:custom-model-deployment/abc123def456",
+            "/model/arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Acustom-model-deployment%2Fabc123def456/invoke",
+        ),
+    ],
+)
+async def test_llm_passthrough_sends_a_bedrock_arn_model_as_one_path_segment_without_its_spec_marker(
+    make_core: MakeCore, host: EndpointHost, model: str, expected: str
+):
+    core: Final = make_core(model_list=[deployment("g", "d1", model=model)])
+    await core.allm_passthrough_route(model="g", method="POST", endpoint="/model/g/invoke")
+    assert host.calls[0].kwargs["endpoint"] == expected
+
+
 @pytest.mark.parametrize("route", ["bedrock/", "bedrock/invoke/", "bedrock/converse/"])
 async def test_llm_passthrough_sends_the_cost_map_target_of_a_bedrock_latest_alias(
     make_core: MakeCore, host: EndpointHost, route: str

@@ -43,6 +43,8 @@ def test_llm_passthrough_route():
     [
         "arn:aws:bedrock:us-east-1:123456789123:application-inference-profile/r742sbn2zckd",
         "arn:aws:bedrock:us-east-1:123456789123:provisioned-model/r742sbn2zckd",
+        "arn:aws:bedrock:us-east-1:123456789123:custom-model-deployment/r742sbn2zckd",
+        "arn:aws:bedrock:us-east-1:123456789123:custom-model/amazon.titan-text-express-v1:0:8k/r742sbn2zckd",
     ],
 )
 def test_bedrock_arn_model_id_url_encoding(arn: str):
