@@ -4016,9 +4016,11 @@ async def _spend_rows_of_native_messages_stream_ending_in(
         if served_as == "python_stream"
         else upstream()
     )
-    guarded: Final = ProxyLogging(user_api_key_cache=DualCache()).async_post_call_streaming_iterator_hook(
+    proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
+    user_api_key_dict: Final = UserAPIKeyAuth(api_key="sk-1", request_route=request_route)
+    guarded: Final = proxy_logging.async_post_call_streaming_iterator_hook(
         response=served,
-        user_api_key_dict=UserAPIKeyAuth(api_key="sk-1", request_route=request_route),
+        user_api_key_dict=user_api_key_dict,
         request_data={"model": "litellm-qa-msgstream", "litellm_logging_obj": logging_obj},
     )
 
@@ -4030,7 +4032,11 @@ async def _spend_rows_of_native_messages_stream_ending_in(
         await asyncio.sleep(0)
     for dispatched in fired_dispatches:
         await asyncio.wait_for(dispatched.wait(), timeout=10)
-    await logging_obj.async_failure_handler(raised.value, "", started, datetime.now())
+    await proxy_logging.post_call_failure_hook(
+        request_data={"model": "litellm-qa-msgstream", "litellm_logging_obj": logging_obj},
+        original_exception=raised.value,
+        user_api_key_dict=user_api_key_dict,
+    )
     return spend_rows.rows
 
 
@@ -4085,7 +4091,7 @@ async def test_messages_stream_refused_after_its_success_was_logged_is_billed_on
         monkeypatch, refusal_error, None, served_as, success_logged_before_refusal=True
     )
 
-    assert [row[:3] for row in rows if row[3] > 0] == [("success", 30, 20)]
+    assert [row[:3] for row in rows] == [("success", 30, 20)]
 
 
 async def _native_pump_stream_refused_after(

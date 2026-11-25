@@ -4531,7 +4531,13 @@ class ProxyLogging:
         request_data.pop("standard_logging_object", None)
 
         ### LOGGING ###
-        if isinstance(logging_obj, Logging) and logging_obj.prepared_cost is not None:
+        if (
+            isinstance(logging_obj, Logging)
+            and logging_obj.stream_success_claimed
+            and isinstance(original_exception, _STREAM_REFUSAL_ERRORS)
+        ):
+            request_data.update({FAILURE_ROW_ALREADY_WRITTEN_KEY: FAILURE_ROW_ALREADY_WRITTEN})
+        elif isinstance(logging_obj, Logging) and logging_obj.prepared_cost is not None:
             await self._dispatch_proxy_only_failure_handlers(logging_obj, original_exception)
         elif not reply_logs_success and self._is_proxy_only_llm_api_error(
             original_exception=original_exception,
