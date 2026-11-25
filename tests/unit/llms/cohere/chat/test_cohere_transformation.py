@@ -1078,6 +1078,16 @@ def test_cohere_v2_response_format_beside_tools_or_documents_reaches_models_that
     assert body == _cohere_v2_body("command-a-03-2025", {**companion, "response_format": {"type": "json_object"}})
 
 
+CITY_PARAMETERS: Final = {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}
+
+
+def _city_tool(name: str, **strict: bool) -> Mapping[str, object]:
+    return {"type": "function", "function": {"name": name, "parameters": CITY_PARAMETERS, **strict}}
+
+
+SOME_TOOLS_STRICT: Final = {"tools": [_city_tool("get_weather", strict=True), _city_tool("get_time")]}
+
+
 UNSUPPORTED_COHERE_V2_PARAMS: Final = [
     pytest.param(NO_TOOL_CHOICE_MODEL, {"tools": [WEATHER_TOOL], "tool_choice": "required"}, id="no-tool-choice-model"),
     pytest.param(
@@ -1192,6 +1202,7 @@ def test_cohere_v2_unsupported_param_is_dropped_with_drop_params(
     [
         pytest.param(NO_TOOL_CHOICE_MODEL, {"tools": [WEATHER_TOOL], "tool_choice": "none"}, "tool_choice", id="tool"),
         pytest.param(REASONING_MODEL, {"reasoning_effort": "extreme"}, "reasoning_effort", id="effort"),
+        pytest.param(TOOL_CHOICE_MODEL, SOME_TOOLS_STRICT, "strict", id="strict"),
     ],
 )
 def test_cohere_v2_drop_params_warns_about_the_dropped_param(
@@ -1217,6 +1228,90 @@ def test_cohere_v2_tool_choice_without_tools_is_left_out(respx_mock: respx.MockR
     body: Final = _cohere_v2_request_body(respx_mock, NO_TOOL_CHOICE_MODEL, {"tool_choice": tool_choice})
 
     assert body == _cohere_v2_body(NO_TOOL_CHOICE_MODEL, {})
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("tools", "cohere_fields"),
+    [
+        pytest.param(
+            [_city_tool("get_weather", strict=False)],
+            {"tools": [_city_tool("get_weather")]},
+            id="strict-false",
+        ),
+        pytest.param(
+            [_city_tool("get_weather", strict=True), _city_tool("get_time", strict=True)],
+            {"tools": [_city_tool("get_weather"), _city_tool("get_time")], "strict_tools": True},
+            id="every-tool-strict",
+        ),
+        pytest.param(
+            [_city_tool("get_weather", strict=False), _city_tool("get_time")],
+            {"tools": [_city_tool("get_weather"), _city_tool("get_time")]},
+            id="no-tool-strict",
+        ),
+    ],
+)
+def test_cohere_v2_tool_strict_becomes_strict_tools(
+    respx_mock: respx.MockRouter, tools: list[Mapping[str, object]], cohere_fields: Mapping[str, object]
+) -> None:
+    body: Final = _cohere_v2_request_body(respx_mock, TOOL_CHOICE_MODEL, {"tools": tools})
+
+    assert body == _cohere_v2_body(TOOL_CHOICE_MODEL, cohere_fields)
+
+
+def test_cohere_v2_strict_on_only_some_tools_is_a_400_without_drop_params() -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as error:
+        litellm.completion(
+            model=f"cohere_chat/{TOOL_CHOICE_MODEL}",
+            messages=[WEATHER_QUESTION],
+            api_key="cohere-test-key",
+            **SOME_TOOLS_STRICT,
+        )
+
+    assert error.value.status_code == 400
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("drop_via", ["request", "global"])
+def test_cohere_v2_strict_on_only_some_tools_is_dropped_with_drop_params(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, drop_via: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_via == "global")
+    request_params: Final = {**SOME_TOOLS_STRICT, "drop_params": True} if drop_via == "request" else SOME_TOOLS_STRICT
+
+    body: Final = _cohere_v2_request_body(respx_mock, TOOL_CHOICE_MODEL, request_params)
+
+    assert body == _cohere_v2_body(TOOL_CHOICE_MODEL, {"tools": [_city_tool("get_weather"), _city_tool("get_time")]})
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize(
+    ("strict", "strict_tools"),
+    [({}, None), ({"strict": False}, None), ({"strict": True}, True)],
+    ids=["strict-omitted", "strict-false", "strict-true"],
+)
+def test_cohere_v2_responses_function_tool_reaches_cohere_without_strict(
+    respx_mock: respx.MockRouter, strict: Mapping[str, bool], strict_tools: bool | None
+) -> None:
+    route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(200, json=_cohere_v2_response({"content": [{"type": "text", "text": "ok"}]}))
+    )
+
+    litellm.responses(
+        model=f"cohere_chat/{TOOL_CHOICE_MODEL}",
+        input="What is the weather in Paris?",
+        tools=[{"type": "function", "name": "get_weather", "parameters": CITY_PARAMETERS, **strict}],
+        api_key="cohere-test-key",
+    )
+
+    sent: Final = _sent_body(route)
+    assert (sent["tools"], sent.get("strict_tools")) == (
+        [{"type": "function", "function": {"name": "get_weather", "description": "", "parameters": CITY_PARAMETERS}}],
+        strict_tools,
+    )
 
 
 @pytest.mark.usefixtures("_cohere_httpx_transport")

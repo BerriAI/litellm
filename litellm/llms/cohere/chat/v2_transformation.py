@@ -80,6 +80,8 @@ _SCHEMA_KEYWORDS_COHERE_REJECTS: Final = frozenset(
     }
 )
 _PATTERN_SYNTAX_COHERE_REJECTS: Final = ("(?=", "(?!", "(?<=", "(?<!")
+_EVERY_TOOL_STRICT: Final = frozenset({True})
+_SOME_TOOLS_STRICT: Final = frozenset({True, False})
 _COHERE_PROVIDERS: Final = ("cohere_chat", "cohere")
 _SCHEMA_DEPTH_CHECKED: Final = 64
 
@@ -101,9 +103,43 @@ def _any_model_supports(capability: Callable[..., bool], model_ids: tuple[str, .
     )
 
 
+def _function_fields(tool: object) -> Mapping[str, object] | None:
+    return as_str_mapping((as_str_mapping(tool) or _NOTHING).get("function"))
+
+
 def _function_name(tool: object) -> object:
-    function: Final = as_str_mapping((as_str_mapping(tool) or _NOTHING).get("function"))
+    function: Final = _function_fields(tool)
     return None if function is None else function.get("name")
+
+
+def _is_strict(tool: object) -> bool:
+    return (_function_fields(tool) or _NOTHING).get("strict") is True
+
+
+def _tool_strictness(tools: object) -> frozenset[bool]:
+    return frozenset(_is_strict(tool) for tool in as_object_list(tools) or ())
+
+
+def _strict_rejection(tools: object) -> str | None:
+    if _tool_strictness(tools) != _SOME_TOOLS_STRICT:
+        return None
+    return "Cohere applies strict to every tool or to none, so it cannot take strict on only some tools."
+
+
+def _without_strict(tool: object) -> object:
+    fields: Final = as_str_mapping(tool)
+    function: Final = _function_fields(tool)
+    if fields is None or function is None or "strict" not in function:
+        return tool
+    return {**fields, "function": {key: value for key, value in function.items() if key != "strict"}}
+
+
+def _cohere_tool_params(tools: object) -> Mapping[str, object]:
+    listed: Final = as_object_list(tools)
+    if listed is None:
+        return _NOTHING
+    strict_tools: Final = {"strict_tools": True} if _tool_strictness(listed) == _EVERY_TOOL_STRICT else _NOTHING
+    return {"tools": [_without_strict(tool) for tool in listed], **strict_tools}
 
 
 def _sole_tool_name(tools: object) -> object:
@@ -258,7 +294,10 @@ def _rejection(
             return None
 
 
-def _logged_value(param: str, value: object) -> object:
+def _logged_value(param: str, optional_params: Mapping[str, object]) -> object:
+    if param == "strict":
+        return [_is_strict(tool) for tool in as_object_list(optional_params.get("tools")) or ()]
+    value: Final = optional_params[param]
     fields: Final = as_str_mapping(value)
     return fields.get("type") if param == "response_format" and fields is not None else value
 
@@ -277,9 +316,12 @@ def _params_cohere_takes(
     model_ids: Final = _cohere_model_ids(model, litellm_params.get("base_model"))
     allowed: Final = _allowed_openai_params(litellm_params)
     reasons: Final = {
-        param: _rejection(param, value, optional_params, model_ids)
-        for param, value in optional_params.items()
-        if param not in allowed
+        **{
+            param: _rejection(param, value, optional_params, model_ids)
+            for param, value in optional_params.items()
+            if param not in allowed
+        },
+        "strict": _strict_rejection(optional_params.get("tools")),
     }
     rejected: Final = {param: reason for param, reason in reasons.items() if reason is not None}
     if rejected and not drops_unsupported_params(litellm_params.get("drop_params")):
@@ -292,13 +334,14 @@ def _params_cohere_takes(
         )
     for param, reason in rejected.items():
         warn_dropped_reasoning(
-            param, _logged_value(param, optional_params[param]), model_ids[0], reason, drop_params_gated=True
+            param, _logged_value(param, optional_params), model_ids[0], reason, drop_params_gated=True
         )
-    return {
+    kept: Final = {
         param: value
         for param, value in optional_params.items()
         if param not in rejected and not _translated_to_thinking(param, value)
     }
+    return {**kept, **_cohere_tool_params(kept.get("tools"))}
 
 
 class CohereV2ChatConfig(OpenAIGPTConfig):
