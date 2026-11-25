@@ -27,4 +27,7 @@ pub struct Metadata {
     pub team_id: Option<String>,
     pub used_client_oauth_token: Option<bool>,
     pub claude_subscription_usage: Option<ClaudeSubscriptionUsage>,
+    /// Whether the call is a silent experiment's mirrored copy. Python logs the key only when it
+    /// is true (`SilentExperimentFlag`).
+    pub is_silent_experiment: bool,
 }
