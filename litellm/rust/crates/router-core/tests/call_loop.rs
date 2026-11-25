@@ -508,20 +508,21 @@ fn agentic_followup() -> AttemptError {
 
 fn follow_up_to_a_provider_held_response() -> AttemptError {
     let mut failed = failure(FailureKind::Declined, 400);
-    failed.classes = vec![
+    failed.classes = [
         "UnresolvablePreviousResponseError".into(),
         "MalformedRequestFieldError".into(),
         "BadRequestError".into(),
-    ];
+    ]
+    .into();
     failed.names_provider = true;
     failed
 }
 
 fn follow_up_to_an_unknown_response() -> AttemptError {
     let mut failed = follow_up_to_a_provider_held_response();
-    failed
-        .classes
-        .insert(0, "UnknownPreviousResponseError".into());
+    failed.classes = std::iter::once("UnknownPreviousResponseError".into())
+        .chain(failed.classes.iter().cloned())
+        .collect();
     failed
 }
 
