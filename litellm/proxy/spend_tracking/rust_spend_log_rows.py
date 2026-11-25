@@ -25,6 +25,7 @@ from litellm.constants import (
 from litellm.litellm_core_utils.core_helpers import (
     claude_subscription_usage,
     get_litellm_metadata_from_kwargs,  # pyright: ignore[reportUnknownVariableType]  # the helper's dict parameter is untyped upstream
+    reconstruct_model_name,  # pyright: ignore[reportUnknownVariableType]  # the helper's Mapping parameter is untyped upstream
 )
 from litellm.litellm_core_utils.hidden_params import served_from_cache
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
@@ -43,6 +44,7 @@ from litellm.types.proxy.spend_log_rows import LedgerColumns, NativeSpendLogRow
 from litellm.types.utils import LiteLLMBatch, batch_chat_usage
 
 if TYPE_CHECKING:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import AgentNameLookup
     from litellm.router import Router
 
 _COMPLETION_START_TIME: Final[TypeAdapter[datetime | None]] = TypeAdapter(datetime | None)
@@ -307,6 +309,29 @@ def spend_log_row_config() -> SpendLogRowConfig:
     )
 
 
+def _failed_request_names_registered_agent(
+    kwargs: Mapping[str, object],
+    payload: Mapping[str, object] | None,
+    logged_provider: object,
+    metadata: Mapping[str, object],
+    agent_names: "AgentNameLookup | None",
+) -> bool:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import (
+        _names_registered_agent,  # pyright: ignore[reportPrivateUsage]  # agent registry lookups stay with the registry
+    )
+
+    if agent_names is None or metadata.get("status") != "failure":
+        return False
+    requested_model: Final = kwargs.get("model")
+    logged_model: Final = payload.get("model") if payload is not None else None
+    resolved_model: Final = (logged_model if isinstance(logged_model, str) else None) or reconstruct_model_name(
+        requested_model if isinstance(requested_model, str) else "",
+        logged_provider if isinstance(logged_provider, str) else None,
+        metadata,
+    )
+    return _names_registered_agent(resolved_model, agent_names)
+
+
 def spend_log_row_input(
     kwargs: dict[str, object],  # mutable-ok: the logging kwargs as litellm hands them over, only read here
     response_obj: object,
@@ -315,6 +340,7 @@ def spend_log_row_input(
     llm_router: "Router | None",
     now: float,
     fallback_session_id: str,
+    agent_names: "AgentNameLookup | None" = None,
 ) -> Mapping[str, object]:
     from litellm.proxy.spend_tracking.spend_tracking_utils import (
         _adapter_route_call_type,  # pyright: ignore[reportPrivateUsage]  # the route table lookup stays with the route table
@@ -427,6 +453,11 @@ def spend_log_row_input(
         "is_configured_model_group": _is_configured_model_group(model_group, llm_router)
         if metadata.get("status") == "failure"
         else False,
+        **(
+            {"names_registered_agent": True}
+            if _failed_request_names_registered_agent(kwargs, payload, logged_provider, metadata, agent_names)
+            else {}
+        ),
         "route_call_type": _adapter_route_call_type(call_type if isinstance(call_type, str) else None, metadata),
         "snapshotless_cost_breakdown": _bounded(
             _snapshotless_cost_breakdown(kwargs)  # pyright: ignore[reportArgumentType]  # main types the kwargs keys as object
@@ -447,8 +478,11 @@ def current_spend_log_row_input(
     start_time: datetime,
     end_time: datetime,
     llm_router: "Router | None",
+    agent_names: "AgentNameLookup | None" = None,
 ) -> Mapping[str, object]:
-    return spend_log_row_input(kwargs, response_obj, start_time, end_time, llm_router, time.time(), str(uuid.uuid4()))
+    return spend_log_row_input(
+        kwargs, response_obj, start_time, end_time, llm_router, time.time(), str(uuid.uuid4()), agent_names
+    )
 
 
 def encode_row_input(row_input: Mapping[str, object]) -> bytes:
@@ -539,8 +573,9 @@ def spendlogs_payload_rust(
     start_time: datetime,
     end_time: datetime,
     llm_router: "Router | None",
+    agent_names: "AgentNameLookup | None" = None,
 ) -> SpendLogsPayload:
-    row_input: Final = current_spend_log_row_input(kwargs, response_obj, start_time, end_time, llm_router)
+    row_input: Final = current_spend_log_row_input(kwargs, response_obj, start_time, end_time, llm_router, agent_names)
     return _spend_logs_payload(_row_builder(spend_log_row_config()).build_row(encode_row_input(row_input)))
 
 

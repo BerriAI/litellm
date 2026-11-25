@@ -7,7 +7,11 @@ import sys
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest import mock
+
+if TYPE_CHECKING:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import AgentNameLookup
 
 CRATE = Path(__file__).resolve().parents[1]
 REPO = CRATE.parents[3]
@@ -119,7 +123,9 @@ def _install() -> None:
     original_payload = spend_tracking_utils.get_logging_payload
     original_accounting = snapshot.build_accounting_payload
 
-    def recording_payload(kwargs, response_obj, start_time, end_time, llm_router=None):
+    def recording_payload(
+        kwargs, response_obj, start_time, end_time, llm_router=None, agent_names: "AgentNameLookup | None" = None
+    ):
         record: dict = {}
         try:
             config = rust_spend_log_rows.spend_log_row_config()
@@ -131,6 +137,7 @@ def _install() -> None:
                 llm_router,
                 FIXED_NOW,
                 FIXED_SESSION,
+                agent_names,
             )
             record = {"config": config._asdict(), "input": json.loads(rust_spend_log_rows.encode_row_input(row_input))}
         except Exception as error:  # noqa: BLE001
@@ -141,7 +148,7 @@ def _install() -> None:
             mock.patch.object(spend_tracking_utils_uuid(), "uuid4", fixed_uuid),
             mock.patch.object(spend_tracking_utils, "uses_spend_logs_ledger", return_value=False),
         ):
-            result = original_payload(kwargs, response_obj, start_time, end_time, llm_router)
+            result = original_payload(kwargs, response_obj, start_time, end_time, llm_router, agent_names)
         if "input" in record:
             try:
                 record["output"] = _row_text(result)

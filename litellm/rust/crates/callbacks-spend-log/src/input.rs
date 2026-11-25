@@ -365,6 +365,7 @@ pub struct RowInput {
     pub(crate) model_group_provider: Option<String>,
     /// Whether the router knows the model group, looked up in Python for failed requests.
     pub(crate) is_configured_model_group: bool,
+    pub(crate) names_registered_agent: bool,
     /// The generateContent call type a chat completion served on a Google adapter route stands
     /// for, resolved from the route table in Python.
     pub(crate) route_call_type: Option<String>,
@@ -429,6 +430,7 @@ impl RowInput {
             cache_key: text_field(value, "cache_key").unwrap_or_default(),
             model_group_provider: text_field(value, "model_group_provider"),
             is_configured_model_group: flag(value, "is_configured_model_group"),
+            names_registered_agent: flag(value, "names_registered_agent"),
             route_call_type: match get_or_none(value, "route_call_type") {
                 Value::Str(call_type) => Some(call_type.clone()),
                 _ => None,

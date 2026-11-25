@@ -113,6 +113,8 @@ def _customer_hierarchy(kwargs: Mapping[str, object]) -> Sequence[Mapping[str, o
 
 
 def _row_input(kwargs: Mapping[str, object], response: object, start_time: datetime, end_time: datetime) -> object:
+    from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
     try:
         built: Final = spend_log_row_input(
             dict(kwargs),
@@ -122,6 +124,7 @@ def _row_input(kwargs: Mapping[str, object], response: object, start_time: datet
             get_llm_router(),
             time.time(),
             str(uuid.uuid4()),  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # litellm's uuid shim is untyped
+            global_agent_registry,
         )
     except Exception as error:  # noqa: BLE001  # update_database logs a row it cannot build and still charges it
         return {"unbuildable": str(error)}

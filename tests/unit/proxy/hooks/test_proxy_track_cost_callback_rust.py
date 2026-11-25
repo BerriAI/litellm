@@ -11,11 +11,13 @@ from pydantic import TypeAdapter
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm.constants import UNKNOWN_MODEL_SPEND_LOG_MODEL
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.custom_logger_v2.field_sources import HookArgs
 from litellm.integrations.custom_logger_v2.rust import RustLogger
 from litellm.litellm_core_utils.llm_cost_calc.finalization import FinalizedCost, finalize_cost
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.agent_endpoints import agent_registry
 from litellm.proxy.db.native_database import ServiceLoggingEvents
 from litellm.proxy.db.rust_spend_log_writer import install_rust_spend_log_writer, uninstall_rust_spend_log_writer
 from litellm.proxy.hooks.rust_spend_logger import (
@@ -34,6 +36,7 @@ from litellm.proxy.spend_tracking.native_budgets import reservation_inputs
 from litellm.proxy.spend_tracking.rust_spend_log_inputs import SpendLogCall, spend_log_success_input
 from litellm.proxy.utils import BilledFailedAttempt, PrismaClient
 from litellm.rust_bridge._native import DatabaseEndpoint, NativeDatabase, NativeSpendCounters, RustSpendLogWriter
+from litellm.types.agents import AgentResponse
 from litellm.types.integrations.custom_logger_v2 import Outcome
 from tests.unit.proxy.db.test_rust_spend_log_writer import FakePrismaClient
 
@@ -185,6 +188,41 @@ async def test_a_rejected_websocket_frame_queues_a_failure_row(proxy: Proxy) -> 
     assert len(rows) == 1
     assert rows[0]["status"] == "failure"
     assert rows[0]["team_id"] == "team-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("registered_names", "expected_model", "expected_model_group"),
+    [
+        (("Research Agent",), "a2a_agent/Research Agent", "a2a_agent/Research Agent"),
+        ((), UNKNOWN_MODEL_SPEND_LOG_MODEL, ""),
+    ],
+)
+async def test_a_failed_a2a_row_keeps_a_registered_agent_name_with_a_space(
+    proxy: Proxy,
+    monkeypatch: pytest.MonkeyPatch,
+    registered_names: tuple[str, ...],
+    expected_model: str,
+    expected_model_group: str,
+) -> None:
+    registry: Final = agent_registry.AgentRegistry()
+    for index, name in enumerate(registered_names):
+        registry.register_agent(AgentResponse(agent_id=f"agent-{index}", agent_name=name, agent_card_params={}))
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+
+    _ = await ps.proxy_logging_obj.post_call_failure_hook(
+        request_data={
+            "model": "a2a_agent/Research Agent",
+            "call_type": "asend_message",
+            "metadata": {"model_group": "a2a_agent/Research Agent"},
+        },
+        original_exception=ValueError("the agent is unreachable"),
+        user_api_key_dict=_auth(),
+    )
+
+    rows: Final = await proxy.rows()
+
+    assert [(row["model"], row["model_group"]) for row in rows] == [(expected_model, expected_model_group)]
 
 
 @pytest.mark.asyncio

@@ -71,6 +71,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _SPEND_LOGS_PRIVACY_METADATA_ADAPTER,
     _TOOL_OUTPUT_BLOCK_TYPES,
     _TRUNCATION_MARKER,
+    AgentNameLookup,
     _adapter_route_call_type,
     _block_type,
     _compaction_summary_for_db,
@@ -83,6 +84,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _is_non_secret_key_value,
     _masked_ip_text,
     _model_group_provider,
+    _names_registered_agent,
     _sanitize_request_body_for_spend_logs_payload,
     _snapshotless_cost_breakdown,
     _string_or_empty,
@@ -718,6 +720,7 @@ def logging_payload(
     start_time: datetime,
     end_time: datetime,
     llm_router: "Router | None" = None,
+    agent_names: AgentNameLookup | None = None,
 ) -> SpendLogsPayload:
     """The ledger-off ``get_logging_payload``, frozen as it was before the Rust row builder."""
     row_kwargs: Final = _CUSTOMER_METADATA_ADAPTER.validate_python(kwargs)
@@ -869,6 +872,7 @@ def logging_payload(
         and not _model_id
         and not _looks_like_model_name(resolved_model)
         and not _is_configured_model_group(_model_group, llm_router)
+        and not _names_registered_agent(resolved_model, agent_names)
     )
     model_name: Final = (
         UNKNOWN_MODEL_SPEND_LOG_MODEL

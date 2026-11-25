@@ -584,6 +584,20 @@ def _is_configured_model_group(  # pyright: ignore[reportUnusedFunction]  # shar
     return registry.resolve(model_group, kind="recognized") or model_group in registry.names(kind="team_public")
 
 
+class AgentNameLookup(Protocol):
+    def get_agent_by_name(self, agent_name: str) -> object | None: ...
+
+
+_A2A_AGENT_MODEL_PREFIX: Final = "a2a_agent/"
+
+
+def _names_registered_agent(  # pyright: ignore[reportUnusedFunction]  # shared with legacy_spend_log_rows and rust_spend_log_rows
+    model: str, agent_names: AgentNameLookup | None
+) -> bool:
+    agent_name: Final = model.removeprefix(_A2A_AGENT_MODEL_PREFIX)
+    return agent_names is not None and agent_name != model and agent_names.get_agent_by_name(agent_name) is not None
+
+
 _TRUNCATION_MARKER: Final = re.compile(
     rf"\.\.\. \({re.escape(LITELLM_TRUNCATED_PAYLOAD_FIELD)} skipped \d+ chars\. "
     rf"{re.escape(LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE)}\) \.\.\."
@@ -612,6 +626,7 @@ async def get_logging_payload_async(
     end_time: datetime,
     llm_router: "Router | None" = None,
     run_in_thread: Callable[[Callable[[], SpendLogsPayload]], Awaitable[SpendLogsPayload]] = asyncio.to_thread,
+    agent_names: AgentNameLookup | None = None,
 ) -> SpendLogsPayload:
     from litellm.proxy.proxy_server import general_settings_view
 
@@ -624,6 +639,7 @@ async def get_logging_payload_async(
         start_time=start_time,
         end_time=end_time,
         llm_router=llm_router,
+        agent_names=agent_names,
     )
     if offload:
         return await run_in_thread(build)
@@ -650,16 +666,17 @@ def get_logging_payload(
     start_time: datetime,
     end_time: datetime,
     llm_router: "Router | None" = None,
+    agent_names: AgentNameLookup | None = None,
 ) -> SpendLogsPayload:
     if kwargs is None:
         kwargs = {}
 
     if uses_spend_logs_ledger():
-        return spendlogs_payload_rust(kwargs, response_obj, start_time, end_time, llm_router)  # pyright: ignore[reportUnknownArgumentType]  # the logging kwargs dict is untyped upstream
+        return spendlogs_payload_rust(kwargs, response_obj, start_time, end_time, llm_router, agent_names)  # pyright: ignore[reportUnknownArgumentType]  # the logging kwargs dict is untyped upstream
 
     from litellm.proxy.spend_tracking import legacy_spend_log_rows
 
-    return legacy_spend_log_rows.logging_payload(kwargs, response_obj, start_time, end_time, llm_router)
+    return legacy_spend_log_rows.logging_payload(kwargs, response_obj, start_time, end_time, llm_router, agent_names)
 
 
 def caller_session_for_accounting(kwargs: Mapping[str, object]) -> str | None:

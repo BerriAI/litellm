@@ -427,7 +427,8 @@ pub(crate) fn build(
     let failed_with_prompt_shaped_model = failed
         && model_id.is_empty()
         && !looks_like_model_name(&resolved_model)
-        && !input.is_configured_model_group;
+        && !input.is_configured_model_group
+        && !input.names_registered_agent;
     let model_name =
         if rejected_as_unknown_model || failed_with_prompt_shaped_model || model_is_malformed {
             UNKNOWN_MODEL.to_owned()

@@ -41,9 +41,11 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsMetadataFields, SpendLogsPayload, UserAPIKeyAuth
+from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import get_passthrough_router_request_metadata
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
+from litellm.types.agents import AgentResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import PassthroughStandardLoggingPayload
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
@@ -7248,6 +7250,35 @@ def test_failed_agent_request_keeps_registered_display_name():
     assert payload["model"] == agent_model
     assert payload["status"] == "failure"
     assert payload["model_id"] == "registered-agent"
+
+
+@pytest.mark.parametrize(
+    ("registered_names", "expected_model", "expected_model_group"),
+    [
+        (("Research Agent",), "a2a_agent/Research Agent", "a2a_agent/Research Agent"),
+        ((), UNKNOWN_MODEL_SPEND_LOG_MODEL, ""),
+    ],
+)
+def test_failed_agent_request_without_a_model_id_keeps_only_a_registered_agent_name_with_a_space(
+    registered_names: tuple[str, ...], expected_model: str, expected_model_group: str
+):
+    registry: Final = AgentRegistry()
+    for index, name in enumerate(registered_names):
+        registry.register_agent(AgentResponse(agent_id=f"agent-{index}", agent_name=name, agent_card_params={}))
+
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "a2a_agent/Research Agent",
+            "call_type": "asend_message",
+            "litellm_params": {"metadata": {"model_group": "a2a_agent/Research Agent", "status": "failure"}},
+        },
+        response_obj=ValueError("the agent is unreachable"),
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+        agent_names=registry,
+    )
+
+    assert (payload["model"], payload["model_group"]) == (expected_model, expected_model_group)
 
 
 _CLI_SESSION_ALIAS: Final = "cli-session-alice"

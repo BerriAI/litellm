@@ -28,6 +28,7 @@ from litellm.a2a_protocol.main import (
     _stream_messages,
     aget_agent_card,
     asend_message,
+    asend_message_streaming,
     create_a2a_client,
 )
 from litellm.a2a_protocol.exceptions import A2AError
@@ -727,6 +728,64 @@ async def test_streamed_send_is_timed_from_before_the_agent_card_fetch(
     assert logger.payload["startTime"] <= card_recorder.card_served_at.timestamp()
 
 
+@pytest.fixture
+def usage_recorder(monkeypatch: pytest.MonkeyPatch) -> _UsageRecorder:
+    recorder: Final = _UsageRecorder()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    monkeypatch.setattr(litellm, "success_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    return recorder
+
+
+_LOGGED_AGENT_NAMES: Final = pytest.mark.parametrize(
+    ("agent_name", "logged_model"),
+    [("configured-agent", "a2a_agent/configured-agent"), ("", "a2a_agent/"), (None, "a2a_agent/recording-agent")],
+)
+
+
+@_LOGGED_AGENT_NAMES
+@pytest.mark.asyncio
+async def test_url_agent_send_is_logged_under_the_configured_agent_name(
+    agent_name: str | None,
+    logged_model: str,
+    isolated_client_cache: LLMClientCache,
+    usage_recorder: _UsageRecorder,
+):
+    await _seed_shared_a2a_client()
+
+    _ = await asend_message(request=_send_request("named-send"), api_base="http://127.0.0.1:9", agent_name=agent_name)
+    await asyncio.wait_for(usage_recorder.logged.wait(), timeout=10)
+
+    assert usage_recorder.payload["model"] == logged_model
+
+
+@_LOGGED_AGENT_NAMES
+@pytest.mark.asyncio
+async def test_url_agent_stream_is_logged_under_the_configured_agent_name(
+    agent_name: str | None,
+    logged_model: str,
+    isolated_client_cache: LLMClientCache,
+    usage_recorder: _UsageRecorder,
+):
+    await _seed_shared_a2a_client(rpc_stream_events=_LANGGRAPH_STREAM_EVENTS)
+    request: Final = SendStreamingMessageRequest(
+        id="reply",
+        params=MessageSendParams(
+            message={"messageId": "m-user", "role": "user", "parts": [{"kind": "text", "text": "hi"}]}
+        ),
+    )
+
+    _ = [
+        chunk
+        async for chunk in asend_message_streaming(
+            request=request, api_base="http://127.0.0.1:9", agent_name=agent_name
+        )
+    ]
+    await asyncio.wait_for(usage_recorder.logged.wait(), timeout=10)
+
+    assert usage_recorder.payload["model"] == logged_model
+
+
 @pytest.mark.asyncio
 async def test_asend_message_counts_usage_off_the_event_loop(monkeypatch):
     from tests.unit.litellm_core_utils.event_loop_lag import (
@@ -915,7 +974,7 @@ def _assert_billed_at_agent_prices(
     assert recorder.agent_id == "agent-1"
 
 
-async def _drain_bridge_stream(litellm_params: Mapping[str, object]) -> None:
+async def _drain_bridge_stream(litellm_params: Mapping[str, object], agent_name: str | None = "trip-planner") -> None:
     from litellm.a2a_protocol.main import asend_message_streaming
 
     _ = [
@@ -925,7 +984,7 @@ async def _drain_bridge_stream(litellm_params: Mapping[str, object]) -> None:
             api_base="http://127.0.0.1:9",
             litellm_params=dict(litellm_params),
             agent_id="agent-1",
-            agent_name="trip-planner",
+            agent_name=agent_name,
         )
     ]
 
@@ -981,6 +1040,20 @@ async def test_completion_bridge_stream_bills_the_agents_prices(
     spend: Final = await a2a_spend_recorder.logged_spend()
     _assert_billed_at_agent_prices(spend, a2a_spend_recorder, expected_cost, _BRIDGE_REPLY)
     assert spend.model == "a2a_agent/trip-planner"
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "logged_model"),
+    [pytest.param("", "a2a_agent/", id="empty_name"), pytest.param(None, "a2a_agent/unknown", id="no_name")],
+)
+@pytest.mark.asyncio
+async def test_completion_bridge_stream_logs_an_empty_agent_name_as_registered(
+    agent_name: str | None, logged_model: str, a2a_spend_recorder: _A2ASpendRecorder
+) -> None:
+    await _drain_bridge_stream(_bridge_agent_params(_PER_TOKEN_PRICES), agent_name=agent_name)
+
+    spend: Final = await a2a_spend_recorder.logged_spend()
+    assert spend.model == logged_model
 
 
 @pytest.mark.asyncio
