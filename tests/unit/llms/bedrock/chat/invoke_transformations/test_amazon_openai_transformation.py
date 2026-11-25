@@ -51,3 +51,45 @@ def test_openai_imported_model_preserves_message_types_and_request_parameters() 
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/"
         "arn:aws:bedrock:us-east-1:117159858402:imported-model%2Fm4gc1mrfuddy/invoke"
     )
+
+
+def test_model_id_is_the_invoke_target_in_url_and_body() -> None:
+    model: Final = "bedrock/openai/global.openai.gpt-6-luna"
+    profile_arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123def456"
+    optional_params: Final = {
+        "model_id": profile_arn,
+        "aws_access_key_id": "AKIAUNITTESTKEY",
+        "aws_secret_access_key": "unit-test-secret",
+        "aws_region_name": "us-east-1",
+        "max_tokens": 10,
+    }
+    config: Final = AmazonBedrockOpenAIConfig()
+    urls: Final = tuple(
+        config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model=model,
+            optional_params=optional_params,
+            litellm_params={},
+            stream=stream,
+        )
+        for stream in (False, True)
+    )
+    request: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    encoded_target: Final = (
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/"
+        "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile%2Fabc123def456"
+    )
+    assert urls == (f"{encoded_target}/invoke", f"{encoded_target}/invoke-with-response-stream")
+    assert request == {
+        "model": profile_arn,
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 10,
+    }

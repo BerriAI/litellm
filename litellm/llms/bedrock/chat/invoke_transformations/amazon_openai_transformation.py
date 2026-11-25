@@ -11,6 +11,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -29,6 +30,9 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+_PARAMS: Final = TypeAdapter(Mapping[str, object])
 
 
 class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
@@ -54,20 +58,11 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
     def custom_llm_provider(self) -> str | None:
         return "bedrock"
 
-    def _get_openai_model_id(self, model: str) -> str:
-        """
-        Extract the actual model ID from the LiteLLM model name.
-
-        Input format: bedrock/openai/<model-id>
-        Returns: <model-id>
-        """
-        # Remove bedrock/ prefix if present
-        model = model.removeprefix("bedrock/")
-
-        # Remove openai/ prefix
-        model = model.removeprefix("openai/")
-
-        return model
+    def _get_invoke_model_id(self, model: str, optional_params: Mapping[str, object]) -> str:
+        model_id: Final = optional_params.get("model_id")
+        if isinstance(model_id, str) and model_id:
+            return model_id
+        return model.removeprefix("bedrock/").removeprefix("openai/")
 
     def get_complete_url(
         self,
@@ -83,8 +78,6 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
 
         Uses the standard Bedrock invoke endpoint format.
         """
-        model_id = self._get_openai_model_id(model)
-
         # Get AWS region
         aws_region_name: Final = self._get_aws_region_name(optional_params=optional_params, model=model)
 
@@ -96,8 +89,8 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
             aws_region_name=aws_region_name,
         )
 
-        # Encode model ID for ARNs (e.g., :imported-model/ -> :imported-model%2F)
-        model_id = CommonUtils.encode_bedrock_runtime_modelid_arn(model_id)
+        params: Final = _PARAMS.validate_python(optional_params)
+        model_id: Final = CommonUtils.encode_bedrock_runtime_modelid_arn(self._get_invoke_model_id(model, params))
 
         invoke_route: Final = "invoke-with-response-stream" if stream else "invoke"
         return join_api_base(endpoint_url, f"model/{model_id}/{invoke_route}")
@@ -139,18 +132,19 @@ class AmazonBedrockOpenAIConfig(OpenAIGPTConfig, BaseAWSLLM):
         """
         Transform the request to OpenAI Chat Completions format for Bedrock imported models.
 
-        Removes AWS-specific params and stream param (handled separately in URL),
-        then delegates to parent class for standard OpenAI request transformation.
+        Removes AWS-specific params, ``model_id`` and the stream param (all carried by the URL),
+        and sends the invoke target as ``model`` because Bedrock rejects a body model that differs from the URL.
         """
         # Remove stream from optional_params as it's handled separately in URL
         optional_params.pop("stream", None)
 
-        # Remove AWS-specific params that shouldn't be in the request body
-        inference_params: Final = {k: v for k, v in optional_params.items() if k not in self.aws_authentication_params}
+        inference_params: Final = {
+            k: v for k, v in optional_params.items() if k != "model_id" and k not in self.aws_authentication_params
+        }
 
-        # Use parent class transform_request for OpenAI format
+        params: Final = _PARAMS.validate_python(optional_params)
         return super().transform_request(
-            model=self._get_openai_model_id(model),
+            model=self._get_invoke_model_id(model, params),
             messages=messages,
             optional_params=inference_params,
             litellm_params=litellm_params,
