@@ -7012,14 +7012,19 @@ class TestAddMissingTeamMember:
         async def only_alpha_beta_gamma(team_ids: Sequence[str]) -> frozenset[str]:
             return frozenset({"team-alpha", "team-beta", "team-gamma"}) & frozenset(team_ids)
 
+        async def create_team(team_id: str) -> None:
+            return None
+
         joined: Final = await add_missing_team_member(
             user_info=LiteLLM_UserTable(user_id="group-sync-user", teams=["team-held"]),
             sso_teams=["team-gamma", "grp-not-a-team", "team-held", "team-beta", "team-alpha"],
             add_team_member=add_fails_for_team_beta,
             existing_team_ids=only_alpha_beta_gamma,
+            team_id_to_upsert="team-upserted",
+            create_team=create_team,
         )
 
-        assert joined == ("team-gamma", "team-alpha")
+        assert joined == ("team-gamma", "team-alpha", "team-upserted")
 
     @pytest.mark.asyncio
     async def test_find_existing_team_ids_reads_the_writer_and_returns_none_when_the_db_cannot_answer(self):
