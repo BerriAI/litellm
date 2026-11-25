@@ -62,7 +62,7 @@ from ..adapters.handler import (
 from ..context_management import AnthropicContextManagementError, PolyfillResult, apply_context_management
 from ..context_management.constants import COMPACT_EDIT_TYPE
 from ..context_management.dispatcher import normalize_spec
-from ..convertible_blocks import reject_malformed_tool_result_text
+from ..convertible_blocks import reject_malformed_text
 from ..safeguards import with_safeguard_results
 from ..utils import (
     KNOWN_REASONING_EFFORTS,
@@ -137,7 +137,7 @@ async def _polyfilled(
     """Run the edits the Responses API can't run natively; raise like the chat completions path does."""
     if not edits:
         return None
-    reject_malformed_tool_result_text(messages, model, kwargs)
+    reject_malformed_text(messages, model, kwargs)
     drop_invalid_edits: Final = drops_unsupported_params(kwargs.get("drop_params"))
     blocks: Final = _system_blocks(system)
     try:
@@ -510,7 +510,7 @@ def _build_responses_kwargs(
             model=model,
             llm_provider=target_provider if isinstance(target_provider, str) else None,
         )
-    reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
+    reject_malformed_text(messages, model, forwarded_kwargs)
     explicitly_dropped: Final = drop_policy(forwarded_kwargs).additional_drop_params
     explicitly_drops_mcp_servers: Final = "mcp_servers" in explicitly_dropped
     sent_mcp_servers: Final = None if explicitly_drops_mcp_servers else mcp_servers

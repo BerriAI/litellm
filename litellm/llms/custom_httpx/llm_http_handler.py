@@ -7693,7 +7693,7 @@ class BaseLLMHTTPHandler:
             model,
             image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
         )
-        multipart: Final = image_edit_provider_config.use_multipart_form_data()
+        json_body: Final = image_edit_provider_config.uses_json_body(image, image_edit_optional_request_params)
         stream_body: Final = _ascii_image_edit_stream_body(data, files)
 
         def send(stream: bool = False) -> httpx.Response:
@@ -7705,19 +7705,19 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                     stream=stream,
                 )
-            if multipart:
+            if json_body:
                 return sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=data,
-                    files=files,
+                    json=data,
                     timeout=timeout,
                     stream=stream,
                 )
             return sync_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                json=data,
+                data=data,
+                files=files,
                 timeout=timeout,
                 stream=stream,
             )
@@ -7831,7 +7831,7 @@ class BaseLLMHTTPHandler:
             model,
             image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
         )
-        multipart: Final = image_edit_provider_config.use_multipart_form_data()
+        json_body: Final = image_edit_provider_config.uses_json_body(image, image_edit_optional_request_params)
         stream_body: Final = _ascii_image_edit_stream_body(data, files)
 
         async def send(stream: bool = False) -> httpx.Response:
@@ -7843,19 +7843,19 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                     stream=stream,
                 )
-            if multipart:
+            if json_body:
                 return await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=data,
-                    files=files,
+                    json=data,
                     timeout=timeout,
                     stream=stream,
                 )
             return await async_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                json=data,
+                data=data,
+                files=files,
                 timeout=timeout,
                 stream=stream,
             )

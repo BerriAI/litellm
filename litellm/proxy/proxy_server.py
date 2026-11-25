@@ -451,9 +451,13 @@ from litellm.llms.anthropic.messages.context_management.inference_view import (
 )
 from litellm.llms.anthropic.messages.convertible_blocks import (
     deployment_drops_params,
-    drop_non_string_tool_result_texts,
-    malformed_tool_result_count_error,
+    emptied_messages_error,
+    malformed_text_count_error,
+    non_string_system_text_error,
+    non_string_user_text_error,
+    without_non_string_system_texts,
 )
+from litellm.llms.anthropic.messages.native.utils import native_messages_to_send
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, exclude_rsa_key_exchange_and_chacha20
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler as JwksHTTPHandler
@@ -621,6 +625,7 @@ from litellm.proxy.common_utils.model_listing_utils import (
     alias_target,
     caller_alias_maps,
     claude_code_view_ids,
+    configured_descriptions,
     configured_display_names,
     dispatched_model,
     label_entries,
@@ -12859,9 +12864,10 @@ async def model_list(
     )
     client_headers: Final[Mapping[str, str]] = http_request.headers if http_request is not None else _EMPTY_HEADERS
     caller_aliases: Final = await request_caller_aliases(user_api_key_dict, team_id)
+    effective_team_id: Final = team_id or user_api_key_dict.team_id
     routing_names: Final = ClaudeCodeRoutingNames(
         llm_router,
-        team_id or user_api_key_dict.team_id,
+        effective_team_id,
         (*caller_aliases.rewrite, caller_aliases.router),
     )
 
@@ -12886,12 +12892,6 @@ async def model_list(
 
     hidden_names: Final = await _listing_hidden_names(healthy_only)
 
-    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import typesafe_allowlist_model_names
-
-    asks_for_allowlist_names: Final = (
-        include_model_access_groups is True and return_wildcard_routes is True and only_model_access_groups is not True
-    )
-
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
         # Get all proxy models as if user is a proxy admin
@@ -12914,10 +12914,7 @@ async def model_list(
                 get_complete_model_list,
                 key_models=[],
                 team_models=[],
-                proxy_model_list=[
-                    *proxy_model_list,
-                    *(typesafe_allowlist_model_names() if asks_for_allowlist_names else ()),
-                ],
+                proxy_model_list=proxy_model_list,
                 user_model=None,
                 infer_model_from_keys=False,
                 return_wildcard_routes=include_wildcard_routes,
@@ -12974,6 +12971,9 @@ async def model_list(
             return create_anthropic_model_list_response(
                 admin_listing,
                 display_names=configured_display_names(admin_entries, llm_router),
+                descriptions=configured_descriptions(
+                    admin_entries, llm_router, team_id=effective_team_id, include_all_teams=effective_team_id is None
+                ),
                 listed_ids=claude_code_view_ids(
                     admin_listing,
                     client_headers,
@@ -12986,9 +12986,6 @@ async def model_list(
             object="list",
         )
 
-    offers_typesafe_allowlist_names: Final = (
-        asks_for_allowlist_names and team_id is None and user_api_key_has_admin_view(user_api_key_dict)
-    )
     key_listing: Final = await _key_model_listing(
         user_api_key_dict,
         caller_aliases,
@@ -12999,7 +12996,6 @@ async def model_list(
         include_wildcard_routes=include_wildcard_routes,
         include_metadata=include_metadata or False,
         fallback_type=fallback_type,
-        offered_model_names=typesafe_allowlist_model_names() if offers_typesafe_allowlist_names else (),
     )
     listing: Final = key_listing.rows
     entries: Final = key_listing.entries
@@ -13025,6 +13021,12 @@ async def model_list(
         return create_anthropic_model_list_response(
             listing,
             display_names=configured_display_names(labels, llm_router),
+            descriptions=configured_descriptions(
+                labels,
+                llm_router,
+                team_id=effective_team_id,
+                include_all_teams=effective_team_id is None and user_api_key_has_admin_view(user_api_key_dict),
+            ),
             listed_ids=claude_code_view_ids(
                 listing,
                 client_headers,
@@ -15507,7 +15509,28 @@ def _counted_request_messages(
         return None
     if messages_format != "anthropic":
         return list(messages)
-    return list(drop_non_string_tool_result_texts(messages, deployment_drops_params(deployment)))
+    drops: Final = deployment_drops_params(deployment)
+    user_text_error: Final = None if drops else non_string_user_text_error(messages)
+    if user_text_error is not None:
+        raise ProxyException(message=user_text_error, type="invalid_request_error", param="messages", code=400)
+    kept: Final = native_messages_to_send(messages, drops)
+    emptied_error: Final = emptied_messages_error(messages, kept)
+    if emptied_error is not None:
+        raise ProxyException(message=emptied_error, type="invalid_request_error", param="messages", code=400)
+    return kept or list(messages)
+
+
+def _counted_request_system(
+    system: JsonValue,
+    messages_format: TokenCountMessagesFormat,
+    deployment: Mapping[str, object] | None,
+) -> JsonValue:
+    error: Final = None if messages_format != "anthropic" else non_string_system_text_error(system)
+    if error is None or not isinstance(system, list):
+        return system
+    if not deployment_drops_params(deployment):
+        raise ProxyException(message=error, type="invalid_request_error", param="system", code=400)
+    return without_non_string_system_texts(system)
 
 
 async def _try_provider_token_count(
@@ -16613,7 +16636,8 @@ async def _count_request_tokens(
         prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     )
     request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
-    local_count_error: Final = malformed_tool_result_count_error(request_messages, messages_format, count_deployment)
+    request_system: Final = _counted_request_system(system, messages_format, count_deployment)
+    local_count_error: Final = malformed_text_count_error(request_messages, messages_format, count_deployment)
     malformed_messages: Final = (
         None
         if local_count_error is None
@@ -16634,7 +16658,7 @@ async def _count_request_tokens(
         else await _gateway_request_view(
             route,
             request_messages,
-            system,
+            request_system,
             _COUNT_TOOLS.validate_python(tools),
             messages_format,
             context_edits,
@@ -16647,7 +16671,7 @@ async def _count_request_tokens(
     inference_messages: Final = (
         request_messages if edited_request is None else [dict(message) for message in edited_request.messages]
     )
-    inference_system: Final = system if edited_request is None else edited_request.system
+    inference_system: Final = request_system if edited_request is None else edited_request.system
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     routed_deployment: Final = _ROUTED_DEPLOYMENT.validate_python(deployment)
     routed_request: Final = (
@@ -16753,7 +16777,7 @@ async def _count_request_tokens(
         if route not in NATIVE_MESSAGES_TARGETS or context_edits is None or request_messages is None
         else await _bridged_request_view(
             request_messages,
-            system,
+            request_system,
             _COUNT_TOOLS.validate_python(tools),
             messages_format,
             replace(context_edits, drop_invalid_edits=False),
@@ -16767,7 +16791,7 @@ async def _count_request_tokens(
     local_messages: Final = (
         request_messages if counted_view is None else [dict(message) for message in counted_view.messages]
     )
-    post_edit_system: Final = system if counted_view is None else counted_view.system
+    post_edit_system: Final = request_system if counted_view is None else counted_view.system
     local_system: Final = (
         system_without_claude_code_billing_header(post_edit_system)
         if messages_format == "anthropic" and route in (Target.CHAT_COMPLETIONS, Target.RESPONSES)

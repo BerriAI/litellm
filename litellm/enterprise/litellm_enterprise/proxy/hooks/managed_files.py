@@ -9,7 +9,7 @@ import time
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from itertools import chain
+from itertools import accumulate, chain, repeat, takewhile
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -296,6 +296,35 @@ def _gemini_file_ids_from_responses_input(input_data: object) -> Iterator[str]:
                     yield file_id
 
 
+_PROXY_ADDED_REQUEST_FIELDS: Final = frozenset(
+    {"metadata", "litellm_metadata", "proxy_server_request", "secret_fields"}
+)
+
+
+def _child_values(value: object) -> Sequence[object]:
+    fields: Final = as_str_mapping(value)
+    if fields is not None:
+        return tuple(fields.values())
+    return as_object_list(value) or ()
+
+
+def _next_body_level(level: tuple[object, ...], _: None) -> tuple[object, ...]:
+    return tuple(chain.from_iterable(map(_child_values, level)))
+
+
+def _own_file_id(value: object) -> str | None:
+    fields: Final = as_str_mapping(value)
+    file_id: Final = fields.get("file_id") if fields is not None else None
+    return file_id if isinstance(file_id, str) and file_id else None
+
+
+def _nested_file_ids(request_body: Mapping[str, object]) -> tuple[str, ...]:
+    caller_fields: Final = tuple(value for key, value in request_body.items() if key not in _PROXY_ADDED_REQUEST_FIELDS)
+    levels: Final = accumulate(repeat(None), _next_body_level, initial=caller_fields)
+    nodes: Final = chain.from_iterable(takewhile(bool, levels))
+    return tuple(dict.fromkeys(filter(None, map(_own_file_id, nodes))))
+
+
 def _is_object_iterable(value: object) -> TypeIs[Iterable[object]]:
     return isinstance(value, Iterable)
 
@@ -438,6 +467,8 @@ class _ManagedFileTableActions(Protocol):
     async def upsert(self, where: Mapping[str, str], data: Mapping[str, Mapping[str, object]]) -> _ManagedFileRow: ...
 
     async def delete(self, where: Mapping[str, str]) -> Optional[_ManagedFileRow]: ...
+
+    async def delete_many(self, where: Mapping[str, object]) -> int: ...
 
 
 class _ManagedObjectTableActions(Protocol):
@@ -649,6 +680,15 @@ class _ScopedFileRow(BaseModel):
 
 
 _SCOPED_FILE_ROWS: Final = TypeAdapter(tuple[_ScopedFileRow, ...])
+
+
+def _file_in_scope(row: _ListedFileRow, scope: FileListModelScope | None) -> bool:
+    if scope is None or scope.holds(row.model_mappings, stored=row.storage_backend is not None):
+        return True
+    if scope.routes_uploaded_model_name is None:
+        return False
+    model: Final = decode_model_from_file_id(row.unified_file_id)
+    return model is not None and scope.routes_uploaded_model_name(model)
 
 
 def _owner_condition(owner_filter: Mapping[str, object]) -> tuple[str, tuple[str, ...]]:
@@ -1125,8 +1165,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     async def delete_unified_file_id(
         self, file_id: str, litellm_parent_otel_span: Optional[Span] = None
     ) -> OpenAIFileObject:
+        file_table: Final = _managed_file_table(self.prisma_client)
         ## get old value
-        initial_value = await _managed_file_table(self.prisma_client).find_first(where={"unified_file_id": file_id})
+        initial_value = await file_table.find_first(where={"unified_file_id": file_id})
         if initial_value is None:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
         ## delete old value
@@ -1135,8 +1176,30 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             value=None,
             litellm_parent_otel_span=litellm_parent_otel_span,
         )
-        await _managed_file_table(self.prisma_client).delete(where={"unified_file_id": file_id})
+        await file_table.delete(where={"unified_file_id": file_id})
         return initial_value.file_object
+
+    @with_service_target(_MANAGED_FILES_TARGET)
+    async def forget_unified_file_id(self, file_id: str, litellm_parent_otel_span: Optional[Span] = None) -> None:
+        file_table: Final = _managed_file_table(self.prisma_client)
+        spellings: Final = list(provider_file_id_spellings(file_id))
+        rows: Final = await file_table.find_many(
+            where={
+                "OR": [
+                    {"unified_file_id": {"in": spellings}},  # bounded-ok: at most four spellings of one file id
+                    {"flat_model_file_ids": {"hasSome": spellings}},
+                ]
+            }
+        )
+        # A row that maps other provider copies still owns them.
+        forgotten_ids: Final = [row.unified_file_id for row in rows if len(row.flat_model_file_ids) <= 1]
+        for forgotten_id in forgotten_ids:
+            await self.internal_usage_cache.async_set_cache(
+                key=forgotten_id, value=None, litellm_parent_otel_span=litellm_parent_otel_span
+            )
+        await file_table.delete_many(
+            where={"unified_file_id": {"in": forgotten_ids}}  # bounded-ok: single-copy rows of one file id
+        )
 
     async def can_user_call_unified_file_id(self, unified_file_id: str, user_api_key_dict: UserAPIKeyAuth) -> bool:
         managed_file = await _managed_file_table(self.prisma_client).find_first(
@@ -1909,6 +1972,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     data["model"] = model_id
                     data["file_id"] = provider_file_id
                     data.update(stored_s3_bucket_kwargs(provider_file_id))
+        elif call_type == CallTypes.aimage_edit.value or call_type == CallTypes.image_edit.value:
+            await self.check_file_ids_access(_nested_file_ids(_REQUEST_FIELDS.validate_python(data)), user_api_key_dict)
         elif call_type == CallTypes.acreate_batch.value:
             input_file_id = cast(Optional[str], data.get("input_file_id"))
             if input_file_id:
@@ -2677,14 +2742,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         every file on the proxy still reads one bounded page at a time.
         ``after`` pages toward older files and ``before`` toward newer ones,
         each page still ordered newest first.
-        ``model_scope`` is applied in the query, so only rows whose
-        ``model_mappings`` name one of its deployment ids or model names, and
-        storage-backed rows, leave the database; a storage-backed row then
-        stays only when its model name is one the router sends to the listed
-        provider. ``purpose`` is applied after parsing, because the managed
-        file table keeps it inside the ``file_object`` blob instead of a
-        column. Rows
-        whose blob will not parse drop out there too, so a chunk of rows can
+        Exact model keys are filtered in the query. A provider with a wildcard
+        deployment can also match concrete model names saved at upload, so its
+        listing resolves those names while paging through the caller's rows.
+        Expiry and purpose are checked against the stored file object. Rows
+        whose object will not parse drop out there too, so a chunk of rows can
         yield fewer matches than the page holds. Successive chunks are read
         until the page is full or the caller's rows run out, which keeps
         ``data`` non-empty while matches remain and its last id usable as the
@@ -2729,6 +2791,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if model_scope is not None and not model_scope.model_mapping_keys:
             return FileListPage.model_validate(build_list_page([]))
 
+        now: Final = self._clock().timestamp()
         page_size: Final = min(limit or MAX_FILE_LIST_LIMIT, MAX_FILE_LIST_LIMIT)
         matches: Final[List[OpenAIFileObject]] = []
         cursor_id = cursor
@@ -2741,7 +2804,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 await _scoped_file_rows(
                     database, owner_filter, model_scope.model_mapping_keys, cursor_id, direction, chunk_size
                 )
-                if model_scope is not None
+                if model_scope is not None and model_scope.routes_uploaded_model_name is None
                 else await database.litellm_managedfiletable.find_many(
                     where=owner_filter,
                     take=chunk_size,
@@ -2752,10 +2815,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             matches.extend(
                 _public_file_object(parsed_file_object, row.unified_file_id)
                 for row in chunk
-                if (
-                    model_scope is None or model_scope.holds(row.model_mappings, stored=row.storage_backend is not None)
-                )
+                if _file_in_scope(row, model_scope)
                 and (parsed_file_object := _parse_managed_file_object(row.file_object, row.unified_file_id)) is not None
+                # A row with several copies stores only the first copy's expiry.
+                and (
+                    len(row.model_mappings) > 1
+                    or parsed_file_object.expires_at is None
+                    or parsed_file_object.expires_at > now
+                )
                 and (purpose is None or parsed_file_object.purpose == purpose)
             )
             if len(chunk) < chunk_size:
