@@ -55,6 +55,7 @@ class Backend:
     provider: Provider
     litellm_params: LiteLLMParamsBody
     passthrough_model: str | None = None
+    skip_reason: str | None = None
 
 
 BACKENDS: Final = (
@@ -70,6 +71,7 @@ BACKENDS: Final = (
         "bedrock_mantle",
         Provider.BEDROCK_MANTLE,
         LiteLLMParamsBody(model="bedrock_mantle/openai.gpt-6.2-sol", aws_region_name="us-east-1"),
+        skip_reason="Stage IAM lacks aws-marketplace:Subscribe for Mantle openai.gpt-6.2-sol",
     ),
 )
 
@@ -95,6 +97,7 @@ def _backends(surface: Surface, mode: Mode) -> tuple[ParameterSet, ...]:
                         mode=mode,
                     )
                 ),
+                *((pytest.mark.skip(reason=backend.skip_reason),) if backend.skip_reason else ()),
             ),
         )
         for backend in BACKENDS
