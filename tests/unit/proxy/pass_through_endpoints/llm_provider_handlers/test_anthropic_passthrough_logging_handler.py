@@ -8,7 +8,8 @@ from unittest.mock import AsyncMock, MagicMock, Mock, patch
 import httpx
 import pytest
 from fastapi import Request
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -3240,13 +3241,23 @@ def test_streamed_messages_from_other_providers_ignore_a_zero_usage_cost_field()
     assert result["kwargs"].get("response_cost") != 0.0
 
 
-class _SuccessKwargsRecorder(CustomLogger):
+class _LoggedHiddenParams(TypedDict):
+    additional_headers: ReadOnly[dict[str, object]]
+
+
+class _LoggedPayload(TypedDict):
+    hidden_params: ReadOnly[_LoggedHiddenParams]
+
+
+class _SuccessPayloadRecorder(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
-        self.success_kwargs: list = []
+        self.payloads: Final[asyncio.Queue[_LoggedPayload]] = asyncio.Queue()
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        self.success_kwargs.append(kwargs)
+    async def async_log_success_event(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ) -> None:
+        self.payloads.put_nowait(TypeAdapter(_LoggedPayload).validate_python(kwargs["standard_logging_object"]))
 
 
 @pytest.mark.parametrize(
@@ -3270,7 +3281,7 @@ class _SuccessKwargsRecorder(CustomLogger):
 async def test_a_streamed_messages_call_logs_the_rate_limit_the_provider_reported(
     all_chunks: list[str], response_headers: dict[str, str], remaining_tokens: int, remaining_requests: int
 ):
-    recorder: Final = _SuccessKwargsRecorder()
+    recorder: Final = _SuccessPayloadRecorder()
     logging_obj: Final = LiteLLMLoggingObj(
         model="claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": "hi"}],
@@ -3308,15 +3319,10 @@ async def test_a_streamed_messages_call_logs_the_rate_limit_the_provider_reporte
         prefer_async_handlers=True,
         **handled["kwargs"],
     )
-    for _ in range(300):
-        if recorder.success_kwargs:
-            break
-        await asyncio.sleep(0.01)
+    logged: Final = await asyncio.wait_for(recorder.payloads.get(), timeout=5)
 
-    assert len(recorder.success_kwargs) == 1
-    logged_headers: Final = recorder.success_kwargs[0]["standard_logging_object"]["hidden_params"][
-        "additional_headers"
-    ]
+    assert recorder.payloads.empty()
+    logged_headers: Final = logged["hidden_params"]["additional_headers"]
     assert logged_headers["x_ratelimit_remaining_tokens"] == remaining_tokens
     assert logged_headers["x_ratelimit_remaining_requests"] == remaining_requests
     assert logged_headers["llm_provider-request-id"] == "req_stream"
