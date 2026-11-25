@@ -53,12 +53,12 @@ def test_fireworks_serverless_model_resolves_to_its_registry_row(
     row: Final = prices[key]
     info: Final = litellm.get_model_info(key)
     assert info["litellm_provider"] == "fireworks_ai"
-    assert (info["mode"], info["supported_endpoints"], info["input_cost_per_token"], info["output_cost_per_token"]) == (
+    assert (info["mode"], info["input_cost_per_token"], info["output_cost_per_token"]) == (
         row["mode"],
-        row["supported_endpoints"],
         row["input_cost_per_token"],
         row["output_cost_per_token"],
     )
+    assert info.get("supported_endpoints") == row.get("supported_endpoints")
 
 
 @pytest.mark.parametrize(
@@ -604,10 +604,12 @@ class _ShutdownRow(BaseModel):
         ("Llama-4-Maverick-17B-128E-Instruct-FP8", "2027-02-03"),
         ("Llama-4-Scout-17B-16E-Instruct", "2027-02-03"),
         ("deepseek-v4.1-flash-1017", "2027-03-06"),
+        ("gpt-image-2.5-flare", "2027-09-09"),
+        ("gpt-image-2.5-sunburst", "2027-09-09"),
     ),
 )
 def test_foundry_retirement_dates_match_schedule(prices: CostMap, model: str, retirement: str) -> None:
-    """Foundry schedule as of 2026-11-24.
+    """Foundry schedule as of 2026-11-25.
 
     https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule
     """

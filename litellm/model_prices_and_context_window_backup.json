@@ -5314,6 +5314,8 @@
     "azure_ai/gpt-image-2.5-flare": {
         "cache_read_input_image_token_cost": 2e-06,
         "cache_read_input_token_cost": 1.25e-06,
+        "deprecation_date": "2027-09-09",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_image_token": 8e-06,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure_ai",
@@ -5329,6 +5331,8 @@
     "azure_ai/gpt-image-2.5-sunburst": {
         "cache_read_input_image_token_cost": 2e-06,
         "cache_read_input_token_cost": 1.25e-06,
+        "deprecation_date": "2027-09-09",
+        "deprecation_source": "https://learn.microsoft.com/en-us/azure/foundry/openai/concepts/model-retirement-schedule",
         "input_cost_per_image_token": 8e-06,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "azure_ai",
@@ -80778,36 +80782,6 @@
         "output_cost_per_token": 0.0,
         "source": "https://docs.fireworks.ai"
     },
-    "fireworks_ai/accounts/fireworks/models/hy4-flash": {
-        "cache_read_input_token_cost": 3e-09,
-        "input_cost_per_token": 7e-08,
-        "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 262144,
-        "mode": "chat",
-        "output_cost_per_token": 2.81e-07,
-        "source": "https://fireworks.ai/models/fireworks/hy4-flash/",
-        "supported_endpoints": [
-            "/v1/chat/completions"
-        ],
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_vision": true
-    },
-    "fireworks_ai/accounts/fireworks/models/qwen4-max": {
-        "cache_read_input_token_cost": 7.5e-08,
-        "input_cost_per_token": 1.5e-06,
-        "litellm_provider": "fireworks_ai",
-        "max_input_tokens": 262144,
-        "mode": "chat",
-        "output_cost_per_token": 4.5e-06,
-        "source": "https://fireworks.ai/models/fireworks/qwen4-max/",
-        "supported_endpoints": [
-            "/v1/chat/completions"
-        ],
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_vision": true
-    },
     "fireworks_ai/accounts/fireworks/models/inkling-2-small": {
         "cache_read_input_token_cost": 3e-08,
         "cache_read_input_token_cost_priority": 3.75e-08,
@@ -127095,7 +127069,6 @@
         "litellm_provider": "huawei_maas",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
-        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
         "source": "https://support.huaweicloud.com/intl/en-us/price-maas/price-maas-0002.html",
@@ -127111,7 +127084,6 @@
         "litellm_provider": "huawei_maas",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
-        "max_tokens": 128000,
         "mode": "chat",
         "off_peak_pricing": {
             "cache_read_input_token_cost": 1.82e-07,
@@ -127131,7 +127103,6 @@
         "litellm_provider": "huawei_maas",
         "max_input_tokens": 1000000,
         "max_output_tokens": 384000,
-        "max_tokens": 384000,
         "mode": "chat",
         "off_peak_pricing": {
             "cache_read_input_token_cost": 3e-09,
@@ -127155,7 +127126,6 @@
         "litellm_provider": "huawei_maas",
         "max_input_tokens": 1000000,
         "max_output_tokens": 384000,
-        "max_tokens": 384000,
         "mode": "chat",
         "off_peak_pricing": {
             "cache_read_input_token_cost": 1.5e-08,
