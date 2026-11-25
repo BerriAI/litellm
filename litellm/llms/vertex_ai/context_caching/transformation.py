@@ -174,7 +174,9 @@ def separate_cached_messages(
     its place and becomes a user turn there. A later system run that ends the cached block stays out of the
     cached set, since it would let a block that ends on a model turn reach the cache only because a reminder
     follows it, and a block made only of such a run caches nothing, so a reminder added each turn changes
-    neither the cached set nor its cache key. The leading run of system messages outside the cached set stays
+    neither the cached set nor its cache key. A block that would leave only system messages uncached caches the
+    leading system run alone, since a cache of the whole conversation is never read again once the next turn
+    arrives, while the system run is. The leading run of system messages outside the cached set stays
     as it is in the remaining messages, so it still becomes the system_instruction, and every later system
     message there comes back already converted to a user turn in place. A model without system message support
     gets its later system messages back as they are, so the request renders them the way it does without a
@@ -186,7 +188,12 @@ def separate_cached_messages(
 
     block_start: Final = _cached_block_start(messages, marked.leading_run_end, marked.block.start, marked.block.stop)
     block_end: Final = _cached_block_end(messages, marked.leading_run_end, block_start, marked.block.stop)
-    cached_end: Final = max(marked.leading_run_end, block_end) if block_start < block_end else 0
+    block_cached_end: Final = max(marked.leading_run_end, block_end) if block_start < block_end else 0
+    cached_end: Final = (
+        marked.leading_run_end
+        if all(is_system_message(message) for message in messages[block_cached_end:])
+        else block_cached_end
+    )
     later_messages: Final = messages[max(cached_end, marked.leading_run_end) :]
     return (
         messages[:cached_end],

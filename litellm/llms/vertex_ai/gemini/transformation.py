@@ -324,7 +324,7 @@ def _video_may_need_download(video_url: object) -> bool:
     return isinstance(url, str) and url.startswith(("http://", "https://")) and not gemini_fetches_url_itself(url)
 
 
-def _openai_messages_may_need_sync_gcs_metadata_fetch(
+def openai_messages_may_need_sync_gcs_metadata_fetch(
     messages: list[AllMessageValues],
 ) -> bool:
     """
@@ -1826,7 +1826,7 @@ async def async_transform_request_body(
         messages, should_inline=should_inline_remote_media(custom_llm_provider)
     )
 
-    if _openai_messages_may_need_sync_gcs_metadata_fetch(inlined_messages):
+    if openai_messages_may_need_sync_gcs_metadata_fetch(inlined_messages):
         # _transform_request_body may issue a sync httpx.get (up to 5s timeout)
         # via _get_gcs_object_content_type to fetch GCS object metadata. Run the
         # whole sync transformation on a worker thread so it does not block the

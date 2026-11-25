@@ -486,9 +486,9 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
         ),
     ],
 )
-def test_openai_messages_may_need_sync_gcs_metadata_fetch_matrix(messages, expected):
+def testopenai_messages_may_need_sync_gcs_metadata_fetch_matrix(messages, expected):
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _openai_messages_may_need_sync_gcs_metadata_fetch,
+        openai_messages_may_need_sync_gcs_metadata_fetch,
     )
 
-    assert _openai_messages_may_need_sync_gcs_metadata_fetch(messages) is expected
+    assert openai_messages_may_need_sync_gcs_metadata_fetch(messages) is expected

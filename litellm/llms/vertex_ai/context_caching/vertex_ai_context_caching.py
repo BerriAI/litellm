@@ -1,4 +1,5 @@
 from collections.abc import Mapping, Sequence
+from functools import partial
 from typing import Final, Literal
 
 import httpx
@@ -9,6 +10,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.caching import Cache, LiteLLMCacheType
 from litellm.constants import MINIMUM_PROMPT_CACHE_TOKEN_COUNT
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_inline_remote_media,
@@ -16,7 +18,6 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     inline_remote_media,
 )
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
-    is_system_message,
     split_leading_system_run,
 )
 from litellm.llms.custom_httpx.http_handler import (
@@ -33,7 +34,11 @@ from ..common_utils import (
     get_supports_system_message,
     get_vertex_base_url,
 )
-from ..gemini.transformation import reject_system_message_videos, should_inline_remote_media
+from ..gemini.transformation import (
+    openai_messages_may_need_sync_gcs_metadata_fetch,
+    reject_system_message_videos,
+    should_inline_remote_media,
+)
 from ..vertex_llm_base import VertexBase
 from .transformation import (
     cached_block_ttl,
@@ -95,12 +100,11 @@ def _record_cache_creation_tokens(logging_obj: Logging, created: _CreatedCachedC
 
 
 def _cached_prefix_covers_whole_request(uncached_messages: Sequence[AllMessageValues]) -> bool:
-    if not all(is_system_message(message) for message in uncached_messages):
+    if uncached_messages:
         return False
     verbose_logger.debug(
-        "Vertex AI context caching: the cached prefix covers the whole request bar any trailing system "
-        "reminders, and an explicit cache only serves that exact prefix, so implicit caching serves it "
-        "without a storage fee. Skipping context caching."
+        "Vertex AI context caching: the cached prefix covers the whole request, and an explicit cache only "
+        "serves that exact prefix, so implicit caching serves it without a storage fee. Skipping context caching."
     )
     return True
 
@@ -129,8 +133,8 @@ def _cached_turns_link_web_media(
     ):
         return False
     verbose_logger.debug(
-        "Vertex AI context caching: a cached turn links web media that Vertex fetches itself, and the "
-        "cachedContents API only takes gs:// links. Skipping context caching."
+        "Vertex AI context caching: a cached turn links web media that Gemini fetches itself, which the "
+        "cachedContents API does not take. Skipping context caching."
     )
     return True
 
@@ -700,9 +704,11 @@ class ContextCachingEndpoints(VertexBase):
             return non_cached_messages, optional_params, google_cache_name
 
         ## TRANSFORM REQUEST
-        cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
+        inlined_turns: Final = list(await _async_inline_cached_turns(cached_messages, model, custom_llm_provider))
+        transform: Final = partial(
+            transform_openai_messages_to_gemini_context_caching,
             model=model,
-            messages=list(await _async_inline_cached_turns(cached_messages, model, custom_llm_provider)),
+            messages=inlined_turns,
             cache_key=generated_cache_key,
             ttl=ttl,
             custom_llm_provider=custom_llm_provider,
@@ -710,6 +716,11 @@ class ContextCachingEndpoints(VertexBase):
             vertex_location=vertex_location,
             drop_params=drop_params,
             litellm_params=litellm_params,
+        )
+        cached_content_request_body: Final = (
+            await asyncify(transform)()
+            if openai_messages_may_need_sync_gcs_metadata_fetch(inlined_turns)
+            else transform()
         )
 
         cached_content_request_body["tools"] = tools
