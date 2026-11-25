@@ -12,6 +12,7 @@ import pytest
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.proxy._types import PassThroughEndpointLoggingResultValues
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
@@ -307,11 +308,31 @@ async def test_a_streamed_anthropic_passthrough_call_logs_the_rate_limit_the_pro
         },
         content=_RATE_LIMITED_ANTHROPIC_STREAM.encode(),
     )
-    logged_results: Final[list[object]] = []
+    logged_results: Final[asyncio.Queue[PassThroughEndpointLoggingResultValues]] = asyncio.Queue()
 
-    async def record_logging_result(**logging_kwargs) -> None:
-        result, _ = PassThroughStreamingHandler._build_passthrough_logging_result(model=None, **logging_kwargs)
-        logged_results.append(result)
+    async def record_logging_result(
+        *,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        passthrough_success_handler_obj: PassThroughEndpointLogging,
+        url_route: str,
+        request_body: dict[str, object],
+        endpoint_type: EndpointType,
+        start_time: datetime,
+        raw_bytes: list[bytes],
+        end_time: datetime,
+    ) -> None:
+        result, _ = PassThroughStreamingHandler._build_passthrough_logging_result(
+            litellm_logging_obj=litellm_logging_obj,
+            passthrough_success_handler_obj=passthrough_success_handler_obj,
+            url_route=url_route,
+            request_body=request_body,
+            endpoint_type=endpoint_type,
+            start_time=start_time,
+            raw_bytes=raw_bytes,
+            end_time=end_time,
+            model=None,
+        )
+        logged_results.put_nowait(result)
 
     async for _ in PassThroughStreamingHandler.chunk_processor(
         response=upstream,
@@ -324,12 +345,10 @@ async def test_a_streamed_anthropic_passthrough_call_logs_the_rate_limit_the_pro
         route_streaming_logging=record_logging_result,
     ):
         pass
-    for _ in range(300):
-        if logged_results:
-            break
-        await asyncio.sleep(0.01)
+    logged_result: Final = await asyncio.wait_for(logged_results.get(), timeout=5)
 
-    assert len(logged_results) == 1
-    logged_headers: Final = logged_results[0]._hidden_params["additional_headers"]
+    assert logged_results.empty()
+    assert isinstance(logged_result, litellm.ModelResponse)
+    logged_headers: Final = logged_result._hidden_params["additional_headers"]
     assert logged_headers["x-ratelimit-remaining-tokens"] == "11999000"
     assert logged_headers["x-ratelimit-remaining-requests"] == "12999"
