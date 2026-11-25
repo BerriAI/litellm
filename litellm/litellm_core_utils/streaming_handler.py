@@ -2878,7 +2878,7 @@ class CustomStreamWrapper:
             await self.aclose()
             self._handle_stream_fallback_error(e)
         except (httpx.ReadError, httpx.RemoteProtocolError) as e:
-            if self.received_finish_reason is None:
+            if self.received_finish_reason is None and not self.received_any_finish_reason:
                 await self.aclose()
                 self._log_stream_failure_and_raise(e)
             return await self._finalize_completed_stream(cache_hit=cache_hit)

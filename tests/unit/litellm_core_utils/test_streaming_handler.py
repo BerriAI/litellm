@@ -2780,6 +2780,51 @@ async def test_gemini_stream_with_a_usage_chunk_after_its_finish_reason_still_co
     assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["stop"]
 
 
+_GEMINI_TEXT_EVENT: Final = {"candidates": [{"content": {"parts": [{"text": "1\n2"}], "role": "model"}, "index": 0}]}
+_GEMINI_FINISH_EVENT: Final = {
+    "candidates": [{"content": {"parts": [{"text": "\n3"}], "role": "model"}, "finishReason": "STOP", "index": 0}],
+    "usageMetadata": {"promptTokenCount": 9, "candidatesTokenCount": 5, "totalTokenCount": 14},
+}
+
+
+async def _sse_lines_then_connection_reset(events: Sequence[Mapping[str, object]]) -> AsyncIterator[str]:
+    for event in events:
+        yield f"data: {json.dumps(event)}"
+    raise httpx.ReadError("Response payload is not completed")
+
+
+def _gemini_stream_cut_after(events: Sequence[Mapping[str, object]], logging_obj: Logging) -> CustomStreamWrapper:
+    logging_obj.update_environment_variables(
+        model="gemini-3.8-flash", user=None, optional_params={}, litellm_params={"litellm_call_id": "gemini-cut"}
+    )
+    return CustomStreamWrapper(
+        completion_stream=GeminiModelResponseIterator(
+            streaming_response=_sse_lines_then_connection_reset(events), sync_stream=False, logging_obj=logging_obj
+        ),
+        model="gemini-3.8-flash",
+        custom_llm_provider="gemini",
+        logging_obj=logging_obj,
+    )
+
+
+@pytest.mark.asyncio
+async def test_gemini_stream_reset_after_its_finish_reason_event_ends_with_stop(logging_obj: Logging) -> None:
+    wrapper: Final = _gemini_stream_cut_after((_GEMINI_TEXT_EVENT, _GEMINI_FINISH_EVENT), logging_obj)
+
+    received: Final = [chunk async for chunk in wrapper]
+
+    assert "".join(c.choices[0].delta.content or "" for c in received if c.choices) == "1\n2\n3"
+    assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["stop"]
+
+
+@pytest.mark.asyncio
+async def test_gemini_stream_reset_before_its_finish_reason_event_still_fails(logging_obj: Logging) -> None:
+    wrapper: Final = _gemini_stream_cut_after((_GEMINI_TEXT_EVENT,), logging_obj)
+
+    with pytest.raises(MidStreamFallbackError):
+        _ = [chunk async for chunk in wrapper]
+
+
 def test_streaming_handler_with_created_time_propagation(
     initialized_custom_stream_wrapper: CustomStreamWrapper, logging_obj: Logging
 ):
