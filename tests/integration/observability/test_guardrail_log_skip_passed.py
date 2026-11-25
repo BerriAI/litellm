@@ -360,14 +360,14 @@ def test_a_pre_call_hook_that_edits_the_request_in_place_keeps_its_index_row(rig
 
 @skips_passed
 def test_a_post_call_hook_that_rewrites_the_response_keeps_its_index_row(rig: Rig) -> None:
-    rewritten: Final = rig.chat(f"the key is {AWS_KEY}", REWRITES_RESPONSE)
-    assert rewritten.status_code == 200, rewritten.text
-    assert "[MASKED]" in rewritten.text, rewritten.text
     texts: Final = ("clean prompt", f"the key is {AWS_KEY}")
     added: Final = rig.index_rows_added(
         REWRITES_RESPONSE, texts, (200, 200), Counters(2, 2, 0, 0), logged_as=REWRITES_RESPONSE
     )
     assert added == 1
+    rewritten: Final = rig.chat(f"the key is {AWS_KEY}", REWRITES_RESPONSE)
+    assert rewritten.status_code == 200, rewritten.text
+    assert "[MASKED]" in rewritten.text, rewritten.text
 
 
 @skips_passed
