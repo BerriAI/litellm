@@ -95,8 +95,8 @@ def test_block_rows_upload_as_embed_content_requests(gateway: Gateway) -> None:
         assert stored == (
             stored_row("mixed#0/2", [GCS_PART]),
             stored_row("mixed#1/2", [TEXT_PART]),
-            stored_row("bare", [TEXT_PART]),
-            stored_row("nested", [GCS_PART, TEXT_PART]),
+            stored_row("bare#0/1", [TEXT_PART]),
+            stored_row("nested#0/1", [GCS_PART, TEXT_PART]),
         )
 
 
