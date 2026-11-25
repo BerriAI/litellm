@@ -1,15 +1,21 @@
 import json
 from typing import Final, Literal
 
+from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.llms.cohere import CohereV2StreamedToolCall
+from litellm.types.llms.cohere import CohereV2StreamedContent, CohereV2StreamedMessageEnd, CohereV2StreamedToolCall
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
     ChatCompletionToolCallChunk,
     ChatCompletionUsageBlock,
+    Delta,
     GenericStreamingChunk,
+    ModelResponseStream,
     ProviderSpecificModelInfo,
+    StreamingChoices,
+    Usage,
+    generate_id,
 )
 
 
@@ -224,17 +230,12 @@ class CohereV2ModelResponseIterator:
         self.tool_index = -1
         self.json_mode = json_mode
         self.tool_call_indexes_with_arguments: frozenset[int] = frozenset()
+        self.response_id: Final = generate_id()
 
-    def _parse_content_delta(self, chunk: dict) -> str:
-        """Parse content-delta chunks to extract text."""
-        delta: Final = chunk.get("delta", {})
-        message: Final = delta.get("message", {})
-        content: Final = message.get("content", {})
-        if isinstance(content, dict) and "text" in content:
-            return content["text"]
-        elif isinstance(content, str):
-            return content
-        return ""
+    def _parse_content_delta(self, chunk: dict) -> tuple[str, str]:
+        """Parse content-delta chunks into their answer text and their thinking text."""
+        content: Final = CohereV2StreamedContent.model_validate(chunk)
+        return content.text, content.thinking
 
     def _parse_tool_call_delta(self, chunk: dict, index: int) -> ChatCompletionToolCallChunk:
         """Parse tool-call-start and tool-call-delta chunks to extract tool calls."""
@@ -281,43 +282,38 @@ class CohereV2ModelResponseIterator:
             return {"citations": [citation_data]}
         return None
 
-    def _parse_message_end(self, chunk: dict) -> tuple[bool, str, ChatCompletionUsageBlock | None]:
+    def _parse_message_end(self, chunk: dict) -> tuple[str, Usage | None]:
         """Parse message-end events to extract finish info and usage."""
-        data: Final = chunk.get("data", {})
-        delta: Final = data.get("delta", {})
-        is_finished: Final = True
-        finish_reason: Final = delta.get("finish_reason", "stop")
+        message_end: Final = CohereV2StreamedMessageEnd.model_validate(chunk)
+        finish_reason: Final = map_finish_reason(message_end.finish_reason or "COMPLETE")
+        tokens: Final = message_end.tokens
+        if tokens is None:
+            return finish_reason, None
+        return finish_reason, Usage(
+            prompt_tokens=tokens.input_tokens,
+            completion_tokens=tokens.output_tokens,
+            total_tokens=tokens.input_tokens + tokens.output_tokens,
+            reasoning_tokens=tokens.reasoning_tokens,
+        )
 
-        usage = None
-        usage_data: Final = delta.get("usage", {})
-        if usage_data:
-            tokens_data: Final = usage_data.get("tokens", {})
-            usage = ChatCompletionUsageBlock(
-                prompt_tokens=tokens_data.get("input_tokens", 0),
-                completion_tokens=tokens_data.get("output_tokens", 0),
-                total_tokens=tokens_data.get("input_tokens", 0) + tokens_data.get("output_tokens", 0),
-            )
-
-        return is_finished, finish_reason, usage
-
-    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
         """
         Parse Cohere v2 streaming chunks.
 
         v2 format:
-        - Content: chunk.type == "content-delta" -> chunk.delta.message.content.text
+        - Content: chunk.type == "content-delta" -> chunk.delta.message.content.text or .thinking
         - Tool calls: chunk.type in ("tool-call-start", "tool-call-delta") -> chunk.delta.message.tool_calls
         - Tool call end: chunk.type == "tool-call-end" -> "{}" arguments when the call streamed none
         - Tool plan: chunk.event == "tool-plan-delta" -> chunk.data.delta.message.tool_plan
         - Citations: chunk.event == "citation-start" -> chunk.data.delta.message.citations
-        - Finish: chunk.event == "message-end" -> chunk.data.delta.finish_reason
+        - Finish: chunk.type == "message-end" -> chunk.delta.finish_reason and chunk.delta.usage
         """
         try:
             text = ""
+            reasoning_content = ""
             tool_use: ChatCompletionToolCallChunk | None = None
-            is_finished = False
-            finish_reason = ""
-            usage: ChatCompletionUsageBlock | None = None
+            finish_reason: str | None = None
+            usage: Usage | None = None
             provider_specific_fields = None
 
             index: Final = int(chunk.get("index", 0))
@@ -326,7 +322,7 @@ class CohereV2ModelResponseIterator:
 
             # Handle different chunk types
             if chunk_type == "content-delta":
-                text = self._parse_content_delta(chunk)
+                text, reasoning_content = self._parse_content_delta(chunk)
             elif chunk_type in ("tool-call-start", "tool-call-delta", "tool-call-end"):
                 tool_use = (
                     self._parse_tool_call_end(index)
@@ -337,8 +333,8 @@ class CohereV2ModelResponseIterator:
                 provider_specific_fields = self._parse_tool_plan_delta(chunk)
             elif event_type == "citation-start":
                 provider_specific_fields = self._parse_citation_start(chunk)
-            elif event_type == "message-end":
-                is_finished, finish_reason, usage = self._parse_message_end(chunk)
+            elif chunk_type == "message-end":
+                finish_reason, usage = self._parse_message_end(chunk)
 
             # Handle citations in any chunk type (fallback)
             if "citations" in chunk:
@@ -346,14 +342,21 @@ class CohereV2ModelResponseIterator:
                     provider_specific_fields = {}
                 provider_specific_fields["citations"] = chunk["citations"]
 
-            return GenericStreamingChunk(
-                text=text,
-                tool_use=tool_use,
-                is_finished=is_finished,
-                finish_reason=finish_reason,
+            return ModelResponseStream(
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(
+                            content=text,
+                            reasoning_content=reasoning_content or None,
+                            tool_calls=[tool_use] if tool_use is not None else None,
+                            provider_specific_fields=provider_specific_fields,
+                        ),
+                        finish_reason=finish_reason,
+                    )
+                ],
                 usage=usage,
-                index=index,
-                provider_specific_fields=provider_specific_fields,
+                id=self.response_id,
             )
 
         except Exception as e:
@@ -363,7 +366,7 @@ class CohereV2ModelResponseIterator:
     def __iter__(self):
         return self
 
-    def __next__(self):
+    def __next__(self) -> ModelResponseStream:
         try:
             chunk: Final = self.response_iterator.__next__()
         except StopIteration:
@@ -378,9 +381,9 @@ class CohereV2ModelResponseIterator:
         except ValueError as e:
             raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
-    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> GenericStreamingChunk:
+    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream:
         """
-        Convert a string chunk to a GenericStreamingChunk for v2
+        Convert a string chunk to a ModelResponseStream for v2
 
         Note: This is used for Cohere v2 pass through streaming logging
         """
@@ -399,7 +402,7 @@ class CohereV2ModelResponseIterator:
         self.async_response_iterator = self.streaming_response.__aiter__()
         return self
 
-    async def __anext__(self):
+    async def __anext__(self) -> ModelResponseStream:
         try:
             chunk: Final = await self.async_response_iterator.__anext__()
         except StopAsyncIteration:

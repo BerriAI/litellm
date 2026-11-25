@@ -6,6 +6,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -79,7 +80,49 @@ _SCHEMA_KEYWORDS_COHERE_REJECTS: Final = frozenset(
 )
 _PATTERN_SYNTAX_COHERE_REJECTS: Final = ("(?=", "(?!", "(?<=", "(?<!")
 _COHERE_PROVIDERS: Final = ("cohere_chat", "cohere")
+_REASONING_FIELDS: Final = frozenset({"reasoning_content", "thinking_blocks"})
+_HISTORY: Final = TypeAdapter(list[object])
 _SCHEMA_DEPTH_CHECKED: Final = 64
+
+
+def _thinking_block_text(block: object) -> str:
+    match block:
+        case {"type": "thinking", "thinking": str(thinking)}:
+            return thinking
+        case _:
+            return ""
+
+
+def _replayed_reasoning(message: Mapping[str, object]) -> str:
+    reasoning_content: Final = message.get("reasoning_content")
+    if isinstance(reasoning_content, str) and reasoning_content:
+        return reasoning_content
+    blocks: Final = as_object_list(message.get("thinking_blocks")) or ()
+    return "\n".join(text for block in blocks if (text := _thinking_block_text(block)))
+
+
+def _assistant_content_parts(content: object) -> tuple[object, ...]:
+    if isinstance(content, str):
+        return ({"type": "text", "text": content},) if content else ()
+    return tuple(as_object_list(content) or ())
+
+
+def _with_cohere_thinking(message: object) -> object:
+    fields: Final = as_str_mapping(message)
+    if fields is None or fields.get("role") != "assistant":
+        return message
+    turn: Final = {key: value for key, value in fields.items() if key not in _REASONING_FIELDS}
+    reasoning: Final = _replayed_reasoning(fields)
+    content_parts: Final = _assistant_content_parts(turn.get("content"))
+    if not reasoning or not (content_parts or turn.get("tool_calls")):
+        return turn
+    return {**turn, "content": [{"type": "thinking", "thinking": reasoning}, *content_parts]}
+
+
+def _response_part_text(content: object, part_type: str) -> str:
+    fields: Final = as_str_mapping(content) or _NOTHING
+    text: Final = fields.get(part_type)
+    return text if fields.get("type") == part_type and isinstance(text, str) else ""
 
 
 def _cohere_model_id(model: str) -> str:
@@ -464,8 +507,8 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             litellm_params,
             headers,
         )
-
-        return data
+        history: Final = _HISTORY.validate_python(data["messages"])
+        return {**data, "messages": [_with_cohere_thinking(message) for message in history]}
 
     def transform_response(
         self,
@@ -496,6 +539,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             model_response.choices[0].message.content = "".join(
                 [content.get("text", "") for content in cohere_content if content is not None]
             )
+        reasoning_content: Final = "".join(_response_part_text(content, "thinking") for content in cohere_content or ())
 
         ## ADD CITATIONS AS ANNOTATIONS
         annotations: list[ChatCompletionAnnotation] | None = None
@@ -522,12 +566,15 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
                 tool_calls=tool_calls,
                 content=None,
                 annotations=annotations,
+                reasoning_content=reasoning_content or None,
             )
             model_response.choices[0].message = _message
         else:
+            current_message: Final = model_response.choices[0].message
             if annotations:
-                current_message: Final = model_response.choices[0].message
                 current_message.annotations = annotations
+            if reasoning_content:
+                current_message.reasoning_content = reasoning_content
 
         ## CALCULATING USAGE - use cohere `billed_units` for returning usage
         token_usage: Final = cohere_v2_chat_response["usage"].get("tokens", {})
@@ -540,6 +587,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
+            reasoning_tokens=token_usage.get("reasoning_tokens"),
         )
         setattr(model_response, "usage", usage)
         return model_response
