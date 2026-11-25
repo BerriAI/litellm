@@ -430,6 +430,17 @@
       ]
     },
     {
+      "name": "acemusic_acedatacloud",
+      "title": "ACE Music by Ace Data Cloud",
+      "description": "Generate ACE Music songs and lyrics, import reference audio, create covers or mashups, and retrieve the original task. Select Bearer Token and enter your Ace API token with ACE Music access.",
+      "icon_url": "https://cdn.acedata.cloud/acemusic-icon-52deddfc87b9.png",
+      "category": "Media Generation",
+      "registry_url": "https://registry.modelcontextprotocol.io/v0.1/servers/io.github.AceDataCloud%2Fmcp-acemusic/versions/latest",
+      "transport": "http",
+      "url": "https://acemusic.mcp.acedata.cloud/mcp",
+      "env_vars": []
+    },
+    {
       "name": "suno_acedatacloud",
       "title": "Suno by Ace Data Cloud",
       "description": "Generate Suno music, lyrics and covers through Ace Data Cloud. Retrieve the same task until final audio is ready. Select Bearer Token and enter your Ace API token with service access.",
