@@ -18,6 +18,7 @@ futures-util.workspace = true
 http-body = "1.0.1"
 litellm-framer.workspace = true
 litellm-python-compat.workspace = true
+litellm-standard-logging.workspace = true
 litellm-auth.workspace = true
 litellm-error.workspace = true
 litellm-config.workspace = true

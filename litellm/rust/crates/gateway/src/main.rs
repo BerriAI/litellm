@@ -1,6 +1,7 @@
 use std::{
     convert::Infallible,
     error::Error,
+    net::SocketAddr,
     path::Path,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -123,9 +124,12 @@ async fn standalone(
 
     tracing::info!(address = %listener.local_addr()?, models = config.model_list.len(), log_level = %log_level, "gateway listening");
 
-    let served = axum::serve(listener, ServiceExt::<Request>::into_make_service(app))
-        .with_graceful_shutdown(shutdown_signal())
-        .await;
+    let served = axum::serve(
+        listener,
+        ServiceExt::<Request>::into_make_service_with_connect_info::<SocketAddr>(app),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await;
     closed(poller, &live).await;
     Ok(served?)
 }

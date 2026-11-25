@@ -9,6 +9,7 @@ description = "The StandardLoggingPayload of litellm/types/utils.py: one call as
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+litellm-python-compat.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

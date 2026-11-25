@@ -8,6 +8,7 @@
 
 mod attempt;
 mod entries;
+mod request_facts;
 mod trace;
 
 use std::{
@@ -33,6 +34,7 @@ use tokio::task::futures::TaskLocalFuture;
 pub use self::{
     attempt::{AttemptRecord, Recorder, ServedDeployment},
     entries::{CallState, Charged, Ended, ErrorResponse, HeadSent, unix},
+    request_facts::RequestFacts,
 };
 
 tokio::task_local! {
@@ -131,10 +133,12 @@ fn missed(what: &str, error: impl std::fmt::Display) {
 }
 
 /// The layer outermost on the inference routes. It makes the request's record, under the trace
-/// its headers name, and runs the rest of the request with it, the response body included, since
-/// hyper polls the body after the handler returned.
+/// its headers name and with what the request tells of its caller, and runs the rest of the
+/// request with it, the response body included, since hyper polls the body after the handler
+/// returned.
 pub(crate) async fn scoped(request: Request, next: Next) -> Response {
     let record = CallRecord::traced(trace::of(request.headers()));
+    record.0.lock().request_facts = RequestFacts::of(&request);
     let response = scope(record.clone(), next.run(request)).await;
     response.map(|body| {
         Body::new(Scoped {
