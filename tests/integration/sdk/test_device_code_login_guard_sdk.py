@@ -142,7 +142,9 @@ class _Bench:
     chatgpt_dir: Path
     copilot_dir: Path
 
-    def run(self, variant: str, provider: Provider, marker: str) -> _Outcome:
+    def run(
+        self, variant: str, provider: Provider, marker: str, environment: Mapping[str, str] = MappingProxyType({})
+    ) -> _Outcome:
         completed: Final = subprocess.run(
             [sys.executable, "-P", "-c", _SCRIPT, variant, _MODELS[provider], marker, _AUTHENTICATORS[provider]],
             env={
@@ -151,6 +153,7 @@ class _Bench:
                 "CHATGPT_TOKEN_DIR": str(self.chatgpt_dir),
                 "GITHUB_COPILOT_TOKEN_DIR": str(self.copilot_dir),
                 "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+                **environment,
             },
             capture_output=True,
             text=True,
@@ -267,3 +270,22 @@ def test_a_marked_server_tool_call_reaches_the_auth_host_like_an_unmarked_one_wh
     assert marked_auth == unmarked_auth
     assert clean.peers.api.drain() == ()
     assert clean.token_files() == ()
+
+
+def test_a_stored_ghe_com_login_finds_its_copilot_api_on_its_own_tenant(clean: _Bench) -> None:
+    dl.write_copilot_access(clean.copilot_dir, dl.COPILOT_GHE_ACCESS)
+    marker: Final = uuid.uuid4().hex
+    outcome: Final = clean.run(
+        "completion",
+        "copilot",
+        marker,
+        MappingProxyType({"GITHUB_COPILOT_ACCESS_TOKEN_URL": dl.GHE_ACCESS_TOKEN_URL}),
+    )
+    verdict: Final = outcome.verdict()
+    assert verdict["ok"] is True, (verdict, outcome.stderr[-3000:])
+    assert marker in str(verdict["text"]), verdict
+    assert set(clean.peers.auth_connections()) == {f"{dl.GHE_API_HOST}:443"}
+    forwarded: Final = [request for request in clean.peers.api.drain() if request.method == "POST"]
+    assert {(request.headers.get("host"), dl.bearer(request)) for request in forwarded} == {
+        (dl.GHE_COPILOT_API_HOST, dl.COPILOT_GHE_ACCESS)
+    }, [(request.headers.get("host"), request.target) for request in forwarded]

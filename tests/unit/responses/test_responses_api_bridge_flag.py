@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from importlib import import_module
 from pathlib import Path
 from typing import Final, cast
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import openai
@@ -304,6 +304,44 @@ class TestUseResponsesApiBridgeFlag:
         assert "client_metadata" not in request_body
         assert request_body["messages"] == [{"role": "user", "content": "Hello"}]
         assert response.output[0].content[0].text == "Answer"
+
+    def test_bridge_sends_a_responses_layout_allowed_tools_tool_choice_in_the_chat_layout(
+        self, respx_mock: respx.MockRouter
+    ):
+        upstream: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                status_code=200,
+                json={
+                    "id": "chatcmpl-123",
+                    "object": "chat.completion",
+                    "created": 1677652288,
+                    "model": "my-custom-model",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "Answer"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+                },
+            )
+        )
+
+        litellm.responses(
+            model="openai/my-custom-model",
+            input="What time is it?",
+            use_chat_completions_api=True,
+            tools=[
+                {"type": "function", "name": name, "parameters": {"type": "object", "properties": {}}}
+                for name in ("get_time", "get_weather")
+            ],
+            tool_choice={"type": "allowed_tools", "mode": "required", "tools": [{"type": "function", "name": "get_time"}]},
+            api_key="fake-provider-api-key",
+            num_retries=0,
+        )
+
+        assert upstream.call_count == 1
+        assert json.loads(upstream.calls[0].request.read())["tool_choice"] == {
+            "type": "allowed_tools",
+            "allowed_tools": {"mode": "required", "tools": [{"type": "function", "function": {"name": "get_time"}}]},
+        }
 
     def test_bridge_merges_instructions_and_developer_input_for_databricks(self, respx_mock: respx.MockRouter):
         upstream: Final = respx_mock.post("https://example.databricks.test/serving-endpoints/chat/completions").mock(
@@ -786,17 +824,76 @@ _FUNCTION_TOOL: Final[dict[str, JsonValue]] = {
 
 
 @pytest.mark.parametrize("custom_llm_provider", ["openai", "azure"])
-def test_a_chat_pin_cannot_pull_gpt_5_4_function_tool_calls_off_the_responses_api(custom_llm_provider: str) -> None:
-    """Chat Completions rejects function tools while reasoning is on for gpt-5.4+, so the capability rule
-    must still bridge the request even when the deployment pins ``mode: chat``."""
+@pytest.mark.parametrize(("effort", "mode"), ((None, "chat"), ("medium", "responses")))
+def test_a_chat_pin_routes_gpt_5_4_function_tools_by_explicit_effort(
+    custom_llm_provider: str, effort: str | None, mode: str
+) -> None:
     info, model = responses_api_bridge_check(
         model="gpt-5.4",
         custom_llm_provider=custom_llm_provider,
         tools=[_FUNCTION_TOOL],
+        reasoning_effort=effort,
         api_base="https://example.openai.azure.com" if custom_llm_provider == "azure" else None,
         deployment_model_info=_CHAT,
     )
-    assert (info["mode"], model) == ("responses", "gpt-5.4")
+    assert (info["mode"], model) == (mode, "gpt-5.4")
+
+
+@pytest.mark.parametrize("provider", ("openai", "azure"))
+@pytest.mark.parametrize(
+    ("model", "effort", "extra_body", "expected"),
+    (
+        ("gpt-5.4-mini", None, None, "chat"),
+        ("gpt-5.4-nano", None, None, "chat"),
+        ("gpt-5.5", None, None, "chat"),
+        ("gpt-5.6", None, None, "responses"),
+        ("gpt-6.1-sol", None, None, "responses"),
+        ("gpt-5.4-mini", "none", None, "chat"),
+        ("gpt-5.4-mini", "medium", None, "responses"),
+        ("gpt-5.4-mini", {"effort": "medium"}, None, "responses"),
+        ("gpt-5.4-mini", None, {"reasoning_effort": "medium"}, "responses"),
+    ),
+)
+def test_function_tools_bridge_only_when_chat_rejects_the_effective_effort(
+    provider: str,
+    model: str,
+    effort: str | Mapping[str, object] | None,
+    extra_body: Mapping[str, object] | None,
+    expected: str,
+) -> None:
+    info, _ = responses_api_bridge_check(
+        model=model,
+        custom_llm_provider=provider,
+        tools=[_FUNCTION_TOOL],
+        reasoning_effort=bridge_reasoning_effort(
+            effort, extra_body, custom_llm_provider=provider, api_base="https://api.openai.com/v1"
+        ),
+        api_base="https://api.openai.com/v1",
+    )
+    assert info.get("mode") == expected
+
+
+@pytest.mark.parametrize("region", ("us", "eu"))
+@pytest.mark.parametrize("model", ("gpt-5.4-mini", "gpt-5.4-nano"))
+def test_regional_azure_default_none_function_tools_stay_on_chat(region: str, model: str) -> None:
+    info, _ = responses_api_bridge_check(
+        model=f"{region}/{model}", custom_llm_provider="azure", tools=[_FUNCTION_TOOL]
+    )
+    assert info.get("mode") == "chat"
+    assert info.get("default_reasoning_effort") == litellm.model_cost[f"azure/{model}"]["default_reasoning_effort"]
+
+
+def test_registered_gpt_5_6_default_none_function_tools_stay_on_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "gpt-5.6-test-default-none"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {**litellm.model_cost["gpt-5.6"], "default_reasoning_effort": "none"},
+    )
+    info, _ = responses_api_bridge_check(
+        model=model, custom_llm_provider="openai", tools=[_FUNCTION_TOOL], api_base="https://api.openai.com/v1"
+    )
+    assert info.get("mode") == "chat"
 
 
 @pytest.mark.parametrize("model", ["openai.gpt-5.6-terra", "us-east-1/openai.gpt-5.6-terra"])
@@ -1012,7 +1109,7 @@ def test_backend_serves_chat_completions_reads_the_shared_row(
 def test_bridge_reasoning_effort_reads_only_a_string_or_mapping_effort_nested_in_extra_body(
     extra_body: JsonValue, expected: JsonValue
 ) -> None:
-    assert bridge_reasoning_effort(None, extra_body) == expected
+    assert bridge_reasoning_effort(None, extra_body, custom_llm_provider="openai", api_base=None) == expected
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
@@ -1353,21 +1450,47 @@ async def test_bridge_sends_text_verbosity_on_a_client_tool_search_follow_up_tur
     monkeypatch.setattr(litellm, "drop_params", False)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     upstream: Final = _openai_chat_upstream(respx_mock, stream=False)
+    earlier_turn: Final = {
+        "request_id": "chatcmpl-earlier-turn",
+        "call_type": "aresponses",
+        "session_id": "earlier-session",
+        "proxy_server_request": {"input": "Hi", "model": "gpt-5.6"},
+        "response": {
+            "id": "chatcmpl-earlier-turn",
+            "object": "response",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "Hi there.", "annotations": []}],
+                }
+            ],
+        },
+    }
 
-    await _bridged_responses_call(
-        True,
-        False,
-        model="openai/gpt-5.6",
-        use_chat_completions_api=True,
-        previous_response_id="chatcmpl-earlier-turn",
-        tools=[_CLIENT_TOOL_SEARCH],
-        text={"verbosity": verbosity},
-    )
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        MagicMock(db=MagicMock(query_raw=AsyncMock(return_value=[earlier_turn]))),
+    ):
+        await _bridged_responses_call(
+            True,
+            False,
+            model="openai/gpt-5.6",
+            use_chat_completions_api=True,
+            previous_response_id="chatcmpl-earlier-turn",
+            tools=[_CLIENT_TOOL_SEARCH],
+            text={"verbosity": verbosity},
+        )
 
     assert upstream.call_count == 1
     assert json.loads(upstream.calls[0].request.read()) == {
         "model": "gpt-5.6",
-        "messages": [{"role": "user", "content": "Hello"}],
+        "messages": [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": [{"type": "text", "text": "Hi there."}]},
+            {"role": "user", "content": "Hello"},
+        ],
         "tools": [
             {
                 "type": "function",
@@ -1380,3 +1503,13 @@ async def test_bridge_sends_text_verbosity_on_a_client_tool_search_follow_up_tur
         ],
         "verbosity": verbosity,
     }
+
+
+@pytest.mark.parametrize(
+    ("model", "bridged"), [("chat-latest", True), ("gpt-chat-latest", False), ("my-gpt-chat-latest", False)]
+)
+def test_only_openais_own_chat_latest_sends_a_reasoning_summary_to_the_responses_api(model: str, bridged: bool) -> None:
+    info, _ = responses_api_bridge_check(
+        model=model, custom_llm_provider="openai", reasoning_effort="medium", reasoning_summary="auto"
+    )
+    assert (info.get("mode") == "responses") is bridged

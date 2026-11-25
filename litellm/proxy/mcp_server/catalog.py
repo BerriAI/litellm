@@ -15,11 +15,12 @@ from dataclasses import dataclass, replace
 from functools import partial, wraps
 from itertools import chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Generic, ParamSpec, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Generic, ParamSpec, Protocol, TypeAlias, TypeVar, cast
 
 from mcp.shared.exceptions import MCPError
 from mcp.types import CacheableResult
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
+from typing_extensions import Self
 
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
@@ -826,6 +827,20 @@ async def prepare_tool_listing_headers(
     return server_auth_header, extra_headers, catalog_auth_header
 
 
+def challenge_rejected_credential(server: MCPServer, outcome: ServerOutcome, listed: Sequence[MCPServer]) -> None:
+    """Answer a listing of this one server with the gateway's 401 when the caller can fix the rejection."""
+    from litellm.proxy.mcp_server.legacy_callbacks import get_listing_scope_response
+
+    scope_response: Final = get_listing_scope_response()
+    if (
+        scope_response is not None
+        and len(listed) == 1
+        and outcome.tag == "auth_required"
+        and server.reauthorizes_in_client
+    ):
+        scope_response.deny_reauth()
+
+
 async def get_filtered_server_tools(
     server: MCPServer,
     *,
@@ -835,6 +850,7 @@ async def get_filtered_server_tools(
     params: PaginatedRequestParams | None = None,
     record_listing: bool = False,
     listing_updates: ExitStack | None = None,
+    use_tool_list_cache: bool = True,
 ) -> tuple[ListToolsResult, ServerOutcome]:
     from mcp.types import ListToolsResult
 
@@ -879,6 +895,7 @@ async def get_filtered_server_tools(
                     proxy_logging_obj=proxy_logging_obj,
                     catalog_auth_header=catalog_auth_header,
                     record_listing=False,
+                    use_tool_list_cache=use_tool_list_cache,
                 )
             )
         else:
@@ -896,6 +913,7 @@ async def get_filtered_server_tools(
                 catalog_auth_header=catalog_auth_header,
                 record_listing=False,
                 listing_updates=listing_updates,
+                use_tool_list_cache=use_tool_list_cache,
             )
         tools: Final = page.tools
         filtered_tools = filter_tools_by_allowed_tools(tools, server)
@@ -943,14 +961,11 @@ async def get_filtered_server_tools(
         )
         return page.model_copy(update={"tools": filtered_tools}), ServerListOk(tool_count=len(filtered_tools))
     except MCPUpstreamAuthError as e:
-        # Absorb so one unauthenticated server does not empty every other server's
-        # tools. Surfacing the upstream 401 to the client as a re-auth challenge is
-        # intentionally not done here: raising from this list handler cannot produce a
-        # 401 + WWW-Authenticate (the MCP session manager serializes it as a JSON-RPC
-        # error). Single-server routes surface it via the request-scope preemptive
-        # check in _raise_preemptive_401_for_unauthenticated_servers instead.
+        # Absorbed so peers keep their tools; a raise here would reach the client as a JSON-RPC error, not a 401
         verbose_logger.debug("MCP list_tools: omitting %s; it needs upstream auth", server.name)
-        return ListToolsResult(tools=[]), classify_list_exception(e)
+        outcome: Final = classify_list_exception(e)
+        challenge_rejected_credential(server, outcome, allowed_mcp_servers)
+        return ListToolsResult(tools=[]), outcome
     except Exception as e:
         verbose_logger.exception("Error getting tools from server %s: %s", server.name, e)
         return ListToolsResult(tools=[]), classify_list_exception(e)
@@ -990,6 +1005,7 @@ async def aggregate_gateway_tools(
     *,
     record_listing: bool = False,
     enforce_rate_limits: bool = True,
+    use_tool_list_cache: bool = True,
 ) -> AggregateToolListing:
     import time
 
@@ -1039,6 +1055,7 @@ async def aggregate_gateway_tools(
                 params=PaginatedRequestParams(cursor=cursor),
                 record_listing=record_listing,
                 listing_updates=listing_updates,
+                use_tool_list_cache=use_tool_list_cache,
             )
             if cursor is not None and outcome.tag != "ok":
                 from mcp.shared.exceptions import MCPError
@@ -1199,6 +1216,8 @@ async def list_gateway_catalog(
                     update={"meta": {key: value for key, value in page_meta.items() if key != SERVER_OUTCOMES_META_KEY}}
                 )
             except Exception as error:
+                outcome: Final = classify_list_exception(error)
+                challenge_rejected_credential(server, outcome, allowed)
                 if cursor is not None:
                     raise MCPError(
                         code=INVALID_PARAMS, message="Upstream continuation failed; start a fresh listing"
@@ -1207,11 +1226,7 @@ async def list_gateway_catalog(
                     request,
                     (),
                     None,
-                    {
-                        "litellm.ai/server_outcomes": {
-                            _aggregate_server_key(server): classify_list_exception(error).model_dump(mode="json")
-                        }
-                    },
+                    {"litellm.ai/server_outcomes": {_aggregate_server_key(server): outcome.model_dump(mode="json")}},
                 )
 
         pages, next_cursor, outcomes = await paginate_catalog(
@@ -1328,29 +1343,55 @@ def combine_optional_catalog(
     )
 
 
-_DiscoveryPage = TypeVar("_DiscoveryPage", bound=CacheableResult)
+class _Expiring(Protocol):
+    @property
+    def ttl_ms(self) -> int: ...
+
+    def model_copy(self, *, update: Mapping[str, object] | None = None, deep: bool = False) -> Self: ...
+
+
+_DiscoveryPage = TypeVar("_DiscoveryPage", bound=_Expiring)
 _DiscoveryKey: TypeAlias = tuple[str, str | None]
 _DISCOVERY_CACHE_LIMIT: Final = 1024
 _DISCOVERY_ENTRY: Final = TypeAdapter(tuple[float, bytes])
 
 
 class _DiscoveryCache(Generic[_DiscoveryPage]):
-    def __init__(self, ttl: float, clock: Callable[[], float], adapter: TypeAdapter[_DiscoveryPage]) -> None:
+    def __init__(
+        self,
+        ttl: float,
+        clock: Callable[[], float],
+        adapter: TypeAdapter[_DiscoveryPage],
+        max_entry_kb: int = 64,
+        storable: Callable[[_DiscoveryPage], bool] | None = None,
+    ) -> None:
         self._ttl = ttl
         self._clock = clock
         self._adapter = adapter
-        self._entries = InMemoryCache(max_size_in_memory=_DISCOVERY_CACHE_LIMIT, max_size_per_item=64, clock=clock)
+        self._storable = storable
+        self._entries = InMemoryCache(
+            max_size_in_memory=_DISCOVERY_CACHE_LIMIT, max_size_per_item=max_entry_kb, clock=clock
+        )
         self._pending: dict[_DiscoveryKey, asyncio.Task[_DiscoveryPage]] = {}
         self._waiters: dict[asyncio.Task[_DiscoveryPage], int] = {}  # mutable-ok: constant-time waiter accounting
+        self._oversized_server_ids: frozenset[str] = frozenset()
+        self.invalidations = 0
 
-    def invalidate(self, server_id: str) -> None:
+    def _entry_keys(self, server_id: str) -> tuple[str, ...]:
         prefix: Final = f"[{json.dumps(server_id)},"
         keys: Final = cast(  # cast-ok: private cache contains only JSON string keys
             "tuple[str, ...]", tuple(self._entries.cache_dict)
         )
-        for entry_key in keys:
-            if entry_key.startswith(prefix):
-                self._entries.delete_cache(entry_key)
+        return tuple(entry_key for entry_key in keys if entry_key.startswith(prefix))
+
+    def holds(self, server_id: str) -> bool:
+        return bool(self._entry_keys(server_id))
+
+    def invalidate(self, server_id: str) -> None:
+        self.invalidations += 1
+        self._oversized_server_ids = self._oversized_server_ids - {server_id}
+        for entry_key in self._entry_keys(server_id):
+            self._entries.delete_cache(entry_key)
         for key in tuple(self._pending):
             if key[0] == server_id:
                 self._pending.pop(key)
@@ -1360,7 +1401,9 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
         if not task.cancelled():
             task.exception()
 
-    async def get(self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[_DiscoveryPage]]) -> _DiscoveryPage:
+    async def get(
+        self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[_DiscoveryPage]], *, capped: bool = True
+    ) -> _DiscoveryPage:
         if self._ttl <= 0:
             return await fetch()
         entry: Final[object] = self._entries.get_cache(json.dumps(key))
@@ -1375,7 +1418,7 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
             return await self._await_fetch(key, pending)
         if len(self._pending) >= _DISCOVERY_CACHE_LIMIT:
             return await fetch()
-        task: Final = asyncio.create_task(self._fetch(key, fetch))
+        task: Final = asyncio.create_task(self._fetch(key, fetch, capped))
         self._pending[key] = task
         task.add_done_callback(self._observe_completion)
         return await self._await_fetch(key, task)
@@ -1395,17 +1438,34 @@ class _DiscoveryCache(Generic[_DiscoveryPage]):
                 if not task.done():
                     task.cancel()
 
-    async def _fetch(self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[_DiscoveryPage]]) -> _DiscoveryPage:
+    async def _fetch(
+        self, key: _DiscoveryKey, fetch: Callable[[], Awaitable[_DiscoveryPage]], capped: bool
+    ) -> _DiscoveryPage:
         try:
             items: Final = await fetch()
-            ttl: Final = min(self._ttl, items.ttl_ms / 1000)
-            if ttl > 0 and self._pending.get(key) is asyncio.current_task():
-                self._entries.set_cache(
-                    json.dumps(key),
-                    _DISCOVERY_ENTRY.dump_json((self._clock() + ttl, self._adapter.dump_json(items))),
-                    ttl=ttl,
-                )
+            if self._pending.get(key) is asyncio.current_task():
+                self.keep(key, items, capped=capped)
             return items
         finally:
             if self._pending.get(key) is asyncio.current_task():
                 self._pending.pop(key)
+
+    def keep(self, key: _DiscoveryKey, items: _DiscoveryPage, *, capped: bool = True) -> None:
+        declared: Final = items.ttl_ms / 1000
+        ttl: Final = min(self._ttl, declared) if capped else declared
+        if ttl <= 0 or (self._storable is not None and not self._storable(items)):
+            return
+        entry: Final = _DISCOVERY_ENTRY.dump_json((self._clock() + ttl, self._adapter.dump_json(items)))
+        if self._entries.check_value_size(entry):
+            self._entries.set_cache(json.dumps(key), entry, ttl=ttl)
+            return
+        server_id: Final = key[0]
+        if server_id in self._oversized_server_ids:
+            return
+        self._oversized_server_ids = self._oversized_server_ids | {server_id}
+        verbose_logger.warning(
+            "MCP server %s returned a %s KB listing, above the %s KB cache entry limit. It is fetched on every request",
+            server_id,
+            len(entry) // 1024,
+            self._entries.max_size_per_item,
+        )

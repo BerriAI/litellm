@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from datetime import timedelta
 from typing import Final
 
@@ -33,96 +34,153 @@ def _build_tags_expr(available_keys: list[str]) -> pl.Expr:
     are handled by Polars' Rust engine.
     """
 
-    def _struct_to_json(row: dict) -> str:
+    def _struct_to_json(row: Mapping[str, object]) -> str:
         tags: Final = {k: str(v) for k, v in row.items() if v is not None}
         return json.dumps(tags) if tags else "{}"
 
     return pl.struct(available_keys).map_elements(_struct_to_json, return_dtype=pl.String).alias("Tags")
 
 
+def _requester_details(row: Mapping[str, object]) -> str | None:
+    principal: Final = (
+        (
+            {
+                "key": "Principal",
+                "value": {
+                    "Type": "User",
+                    **{name: row["user_email"] for name in ("Name", "Email") if row["user_email"] is not None},
+                },
+            },
+        )
+        if row["user_id"] is not None
+        else ()
+    )
+    credential: Final = (
+        (
+            {
+                "key": "Credential",
+                "value": {
+                    "Type": "API Key",
+                    **({"Name": row["api_key_alias"]} if row["api_key_alias"] is not None else {}),
+                },
+            },
+        )
+        if row["api_key"] is not None
+        else ()
+    )
+    entries: Final = (*principal, *credential)
+    return json.dumps(entries) if entries else None
+
+
+def _sku_price_details(row: Mapping[str, object]) -> str | None:
+    if row["custom_llm_provider"] is None or row["model"] is None:
+        return None
+    return json.dumps({"ModelId": row["model"]})
+
+
 class FocusTransformer:
     """Transforms LiteLLM DB rows into Focus-compatible schema."""
 
-    schema = FOCUS_NORMALIZED_SCHEMA
+    schema: Final = FOCUS_NORMALIZED_SCHEMA
 
     def transform(self, frame: pl.DataFrame) -> pl.DataFrame:
         """Return a normalized frame expected by downstream serializers."""
         if frame.is_empty():
             return pl.DataFrame(schema=self.schema)
 
-        # Build Tags JSON from metadata columns using vectorized Polars expression
         available_keys: Final = [k for k in _TAG_KEYS if k in frame.columns]
-        if available_keys:
-            frame = frame.with_columns(_build_tags_expr(available_keys))
-        else:
-            frame = frame.with_columns(pl.lit("{}").alias("Tags"))
-
-        # derive period start/end from usage date
-        frame = frame.with_columns(
+        tagged: Final = frame.with_columns(
+            _build_tags_expr(available_keys) if available_keys else pl.lit("{}").alias("Tags"),
+            *(
+                pl.lit(None, dtype=pl.String).alias(name)
+                for name in ("user_id", "user_email")
+                if name not in frame.columns
+            ),
+        )
+        dated: Final = tagged.with_columns(
             pl.col("date")
             .cast(pl.Utf8)
             .str.strptime(pl.Datetime(time_unit="us"), format="%Y-%m-%d", strict=False)
             .alias("usage_date"),
         )
-        frame = frame.with_columns(
+        periods: Final = dated.with_columns(
             pl.col("usage_date").alias("ChargePeriodStart"),
             (pl.col("usage_date") + timedelta(days=1)).alias("ChargePeriodEnd"),
         )
 
-        def fmt(col):
+        def fmt(col: pl.Expr) -> pl.Expr:
             return col.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         DEC: Final = pl.Decimal(18, 6)
 
-        def dec(col):
+        def dec(col: pl.Expr) -> pl.Expr:
             return col.cast(DEC)
+
+        def string_col(name: str) -> pl.Expr:
+            return pl.col(name).cast(pl.String)
 
         none_str: Final = pl.lit(None, dtype=pl.Utf8)
         none_dec: Final = pl.lit(None, dtype=pl.Decimal(18, 6))
+        spend: Final = dec(pl.col("spend").fill_null(0.0))
+        requests: Final = dec(pl.col("api_requests").cast(pl.Int64).cast(pl.Float64).fill_null(0.0))
+        sku_id: Final = pl.concat_str(string_col("custom_llm_provider"), string_col("model"), separator="/")
 
-        return frame.select(
-            dec(pl.col("spend").fill_null(0.0)).alias("BilledCost"),
-            pl.col("api_key").cast(pl.String).alias("BillingAccountId"),
-            pl.col("api_key_alias").cast(pl.String).alias("BillingAccountName"),
-            pl.lit("API Key").alias("BillingAccountType"),
+        return periods.select(
+            spend.alias("BilledCost"),
+            string_col("api_key").alias("BillingAccountId"),
+            string_col("api_key_alias").alias("BillingAccountName"),
+            pl.when(pl.col("api_key").is_not_null())
+            .then(pl.lit("API Key"))
+            .otherwise(none_str)
+            .alias("BillingAccountType"),
             pl.lit("USD").alias("BillingCurrency"),
             fmt(pl.col("ChargePeriodEnd")).alias("BillingPeriodEnd"),
             fmt(pl.col("ChargePeriodStart")).alias("BillingPeriodStart"),
             pl.lit("Usage").alias("ChargeCategory"),
             none_str.alias("ChargeClass"),
-            pl.col("model").cast(pl.String).alias("ChargeDescription"),
+            string_col("model").alias("ChargeDescription"),
             pl.lit("Usage-Based").alias("ChargeFrequency"),
             fmt(pl.col("ChargePeriodEnd")).alias("ChargePeriodEnd"),
             fmt(pl.col("ChargePeriodStart")).alias("ChargePeriodStart"),
-            dec(pl.col("api_requests").cast(pl.Int64).cast(pl.Float64).fill_null(0.0)).alias("ConsumedQuantity"),
+            requests.alias("ConsumedQuantity"),
             pl.lit("Requests").alias("ConsumedUnit"),
-            dec(pl.col("spend").fill_null(0.0)).alias("ContractedCost"),
-            none_str.alias("ContractedUnitPrice"),
-            dec(pl.col("spend").fill_null(0.0)).alias("EffectiveCost"),
-            pl.col("custom_llm_provider").cast(pl.String).alias("InvoiceIssuerName"),
+            spend.alias("ContractedCost"),
+            none_dec.alias("ContractedUnitPrice"),
+            string_col("api_key").alias("CredentialId"),
+            spend.alias("EffectiveCost"),
+            string_col("custom_llm_provider").alias("InvoiceIssuerName"),
             none_str.alias("InvoiceId"),
-            dec(pl.col("spend").fill_null(0.0)).alias("ListCost"),
+            spend.alias("ListCost"),
             none_dec.alias("ListUnitPrice"),
             none_str.alias("AvailabilityZone"),
             pl.lit("USD").alias("PricingCurrency"),
             none_str.alias("PricingCategory"),
-            dec(pl.col("api_requests").cast(pl.Int64).cast(pl.Float64).fill_null(0.0)).alias("PricingQuantity"),
+            requests.alias("PricingQuantity"),
             none_dec.alias("PricingCurrencyContractedUnitPrice"),
-            dec(pl.col("spend").fill_null(0.0)).alias("PricingCurrencyEffectiveCost"),
+            spend.alias("PricingCurrencyEffectiveCost"),
             none_dec.alias("PricingCurrencyListUnitPrice"),
             pl.lit("Requests").alias("PricingUnit"),
-            pl.col("custom_llm_provider").cast(pl.String).alias("ProviderName"),
-            pl.col("custom_llm_provider").cast(pl.String).alias("PublisherName"),
+            string_col("user_id").alias("PrincipalId"),
+            string_col("custom_llm_provider").alias("ServiceProviderName"),
+            string_col("custom_llm_provider").alias("HostProviderName"),
+            pl.struct("user_id", "user_email", "api_key", "api_key_alias")
+            .map_elements(_requester_details, return_dtype=pl.String)
+            .alias("RequesterDetails"),
             none_str.alias("RegionId"),
             none_str.alias("RegionName"),
-            pl.col("model").cast(pl.String).alias("ResourceId"),
-            pl.col("model").cast(pl.String).alias("ResourceName"),
-            pl.col("model").cast(pl.String).alias("ResourceType"),
+            string_col("model").alias("ResourceId"),
+            string_col("model").alias("ResourceName"),
+            string_col("model").alias("ResourceType"),
             pl.lit("AI and Machine Learning").alias("ServiceCategory"),
             pl.lit("Generative AI").alias("ServiceSubcategory"),
-            pl.col("model_group").cast(pl.String).alias("ServiceName"),
-            pl.col("team_id").cast(pl.String).alias("SubAccountId"),
-            pl.col("team_alias").cast(pl.String).alias("SubAccountName"),
-            none_str.alias("SubAccountType"),
-            pl.col("Tags").cast(pl.String).alias("Tags"),
-        )
+            string_col("model_group").alias("ServiceName"),
+            sku_id.alias("SkuId"),
+            pl.concat_str(sku_id, pl.lit("requests"), separator="/").alias("SkuPriceId"),
+            pl.struct("custom_llm_provider", "model")
+            .map_elements(_sku_price_details, return_dtype=pl.String)
+            .alias("SkuPriceDetails"),
+            string_col("team_id").alias("SubAccountId"),
+            string_col("team_alias").alias("SubAccountName"),
+            pl.when(pl.col("team_id").is_not_null()).then(pl.lit("Team")).otherwise(none_str).alias("SubAccountType"),
+            string_col("Tags").alias("Tags"),
+        ).select(self.schema.names())

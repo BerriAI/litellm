@@ -18,11 +18,12 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.baseline_accounting import BaselineAccountingStore
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from tests.integration._support.budget import readiness_seconds
 from tests.integration._support.timing import assert_enforced_within
 
 _PROJECTION_LOCK_TIMEOUT_SECONDS: Final = 1
 _MIGRATION: Final = Path(__file__).parents[4] / (
-    "litellm-proxy-extras/litellm_proxy_extras/migrations/20260915010000_add_autorouter_baseline_state/migration.sql"
+    "litellm/proxy-extras/litellm_proxy_extras/migrations/20260915010000_add_autorouter_baseline_state/migration.sql"
 )
 
 
@@ -50,7 +51,7 @@ async def _client(env: pytest.MonkeyPatch, url: str, replica: str | None = None)
             context.setenv("DATABASE_URL_READ_REPLICA", replica)
         client: Final = PrismaClient(url, ProxyLogging(UserApiKeyCache()))
         try:
-            await client.db.connect(timeout=timedelta(seconds=1))
+            await client.db.connect(timeout=timedelta(seconds=readiness_seconds()))
             yield client
         finally:
             await client.db.disconnect()

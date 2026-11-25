@@ -1,0 +1,13 @@
+[package]
+name = "litellm-env"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Environment and layered settings lookups that config loading reads through"
+
+[dependencies]
+litellm-python-compat.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true

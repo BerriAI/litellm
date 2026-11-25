@@ -44,6 +44,15 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
 _SUPPORTED = frozenset({"tpm_limit", "rpm_limit", "team_alias"})
 
 
+def test_generic_metadata_delegation_does_not_allow_team_admins_to_change_lens_logging() -> None:
+    verdict: Final = team_admin_edit_verdict(
+        UpdateTeamRequest(team_id="team-1", metadata={"lens_enabled": False}),
+        LiteLLM_TeamTable(team_id="team-1"),
+        frozenset({"metadata"}),
+    )
+    assert verdict == TeamAdminMetadataKeyProxyControlled(key="lens_enabled")
+
+
 def _team(**overrides):
     return LiteLLM_TeamTable(team_id="team-1", **overrides)
 
@@ -322,6 +331,7 @@ _PROXY_READ_TEAM_METADATA_KEYS: Final = (
     "allowed_vector_store_indexes",
     "enforced_file_expires_after",
     "enforced_batch_output_expires_after",
+    "allowed_s3_buckets",
     "require_trace_id",
     "allowed_passthrough_routes",
     "denied_passthrough_routes",
@@ -333,6 +343,7 @@ _PROXY_READ_TEAM_METADATA_KEYS: Final = (
     "otel_service_name_override",
     "otel_service_name",
     "soft_budget_alerting_emails",
+    "max_budget_alert_emails",
     "team_member_max_budget_alert_emails",
     "batch_enqueued_token_limit",
     "max_batch_file_records",
@@ -343,6 +354,8 @@ _PROXY_READ_TEAM_METADATA_KEYS: Final = (
     "phoenix_project_name_override",
     "phoenix_project_name",
     "opik",
+    "model_limit_max_borrow_multiple",
+    "required_customer_headers",
 )
 
 _STORED_METADATA: Final = {"cost_center": "eng", "region": "eu", "priority": "high", "guardrails": ["pii"]}
@@ -384,7 +397,9 @@ class TestTeamMetadataEdits:
         verdict: Final = _metadata_verdict(_STORED_METADATA, {**_STORED_METADATA, key: "set-by-team-admin"})
         assert verdict == TeamAdminMetadataKeyProxyControlled(key=key)
 
-    @pytest.mark.parametrize("key", ["opted_out_global_guardrails", "callback_settings", "priority", "guardrails"])
+    @pytest.mark.parametrize(
+        "key", ["opted_out_global_guardrails", "callback_settings", "priority", "guardrails", "allowed_s3_buckets"]
+    )
     def test_changing_or_removing_a_stored_proxy_controlled_key_names_it(self, key: str):
         stored: Final = {**_STORED_METADATA, key: ["stored"]}
         changed: Final = _metadata_verdict(stored, {**stored, key: ["changed"]})

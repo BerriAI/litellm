@@ -1,8 +1,12 @@
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import TypeAdapter
+from typing_extensions import TypedDict
 
 import litellm
+from litellm.litellm_core_utils.core_helpers import keyword_arguments
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment, join_api_base
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.openai.workload_identity import resolve_openai_bearer_token
@@ -27,12 +31,18 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
+_DECODED_JSON: Final = TypeAdapter(object)
+
+
+class _VectorStoreResponseFields(TypedDict, total=False, extra_items=object):
+    pass
+
 
 class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     ASSISTANTS_HEADER_KEY = "OpenAI-Beta"
     ASSISTANTS_HEADER_VALUE = "assistants=v2"
 
-    def get_auth_credentials(self, litellm_params: dict) -> BaseVectorStoreAuthCredentials:
+    def get_auth_credentials(self, litellm_params: Mapping[str, object]) -> BaseVectorStoreAuthCredentials:
         api_key: Final = litellm_params.get("api_key")
         if api_key is None:
             raise ValueError("api_key is required")
@@ -48,7 +58,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
             "write": [("POST", "/vector_stores")],
         }
 
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(self, headers: dict[str, object], litellm_params: GenericLiteLLMParams | None) -> dict:
         params: Final = litellm_params or GenericLiteLLMParams()
         bearer_token: Final = resolve_openai_bearer_token(
             api_key=params.api_key, api_base=params.api_base, litellm_params=params.model_dump(exclude_none=True)
@@ -75,7 +85,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the Base endpoint for OpenAI Vector Stores API
@@ -97,9 +107,9 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         base_url, query_separator, query_string = api_base.partition("?")
         url: Final = f"{join_api_base(base_url, f'{encoded_vector_store_id}/search')}{query_separator}{query_string}"
@@ -118,8 +128,10 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         self, response: httpx.Response, litellm_logging_obj: LiteLLMLoggingObj
     ) -> VectorStoreSearchResponse:
         try:
-            response_json: Final = response.json()
-            return VectorStoreSearchResponse(**response_json)
+            response_json: Final = _DECODED_JSON.validate_python(response.json())
+            return VectorStoreSearchResponse(
+                **_VectorStoreResponseFields(**keyword_arguments(response_json, VectorStoreSearchResponse))
+            )
         except Exception as e:
             raise self.get_error_class(
                 error_message=str(e),
@@ -131,7 +143,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         url: Final = api_base  # Base URL for creating vector stores
         metadata: Final = vector_store_create_optional_params.get("metadata", None)
         metadata_payload: Final = add_openai_metadata(metadata)
@@ -149,8 +161,10 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
 
     def transform_create_vector_store_response(self, response: httpx.Response) -> VectorStoreCreateResponse:
         try:
-            response_json: Final = response.json()
-            return VectorStoreCreateResponse(**response_json)
+            response_json: Final = _DECODED_JSON.validate_python(response.json())
+            return VectorStoreCreateResponse(
+                **_VectorStoreResponseFields(**keyword_arguments(response_json, VectorStoreCreateResponse))
+            )
         except Exception as e:
             raise self.get_error_class(
                 error_message=str(e),

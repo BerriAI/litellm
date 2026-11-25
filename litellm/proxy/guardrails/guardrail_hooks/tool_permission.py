@@ -5,11 +5,11 @@ from dataclasses import dataclass
 from functools import partial, reduce
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import Any, Final, Literal, TypeAlias, TypedDict, TypeVar
+from typing import Final, Literal, TypeAlias, TypeVar
 
 from fastapi import HTTPException
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly, Required
+from typing_extensions import TypedDict
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.dual_cache import DualCache
@@ -22,19 +22,30 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
-from litellm.litellm_core_utils.tool_fields import declared_function_name, qualified_member_name
+from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none, keyword_arguments
+from litellm.litellm_core_utils.tool_fields import (
+    BridgedTool,
+    declared_function_name,
+    qualified_member_name,
+    recorded_bridged_tools,
+)
 from litellm.llms.anthropic.common_utils import (
     anthropic_server_tool_call_params,
     anthropic_server_tool_calls,
     without_anthropic_server_tool_calls,
 )
 from litellm.llms.base_llm.guardrail_translation.utils import anthropic_tool_names
+from litellm.llms.gemini.google_genai.guardrail_translation.handler import (
+    generate_content_sse_function_calls,
+    generate_content_sse_with_parts_replaced,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
 from litellm.proxy.guardrails.anthropic_sse import (
+    anthropic_sse_chunks_as_scanned,
     anthropic_sse_chunks_from_response,
     anthropic_sse_error_events,
     assemble_anthropic_sse_stream,
@@ -51,6 +62,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolResult,
 )
 from litellm.types.utils import (
+    CallTypes,
     CallTypesLiteral,
     ChatCompletionMessageCustomToolCall,
     ChatCompletionMessageToolCall,
@@ -80,7 +92,7 @@ _DECODED_ARGUMENTS: Final = TypeAdapter(object)
 _REQUEST_DATA: Final = TypeAdapter(object)
 _ToolTarget: TypeAlias = tuple[str | None, str | None]
 _JudgedCalls: TypeAlias = Mapping[str, tuple[tuple[str, str], ...]]
-_GroupedT: Final = TypeVar("_GroupedT")
+_GroupedT = TypeVar("_GroupedT")
 
 
 def _snake_case(name: str) -> str:
@@ -173,6 +185,18 @@ def _namespace_members(tool: object) -> Sequence[object]:
 def _returned_namespace(tool_call: ChatCompletionMessageToolCall) -> str | None:
     tags: Final = as_str_mapping(attribute_or_none(tool_call, "provider_specific_fields"))
     return _non_empty_string(tags.get("namespace")) if tags is not None else None
+
+
+def _bridged_tools(data: object) -> Mapping[str, BridgedTool]:
+    fields: Final = _object_mapping(data)
+    logging_obj: Final = fields.get("litellm_logging_obj") if fields is not None else None
+    return recorded_bridged_tools(attribute_or_none(logging_obj, "model_call_details"))
+
+
+def _as_the_caller_named_it(target: _ToolTarget, bridged: Mapping[str, BridgedTool]) -> _ToolTarget:
+    name, tool_type = target
+    tool: Final = bridged.get(name) if name is not None else None
+    return target if tool is None else (tool.full_name, tool_type)
 
 
 def _judged_call_names(
@@ -294,6 +318,30 @@ def _sent_tools(data: object) -> tuple[object, ...]:
 
 def _sent_fields(data: object) -> Mapping[str, object]:
     return dict(chain.from_iterable(layer.items() for layer in _request_layers(data)))
+
+
+def _is_generate_content_stream_route(route: str | None) -> bool:
+    return route is not None and CallTypes.agenerate_content_stream in (get_call_types_for_route(route) or ())
+
+
+def _sse_chunk_bytes(chunk: object) -> bytes | None:
+    match chunk:
+        case bytes():
+            return chunk
+        case str():
+            return chunk.encode()
+        case _:
+            return None
+
+
+def _raw_sse_text(chunks: Sequence[object]) -> str | None:
+    encoded: Final = tuple(map(_sse_chunk_bytes, chunks))
+    if any(chunk is None for chunk in encoded):
+        return None
+    try:
+        return b"".join(chunk for chunk in encoded if chunk is not None).decode()
+    except UnicodeDecodeError:
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -472,19 +520,13 @@ def _rewritten_tool_config(tool_config: object, removed_names: frozenset[str], f
     }
 
 
-class _ToolPermissionRuleFields(TypedDict, total=False):
-    """The config-file shape a :class:`ToolPermissionRule` is built from."""
-
-    id: ReadOnly[Required[str]]
-    tool_name: ReadOnly[str | None]
-    tool_type: ReadOnly[str | None]
-    decision: ReadOnly[Required[Literal["allow", "deny"]]]
-    allowed_param_patterns: ReadOnly[dict[str, str] | None]
+class _ToolPermissionRuleFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
-def _rule_from_fields(fields: _ToolPermissionRuleFields) -> ToolPermissionRule:
+def _rule_from_fields(fields: object) -> ToolPermissionRule:
     """Validate one config-file rule entry into a :class:`ToolPermissionRule`."""
-    return ToolPermissionRule(**fields)
+    return ToolPermissionRule.model_validate(_ToolPermissionRuleFields(**keyword_arguments(fields, ToolPermissionRule)))
 
 
 def _is_tool_use_block(block: object) -> bool:
@@ -496,7 +538,7 @@ def _is_tool_use_block(block: object) -> bool:
 class ToolPermissionGuardrail(CustomGuardrail):
     def __init__(
         self,
-        rules: list[dict] | None = None,
+        rules: Sequence[object] | None = None,
         default_action: Literal["deny", "allow"] = "deny",
         on_disallowed_action: Literal["block", "rewrite"] = "block",
         **kwargs,
@@ -529,7 +571,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             self.default_action,
         )
 
-    def _load_rules(self, rules: list[Any] | None) -> None:
+    def _load_rules(self, rules: Sequence[object] | None) -> None:
         """Parse ``rules`` and (re)build the compiled target/pattern lookups.
 
         ``self.rules`` plus ``_compiled_rule_targets`` / ``_compiled_rule_patterns``
@@ -539,13 +581,13 @@ class ToolPermissionGuardrail(CustomGuardrail):
         sync) reflects rule changes instead of keeping the construction-time maps.
         """
         parsed_rules: Final[list[ToolPermissionRule]] = []
-        compiled_targets: Final[dict[str, dict[str, re.Pattern | None]]] = {}
-        compiled_patterns: Final[dict[str, dict[str, re.Pattern]]] = {}
+        compiled_targets: Final[dict[str, dict[str, re.Pattern[str] | None]]] = {}
+        compiled_patterns: Final[dict[str, dict[str, re.Pattern[str]]]] = {}
 
         for rule_item in rules or []:
             rule = rule_item if isinstance(rule_item, ToolPermissionRule) else _rule_from_fields(rule_item)
 
-            target_patterns: dict[str, re.Pattern | None] = {
+            target_patterns: dict[str, re.Pattern[str] | None] = {
                 "tool_name": None,
                 "tool_type": None,
             }
@@ -560,7 +602,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 except re.error as exc:
                     raise ValueError(f"Invalid regex for tool_type in rule '{rule.id}': {exc}") from exc
 
-            rule_patterns: dict[str, re.Pattern] = {}
+            rule_patterns: dict[str, re.Pattern[str]] = {}
             for path, pattern in (rule.allowed_param_patterns or {}).items():
                 try:
                     rule_patterns[path] = re.compile(pattern)
@@ -641,7 +683,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
         ]
 
-    def _matches_regex(self, pattern: re.Pattern | None, value: str | None) -> bool:
+    def _matches_regex(self, pattern: re.Pattern[str] | None, value: str | None) -> bool:
         if pattern is None:
             return True
         if value is None:
@@ -948,10 +990,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
         return is_allowed, None, message
 
     @staticmethod
-    def _get_mapping_value(item: object, key: str) -> Any:
+    def _get_mapping_value(item: object, key: str) -> object:
         if isinstance(item, dict):
             return item.get(key)
-        return getattr(item, key, None)
+        return attribute_or_none(item, key)
 
     @staticmethod
     def _legacy_function_call_id(choice_index: int) -> str:
@@ -1027,10 +1069,13 @@ class ToolPermissionGuardrail(CustomGuardrail):
         )
 
     def _returned_call_names(self, data: Mapping[str, object]) -> _JudgedCalls:
+        bridged_calls: Final = MappingProxyType(
+            {sent_name: ((tool.full_name, tool.name),) for sent_name, tool in _bridged_tools(data).items()}
+        )
         sent_tools: Final = _sent_tools(_REQUEST_DATA.validate_python(data))
         member_names: Final = tuple(chain.from_iterable(map(self._bare_member_names, sent_tools)))
         if not member_names:
-            return MappingProxyType({})
+            return bridged_calls
         top_level_tools: Final = (tool for tool in sent_tools if not _is_namespace(tool))
         top_level_names: Final = frozenset(name for name in map(declared_function_name, top_level_tools) if name)
         listed: Final = frozenset(name for name, _ in self._collect_request_tools(data) if name is not None)
@@ -1043,8 +1088,11 @@ class ToolPermissionGuardrail(CustomGuardrail):
         )
         return MappingProxyType(
             {
-                name: (*members, *(((name, name),) if name in own_names else ()))
-                for name, members in returned_members.items()
+                **{
+                    name: (*members, *(((name, name),) if name in own_names else ()))
+                    for name, members in returned_members.items()
+                },
+                **bridged_calls,
             }
         )
 
@@ -1384,7 +1432,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
     def _modify_request_with_permission_errors(
         self,
-        data: dict,
+        data: dict[str, object],
         denied_targets: frozenset[_ToolTarget],
     ):
         """
@@ -1544,9 +1592,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         """ """
         verbose_proxy_logger.debug("Tool Permission Guardrail Pre-Call Hook")
 
@@ -1565,11 +1613,16 @@ class ToolPermissionGuardrail(CustomGuardrail):
             )
             return data
 
-        member_names: Final = tuple(
-            chain.from_iterable(map(self._bare_member_names, _sent_tools(_REQUEST_DATA.validate_python(data))))
+        bridged: Final = _bridged_tools(_REQUEST_DATA.validate_python(data))
+        member_names: Final = (
+            *chain.from_iterable(map(self._bare_member_names, _sent_tools(_REQUEST_DATA.validate_python(data)))),
+            *((tool.full_name, tool.name) for tool in bridged.values()),
         )
         bare_names: Final = _grouped_values(member_names)
-        decisions: Final = tuple((target, self._check_target_permission(target, bare_names)) for target in new_tools)
+        decisions: Final = tuple(
+            (target, self._check_target_permission(_as_the_caller_named_it(target, bridged), bare_names))
+            for target in new_tools
+        )
         denied: Final = tuple(
             (target, message)
             for target, (is_allowed, _, message) in decisions
@@ -1597,7 +1650,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
     @log_guardrail_information
     async def async_post_call_success_hook(
         self,
-        data: dict,
+        data: dict[str, object],
         user_api_key_dict: UserAPIKeyAuth,
         response: LLMResponseTypes,
     ):
@@ -1650,7 +1703,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         response: AsyncIterable[ModelResponseStream],
-        request_data: dict,
+        request_data: Mapping[str, object],
     ) -> AsyncGenerator[ModelResponseStream, None]:
         """
         Check tool usage permissions after the LLM stream call
@@ -1687,11 +1740,20 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 yield chunk
             return
 
+        for sse_chunk in self._raw_stream_to_deliver(all_chunks, request_data, user_api_key_dict.request_route):
+            yield sse_chunk
+
+    def _raw_stream_to_deliver(
+        self, source_chunks: Sequence[object], request_data: Mapping[str, object], route: str | None
+    ) -> Sequence[object]:
+        if is_raw_sse_stream(source_chunks) and _is_generate_content_stream_route(route):
+            return self._generate_content_stream_to_deliver(source_chunks, self._returned_call_names(request_data))
+        upstream_errors: Final = anthropic_sse_error_events(source_chunks)
         anthropic_response: Final = assemble_anthropic_sse_stream(
-            all_chunks, restore_identity=bool(anthropic_sse_error_events(all_chunks)), through_upstream_error=True
+            source_chunks, restore_identity=bool(upstream_errors), through_upstream_error=True
         )
         if anthropic_response is None:
-            if is_raw_sse_stream(all_chunks) and not is_sse_error_stream(all_chunks):
+            if is_raw_sse_stream(source_chunks) and not is_sse_error_stream(source_chunks):
                 raise GuardrailRaisedException(
                     guardrail_name=self.guardrail_name,
                     message=(
@@ -1699,14 +1761,42 @@ class ToolPermissionGuardrail(CustomGuardrail):
                         "(not a parseable Anthropic SSE stream), blocking it"
                     ),
                 )
-            for chunk in all_chunks:
-                yield chunk
-            return
+            return source_chunks
+        return self._anthropic_stream_to_deliver(
+            anthropic_response, source_chunks, self._returned_call_names(request_data)
+        )
 
-        for sse_chunk in self._anthropic_stream_to_deliver(
-            anthropic_response, all_chunks, self._returned_call_names(request_data)
-        ):
-            yield sse_chunk
+    def _generate_content_stream_to_deliver(
+        self, source_chunks: Sequence[object], judged_names: _JudgedCalls
+    ) -> Sequence[object]:
+        sse_text: Final = _raw_sse_text(source_chunks)
+        calls: Final = None if sse_text is None else generate_content_sse_function_calls(sse_text)
+        if sse_text is None or calls is None:
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                message=(
+                    "Streamed response could not be verified for tool permissions "
+                    "(not a parseable generateContent SSE stream), blocking it"
+                ),
+            )
+        tool_calls: Final = tuple(
+            ChatCompletionMessageToolCall(
+                id=str(index), type="function", function=Function(name=call.name, arguments=json.dumps(dict(call.args)))
+            )
+            for index, call in enumerate(calls)
+        )
+        denials: Final = self._evaluate_tool_calls(tool_calls, judged_names)
+        if not denials:
+            return source_chunks
+        locations: Final = MappingProxyType({tool_call.id: call.location for tool_call, call in zip(tool_calls, calls)})
+        texts: Final = MappingProxyType(
+            {
+                locations[tool_call.id]: self._create_permission_error_result(tool_call, error).content
+                for tool_call, error in denials
+            }
+        )
+        rewritten: Final = generate_content_sse_with_parts_replaced(sse_text, calls, texts)
+        return (rewritten.encode() if any(isinstance(chunk, bytes) for chunk in source_chunks) else rewritten,)
 
     def _anthropic_stream_to_deliver(
         self,
@@ -1714,16 +1804,10 @@ class ToolPermissionGuardrail(CustomGuardrail):
         source_chunks: Sequence[object],
         judged_names: _JudgedCalls,
     ) -> Sequence[object]:
-        """The frames the client gets: on a failed upstream only what the check read, never the upstream's own.
-
-        Assembly reads past an upstream error, and a client can read a frame of a broken stream that assembly
-        does not, so forwarding those frames would pass a tool call nobody checked.
-        """
         denials: Final = self._check_assembled_stream(anthropic_response, judged_names)
-        if denials:
-            self._modify_response_with_permission_errors(anthropic_response, denials)
-        elif not anthropic_sse_error_events(source_chunks):
-            return source_chunks
+        if not denials:
+            return anthropic_sse_chunks_as_scanned(anthropic_response, source_chunks)
+        self._modify_response_with_permission_errors(anthropic_response, denials)
         return anthropic_sse_chunks_from_response(anthropic_response, source_chunks, keep_explanations=True)
 
     def _check_assembled_stream(

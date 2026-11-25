@@ -447,6 +447,7 @@ def test_messages_stream_opens_thinking_block_at_index_zero_for_reasoning_conten
         (0, {"type": "thinking", "thinking": "", "signature": ""}),
         (0, {"type": "thinking_delta", "thinking": "Let me "}),
         (0, {"type": "thinking_delta", "thinking": "think."}),
+        (0, {"type": "signature_delta", "signature": ""}),
         (1, {"type": "text", "text": ""}),
         (1, {"type": "text_delta", "text": "Hello "}),
         (1, {"type": "text_delta", "text": "there"}),
@@ -454,6 +455,7 @@ def test_messages_stream_opens_thinking_block_at_index_zero_for_reasoning_conten
     assert tuple(event["type"] for event in events) == (
         "message_start",
         "content_block_start",
+        "content_block_delta",
         "content_block_delta",
         "content_block_delta",
         "content_block_stop",

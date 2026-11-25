@@ -26,11 +26,11 @@ import asyncio
 import json
 import os
 import threading
-from collections.abc import Mapping
+from collections.abc import Mapping, MutableMapping
 from concurrent.futures import ThreadPoolExecutor
 from functools import cache
 from importlib.resources import files
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, TypeAlias, TypeVar
 from urllib.parse import urlparse
 
 import httpx
@@ -40,17 +40,18 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.offline_mode import is_offline_mode
 
 # Cache for the loaded configuration
-_BETA_HEADERS_CONFIG: dict | None = None
+_BETA_HEADERS_CONFIG: dict[str, object] | None = None
 _BETA_HEADERS_CONFIG_LOCK: Final = threading.Lock()
 _BETA_HEADERS_CONFIG_LOADER: Final = ThreadPoolExecutor(max_workers=1, thread_name_prefix="litellm-beta-headers-config")
+_BACKGROUND_LOAD_IN_FLIGHT: Final = threading.Lock()
 
 BetaHeadersConfig: TypeAlias = Mapping[str, str | Mapping[str, str | None]]
 _BETA_HEADERS_CONFIG_ADAPTER: Final = TypeAdapter(BetaHeadersConfig)
 _DECODED_JSON: Final = TypeAdapter(object)
 
 BetaPlacement: TypeAlias = Literal["header", "body"]
-UnlistedBetas: TypeAlias = Literal["drop", "forward"]
 _HEADER_ONLY_COLUMN_SUFFIX: Final = "_header_only"
+_HeadersT = TypeVar("_HeadersT", bound=MutableMapping[str, str])
 
 
 class GetAnthropicBetaHeadersConfig:
@@ -62,7 +63,7 @@ class GetAnthropicBetaHeadersConfig:
     """
 
     @staticmethod
-    def load_local_beta_headers_config() -> dict:
+    def load_local_beta_headers_config() -> dict[str, object]:
         """Load the local backup beta headers config bundled with the package."""
         try:
             content: Final = json.loads(
@@ -137,7 +138,7 @@ class GetAnthropicBetaHeadersConfig:
         return _DECODED_JSON.validate_python(response.json())
 
 
-def get_beta_headers_config(url: str) -> dict:
+def get_beta_headers_config(url: str) -> dict[str, object]:
     """
     Public entry point — returns the beta headers config dict.
 
@@ -211,12 +212,28 @@ async def aload_beta_headers_config() -> None:
         await asyncio.get_running_loop().run_in_executor(_BETA_HEADERS_CONFIG_LOADER, _load_beta_headers_config)
 
 
+def loaded_beta_headers_config() -> Mapping[str, object] | None:
+    return _BETA_HEADERS_CONFIG
+
+
+def _cache_beta_headers_config() -> None:
+    try:
+        _load_beta_headers_config()
+    finally:
+        _BACKGROUND_LOAD_IN_FLIGHT.release()
+
+
+def load_beta_headers_config_in_background() -> None:
+    if _BETA_HEADERS_CONFIG is None and _BACKGROUND_LOAD_IN_FLIGHT.acquire(blocking=False):
+        _ = _BETA_HEADERS_CONFIG_LOADER.submit(_cache_beta_headers_config)
+
+
 @cache
 def _bundled_beta_headers_config() -> BetaHeadersConfig:
     return _BETA_HEADERS_CONFIG_ADAPTER.validate_python(GetAnthropicBetaHeadersConfig.load_local_beta_headers_config())
 
 
-def reload_beta_headers_config() -> dict:
+def reload_beta_headers_config() -> dict[str, object]:
     """
     Force reload the beta headers configuration from source (remote or local).
     Clears the cache and fetches fresh configuration.
@@ -281,13 +298,12 @@ def filter_and_transform_beta_headers(
     beta_headers: list[str],
     provider: str,
     placement: BetaPlacement = "header",
-    unlisted: UnlistedBetas = "drop",
 ) -> list[str]:
     """
     Filter and transform beta headers based on provider's mapping configuration.
 
     This function:
-    1. Only allows headers that are present in the provider's mapping keys, unless ``unlisted`` is "forward"
+    1. Only allows headers that are present in the provider's mapping keys
     2. Filters out headers with null values (unsupported)
     3. Maps headers to provider-specific names (e.g., advanced-tool-use -> tool-search-tool)
 
@@ -295,7 +311,6 @@ def filter_and_transform_beta_headers(
         beta_headers: List of Anthropic beta header values
         provider: Provider name (e.g., "anthropic", "bedrock", "vertex_ai")
         placement: Whether the betas travel as the anthropic-beta header or the anthropic_beta body field
-        unlisted: Whether a beta missing from the mapping is dropped or forwarded as sent
 
     Returns:
         List of filtered and transformed beta headers for the provider
@@ -309,10 +324,6 @@ def filter_and_transform_beta_headers(
 
     for header in beta_headers:
         header = header.strip()
-
-        if header not in provider_mapping and unlisted == "forward":
-            filtered_headers.add(header)
-            continue
 
         # Check if header is in the mapping
         if header not in provider_mapping:
@@ -423,12 +434,11 @@ def resolve_beta_provider(provider: str, api_base: str | None = None) -> str:
 
 
 def update_headers_with_filtered_beta(
-    headers: dict,
+    headers: _HeadersT,
     provider: str,
     api_base: str | None = None,
-    unlisted: UnlistedBetas = "drop",
     keep: frozenset[str] = frozenset(),
-) -> dict:
+) -> _HeadersT:
     """
     Update headers dict by filtering and transforming anthropic-beta header values.
     Modifies the headers dict in place and returns it.
@@ -437,7 +447,6 @@ def update_headers_with_filtered_beta(
         headers: Request headers dict (will be modified in place)
         provider: Provider name
         api_base: Deployment api_base, used to pick the allowlist row (Foundry hosts use ``azure_ai``)
-        unlisted: Whether a beta missing from the row is dropped or forwarded as sent
         keep: Betas the routed model accepts, forwarded as sent whatever the row says
 
     Returns:
@@ -457,7 +466,6 @@ def update_headers_with_filtered_beta(
                 *filter_and_transform_beta_headers(
                     beta_headers=[b for b in beta_values if b not in keep],
                     provider=resolve_beta_provider(provider, api_base),
-                    unlisted=unlisted,
                 ),
                 *(b for b in beta_values if b in keep),
             ]
@@ -475,7 +483,7 @@ def update_headers_with_filtered_beta(
 
 
 def update_request_with_filtered_beta(
-    headers: dict,
+    headers: dict[str, str],
     request_data: dict,
     provider: str,
     api_base: str | None = None,

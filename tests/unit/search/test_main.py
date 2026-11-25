@@ -57,6 +57,19 @@ def _proxy_style_logging_obj() -> Logging:
 
 
 @pytest.mark.usefixtures("_local_model_cost_map")
+def test_webiq_search_reports_the_catalog_query_cost(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post("https://api.microsoft.ai/v3/search/web").respond(
+        json={"webResults": [{"title": "A source", "url": "https://example.com", "content": "A passage"}]}
+    )
+    response: Final = litellm.search(query="litellm release notes", search_provider="webiq", api_key="test-webiq-key")
+
+    assert response._hidden_params["response_cost"] > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(
+        litellm.model_cost["webiq/search"]["input_cost_per_query"]
+    )
+
+
+@pytest.mark.usefixtures("_local_model_cost_map")
 def test_search_bills_search_tool_input_cost_per_query(respx_mock: respx.MockRouter) -> None:
     respx_mock.post(EXA_SEARCH_URL).respond(json={"results": [{"title": "t", "url": "https://example.com"}]})
     map_price, _ = search_provider_cost_per_query(model="exa_ai/search", custom_llm_provider="exa_ai")
@@ -156,6 +169,63 @@ def test_search_cost_is_the_price_entry_of_the_requested_mode(
         model=f"{provider}/search", custom_llm_provider=provider, optional_params=optional_params
     )
     assert cost == pytest.approx((expected, 0.0))
+
+
+@pytest.mark.usefixtures("_search_mode_prices")
+@pytest.mark.parametrize(
+    ("requested_depth", "reported_parameters", "priced_model"),
+    (
+        (None, {"search_depth": "advanced"}, "tavily/search-advanced"),
+        (None, {"search_depth": "basic"}, "tavily/search"),
+        (None, None, "tavily/search"),
+        (None, {"search_depth": ["advanced"]}, "tavily/search"),
+        ("basic", {"search_depth": "advanced"}, "tavily/search"),
+    ),
+)
+def test_tavily_search_bills_the_depth_selected_upstream_when_not_explicit(
+    respx_mock: respx.MockRouter,
+    requested_depth: str | None,
+    reported_parameters: Mapping[str, str | list[str]] | None,
+    priced_model: str,
+) -> None:
+    route: Final = respx_mock.post(TAVILY_SEARCH_URL).respond(
+        json={"results": [], "auto_parameters": reported_parameters},
+    )
+    depth: Final = {} if requested_depth is None else {"search_depth": requested_depth}
+
+    response: Final = litellm.search(
+        query="Compare battery storage technologies",
+        search_provider="tavily",
+        api_key="test-tavily-key",
+        auto_parameters=True,
+        **depth,
+    )
+
+    assert len(route.calls) == 1
+    assert json.loads(route.calls.last.request.content) == {
+        "query": "Compare battery storage technologies",
+        "auto_parameters": True,
+        **depth,
+    }
+    assert response.hidden_params["response_cost"] == pytest.approx(SEARCH_MODE_PRICES[priced_model])
+
+
+@pytest.mark.usefixtures("_search_mode_prices")
+def test_tavily_search_keeps_the_fixed_tool_price_when_depth_is_selected_upstream(
+    respx_mock: respx.MockRouter,
+) -> None:
+    respx_mock.post(TAVILY_SEARCH_URL).respond(json={"results": [], "auto_parameters": {"search_depth": "advanced"}})
+    configured_price: Final = 0.03
+
+    response: Final = litellm.search(
+        query="Compare battery storage technologies",
+        search_provider="tavily",
+        api_key="test-tavily-key",
+        auto_parameters=True,
+        input_cost_per_query=configured_price,
+    )
+
+    assert response.hidden_params["response_cost"] == pytest.approx(configured_price)
 
 
 @pytest.mark.usefixtures("_search_mode_prices")

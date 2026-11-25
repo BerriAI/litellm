@@ -3,7 +3,7 @@ import json
 import time
 from datetime import datetime, timedelta, timezone
 from itertools import islice
-from typing import Optional
+from typing import Final, Optional
 
 import httpx
 import pytest
@@ -11,7 +11,7 @@ import pytest
 import litellm
 from litellm.interactions.background_cost_polling import (
     _create_context,
-    _poll_intervals,
+    poll_intervals,
     _rebuild_logging_obj,
     BackgroundInteractionPollContext,
     InMemoryBackgroundSettlementStore,
@@ -21,11 +21,13 @@ from litellm.interactions.background_cost_polling import (
     poll_and_log_background_interaction_cost,
     PollSchedule,
     resume_unsettled_background_interactions,
+    SettlementOutcome,
 )
 from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.interactions import InteractionsAPIResponse
+from tests._support.clock_loops import AutojumpClockLoop
 
 USAGE_BLOCK = {
     "total_tokens": 175,
@@ -122,7 +124,7 @@ def _fetch_sequence(*responses):
     [(0.0, 0.002), (0.001, 0.0), (-1.0, 0.002), (0.0, 0.0)],
 )
 def test_poll_intervals_stops_instead_of_looping_on_a_non_positive_interval(initial, maximum):
-    intervals = list(islice(_poll_intervals(initial=initial, maximum=maximum, timeout=3600.0), 10))
+    intervals = list(islice(poll_intervals(initial=initial, maximum=maximum, timeout=3600.0), 10))
 
     assert len(intervals) < 10
     assert all(interval > 0 for interval in intervals)
@@ -805,7 +807,7 @@ def test_poll_intervals_double_up_to_the_cap_and_stay_inside_the_timeout():
     actually ships, so an off-by-one in the doubling or in the remaining-budget
     check cannot pass green.
     """
-    intervals = list(_poll_intervals(initial=5.0, maximum=60.0, timeout=3600.0))
+    intervals = list(poll_intervals(initial=5.0, maximum=60.0, timeout=3600.0))
 
     assert intervals[:6] == [5.0, 10.0, 20.0, 40.0, 60.0, 60.0]
     assert max(intervals) == 60.0
@@ -1422,3 +1424,70 @@ async def test_create_on_a_replica_without_the_settlement_table_still_settles_in
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+class _JobFinishingAt:
+    def __init__(self, finishes_at: float) -> None:
+        self.finishes_at: Final = finishes_at
+        self.last_polled_at: float | None = None
+
+    async def fetch(self, context: BackgroundInteractionPollContext) -> InteractionsAPIResponse:
+        now: Final = asyncio.get_running_loop().time()
+        self.last_polled_at = now
+        finished: Final = now >= self.finishes_at
+        return _response("completed" if finished else "in_progress", with_usage=finished)
+
+
+async def _finish_owned_loop_tasks() -> None:
+    current: Final = asyncio.current_task()
+    leftover: Final = tuple(task for task in asyncio.all_tasks() if task is not current)
+    for task in leftover:
+        task.cancel()
+    await asyncio.gather(*leftover, return_exceptions=True)
+
+
+def _poll_on_a_virtual_clock(
+    context: BackgroundInteractionPollContext, job: _JobFinishingAt
+) -> SettlementOutcome | None:
+    loop: Final = AutojumpClockLoop()
+    try:
+        return loop.run_until_complete(poll_and_log_background_interaction_cost(context, fetch_interaction=job.fetch))
+    finally:
+        loop.run_until_complete(_finish_owned_loop_tasks())
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.run_until_complete(loop.shutdown_default_executor())
+        loop.close()
+
+
+_TWO_HOURS_SECONDS: Final = 7200.0
+
+
+def test_a_background_job_that_runs_past_the_old_one_hour_window_settles_under_the_default_poll_window() -> None:
+    logging_obj: Final = _logging_obj()
+    job: Final = _JobFinishingAt(_TWO_HOURS_SECONDS)
+    context: Final = BackgroundInteractionPollContext(
+        interaction_id="interactions/bg-abc", custom_llm_provider="gemini", logging_obj=logging_obj
+    )
+
+    outcome: Final = _poll_on_a_virtual_clock(context, job)
+
+    assert outcome == "billed"
+    assert job.last_polled_at is not None and job.last_polled_at >= _TWO_HOURS_SECONDS
+    assert logging_obj.model_call_details["response_cost"] > 0
+
+
+def test_an_explicit_shorter_poll_window_still_gives_up_before_a_job_that_outlasts_it() -> None:
+    logging_obj: Final = _logging_obj()
+    job: Final = _JobFinishingAt(_TWO_HOURS_SECONDS)
+    context: Final = BackgroundInteractionPollContext(
+        interaction_id="interactions/bg-abc",
+        custom_llm_provider="gemini",
+        logging_obj=logging_obj,
+        timeout_seconds=3600.0,
+    )
+
+    outcome: Final = _poll_on_a_virtual_clock(context, job)
+
+    assert outcome == "unsettled"
+    assert job.last_polled_at is not None and job.last_polled_at <= 3600.0
+    assert logging_obj.model_call_details.get("response_cost") is None

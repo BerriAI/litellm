@@ -90,7 +90,7 @@ def _billed_units(request: MarengoBilledRequest) -> tuple[int, int]:
             assert_never(input_type)
 
 
-def _billed_usage(batch_data: list[dict] | None) -> Usage:
+def _billed_usage(batch_data: list[dict[str, object]] | None) -> Usage:
     units: Final = tuple(_billed_units(request) for request in BILLED_REQUESTS.validate_python(batch_data or ()))
     query_count: Final = sum(text_requests for text_requests, _ in units)
     image_count: Final = sum(images for _, images in units)
@@ -141,7 +141,9 @@ class TwelveLabsMarengoEmbeddingConfig:
             return list(MARENGO_SHARED_PARAMS)
         return [*MARENGO_SHARED_PARAMS, *MARENGO_2_7_ONLY_PARAMS]
 
-    def map_openai_params(self, non_default_params: dict, optional_params: dict) -> dict:
+    def map_openai_params(
+        self, non_default_params: dict[str, object], optional_params: dict[str, object]
+    ) -> dict[str, object]:
         for k, v in non_default_params.items():
             if k == "encoding_format":
                 # TwelveLabs doesn't have encoding_format, but we can map it to embeddingOption
@@ -183,7 +185,7 @@ class TwelveLabsMarengoEmbeddingConfig:
     def _transform_request(
         self,
         input: str,
-        inference_params: dict,
+        inference_params: dict[str, object],
         async_invoke_route: bool = False,
         model_id: str | None = None,
         output_s3_uri: str | None = None,
@@ -322,7 +324,7 @@ class TwelveLabsMarengoEmbeddingConfig:
         )
 
     def _transform_response(
-        self, response_list: list[dict], model: str, batch_data: list[dict] | None = None
+        self, response_list: list[dict[str, object]], model: str, batch_data: list[dict[str, object]] | None = None
     ) -> EmbeddingResponse:
         vectors: Final = tuple(
             vector for response in INVOKE_RESPONSES.validate_python(response_list) for vector in response.vectors()
@@ -340,7 +342,7 @@ class TwelveLabsMarengoEmbeddingConfig:
     ) -> EmbeddingResponse:
         return self._transform_response(response_list, model, batch_data)
 
-    def _transform_async_invoke_response(self, response: dict, model: str) -> EmbeddingResponse:
+    def _transform_async_invoke_response(self, response: dict[str, object], model: str) -> EmbeddingResponse:
         """
         Transform async invoke response (invocation ARN) to OpenAI format.
 

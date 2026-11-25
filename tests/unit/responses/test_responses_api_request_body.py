@@ -10,8 +10,9 @@ import json
 import logging
 import math
 from collections.abc import Awaitable, Callable, Mapping
-from pathlib import Path
+from datetime import datetime, timezone
 from importlib import import_module
+from pathlib import Path
 from typing import Final, cast
 from unittest.mock import AsyncMock, patch
 
@@ -22,6 +23,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import ResponsesAPIResponse
 from tests.unit.llms.bedrock.slow_upstream import (
@@ -255,9 +257,7 @@ async def test_aresponses_forwards_non_enum_reasoning_effort(
 
 
 @pytest.mark.asyncio
-async def test_aresponses_forwards_moderation(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
-) -> None:
+async def test_aresponses_forwards_moderation(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
@@ -276,9 +276,7 @@ async def test_aresponses_forwards_moderation(
 
 
 @pytest.mark.asyncio
-async def test_aresponses_omits_null_moderation(
-    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
-) -> None:
+async def test_aresponses_omits_null_moderation(monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "fake-api-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
@@ -740,11 +738,48 @@ async def test_aresponses_websocket_keeps_routing_hints_out_of_the_relay_kwargs(
             litellm_logging_obj=MagicMock(),
             input=[{"type": "message", "role": "user", "content": "hi"}],
             previous_response_id="resp_prev",
+            generate=False,
         )
 
         mock_ws.assert_awaited_once()
         assert "input" not in mock_ws.call_args.kwargs
         assert "previous_response_id" not in mock_ws.call_args.kwargs
+        assert "generate" not in mock_ws.call_args.kwargs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    (("openai/provider-label-model", "openai"), ("azure/provider-label-model", "azure")),
+    ids=("openai", "azure"),
+)
+async def test_aresponses_websocket_logs_the_provider_inferred_from_the_model(model: str, provider: str) -> None:
+    from unittest.mock import MagicMock
+
+    from litellm.responses.main import (
+        _aresponses_websocket,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # the private entry is what the proxy calls
+        base_llm_http_handler,
+    )
+
+    logging_obj: Final = LiteLLMLogging(
+        model=model,
+        messages=[],
+        stream=True,
+        call_type="_aresponses_websocket",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="websocket-provider-label",
+        function_id="websocket-provider-label",
+    )
+
+    with patch.object(base_llm_http_handler, "async_responses_websocket", new_callable=AsyncMock):
+        await _aresponses_websocket(
+            model=model,
+            websocket=MagicMock(),
+            api_key="sk-test",
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert logging_obj.model_call_details["litellm_params"]["custom_llm_provider"] == provider
 
 
 _STRIPPED_WS_INPUT = [{"role": "user", "content": "hi"}]

@@ -113,7 +113,7 @@ def _assert_completed_by_retry(
 ) -> None:
     assert status == 200, events
     types: Final = event_types(events)
-    assert types[0] == "message_start", events
+    assert types[0] == "message_start" and types.count("message_start") == 1, events
     assert "content_block_delta" in types and "error" not in types, events
     assert types[-1] == "message_stop", events
     assert delta_text(events) == _TEXT, events

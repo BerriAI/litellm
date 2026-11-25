@@ -21,11 +21,14 @@ from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes impor
     safe_set_attribute,
 )
 from litellm.litellm_core_utils.core_helpers import has_attributes, require_attributes
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_dumps import jsonable_or_str, safe_dumps
 from litellm.types.integrations.weave_otel import WeaveOtelConfig, WeaveSpanAttributes
 from litellm.types.utils import StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
+    from opentelemetry.context import Context
     from opentelemetry.trace import Span
 
 
@@ -64,7 +67,7 @@ class WeaveLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
     def set_messages(span: Span, kwargs: Mapping[str, object]):
         """Set input messages as span attributes using OpenInference conventions."""
 
-        messages: Final = kwargs.get("messages") or []
+        messages: Final[object] = kwargs.get("messages") or []
         optional_params: Final = kwargs.get("optional_params") or _NO_FIELDS
 
         prompt: Final = {"messages": messages}
@@ -74,7 +77,11 @@ class WeaveLLMObsOTELAttributes(BaseLLMObsOTELAttributes):
             prompt["functions"] = functions
         if tools is not None:
             prompt["tools"] = tools
-        safe_set_attribute(span, OpenInferenceSpanAttributes.INPUT_VALUE, json.dumps(prompt))
+        safe_set_attribute(
+            span,
+            OpenInferenceSpanAttributes.INPUT_VALUE,
+            json.dumps(prompt, default=jsonable_or_str),
+        )
 
 
 def _set_weave_specific_attributes(span: Span, kwargs: Mapping[str, object], response_obj: object):
@@ -248,7 +255,9 @@ class WeaveOtelLogger(OpenTelemetry):
 
         super().__init__(config=config, callback_name=callback_name, **kwargs)
 
-    def _maybe_log_raw_request(self, kwargs, response_obj, start_time, end_time, parent_span):
+    def _maybe_log_raw_request(
+        self, kwargs: object, response_obj: object, start_time: object, end_time: object, parent_span: object
+    ):
         """
         Override to skip creating the raw_gen_ai_request child span.
 
@@ -259,12 +268,12 @@ class WeaveOtelLogger(OpenTelemetry):
 
     def _start_primary_span(
         self,
-        kwargs,
-        response_obj,
-        start_time,
-        end_time,
-        context,
-        parent_span=None,
+        kwargs: dict[str, object],
+        response_obj: object,
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+        context: Context | None,
+        parent_span: object = None,
     ):
         """
         Override to always create a child span instead of reusing the parent span.
@@ -286,7 +295,9 @@ class WeaveOtelLogger(OpenTelemetry):
         span.end(end_time=self._to_ns(end_time))
         return span
 
-    def _handle_success(self, kwargs, response_obj, start_time, end_time):
+    def _handle_success(
+        self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+    ):
         """
         Override to prevent ending externally created parent spans.
 
@@ -327,7 +338,7 @@ class WeaveOtelLogger(OpenTelemetry):
 
     def construct_dynamic_otel_headers(
         self, standard_callback_dynamic_params: StandardCallbackDynamicParams
-    ) -> dict | None:
+    ) -> dict[str, str] | None:
         """
         Construct dynamic Weave headers from standard callback dynamic params.
 
@@ -336,7 +347,7 @@ class WeaveOtelLogger(OpenTelemetry):
         Returns:
             dict: A dictionary of dynamic Weave headers
         """
-        dynamic_headers: Final = {}
+        dynamic_headers: Final = dict[str, str]()
 
         dynamic_wandb_api_key: Final = standard_callback_dynamic_params.get("wandb_api_key")
         dynamic_weave_project_id: Final = standard_callback_dynamic_params.get("weave_project_id")
