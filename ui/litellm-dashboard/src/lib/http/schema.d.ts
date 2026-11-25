@@ -27434,6 +27434,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -27445,6 +27449,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -27456,6 +27464,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -43891,6 +43903,16 @@ export interface components {
              */
             type: "tool_search_output";
         };
+        /** ResponsesAPIBackgroundOptions */
+        ResponsesAPIBackgroundOptions: {
+            /**
+             * Completion Window
+             * @enum {string}
+             */
+            completion_window?: "soonest" | "2h" | "8h";
+            /** Continuation Id */
+            continuation_id?: string;
+        };
         /**
          * ResponsesAPIRequestParams
          * @description TypedDict for request parameters supported by the responses API.
@@ -43898,6 +43920,7 @@ export interface components {
         ResponsesAPIRequestParams: {
             /** Background */
             background?: boolean | null;
+            background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
             /** Context Management */
             context_management?: components["schemas"]["ContextManagementEntry"][] | null;
             /** Include */
@@ -66326,6 +66349,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
@@ -69790,6 +69814,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */
@@ -80459,6 +80484,7 @@ export interface operations {
                 "application/json": {
                     /** Background */
                     background?: boolean | null;
+                    background_options?: components["schemas"]["ResponsesAPIBackgroundOptions"] | null;
                     /** Context Management */
                     context_management?: components["schemas"]["ContextManagementEntry"][] | null;
                     /** Include */

@@ -6,6 +6,7 @@ import pytest
 
 import litellm
 import litellm.main as litellm_main
+from litellm import Router
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.openai import OpenAIConfig
@@ -92,6 +93,146 @@ def test_gpt5_unsupported_params_drop(config: OpenAIConfig):
         drop_params=True,
     )
     assert "top_p" not in params
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model"),
+    [
+        ("openai", "chat-latest"),
+        ("openai", "openai/chat-latest"),
+        ("azure", "chat-latest"),
+        ("azure", "gpt-chat-latest"),
+        ("azure", "gpt-chat-latest-gs"),
+        ("azure_ai", "gpt-chat-latest"),
+    ],
+)
+def test_chat_latest_aliases_take_the_gpt5_request_shape(custom_llm_provider: str, model: str):
+    function_tool: Final = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+    }
+    params: Final = litellm.get_optional_params(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        max_tokens=50,
+        temperature=0.2,
+        tools=[function_tool],
+        tool_choice="auto",
+        drop_params=True,
+    )
+    assert params["max_completion_tokens"] == 50
+    assert "max_tokens" not in params
+    assert "temperature" not in params
+    assert params["tool_choice"] == "auto"
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model", "row_key"),
+    [
+        ("openai", "chat-latest", "chat-latest"),
+        ("azure", "gpt-chat-latest", "azure/gpt-chat-latest"),
+        ("azure_ai", "gpt-chat-latest", "azure_ai/gpt-chat-latest"),
+        ("azure", "gpt-chat-latest-eastus", "chat-latest"),
+        ("azure_ai", "gpt-chat-latest-2", "chat-latest"),
+    ],
+)
+@pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+def test_chat_latest_forwards_only_the_effort_levels_its_row_lists(
+    custom_llm_provider: str, model: str, row_key: str, level: str
+):
+    if level in litellm.model_cost[row_key]["reasoning_effort_levels"]:
+        kept: Final = litellm.get_optional_params(
+            model=model, custom_llm_provider=custom_llm_provider, reasoning_effort=level, drop_params=False
+        )
+        assert kept["reasoning_effort"] == level
+        return
+    dropped: Final = litellm.get_optional_params(
+        model=model, custom_llm_provider=custom_llm_provider, reasoning_effort=level, drop_params=True
+    )
+    assert "reasoning_effort" not in dropped
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        litellm.get_optional_params(
+            model=model, custom_llm_provider=custom_llm_provider, reasoning_effort=level, drop_params=False
+        )
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["openai", "aihubmix"])
+def test_gpt_chat_latest_keeps_tool_choice_on_providers_without_a_row_that_flags_it(custom_llm_provider: str):
+    function_tool: Final = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+    }
+    params: Final = litellm.get_optional_params(
+        model="gpt-chat-latest",
+        custom_llm_provider=custom_llm_provider,
+        tools=[function_tool],
+        tool_choice="required",
+        drop_params=False,
+    )
+    assert params["tool_choice"] == "required"
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "model"),
+    [
+        ("aiml", "openai/gpt-chat-latest"),
+        ("crusoe", "gpt-chat-latest"),
+        ("github_copilot", "chat-latest"),
+        ("chatgpt", "gpt-chat-latest"),
+        ("ragflow", "chat/assistant-1/gpt-chat-latest"),
+        ("openai", "gpt-chat-latest"),
+        ("openai", "openai/gpt-chat-latest"),
+        ("openai", "my-gpt-chat-latest"),
+    ],
+)
+def test_chat_latest_names_openai_azure_and_foundry_do_not_serve_keep_the_params_they_forwarded(
+    custom_llm_provider: str, model: str
+):
+    params: Final = litellm.get_optional_params(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        max_tokens=50,
+        stop=["END"],
+        top_p=0.5,
+        presence_penalty=0.1,
+        drop_params=False,
+    )
+    assert params["max_tokens"] == 50
+    assert params["stop"] == ["END"]
+    assert params["top_p"] == 0.5
+    assert params["presence_penalty"] == 0.1
+
+
+@pytest.mark.parametrize("model", ["gpt-chat-latest", "openai/gpt-chat-latest", "my-gpt-chat-latest"])
+def test_chat_latest_names_openai_does_not_serve_forward_the_effort_and_temperature_they_were_sent(model: str):
+    params: Final = litellm.get_optional_params(
+        model=model, custom_llm_provider="openai", reasoning_effort="high", temperature=0.2, drop_params=False
+    )
+    assert params["reasoning_effort"] == "high"
+    assert params["temperature"] == 0.2
+
+
+def test_a_deployments_declared_levels_do_not_gate_its_sibling_deployments():
+    level: Final = next(
+        level
+        for level in ("none", "minimal", "low")
+        if not OpenAIGPT5Config.refuses_reasoning_effort_level("gpt-5.1", level)
+    )
+    Router(
+        model_list=[
+            {
+                "model_name": "capped",
+                "litellm_params": {"model": "openai/gpt-5.1", "api_key": "sk-test"},
+                "model_info": {"reasoning_effort_levels": ["medium", "high"]},
+            },
+            {"model_name": "uncapped", "litellm_params": {"model": "openai/gpt-5.1", "api_key": "sk-test"}},
+        ]
+    )
+    chat: Final = litellm.get_optional_params(
+        model="gpt-5.1", custom_llm_provider="openai", reasoning_effort=level, drop_params=False
+    )
+    assert chat["reasoning_effort"] == level
+    assert not OpenAIGPT5Config.row_disables_reasoning_effort_level("gpt-5.1", level)
 
 
 # GPT-5-Codex specific tests

@@ -27,12 +27,11 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, is_undecodable_json_object, loads_json_object
+from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH, truncate_tool_name
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
-    OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
-    truncate_tool_name,
 )
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     build_complete_streaming_response,

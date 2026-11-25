@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 import importlib
-from collections.abc import Coroutine, Mapping
+from collections.abc import Collection, Coroutine, Mapping
 from functools import partial
 from typing import TYPE_CHECKING, Final, Literal, Optional, cast, get_type_hints, overload
 
@@ -65,6 +65,7 @@ from litellm.types.utils import (
     ProviderRoutingHints,
 )
 from litellm.utils import (
+    EXTRA_BODY_ROUTING_KEYS,
     ImageResponse,
     ProviderConfigManager,
     get_llm_provider,
@@ -413,6 +414,7 @@ def image_generation(
             litellm.LlmProviders.QWENCLOUD,
             litellm.LlmProviders.QWEN_AI_PLATFORM,
             litellm.LlmProviders.EDENAI,
+            litellm.LlmProviders.MINIMAX,
         ):
             if image_generation_config is None:
                 raise ValueError(f"image generation config is not supported for {custom_llm_provider}")
@@ -752,6 +754,8 @@ _OBJECT_DICT_ADAPTER: Final = TypeAdapter[dict[str, object]](dict[str, object])
 _ADDITIONAL_DROP_PARAMS: Final = TypeAdapter[tuple[str, ...]](tuple[str, ...])
 _IMAGE_EDIT_OPENAI_PARAMS: Final = frozenset(get_type_hints(ImageEditOptionalRequestParams))
 _DROP_PARAM_KWARGS: Final = frozenset({"drop_params", "additional_drop_params"})
+_IGNORED_UNLESS_SUPPORTED_EDIT_PARAMS: Final = frozenset({"markup"})
+_PASSTHROUGH_EDIT_PROVIDERS: Final = frozenset({litellm.LlmProviders.MINIMAX.value})
 
 
 def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
@@ -759,6 +763,21 @@ def _listed_drop_params(additional_drop_params: object) -> tuple[str, ...]:
         return _ADDITIONAL_DROP_PARAMS.validate_python(additional_drop_params)
     except ValidationError:
         return ()
+
+
+def _passthrough_edit_params(
+    non_default_params: Mapping[str, object],
+    extra_body: Mapping[str, object] | None,
+    mapped_params: Collection[str],
+    additional_drop_params: Collection[str] | None,
+) -> Mapping[str, object]:
+    dropped: Final = frozenset(additional_drop_params or ())
+    unmapped_excluded: Final = _DROP_PARAM_KWARGS | _IMAGE_EDIT_OPENAI_PARAMS | frozenset(mapped_params) | dropped
+    body_fields: Final = {} if "extra_body" in dropped else (extra_body or {})
+    return {
+        **{key: value for key, value in non_default_params.items() if key not in unmapped_excluded},
+        **{key: value for key, value in body_fields.items() if key not in dropped | EXTRA_BODY_ROUTING_KEYS},
+    }
 
 
 def _custom_handler_edit_params(
@@ -788,6 +807,7 @@ def image_edit(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
+    markup: FileTypes | list[FileTypes] | None = None,  # mutable-ok: a tuple is one upload, a list is several
     **kwargs,
 ) -> ImageResponse | Coroutine[object, object, ImageResponse]:
     """
@@ -836,11 +856,11 @@ def image_edit(
             extra_headers = dict(merged_extra_headers)
 
         # get llm provider logic
-        litellm_params: Final = GenericLiteLLMParams(**kwargs)
         model, custom_llm_provider, _, _ = get_llm_provider(
             model=model or DEFAULT_IMAGE_ENDPOINT_MODEL,
             custom_llm_provider=custom_llm_provider,
         )
+        litellm_params: Final = GenericLiteLLMParams(**kwargs, custom_llm_provider=custom_llm_provider)
 
         # Check for custom provider
         if custom_llm_provider in litellm._custom_providers:
@@ -853,6 +873,7 @@ def image_edit(
             custom_optional_params: Final = _custom_handler_edit_params(
                 _OBJECT_DICT_ADAPTER.validate_python(kwargs),
                 {
+                    "markup": markup,
                     "mask": mask,
                     "n": n,
                     "quality": quality,
@@ -929,10 +950,15 @@ def image_edit(
                 message=f"`{requested_params.param}` {requested_params.reason} for {model}. "
                 "To drop it from the call, set `litellm.drop_params = True`.",
             )
+        ignored_edit_params: Final = _IGNORED_UNLESS_SUPPORTED_EDIT_PARAMS - provider_supported_params
         # Get ImageEditOptionalRequestParams with only valid parameters
         image_edit_optional_params: Final[ImageEditOptionalRequestParams] = (
             _get_ImageEditRequestUtils().get_requested_image_edit_optional_param(
-                {**local_vars, **requested_params},
+                {
+                    key: value
+                    for key, value in {**local_vars, **requested_params}.items()
+                    if key not in ignored_edit_params
+                },
                 provider_supported_params=provider_supported_params.intersection(requested_params),
             )
         )
@@ -1052,7 +1078,19 @@ def image_edit(
             image=images,
             prompt=prompt,
             image_edit_provider_config=image_edit_provider_config,
-            image_edit_optional_request_params=image_edit_request_params,
+            image_edit_optional_request_params={
+                **image_edit_request_params,
+                **(
+                    _passthrough_edit_params(
+                        kept_params,
+                        extra_body if isinstance(extra_body, dict) else None,
+                        provider_supported_params,
+                        additional_drop_params,
+                    )
+                    if custom_llm_provider in _PASSTHROUGH_EDIT_PROVIDERS
+                    else {}
+                ),
+            },
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
@@ -1092,6 +1130,7 @@ async def aimage_edit(
     timeout: float | httpx.Timeout | None = None,
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
+    markup: FileTypes | list[FileTypes] | None = None,  # mutable-ok: a tuple is one upload, a list is several
     **kwargs,
 ) -> ImageResponse:
     """
@@ -1122,6 +1161,7 @@ async def aimage_edit(
             image=images,
             prompt=prompt,
             mask=mask,
+            markup=markup,
             model=model,
             n=n,
             quality=quality,

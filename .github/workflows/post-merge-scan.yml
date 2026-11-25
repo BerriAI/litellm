@@ -1,0 +1,87 @@
+name: Post-merge Scan
+
+on:
+  push:
+    branches:
+      - "stable/**"
+      - "lts/**"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  osv:
+    name: osv
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Download osv-scanner v2.3.8
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/osv-scanner" \
+            https://github.com/google/osv-scanner/releases/download/v2.3.8/osv-scanner_linux_amd64
+          echo "bc98e15319ed0d515e3f9235287ba53cdc5535d576d24fd573978ecfe9ab92dc  $RUNNER_TEMP/osv-scanner" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/osv-scanner"
+
+      - name: Scan lockfiles
+        run: |
+          "$RUNNER_TEMP/osv-scanner" scan source \
+            --config osv-scanner.toml \
+            -L uv.lock \
+            -L ui/litellm-dashboard/package-lock.json \
+            -L vscode-extension/package-lock.json
+
+  grype:
+    name: grype (${{ matrix.dockerfile }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        dockerfile:
+          - Dockerfile
+          - docker/Dockerfile.database
+          - docker/Dockerfile.non_root
+          - ui/Dockerfile
+          - gateway/Dockerfile
+          - backend/Dockerfile
+          - migrations/Dockerfile
+    env:
+      DOCKERFILE: ${{ matrix.dockerfile }}
+      IMAGE: post-merge-scan:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Download Grype v0.114.0
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/grype.tar.gz" \
+            https://github.com/anchore/grype/releases/download/v0.114.0/grype_0.114.0_linux_amd64.tar.gz
+          echo "edda0968d8827daab01d32b3cd7de192ae0915005e7bbfcfef9e68e79bc43343  $RUNNER_TEMP/grype.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/grype.tar.gz" -C "$RUNNER_TEMP" grype
+          chmod +x "$RUNNER_TEMP/grype"
+
+      - name: Build image
+        run: docker build -f "$DOCKERFILE" -t "$IMAGE" .
+
+      - name: Scan image for fixable HIGH/CRITICAL CVEs
+        env:
+          GRYPE_MATCH_PYTHON_USING_CPES: "true"
+        run: |
+          "$RUNNER_TEMP/grype" "$IMAGE" \
+            --config .grype.yaml \
+            --only-fixed \
+            --fail-on high \
+            --output table

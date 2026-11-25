@@ -5,11 +5,12 @@ import json
 import logging
 import re
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
+from http import HTTPStatus
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeVar, cast, runtime_checkable
 
 import httpx
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -114,6 +115,11 @@ def as_object_list(value: object) -> Sequence[object] | None:
     return value if isinstance(value, list) else None
 
 
+def proxy_request_headers(container: Mapping[str, object] | None) -> Mapping[str, object] | None:
+    proxy_server_request: Final = as_str_mapping(container.get("proxy_server_request")) if container else None
+    return as_str_mapping(proxy_server_request.get("headers")) if proxy_server_request else None
+
+
 _OBJECT_ENTRIES: Final = TypeAdapter(list[object])
 _OBJECT_KEYS: Final = TypeAdapter(dict[object, object])
 _PARAM_NAME: Final = re.compile(r"\w+")
@@ -145,6 +151,21 @@ class _SupportsGetItem(Protocol):
 
 def attribute_or_none(source: object, name: str) -> object:
     return getattr(source, name, None)
+
+
+_HTTP_ERROR_STATUSES: Final = range(HTTPStatus.BAD_REQUEST, 600)
+
+
+def http_error_status(value: object) -> int | None:
+    match value:
+        case bool():
+            return None
+        case int() if value in _HTTP_ERROR_STATUSES:
+            return value
+        case str() if len(value) == 3 and value.isascii() and value.isdigit() and int(value) in _HTTP_ERROR_STATUSES:
+            return int(value)
+        case _:
+            return None
 
 
 def iter_items(value: object) -> Iterable[object]:
@@ -640,11 +661,16 @@ def preserve_upstream_non_openai_attributes(
     """
     Preserve non-OpenAI attributes from the original chunk.
     """
-    # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-    expected_keys: Final = set(type(model_response).model_fields.keys()).union({"usage"})
-    for key, value in original_chunk.model_dump().items():
-        if key not in expected_keys:
-            setattr(model_response, key, value)
+    for key, value in upstream_non_openai_attributes(type(model_response), original_chunk):
+        setattr(model_response, key, value)
+
+
+def upstream_non_openai_attributes(
+    model_response_type: type[BaseModel], original_chunk: BaseModel
+) -> tuple[tuple[str, object], ...]:
+    expected_keys: Final = frozenset(model_response_type.model_fields) | frozenset({"usage"})
+    dumped: Final[Mapping[str, object]] = original_chunk.model_dump()
+    return tuple((key, value) for key, value in dumped.items() if key not in expected_keys)
 
 
 def safe_deep_copy(data):

@@ -15,6 +15,7 @@ from litellm.llms.azure.responses.transformation import AzureOpenAIResponsesAPIC
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.bedrock.responses.transformation import BedrockOpenAIResponsesConfig
 from litellm.llms.bedrock_mantle.responses.transformation import BedrockMantleResponsesAPIConfig
+from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.litellm_completion_transformation.transformation import LiteLLMCompletionResponsesConfig
 from litellm.types.llms.openai import (
@@ -2396,6 +2397,43 @@ class TestResponsesSurfaceSharesTheEffortRule:
             drop_params=True,
         )
         assert mapped["reasoning"] == {"summary": "auto"}
+
+    @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
+    def test_a_row_that_lists_its_effort_levels_forwards_only_those(self, local_model_cost_map: None, level: str):
+        model: Final = "chat-latest"
+        forwarded: Final = level in litellm.model_cost["chat-latest"]["reasoning_effort_levels"]
+        dropped: Final = OpenAIResponsesAPIConfig().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": level, "summary": "auto"}},
+            model=model,
+            drop_params=True,
+        )
+        assert dropped["reasoning"] == ({"effort": level, "summary": "auto"} if forwarded else {"summary": "auto"})
+        if forwarded:
+            return
+        with pytest.raises(litellm.UnsupportedParamsError):
+            OpenAIResponsesAPIConfig().map_openai_params(
+                response_api_optional_params={"reasoning": {"effort": level}},
+                model=model,
+                drop_params=False,
+            )
+
+    @pytest.mark.parametrize(
+        ("config", "model"),
+        [
+            (LiteLLMProxyResponsesAPIConfig, "chat-latest"),
+            (OpenAIResponsesAPIConfig, "gpt-chat-latest"),
+            (OpenAIResponsesAPIConfig, "my-gpt-chat-latest"),
+        ],
+    )
+    def test_a_chat_latest_name_openai_does_not_serve_forwards_the_effort_it_was_sent(
+        self, local_model_cost_map: None, config: type[OpenAIResponsesAPIConfig], model: str
+    ):
+        mapped: Final = config().map_openai_params(
+            response_api_optional_params={"reasoning": {"effort": "high"}},
+            model=model,
+            drop_params=False,
+        )
+        assert mapped["reasoning"] == {"effort": "high"}
 
     @pytest.mark.parametrize("level", ["none", "minimal", "low", "medium", "high", "xhigh", "max"])
     def test_gpt5_3_codex_forwards_exactly_the_effort_levels_its_map_row_allows(self, local_model_cost_map, level):
