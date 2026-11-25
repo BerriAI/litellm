@@ -4,12 +4,41 @@ import {
   type APIRequestContext,
   type Locator,
   type Page,
+  type Request,
 } from "@playwright/test";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { masterKey, rootPath, uniqueSuffix } from "../../helpers/traffic";
 
 const DISCOUNTS = "/config/cost_discount_config";
 const MARGINS = "/config/cost_margin_config";
+const DISCOUNT_PREFIX = "openai/e2e-";
+const MARGIN_AMOUNT = 0.008;
+const MARGIN_PROVIDER_POOLS = [
+  [
+    ["anthropic", "Anthropic"],
+    ["bedrock", "Amazon Bedrock"],
+    ["ai21", "Ai21"],
+  ],
+  [
+    ["cohere", "Cohere"],
+    ["cerebras", "Cerebras"],
+    ["cloudflare", "Cloudflare"],
+  ],
+  [
+    ["groq", "Groq"],
+    ["fireworks_ai", "Fireworks AI"],
+    ["nvidia_nim", "Nvidia Nim"],
+  ],
+  [
+    ["mistral", "Mistral AI"],
+    ["ollama", "Ollama"],
+  ],
+  [
+    ["perplexity", "Perplexity"],
+    ["replicate", "Replicate"],
+  ],
+] as const;
+const MARGIN_PROVIDERS = MARGIN_PROVIDER_POOLS.flat();
 type CostConfig = Record<
   string,
   number | { percentage?: number; fixed_amount?: number }
@@ -23,17 +52,50 @@ const configResponse = (page: Page, method: "GET" | "PATCH", path: string) =>
     );
   });
 
-async function openCostSettings(
-  page: Page,
-  path: string,
-  section: RegExp,
-): Promise<CostConfig> {
+async function openCostSettings(page: Page, path: string, section: RegExp) {
+  const reads: Promise<CostConfig>[] = [];
+  const recordConfigRead = (request: Request) => {
+    if (
+      request.method() !== "GET" ||
+      new URL(request.url()).pathname !== rootPath() + path
+    )
+      return;
+    reads.push(
+      request
+        .response()
+        .then(async (response) =>
+          response?.ok() ? (await response.json()).values : {},
+        ),
+    );
+  };
+  page.on("requestfinished", recordConfigRead);
   const loading = configResponse(page, "GET", path);
   await page.goto(`${rootPath()}/ui/cost-tracking/`);
   const response = await loading;
   expect(response.ok(), `Load ${path} (HTTP ${response.status()})`).toBe(true);
   await page.getByRole("button", { name: section }).click();
-  return (await response.json()).values;
+  await expect(
+    page.getByText("Loading configuration...", { exact: true }),
+  ).toBeHidden();
+
+  return async (
+    isTestEntry: (key: string, value: CostConfig[string]) => boolean,
+  ) => {
+    page.off("requestfinished", recordConfigRead);
+    const [first, ...others] = await Promise.all(reads);
+    return {
+      occupied: new Set([first, ...others].flatMap(Object.keys)),
+      existing: Object.fromEntries(
+        Object.entries(first).filter(
+          ([key, value]) =>
+            !isTestEntry(key, value) &&
+            others.every(
+              (recent) => JSON.stringify(recent[key]) === JSON.stringify(value),
+            ),
+        ),
+      ),
+    };
+  };
 }
 
 async function selectProvider(page: Page, dialog: Locator, label: string) {
@@ -44,18 +106,27 @@ async function selectProvider(page: Page, dialog: Locator, label: string) {
     .click();
 }
 
-async function restoreConfig(
+async function removeTestEntry(
   request: APIRequestContext,
   path: string,
-  config: CostConfig,
+  key: string,
 ) {
-  const response = await request.patch(rootPath() + path, {
-    headers: { Authorization: `Bearer ${masterKey()}` },
-    data: config,
-  });
-  expect(response.ok(), `Restore ${path} (HTTP ${response.status()})`).toBe(
-    true,
-  );
+  try {
+    const options = {
+      headers: { Authorization: `Bearer ${masterKey()}`, Connection: "close" },
+      timeout: 1500,
+    };
+    const response = await request.get(rootPath() + path, options);
+    if (!response.ok()) return;
+    const current: CostConfig = (await response.json()).values;
+    if (!Object.hasOwn(current, key)) return;
+    const data = Object.fromEntries(
+      Object.entries(current).filter(([entry]) => entry !== key),
+    );
+    await request.patch(rootPath() + path, { ...options, data });
+  } catch {
+    return;
+  }
 }
 
 test.describe("Cost tracking settings", () => {
@@ -66,7 +137,7 @@ test.describe("Cost tracking settings", () => {
     page,
     request,
   }) => {
-    const original = await openCostSettings(
+    const retainedEntries = await openCostSettings(
       page,
       DISCOUNTS,
       /^Provider Discounts/,
@@ -95,6 +166,10 @@ test.describe("Cost tracking settings", () => {
     ).toHaveValue(`  ${pattern} `);
 
     await percentage.fill("12.5");
+    const key = `openai/${pattern}`;
+    const { existing } = await retainedEntries((entry) =>
+      entry.startsWith(DISCOUNT_PREFIX),
+    );
     const saving = configResponse(page, "PATCH", DISCOUNTS);
     await add.click();
     const response = await saving;
@@ -102,10 +177,11 @@ test.describe("Cost tracking settings", () => {
       expect(response.ok(), `Save discount (HTTP ${response.status()})`).toBe(
         true,
       );
-      expect(response.request().postDataJSON()).toEqual({
-        ...original,
-        [`openai/${pattern}`]: 0.125,
-      });
+      const body: CostConfig = response.request().postDataJSON();
+      expect(body[key]).toBe(0.125);
+      for (const [entry, value] of Object.entries(existing)) {
+        expect(body[entry], `Preserve discount ${entry}`).toEqual(value);
+      }
       await expect(
         page.getByText("Discount configuration updated successfully", {
           exact: true,
@@ -113,15 +189,15 @@ test.describe("Cost tracking settings", () => {
       ).toBeVisible();
       await expect(dialog).toBeHidden();
     } finally {
-      await restoreConfig(request, DISCOUNTS, original);
+      if (response.ok()) await removeTestEntry(request, DISCOUNTS, key);
     }
   });
 
   test("keeps both margin drafts when switching types and saves only the selected fixed amount", async ({
     page,
     request,
-  }) => {
-    const original = await openCostSettings(
+  }, testInfo) => {
+    const retainedEntries = await openCostSettings(
       page,
       MARGINS,
       /^Fee\/Price Margin/,
@@ -130,7 +206,22 @@ test.describe("Cost tracking settings", () => {
       .getByRole("button", { name: "+ Add Provider Margin", exact: true })
       .click();
     const dialog = page.getByRole("dialog", { name: "Add Provider Margin" });
-    await selectProvider(page, dialog, "Global (All Providers)");
+    const { occupied, existing } = await retainedEntries(
+      (key, value) =>
+        MARGIN_PROVIDERS.some(([provider]) => provider === key) &&
+        typeof value === "object" &&
+        value.fixed_amount === MARGIN_AMOUNT &&
+        value.percentage === undefined,
+    );
+    const candidates =
+      MARGIN_PROVIDER_POOLS[
+        testInfo.repeatEachIndex % MARGIN_PROVIDER_POOLS.length
+      ];
+    const provider = candidates.find(([key]) => !occupied.has(key));
+    if (!provider)
+      throw new Error("No unused provider is available for the margin test");
+    const [key, label] = provider;
+    await selectProvider(page, dialog, label);
     const percentage = dialog.getByRole("textbox", {
       name: "Margin Percentage",
     });
@@ -141,11 +232,11 @@ test.describe("Cost tracking settings", () => {
     const fixedType = dialog.getByRole("radio", { name: "Fixed Amount" });
     await percentage.fill("25");
     await fixedType.click();
-    await fixed.fill("0.008");
+    await fixed.fill(String(MARGIN_AMOUNT));
     await percentageType.click();
     await expect(percentage).toHaveValue("25");
     await fixedType.click();
-    await expect(fixed).toHaveValue("0.008");
+    await expect(fixed).toHaveValue(String(MARGIN_AMOUNT));
 
     const saving = configResponse(page, "PATCH", MARGINS);
     await dialog
@@ -156,10 +247,11 @@ test.describe("Cost tracking settings", () => {
       expect(response.ok(), `Save margin (HTTP ${response.status()})`).toBe(
         true,
       );
-      expect(response.request().postDataJSON()).toEqual({
-        ...original,
-        global: { fixed_amount: 0.008 },
-      });
+      const body: CostConfig = response.request().postDataJSON();
+      expect(body[key]).toEqual({ fixed_amount: MARGIN_AMOUNT });
+      for (const [entry, value] of Object.entries(existing)) {
+        expect(body[entry], `Preserve margin ${entry}`).toEqual(value);
+      }
       await expect(
         page.getByText("Margin configuration updated successfully", {
           exact: true,
@@ -167,7 +259,7 @@ test.describe("Cost tracking settings", () => {
       ).toBeVisible();
       await expect(dialog).toBeHidden();
     } finally {
-      await restoreConfig(request, MARGINS, original);
+      if (response.ok()) await removeTestEntry(request, MARGINS, key);
     }
   });
 });
