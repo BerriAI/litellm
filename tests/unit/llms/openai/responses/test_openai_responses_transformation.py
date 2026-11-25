@@ -5261,6 +5261,21 @@ def test_an_openai_deployment_keeps_a_later_system_item_in_place_unless_a_compat
     assert _input_sent_for_a_later_system_item(api_base, model_info) == list(_LATER_SYSTEM_INPUT)
 
 
+def test_an_openai_compatible_deployment_forwards_an_input_that_is_one_object_unchanged() -> None:
+    config: Final = OpenAIResponsesAPIConfig()
+    object_input: Final = {"role": "system", "content": "Reply in French."}
+
+    request: Final = config.transform_responses_api_request(
+        model="accounts/fireworks/models/qwen3p8-2p4t-a95b",
+        input=object_input,  # pyright: ignore[reportArgumentType]  # a caller's malformed input, which the provider rejects
+        response_api_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(api_base=_FIREWORKS_API_BASE, model_info=_SYSTEM_FIRST_DEPLOYMENT),
+        headers={},
+    )
+
+    assert request["input"] == object_input
+
+
 @pytest.mark.parametrize("role", ["system", "developer"])
 def test_a_system_first_openai_compatible_deployment_sends_a_continued_turns_instruction_item_as_a_user_turn(
     role: str,
