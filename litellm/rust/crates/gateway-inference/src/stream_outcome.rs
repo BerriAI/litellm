@@ -65,6 +65,12 @@ pub(crate) fn broke(error: &litellm_host_http::Error<InferenceError>) -> Attempt
     }
 }
 
+/// What a stream failed on: the provider's error event, or the error it broke with.
+pub(crate) enum StreamFailure<'a, E> {
+    Event { status: u16, answer: &'a str },
+    Broke(&'a E),
+}
+
 struct Watched<E> {
     blocks: BoxStream<'static, Result<SseBlock, E>>,
     /// What a stream whose outcome is not known yet counted so far, a later event's count over
@@ -73,53 +79,129 @@ struct Watched<E> {
 }
 
 /// `blocks` as they are, with `report` told how the stream went: once, and never for a stream
-/// that is dropped before its outcome is known.
-pub(crate) fn watched<E, R, F>(
+/// that is dropped before its outcome is known. `failed` hears what a failed stream failed on
+/// before `report` hears it failed.
+pub(crate) fn watched<E, R, F, S>(
     blocks: BoxStream<'static, Result<SseBlock, E>>,
     read: Read,
     broke: fn(&E) -> AttemptError,
+    failed: S,
     report: R,
 ) -> BoxStream<'static, Result<SseBlock, E>>
 where
     E: Send + 'static,
     R: Fn(Outcome) -> F + Send + Sync + 'static,
     F: Future<Output = ()> + Send,
+    S: Fn(StreamFailure<'_, E>) + Send + Sync + 'static,
+{
+    watching(blocks, read, broke, failed, report, Left::default())
+}
+
+/// [`watched`], with `left` told what the stream counted when it is dropped before its outcome
+/// is known, as a client that disconnects mid-stream drops it.
+pub(crate) fn watched_or_left<E, R, F, S>(
+    blocks: BoxStream<'static, Result<SseBlock, E>>,
+    read: Read,
+    broke: fn(&E) -> AttemptError,
+    failed: S,
+    report: R,
+    left: impl FnOnce(Counts) + Send + 'static,
+) -> BoxStream<'static, Result<SseBlock, E>>
+where
+    E: Send + 'static,
+    R: Fn(Outcome) -> F + Send + Sync + 'static,
+    F: Future<Output = ()> + Send,
+    S: Fn(StreamFailure<'_, E>) + Send + Sync + 'static,
+{
+    let left = Left {
+        counted: Counts::default(),
+        told: Some(Box::new(left)),
+    };
+    watching(blocks, read, broke, failed, report, left)
+}
+
+/// Who hears what a stream counted if it is dropped before its outcome is known.
+#[derive(Default)]
+struct Left {
+    counted: Counts,
+    told: Option<Box<dyn FnOnce(Counts) + Send>>,
+}
+
+impl Drop for Left {
+    fn drop(&mut self) {
+        if let Some(told) = self.told.take() {
+            told(self.counted);
+        }
+    }
+}
+
+fn watching<E, R, F, S>(
+    blocks: BoxStream<'static, Result<SseBlock, E>>,
+    read: Read,
+    broke: fn(&E) -> AttemptError,
+    failed: S,
+    report: R,
+    left: Left,
+) -> BoxStream<'static, Result<SseBlock, E>>
+where
+    E: Send + 'static,
+    R: Fn(Outcome) -> F + Send + Sync + 'static,
+    F: Future<Output = ()> + Send,
+    S: Fn(StreamFailure<'_, E>) + Send + Sync + 'static,
 {
     let watched = Watched {
         blocks,
         counted: Some(Counts::default()),
     };
-    stream::unfold((watched, report), move |(watched, report)| async move {
-        let Watched {
-            mut blocks,
-            counted,
-        } = watched;
-        let block = blocks.next().await;
-        let (counted, outcome) = match (&block, counted) {
-            (_, None) => (None, None),
-            (Some(Ok(block)), Some(counted)) => {
-                match block.event.as_ref().map(|event| read(&event.data)) {
-                    Some(Reading {
-                        kind: Kind::Failed { status, answer },
-                        ..
-                    }) => (
-                        None,
-                        Some(Err(AttemptError::from_provider(status, &answer, None))),
-                    ),
-                    Some(Reading {
-                        usage: Some(usage), ..
-                    }) => (Some(usage.over(counted)), None),
-                    Some(Reading { usage: None, .. }) | None => (Some(counted), None),
+    let listeners = (failed, report);
+    stream::unfold(
+        (watched, listeners, left),
+        move |(watched, listeners, mut left)| async move {
+            let (failed, report) = &listeners;
+            let Watched {
+                mut blocks,
+                counted,
+            } = watched;
+            let block = blocks.next().await;
+            let (counted, outcome) = match (&block, counted) {
+                (_, None) => (None, None),
+                (Some(Ok(block)), Some(counted)) => {
+                    match block.event.as_ref().map(|event| read(&event.data)) {
+                        Some(Reading {
+                            kind: Kind::Failed { status, answer },
+                            ..
+                        }) => {
+                            failed(StreamFailure::Event {
+                                status,
+                                answer: &answer,
+                            });
+                            (
+                                None,
+                                Some(Err(AttemptError::from_provider(status, &answer, None))),
+                            )
+                        }
+                        Some(Reading {
+                            usage: Some(usage), ..
+                        }) => (Some(usage.over(counted)), None),
+                        Some(Reading { usage: None, .. }) | None => (Some(counted), None),
+                    }
                 }
+                (Some(Err(error)), Some(_)) => {
+                    failed(StreamFailure::Broke(error));
+                    (None, Some(Err(broke(error))))
+                }
+                (None, Some(counted)) => (None, Some(Ok(counted))),
+            };
+            match counted {
+                Some(counted) => left.counted = counted,
+                None => left.told = None,
             }
-            (Some(Err(error)), Some(_)) => (None, Some(Err(broke(error)))),
-            (None, Some(counted)) => (None, Some(Ok(counted))),
-        };
-        if let Some(outcome) = outcome {
-            report(outcome).await;
-        }
-        Some((block?, (Watched { blocks, counted }, report)))
-    })
+            if let Some(outcome) = outcome {
+                report(outcome).await;
+            }
+            Some((block?, (Watched { blocks, counted }, listeners, left)))
+        },
+    )
     .boxed()
 }
 
@@ -155,29 +237,36 @@ pub(crate) fn reporting_outcome<H: routing::Host>(
     let router = gateway.router.clone();
     let routing = gateway.routing.clone();
     let deployment = deployment.clone();
-    watched(blocks, read, broke, move |outcome: Outcome| {
-        let (router, routing, deployment) = (router.clone(), routing.clone(), deployment.clone());
-        async move {
-            let total_tokens = match outcome {
-                Ok(counted) => counted.total(),
-                Err(failure) => {
-                    return record_failure(&router, &*routing, &deployment, &failure).await;
+    watched(
+        blocks,
+        read,
+        broke,
+        |_| {},
+        move |outcome: Outcome| {
+            let (router, routing, deployment) =
+                (router.clone(), routing.clone(), deployment.clone());
+            async move {
+                let total_tokens = match outcome {
+                    Ok(counted) => counted.total(),
+                    Err(failure) => {
+                        return record_failure(&router, &*routing, &deployment, &failure).await;
+                    }
+                };
+                let recorded = router
+                    .report_success(
+                        &*routing,
+                        &deployment.id,
+                        total_tokens as f64,
+                        0.0,
+                        SuccessReport::default(),
+                    )
+                    .await;
+                if let Err(error) = recorded {
+                    tracing::warn!(deployment_id = %deployment.id, %error, "stream outcome was not recorded");
                 }
-            };
-            let recorded = router
-                .report_success(
-                    &*routing,
-                    &deployment.id,
-                    total_tokens as f64,
-                    0.0,
-                    SuccessReport::default(),
-                )
-                .await;
-            if let Err(error) = recorded {
-                tracing::warn!(deployment_id = %deployment.id, %error, "stream outcome was not recorded");
             }
-        }
-    })
+        },
+    )
 }
 
 #[cfg(test)]
@@ -217,14 +306,20 @@ mod tests {
         let chunks =
             stream::iter(chunks).map(|chunk| chunk.map(|text| Bytes::from_static(text.as_bytes())));
         let blocks = sse::blocks(chunks).boxed();
-        let delivered = watched(blocks, read, dropped, move |outcome: Outcome| {
-            sink.lock().push(
-                outcome
-                    .map(Counts::total)
-                    .map_err(|failure| (failure.status, failure.kind)),
-            );
-            async {}
-        })
+        let delivered = watched(
+            blocks,
+            read,
+            dropped,
+            |_| {},
+            move |outcome: Outcome| {
+                sink.lock().push(
+                    outcome
+                        .map(Counts::total)
+                        .map_err(|failure| (failure.status, failure.kind)),
+                );
+                async {}
+            },
+        )
         .take(take)
         .count()
         .await;
@@ -268,6 +363,41 @@ mod tests {
             heard(vec![Ok(START), Ok(head), Ok(tail)], read_event, usize::MAX).await,
             (2, vec![Ok(12)])
         );
+    }
+
+    /// What `left` heard of a stream of `chunks` read `take` blocks into, then dropped.
+    async fn left_after(chunks: Vec<&'static str>, take: usize) -> Vec<u64> {
+        let left = Arc::new(Mutex::new(Vec::new()));
+        let sink = left.clone();
+        let chunks = stream::iter(chunks)
+            .map(|chunk| Ok::<_, Dropped>(Bytes::from_static(chunk.as_bytes())));
+        let blocks = sse::blocks(chunks).boxed();
+        watched_or_left(
+            blocks,
+            read_event,
+            dropped,
+            |_| {},
+            |_: Outcome| async {},
+            move |counted: Counts| sink.lock().push(counted.total()),
+        )
+        .take(take)
+        .count()
+        .await;
+        left.lock().clone()
+    }
+
+    #[rstest]
+    #[case::dropped_after_its_start(vec![START, DELTA, STOP], 1, vec![8])]
+    #[case::dropped_after_its_usage(vec![START, DELTA, STOP], 2, vec![12])]
+    #[case::read_to_its_end(vec![START, DELTA, STOP], usize::MAX, vec![])]
+    #[case::ended_on_the_providers_error(vec![START, OVERLOADED, STOP], 2, vec![])]
+    #[tokio::test]
+    async fn a_stream_dropped_before_its_outcome_tells_what_it_counted_once(
+        #[case] chunks: Vec<&'static str>,
+        #[case] take: usize,
+        #[case] expected: Vec<u64>,
+    ) {
+        assert_eq!(left_after(chunks, take).await, expected);
     }
 
     #[tokio::test]

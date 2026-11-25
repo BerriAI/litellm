@@ -38,11 +38,12 @@
 //!   overlap the cost map; that needs the provider resolution port, not a classifier change.
 //! - `litellm_proxy` errors are not unwrapped into the proxied exception. Trigger: a Rust
 //!   route that calls a LiteLLM proxy.
-//! - Only the OpenAI-compatible, Vertex AI and Cohere mappers are ported; every other
+//! - Only the OpenAI-compatible, Anthropic, Vertex AI and Cohere mappers are ported; every other
 //!   provider goes straight to the status table. Trigger: a Rust route for such a provider.
 
 use litellm_redaction::SecretRedactor;
 
+mod anthropic;
 mod cohere;
 mod openai;
 mod original;
@@ -53,6 +54,7 @@ mod vertex_ai;
 
 pub use original::{ExceptionFamily, OriginalException, TimeoutPhase};
 pub use public::{MappedFailure, PublicError, UpstreamResponse};
+pub use status::classify as classify_status;
 
 use rules::{Rule, contains_any, first_match};
 
@@ -157,6 +159,7 @@ fn family_rules(family: ExceptionFamily) -> &'static [Rule] {
         ExceptionFamily::OpenAiCompatible => openai::RULES,
         ExceptionFamily::VertexAi => vertex_ai::RULES,
         ExceptionFamily::Cohere => cohere::RULES,
+        ExceptionFamily::Anthropic => anthropic::RULES,
         ExceptionFamily::Other => &[],
     }
 }
