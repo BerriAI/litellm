@@ -531,7 +531,7 @@ def test_retried_stream_spend_row_records_the_attempt_count(gateway: Gateway) ->
         rows: Final = read_rows(
             "SELECT metadata->>'attempted_retries' AS attempted, metadata->>'max_retries' AS budget "
             'FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
-            (_served_id(prompt, 2),),
+            (_served_id(prompt, _shown_attempt(failure, 2)),),
         )
         assert rows == [{"attempted": "1", "budget": "1"}], rows
 
