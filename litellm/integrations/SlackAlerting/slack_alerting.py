@@ -511,7 +511,7 @@ class SlackAlerting(CustomBatchLogger):
 
     async def response_taking_too_long(
         self,
-        request_data: dict | None = None,
+        request_data: dict[str, object] | None = None,
     ):
         if self.alerting is None or self.alert_types is None:
             return
@@ -1803,7 +1803,7 @@ Model Info:
 
     async def _run_scheduler_helper(
         self,
-        llm_router,
+        llm_router: Router,
         pod_lock_manager: "PodLockManager | None" = None,
     ) -> bool:
         """
@@ -1856,7 +1856,7 @@ Model Info:
 
     async def _run_scheduled_daily_report(
         self,
-        llm_router: object | None = None,
+        llm_router: Router | None = None,
         pod_lock_manager: "PodLockManager | None" = None,
     ):
         """

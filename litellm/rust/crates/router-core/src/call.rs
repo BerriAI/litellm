@@ -11,9 +11,9 @@ use serde_json::{Map, Value};
 use tracing::warn;
 
 use crate::{
-    Call, RouterStateSnapshot,
+    Call, FailureReport, RouterStateSnapshot,
     config::Op,
-    error::{AttemptError, Error, FailureKind},
+    error::{AttemptError, Error, FailureKind, RaisedBy},
     fallback::{FallbackKeys, FallbackTarget, Fallbacks},
     health::{GroupShape, should_retry_status, team_model_has_alternatives},
     host::{
@@ -1207,8 +1207,30 @@ impl<H: RouterHost> Call<'_, H> {
         // request's `OutcomeCallbacks` reach, except a deferred stream's: its request counts now
         // (`increment_deployment_usage_for_response`), its success or failure when the host reports
         // the stream's end.
-        match self.host.attempt(&attempt).await {
+        let checks = &self.core.config.pre_call_checks;
+        let admitted = checks
+            .admit(self.host.cache(), &deployment, self.core.clock.now())
+            .await;
+        let ran = match admitted {
+            Err(refusal) => Err(refusal),
+            Ok(()) => self
+                .host
+                .attempt(&attempt)
+                .await
+                .map_err(|failure| self.failed(failure, Some(&deployment.id))),
+        };
+        match ran {
             Ok(output) => {
+                if !output.deferred {
+                    checks
+                        .succeeded(
+                            self.host.cache(),
+                            &deployment,
+                            output.total_tokens,
+                            self.core.clock.now(),
+                        )
+                        .await;
+                }
                 // `_should_raise_content_policy_error`: a blocked response is raised only when
                 // a content-policy fallback would serve it, and counts as no failure.
                 let routed = routed_name(target, &candidates);
@@ -1286,19 +1308,35 @@ impl<H: RouterHost> Call<'_, H> {
                     ),
                 })
             }
-            Err(failure) => {
-                let error = self.failed(failure, Some(&deployment.id));
-                let failed_deployment = match &error {
-                    Error::Attempt { failure, .. } => {
-                        if !failure.recorded && !failure.queue_rejected() {
-                            self.record_failure(
-                                snapshot,
-                                request,
-                                &candidates,
-                                &deployment,
-                                failure,
-                            )
-                            .await;
+            Err(mut error) => {
+                let failed_deployment = match &mut error {
+                    Error::Attempt { failure, raised_by } => {
+                        match raised_by {
+                            // A refused deployment that cooled down is retried as Python's loop
+                            // retries it, on a healthy sibling at once. One that stayed healthy (a
+                            // lone deployment) would be retried after its `retry-after`, a minute,
+                            // so its refusal is answered now.
+                            RaisedBy::PreCallCheck(_) => {
+                                let cooled = self
+                                    .cool_down_refused(snapshot, request, &deployment, failure)
+                                    .await;
+                                if !cooled {
+                                    failure.num_retries = Some(0);
+                                }
+                            }
+                            RaisedBy::Host(_) | RaisedBy::Core
+                                if !failure.recorded && !failure.queue_rejected() =>
+                            {
+                                self.record_failure(
+                                    snapshot,
+                                    request,
+                                    &candidates,
+                                    &deployment,
+                                    failure,
+                                )
+                                .await;
+                            }
+                            RaisedBy::Host(_) | RaisedBy::Core => {}
                         }
                         Some(deployment.id.clone())
                     }
@@ -1470,6 +1508,47 @@ impl<H: RouterHost> Call<'_, H> {
         };
         if let Err(error) = counted {
             warn!(deployment_id = %deployment.id, error = %error, "usage was not recorded");
+        }
+    }
+
+    /// `async_routing_strategy_pre_call_checks`' cooldown for a deployment a pre-call check
+    /// refused: `set_cooldown_deployments` alone, as the Python host reports its own refusal.
+    /// Returns whether the deployment was cooled down.
+    async fn cool_down_refused(
+        &self,
+        snapshot: &RouterStateSnapshot,
+        request: &RouterRequest,
+        deployment: &crate::registry::Deployment,
+        failure: &AttemptError,
+    ) -> bool {
+        let report = FailureReport {
+            uncounted: true,
+            batch_api: request.batch_api,
+            ..FailureReport::default()
+        };
+        let cooled = self
+            .core
+            .reported_failure(
+                snapshot,
+                self.host.cache(),
+                &deployment.id,
+                failure,
+                &report,
+            )
+            .await;
+        match cooled {
+            Ok(Some(cooldown)) => {
+                self.host.observe(&RouterEvent::CooldownSet {
+                    deployment_id: deployment.id.clone(),
+                    cooldown,
+                });
+                true
+            }
+            Ok(None) => false,
+            Err(error) => {
+                warn!(deployment_id = %deployment.id, error = %error, "cooldown was not recorded");
+                false
+            }
         }
     }
 

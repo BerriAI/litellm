@@ -148,9 +148,9 @@ class HumanloopLogger(CustomLogger):
         self,
         model: str,
         messages: list[AllMessageValues],
-        non_default_params: dict,
+        non_default_params: dict[str, object],
         prompt_id: str | None,
-        prompt_variables: dict | None,
+        prompt_variables: dict[str, object] | None,
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_spec: PromptSpec | None = None,
         prompt_label: str | None = None,
@@ -160,7 +160,7 @@ class HumanloopLogger(CustomLogger):
     ) -> tuple[
         str,
         list[AllMessageValues],
-        dict,
+        dict[str, object],
     ]:
         humanloop_api_key = dynamic_callback_params.get("humanloop_api_key") or get_secret_str("HUMANLOOP_API_KEY")
 

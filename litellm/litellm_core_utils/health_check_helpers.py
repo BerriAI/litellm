@@ -160,7 +160,7 @@ class HealthCheckHelpers:
     async def ahealth_check_wildcard_models(
         model: str,
         custom_llm_provider: str,
-        model_params: dict,
+        model_params: dict[str, object],
         litellm_logging_obj: "Logging",
     ) -> dict[str, object]:
         from litellm import acompletion
@@ -180,8 +180,8 @@ class HealthCheckHelpers:
 
     @staticmethod
     def update_model_params_with_health_check_tracking_information(
-        model_params: dict,
-    ) -> dict:
+        model_params: dict[str, object],
+    ) -> dict[str, object]:
         """
         Updates the health check model params with tracking information.
 
@@ -224,7 +224,7 @@ class HealthCheckHelpers:
     @staticmethod
     async def _batch_health_check(
         custom_llm_provider: str,
-        model_params: dict,
+        model_params: dict[str, object],
         filtered_model_params: dict,
     ) -> object:
         """

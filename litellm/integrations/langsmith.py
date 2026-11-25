@@ -144,7 +144,7 @@ class LangsmithLogger(CustomBatchLogger):
             "dotted_order": metadata.get("dotted_order", None),
         }
 
-    def _redact_metadata(self, metadata: Mapping[str, object]) -> dict:
+    def _redact_metadata(self, metadata: Mapping[str, object]) -> dict[str, object]:
         # helper is shallow; also scrub nested requester_metadata since
         # LangSmith forwards the whole dict into the run
         redacted: Final = redact_user_api_key_info(metadata=dict(metadata))

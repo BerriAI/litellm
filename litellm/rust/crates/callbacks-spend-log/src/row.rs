@@ -737,8 +737,9 @@ fn positive(value: &Value) -> bool {
     }
 }
 
-/// The row's `session_id`: the stamped session when missing sessions are omitted, the batch id
-/// for batch calls, the caller's session under request correlation, else the trace id.
+/// The row's `session_id`: the stamped session, else the parent session a proxy sub-call
+/// inherited, when missing sessions are omitted, the batch id for batch calls, the caller's
+/// session under request correlation, else the trace id.
 fn session_id(
     builder: &SpendLogRowBuilder,
     input: &RowInput,
@@ -746,7 +747,11 @@ fn session_id(
 ) -> Option<String> {
     let omit = input.auth.session_id_omitted || builder.config.omit_missing_session_id;
     if omit {
-        return input.auth.session_id.clone();
+        return input
+            .auth
+            .session_id
+            .clone()
+            .or_else(|| stamps::inherited_parent_session(&input.litellm_params));
     }
     if let (Some(kind), Some(id)) = (input.call_type.as_deref(), request_id)
         && BATCH_TRACE_CALL_TYPES.contains(&kind)

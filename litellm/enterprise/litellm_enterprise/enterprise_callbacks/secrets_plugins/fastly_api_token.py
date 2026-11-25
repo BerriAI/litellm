@@ -15,7 +15,7 @@ class FastlyApiKeyDetector(RegexBasedDetector):
         return "Fastly API Key"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Fastly API key
             re.compile(

@@ -11,6 +11,7 @@ When a deployment sets both itpm/otpm and tpm/rpm, both are enforced. A warning
 is logged the first time such a deployment is seen.
 """
 
+import asyncio
 import contextlib
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
@@ -29,12 +30,15 @@ from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     async_io_token_pre_call_check,
     async_io_token_reconcile_success,
     async_io_token_refund_failure,
+    async_socket_turn_misses_itpm_room,
     deployment_has_io_token_limits,
     get_io_token_rate_limit_request_kwargs,
     io_token_pre_call_check,
     io_token_reconcile_success,
     io_token_refund_failure,
 )
+from litellm.types.llms.openai import AllMessageValues
+from litellm.types.responses.streaming_websocket import ResponsesClientWebSocket
 from litellm.types.router import RouterErrors, parse_daily_reset_time
 from litellm.types.utils import StandardLoggingPayload
 from litellm.utils import get_utc_datetime
@@ -144,6 +148,35 @@ class ModelRateLimitingCheck(CustomLogger):
         # model_ids already warned about itpm/otpm + tpm/rpm on the same deployment,
         # so the warning is logged once per deployment rather than per request.
         self._io_token_conflict_warned_ids: set[str] = set()
+
+    def filters_deployments_for(self, request_kwargs: Mapping[str, object]) -> bool:
+        return (
+            isinstance(request_kwargs.get("websocket"), ResponsesClientWebSocket)
+            and isinstance(request_kwargs.get("first_message"), str)
+            and not request_kwargs.get("previous_response_id")
+        )
+
+    async def async_filter_deployments(
+        self,
+        model: str,
+        healthy_deployments: list[dict[str, object]],  # mutable-ok: CustomLogger deployment-list contract
+        messages: list[AllMessageValues] | None,  # mutable-ok: CustomLogger deployment-list contract
+        request_kwargs: dict[str, object] | None = None,  # mutable-ok: CustomLogger deployment-list contract
+        parent_otel_span: Span | None = None,
+    ) -> list[dict[str, object]]:  # mutable-ok: CustomLogger deployment-list contract
+        if not request_kwargs or not self.filters_deployments_for(request_kwargs):
+            return healthy_deployments
+        now: Final = self.clock()
+        misses: Final = await asyncio.gather(
+            *(
+                async_socket_turn_misses_itpm_room(self.usage, deployment, now, request_kwargs)
+                for deployment in healthy_deployments
+            )
+        )
+        with_room: Final = [
+            deployment for deployment, missed in zip(healthy_deployments, misses, strict=True) if not missed
+        ]
+        return with_room or healthy_deployments
 
     def _increment(self, counter: UsageCounter, value: int, ttl: int) -> float | None:
         return self.usage.increment_sync(counter, value, ttl)
@@ -259,7 +292,7 @@ class ModelRateLimitingCheck(CustomLogger):
         )
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def pre_call_check(self, deployment: dict) -> dict | None:
+    def pre_call_check(self, deployment: dict) -> dict[str, object] | None:
         """
         Synchronous pre-call check for model rate limits.
 

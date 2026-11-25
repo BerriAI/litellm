@@ -383,7 +383,7 @@ class RunwayMLTextToSpeechConfig(BaseTextToSpeechConfig):
         voice: str | Mapping[str, object] | None,
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
-        headers: dict,
+        headers: dict[str, str],
     ) -> TextToSpeechRequestData:
         """
         Transform OpenAI TTS request to RunwayML TTS format

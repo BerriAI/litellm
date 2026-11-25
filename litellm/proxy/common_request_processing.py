@@ -376,6 +376,7 @@ from litellm.proxy.litellm_pre_call_utils import (
 from litellm.proxy.policy_engine.response_retrieval import attach_post_call_pipelines_to_retrieval
 from litellm.types.litellm_params import STREAM_USAGE_INJECTED_FIELD
 from litellm.types.utils import (
+    CallTypes,
     Choices,
     ImageResponse,
     LLMResponseTypes,
@@ -2300,6 +2301,19 @@ def _is_cache_hit(litellm_logging_obj: LiteLLMLoggingObj) -> bool:
     return caching_details is not None and caching_details.get("cache_hit") is True
 
 
+_ANTHROPIC_MESSAGES_CALL_TYPES: Final = frozenset({CallTypes.anthropic_messages, CallTypes.aanthropic_messages})
+
+
+def _anthropic_messages_cache_key_header(response_cache_key: object, logging_obj: LiteLLMLoggingObj) -> object:
+    if (
+        response_cache_key
+        or logging_obj.call_type not in _ANTHROPIC_MESSAGES_CALL_TYPES
+        or not _is_cache_hit(logging_obj)
+    ):
+        return response_cache_key
+    return logging_obj.get_preset_cache_key() or response_cache_key
+
+
 def _get_cost_breakdown_from_logging_obj(
     litellm_logging_obj: LiteLLMLoggingObj | None,
     response_cost: float | str | None = None,
@@ -3099,7 +3113,7 @@ class ProxyBaseLLMRequestProcessing:
     async def build_litellm_proxy_success_headers_from_llm_response(
         *,
         response: object,
-        request_data: dict,
+        request_data: dict[str, object],
         request: Request,
         user_api_key_dict: UserAPIKeyAuth,
         logging_obj: LiteLLMLoggingObj,
@@ -3492,7 +3506,7 @@ class ProxyBaseLLMRequestProcessing:
     async def _pre_call_with_fallbacks(
         self,
         request: Request,
-        general_settings: dict,
+        general_settings: dict[str, object],
         proxy_logging_obj: ProxyLogging,
         user_api_key_dict: UserAPIKeyAuth,
         version: str | None,
@@ -4449,7 +4463,7 @@ class ProxyBaseLLMRequestProcessing:
                 user_api_key_dict=user_api_key_dict,
                 call_id=logging_obj.litellm_call_id,
                 model_id=model_id,
-                cache_key=cache_key,
+                cache_key=_anthropic_messages_cache_key_header(cache_key, logging_obj),
                 api_base=api_base,
                 version=version,
                 response_cost=logging_obj.finalized_cost.amount
@@ -5231,7 +5245,7 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     async def _run_deferred_stream_guardrails(
-        captured_data: dict,
+        captured_data: dict[str, object],
         captured_user_api_key_dict: "UserAPIKeyAuth",
         captured_logging_obj: LiteLLMLoggingObj,
         assembled_response: Any,
@@ -5569,7 +5583,7 @@ class ProxyBaseLLMRequestProcessing:
     @staticmethod
     async def finalize_streaming_generator_cleanup(
         request: Request | None,
-        request_data: dict,
+        request_data: dict[str, object],
         response: object,
         stream_completed: bool = False,
         client_disconnected: bool = False,
@@ -5833,7 +5847,7 @@ class ProxyBaseLLMRequestProcessing:
     def async_sse_data_generator(
         response: object,
         user_api_key_dict: UserAPIKeyAuth,
-        request_data: dict,
+        request_data: dict[str, object],
         proxy_logging_obj: ProxyLogging,
         request: Request | None = None,
         restamp_model: str | None = None,

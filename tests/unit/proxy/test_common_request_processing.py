@@ -78,6 +78,7 @@ from litellm.proxy.common_request_processing import (
     _override_openai_response_model,
     _parse_event_data_for_error,
     _sse_error_frames,
+    _anthropic_messages_cache_key_header,
     _UpstreamClosingStreamingResponse,
     attach_guardrail_information,
     await_llm_call_cancelling_on_disconnect,
@@ -16204,6 +16205,56 @@ class TestResponseCostFromLoggingObjForCacheHits:
         )
 
         assert cost == ""
+
+
+_CONFIRMED_HIT: Final = CachingDetails(cache_hit=True, cache_duration_ms=1.0)
+
+
+@pytest.mark.parametrize(
+    ("response_cache_key", "call_type", "caching_details", "preset_cache_key", "expected"),
+    [
+        ("from-response", "anthropic_messages", _CONFIRMED_HIT, "looked-up", "from-response"),
+        ("", "anthropic_messages", _CONFIRMED_HIT, "looked-up", "looked-up"),
+        ("", "aanthropic_messages", _CONFIRMED_HIT, "looked-up", "looked-up"),
+        ("", "anthropic_messages", None, "looked-up", ""),
+        ("", "anthropic_messages", CachingDetails(cache_hit=False, cache_duration_ms=1.0), "looked-up", ""),
+        ("", "anthropic_messages", _CONFIRMED_HIT, None, ""),
+        ("", "anthropic_messages", _CONFIRMED_HIT, 42, ""),
+        ("", "acompletion", _CONFIRMED_HIT, "looked-up", ""),
+        ("", "aresponses", _CONFIRMED_HIT, "looked-up", ""),
+    ],
+    ids=[
+        "response_key_wins",
+        "messages_hit",
+        "async_messages_hit",
+        "no_cache_lookup",
+        "cache_miss",
+        "no_recorded_key",
+        "non_string_recorded_key",
+        "chat_completions_unchanged",
+        "responses_unchanged",
+    ],
+)
+def test_messages_cache_key_header_falls_back_to_the_key_a_confirmed_hit_looked_up(
+    response_cache_key: str,
+    call_type: str,
+    caching_details: CachingDetails | None,
+    preset_cache_key: object,
+    expected: str,
+) -> None:
+    logging_obj: Final = Logging(
+        model="claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type=call_type,
+        start_time=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        litellm_call_id="cache-key-header",
+        function_id="cache-key-header",
+    )
+    logging_obj.caching_details = caching_details
+    logging_obj.litellm_params = {"preset_cache_key": preset_cache_key}
+
+    assert _anthropic_messages_cache_key_header(response_cache_key, logging_obj) == expected
 
 
 @pytest.mark.asyncio

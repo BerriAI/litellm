@@ -161,7 +161,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         )
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    def pre_call_check(self, deployment: dict) -> dict | None:
+    def pre_call_check(self, deployment: dict) -> dict[str, object] | None:
         """
         Pre-call check + update model rpm
 
@@ -237,7 +237,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             return deployment  # don't fail calls if eg. redis fails to connect
 
     @with_service_target(ROUTER_USAGE_TARGET)
-    async def async_pre_call_check(self, deployment: dict, parent_otel_span: Span | None) -> dict | None:
+    async def async_pre_call_check(self, deployment: dict, parent_otel_span: Span | None) -> dict[str, object] | None:
         """
         Pre-call check + update model rpm
         - Used inside semaphore
@@ -463,7 +463,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         input: str | list | None = None,
         routable_group: RoutableGroup = no_routable_group,
         refusal: type[RequestOverDeploymentTpmError] = RequestOverDeploymentTpmError,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Common checks for get available deployment, across sync + async implementations
         """

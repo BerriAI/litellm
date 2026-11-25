@@ -34,6 +34,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
+from litellm.litellm_core_utils.audio_utils.utils import as_raw_pcm16_base64, as_wav_base64
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
     as_str_mapping,
@@ -454,6 +455,26 @@ def _served_model_name(model_version: object) -> str | None:
     return model_version.split("@", 1)[0]
 
 
+def requests_audio_mime_type(request_body: Mapping[str, object]) -> bool:
+    match request_body.get("generationConfig") or request_body.get("generation_config"):
+        case {
+            "responseFormat": {
+                "audio": {"mimeType": str() | int() | float() as mime_type}
+                | {"mime_type": str() | int() | float() as mime_type}
+            }
+        }:
+            return bool(mime_type)
+        case {
+            "response_format": {
+                "audio": {"mimeType": str() | int() | float() as mime_type}
+                | {"mime_type": str() | int() | float() as mime_type}
+            }
+        }:
+            return bool(mime_type)
+        case _:
+            return False
+
+
 _GEMINI_SPEECH_CONFIG_KEY_MAP: Final[Mapping[str, str]] = MappingProxyType(
     {
         "multi_speaker_voice_config": "multiSpeakerVoiceConfig",
@@ -690,25 +711,62 @@ def reject_unknown_gemini_tts_voice_keys(
     )
 
 
+def _chat_audio_data(
+    media_type: str, audio_base64: str, keeps_requested_audio_format: bool, wraps_raw_audio_as_wav: bool
+) -> str:
+    if wraps_raw_audio_as_wav:
+        return as_wav_base64(media_type, audio_base64)
+    return audio_base64 if keeps_requested_audio_format else as_raw_pcm16_base64(media_type, audio_base64)
+
+
 def _named_audio_format(audio_format: object) -> str:
     if isinstance(audio_format, str):
         return repr(audio_format[:_NAMED_AUDIO_FORMAT_CHARS])
     return repr(audio_format)[:_NAMED_AUDIO_FORMAT_CHARS]
 
 
-def unsupported_gemini_tts_audio_format(
-    model: str, audio: Mapping[str, object], drop_params: bool, llm_provider: str | None
-) -> UnsupportedParamsError | None:
+_GEMINI_TTS_RAW_AUDIO_FORMAT: Final = "pcm16"
+_GEMINI_TTS_WAV_AUDIO_FORMAT: Final = "wav"
+_GEMINI_TTS_BUFFERED_AUDIO_FORMATS: Final = (_GEMINI_TTS_RAW_AUDIO_FORMAT, _GEMINI_TTS_WAV_AUDIO_FORMAT)
+_WAV_CHAT_AUDIO_PARAM: Final = "wav_chat_audio"
+
+
+def _gemini_tts_audio_formats(audio: Mapping[str, object]) -> tuple[object, ...]:
     nested_config: Final = _gemini_speech_config_wrapper(audio) or {}
+    return tuple(item for item in (audio.get("format"), nested_config.get("format")) if item is not None)
+
+
+def requests_wav_chat_audio(request_params: Mapping[str, object]) -> bool:
+    audio: Final = as_str_mapping(request_params.get("audio"))
+    return (
+        audio is not None
+        and request_params.get("stream") is not True
+        and _GEMINI_TTS_WAV_AUDIO_FORMAT in _gemini_tts_audio_formats(audio)
+    )
+
+
+def returns_wav_chat_audio(optional_params: Mapping[str, object]) -> bool:
+    return optional_params.get(_WAV_CHAT_AUDIO_PARAM) is True
+
+
+def unsupported_gemini_tts_audio_format(
+    model: str,
+    audio: Mapping[str, object],
+    drop_params: bool,
+    llm_provider: str | None,
+    supported_formats: Sequence[str] = (_GEMINI_TTS_RAW_AUDIO_FORMAT,),
+) -> UnsupportedParamsError | None:
     audio_format: Final = next(
-        (item for item in (audio.get("format"), nested_config.get("format")) if item not in (None, "pcm16")), None
+        (item for item in _gemini_tts_audio_formats(audio) if item not in supported_formats), None
     )
     if audio_format is None or drops_unsupported_params(drop_params):
         return None
+    supported: Final = " or ".join(repr(item) for item in supported_formats)
     return UnsupportedParamsError(
         message=(
-            f"{model} does not take the audio format {_named_audio_format(audio_format)}. Set format "
-            "to 'pcm16' or leave it out, or set drop_params to drop it."
+            f"{model} does not take the audio format {_named_audio_format(audio_format)}"
+            f"{' when streaming' if audio_format == _GEMINI_TTS_WAV_AUDIO_FORMAT else ''}. Set format "
+            f"to {supported} or leave it out, or set drop_params to drop it."
         ),
         model=model,
         llm_provider=llm_provider,
@@ -1462,7 +1520,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return transformed_config
 
-    def _extract_google_maps_retrieval_config(self, google_maps_config: dict) -> tuple[dict, dict | None]:
+    def _extract_google_maps_retrieval_config(
+        self, google_maps_config: Mapping[str, object]
+    ) -> tuple[dict[str, object], dict[str, object] | None]:
         """
         Extract location configuration from googleMaps tool for Vertex AI toolConfig.
 
@@ -1478,7 +1538,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 - cleaned_google_maps_config: googleMaps config without location fields
                 - retrieval_config: Location config for toolConfig.retrievalConfig or None
         """
-        retrieval_config = None
+        retrieval_config: dict[str, object] | None = None
         latitude: Final = google_maps_config.get("latitude")
         longitude: Final = google_maps_config.get("longitude")
         language_code: Final = google_maps_config.get("languageCode")
@@ -1500,7 +1560,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return cleaned_config, retrieval_config
 
-    def get_tool_value(self, tool: dict, tool_name: str) -> dict | None:
+    def get_tool_value(self, tool: dict, tool_name: str) -> dict[str, object] | None:
         """
         Helper function to get tool value handling both camelCase and underscore_case variants
 
@@ -1531,7 +1591,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         urlContext: dict[str, object] | None,
         optional_params: dict[str, object],
         keep_search_tools_with_functions: bool = False,
-    ) -> tuple:
+    ) -> tuple[dict[str, object] | None, dict[str, object] | None, dict[str, object] | None, dict[str, object] | None]:
         """
         Resolve the Gemini 2.x constraint: multiple Tool objects in a request must
         ALL be search tools. When function declarations are mixed with search
@@ -2162,7 +2222,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             )
 
     def _map_audio_params(
-        self, value: Mapping[str, object], drop_unknown_fields: bool = False
+        self,
+        value: Mapping[str, object],
+        drop_unknown_fields: bool = False,
+        supported_formats: Sequence[str] = (_GEMINI_TTS_RAW_AUDIO_FORMAT,),
     ) -> dict[str, object]:  # mutable-ok: the public forwarding interface returns a concrete request dictionary
         """
         Expected input:
@@ -2183,7 +2246,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         }
         """
         audio_format_error: Final = unsupported_gemini_tts_audio_format(
-            "Gemini TTS", value, drop_unknown_fields, self.custom_llm_provider
+            "Gemini TTS", value, drop_unknown_fields, self.custom_llm_provider, supported_formats
         )
         if audio_format_error is not None:
             raise audio_format_error
@@ -2222,16 +2285,19 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         return speech_config_without_language
 
     def _map_chat_audio_params(
-        self, model: str, value: Mapping[str, object], drop_params: bool
+        self, model: str, value: Mapping[str, object], drop_params: bool, streams: bool
     ) -> dict[str, object]:  # mutable-ok: the public forwarding interface returns a concrete request dictionary
+        supported_formats: Final = (_GEMINI_TTS_RAW_AUDIO_FORMAT,) if streams else _GEMINI_TTS_BUFFERED_AUDIO_FORMATS
         audio_format_error: Final = unsupported_gemini_tts_audio_format(
-            model, value, drop_params, self.custom_llm_provider
+            model, value, drop_params, self.custom_llm_provider, supported_formats
         )
         if audio_format_error is not None:
             raise audio_format_error
         if _gemini_speech_config_wrapper(value) is not None:
             reject_unknown_gemini_tts_voice_keys(model, value, drop_params, self.custom_llm_provider)
-        return self._map_audio_params(value, drop_unknown_fields=drops_unsupported_params(drop_params))
+        return self._map_audio_params(
+            value, drop_unknown_fields=drops_unsupported_params(drop_params), supported_formats=supported_formats
+        )
 
     def map_audio_params(
         self,
@@ -2425,7 +2491,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif param == "n":
                 optional_params["candidate_count"] = value
             elif param == "audio" and isinstance(value, dict):
-                optional_params["speechConfig"] = self._map_chat_audio_params(model, value, drop_params)
+                optional_params["speechConfig"] = self._map_chat_audio_params(
+                    model, value, drop_params, typed_request_params.get("stream") is True
+                )
+                if requests_wav_chat_audio(typed_request_params):
+                    optional_params[_WAV_CHAT_AUDIO_PARAM] = True  # rebind-ok: fills the caller's dict
             elif param == "stop":
                 if isinstance(value, str):
                     optional_params["stop_sequences"] = [value]
@@ -2808,7 +2878,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return invocations if invocations else None
 
-    def _extract_audio_response_from_parts(self, parts: list[HttpxPartType]) -> ChatCompletionAudioResponse | None:
+    def _extract_audio_response_from_parts(
+        self, parts: list[HttpxPartType], keeps_requested_audio_format: bool, wraps_raw_audio_as_wav: bool = False
+    ) -> ChatCompletionAudioResponse | None:
         """Extract audio response from parts if present"""
         for part in parts:
             if "text" in part:
@@ -2824,7 +2896,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                                 transcript = ""  # Gemini doesn't provide transcript
 
                                 return ChatCompletionAudioResponse(
-                                    data=audio_data,
+                                    data=_chat_audio_data(
+                                        media_type, audio_data, keeps_requested_audio_format, wraps_raw_audio_as_wav
+                                    ),
                                     expires_at=expires_at,
                                     transcript=transcript,
                                 )
@@ -2840,7 +2914,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     expires_at = int(time.time()) + (24 * 60 * 60)
                     transcript = ""  # Gemini doesn't provide transcript
 
-                    return ChatCompletionAudioResponse(data=data, expires_at=expires_at, transcript=transcript)
+                    return ChatCompletionAudioResponse(
+                        data=_chat_audio_data(mime_type, data, keeps_requested_audio_format, wraps_raw_audio_as_wav),
+                        expires_at=expires_at,
+                        transcript=transcript,
+                    )
 
         return None
 
@@ -3528,6 +3606,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         standard_optional_params: dict[str, object],
         cumulative_tool_call_index: int = 0,
         thought_signature_in_tool_call_id: bool = True,
+        keeps_requested_audio_format: bool = False,
+        wraps_raw_audio_as_wav: bool = False,
     ) -> tuple[list[dict[str, object]], list[dict[str, object]], list, list, int]:
         """
         Helper method to process candidates and extract metadata
@@ -3584,7 +3664,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 ) = VertexGeminiConfig().get_assistant_content_message(parts=candidate["content"]["parts"])
 
                 audio_response = VertexGeminiConfig()._extract_audio_response_from_parts(
-                    parts=candidate["content"]["parts"]
+                    parts=candidate["content"]["parts"],
+                    keeps_requested_audio_format=keeps_requested_audio_format,
+                    wraps_raw_audio_as_wav=wraps_raw_audio_as_wav,
                 )
                 image_response = list(
                     _final_images(candidate["content"]["parts"])
@@ -3723,6 +3805,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         standard_optional_params: dict[str, object],  # mutable-ok: mirrors override contract
         cumulative_tool_call_index: int = 0,
         thought_signature_in_tool_call_id: bool = True,
+        keeps_requested_audio_format: bool = False,
     ) -> tuple[  # mutable-ok: mirrors override contract
         list[dict[str, object]],
         list[dict[str, object]],
@@ -3736,6 +3819,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             standard_optional_params,
             cumulative_tool_call_index,
             thought_signature_in_tool_call_id,
+            keeps_requested_audio_format,
         )
 
     def transform_response(
@@ -3752,20 +3836,56 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
-        ## LOGGING
+        return self._log_and_transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            logged_input=messages,
+            request_data=request_data,
+            keeps_requested_audio_format=requests_audio_mime_type(request_data),
+            wraps_raw_audio_as_wav=returns_wav_chat_audio(optional_params),
+        )
+
+    def transform_pass_through_response(
+        self, model: str, raw_response: httpx.Response, logging_obj: LoggingClass
+    ) -> ModelResponse:
+        return self._log_and_transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=logging_obj,
+            logged_input=[{"role": "user", "content": "no-message-pass-through-endpoint"}],
+            request_data={},
+            keeps_requested_audio_format=True,
+        )
+
+    def _log_and_transform_response(
+        self,
+        *,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ModelResponse,
+        logging_obj: LoggingClass,
+        logged_input: Sequence[AllMessageValues],
+        request_data: Mapping[str, object],
+        keeps_requested_audio_format: bool,
+        wraps_raw_audio_as_wav: bool = False,
+    ) -> ModelResponse:
         logging_obj.post_call(
-            input=messages,
+            input=logged_input,
             api_key="",
             original_response=raw_response.text,
             additional_args={"complete_input_dict": request_data},
         )
-
         return self._transform_google_generate_content_to_openai_model_response(
             completion_response=parse_body(raw_response),
             model_response=model_response,
             model=model,
             logging_obj=logging_obj,
             raw_response=raw_response,
+            keeps_requested_audio_format=keeps_requested_audio_format,
+            wraps_raw_audio_as_wav=wraps_raw_audio_as_wav,
         )
 
     def _transform_google_generate_content_to_openai_model_response(
@@ -3775,6 +3895,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         logging_obj: LoggingClass,
         raw_response: httpx.Response,
+        keeps_requested_audio_format: bool = False,
+        wraps_raw_audio_as_wav: bool = False,
     ) -> ModelResponse:
         """
         Transforms a Google GenAI generate content response to an OpenAI model response.
@@ -3828,6 +3950,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     thought_signature_in_tool_call_id=embeds_thought_signature_in_tool_call_id(
                         logging_obj.litellm_params  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # Logging.litellm_params is untyped
                     ),
+                    keeps_requested_audio_format=keeps_requested_audio_format,
+                    wraps_raw_audio_as_wav=wraps_raw_audio_as_wav,
                 )
 
             usage: Final = VertexGeminiConfig._calculate_usage(
@@ -3891,9 +4015,17 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         logging_obj: LoggingClass,
         raw_response: httpx.Response,
+        keeps_requested_audio_format: bool = False,
+        wraps_raw_audio_as_wav: bool = False,
     ) -> ModelResponse:
         return self._transform_google_generate_content_to_openai_model_response(
-            completion_response, model_response, model, logging_obj, raw_response
+            completion_response,
+            model_response,
+            model,
+            logging_obj,
+            raw_response,
+            keeps_requested_audio_format,
+            wraps_raw_audio_as_wav,
         )
 
     def _transform_messages(
@@ -4179,7 +4311,7 @@ class VertexLLM(VertexBase):
         logging_obj: LoggingClass,
         stream: bool | None,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         logger_fn: object = None,
         api_base: str | None = None,
         client: AsyncHTTPHandler | None = None,
@@ -4292,7 +4424,7 @@ class VertexLLM(VertexBase):
         logging_obj: LoggingClass,
         stream: bool | None,
         optional_params: dict,
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
         logger_fn: object = None,
         api_base: str | None = None,
         client: AsyncHTTPHandler | None = None,
@@ -4400,6 +4532,9 @@ class VertexLLM(VertexBase):
             logging_obj=logging_obj,
             request_body=sent_body,
             messages=messages,
+            wraps_raw_audio_as_wav=returns_wav_chat_audio(
+                cast(Mapping[str, object], optional_params)  # cast-ok: completion keys optional params by name
+            ),
         )
 
     def completion(
@@ -4420,7 +4555,7 @@ class VertexLLM(VertexBase):
         vertex_location: str | None,
         vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
         gemini_api_key: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         logger_fn: object = None,
         extra_headers: dict | None = None,
         client: AsyncHTTPHandler | HTTPHandler | None = None,
@@ -4633,6 +4768,9 @@ class VertexLLM(VertexBase):
             logging_obj=logging_obj,
             request_body=sent_body,
             messages=messages,
+            wraps_raw_audio_as_wav=returns_wav_chat_audio(
+                cast(Mapping[str, object], optional_params)  # cast-ok: completion keys optional params by name
+            ),
         )
 
 
@@ -4644,6 +4782,7 @@ def _transform_long_decode_hops(
     logging_obj: LoggingClass,
     request_body: RequestBody,
     messages: Sequence[AllMessageValues],
+    wraps_raw_audio_as_wav: bool = False,
 ) -> ModelResponse:
     body: Final = merge_hops(hops)
     logging_obj.post_call(
@@ -4658,6 +4797,8 @@ def _transform_long_decode_hops(
         model=model,
         logging_obj=logging_obj,
         raw_response=first_response,
+        keeps_requested_audio_format=requests_audio_mime_type(request_body),
+        wraps_raw_audio_as_wav=wraps_raw_audio_as_wav,
     )
     merged_usage: Final = getattr(merged, "usage", None)
     marked: Final = (
@@ -4701,6 +4842,7 @@ class ModelResponseIterator:
         response_headers: dict[str, str] | None = None,
         response: httpx.Response | None = None,
         resume: StreamResume | None = None,
+        returns_provider_audio: bool = False,
     ):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             check_is_function_call,
@@ -4721,6 +4863,9 @@ class ModelResponseIterator:
         self.has_seen_tool_calls: bool = False
         self._resume = resume
         self._output_cap = continuation_cap_of(resume.request_body) if resume is not None else None
+        self._keeps_requested_audio_format: Final = returns_provider_audio or (
+            resume is not None and requests_audio_mime_type(resume.request_body)
+        )
         self._pending_hop_token: str | None = None
         self._unanswered_hop_token: str | None = None
         self._token_after_unsent_images: str | None = None
@@ -4788,6 +4933,7 @@ class ModelResponseIterator:
             self.logging_obj.optional_params,
             cumulative_tool_call_index=self.cumulative_tool_call_index,
             thought_signature_in_tool_call_id=self.thought_signature_in_tool_call_id,
+            keeps_requested_audio_format=self._keeps_requested_audio_format,
         )
 
         # Track whether tool_calls have been seen across streaming chunks.

@@ -83,6 +83,7 @@ from litellm.constants import (
     NON_INFERENCE_CALL_TYPES,
     OPENAI_EMBEDDING_PARAMS,
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
+    PROVIDERS_WITH_RUNTIME_MODEL_INFO_LOOKUPS,
     TOGETHER_AI_API_KEY_ENV_VARS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
@@ -125,6 +126,7 @@ from litellm.litellm_core_utils.get_model_cost_map import (
 )
 from litellm.litellm_core_utils.model_cost_table import (
     AliasedCostEntry,
+    FailedLookup,
     Landing,
     VersionCached,
     changed_in_place,
@@ -2307,7 +2309,7 @@ def post_call_processing(
     original_response: object,
     model,
     optional_params: dict | None,
-    original_function,
+    original_function: Callable[..., object],
     rules_obj: Rules,
 ):
     try:
@@ -2427,6 +2429,8 @@ def clamp_max_tokens(
                 messages = args[1]
             elif kwargs.get("messages", None):
                 messages = kwargs["messages"]
+            api_base: Final = kwargs.get("api_base")
+            provider: Final = kwargs.get("custom_llm_provider")
             kwargs["max_tokens"] = _get_modified_max_tokens()(
                 model=model,
                 base_model=base_model,
@@ -2434,6 +2438,12 @@ def clamp_max_tokens(
                 user_max_tokens=kwargs.get("max_tokens"),
                 buffer_num=None,
                 buffer_perc=None,
+                api_base=api_base if isinstance(api_base, str) and api_base else None,
+                api_key=model_info_lookup_api_key(
+                    str(model),
+                    provider if isinstance(provider, str) else None,
+                    sent_bearer_credential(call_headers(kwargs), kwargs.get("api_key")),
+                ),
             )
         except Exception as e:
             print_verbose(f"Error while checking max token limit: {e}")
@@ -5765,7 +5775,7 @@ class PreProcessNonDefaultParams:
         model: str,
         remove_sensitive_keys: bool = False,
         add_provider_specific_params: bool = False,
-    ) -> dict:
+    ) -> dict[str, object]:
         non_default_params: Final = PreProcessNonDefaultParams.base_pre_process_non_default_params(
             passed_params=passed_params,
             special_params=special_params,
@@ -5988,13 +5998,15 @@ def _map_params_with_provider_config(
             base_model=base_model,
             allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
         )
-    if isinstance(provider_config, (litellm.ChatGPTConfig, litellm.GithubCopilotConfig)):
+    if isinstance(provider_config, litellm.OpenAIConfig):
         return provider_config.map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
             drop_params=drop_params,
             reasoning_drop_logger=reasoning_drop_logger,
+            declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+            allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
         )
     from litellm.llms.openai_like.dynamic_config import MapsAllowedOpenAIParams
 
@@ -6198,7 +6210,8 @@ def get_optional_params(
         else get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider, base_model=base_model)
     )
     if supported_params is None:
-        supported_params = get_supported_openai_params(model=model, custom_llm_provider="openai")
+        fallback_config: Final = litellm.OpenAIConfig().config_for_openai_compatible_provider(model=model)
+        supported_params = fallback_config.get_supported_openai_params(model=model)
 
     supported_params = supported_params or []
     supported_params.extend(allowed_openai_param_names(allowed_openai_params))
@@ -6595,7 +6608,17 @@ def get_optional_params(
         )
     elif custom_llm_provider == "openai":
         optional_params = (
-            litellm.OpenAIGPT5Config().map_openai_params(
+            litellm.openaiOSeriesConfig.map_openai_params(  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=bool(drop_params),
+                declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+                allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
+                reasoning_drop_logger=_litellm_reasoning_drop_logger,
+            )
+            if litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
+            else litellm.OpenAIGPT5Config().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
                 model=model,
@@ -6603,7 +6626,7 @@ def get_optional_params(
                 declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
                 reasoning_drop_logger=_litellm_reasoning_drop_logger,
             )
-            if litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model)
+            if litellm.OpenAIGPT5Config.is_openai_gpt_5_model(model=model)
             else litellm.OpenAIConfig().map_openai_params(
                 non_default_params=non_default_params,
                 optional_params=optional_params,
@@ -6626,6 +6649,9 @@ def get_optional_params(
                 optional_params=optional_params,
                 model=_azure_detection_model,
                 drop_params=bool(drop_params),
+                declared_reasoning_efforts=_declared_reasoning_efforts(model_info),
+                allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
+                reasoning_drop_logger=_litellm_reasoning_drop_logger,
             )
         elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=_azure_detection_model):
             optional_params = litellm.AzureOpenAIGPT5Config().map_openai_params(
@@ -7435,7 +7461,7 @@ def _get_model_info_from_generalization(
     model: str,
     potential_model_names: PotentialModelNamesAndCustomLLMProvider,
     custom_llm_provider: str | None,
-) -> tuple[str, dict] | None:
+) -> tuple[str, dict[str, object]] | None:
     """Resolve an unmapped model via the declarative capability generalization rules.
 
     Tries the same name candidates as the exact lookups, in the same order, and
@@ -7591,13 +7617,15 @@ def cached_get_model_info_helper(
     model: str,
     custom_llm_provider: str | None,
     api_base: str | None = None,
+    api_key: str | None = None,
     *,
     preserve_unset_costs: bool = False,
-) -> ModelInfoBase:
-    return get_model_info_helper(
+) -> ModelInfoBase | FailedLookup[ModelInfoBase]:
+    return _look_up_model_info(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
+        api_key=api_key,
         preserve_unset_costs=preserve_unset_costs,
     )
 
@@ -7605,10 +7633,20 @@ def cached_get_model_info_helper(
 _cached_get_model_info_helper = cached_get_model_info_helper
 
 
+def cached_model_info_for_call(
+    model: str, custom_llm_provider: str | None, api_base: str | None, api_key: str | None
+) -> ModelInfoBase:
+    if not looks_up_model_info_at_runtime(model, custom_llm_provider):
+        return cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+    return cached_get_model_info_helper(
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
+    )
+
+
 @VersionCached
 def cached_cost_map_key(model: str, custom_llm_provider: str | None) -> str | None:
     try:
-        return cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)["key"]
+        return get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider, catalog_only=True)["key"]
     except Exception:
         return None
 
@@ -7667,6 +7705,26 @@ def get_model_info_helper(
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
     """
+    looked_up: Final = _look_up_model_info(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        api_key=api_key,
+        catalog_only=catalog_only,
+        preserve_unset_costs=preserve_unset_costs,
+    )
+    return looked_up.value if isinstance(looked_up, FailedLookup) else looked_up
+
+
+def _look_up_model_info(
+    model: str,
+    custom_llm_provider: str | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
+    *,
+    catalog_only: bool = False,
+    preserve_unset_costs: bool = False,
+) -> ModelInfoBase | FailedLookup[ModelInfoBase]:
     from litellm.litellm_core_utils.get_llm_provider_logic import declared_authenticating_provider
 
     try:
@@ -7696,7 +7754,9 @@ def get_model_info_helper(
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
         if provider_config is not None:
-            provider_get_model_info: Final = getattr(provider_config, "get_model_info", None)
+            provider_get_model_info: Final = getattr(provider_config, "look_up_model_info", None) or getattr(
+                provider_config, "get_model_info", None
+            )
             if callable(provider_get_model_info):
                 try:
                     provider_model_info: Final = provider_get_model_info(
@@ -8161,15 +8221,16 @@ def _build_model_info(
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
     api_key: str | None = None,
-) -> ModelInfo:
+) -> ModelInfo | FailedLookup[ModelInfo]:
     supported_openai_params = litellm.get_supported_openai_params(model=model, custom_llm_provider=custom_llm_provider)
 
-    _model_info: Final = get_model_info_helper(
+    looked_up: Final = _look_up_model_info(
         model=model,
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
     )
+    _model_info: Final = looked_up.value if isinstance(looked_up, FailedLookup) else looked_up
 
     provider_info: Final = get_provider_info(model=model, custom_llm_provider=custom_llm_provider)
     if provider_info:
@@ -8180,7 +8241,41 @@ def _build_model_info(
     # if verbose_logger.isEnabledFor(logging.DEBUG):
     # verbose_logger.debug(f"model_info: {_model_info}")
 
-    return ModelInfo(**_model_info, supported_openai_params=supported_openai_params)
+    model_info: Final = ModelInfo(**_model_info, supported_openai_params=supported_openai_params)
+    return FailedLookup(model_info) if isinstance(looked_up, FailedLookup) else model_info
+
+
+def looks_up_model_info_at_runtime(model: str | None, custom_llm_provider: str | None) -> bool:
+    provider: Final = custom_llm_provider or (model or "").partition("/")[0]
+    return provider in PROVIDERS_WITH_RUNTIME_MODEL_INFO_LOOKUPS
+
+
+def model_info_lookup_api_key(model: str | None, custom_llm_provider: str | None, api_key: str | None) -> str | None:
+    return api_key if looks_up_model_info_at_runtime(model, custom_llm_provider) else None
+
+
+_REQUEST_HEADERS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _header_mapping(headers: object) -> Mapping[str, object]:
+    return _REQUEST_HEADERS.validate_python(headers) if isinstance(headers, Mapping) else {}
+
+
+def call_headers(request_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    return {**_header_mapping(request_kwargs.get("headers")), **_header_mapping(request_kwargs.get("extra_headers"))}
+
+
+def sent_bearer_credential(headers: object, api_key: object) -> str | None:
+    authorizations: Final = tuple(
+        value for name, value in _header_mapping(headers).items() if name.lower() == "authorization"
+    )
+    if not authorizations:
+        return api_key if isinstance(api_key, str) and api_key else None
+    authorization: Final = authorizations[-1]
+    if not isinstance(authorization, str):
+        return None
+    scheme, _, token = authorization.partition(" ")
+    return token.strip() or None if scheme.lower() == "bearer" else None
 
 
 @VersionCached
@@ -8188,8 +8283,9 @@ def _cached_get_model_info(
     model: str,
     custom_llm_provider: str | None = None,
     api_base: str | None = None,
-) -> ModelInfo:
-    return _build_model_info(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base)
+    api_key: str | None = None,
+) -> ModelInfo | FailedLookup[ModelInfo]:
+    return _build_model_info(model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key)
 
 
 def get_model_info(
@@ -8273,11 +8369,18 @@ def get_model_info(
             "supported_openai_params": ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"]
         }
     """
-    # api_key is a per-caller credential, not part of the model identity, so it is
-    # kept out of the cache key; explicit keys are resolved without the cache.
     if api_key is not None:
-        return _build_model_info(model, custom_llm_provider, api_base, api_key)
-    return _cached_get_model_info(model, custom_llm_provider, api_base)
+        built: Final = _build_model_info(model, custom_llm_provider, api_base, api_key)
+        return built.value if isinstance(built, FailedLookup) else built
+    return get_model_info_for_call(model, custom_llm_provider, api_base, None)
+
+
+def get_model_info_for_call(
+    model: str, custom_llm_provider: str | None, api_base: str | None, api_key: str | None
+) -> ModelInfo:
+    if not looks_up_model_info_at_runtime(model, custom_llm_provider):
+        return _cached_get_model_info(model, custom_llm_provider)
+    return _cached_get_model_info(model, custom_llm_provider, api_base, api_key if api_base else None)
 
 
 get_model_info.cache_clear = _cached_get_model_info.cache_clear
@@ -8330,7 +8433,7 @@ def _annotation_name(param: object) -> str:
     return require_attributes(attribute_or_none(param, "annotation"), _NamedAnnotation, "__name__").__name__
 
 
-def function_to_dict(input_function) -> dict:
+def function_to_dict(input_function: Callable[..., object]) -> dict:
     """Using type hints and numpy-styled docstring,
     produce a dictionary usable for OpenAI function calling
 
@@ -8507,6 +8610,15 @@ def create_proxy_transport_and_mounts():
         async_proxy_mounts[url] = httpx.AsyncHTTPTransport()
 
     return sync_proxy_mounts, async_proxy_mounts
+
+
+_ALTERNATE_KEY_ENV_VARS: Final = {
+    "COHERE_API_KEY": ("CO_API_KEY",),
+    "FEATHERLESS_AI_API_KEY": ("FEATHERLESS_API_KEY",),
+    "PERPLEXITYAI_API_KEY": ("PERPLEXITY_API_KEY",),
+    "REPLICATE_API_KEY": ("REPLICATE_API_TOKEN",),
+    "VOLCENGINE_API_KEY": ("ARK_API_KEY",),
+}
 
 
 def validate_environment(
@@ -8922,6 +9034,10 @@ def validate_environment(
         """Filter out keys that contain the exclude_pattern (case insensitive)."""
         return [key for key in keys if exclude_pattern not in key.lower()]
 
+    missing_keys = [  # rebind-ok: narrows the list like the filters below
+        key for key in missing_keys if not any(name in os.environ for name in _ALTERNATE_KEY_ENV_VARS.get(key, ()))
+    ]
+
     if api_key is not None:
         missing_keys = filter_missing_keys(missing_keys, "api_key")
 
@@ -8937,11 +9053,11 @@ def validate_environment(
     return {"keys_in_environment": keys_in_environment, "missing_keys": missing_keys}
 
 
-def acreate(*args, **kwargs):  ## Thin client to handle the acreate langchain call
+def acreate(*args: object, **kwargs: object):  ## Thin client to handle the acreate langchain call
     return litellm.acompletion(*args, **kwargs)
 
 
-def valid_model(model):
+def valid_model(model: str):
     try:
         # for a given model name, check if the user has the right permissions to access the model
         if model in litellm.open_ai_chat_completion_models or model in litellm.open_ai_text_completion_models:
@@ -9073,7 +9189,7 @@ _calculate_retry_after = calculate_retry_after
 # custom prompt helper function
 def register_prompt_template(
     model: str,
-    roles: dict = {},
+    roles: Mapping[str, object] = {},
     initial_prompt_value: str = "",
     final_prompt_value: str = "",
     tokenizer_config: dict = {},
@@ -9229,7 +9345,7 @@ def read_config_args(config_path) -> object:
 ########## experimental completion variants ############################
 
 
-def process_system_message(system_message: object, max_tokens, model):
+def process_system_message(system_message: object, max_tokens: float, model: str | None):
     system_message_event: Final = {"role": "system", "content": system_message}
     system_message_tokens = get_token_count([system_message_event], model)
 
@@ -9242,7 +9358,7 @@ def process_system_message(system_message: object, max_tokens, model):
     return system_message_event, max_tokens - system_message_tokens
 
 
-def process_messages(messages, max_tokens, model):
+def process_messages(messages, max_tokens: float, model: str | None):
     # Process messages from older to more recent
     messages = messages[::-1]
     final_messages = []
@@ -9269,7 +9385,7 @@ def process_messages(messages, max_tokens, model):
     return final_messages
 
 
-def attempt_message_addition(final_messages, message, available_tokens, max_tokens, model):
+def attempt_message_addition(final_messages, message, available_tokens: float, max_tokens: float, model: str | None):
     temp_messages: Final = [message] + final_messages
     temp_message_tokens: Final = get_token_count(messages=temp_messages, model=model)
     verbose_logger.debug("temp_message_tokens: %s, max_tokens: %s", temp_message_tokens, max_tokens)
@@ -9289,7 +9405,7 @@ def attempt_message_addition(final_messages, message, available_tokens, max_toke
     return final_messages
 
 
-def can_add_message(message, messages, max_tokens, model):
+def can_add_message(message, messages, max_tokens: float, model: str | None):
     if get_token_count(messages + [message], model) <= max_tokens:
         return True
     return False
@@ -9299,7 +9415,9 @@ def get_token_count(messages, model) -> int:
     return token_counter(model=model, messages=messages)
 
 
-def shorten_message_to_fit_limit(message, tokens_needed, model: str | None, raise_error_on_max_limit: bool = False):
+def shorten_message_to_fit_limit(
+    message, tokens_needed: float, model: str | None, raise_error_on_max_limit: bool = False
+):
     """
     Shorten a message to fit within a token limit by removing characters from the middle.
 
@@ -9360,7 +9478,7 @@ def trim_messages(
     model: str | None = None,
     trim_ratio: float = DEFAULT_TRIM_RATIO,
     return_response_tokens: bool = False,
-    max_tokens=None,
+    max_tokens: float | None = None,
 ):
     """
     Trim a list of messages to fit within a model's token limit.
@@ -9724,7 +9842,9 @@ def _debug_params_repr(params: Mapping[str, object]) -> str:
     return "{" + ", ".join(f"{key!r}: {_debug_arg_repr(value)}" for key, value in params.items()) + "}"
 
 
-def print_args_passed_to_litellm(original_function, args: Sequence[object], kwargs: Mapping[str, object]):
+def print_args_passed_to_litellm(
+    original_function: Callable[..., object], args: Sequence[object], kwargs: Mapping[str, object]
+):
     if not is_debugging_on():
         return
     try:
@@ -10053,7 +10173,7 @@ from litellm.types.llms.openai import (
 )
 
 
-def convert_to_dict(message: BaseModel | dict) -> dict:
+def convert_to_dict(message: BaseModel | dict) -> dict[str, object]:
     """
     Converts a message to a dictionary if it's a Pydantic model.
 
@@ -10117,7 +10237,7 @@ def validate_and_fix_openai_messages(
     return validate_chat_completion_user_messages(messages=new_messages, model=model, request_kwargs=request_kwargs)
 
 
-def validate_and_fix_openai_tools(tools: list | None) -> list[dict] | None:
+def validate_and_fix_openai_tools(tools: list | None) -> list[dict[str, object]] | None:
     """
     Ensure tools is List[dict] and not List[BaseModel]
     """
@@ -10223,7 +10343,7 @@ def validate_chat_completion_tool_choice(
     tool_choice: dict | str | None,
     model: str = "",
     drop_params: bool = False,
-) -> dict | str | None:
+) -> dict[str, object] | str | None:
     """
     Confirm the tool choice is passed in the OpenAI format.
 
@@ -10322,10 +10442,10 @@ class ProviderConfigManager:
     # Dictionary mapping for O(1) provider lookup
     # Stores tuples of (factory_function, needs_model_parameter)
     # This is initialized lazily on first access to avoid circular imports
-    _PROVIDER_CONFIG_MAP: dict[LlmProviders, tuple[Callable, bool]] | None = None
+    _PROVIDER_CONFIG_MAP: dict[LlmProviders, tuple[Callable[..., BaseConfig], bool]] | None = None
 
     @staticmethod
-    def _build_provider_config_map() -> dict[LlmProviders, tuple[Callable, bool]]:
+    def _build_provider_config_map() -> dict[LlmProviders, tuple[Callable[..., BaseConfig], bool]]:
         """Build the provider-to-config mapping dictionary.
 
         Returns a dict mapping provider to (factory_function, needs_model_parameter).
@@ -10647,7 +10767,7 @@ class ProviderConfigManager:
 
             if litellm.openaiOSeriesConfig.is_model_o_series_model(model=model):
                 return litellm.openaiOSeriesConfig
-            if litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model):
+            if litellm.OpenAIGPT5Config.is_openai_gpt_5_model(model=model):
                 return litellm.OpenAIGPT5Config()
             if not OpenAIGPTConfig.is_openai_catalog_model(model):
                 return OpenAIUnknownModelConfig()
@@ -12514,7 +12634,7 @@ def get_requester_metadata(metadata: Mapping[str, object]):
     return None
 
 
-def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict:
+def return_raw_request(endpoint: CallTypes, kwargs: Mapping[str, object]) -> RawRequestTypedDict:
     """
     Return the json str of the request
 
@@ -12562,7 +12682,7 @@ def return_raw_request(endpoint: CallTypes, kwargs: dict) -> RawRequestTypedDict
         )
 
 
-def jsonify_tools(tools: Sequence[object]) -> list[dict]:
+def jsonify_tools(tools: Sequence[object]) -> list[dict[str, object]]:
     """
     Fixes https://github.com/BerriAI/litellm/issues/9321
 
