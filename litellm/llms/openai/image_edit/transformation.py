@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sequence
 from io import BufferedReader
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -6,6 +7,7 @@ from httpx._types import RequestFiles
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import (
@@ -25,6 +27,15 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+def _is_uploaded_file(value: object) -> bool:
+    return value is not None and not isinstance(value, Mapping)
+
+
+def _has_uploaded_file(value: object) -> bool:
+    items: Final = as_object_list(value)
+    return any(map(_is_uploaded_file, items)) if items is not None else _is_uploaded_file(value)
 
 
 class OpenAIImageEditConfig(BaseImageEditConfig):
@@ -78,6 +89,17 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         else:
             files_list.append((field_name, ("image.png", image, image_content_type)))
 
+    def uses_json_body(
+        self,
+        image: FileTypes | Sequence[FileTypes | None] | None,
+        image_edit_optional_request_params: Mapping[str, object],
+    ) -> bool:
+        return super().uses_json_body(image, image_edit_optional_request_params) or (
+            "images" in image_edit_optional_request_params
+            and not _has_uploaded_file(image)
+            and not _has_uploaded_file(image_edit_optional_request_params.get("mask"))
+        )
+
     def transform_image_edit_request(
         self,
         model: str,
@@ -105,6 +127,9 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
 
         request: Final = ImageEditRequestParams(**request_params)
         request_dict: Final = cast(dict, request)
+        if self.uses_json_body(image, request):
+            json_fields: Final = as_str_mapping(request) or {}
+            return {key: value for key, value in json_fields.items() if key != "image"}, []
 
         #########################################################
         # Separate images and masks as `files` and send other parameters as `data`

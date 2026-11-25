@@ -1,6 +1,6 @@
 import types
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any
 
 import httpx
@@ -148,6 +148,13 @@ class BaseImageEditConfig(ABC):
         Default is True for backwards compatibility with OpenAI-style providers.
         """
         return True
+
+    def uses_json_body(
+        self,
+        image: FileTypes | Sequence[FileTypes | None] | None,
+        image_edit_optional_request_params: Mapping[str, object],
+    ) -> bool:
+        return not self.use_multipart_form_data()
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
