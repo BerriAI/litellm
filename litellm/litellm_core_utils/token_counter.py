@@ -858,7 +858,7 @@ def _chunks_cut_at_whitespace(text: str, chunk_size: int) -> Iterator[str]:
     after the line breaks that open the run, which the tokenizer joins to punctuation before them, and before
     the rest, which it joins to the word after. A cut there counts the same as the whole text, where a cut
     inside a word adds a token. A piece with no such run is cut at ``chunk_size``."""
-    start = 0
+    start = 0  # rebind-ok: cursor that advances by each cut, whose length depends on the text
     while start < len(text):
         window = text[start : start + chunk_size]
         length = len(window) if start + chunk_size >= len(text) else _whitespace_cut(window)
