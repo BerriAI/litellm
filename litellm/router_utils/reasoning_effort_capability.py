@@ -30,7 +30,6 @@ from typing import Final, get_args
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
-from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.types.llms.openai import REASONING_EFFORT
 from litellm.utils import catalog_row_with_runtime_registrations
 
@@ -94,12 +93,6 @@ def deployment_reasoning_effort_levels(model_info: Mapping[str, object] | None) 
     if model_info is None:
         return None
     return declared_reasoning_efforts(MappingProxyType({_DECLARED_EFFORTS_KEY: model_info.get(_DECLARED_EFFORTS_KEY)}))
-
-
-def catalog_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -> tuple[str, ...] | None:
-    catalog: Final = GetModelCostMap.loaded_model_cost_map()
-    entry: Final = catalog.get(f"{custom_llm_provider}/{model}") or catalog.get(model)
-    return declared_reasoning_efforts(entry) if entry is not None else None
 
 
 def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -> tuple[str, ...] | None:
