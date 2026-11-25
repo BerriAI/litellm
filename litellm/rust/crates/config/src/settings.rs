@@ -90,7 +90,8 @@ pub struct GeneralSettings {
     pub global_max_parallel_requests: Option<u64>,
     pub max_request_size_mb: Option<f64>,
     pub max_response_size_mb: Option<u64>,
-    pub proxy_config_reload_interval_seconds: u64,
+    /// `None` when neither the config nor `PROXY_CONFIG_RELOAD_INTERVAL_SECONDS` sets it.
+    pub proxy_config_reload_interval_seconds: Option<i64>,
     pub background_health_checks: Option<bool>,
     pub health_check_interval: u64,
     pub health_check_concurrency: Option<u64>,
@@ -163,7 +164,7 @@ impl Default for GeneralSettings {
             global_max_parallel_requests: None,
             max_request_size_mb: None,
             max_response_size_mb: None,
-            proxy_config_reload_interval_seconds: 30,
+            proxy_config_reload_interval_seconds: None,
             background_health_checks: None,
             health_check_interval: 300,
             health_check_concurrency: None,

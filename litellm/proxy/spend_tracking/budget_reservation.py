@@ -280,7 +280,7 @@ async def reserve_budget_for_request(
     raw_body: bytes | None = None,
     path_params: Mapping[str, object] | None = None,
     request: Request | None = None,
-) -> dict | None:
+) -> dict[str, object] | None:
     if valid_token is None or not RouteChecks.runs_inference_checks(route=route):
         return None
     if RouteChecks.is_unbilled_route(route):
@@ -613,7 +613,7 @@ async def release_budget_reservation_on_cancel(
 
 
 async def invalidate_budget_reservation_counters(
-    budget_reservation: dict | None,
+    budget_reservation: dict[str, object] | None,
 ) -> None:
     if budget_reservation is None:
         return

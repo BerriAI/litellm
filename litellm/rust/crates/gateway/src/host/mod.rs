@@ -10,12 +10,14 @@ mod model_info;
 mod precall;
 mod prompt_estimate;
 mod router;
+mod spend_log;
 
 pub use auth::NativeRows;
 pub use boot::NativeBootHost;
 pub use capacity::NativeCapacityHost;
 pub use precall::ContextWindows;
 pub use router::NativeRouterHost;
+pub use spend_log::RustSpendLogHost;
 
 use std::sync::Arc;
 

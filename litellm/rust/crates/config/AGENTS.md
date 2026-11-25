@@ -19,3 +19,9 @@
 - The layer does not copy two things the proxy does. It reads the variable from the `Lookup` it is given, which `config-load` makes the config's `environment_variables` over the process environment, where the proxy reads some of these only at import. And it reads every flag variable but `reasoning_auto_summary`'s by the one flag rule, where the proxy has a rule per variable and one of them takes any word as on
 - Values stay as written: a comma-separated list is a `String`, an optional number is an `Option`. Splitting a list, applying a default and validating belong to the consumer
 - `Flag` is the one parsed shape of an `Environment` field, because every consumer would otherwise repeat Python's `strip().lower() == "true"`. Python string semantics it needs come from `python-compat`. It predates the one flag rule, so do not use it for a new variable
+
+## Database settings
+
+- `db::settings::overlay` layers the `LiteLLM_Config` settings rows over the config document after includes and before `os.environ/` resolution. It takes rows the caller already decrypted and does no I/O. Stored `environment_variables` go into the document's own `environment_variables`, never the process environment
+- The `LiteLLM_UISettings` row goes in as `UiSettings`, built from the column's JSON text with `UiSettings::from_json`. Its runtime flags fill `general_settings` under the file, the way `sync_ui_settings_to_general_settings` does
+- `generated/db_settings.json` is script output pinning the overlay and its key tables against the Python proxy. Regenerate it with `scripts/generate_db_settings_fixtures.py` when the proxy's merge rules or `ConfigGeneralSettings` change, never by hand. `test_rust_gateway_copy_of_db_settings_keys_matches_python` in `tests/unit/proxy/test_proxy_server.py` fails when a Python key list drifts from its tables

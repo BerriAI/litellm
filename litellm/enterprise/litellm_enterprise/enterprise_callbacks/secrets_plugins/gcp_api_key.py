@@ -15,7 +15,7 @@ class GCPApiKeyDetector(RegexBasedDetector):
         return "GCP API Key"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # GCP API Key
             re.compile(

@@ -1852,6 +1852,20 @@ class _Lines(logging.Handler):
         self.lines.append((record.levelname, record.getMessage()))
 
 
+async def _logged(handler: _Lines, step: Awaitable[object]) -> list[tuple[str, str]]:
+    """The lines one step logs. A Rust record from a runtime task reaches Python's logging from a background
+    queue, after the call that logged it has returned, so this waits for as many lines as were recorded."""
+    recorded: Final = _GOLDEN.upcoming()
+    assert isinstance(recorded, list)
+    already: Final = len(handler.lines)
+    await step
+    for _ in range(500):
+        if len(handler.lines) - already >= len(recorded):
+            break
+        await asyncio.sleep(0.01)
+    return handler.lines[already:]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fail_closed", (False, True))
 async def test_redis_failures_are_logged_like_python(fail_closed: bool, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1860,18 +1874,17 @@ async def test_redis_failures_are_logged_like_python(fail_closed: bool, monkeypa
     )
     clock: Final = Clock()
     request: Final = Request(_auth(rpm_limit=5, tpm_limit=4000, max_parallel_requests=2), {**_CHAT, "max_tokens": 20})
-    logged: Final[list[list[tuple[str, str]]]] = []
-    for side in (_side(clock, port=_free_port()),):
-        handler = _Lines()
-        verbose_proxy_logger.addHandler(handler)
-        try:
-            await _run(side, 0, _admit, request)
-            await _run(side, 0, _end, request)
-        finally:
-            verbose_proxy_logger.removeHandler(handler)
-        logged.append(handler.lines)
-    _GOLDEN.agree(logged[0])
-    assert logged[0] != []
+    side: Final = _side(clock, port=_free_port())
+    handler: Final = _Lines()
+    verbose_proxy_logger.addHandler(handler)
+    try:
+        admitted: Final = await _logged(handler, _run(side, 0, _admit, request))
+        _GOLDEN.agree(admitted)
+        ended: Final = await _logged(handler, _run(side, 0, _end, request))
+        _GOLDEN.agree(ended)
+    finally:
+        verbose_proxy_logger.removeHandler(handler)
+    assert admitted != [] and ended != []
 
 
 @pytest.mark.asyncio

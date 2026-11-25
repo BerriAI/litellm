@@ -8,7 +8,7 @@ use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use axum::{body::Body, extract::Request, http::Method};
 use litellm_config::{Config, Environment};
-use litellm_gateway::host::auth::AuthStore;
+use litellm_gateway::{StoredConfig, host::auth::AuthStore};
 use rstest::rstest;
 use serde::Deserialize;
 
@@ -21,7 +21,37 @@ struct Scenario {
     /// The `tpm_limit` of each key that holds one.
     #[serde(default)]
     tpm_limits: BTreeMap<String, i64>,
+    /// What boot read of the config the proxy stores in its database.
+    #[serde(default)]
+    stored: Stored,
     requests: Vec<Sent>,
+}
+
+/// `unused` when `store_model_in_db` is off, `loaded` when the config holds what the database
+/// stores, `unread` when the database could not be read, and `ui_settings_unread` when it is off
+/// and the UI settings could not be read or layered in.
+#[derive(Clone, Copy, Default, Deserialize)]
+enum Stored {
+    #[default]
+    #[serde(rename = "unused")]
+    Unused,
+    #[serde(rename = "loaded")]
+    Loaded,
+    #[serde(rename = "unread")]
+    Unread,
+    #[serde(rename = "ui_settings_unread")]
+    UiSettingsUnread,
+}
+
+impl From<Stored> for StoredConfig {
+    fn from(stored: Stored) -> Self {
+        match stored {
+            Stored::Unused => Self::Unused,
+            Stored::Loaded => Self::Loaded,
+            Stored::Unread => Self::Unread,
+            Stored::UiSettingsUnread => Self::UiSettingsUnread,
+        }
+    }
 }
 
 /// The database holding each key of the scenario, a plain row with the model list and the token
@@ -100,6 +130,10 @@ impl Sent {
 #[case::drop_params_set("drop_params_set")]
 #[case::database("database")]
 #[case::store_model_in_db("store_model_in_db")]
+#[case::store_model_in_db_unread("store_model_in_db_unread")]
+#[case::ui_settings_unread("ui_settings_unread")]
+#[case::environment_variables("environment_variables")]
+#[case::store_model_in_db_objects("store_model_in_db_objects")]
 #[case::router_settings_by_group("router_settings_by_group")]
 #[case::groups_and_fallbacks("groups_and_fallbacks")]
 #[case::model_aliases("model_aliases")]
@@ -146,8 +180,8 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     };
     let admit = Arc::new(litellm_gateway::Admit::new(
         &config,
-        &Environment::default(),
         &state,
+        scenario.stored.into(),
     ));
 
     let answered = futures_util::future::join_all(scenario.requests.iter().map(|sent| {

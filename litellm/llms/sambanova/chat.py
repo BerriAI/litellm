@@ -89,7 +89,7 @@ class SambanovaConfig(OpenAIGPTConfig):
         optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         map max_completion_tokens param to max_tokens
         """

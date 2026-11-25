@@ -339,7 +339,7 @@ class OpenAIConfig(BaseConfig):
         optional_params: dict[str, object],
         litellm_params: dict[str, object],
         headers: dict[str, object],
-    ) -> dict:
+    ) -> dict[str, object]:
         messages = self._transform_messages(messages=messages, model=model)
         return {"model": model, "messages": messages, **optional_params}
 
@@ -2830,7 +2830,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     def add_message(
         self, 
         thread_id: str,
-        message_data: dict,
+        message_data: dict[str, object],
         api_key: str | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
@@ -2847,7 +2847,7 @@ class OpenAIAssistantsAPI(BaseLLM):
     def add_message(
         self, 
         thread_id: str,
-        message_data: dict,
+        message_data: dict[str, object],
         api_key: str | None,
         api_base: str | None,
         timeout: float | httpx.Timeout,
@@ -3392,7 +3392,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
-        client,
+        client: object,
         arun_thread: Literal[True], 
         event_handler: AssistantEventHandler | None,
         *,
@@ -3416,7 +3416,7 @@ class OpenAIAssistantsAPI(BaseLLM):
         timeout: float | httpx.Timeout,
         max_retries: int | None,
         organization: str | None,
-        client,
+        client: object,
         arun_thread: Literal[False] | None, 
         event_handler: AssistantEventHandler | None,
         *,

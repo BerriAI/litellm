@@ -6845,6 +6845,36 @@ def test_anthropic_messages_request_strips_billing_header_for_minimax():
     assert all(not t.startswith("x-anthropic-billing-header:") for t in texts)
 
 
+@pytest.mark.parametrize(
+    ("module_path", "class_name", "model"),
+    (
+        ("litellm.llms.minimax.messages.transformation", "MinimaxMessagesConfig", "MiniMax-M3"),
+        ("litellm.llms.deepseek.messages.transformation", "DeepSeekAnthropicMessagesConfig", "deepseek-v4-pro"),
+    ),
+    ids=("minimax", "deepseek"),
+)
+def test_billing_header_strip_forwards_a_non_string_system_text_for_the_provider_to_answer(
+    module_path: str, class_name: str, model: str
+) -> None:
+    import importlib
+
+    from litellm.types.router import GenericLiteLLMParams
+
+    config: Final = getattr(importlib.import_module(module_path), class_name)()
+    result: Final = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 16,
+            "system": [{"type": "text", "text": None}, BILLING_HEADER_BLOCK, {"type": "text", "text": "real"}],
+        },
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert result["system"] == [{"type": "text", "text": None}, {"type": "text", "text": "real"}]
+
+
 def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
     from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude_transformation import (
         AmazonAnthropicClaudeConfig,

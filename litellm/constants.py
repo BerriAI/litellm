@@ -191,7 +191,6 @@ LITELLM_MAX_STREAMING_DURATION_SECONDS: Final = get_env_float_or_none("LITELLM_M
 MID_STREAM_FAILURE_LOG_WAIT_SECONDS: Final = 1.0
 
 # Maximum number of base64 characters to keep in logging payloads.
-# Data URIs exceeding this are replaced with a size placeholder.
 # Set to 0 to disable truncation.
 MAX_BASE64_LENGTH_FOR_LOGGING: Final = get_env_int("MAX_BASE64_LENGTH_FOR_LOGGING", 64)
 BASE64_TRUNCATION_OFFLOAD_THRESHOLD_CHARS: Final = 256 * 1024
@@ -370,6 +369,7 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = get_env_int(
 # Provider-specific API base URLs
 XAI_API_BASE: Final = "https://api.x.ai/v1"
 PLACEHOLDER_API_KEY: Final = "fake-api-key"
+PLACEHOLDER_API_KEYS: Final = frozenset({PLACEHOLDER_API_KEY, "dummy-key"})
 OPEN_SANDBOX_API_BASE_ENV_VAR: Final = "OPEN_SANDBOX_API_BASE"
 OPEN_SANDBOX_API_KEY_ENV_VAR: Final = "OPEN_SANDBOX_API_KEY"
 OPEN_SANDBOX_DEFAULT_TEMPLATE: Final = "opensandbox/code-interpreter:v1.1.0"
@@ -467,6 +467,7 @@ MCP_PEEKED_BODY_SCOPE_KEY: Final = "litellm_mcp_peeked_body"
 MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS: Final = 5.0
 REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
 REALTIME_METERED_USAGE_KEY: Final = "realtime_metered_usage"
+REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY: Final = "realtime_transcription_addon_models"
 FAILED_PROMPT_TOKEN_ESTIMATE_KEY: Final = "failed_prompt_token_estimate"
 OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS: Final = 30
 OPENAI_LIVE_SESSION_CLOSE_TIMEOUT_SECONDS: Final = 5
@@ -812,6 +813,7 @@ ANTHROPIC_IMAGE_PIXELS_PER_TOKEN: Final = 750
 OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS: Final = 13
 OPENAI_CHAT_PDF_FILE_TOKENS: Final = 192
 PDF_DATA_URL_PREFIX: Final = "data:application/pdf;base64,"
+TRUNCATED_BASE64_MARKER: Final = "[base64_data truncated: "
 PDF_MAX_FORM_XOBJECT_DEPTH: Final = 32
 PDF_MAX_XOBJECT_DRAWS_PER_PAGE: Final = 10_000
 OPENAI_MODEL_NAME_MAX_DASHES: Final = 16
@@ -1161,6 +1163,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
     "https://inference.runanywhere.ai/v1",
+    "https://api-ap-southeast-1.modelarts-maas.com/openai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
     "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
@@ -1252,6 +1255,7 @@ openai_compatible_providers: Final[list[str]] = [
     "reka",
     "streamlake",
     "wally",
+    "huawei_maas",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
@@ -1290,7 +1294,7 @@ _openai_like_providers: Final[list[str]] = [
     "inferenceapis",
 ]  # private helper. similar to openai but require some custom auth / endpoint handling, so can't use the openai sdk
 # well supported replicate llms
-replicate_models: Final[set] = set(
+replicate_models: Final[set[str]] = set(
     [
         # llama replicate supported LLMs
         "replicate/llama-2-70b-chat:2796ee9483c3fd7aa2e171d38f4ca12251a30609463dcfd4cd76703f22e96cdf",
@@ -1307,7 +1311,7 @@ replicate_models: Final[set] = set(
     ]
 )
 
-clarifai_models: Final[set] = set(
+clarifai_models: Final[set[str]] = set(
     [
         "clarifai/openai.chat-completion.gpt-oss-20b",
         "clarifai/qwen.qwenLM.Qwen3-30B-A3B-Instruct-2507",
@@ -1343,7 +1347,7 @@ clarifai_models: Final[set] = set(
 )
 
 
-huggingface_models: Final[set] = set(
+huggingface_models: Final[set[str]] = set(
     [
         "meta-llama/Llama-2-7b-hf",
         "meta-llama/Llama-2-7b-chat-hf",
@@ -1470,7 +1474,7 @@ nebius_embedding_models: Final[set] = set(
     ]
 )
 
-WANDB_MODELS: Final[set] = set(
+WANDB_MODELS: Final[set[str]] = set(
     [
         # openai models
         "openai/gpt-oss-120b",
@@ -1629,8 +1633,8 @@ BEDROCK_CONVERSE_MODELS: Final = [
 ]
 
 
-open_ai_embedding_models: Final[set] = set(["text-embedding-ada-002"])
-cohere_embedding_models: Final[set] = set(
+open_ai_embedding_models: Final[set[str]] = set(["text-embedding-ada-002"])
+cohere_embedding_models: Final[set[str]] = set(
     [
         "embed-v4.0",
         "embed-english-v3.0",
@@ -1641,7 +1645,7 @@ cohere_embedding_models: Final[set] = set(
         "embed-multilingual-v2.0",
     ]
 )
-bedrock_embedding_models: Final[set] = set(
+bedrock_embedding_models: Final[set[str]] = set(
     [
         "amazon.titan-embed-text-v1",
         "amazon.nova-2-multimodal-embeddings-v1:0",
@@ -1863,6 +1867,15 @@ TRANSCRIBE_MEDIA_DOWNLOAD_CONCURRENCY: Final = 1
 TRANSCRIBE_MEDIA_FETCH_ATTEMPTS: Final = 3
 TRANSCRIBE_MEDIA_LAST_MODIFIED_TOLERANCE_SECONDS: Final = 1.0  # S3 Last-Modified carries whole seconds only
 TRANSCRIBE_MEASURABLE_MEDIA_FORMATS: Final = frozenset({"flac", "mp3", "ogg", "wav"})  # what libsndfile can read
+OPENAI_AGENTS_TURN_POLL_INITIAL_DELAY_SECONDS: Final = 5.0
+OPENAI_AGENTS_TURN_POLL_MAX_DELAY_SECONDS: Final = 60.0
+OPENAI_AGENTS_TURN_POLL_TIMEOUT_SECONDS: Final = 3600.0
+OPENAI_AGENTS_TURN_CLAIM_WINDOW_SECONDS: Final = 300.0
+OPENAI_AGENTS_TURN_CLOCK_SKEW_SECONDS: Final = 60
+OPENAI_AGENTS_TURN_CLAIMS_MAX_SIZE: Final = 10_000
+OPENAI_AGENTS_LIST_PAGE_LIMIT: Final = 100
+OPENAI_AGENTS_TURN_DRAIN_POLL_SHARE: Final = 0.75
+OPENAI_AGENTS_SETTLED_FETCH_ATTEMPTS: Final = 4
 
 BATCH_STATUS_POLL_INTERVAL_SECONDS: Final = get_env_int("BATCH_STATUS_POLL_INTERVAL_SECONDS", 3600)  # 1 hour
 BATCH_STATUS_POLL_MAX_ATTEMPTS: Final = get_env_int("BATCH_STATUS_POLL_MAX_ATTEMPTS", 24)  # for 24 hours
@@ -2100,6 +2113,8 @@ LENGTH_OF_LITELLM_GENERATED_KEY: Final = get_env_int("LENGTH_OF_LITELLM_GENERATE
 MINIMUM_CUSTOM_KEY_LENGTH: Final = get_env_int("MINIMUM_CUSTOM_KEY_LENGTH", 16)
 SECRET_MANAGER_REFRESH_INTERVAL: Final = get_env_int("SECRET_MANAGER_REFRESH_INTERVAL", 86400)
 OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS: Final = frozenset({"openai", "azure"})
+# The Rust gateway keeps a copy in litellm/rust/crates/config/src/db/settings/keys.rs, which
+# test_rust_gateway_copy_of_db_settings_keys_matches_python in tests/unit/proxy/test_proxy_server.py enforces.
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "default_internal_user_params",
     "default_team_params",
@@ -2320,12 +2335,17 @@ PROVIDER_ERROR_BODY_ATTRIBUTE: Final = "provider_error_body"
 CREDENTIAL_FIELD_NAME_FRAGMENTS: Final[tuple[str, ...]] = (
     "accesskey",
     "accesstoken",
+    "accountkey",
     "apikey",
     "authtoken",
     "bearer",
     "clientsecret",
+    "connectionstring",
     "credential",
+    "encryptionkey",
     "idtoken",
+    "licensekey",
+    "masterkey",
     "passphrase",
     "passwd",
     "password",
@@ -2333,7 +2353,9 @@ CREDENTIAL_FIELD_NAME_FRAGMENTS: Final[tuple[str, ...]] = (
     "refreshtoken",
     "secret",
     "sessiontoken",
+    "sharedkey",
     "signingkey",
+    "subscriptionkey",
 )
 CREDENTIAL_FIELD_NAME_WORDS: Final[frozenset[str]] = frozenset(
     {"auth", "authorization", "cookie", "pass", "pwd", "session", "sig", "signature", "token"}

@@ -3989,7 +3989,7 @@ async def get_auto_router_classifier_default_prompt(
     )
 
 
-def deduplicate_litellm_router_models(models: list[dict]) -> list[dict]:
+def deduplicate_litellm_router_models(models: list[dict]) -> list[dict[str, object]]:
     """
     Deduplicate models based on their model_info.id field.
     Returns a list of unique models keeping only the first occurrence of each model ID.

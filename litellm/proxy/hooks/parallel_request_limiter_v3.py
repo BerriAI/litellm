@@ -76,6 +76,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     get_key_own_model_rate_limit,
     get_model_rate_limit_from_metadata,
+    team_models_counting_cached_tokens,
 )
 from litellm.proxy.common_utils.callback_utils import get_model_group_from_litellm_kwargs
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
@@ -1319,6 +1320,11 @@ class ParallelRequestLimiterHook(CustomLogger):
                         "user_api_key_model_max_budget": _METADATA.validate_python(
                             user_api_key_dict.model_max_budget or {}  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.model_max_budget is a bare dict
                         ),
+                        "user_api_key_team_metadata": {
+                            "model_tpm_limit_counts_cached_tokens": team_models_counting_cached_tokens(
+                                user_api_key_dict.team_metadata
+                            )
+                        },
                     }
                 },
                 "standard_logging_object": {
@@ -1393,7 +1399,7 @@ class ParallelRequestLimiterHook(CustomLogger):
         kwargs: dict[str, object],
         result: object,
         call_type: str,
-    ) -> tuple[dict, object]:
+    ) -> tuple[dict[str, object], object]:
         """
         Mirror the pre-call rate-limit snapshot into the SLP so streaming
         success callbacks see the same ``x-ratelimit-*`` headers the
@@ -1477,7 +1483,6 @@ class ParallelRequestLimiterHook(CustomLogger):
         except Exception as e:  # noqa: BLE001  # a background refund has no caller to raise to, so it logs its failure
             _log_responses_websocket_release_error(e)
 
-    @with_service_target(RATE_LIMITS_TARGET)
     async def async_release_max_parallel_requests_on_disconnect(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -1493,6 +1498,10 @@ class ParallelRequestLimiterHook(CustomLogger):
         key object's current max_parallel_requests configuration, which can change mid-request) decides
         whether there is anything to release.
         """
+        await self.async_release_request_parallel_slot()
+
+    @with_service_target(RATE_LIMITS_TARGET)
+    async def async_release_request_parallel_slot(self) -> None:
         native_state: Final = _native_state(self, get_request_stash())
         if native_state is not None:
             await self.native_companion.release_on_disconnect(native_state)
@@ -2565,6 +2574,14 @@ async def increment_reservation_aware_tokens(
     )
 
 
+def _team_counts_cached_tokens_from_request_metadata(
+    request_metadata: Mapping[str, object],
+    model: RateLimitedModel,
+) -> bool:
+    models: Final = team_models_counting_cached_tokens(request_metadata.get("user_api_key_team_metadata"))
+    return models.get(model.requested, models.get(model.group, False))
+
+
 def _settlement_resolved(
     limiter: ParallelRequestLimiterHook,
     kwargs: Mapping[str, object],
@@ -2602,6 +2619,9 @@ def _settlement_resolved(
                     {
                         "group": candidate.group,
                         "key_owns": _key_owns_model_tpm_limit_from_request_metadata(request_metadata, candidate),
+                        "counts_cached_tokens": _team_counts_cached_tokens_from_request_metadata(
+                            request_metadata, candidate
+                        ),
                     }
                     for candidate in _rate_limited_models(limiter, model)
                 ],

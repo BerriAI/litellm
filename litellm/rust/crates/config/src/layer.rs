@@ -3,14 +3,15 @@
 //! set it.
 //!
 //! One rule for every such key: the config's own value first, then `LITELLM_<KEY>`, then the
-//! default. A flag is read by the one flag rule, `lax_bool`, whichever of the two wrote it, and
-//! leaves this crate as a `bool`. Two keys are read as the proxy reads them instead.
-//! `reasoning_auto_summary` is on when the config's value is truthy or its variable is `true` in
-//! any case, even under a config that sets it to `false`. `request_timeout` is read from
-//! `REQUEST_TIMEOUT`, the name the proxy reads it by, as `float()` reads its text, and only from
-//! the process's own environment, since the proxy reads it once when `litellm` is imported, before
-//! the config's `environment_variables` are exported, so a timeout the config exports times
-//! nothing out there.
+//! default. `general_settings.proxy_config_reload_interval_seconds` follows it with
+//! `PROXY_CONFIG_RELOAD_INTERVAL_SECONDS`, the name the proxy reads. A flag is read by the one
+//! flag rule, `lax_bool`, whichever of the two wrote it, and leaves this crate as a `bool`. Two
+//! keys are read as the proxy reads them instead. `reasoning_auto_summary` is on when the config's
+//! value is truthy or its variable is `true` in any case, even under a config that sets it to
+//! `false`. `request_timeout` is read from `REQUEST_TIMEOUT`, the name the proxy reads it by, as
+//! `float()` reads its text, and only from the process's own environment, since the proxy reads it
+//! once when `litellm` is imported, before the config's `environment_variables` are exported, so a
+//! timeout the config exports times nothing out there.
 //!
 //! The proxy differs in two places, and neither is kept. It reads some of the `LITELLM_<KEY>`
 //! variables only when it starts too, where the variable here is read from whatever `environment`
@@ -26,7 +27,7 @@ use litellm_python_compat::{
 };
 use litellm_secret_value::SecretValue;
 
-use crate::{Config, LiteLlmSettings, Spelled};
+use crate::{Config, GeneralSettings, LiteLlmSettings, Spelled};
 
 const REASONING_AUTO_SUMMARY: &str = "litellm_settings.reasoning_auto_summary";
 const REASONING_AUTO_SUMMARY_VARIABLE: &str = "LITELLM_REASONING_AUTO_SUMMARY";
@@ -69,6 +70,12 @@ trait Written: Sized {
 impl Written for bool {
     fn written(text: String) -> Option<Self> {
         lax_bool(&text.as_str().into())
+    }
+}
+
+impl Written for i64 {
+    fn written(text: String) -> Option<Self> {
+        text.trim().parse().ok()
     }
 }
 
@@ -171,10 +178,20 @@ impl Config {
         );
         let (reasoning_auto_summary, summarized) =
             reasoning_auto_summary(litellm_settings.reasoning_auto_summary, environment);
+        let (proxy_config_reload_interval_seconds, interval_origin) = filled(
+            self.general_settings.proxy_config_reload_interval_seconds,
+            environment,
+            "general_settings.proxy_config_reload_interval_seconds",
+            "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS".to_owned(),
+        );
         Self {
             litellm_settings: LiteLlmSettings {
                 reasoning_auto_summary,
                 ..litellm_settings
+            },
+            general_settings: GeneralSettings {
+                proxy_config_reload_interval_seconds,
+                ..self.general_settings
             },
             origins: Origins(
                 self.origins
@@ -182,6 +199,7 @@ impl Config {
                     .into_iter()
                     .chain(origins.into_iter().flatten())
                     .chain(summarized)
+                    .chain(interval_origin)
                     .collect(),
             ),
             ..self
@@ -363,6 +381,47 @@ mod tests {
                 config.origins.variable("litellm_settings.request_timeout")
             ),
             (seconds.map(Spelled::Value), variable)
+        );
+    }
+
+    #[rstest]
+    #[case::the_config_when_both_set_it(
+        "general_settings:\n  proxy_config_reload_interval_seconds: 5\n",
+        Some("7"),
+        Some(5),
+        None
+    )]
+    #[case::the_variable_when_the_config_leaves_it_unset(
+        "model_list: []\n",
+        Some(" 7 "),
+        Some(7),
+        Some("PROXY_CONFIG_RELOAD_INTERVAL_SECONDS")
+    )]
+    #[case::a_variable_that_is_no_integer("model_list: []\n", Some("soon"), None, None)]
+    #[case::neither("model_list: []\n", None, None, None)]
+    fn the_reload_interval_is_read_from_the_config_first_and_its_variable_second(
+        #[case] yaml: &str,
+        #[case] written: Option<&str>,
+        #[case] value: Option<i64>,
+        #[case] variable: Option<&str>,
+    ) {
+        let lookup = |name: &str| {
+            (name == "PROXY_CONFIG_RELOAD_INTERVAL_SECONDS")
+                .then_some(written)
+                .flatten()
+                .map(str::to_owned)
+        };
+
+        let config = Config::from_yaml(yaml).unwrap().with_environment(&lookup);
+
+        assert_eq!(
+            (
+                config.general_settings.proxy_config_reload_interval_seconds,
+                config
+                    .origins
+                    .variable("general_settings.proxy_config_reload_interval_seconds")
+            ),
+            (value, variable)
         );
     }
 

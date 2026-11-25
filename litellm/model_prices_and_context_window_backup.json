@@ -32927,6 +32927,7 @@
         "output_cost_per_image": 0.039,
         "output_cost_per_image_token": 3e-05,
         "output_cost_per_image_token_batches": 1.5e-05,
+        "output_cost_per_image_token_flex": 1.5e-05,
         "output_cost_per_image_token_priority": 5.4e-05,
         "output_cost_per_reasoning_token": 2.5e-06,
         "output_cost_per_token": 2.5e-06,
@@ -39675,7 +39676,7 @@
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "openai",
-        "max_input_tokens": 400000,
+        "max_input_tokens": 272000,
         "max_output_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 3e-05,
@@ -73197,6 +73198,39 @@
         "supported_endpoints": [
             "/v1/audio/transcriptions"
         ]
+    },
+    "elevenlabs/scribe_v2_realtime": {
+        "input_cost_per_second": 6.1111e-05,
+        "litellm_provider": "elevenlabs",
+        "metadata": {
+            "calculation": "$0.22/hour = $0.003667/minute = $0.000061111 per second",
+            "original_pricing_per_hour": 0.22
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://elevenlabs.io/pricing/api",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_audio_input": true
+    },
+    "elevenlabs/scribe_v2_realtime/keyterms": {
+        "input_cost_per_second": 1.3889e-05,
+        "litellm_provider": "elevenlabs",
+        "metadata": {
+            "calculation": "$0.05/hour = $0.000013889 per second",
+            "note": "Keyterm prompting add-on for Scribe v2 Realtime, billed on top of the base rate",
+            "original_pricing_per_hour": 0.05
+        },
+        "mode": "audio_transcription",
+        "output_cost_per_second": 0.0,
+        "source": "https://elevenlabs.io/pricing/api"
     },
     "scaleway/glm-5.2": {
         "deprecation_source": "https://www.scaleway.com/en/docs/generative-apis/reference-content/supported-models/",
@@ -126765,6 +126799,157 @@
         "supports_tool_search": true,
         "supports_vision": true,
         "supports_web_search": true,
+        "supports_xhigh_reasoning_effort": true
+    },
+    "fireworks_ai/accounts/fireworks/models/qwen4-max": {
+        "cache_read_input_token_cost": 7.5e-08,
+        "cache_read_input_token_cost_priority": 9.375e-08,
+        "input_cost_per_token": 1.5e-06,
+        "input_cost_per_token_priority": 1.875e-06,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 262144,
+        "mode": "chat",
+        "output_cost_per_token": 4.5e-06,
+        "output_cost_per_token_priority": 5.625e-06,
+        "source": "https://api.fireworks.ai/v1/serverless/models?format=nested",
+        "supports_function_calling": true,
+        "supports_mid_conversation_system": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "fireworks_ai/accounts/fireworks/models/hy4-flash": {
+        "cache_read_input_token_cost": 3e-09,
+        "cache_read_input_token_cost_priority": 3.75e-09,
+        "input_cost_per_token": 7e-08,
+        "input_cost_per_token_priority": 8.75e-08,
+        "litellm_provider": "fireworks_ai",
+        "max_input_tokens": 524288,
+        "mode": "chat",
+        "output_cost_per_token": 2.81e-07,
+        "output_cost_per_token_priority": 3.5125e-07,
+        "source": "https://fireworks.ai/models/fireworks/hy4-flash",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "huawei_maas/glm-5.3": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "huawei_maas",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://support.huaweicloud.com/intl/en-us/price-maas/price-maas-0002.html",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true
+    },
+    "huawei_maas/glm-5.2": {
+        "cache_read_input_token_cost": 2.6e-07,
+        "deprecation_date": "2026-11-30",
+        "deprecation_source": "https://support.huaweicloud.com/intl/en-us/bulletin-maas/bulletin-maas-0002.html",
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "huawei_maas",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 1.82e-07,
+            "hours_utc": "13:00-00:00",
+            "input_cost_per_token": 9.8e-07,
+            "output_cost_per_token": 3.08e-06
+        },
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://support.huaweicloud.com/intl/en-us/price-maas/price-maas-0002.html",
+        "successor_model": "huawei_maas/glm-5.3",
+        "supports_function_calling": true,
+        "supports_reasoning": true
+    },
+    "huawei_maas/deepseek-v4.1-flash-1017": {
+        "cache_read_input_token_cost": 6e-09,
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "huawei_maas",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 3e-09,
+            "hours_utc": "13:00-00:00",
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 6e-07
+        },
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://support.huaweicloud.com/intl/en-us/price-maas/price-maas-0002.html",
+        "supports_assistant_prefill": true,
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "huawei_maas/deepseek-v4.1-flash": {
+        "cache_read_input_token_cost": 3e-08,
+        "deprecation_date": "2026-11-30",
+        "deprecation_source": "https://support.huaweicloud.com/intl/en-us/bulletin-maas/bulletin-maas-0002.html",
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "huawei_maas",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 1.5e-08,
+            "hours_utc": "13:00-00:00",
+            "input_cost_per_token": 1.5e-07,
+            "output_cost_per_token": 6e-07
+        },
+        "output_cost_per_token": 1.2e-06,
+        "source": "https://support.huaweicloud.com/intl/en-us/price-maas/price-maas-0002.html",
+        "successor_model": "huawei_maas/deepseek-v4.1-flash-1017",
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_vision": true
+    },
+    "us-gov.openai.gpt-5.6-cyber": {
+        "cache_creation_input_token_cost": 2.109375e-05,
+        "cache_read_input_token_cost": 1.6875e-06,
+        "input_cost_per_token": 1.6875e-05,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 0.00010125,
+        "source": "https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-56-cyber.html",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_bedrock_converse_tool_result_images": false,
+        "supports_bedrock_runtime_chat_completions_response_format": true,
+        "supports_function_calling": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_openai_prompt_cache_breakpoint": true,
+        "supports_reasoning": true,
+        "supports_sampling_params": false,
+        "supports_tool_choice": true,
+        "supports_vision": true,
         "supports_xhigh_reasoning_effort": true
     }
 }

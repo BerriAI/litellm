@@ -40,7 +40,7 @@ from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm import _logging as litellm_logger_settings
 from litellm._internal_context import current_request_parent_otel_span, in_post_response_phase
-from litellm._logging import session_id_var, trace_id_var, verbose_logger
+from litellm._logging import format_base64_size, session_id_var, trace_id_var, verbose_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.caching import DualCache
 from litellm.constants import (
@@ -3725,6 +3725,42 @@ async def test_async_success_handler_truncates_large_base64_off_the_event_loop(m
     assert payload not in logged_url
     assert scan_threads
     assert loop_thread not in scan_threads
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_logs_a_base64_image_source_as_a_size_placeholder(monkeypatch):
+    logged: Final = asyncio.Event()
+    captured: Final[dict[str, StandardLoggingPayload]] = {}  # mutable-ok: the callback hands its payload back here
+
+    class CaptureLogger(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            captured["standard_logging_object"] = kwargs["standard_logging_object"]
+            logged.set()
+
+    monkeypatch.setattr(litellm, "callbacks", [CaptureLogger()])
+    payload: Final = "P" * 300_000
+    await litellm.anthropic.messages.acreate(
+        model="anthropic/claude-haiku-5-5",
+        max_tokens=10,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe"},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": payload}},
+                ],
+            }
+        ],
+        mock_response="ok",
+    )
+    await asyncio.wait_for(logged.wait(), timeout=10)
+
+    logged_source: Final = captured["standard_logging_object"]["messages"][0]["content"][1]["source"]
+    assert logged_source == {
+        "type": "base64",
+        "media_type": "image/png",
+        "data": f"[base64_data truncated: {format_base64_size(len(payload))}]",
+    }
 
 
 @pytest.mark.parametrize(
@@ -15684,6 +15720,15 @@ def test_litellm_logging_no_log_param(monkeypatch, disable_no_log_param):
         event_hook="success_handler",
     )
     assert should_run_managed_files_callback is True
+
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+
+    should_run_spend_callback = litellm_logging_obj.should_run_callback(
+        callback=ProxyDBLogger(),
+        litellm_params={"no-log": True},
+        event_hook="success_handler",
+    )
+    assert should_run_spend_callback is True
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")

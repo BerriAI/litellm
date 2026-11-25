@@ -2178,7 +2178,7 @@ class AmazonConverseConfig(BaseConfig):
 
     @staticmethod
     def _merge_parallel_tool_use_config(
-        additional_request_params: dict, parallel_tool_use_config: dict
+        additional_request_params: dict, parallel_tool_use_config: dict[str, object]
     ) -> dict[str, object]:
         merged_entries: Final = {
             key: (
