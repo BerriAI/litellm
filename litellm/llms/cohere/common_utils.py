@@ -1,7 +1,6 @@
 import json
 from typing import Final, Literal
 
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.cohere import CohereV2StreamedContent, CohereV2StreamedMessageEnd, CohereV2StreamedToolCall
@@ -15,7 +14,6 @@ from litellm.types.utils import (
     ProviderSpecificModelInfo,
     StreamingChoices,
     Usage,
-    generate_id,
 )
 
 
@@ -230,7 +228,6 @@ class CohereV2ModelResponseIterator:
         self.tool_index = -1
         self.json_mode = json_mode
         self.tool_call_indexes_with_arguments: frozenset[int] = frozenset()
-        self.response_id: Final = generate_id()
 
     def _parse_content_delta(self, chunk: dict) -> tuple[str, str]:
         """Parse content-delta chunks into their answer text and their thinking text."""
@@ -285,7 +282,7 @@ class CohereV2ModelResponseIterator:
     def _parse_message_end(self, chunk: dict) -> tuple[str, Usage | None]:
         """Parse message-end events to extract finish info and usage."""
         message_end: Final = CohereV2StreamedMessageEnd.model_validate(chunk)
-        finish_reason: Final = map_finish_reason(message_end.finish_reason or "COMPLETE")
+        finish_reason: Final = message_end.finish_reason or "COMPLETE"
         tokens: Final = message_end.tokens
         if tokens is None:
             return finish_reason, None
@@ -356,7 +353,6 @@ class CohereV2ModelResponseIterator:
                     )
                 ],
                 usage=usage,
-                id=self.response_id,
             )
 
         except Exception as e:

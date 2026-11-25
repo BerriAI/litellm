@@ -81,6 +81,7 @@ _SCHEMA_KEYWORDS_COHERE_REJECTS: Final = frozenset(
 _PATTERN_SYNTAX_COHERE_REJECTS: Final = ("(?=", "(?!", "(?<=", "(?<!")
 _COHERE_PROVIDERS: Final = ("cohere_chat", "cohere")
 _REASONING_FIELDS: Final = frozenset({"reasoning_content", "thinking_blocks"})
+_COHERE_TOOL_CALL_FIELDS: Final = frozenset({"id", "type", "function"})
 _HISTORY: Final = TypeAdapter(list[object])
 _SCHEMA_DEPTH_CHECKED: Final = 64
 
@@ -107,14 +108,33 @@ def _assistant_content_parts(content: object) -> tuple[object, ...]:
     return tuple(as_object_list(content) or ())
 
 
-def _with_cohere_thinking(message: object) -> object:
+def _has_thinking_part(content_parts: tuple[object, ...]) -> bool:
+    return any((as_str_mapping(part) or _NOTHING).get("type") == "thinking" for part in content_parts)
+
+
+def _cohere_tool_call(tool_call: object) -> object:
+    fields: Final = as_str_mapping(tool_call)
+    if fields is None:
+        return tool_call
+    return {key: value for key, value in fields.items() if key in _COHERE_TOOL_CALL_FIELDS}
+
+
+def _cohere_assistant_fields(fields: Mapping[str, object]) -> Mapping[str, object]:
+    tool_calls: Final = as_object_list(fields.get("tool_calls"))
+    kept: Final = {key: value for key, value in fields.items() if key not in _REASONING_FIELDS}
+    if not tool_calls:
+        return kept
+    return {**kept, "tool_calls": [_cohere_tool_call(tool_call) for tool_call in tool_calls]}
+
+
+def _cohere_history_message(message: object) -> object:
     fields: Final = as_str_mapping(message)
     if fields is None or fields.get("role") != "assistant":
         return message
-    turn: Final = {key: value for key, value in fields.items() if key not in _REASONING_FIELDS}
+    turn: Final = _cohere_assistant_fields(fields)
     reasoning: Final = _replayed_reasoning(fields)
     content_parts: Final = _assistant_content_parts(turn.get("content"))
-    if not reasoning or not (content_parts or turn.get("tool_calls")):
+    if not reasoning or not (content_parts or turn.get("tool_calls")) or _has_thinking_part(content_parts):
         return turn
     return {**turn, "content": [{"type": "thinking", "thinking": reasoning}, *content_parts]}
 
@@ -508,7 +528,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             headers,
         )
         history: Final = _HISTORY.validate_python(data["messages"])
-        return {**data, "messages": [_with_cohere_thinking(message) for message in history]}
+        return {**data, "messages": [_cohere_history_message(message) for message in history]}
 
     def transform_response(
         self,
