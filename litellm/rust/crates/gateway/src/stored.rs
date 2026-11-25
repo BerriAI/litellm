@@ -1019,6 +1019,11 @@ mod tests {
         Err(()),
         (StoredConfig::UiSettingsUnread, false)
     )]
+    #[case::store_model_in_db_off_and_the_ui_settings_unloadable(
+        FILE,
+        Ok(Some(UNLOADABLE_FLAG)),
+        (StoredConfig::UiSettingsUnread, false)
+    )]
     #[case::store_model_in_db_off(FILE, Ok(None), (StoredConfig::Unused, false))]
     #[case::store_model_in_db_on_and_the_ui_settings_unreadable(
         &format!("{FILE}{ON}"),

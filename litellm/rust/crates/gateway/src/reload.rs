@@ -317,7 +317,8 @@ impl Reading {
         differ
     }
 
-    /// Swaps `live` to the file with only `ui_settings` layered in and stops reading, for a
+    /// Swaps `live` to the file with only `ui_settings` layered in, or to the file alone over
+    /// [`StoredConfig::UiSettingsUnread`] when they do not load, and stops reading, for a
     /// `store_model_in_db` boot found off once it could read the settings. Python decided the same
     /// at startup from its own read, so it serves no stored model and never reloads.
     async fn off<R, F>(&mut self, ui_settings: UiSettings, live: &Live, rebuild: &R) -> Reloaded
@@ -328,26 +329,32 @@ impl Reading {
         tracing::info!(
             "store_model_in_db is off, so the gateway serves the config file with only the UI settings and stops reading the stored config"
         );
-        let config = match stored::ui_settings_only(
+        let (config, stored) = match stored::ui_settings_only(
             self.document.clone(),
             ui_settings,
             &*self.secrets,
         )
         .await
         {
-            Ok(config) => config,
+            Ok(config) => (config, StoredConfig::Unused),
             Err(error) => {
                 tracing::warn!(
                     error = %Report::new(&error),
                     "the config with the stored UI settings layered in does not load, so python answers every request"
                 );
-                return Reloaded::Unbuilt;
+                match self.document.clone().resolve((self.secrets)()).await {
+                    Ok(file) => (file, StoredConfig::UiSettingsUnread),
+                    Err(error) => {
+                        tracing::warn!(
+                            error = %Report::new(&error),
+                            "the config file does not load, so python answers every request"
+                        );
+                        return Reloaded::Unbuilt;
+                    }
+                }
             }
         };
-        match live
-            .swap(|current| rebuild(config, StoredConfig::Unused, current))
-            .await
-        {
+        match live.swap(|current| rebuild(config, stored, current)).await {
             Ok(_) => {
                 self.off = true;
                 Reloaded::Off
@@ -900,6 +907,40 @@ mod tests {
         assert_eq!((first, second), (Reloaded::Off, Reloaded::Off));
         assert_eq!(api_key(&live, "a"), None);
         assert_eq!(refused_for(&live, "file").await, None);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_read_that_finds_store_model_in_db_off_with_ui_settings_that_do_not_load_blames_them_and_stops()
+     {
+        let (live, mut reading) = booted(&Rows::default()).await;
+        reading.switched_on = false;
+        let rows = Rows {
+            ui_settings: Ok(Some(
+                r#"{"forward_client_headers_to_llm_api": ["not", "a", "flag"]}"#,
+            )),
+            ..serving(&[("a", "key-1")])
+        };
+
+        let first = reading.reload(&rows, &live, &rebuild).await;
+        let second = reading.reload(&rows, &live, &rebuild).await;
+
+        let request = Request::post("/v1/messages")
+            .header("authorization", "Bearer gateway-key")
+            .body(Body::from(
+                r#"{"model":"file","max_tokens":8,"messages":[]}"#,
+            ))
+            .unwrap();
+        let admit = live.current().admit.clone().unwrap();
+        let over = admit
+            .admit(request)
+            .await
+            .err()
+            .map(|(_, reason)| String::from(reason.over));
+        assert_eq!(
+            (first, second, over.as_deref()),
+            (Reloaded::Off, Reloaded::Off, Some("ui_settings"))
+        );
     }
 
     #[rstest]
