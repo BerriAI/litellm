@@ -195,7 +195,7 @@ class BaseInteractionsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the get interaction request into URL and query params.
 
@@ -226,7 +226,7 @@ class BaseInteractionsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the delete interaction request into URL and body.
 
@@ -258,7 +258,7 @@ class BaseInteractionsAPIConfig(ABC):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         """
         Transform the cancel interaction request into URL and body.
 

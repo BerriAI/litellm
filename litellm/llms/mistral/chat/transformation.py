@@ -891,7 +891,7 @@ class MistralConfig(OpenAIGPTConfig):
         return all_expected_values_are_empty
 
     @staticmethod
-    def _handle_empty_content_response(response_data: dict) -> dict:
+    def _handle_empty_content_response(response_data: dict) -> dict[str, object]:
         """
         Handle Mistral-specific behavior where empty string content should be converted to None.
 
@@ -920,7 +920,7 @@ class MistralConfig(OpenAIGPTConfig):
         return "\n".join([block.get("text", "") for block in thinking_blocks["thinking"]])
 
     @staticmethod
-    def _handle_content_list_to_str_conversion(response_data: dict) -> dict:
+    def _handle_content_list_to_str_conversion(response_data: dict) -> dict[str, object]:
         """
         Handle Mistral's content list format and extract thinking content.
 

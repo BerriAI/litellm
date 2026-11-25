@@ -113,10 +113,20 @@ pub struct Shadowed {
 }
 
 /// The document with the stored settings layered in, and the stored keys the file shadows.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Overlaid {
     pub document: Value,
     pub shadowed: Box<[Shadowed]>,
+}
+
+/// `document` holds decrypted stored values and the master key, so `Debug` leaves it out.
+impl std::fmt::Debug for Overlaid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Overlaid")
+            .field("document", &"<redacted>")
+            .field("shadowed", &self.shadowed)
+            .finish()
+    }
 }
 
 /// `document` with `rows` layered under it. Call it only when the proxy would read the database,
@@ -270,6 +280,17 @@ mod tests {
 
     fn rows(json: &str) -> SettingsRows {
         serde_json::from_str(json).expect("test rows parse")
+    }
+
+    #[test]
+    fn debug_output_leaves_the_overlaid_document_out() {
+        let overlaid = overlay(
+            yaml("general_settings: {master_key: sk-file-secret}"),
+            &rows(r#"{"general_settings": {"master_key": "sk-stored-secret"}}"#),
+        );
+        let printed = format!("{overlaid:?}");
+        assert!(!printed.contains("secret"), "{printed}");
+        assert!(printed.contains("master_key"), "{printed}");
     }
 
     fn shadowed(keys: &[(Section, &str)]) -> Box<[Shadowed]> {

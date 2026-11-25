@@ -110,7 +110,7 @@ class AzureAnthropicMessagesConfig(AnthropicMessagesConfig):
         anthropic_messages_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
-    ) -> dict:
+    ) -> dict[str, object]:
         anthropic_messages_request: Final = super().transform_anthropic_messages_request(
             model=model,
             messages=messages,
