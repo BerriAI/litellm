@@ -59,6 +59,7 @@ IGNORE_FUNCTIONS = [
     "_decrypted_param",  # max depth set.
     "contains_encrypted_marker",  # max depth set.
     "_rotate_guardrail_row",  # bounded by attempts_left.
+    "_responses_dropping_refused_fields",  # bounded by _REFUSED_FIELDS, each retry drops a field it sent.
     "_delete_nested_value_custom",  # max depth set (bounded by number of path segments).
     "_filter_exceptions_from_params",  # max depth set (default 20) to prevent infinite recursion.
     "__getattr__",  # lazy loading pattern in litellm/__init__.py with proper caching to prevent infinite recursion.
