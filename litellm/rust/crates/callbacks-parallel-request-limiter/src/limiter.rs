@@ -1085,7 +1085,7 @@ impl ParallelRequestLimiter {
         if state.stash().settles_at_close {
             return;
         }
-        self.refund_batch_reservations(state).await;
+        self.refund_batch_reservations(state, ctx).await;
         let settlements = {
             let mut stash = state.stash();
             let (reserved, itpm, otpm) = Self::open_reservations(&stash);
@@ -1102,19 +1102,17 @@ impl ParallelRequestLimiter {
             settlements
         };
         for settlement in settlements {
-            self.engine.settle(settlement, ctx, false).await;
+            self.engine.settle(settlement, ctx).await;
         }
     }
 
-    async fn refund_batch_reservations(&self, state: &LimiterState) {
+    async fn refund_batch_reservations(&self, state: &LimiterState, ctx: Ctx<'_>) {
         let enqueued = state.stash().batch_enqueued.take();
         if let Some(reservation) = enqueued {
             self.enqueued.refund(&reservation).await;
         }
         let refunds = std::mem::take(&mut state.stash().batch_tpd_refunds);
-        if !refunds.is_empty() {
-            self.engine.reservation_aware(&refunds).await;
-        }
+        self.engine.apply_usage(&refunds, ctx).await;
     }
 
     /// Leaves a WebSocket's admission reservation to its close: the failure callbacks of the
@@ -1147,7 +1145,11 @@ impl ParallelRequestLimiter {
         if !state.stash().owned {
             return;
         }
-        self.refund_batch_reservations(state).await;
+        let ctx = Ctx {
+            policy: Policy::default(),
+            request: None,
+        };
+        self.refund_batch_reservations(state, ctx).await;
         let settlements = {
             let mut stash = state.stash();
             let (reserved, itpm, otpm) = Self::open_reservations(&stash);
@@ -1185,12 +1187,8 @@ impl ParallelRequestLimiter {
             stash.mark_reservation_released();
             settlements
         };
-        let ctx = Ctx {
-            policy: Policy::default(),
-            request: None,
-        };
         for settlement in settlements {
-            self.engine.settle(settlement, ctx, false).await;
+            self.engine.settle(settlement, ctx).await;
         }
     }
 
@@ -1361,7 +1359,7 @@ impl ParallelRequestLimiter {
             settlements
         };
         for settlement in settlements {
-            self.engine.settle(settlement, ctx, true).await;
+            self.engine.settle(settlement, ctx).await;
         }
     }
 
@@ -1407,16 +1405,8 @@ impl ParallelRequestLimiter {
             (operations, io)
         };
         self.engine.apply_usage(&operations, ctx).await;
-        match io {
-            Some(Settlement::Plain(operations)) if !operations.is_empty() => {
-                self.engine
-                    .increment_with_ttl_preservation(&operations, ctx)
-                    .await;
-            }
-            Some(Settlement::Project(operations)) if !operations.is_empty() => {
-                self.engine.reservation_aware(&operations).await;
-            }
-            _ => {}
+        if let Some(settlement) = io {
+            self.engine.settle(settlement, ctx).await;
         }
     }
 

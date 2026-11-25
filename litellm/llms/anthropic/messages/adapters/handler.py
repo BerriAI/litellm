@@ -101,7 +101,7 @@ class _ChatTargetReasoning:
     summary: str | None = None
 
 
-def _model_info_with_request_base_model(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
+def model_info_with_request_base_model(kwargs: Mapping[str, object]) -> Mapping[str, object] | None:
     model_info: Final = as_str_mapping(kwargs.get("model_info"))
     base_model: Final = kwargs.get("base_model")
     if not isinstance(base_model, str) or not base_model:
@@ -662,7 +662,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         web_search_options: Final = completion_kwargs.get("web_search_options")
         tools: Final = completion_kwargs.get("tools")
         client_summary: Final = thinking.get("summary")
-        deployment_model_info: Final = _model_info_with_request_base_model(completion_kwargs)
+        deployment_model_info: Final = model_info_with_request_base_model(completion_kwargs)
         declared_base_model: Final = None if deployment_model_info is None else deployment_model_info.get("base_model")
         model_info, _ = responses_api_bridge_check(
             model=local_model,
@@ -896,7 +896,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data,
             custom_llm_provider=target_provider,
             api_base=api_base if isinstance(api_base, str) else None,
-            deployment_model_info=_model_info_with_request_base_model(provider_kwargs),
+            deployment_model_info=model_info_with_request_base_model(provider_kwargs),
             reasoning_summary=peek_reasoning_summary_aliases(provider_kwargs),
             drop_params=drop_params,
             translate_bare_output_effort=extra_kwargs.get("reasoning_effort") is None,
