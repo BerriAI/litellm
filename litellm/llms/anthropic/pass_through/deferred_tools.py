@@ -7,6 +7,8 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.vertex_ai.common_utils import VertexAIModelRoute, get_vertex_ai_model_route
 
+from .utils import local_model_name
+
 DeferredToolsMode: TypeAlias = Literal["passthrough", "native", "emulate", "drop"]
 CLAUDE_CODE_TOOL_SEARCH_NAME: Final = "ToolSearch"
 CLIENT_TOOL_SEARCH_PROVIDERS: Final = frozenset({"azure", "openai"})
@@ -76,7 +78,9 @@ def builds_tools_without_deferral(provider: str | None, model: str, model_info: 
                 "api_base": api_base,
                 "base_model": (as_str_mapping(model_info) or {}).get("base_model"),
             }
-            return get_vertex_ai_model_route(model, route_params) == VertexAIModelRoute.GEMINI
+            return (
+                get_vertex_ai_model_route(local_model_name(model, provider), route_params) == VertexAIModelRoute.GEMINI
+            )
         case "bedrock":
             return BedrockModelInfo.get_bedrock_route(model) in ("converse", "converse_like", "chat_completions")
         case _:
@@ -136,7 +140,7 @@ def is_deferred(tool: Mapping[str, object]) -> bool:
 
 
 def client_tool_search_name(tools: Iterable[object] | None) -> str | None:
-    names: Final = frozenset((as_str_mapping(tool) or {}).get("name") for tool in tools or ())
+    names: Final = ((as_str_mapping(tool) or {}).get("name") for tool in tools or ())
     return CLAUDE_CODE_TOOL_SEARCH_NAME if CLAUDE_CODE_TOOL_SEARCH_NAME in names else None
 
 

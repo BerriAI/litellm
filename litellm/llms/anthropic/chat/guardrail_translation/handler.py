@@ -33,6 +33,7 @@ from litellm.llms.anthropic.pass_through.adapters.transformation import (
     is_provider_native_tool_dict,
     truncate_tool_name,
 )
+from litellm.llms.anthropic.pass_through.deferred_tools import is_deferred
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     build_complete_streaming_response,
     build_usage_only_response_from_chunks,
@@ -263,6 +264,33 @@ def _restore_tool_use_names(messages: Sequence[object], original_names: Mapping[
         for block in list_field(message, "content"):
             if (name := _tool_use_name(block)) is not None and name in original_names and isinstance(block, dict):
                 block["name"] = original_names[name]
+
+
+def _deferred_tool_names(tools: Iterable[object]) -> frozenset[str]:
+    names: Final = (
+        (as_str_mapping(tool) or {}).get("name") for tool in tools if is_deferred(as_str_mapping(tool) or {})
+    )
+    return frozenset(name for name in names if isinstance(name, str))
+
+
+def _with_request_deferral(tool: AllAnthropicToolsValues, deferred_names: frozenset[str]) -> AllAnthropicToolsValues:
+    name: Final = (as_str_mapping(tool) or {}).get("name")
+    if not isinstance(name, str) or name not in deferred_names:
+        return tool
+    return cast(AllAnthropicToolsValues, {**tool, "defer_loading": True})  # cast-ok: same tool, one more field
+
+
+def _loaded_up_front(tools: Sequence[object]) -> Sequence[object]:
+    """
+    Anthropic rejects a request whose tools are all deferred, so when a guardrail removed the
+    tools that were not, the ones it kept are sent without `defer_loading`.
+    """
+    if not tools or not all(is_deferred(as_str_mapping(tool) or {}) for tool in tools):
+        return tools
+    return tuple(
+        {key: value for key, value in fields.items() if key != "defer_loading"}
+        for fields in filter(None, map(as_str_mapping, tools))
+    )
 
 
 def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[str, str]) -> ChatCompletionToolParam:
@@ -758,6 +786,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 # Convert tools back from OpenAI format to Anthropic format
                 anthropic_config: Final = AnthropicConfig()
                 anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
+                request_deferred_names: Final = _deferred_tool_names(list_field(data, "tools"))
                 for tool in guardrailed_tools:
                     converted_tool, mcp_server = anthropic_config.map_tool_helper(
                         _with_original_name(tool, original_tool_names.declared)
@@ -772,10 +801,14 @@ class AnthropicMessagesHandler(BaseTranslation):
                         tool_name=anthropic_tool_name,
                     )
                     if scan_only_tool_results
-                    else [
-                        *(tool for tool in data.get("tools") or [] if is_provider_native_tool_dict(tool)),
-                        *anthropic_tools,
-                    ]
+                    else list(
+                        _loaded_up_front(
+                            [
+                                *(tool for tool in data.get("tools") or [] if is_provider_native_tool_dict(tool)),
+                                *(_with_request_deferral(tool, request_deferred_names) for tool in anthropic_tools),
+                            ]
+                        )
+                    )
                 )
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")

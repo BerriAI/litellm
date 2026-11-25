@@ -116,8 +116,11 @@ def _tool_result_texts(tool_result: Mapping[str, object]) -> Iterator[str]:
 
 @dataclass(frozen=True, slots=True)
 class ToolSearchReplay:
-    call_ids: frozenset[object]
+    call_ids: frozenset[str]
     loadable: Mapping[str, Mapping[str, object]]
+
+    def replays(self, tool_use_id: object) -> bool:
+        return isinstance(tool_use_id, str) and tool_use_id in self.call_ids
 
     def call_item(self, tool_use: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: API input item
         return {
@@ -372,7 +375,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         if btype in ("thinking", "redacted_thinking"):
             replayed: Final = responses_reasoning_items_from_thinking_blocks(group)
             return tuple(dict(item) for item in replayed)
-        if btype == "tool_use" and tool_search is not None and first.get("id") in tool_search.call_ids:
+        if btype == "tool_use" and tool_search is not None and tool_search.replays(first.get("id")):
             return (tool_search.call_item(first),)
         if btype == "tool_use":
             return (
@@ -462,7 +465,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             tool_use_id = block.get("tool_use_id", "")
                             inner = block.get("content")
                             tool_result_block = cast(Mapping[str, object], block)  # cast-ok: TypedDict upcast
-                            if tool_search is not None and tool_use_id in tool_search.call_ids:
+                            if tool_search is not None and tool_search.replays(tool_use_id):
                                 input_items.extend(tool_search.output_items(tool_result_block))
                                 continue
                             tool_breakpoint, covered_image_parts, later_image_parts = (
@@ -621,7 +624,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         searches: Final = (block for block in _assistant_tool_uses(messages) if block.get("name") == tool_search_name)
         loadable: Final = (tool for tool in tools if tool.get("name") != tool_search_name)
         return ToolSearchReplay(
-            call_ids=frozenset(block.get("id") for block in searches),
+            call_ids=frozenset(
+                call_id for call_id in (block.get("id") for block in searches) if isinstance(call_id, str)
+            ),
             loadable=MappingProxyType(
                 {str(tool.get("name")): cls._translate_tool_to_responses_api(tool) for tool in loadable}
             ),
