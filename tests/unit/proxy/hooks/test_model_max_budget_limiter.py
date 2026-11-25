@@ -1170,6 +1170,60 @@ async def test_svg_authoring_is_charged_to_the_author_models_budget_not_the_imag
 
 
 @pytest.mark.asyncio
+async def test_svg_authoring_is_charged_only_to_the_svg_model_names_it_was_admitted_under(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.constants import SVG_AUTHOR_BUDGET_MODELS_METADATA_KEY
+    from litellm.types.utils import ImageResponse
+
+    calls_the_model: Final = {"model": "openai/gpt-5-nano", "api_key": "sk-test"}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.llm_router",
+        Router(
+            model_list=[
+                {"model_name": "my-nano", "litellm_params": calls_the_model},
+                {"model_name": "other-nano", "litellm_params": calls_the_model},
+            ]
+        ),
+    )
+    svg_cost: Final = (
+        1000 * litellm.model_cost["gpt-5-nano"]["input_cost_per_token"]
+        + 500 * litellm.model_cost["gpt-5-nano"]["output_cost_per_token"]
+    )
+    budget: Final = {"budget_limit": 1.0, "time_period": "1d"}
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+
+    await _log_success(
+        limiter,
+        {
+            "call_type": "aimage_generation",
+            "custom_llm_provider": "openai",
+            "standard_logging_object": {
+                "call_type": "aimage_generation",
+                "response_cost": 0.02 + svg_cost,
+                "model": "gpt-image-1",
+                "model_group": "gpt-image-1",
+                "metadata": {"user_api_key_hash": KEY_HASH},
+            },
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key_model_max_budget": {"my-nano": budget, "other-nano": budget},
+                    SVG_AUTHOR_BUDGET_MODELS_METADATA_KEY: ["my-nano"],
+                }
+            },
+        },
+        response_obj=ImageResponse(
+            data=[{"b64_json": "svg"}],
+            svg_usage={"model": "gpt-5-nano", "input_tokens": 1000, "output_tokens": 500, "total_tokens": 1500},
+        ),
+    )
+
+    assert {
+        model: await _spend(limiter, f"virtual_key_spend:{KEY_HASH}:{model}:1d") for model in ("my-nano", "other-nano")
+    } == {"my-nano": pytest.approx(svg_cost), "other-nano": 0.0}
+
+
+@pytest.mark.asyncio
 async def test_a_delegated_response_is_charged_to_every_budgeted_group_that_calls_its_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

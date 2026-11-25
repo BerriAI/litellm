@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
-from litellm.constants import SVG_AUTHOR_DEPLOYMENT_METADATA_KEY
+from litellm.constants import SVG_AUTHOR_BUDGET_MODELS_METADATA_KEY, SVG_AUTHOR_DEPLOYMENT_METADATA_KEY
 from litellm.litellm_core_utils.routing_common_utils import resolve_model_group_alias
 from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
@@ -18,7 +18,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     key_model_aliases_for_auth_check,
 )
-from litellm.proxy.hooks.model_max_budget_limiter import delegated_model_over_budget
+from litellm.proxy.hooks.model_max_budget_limiter import model_over_budget
 from litellm.proxy.litellm_pre_call_utils import customer_request_auth, request_served_model
 from litellm.types.images.main import ImageSVGAuthorDeployment
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
@@ -85,15 +85,31 @@ def _containers(body: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
     yield _as_extra_body(body.get(_EXTRA_BODY_FIELD)) or {}
 
 
-def _authors_in(container: Mapping[str, object]) -> Iterator[str | None]:
-    yield _author_of(container.get(_SVG_FIELD))
-    form_model: Final = container.get(_SVG_FORM_MODEL_FIELD)
-    yield form_model if isinstance(form_model, str) else None
+_NOT_A_MODEL_NAME: Final = object()
+
+
+def _author_values_in(container: Mapping[str, object]) -> Iterator[object]:
+    svg: Final = _as_object(container.get(_SVG_FIELD))
+    if svg is not None and "model" in svg:
+        yield svg["model"]
+    yield from (
+        value if key == _SVG_FORM_MODEL_FIELD else _NOT_A_MODEL_NAME
+        for key, value in container.items()
+        if key.startswith(_SVG_FORM_MODEL_FIELD)
+    )
 
 
 def _svg_author_models(body: Mapping[str, object]) -> tuple[str, ...]:
-    named: Final = chain.from_iterable(_authors_in(container) for container in _containers(body))
-    return tuple(dict.fromkeys(name for name in named if name))
+    named: Final = tuple(
+        name
+        for name in chain.from_iterable(_author_values_in(container) for container in _containers(body))
+        if name is not None
+    )
+    if not all(isinstance(name, str) and name for name in named):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="svg.model must be a single model name string"
+        )
+    return tuple(dict.fromkeys(name for name in named if isinstance(name, str)))
 
 
 def _encoded_like(original: object, value: Mapping[str, object]) -> object:
@@ -160,11 +176,9 @@ def _upstream_account(params: _DeploymentParams) -> tuple[object, ...]:
 def _image_deployments_billed_like(
     author: _Deployment, body: Mapping[str, object], team_id: str | None, llm_router: "Router | None"
 ) -> tuple[str, ...]:
-    image_model: Final = body.get("model")
-    if not isinstance(image_model, str):
+    image_group: Final = body.get("model")
+    if not isinstance(image_group, str):
         return ()
-    model_group_alias: Final = (_as_object(body.get(_ROUTER_SETTINGS_FIELD)) or {}).get("model_group_alias")
-    image_group: Final = resolve_model_group_alias(model_group_alias, image_model) or image_model
     author_account: Final = _upstream_account(author.litellm_params)
     return tuple(
         deployment.model_info.id
@@ -207,15 +221,15 @@ async def _check_key_owner_access(model: str, user_api_key_dict: UserAPIKeyAuth,
     )
 
 
-async def _refuse_an_author_over_its_budget(authors: tuple[str, ...], caller: UserAPIKeyAuth) -> None:
-    for author in authors:
-        if (budgeted := await delegated_model_over_budget(author, caller)) is not None:
-            raise ProxyException(
-                message=f"Budget exceeded for model={budgeted}, so svg.model cannot use {author}",
-                type=ProxyErrorTypes.budget_exceeded,
-                param="svg.model",
-                code=400,
-            )
+async def _refuse_an_author_over_its_budget(budget_models: tuple[str, ...], caller: UserAPIKeyAuth) -> None:
+    budgeted: Final = await model_over_budget(budget_models, caller)
+    if budgeted is not None:
+        raise ProxyException(
+            message=f"Budget exceeded for model={budgeted}, so svg.model cannot use it",
+            type=ProxyErrorTypes.budget_exceeded,
+            param="svg.model",
+            code=400,
+        )
 
 
 def _metadata_with_author_guardrails(
@@ -287,9 +301,11 @@ async def _authorized_author_updates(
             llm_router=llm_router,
         )
         await _check_key_owner_access(name, valid_token, llm_router)
-    await _refuse_an_author_over_its_budget(tuple(dict.fromkeys(name for name, _ in checks)), user_api_key_dict)
+    budget_models: Final = tuple(dict.fromkeys((*(name for name, _ in checks), served_author)))
+    await _refuse_an_author_over_its_budget(budget_models, user_api_key_dict)
+    budget_stamp: Final = {SVG_AUTHOR_BUDGET_MODELS_METADATA_KEY: list(budget_models)}
     if deployment is None:
-        return {}
+        return {metadata_variable_name: {**(_as_object(body.get(metadata_variable_name)) or {}), **budget_stamp}}
     provider_model: Final = _provider_and_model(deployment.litellm_params)[1]
     billed_like_author: Final = _image_deployments_billed_like(deployment, body, user_api_key_dict.team_id, llm_router)
     guarded_metadata: Final = _metadata_with_author_guardrails(body, served_author, llm_router)
@@ -298,21 +314,19 @@ async def _authorized_author_updates(
         if guarded_metadata is not None and metadata_variable_name == "metadata"
         else _as_object(body.get(metadata_variable_name)) or {}
     )
+    price_stamp: Final = (
+        {
+            SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: ImageSVGAuthorDeployment(
+                deployment_id=deployment.model_info.id,
+                provider_model=provider_model,
+                image_deployment_ids=billed_like_author,
+            ).model_dump()
+        }
+        if deployment.model_info.id is not None and billed_like_author
+        else {}
+    )
     return {
         **_rewritten_body_fields(body, provider_model),
         **({"metadata": guarded_metadata} if guarded_metadata is not None else {}),
-        **(
-            {
-                metadata_variable_name: {
-                    **metadata,
-                    SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: ImageSVGAuthorDeployment(
-                        deployment_id=deployment.model_info.id,
-                        provider_model=provider_model,
-                        image_deployment_ids=billed_like_author,
-                    ).model_dump(),
-                }
-            }
-            if deployment.model_info.id is not None and billed_like_author
-            else {}
-        ),
+        metadata_variable_name: {**metadata, **budget_stamp, **price_stamp},
     }

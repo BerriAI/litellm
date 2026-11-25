@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm import Router
-from litellm.constants import SVG_AUTHOR_DEPLOYMENT_METADATA_KEY
+from litellm.constants import SVG_AUTHOR_BUDGET_MODELS_METADATA_KEY, SVG_AUTHOR_DEPLOYMENT_METADATA_KEY
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.image_endpoints.svg_author_model import svg_author_model_updates
 
@@ -101,6 +101,12 @@ def _request(shape: Callable[[str], Mapping[str, object]], author: str) -> Mappi
     return {"model": "gpt-image-2.6", "prompt": "a red circle", "output_format": "svg", "metadata": {}, **shape(author)}
 
 
+def _price_stamp(authorized: Mapping[str, object]) -> object:
+    metadata: Final = authorized["metadata"]
+    assert isinstance(metadata, Mapping)
+    return metadata.get(SVG_AUTHOR_DEPLOYMENT_METADATA_KEY)
+
+
 async def _authorize(body: Mapping[str, object], key: UserAPIKeyAuth, router: Router) -> Mapping[str, object]:
     updates: Final = await svg_author_model_updates(
         body=body, user_api_key_dict=key, llm_router=router, metadata_variable_name="metadata"
@@ -127,7 +133,7 @@ async def test_allowed_proxy_author_is_sent_as_its_provider_model_and_recorded(
     request: Final = _request(shape, "my-nano")
     authorized: Final = await _authorize(request, UserAPIKeyAuth(models=["gpt-image-2.6", "my-nano"]), router)
     assert _author_sent(authorized) == "gpt-5-nano"
-    assert authorized["metadata"] == {SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: AUTHOR_STAMP}
+    assert _price_stamp(authorized) == AUTHOR_STAMP
 
 
 @pytest.mark.asyncio
@@ -135,7 +141,7 @@ async def test_key_alias_for_the_author_is_sent_as_its_provider_model(router: Ro
     key: Final = UserAPIKeyAuth(models=["gpt-image-2.6", "my-nano"], aliases={"nano": "my-nano"})
     authorized: Final = await _authorize(_request(_svg_top_level, "nano"), key, router)
     assert _author_sent(authorized) == "gpt-5-nano"
-    assert authorized["metadata"] == {SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: AUTHOR_STAMP}
+    assert _price_stamp(authorized) == AUTHOR_STAMP
 
 
 @pytest.mark.asyncio
@@ -153,7 +159,9 @@ async def test_unrestricted_key_keeps_a_raw_provider_author_unchanged(
     shape: Callable[[str], Mapping[str, object]], router: Router
 ) -> None:
     request: Final = _request(shape, "gpt-5-mini")
-    assert await _authorize(request, UserAPIKeyAuth(), router) == request
+    authorized: Final = await _authorize(request, UserAPIKeyAuth(), router)
+    assert {**authorized, "metadata": {}} == request
+    assert authorized["metadata"] == {SVG_AUTHOR_BUDGET_MODELS_METADATA_KEY: ["gpt-5-mini"]}
 
 
 @pytest.mark.asyncio
@@ -181,7 +189,7 @@ async def test_key_or_team_model_group_alias_for_the_author_is_sent_as_its_provi
     }
     authorized: Final = await _authorize(request, UserAPIKeyAuth(models=["gpt-image-2.6", "my-nano"]), router)
     assert _author_sent(authorized) == "gpt-5-nano"
-    assert authorized["metadata"] == {SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: AUTHOR_STAMP}
+    assert _price_stamp(authorized) == AUTHOR_STAMP
 
 
 @pytest.mark.asyncio
@@ -212,7 +220,7 @@ async def test_chained_key_aliases_send_the_model_they_approve(router: Router) -
     )
     authorized: Final = await _authorize(_request(_svg_top_level, "nano-alias"), key, router)
     assert _author_sent(authorized) == "gpt-5-nano"
-    assert authorized["metadata"] == {SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: AUTHOR_STAMP}
+    assert _price_stamp(authorized) == AUTHOR_STAMP
 
 
 @pytest.mark.asyncio
@@ -223,7 +231,7 @@ async def test_key_alias_through_the_global_alias_map_sends_the_model_it_approve
     key: Final = UserAPIKeyAuth(models=["gpt-image-2.6", "my-nano"], aliases={"nano": "restricted-chat"})
     authorized: Final = await _authorize(_request(_svg_top_level, "nano"), key, router)
     assert _author_sent(authorized) == "gpt-5-nano"
-    assert authorized["metadata"] == {SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: AUTHOR_STAMP}
+    assert _price_stamp(authorized) == AUTHOR_STAMP
 
 
 @pytest.mark.asyncio
@@ -234,7 +242,7 @@ async def test_saved_model_group_alias_is_applied_once_to_the_author(router: Rou
     }
     authorized: Final = await _authorize(request, UserAPIKeyAuth(), router)
     assert _author_sent(authorized) == "gpt-5-nano"
-    assert authorized["metadata"] == {SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: AUTHOR_STAMP}
+    assert _price_stamp(authorized) == AUTHOR_STAMP
 
 
 @pytest.mark.asyncio
@@ -260,12 +268,10 @@ async def test_team_alias_for_the_author_is_sent_as_its_team_deployment_model() 
     )
     authorized: Final = await _authorize(_request(_svg_top_level, "team-nano"), key, team_router)
     assert _author_sent(authorized) == "gpt-5-nano"
-    assert authorized["metadata"] == {
-        SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: {
-            "deployment_id": "team-nano-deployment",
-            "provider_model": "gpt-5-nano",
-            "image_deployment_ids": ("image-deployment",),
-        }
+    assert _price_stamp(authorized) == {
+        "deployment_id": "team-nano-deployment",
+        "provider_model": "gpt-5-nano",
+        "image_deployment_ids": ("image-deployment",),
     }
 
 
@@ -293,7 +299,7 @@ async def test_author_on_another_upstream_account_is_sent_but_not_priced_by_its_
     )
     authorized: Final = await _authorize(_request(_svg_top_level, "cheap-nano"), UserAPIKeyAuth(), mixed)
     assert _author_sent(authorized) == "gpt-5-nano"
-    assert authorized["metadata"] == {}
+    assert _price_stamp(authorized) is None
 
 
 @pytest.mark.asyncio
@@ -369,3 +375,110 @@ async def test_svg_author_deployment_guardrails_join_the_requests_own() -> None:
     authorized: Final = await _authorize(request, UserAPIKeyAuth(), guarded)
     assert authorized["metadata"]["guardrails"] == ["caller-guard", "pii-mask"]
     assert authorized["metadata"][SVG_AUTHOR_DEPLOYMENT_METADATA_KEY] == AUTHOR_STAMP
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "author_fields",
+    [
+        {"svg[model]": ["restricted-chat"]},
+        {"svg": {"model": ["restricted-chat"]}},
+        {"svg[model][]": ["restricted-chat"]},
+        {"extra_body": {"svg[model]": ["restricted-chat"]}},
+        {"svg": {"model": {"name": "restricted-chat"}}},
+    ],
+)
+async def test_svg_author_that_is_not_a_single_name_is_rejected(
+    author_fields: Mapping[str, object], router: Router
+) -> None:
+    request: Final = {"model": "gpt-image-2.6", "prompt": "a red circle", "metadata": {}, **author_fields}
+    with pytest.raises(HTTPException) as rejected:
+        await _authorize(request, UserAPIKeyAuth(models=["gpt-image-2.6"]), router)
+    assert rejected.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_svg_author_reached_through_the_global_alias_map_is_held_to_its_own_budget(
+    router: Router, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import Litellm_EntityType
+    from litellm.proxy.hooks.model_max_budget_limiter import model_budget_spend_cache_key
+
+    monkeypatch.setattr(litellm, "model_alias_map", {"restricted-chat": "my-nano"})
+    key: Final = UserAPIKeyAuth(
+        token="svg-alias-budget-key",
+        models=["gpt-image-2.6", "my-nano"],
+        model_max_budget={"my-nano": {"budget_limit": 1.0, "time_period": "1d"}},
+    )
+    spend_key: Final = model_budget_spend_cache_key(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id="svg-alias-budget-key",
+        budget_model="my-nano",
+        budget_duration="1d",
+    )
+    await proxy_server.model_max_budget_limiter.dual_cache.async_set_cache(spend_key, 1.0)
+    try:
+        with pytest.raises(ProxyException) as refused:
+            await _authorize(_request(_svg_top_level, "restricted-chat"), key, router)
+    finally:
+        await proxy_server.model_max_budget_limiter.dual_cache.async_delete_cache(spend_key)
+    assert refused.value.type == "budget_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_svg_author_is_not_held_to_another_groups_budget_on_the_same_provider_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import Litellm_EntityType
+    from litellm.proxy.hooks.model_max_budget_limiter import model_budget_spend_cache_key
+
+    shared_model: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt-image-2.6",
+                "litellm_params": {"model": "openai/gpt-image-2.6-flare", "api_key": "sk-test"},
+                "model_info": {"id": "image-deployment"},
+            },
+            {
+                "model_name": "my-nano",
+                "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "sk-test"},
+                "model_info": {"id": AUTHOR_DEPLOYMENT_ID},
+            },
+            {
+                "model_name": "other-nano",
+                "litellm_params": {"model": "openai/gpt-5-nano", "api_key": "sk-test"},
+                "model_info": {"id": "other-nano-deployment"},
+            },
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", shared_model)
+    key: Final = UserAPIKeyAuth(
+        token="svg-other-group-key",
+        models=["gpt-image-2.6", "my-nano", "other-nano"],
+        model_max_budget={"other-nano": {"budget_limit": 1.0, "time_period": "1d"}},
+    )
+    spend_key: Final = model_budget_spend_cache_key(
+        entity_type=Litellm_EntityType.KEY,
+        entity_id="svg-other-group-key",
+        budget_model="other-nano",
+        budget_duration="1d",
+    )
+    await proxy_server.model_max_budget_limiter.dual_cache.async_set_cache(spend_key, 1.0)
+    try:
+        authorized: Final = await _authorize(_request(_svg_top_level, "my-nano"), key, shared_model)
+    finally:
+        await proxy_server.model_max_budget_limiter.dual_cache.async_delete_cache(spend_key)
+    assert _author_sent(authorized) == "gpt-5-nano"
+    assert authorized["metadata"][SVG_AUTHOR_BUDGET_MODELS_METADATA_KEY] == ["my-nano"]
+
+
+@pytest.mark.asyncio
+async def test_already_resolved_image_model_is_not_aliased_again_for_the_price_stamp(router: Router) -> None:
+    request: Final = {
+        **_request(_svg_top_level, "my-nano"),
+        "router_settings_override": {"model_group_alias": {"gpt-image-2.6": "restricted-chat"}},
+    }
+    authorized: Final = await _authorize(request, UserAPIKeyAuth(), router)
+    assert _price_stamp(authorized) == AUTHOR_STAMP

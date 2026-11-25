@@ -240,6 +240,7 @@ def _svg_logging_obj(
     metadata: dict[str, object],
     metadata_key: str = "metadata",
     served_by: str = SERVING_IMAGE_DEPLOYMENT,
+    copied_from: str | None = None,
 ) -> Logging:
     logging_obj: Final = Logging(
         model="gpt-image-2.6-flare",
@@ -254,7 +255,10 @@ def _svg_logging_obj(
         model="gpt-image-2.6-flare",
         user="",
         optional_params={},
-        litellm_params={"custom_llm_provider": "openai", metadata_key: {**metadata, "model_info": {"id": served_by}}},
+        litellm_params={
+            "custom_llm_provider": "openai",
+            metadata_key: {**metadata, "model_info": {"id": served_by, "original_model_id": copied_from}},
+        },
     )
     return logging_obj
 
@@ -367,6 +371,26 @@ def test_svg_author_deployment_price_is_not_applied_when_another_image_deploymen
     )
     assert logging_obj.response_cost_calculator(result=response) == pytest.approx(
         _rendering_cost(response, "aimage_generation") + _list_authoring_cost("gpt-5-nano")
+    )
+
+
+def test_svg_author_price_applies_to_a_request_scoped_copy_of_the_image_deployment(svg_author_deployment: str) -> None:
+    from litellm.constants import SVG_AUTHOR_DEPLOYMENT_METADATA_KEY
+
+    response: Final = _svg_response("gpt-5-nano")
+    stamp: Final = {
+        "deployment_id": svg_author_deployment,
+        "provider_model": "gpt-5-nano",
+        "image_deployment_ids": [SERVING_IMAGE_DEPLOYMENT],
+    }
+    logging_obj: Final = _svg_logging_obj(
+        "aimage_generation",
+        {SVG_AUTHOR_DEPLOYMENT_METADATA_KEY: stamp},
+        served_by="request-scoped-copy",
+        copied_from=SERVING_IMAGE_DEPLOYMENT,
+    )
+    assert logging_obj.response_cost_calculator(result=response) == pytest.approx(
+        _rendering_cost(response, "aimage_generation") + 30 * SVG_AUTHOR_INPUT_PRICE + 100 * SVG_AUTHOR_OUTPUT_PRICE
     )
 
 

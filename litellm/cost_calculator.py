@@ -2962,9 +2962,12 @@ def svg_author_deployment_in(logged_params: object) -> ImageSVGAuthorDeployment 
         None,
     )
     served_by: Final = next(
-        (served for bucket in buckets if (served := _metadata_bucket(bucket.get("model_info")).get("id"))), None
+        (served for bucket in buckets if (served := _metadata_bucket(bucket.get("model_info"))).get("id")), None
     )
-    return stamp if stamp is not None and served_by in stamp.image_deployment_ids else None
+    served_ids: Final[tuple[object, ...]] = (
+        () if served_by is None else (served_by.get("id"), served_by.get("original_model_id"))
+    )
+    return stamp if stamp is not None and any(i in stamp.image_deployment_ids for i in served_ids) else None
 
 
 def _metadata_bucket(value: object) -> Mapping[str, object]:
