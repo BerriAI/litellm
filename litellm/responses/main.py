@@ -934,7 +934,9 @@ def starts_background_run_upstream(
     model: str, custom_llm_provider: str, model_info: object, api_base: str | None
 ) -> bool:
     provider_config: Final = dispatched_responses_api_config(model, custom_llm_provider, model_info, api_base)
-    return provider_config is not None and provider_config.starts_background_runs()
+    return provider_config is not None and provider_config.starts_background_runs(
+        _dispatched_model_name(model, custom_llm_provider)
+    )
 
 
 def provider_stores_the_conversation(model: str, custom_llm_provider: str | None, kwargs: Mapping[str, object]) -> bool:

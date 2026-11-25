@@ -247,6 +247,25 @@ class TestModelSpecialHandling:
         assert body["messages"][0]["content"] == expected_content
 
 
+class TestBackgroundRuns:
+    @pytest.mark.parametrize(
+        ("model", "starts_runs"),
+        [("inline-model", False), ("queueing-model", True), ("background_runs/queueing-model", True)],
+    )
+    def test_one_model_can_start_runs_on_a_provider_that_answers_background_inline(
+        self, model: str, starts_runs: bool
+    ) -> None:
+        config: Final = create_responses_config_class(
+            _provider(
+                "background_runs",
+                special_handling={"answers_background_inline": True},
+                model_special_handling={"queueing-model": {"answers_background_inline": False}},
+            )
+        )()
+
+        assert config.starts_background_runs(model) is starts_runs
+
+
 class TestReasoningEffortRounding:
     _CATALOG_KEY: Final = "refuseless/glm-5.3-abliterated"
 

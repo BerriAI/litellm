@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Final
 import httpx
 
 from litellm.litellm_core_utils.core_helpers import set_response_cost_in_hidden_params
+from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.types.llms.openai import ResponsesAPIResponse
@@ -25,11 +26,17 @@ from ..common_utils import EdenAIException, authorized_headers, resolve_api_base
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
+_UPSTREAMS_STARTING_BACKGROUND_RUNS: Final = frozenset({"openai", "azure", "microsoft", "meta"})
+
 
 class EdenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.EDENAI
+
+    def starts_background_runs(self, model: str) -> bool:
+        upstream, separator, _ = model.partition("/")
+        return (upstream if separator else inferred_provider(model)) in _UPSTREAMS_STARTING_BACKGROUND_RUNS
 
     def validate_environment(
         self,

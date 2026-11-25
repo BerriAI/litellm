@@ -197,7 +197,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         self.async_fetch_image = async_fetch_image
         self.encrypted_agent_messages = encrypted_agent_messages
 
-    def starts_background_runs(self) -> bool:
+    def starts_background_runs(self, model: str) -> bool:
         return "background" not in BEDROCK_RUNTIME_UNSUPPORTED_RESPONSE_PARAMS
 
     @classmethod

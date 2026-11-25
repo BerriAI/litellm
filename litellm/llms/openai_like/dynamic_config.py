@@ -494,8 +494,8 @@ def create_responses_config_class(provider: SimpleProviderConfig) -> "type[OpenA
             )
             return join_api_base(resolved_base, "responses")
 
-        def starts_background_runs(self) -> bool:
-            return not provider.special_handling.get("answers_background_inline")
+        def starts_background_runs(self, model: str) -> bool:
+            return not provider.special_handling_for(model).get("answers_background_inline")
 
         def _reads_prompt_cache_breakpoints(
             self, model: str, litellm_params: GenericLiteLLMParams, prompt_cache_options: object

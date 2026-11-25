@@ -636,6 +636,8 @@ def test_bridged_chat_rejects_background_on_a_pass_through_model_that_cannot_str
         "refuseless/deepseek-v4.1-flash-fast",
         "openinfer/@oi/Qwen3.5-9B",
         "zerogpu/meta-llama/llama-3.1-8b-instruct",
+        "edenai/google/gemma-4-31b-it",
+        "edenai/google-model-without-a-prefix",
     ],
 )
 def test_bridged_chat_sends_background_to_a_provider_that_answers_it_inline(model: str) -> None:
@@ -655,6 +657,62 @@ def test_bridged_chat_sends_background_to_a_provider_that_answers_it_inline(mode
     assert isinstance(response, ModelResponse)
     assert response.choices[0].message.content == "pong"
     assert json.loads(upstream.calls.last.request.content)["background"] is True
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "edenai/openai/gpt-5.3-codex",
+        "edenai/azure/gpt-5.3-codex",
+        "edenai/microsoft/mai-model",
+        "edenai/meta/muse-model",
+        "edenai/gpt-5.3-codex",
+    ],
+)
+def test_bridged_chat_rejects_background_on_an_eden_ai_upstream_that_starts_a_run(model: str) -> None:
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.post(url__startswith="https://eden.invalid/").mock(
+            return_value=httpx.Response(200, json=_searched_responses_body(model.split("/", 1)[1]))
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            litellm.completion(
+                model=model,
+                messages=[{"role": "user", "content": "ping"}],
+                api_base="https://eden.invalid/v3",
+                api_key="test-key",
+                background=True,
+                model_info={"mode": "responses"},
+            )
+
+    assert raised.value.status_code == 400
+    assert "background" in raised.value.message
+    assert upstream.call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("model", "sent_background"),
+    [("volcengine/seed-2-0-mini-260428", None), ("bigmodel/glm-5.3-flash", True)],
+)
+def test_bridged_chat_keeps_serving_allowed_background_on_a_provider_that_starts_no_run(
+    model: str, sent_background: bool | None
+) -> None:
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith="https://inline-provider.invalid/").mock(
+            return_value=httpx.Response(200, json=_searched_responses_body(model.split("/", 1)[1]))
+        )
+        response: Final = litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "ping"}],
+            api_base="https://inline-provider.invalid/v1",
+            api_key="test-key",
+            background=True,
+            allowed_openai_params=["background"],
+            model_info={"mode": "responses"},
+        )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    assert json.loads(upstream.calls.last.request.content).get("background") is sent_background
 
 
 def test_bridged_chat_keeps_serving_background_on_a_deployment_that_falls_back_to_chat(
