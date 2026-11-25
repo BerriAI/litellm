@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.request_timeout_resolver import get_configured_r
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.pass_through.deferred_tools import (
     native_messages_deferred_tools_refusal,
+    refusal_unless_dropped,
     unknown_deferred_tools_refusal,
 )
 from litellm.llms.anthropic.pass_through.messages.handler import messages_request_bridges
@@ -110,10 +111,14 @@ def _refuse_unusable_deferred_tools(kwargs: Mapping[str, object]) -> None:
         return
     drop_params: Final = drops_unsupported_params(kwargs.get("drop_params"))
     model, provider, _, _ = get_llm_provider(str(kwargs["model"]), optional_str(kwargs.get("custom_llm_provider")))
-    refusal: Final = unknown_deferred_tools_refusal(model_info, drop_params) or (
-        None
-        if messages_request_bridges(model, provider, model_info)
-        else native_messages_deferred_tools_refusal(model_info, provider, drop_params)
+    refusal: Final = refusal_unless_dropped(
+        unknown_deferred_tools_refusal(model_info)
+        or (
+            None
+            if messages_request_bridges(model, provider, model_info)
+            else native_messages_deferred_tools_refusal(model_info, provider)
+        ),
+        drop_params,
     )
     if refusal is not None:
         raise AnthropicError(status_code=400, message=refusal)

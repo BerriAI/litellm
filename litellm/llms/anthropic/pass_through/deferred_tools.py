@@ -2,12 +2,12 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Final, Literal, TypeAlias
 
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 
 DeferredToolsMode: TypeAlias = Literal["passthrough", "native", "emulate", "drop"]
 CLAUDE_CODE_TOOL_SEARCH_NAME: Final = "ToolSearch"
-CLIENT_TOOL_SEARCH_PROVIDERS: Final = frozenset({"azure", "fireworks_ai", "openai"})
-DEFERRAL_NEEDS_TOOL_SEARCH_PROVIDERS: Final = frozenset({"openai"})
+CLIENT_TOOL_SEARCH_PROVIDERS: Final = frozenset({"azure", "openai"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,31 +43,36 @@ def unknown_deferred_tools_message(setting: UnknownDeferredTools) -> str:
     )
 
 
-def unknown_deferred_tools_refusal(model_info: object, drop_params: bool) -> str | None:
+def unknown_deferred_tools_refusal(model_info: object) -> str | None:
     setting: Final = deferred_tools_setting(model_info)
-    if not isinstance(setting, UnknownDeferredTools) or drop_params:
-        return None
-    return unknown_deferred_tools_message(setting)
+    return unknown_deferred_tools_message(setting) if isinstance(setting, UnknownDeferredTools) else None
+
+
+def refusal_unless_dropped(refusal: str | None, drop_params: bool) -> str | None:
+    if refusal is None or not drop_params:
+        return refusal
+    verbose_logger.warning("drop_params is on, so LiteLLM falls back instead of answering 400: %s", refusal)
+    return None
 
 
 def usable_deferred_tools_mode(model_info: object, provider: str | None) -> DeferredToolsMode:
     mode: Final = deferred_tools_mode(model_info)
     if mode == "native" and provider not in CLIENT_TOOL_SEARCH_PROVIDERS:
         return "drop"
-    if mode == "passthrough" and provider in DEFERRAL_NEEDS_TOOL_SEARCH_PROVIDERS:
+    if mode == "passthrough" and provider in CLIENT_TOOL_SEARCH_PROVIDERS:
         return "drop"
     return mode
 
 
-def unusable_deferred_tools_refusal(model_info: object, provider: str | None, drop_params: bool) -> str | None:
+def unusable_deferred_tools_refusal(model_info: object, provider: str | None) -> str | None:
     mode: Final = deferred_tools_mode(model_info)
-    if drop_params or usable_deferred_tools_mode(model_info, provider) == mode:
+    if usable_deferred_tools_mode(model_info, provider) == mode:
         return None
     if mode == "native":
         return (
-            f"model_info.deferred_tools native needs a Responses API with client tool search, which provider "
-            f"{provider} lacks. Pick emulate, passthrough or drop for this deployment, or set drop_params to send "
-            "deferred tools the drop way"
+            f"model_info.deferred_tools native needs a Responses API whose client tool search keeps deferred tools "
+            f"out of the prompt, which provider {provider} lacks. Pick emulate, passthrough or drop for this "
+            "deployment, or set drop_params to send deferred tools the drop way"
         )
     return (
         f"model_info.deferred_tools passthrough sends deferred tools as Claude Code sent them, which provider "
@@ -76,9 +81,9 @@ def unusable_deferred_tools_refusal(model_info: object, provider: str | None, dr
     )
 
 
-def native_messages_deferred_tools_refusal(model_info: object, provider: str | None, drop_params: bool) -> str | None:
+def native_messages_deferred_tools_refusal(model_info: object, provider: str | None) -> str | None:
     setting: Final = (as_str_mapping(model_info) or {}).get("deferred_tools")
-    if setting is None or setting == "passthrough" or drop_params:
+    if setting is None or setting == "passthrough":
         return None
     return (
         f"model_info.deferred_tools {setting} applies only where LiteLLM translates /v1/messages to another API. "

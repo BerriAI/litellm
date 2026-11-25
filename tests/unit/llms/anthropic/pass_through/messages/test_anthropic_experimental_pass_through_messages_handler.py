@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import json
+import logging
 import os
 import uuid
 from collections.abc import Mapping
@@ -2449,6 +2450,12 @@ async def test_azure_messages_send_no_tool_search_unless_deferred_tools_is_nativ
         ),
         ("xai/grok-4.7", {"deferred_tools": "native"}, {}, "emulate, passthrough or drop"),
         (
+            "fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro",
+            {"deferred_tools": "native"},
+            {},
+            "emulate, passthrough or drop",
+        ),
+        (
             "azure/gpt-6.1-sol",
             {"deferred_tools": "native"},
             {"tool_choice": {"type": "tool", "name": "ToolSearch"}},
@@ -2456,6 +2463,7 @@ async def test_azure_messages_send_no_tool_search_unless_deferred_tools_is_nativ
         ),
         ("anthropic/claude-opus-5-5", {"deferred_tools": "loaded"}, {}, "passthrough, native, emulate, drop"),
         ("openai/gpt-6.2-sol", {"deferred_tools": "passthrough"}, {}, "Pick native or emulate"),
+        ("azure/gpt-6.1-sol", {"deferred_tools": "passthrough"}, {}, "Pick native or emulate"),
         ("deepseek/deepseek-chat", {"deferred_tools": "emulate"}, {}, "set it to passthrough"),
         ("deepseek/deepseek-chat", {"deferred_tools": "native"}, {}, "set it to passthrough"),
         ("anthropic/claude-opus-5-5", {"deferred_tools": "drop"}, {}, "set it to passthrough"),
@@ -2464,9 +2472,11 @@ async def test_azure_messages_send_no_tool_search_unless_deferred_tools_is_nativ
         "unknown_value",
         "native_without_a_responses_api",
         "native_without_client_tool_search",
+        "native_where_tool_search_still_prompts_deferred_tools",
         "native_with_a_forced_tool_search",
         "unknown_value_on_a_messages_api_route",
         "passthrough_where_deferral_needs_tool_search",
+        "passthrough_on_azure",
         "emulate_on_a_messages_api_route",
         "native_on_a_messages_api_route",
         "drop_on_a_messages_api_route",
@@ -2503,17 +2513,21 @@ async def test_unusable_deferred_tools_setting_is_a_400_before_any_upstream_call
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "model, deferral_flags",
-    [("fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro", {None, True}), ("openai/gpt-6.2-sol", {None})],
+    "model, deferral_flags, fallback_warnings",
+    [("fireworks_ai/accounts/fireworks/models/kimi-k3p1-pro", {None, True}, 0), ("openai/gpt-6.2-sol", {None}, 1)],
     ids=["kept_where_the_provider_takes_it", "dropped_where_deferral_needs_tool_search"],
 )
 async def test_passthrough_deferred_tools_fall_back_to_drop_under_drop_params_only_where_the_provider_rejects_them(
-    model: str, deferral_flags: set[object], monkeypatch: pytest.MonkeyPatch
+    model: str,
+    deferral_flags: set[object],
+    fallback_warnings: int,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"), respx.mock(assert_all_called=True) as respx_mock:
         upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
         with pytest.raises((openai.APIError, litellm.exceptions.APIConnectionError)):
             await litellm.anthropic.messages.acreate(
@@ -2532,17 +2546,26 @@ async def test_passthrough_deferred_tools_fall_back_to_drop_under_drop_params_on
     assert {tool.get("defer_loading") for tool in chain.from_iterable(body["tools"] for body in bodies)} == (
         deferral_flags
     )
+    assert len(_deferred_tools_fallback_warnings(caplog)) == fallback_warnings
+
+
+def _deferred_tools_fallback_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
+    return tuple(
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno == logging.WARNING and "model_info.deferred_tools" in record.getMessage()
+    )
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model_info", [{"deferred_tools": "emulate"}, {"deferred_tools": "native"}])
 async def test_a_messages_api_route_ignores_deferred_tools_under_drop_params(
-    model_info: Mapping[str, object], monkeypatch: pytest.MonkeyPatch
+    model_info: Mapping[str, object], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
-    with respx.mock(assert_all_called=True) as respx_mock:
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"), respx.mock(assert_all_called=True) as respx_mock:
         upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
         with pytest.raises((litellm.exceptions.APIConnectionError, litellm.exceptions.InternalServerError)):
             await litellm.anthropic.messages.acreate(
@@ -2557,6 +2580,7 @@ async def test_a_messages_api_route_ignores_deferred_tools_under_drop_params(
 
     bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
     assert [[tool.get("defer_loading") for tool in body["tools"]] for body in bodies][:1] == [[None, None, True]]
+    assert any(str(model_info["deferred_tools"]) in warning for warning in _deferred_tools_fallback_warnings(caplog))
 
 
 @pytest.mark.asyncio
@@ -2774,6 +2798,32 @@ async def test_emulated_deferred_tools_stream_the_loaded_tool_call_under_its_own
     assert "CallLoadedTool" not in streamed
     assert [(block["type"], block.get("name")) for block in tool_starts] == [("tool_use", "mcp__weather__get_forecast")]
     assert json.loads(tool_input) == {"city": "Lyon"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_info, search_result",
+    [
+        ({"deferred_tools": "passthrough"}, "Loaded tool mcp__weather__get_forecast.Tool loaded."),
+        ({"deferred_tools": "drop"}, "Tool loaded."),
+    ],
+    ids=["passthrough", "drop"],
+)
+async def test_a_chat_backend_reads_which_tools_a_passthrough_tool_search_loaded(
+    model_info: Mapping[str, object], search_result: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    body, _ = await _fireworks_kimi_messages(
+        model_info, httpx.Response(200, json=_dispatcher_chat_completion()), stream=False
+    )
+
+    search_results: Final = [
+        message for message in body["messages"] if message.get("tool_call_id") == "toolu_search"
+    ]
+    assert len(search_results) == 1
+    content: Final = search_results[0]["content"]
+    assert (content if isinstance(content, str) else "".join(part["text"] for part in content)) == search_result
 
 
 @pytest.mark.asyncio
