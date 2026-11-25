@@ -329,7 +329,8 @@ def test_cooldown_counter_increments_with_custom_labels(
         }
         logger.increment_deployment_cooled_down(**deployment_labels)
 
-        assert [(sample.labels, sample.value) for sample in _metric_samples("litellm_deployment_cooled_down_total")] == [
+        samples: Final = _metric_samples("litellm_deployment_cooled_down_total")
+        assert [(sample.labels, sample.value) for sample in samples] == [
             ({**deployment_labels, **expected_custom_labels}, 1)
         ]
     finally:
