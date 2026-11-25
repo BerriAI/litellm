@@ -44498,6 +44498,106 @@
     "minimax/minimax-latest": {
         "alias_of": "minimax/MiniMax-M3"
     },
+    "anex/MiniMax-H3": {
+        "litellm_provider": "anex",
+        "mode": "video_generation",
+        "source": "https://anex.sh/docs/video-pricing",
+        "output_cost_per_second": 0.068,
+        "output_cost_per_second_768p": 0.068,
+        "output_cost_per_second_2k": 0.11,
+        "output_cost_per_second_4k": 0.136,
+        "input_cost_per_image": 0.034,
+        "provider_specific_entry": {
+            "anex_free_input_images": 5
+        },
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "metadata": {
+            "comment": "MiniMax-compatible task API. Text to video and first and last frame, and a request with a reference runs on MiniMax-H3-Ref2VA at the same rates. $0.068/s at 768P, $0.11/s at 2K and $0.136/s at 4K. 2K and 4K are delivered by upscaling the 768P render. Plus $0.034 per input image beyond the first 5. Reference audio is free. Reference video input is rejected, since its billed seconds are known only after the create call."
+        }
+    },
+    "anex/MiniMax-H3-Ref2VA": {
+        "litellm_provider": "anex",
+        "mode": "video_generation",
+        "source": "https://anex.sh/docs/video-pricing",
+        "output_cost_per_second": 0.068,
+        "output_cost_per_second_768p": 0.068,
+        "output_cost_per_second_2k": 0.11,
+        "output_cost_per_second_4k": 0.136,
+        "input_cost_per_image": 0.034,
+        "provider_specific_entry": {
+            "anex_free_input_images": 5
+        },
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "metadata": {
+            "comment": "MiniMax-compatible task API. Reference to video, 50 steps, and needs at least one reference. $0.068/s at 768P, $0.11/s at 2K and $0.136/s at 4K. 2K and 4K are delivered by upscaling the 768P render. Plus $0.034 per input image beyond the first 5. Reference audio is free. Reference video input is rejected, since its billed seconds are known only after the create call."
+        }
+    },
+    "anex/MiniMax-H3-Ref2VA-SMD-4step": {
+        "litellm_provider": "anex",
+        "mode": "video_generation",
+        "source": "https://anex.sh/docs/video-pricing",
+        "output_cost_per_second": 0.051,
+        "output_cost_per_second_768p": 0.051,
+        "output_cost_per_second_2k": 0.11,
+        "output_cost_per_second_4k": 0.119,
+        "input_cost_per_image": 0.034,
+        "provider_specific_entry": {
+            "anex_free_input_images": 5
+        },
+        "supported_modalities": [
+            "text",
+            "image",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "metadata": {
+            "comment": "MiniMax-compatible task API. Reference to video, 4 steps, and needs at least one reference. $0.051/s at 768P, $0.11/s at 2K and $0.119/s at 4K. 2K and 4K are delivered by upscaling the 768P render. Plus $0.034 per input image beyond the first 5. Reference audio is free. Reference video input is rejected, since its billed seconds are known only after the create call."
+        }
+    },
+    "anex/FastH3-8-Step-V2": {
+        "litellm_provider": "anex",
+        "mode": "video_generation",
+        "source": "https://anex.sh/docs/video-pricing",
+        "output_cost_per_second": 0.017,
+        "output_cost_per_second_768p": 0.017,
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "metadata": {
+            "comment": "MiniMax-compatible task API. Text to video, 8 steps, 768P only, $0.017/s."
+        }
+    },
     "minimax/MiniMax-H3": {
         "litellm_provider": "minimax",
         "mode": "video_generation",
