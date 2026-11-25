@@ -2001,6 +2001,7 @@ async fn a_retry_whose_create_may_exist_ends_the_retries_and_the_fallbacks(confi
     assert_eq!((host.retries(), host.selected().len()), (1, 2));
 }
 
+#[rstest]
 #[tokio::test]
 async fn a_fallback_whose_create_may_exist_is_the_last_fallback_tried() {
     let host = Arc::new(ScriptedHost::scripted(vec![
@@ -2019,6 +2020,7 @@ async fn a_fallback_whose_create_may_exist_is_the_last_fallback_tried() {
     assert_eq!(host.selected(), ["p1", "b1"]);
 }
 
+#[rstest]
 #[tokio::test]
 async fn a_weighted_failover_whose_create_may_exist_skips_the_regular_fallbacks() {
     let host = Arc::new(ScriptedHost::failing(
