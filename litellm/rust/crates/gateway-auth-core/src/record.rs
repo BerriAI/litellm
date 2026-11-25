@@ -10,6 +10,7 @@ pub struct UserRecord {
     pub user_id: String,
     pub user_alias: Option<String>,
     pub limits: MinuteLimits,
+    pub budget: Budget,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -17,22 +18,28 @@ pub struct TeamRecord {
     pub team_id: String,
     pub team_alias: Option<String>,
     pub limits: MinuteLimits,
+    pub budget: Budget,
+    /// The `max_budget` of the budget `metadata.team_member_budget_id` names, which a member with
+    /// no budget of its own is held to.
+    pub member_max_budget: Option<f64>,
 }
 
-/// A user's row in a team. Its limits are its budget row's.
+/// A user's row in a team. Its limits and budget are its budget row's.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MembershipRecord {
     pub user_id: String,
     pub team_id: String,
     pub limits: MinuteLimits,
+    pub budget: Budget,
 }
 
-/// An organization. Its limits are its budget row's.
+/// An organization. Its limits and budget are its budget row's.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct OrgRecord {
     pub organization_id: String,
     pub organization_alias: Option<String>,
     pub limits: MinuteLimits,
+    pub budget: Budget,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -40,6 +47,7 @@ pub struct ProjectRecord {
     pub project_id: String,
     pub project_alias: Option<String>,
     pub metadata: Option<Map<String, Value>>,
+    pub budget: Budget,
 }
 
 /// The request's end user. `found` is whether it has a row, so a request that names none, or one
@@ -48,8 +56,8 @@ pub struct ProjectRecord {
 pub struct EndUserRecord {
     pub end_user_id: Option<String>,
     pub found: bool,
-    /// Its budget row's.
     pub limits: MinuteLimits,
+    pub budget: Budget,
 }
 
 /// The requests and tokens per minute a row allows, `None` where it sets no limit.
@@ -63,6 +71,13 @@ impl MinuteLimits {
     pub fn counts_tokens(self) -> bool {
         self.tpm.is_some()
     }
+}
+
+/// The `max_budget` a row holds and what it has spent against it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Budget {
+    pub max: Option<f64>,
+    pub spend: f64,
 }
 
 /// A record that stands for something a caller names by id.
