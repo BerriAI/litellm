@@ -70,6 +70,20 @@ except Exception:
     version = "0.0.0"
 
 
+def _explicitly_disabled_retries(logging_obj: "LiteLLMLoggingObject | None") -> bool:
+    """True when the request explicitly asked for zero retries.
+
+    The stale-session ``ConnectError`` retry below rebuilds the client once, under
+    the SDK retry configuration — so a request that set ``max_retries=0`` /
+    ``num_retries=0`` still made a second transport attempt. An explicit zero wins
+    over the session refresh (#52773); an unset value keeps the refresh.
+    """
+    params = getattr(logging_obj, "litellm_params", None)
+    if not isinstance(params, dict):
+        return False
+    return any(params.get(key) == 0 for key in ("max_retries", "num_retries"))
+
+
 # aiohttp 3.10+ exposes a `socket_factory` kwarg on TCPConnector. Older
 # versions don't — detect once and skip the keep-alive wiring there.
 # https://docs.aiohttp.org/en/stable/client_reference.html#aiohttp.TCPConnector
@@ -1043,7 +1057,10 @@ class AsyncHTTPHandler:
             response.raise_for_status()
             return response
         except httpx.ConnectError:
-            # Retry the request with a new session if there is a connection error
+            # Retry the request with a new session if there is a connection error —
+            # unless the caller explicitly disabled retries (#52773).
+            if _explicitly_disabled_retries(logging_obj):
+                raise
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
                 return await self.single_connection_request(
