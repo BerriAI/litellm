@@ -210,6 +210,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_openai_prompt_cache_breakpoint: ReadOnly[bool | None]
     supports_bedrock_converse_cache_point: ReadOnly[bool | None]
     supports_thinking_cache_preservation: ReadOnly[bool | None]
+    supports_configuration_update_input_item: ReadOnly[bool | None]
     supports_computer_use: bool | None
     supports_audio_input: bool | None
     supports_video_input: ReadOnly[bool | None]

@@ -7796,6 +7796,7 @@ def _look_up_model_info(
                 supports_openai_prompt_cache_breakpoint=None,
                 supports_bedrock_converse_cache_point=None,
                 supports_thinking_cache_preservation=None,
+                supports_configuration_update_input_item=None,
                 supports_computer_use=None,
                 supports_pdf_input=None,
             )
@@ -8136,6 +8137,9 @@ def _look_up_model_info(
                 ),
                 supports_bedrock_converse_cache_point=_model_info.get("supports_bedrock_converse_cache_point", None),
                 supports_thinking_cache_preservation=_model_info.get("supports_thinking_cache_preservation", None),
+                supports_configuration_update_input_item=_model_info.get(
+                    "supports_configuration_update_input_item", None
+                ),
                 supports_audio_input=_model_info.get("supports_audio_input", None),
                 supports_video_input=_model_info.get("supports_video_input", None),
                 supports_box_questions=_model_info.get("supports_box_questions", None),

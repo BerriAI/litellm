@@ -48,6 +48,7 @@ from litellm.llms.openai.chat.gpt_reasoning_transformation import (
     refused_reasoning_effort_warning,
     unsupported_reasoning_effort_message,
 )
+from litellm.responses.additional_tools import ADDITIONAL_TOOLS_INPUT_ITEM_TYPE
 from litellm.responses.litellm_completion_transformation.custom_tools import TOOL_CALL_ITEM_ID_PREFIX_BY_TYPE
 from litellm.responses.litellm_completion_transformation.reasoning_items import is_litellm_minted_reasoning_item
 from litellm.responses.litellm_completion_transformation.tool_search import (
@@ -761,7 +762,40 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         sanitized_tools: Final = self._sanitized_tool_schemas_for_openai(
             model=model, tools=object_schema_tools, litellm_params=litellm_params
         )
-        return self._drop_foreign_tool_call_item_ids(stripped_input), sanitized_tools
+        sanitized_input: Final = self._input_with_sanitized_additional_tools(
+            model=model, input=stripped_input, litellm_params=litellm_params
+        )
+        return self._drop_foreign_tool_call_item_ids(sanitized_input), sanitized_tools
+
+    def _input_with_sanitized_additional_tools(
+        self, model: str, input: str | ResponseInputParam, litellm_params: GenericLiteLLMParams
+    ) -> str | ResponseInputParam:
+        if not isinstance(input, list):
+            return input
+        sanitized_items: Final = [
+            self._item_with_sanitized_additional_tools(model=model, item=item, litellm_params=litellm_params)
+            for item in input
+        ]
+        if _same_objects(sanitized_items, input):
+            return input
+        return cast("ResponseInputParam", sanitized_items)  # cast-ok: items keep their shape, tool schemas sanitized
+
+    def _item_with_sanitized_additional_tools(
+        self, model: str, item: object, litellm_params: GenericLiteLLMParams
+    ) -> object:
+        fields: Final = _json_object_or_none(item)
+        tools: Final = fields.get("tools") if fields is not None else None
+        if fields is None or fields.get("type") != ADDITIONAL_TOOLS_INPUT_ITEM_TYPE or not isinstance(tools, list):
+            return item
+        item_tools: Final = cast("list[ALL_RESPONSES_API_TOOL_PARAMS]", tools)  # cast-ok: forwarded as sent
+        sanitized: Final = self._sanitized_tool_schemas_for_openai(
+            model=model,
+            tools=self._tools_with_object_parameters(model=model, tools=item_tools),
+            litellm_params=litellm_params,
+        )
+        if sanitized is None or _same_objects(sanitized, item_tools):
+            return item
+        return {**fields, "tools": list(sanitized)}
 
     def _replayable_input(
         self, input: str | ResponseInputParam, reads_breakpoints: bool, maps_anthropic_tool_search: bool

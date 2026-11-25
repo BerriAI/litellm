@@ -192,7 +192,7 @@ class ResponsesToCompletionBridgeHandler:
             optional_params = {**optional_params, "stream": True}
         logging_obj.record_bridged_chat_request(optional_params, litellm_params)
 
-        request_data: Final = self.transformation_handler.transform_request(
+        bridged_request: Final = self.transformation_handler.transform_request_with_configuration(
             model=model,
             messages=messages,
             optional_params=optional_params,
@@ -201,6 +201,7 @@ class ResponsesToCompletionBridgeHandler:
             litellm_logging_obj=logging_obj,
             client=kwargs.get("client"),
         )
+        request_data: Final = bridged_request.request_data
 
         # Set on request_data rather than passed as explicit kwargs: the spread of
         # `sanitized_litellm_params` already carries both, so passing them again
@@ -228,6 +229,7 @@ class ResponsesToCompletionBridgeHandler:
                 encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
                 json_mode=json_mode,
+                configuration_note=bridged_request.configuration_note,
             )
             if not stream:
                 return completed_response
@@ -262,6 +264,7 @@ class ResponsesToCompletionBridgeHandler:
                 encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
                 json_mode=json_mode,
+                configuration_note=bridged_request.configuration_note,
             )
         else:
             if self._is_preformatted_cached_chat_stream(result):
@@ -277,6 +280,7 @@ class ResponsesToCompletionBridgeHandler:
                 ),
                 replays_openai_history=replays_responses_history(custom_llm_provider),
                 streams_reasoning_signatures=streams_reasoning_signatures,
+                configuration_note=bridged_request.configuration_note,
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
@@ -306,17 +310,15 @@ class ResponsesToCompletionBridgeHandler:
             optional_params = {**optional_params, "stream": True}
         logging_obj.record_bridged_chat_request(optional_params, litellm_params)
 
-        try:
-            request_data: Final = self.transformation_handler.transform_request(
-                model=model,
-                messages=messages,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                headers=headers,
-                litellm_logging_obj=logging_obj,
-            )
-        except Exception as e:
-            raise e
+        bridged_request: Final = self.transformation_handler.transform_request_with_configuration(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+            litellm_logging_obj=logging_obj,
+        )
+        request_data: Final = bridged_request.request_data
 
         # Set on request_data rather than passed as explicit kwargs: the spread of
         # `sanitized_litellm_params` already carries both, so passing them again
@@ -349,6 +351,7 @@ class ResponsesToCompletionBridgeHandler:
                 encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
                 json_mode=json_mode,
+                configuration_note=bridged_request.configuration_note,
             )
             if not stream:
                 return completed_response
@@ -383,6 +386,7 @@ class ResponsesToCompletionBridgeHandler:
                 encoding=validated_kwargs["encoding"],
                 api_key=kwargs.get("api_key"),
                 json_mode=json_mode,
+                configuration_note=bridged_request.configuration_note,
             )
         else:
             if self._is_preformatted_cached_chat_stream(result):
@@ -398,6 +402,7 @@ class ResponsesToCompletionBridgeHandler:
                 ),
                 replays_openai_history=replays_responses_history(custom_llm_provider),
                 streams_reasoning_signatures=streams_reasoning_signatures,
+                configuration_note=bridged_request.configuration_note,
             )
             streamwrapper: Final = CustomStreamWrapper(
                 completion_stream=completion_stream,
