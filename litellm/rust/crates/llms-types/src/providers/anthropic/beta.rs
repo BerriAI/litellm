@@ -329,7 +329,6 @@ impl AnthropicBeta {
             | Self::ManagedAgents20260401
             | Self::McpTunnels20260622
             | Self::MidConversationSystemClearAt20260821
-            | Self::ModelContextWindowExceeded20250826
             | Self::Oauth20250420
             | Self::Pdfs20240925
             | Self::PromptCaching20240731
@@ -404,7 +403,8 @@ impl AnthropicBeta {
             | Self::WebSearch20250305 => &[BetaProvider::BedrockConverse, BetaProvider::Bedrock],
             Self::Compact20260904
             | Self::MidConversationOutputConfig20260701
-            | Self::MidConversationToolChanges20260701 => &[
+            | Self::MidConversationToolChanges20260701
+            | Self::ModelContextWindowExceeded20250826 => &[
                 BetaProvider::BedrockConverse,
                 BetaProvider::BedrockMantle,
                 BetaProvider::Databricks,

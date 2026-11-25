@@ -50,6 +50,7 @@ from litellm.llms.bedrock.common_utils import (
 from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER,
+    ANTHROPIC_MODEL_CONTEXT_WINDOW_EXCEEDED_BETA_HEADER,
     ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
     AnthropicThinkingParam,
 )
@@ -67,10 +68,17 @@ else:
 _NON_DEFAULT_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _LITELLM_PARAMS: Final = TypeAdapter(Mapping[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
+_MODELS_NEEDING_CONTEXT_WINDOW_CLAMP_BETA: Final = frozenset({"anthropic.claude-opus-4-1-20250805-v1:0"})
 
 
 def _anthropic_config_max_tokens() -> int | None:
     return litellm.AnthropicConfig.max_tokens
+
+
+def _bedrock_capability_base_model(model: str, litellm_params: Mapping[str, object]) -> str:
+    return BedrockModelInfo.get_base_model(
+        bedrock_capability_model(strip_bedrock_routing_prefix(model), litellm_params.get("base_model"))
+    )
 
 
 def _bedrock_tool_search_tool(tool: Mapping[str, object]) -> Mapping[str, object]:
@@ -270,6 +278,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         )
 
         self._convert_document_url_sources_to_base64(_anthropic_request)
+        needs_context_window_clamp: Final = "max_tokens" not in optional_params and (
+            _bedrock_capability_base_model(model, _LITELLM_PARAMS.validate_python(litellm_params))
+            in _MODELS_NEEDING_CONTEXT_WINDOW_CLAMP_BETA
+        )
         beta_list: Final = self._compute_bedrock_invoke_beta_headers(
             model=model,
             messages=messages,
@@ -279,6 +291,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             history_holds_tool_search=replays_tool_search(
                 OBJECT_MAPPING_ADAPTER.validate_python(_anthropic_request).get("messages")
             ),
+            needs_context_window_clamp=needs_context_window_clamp,
         )
         if beta_list:
             _anthropic_request["anthropic_beta"] = beta_list
@@ -333,11 +346,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         )
 
     def _default_max_tokens_models(self, model: str, litellm_params: Mapping[str, object]) -> tuple[str, ...]:
-        return (
-            BedrockModelInfo.get_base_model(
-                bedrock_capability_model(strip_bedrock_routing_prefix(model), litellm_params.get("base_model"))
-            ),
-        )
+        return (_bedrock_capability_base_model(model, litellm_params),)
 
     def _default_max_tokens(self, model: str, litellm_params: Mapping[str, object]) -> int:
         configured_max_tokens: Final = self._read_configured_max_tokens()
@@ -431,6 +440,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         headers: dict[str, object],
         thinking: AnthropicThinkingParam | None,
         history_holds_tool_search: bool,
+        needs_context_window_clamp: bool,
     ) -> list[str]:
         tools: Final = optional_params.get("tools")
         tool_search_used: Final = self.is_tool_search_used(tools) or history_holds_tool_search
@@ -466,8 +476,11 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         if self.is_eager_input_streaming_used(tools):
             beta_set.add(ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER)
 
+        clamp_betas: Final = (
+            (ANTHROPIC_MODEL_CONTEXT_WINDOW_EXCEEDED_BETA_HEADER,) if needs_context_window_clamp else ()
+        )
         auto_beta_list: Final = filter_and_transform_beta_headers(
-            beta_headers=list(beta_set - user_beta_set),
+            beta_headers=[*(beta_set - user_beta_set), *clamp_betas],
             provider="bedrock",
         )
         return sorted(user_beta_set.union(set(auto_beta_list)))

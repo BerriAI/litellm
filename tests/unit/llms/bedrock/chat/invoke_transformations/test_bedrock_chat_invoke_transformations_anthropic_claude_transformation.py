@@ -2472,6 +2472,81 @@ def test_bedrock_invoke_claude_default_max_tokens_reads_an_inference_profile_arn
     assert body["max_tokens"] == mapped_cap, f"an ARN should take its base_model's cap, got {body['max_tokens']}"
 
 
+BEDROCK_OPUS_41_BASE_ID: Final = "anthropic.claude-opus-4-1-20250805-v1:0"
+CONTEXT_WINDOW_CLAMP_BETA: Final = "model-context-window-exceeded-2025-08-26"
+
+
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model", "optional_params", "litellm_params", "headers", "expected_betas"),
+    [
+        pytest.param(f"invoke/us.{BEDROCK_OPUS_41_BASE_ID}", {}, {}, {}, [CONTEXT_WINDOW_CLAMP_BETA], id="opus_4_1"),
+        pytest.param(
+            "invoke/anthropic/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+            {},
+            {"base_model": BEDROCK_OPUS_41_BASE_ID},
+            {},
+            [CONTEXT_WINDOW_CLAMP_BETA],
+            id="opus_4_1_inference_profile_arn",
+        ),
+        pytest.param(
+            f"invoke/us.{BEDROCK_OPUS_41_BASE_ID}",
+            {},
+            {},
+            {"anthropic-beta": CONTEXT_WINDOW_CLAMP_BETA},
+            [CONTEXT_WINDOW_CLAMP_BETA],
+            id="opus_4_1_caller_sent_the_beta",
+        ),
+        pytest.param(
+            f"invoke/us.{BEDROCK_OPUS_41_BASE_ID}", {"max_tokens": 1024}, {}, {}, None, id="caller_max_tokens"
+        ),
+        pytest.param(f"invoke/us.{BEDROCK_HAIKU_45_BASE_ID}", {}, {}, {}, None, id="haiku_4_5"),
+        pytest.param("invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0", {}, {}, {}, None, id="sonnet_4_5"),
+        pytest.param("invoke/us.anthropic.claude-opus-4-5-20251101-v1:0", {}, {}, {}, None, id="opus_4_5"),
+        pytest.param("invoke/anthropic.claude-3-haiku-20240307-v1:0", {}, {}, {}, None, id="claude_3_haiku"),
+    ],
+)
+def test_bedrock_invoke_claude_asks_opus_4_1_to_clamp_the_max_tokens_litellm_filled(
+    model: str,
+    optional_params: dict[str, object],
+    litellm_params: dict[str, object],
+    headers: dict[str, object],
+    expected_betas: list[str] | None,
+) -> None:
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers=headers,
+    )
+
+    assert body.get("anthropic_beta") == expected_betas, f"got {body.get('anthropic_beta')}"
+
+
+def test_bedrock_invoke_claude_context_window_clamp_beta_follows_the_beta_map(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm import anthropic_beta_headers_manager
+
+    bundled: Final = anthropic_beta_headers_manager.GetAnthropicBetaHeadersConfig.load_local_beta_headers_config()
+    monkeypatch.setattr(
+        anthropic_beta_headers_manager,
+        "_BETA_HEADERS_CONFIG",
+        {**bundled, "bedrock": {**bundled["bedrock"], CONTEXT_WINDOW_CLAMP_BETA: None}},
+    )
+
+    body: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=f"invoke/us.{BEDROCK_OPUS_41_BASE_ID}",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "anthropic_beta" not in body, (
+        f"a null bedrock row must switch the beta off, got {body.get('anthropic_beta')}"
+    )
+
+
 @pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
 @pytest.mark.parametrize("drop_params", [True, False])
 def test_bedrock_chat_invoke_adds_the_binding_beta_so_block_binding_is_kept(

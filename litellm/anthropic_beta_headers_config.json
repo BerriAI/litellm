@@ -216,6 +216,7 @@
     "mcp-client-2025-04-04": null,
     "message-threads-2026-08-12": null,
     "mcp-servers-2025-12-04": null,
+    "model-context-window-exceeded-2025-08-26": "model-context-window-exceeded-2025-08-26",
     "output-128k-2025-02-19": null,
     "structured-output-2024-03-01": null,
     "per-turn-control-2026-07-01": null,
