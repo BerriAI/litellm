@@ -4211,6 +4211,7 @@ dependencies = [
  "hyper-util",
  "jiff",
  "litellm-at-rest",
+ "litellm-auth-gcp",
  "litellm-auth-store",
  "litellm-callbacks",
  "litellm-callbacks-budgets",

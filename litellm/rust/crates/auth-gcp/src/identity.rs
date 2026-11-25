@@ -6,6 +6,7 @@ use gcp_auth::{CustomServiceAccount, TokenProvider};
 use litellm_auth_types::{Error, ErrorDetail};
 use litellm_secret_value::SecretValue;
 use moka::future::Cache;
+use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
@@ -326,8 +327,51 @@ async fn load_application_credentials(path: &str) -> Result<Arc<dyn GcpTokenSour
     load_credentials_json(&contents)
 }
 
+const AWS_SOURCE_IN_FIPS: &str = "a source other than AWS in the FIPS build, since Google's Rust SDK signs the AWS request outside the FIPS module";
+
+#[derive(serde::Deserialize)]
+struct SubjectTokenSource {
+    environment_id: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct ExternalAccountSource {
+    credential_source: Option<SubjectTokenSource>,
+}
+
+#[derive(serde::Deserialize)]
+struct ImpersonatedSource {
+    source_credentials: Option<ExternalAccountSource>,
+}
+
+impl ExternalAccountSource {
+    fn is_aws(&self) -> bool {
+        self.credential_source
+            .as_ref()
+            .is_some_and(|source| source.environment_id.is_some())
+    }
+}
+
+impl ImpersonatedSource {
+    fn is_aws(&self) -> bool {
+        self.source_credentials
+            .as_ref()
+            .is_some_and(ExternalAccountSource::is_aws)
+    }
+}
+
 fn load_credentials_json(contents: &str) -> Result<Arc<dyn GcpTokenSource>, Error> {
     let configured: Value = serde_json::from_str(contents).map_err(auth_acquisition_error)?;
+    if cfg!(feature = "fips")
+        && (ExternalAccountSource::deserialize(&configured).is_ok_and(|account| account.is_aws())
+            || ImpersonatedSource::deserialize(&configured)
+                .is_ok_and(|impersonated| impersonated.is_aws()))
+    {
+        return Err(Error::InvalidConfiguration(ErrorDetail::InvalidType {
+            field: "Google credentials credential_source".into(),
+            expected: AWS_SOURCE_IN_FIPS,
+        }));
+    }
     let kind = configured.get("type").and_then(Value::as_str);
     let project_id = configured
         .get("project_id")
@@ -618,6 +662,73 @@ mod tests {
                 .await
                 .contains("is base64-encoded JSON, not the JSON itself")
         );
+    }
+
+    fn aws_sourced_external_account() -> Value {
+        serde_json::json!({
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/pool/providers/aws",
+            "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+            "token_url": "https://sts.googleapis.com/v1/token",
+            "credential_source": {
+                "environment_id": "aws1",
+                "regional_cred_verification_url": "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15"
+            }
+        })
+    }
+
+    fn aws_sourced_impersonated_account() -> Value {
+        serde_json::json!({
+            "type": "impersonated_service_account",
+            "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/sa@p.iam.gserviceaccount.com:generateAccessToken",
+            "source_credentials": aws_sourced_external_account(),
+        })
+    }
+
+    fn with_a_repeated_environment_id(account: Value) -> String {
+        let text = account.to_string();
+        let repeated = text.replacen(
+            r#""environment_id":"aws1""#,
+            r#""environment_id":"aws1","environment_id":"aws1""#,
+            1,
+        );
+        assert_ne!(repeated, text);
+        repeated
+    }
+
+    #[rstest::rstest]
+    #[case::external_account(aws_sourced_external_account().to_string())]
+    #[case::external_account_with_a_malformed_unrelated_field({
+        let mut account = aws_sourced_external_account();
+        account["source_credentials"] = Value::Bool(false);
+        account.to_string()
+    })]
+    #[case::external_account_with_a_repeated_key(with_a_repeated_environment_id(
+        aws_sourced_external_account()
+    ))]
+    #[case::impersonated_external_account(aws_sourced_impersonated_account().to_string())]
+    #[case::impersonated_external_account_with_a_repeated_key(with_a_repeated_environment_id(
+        aws_sourced_impersonated_account()
+    ))]
+    #[tokio::test]
+    async fn only_the_fips_build_refuses_an_aws_source_google_s_sdk_would_sign(
+        #[case] configured: String,
+    ) {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let loaded = NativeProviderLoader
+            .load(CredentialSource::Trusted(SecretValue::new(configured)))
+            .await;
+
+        match cfg!(feature = "fips") {
+            true => assert!(matches!(
+                loaded,
+                Err(Error::InvalidConfiguration(ErrorDetail::InvalidType {
+                    expected: AWS_SOURCE_IN_FIPS,
+                    ..
+                }))
+            )),
+            false => assert!(loaded.is_ok()),
+        }
     }
 
     async fn trusted_load_error(configured: &str) -> String {

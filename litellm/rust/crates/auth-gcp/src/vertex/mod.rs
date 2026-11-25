@@ -771,7 +771,10 @@ mod tests {
     #[rstest]
     #[case::file(file_source, "granted", "subject_token=file-subject")]
     #[case::url(url_source, "granted", "subject_token=url-subject")]
-    #[case::aws_metadata(aws_metadata_source, "granted", "subject_token=%257B")]
+    #[cfg_attr(
+        not(feature = "fips"),
+        case::aws_metadata(aws_metadata_source, "granted", "subject_token=%257B")
+    )]
     #[case::impersonated(impersonating_source, "impersonated", "subject_token=file-subject")]
     #[case::explicit_aws(explicit_aws, "granted", "subject_token=%257B%2522headers%2522")]
     #[case::explicit_aws_impersonated(
@@ -798,6 +801,36 @@ mod tests {
         assert_eq!(login.token.expose(), token);
         let exchanges = google.sent_to("/token");
         assert!(exchanges[0].body.contains(subject), "{exchanges:?}");
+    }
+
+    #[cfg(feature = "fips")]
+    #[rstest]
+    #[case::vertex_credentials(explicit(|google| aws_metadata_source(google, Path::new("/"))), PythonException::Malformed)]
+    #[case::application_default_file(Box::new(|google: &Google, directory: &Path| adc_file(aws_metadata_source(google, directory))(google, directory)), PythonException::DefaultCredentials)]
+    #[case::vertex_credentials_with_a_repeated_key(Box::new(|google: &Google, directory: &Path| (Some(with_a_repeated_environment_id(aws_metadata_source(google, directory))), at(google))), PythonException::Malformed)]
+    #[case::application_default_file_with_a_repeated_key(Box::new(|google: &Google, directory: &Path| adc_text(with_a_repeated_environment_id(aws_metadata_source(google, directory)))(google, directory)), PythonException::DefaultCredentials)]
+    #[tokio::test]
+    async fn the_fips_build_refuses_an_aws_source_google_s_sdk_would_sign(
+        #[future] google: Google,
+        #[case] setup: Setup,
+        #[case] exception: PythonException,
+    ) {
+        let google = google.await;
+        let directory = tempfile::tempdir().unwrap();
+        let (credentials, environment) = setup(&google, directory.path());
+
+        let refused = failure(
+            auth(environment)
+                .login(credentials, Some("p".into()))
+                .await
+                .unwrap_err(),
+        );
+
+        assert_eq!(
+            (refused.exception, refused.message.as_str()),
+            (exception, crate::google::builders::AWS_SOURCE_IN_FIPS)
+        );
+        assert!(google.sent_to("/token").is_empty());
     }
 
     #[rstest]
@@ -1091,9 +1124,13 @@ mod tests {
     }
 
     fn adc_file(contents: Value) -> impl Fn(&Google, &Path) -> (Option<String>, FakeEnvironment) {
+        adc_text(contents.to_string())
+    }
+
+    fn adc_text(contents: String) -> impl Fn(&Google, &Path) -> (Option<String>, FakeEnvironment) {
         move |_, directory| {
             let path = directory.join("adc.json");
-            std::fs::write(&path, contents.to_string()).unwrap();
+            std::fs::write(&path, &contents).unwrap();
             (
                 None,
                 environment(&[("GOOGLE_APPLICATION_CREDENTIALS", path.to_str().unwrap())]),
@@ -1102,6 +1139,18 @@ mod tests {
     }
 
     type Setup = Box<dyn Fn(&Google, &Path) -> (Option<String>, FakeEnvironment)>;
+
+    #[cfg(feature = "fips")]
+    fn with_a_repeated_environment_id(account: Value) -> String {
+        let text = account.to_string();
+        let repeated = text.replacen(
+            r#""environment_id":"aws1""#,
+            r#""environment_id":"aws1","environment_id":"aws1""#,
+            1,
+        );
+        assert_ne!(repeated, text);
+        repeated
+    }
 
     fn explicit(credentials: impl Fn(&Google) -> Value + 'static) -> Setup {
         Box::new(move |google, _| (Some(credentials(google).to_string()), at(google)))
@@ -1391,7 +1440,12 @@ mod tests {
                 explicit_aws.clone(),
             )))
             .await;
-        assert!(shared.is_ok(), "{:?}", shared.err());
+        assert_eq!(
+            shared.is_ok(),
+            !cfg!(feature = "fips"),
+            "{:?}",
+            shared.err()
+        );
         let error = auth(FakeEnvironment::default())
             .login(Some(explicit_aws), Some("p".into()))
             .await

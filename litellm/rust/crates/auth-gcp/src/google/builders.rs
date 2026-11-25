@@ -29,6 +29,7 @@ use crate::{
 
 const NO_CREDENTIAL_SOURCE: &str = "The external account credentials name no credential_source.";
 const NO_PRINCIPAL: &str = "The service account impersonation URL names no service account.";
+pub(crate) const AWS_SOURCE_IN_FIPS: &str = "The FIPS build cannot use an AWS credential_source through Google's Rust SDK, which signs the AWS request outside the FIPS module. Put the credentials in vertex_credentials with LiteLLM's aws_region_name and other aws_* keys so LiteLLM signs the request.";
 
 /// Builds `credentials` with Google's Rust SDK, a failure raised as `exception`.
 pub(crate) fn build(
@@ -192,6 +193,9 @@ pub(crate) fn external_account(
     }
     match bounded_file_source::subject_file(info) {
         Some(path) => bounded_file_source::load(info, path, environment, unusable),
+        None if cfg!(feature = "fips") && source.environment_id.is_some() => {
+            Err(GoogleLoginFailure::new(unusable, AWS_SOURCE_IN_FIPS))
+        }
         None => build(SdkCredentials::ExternalAccount(info.sdk.clone()), unusable),
     }
 }
