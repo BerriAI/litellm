@@ -153,6 +153,7 @@ from litellm.exceptions import (
     MissingMessageRoleError,
     RejectedRequestError,
     SensitiveDataRouteException,
+    UnresolvablePreviousResponseError,
 )
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -712,7 +713,7 @@ class _BudgetAlertEmailer(Protocol):
 
 
 def _is_client_error_exception(exc: Exception) -> bool:
-    if isinstance(exc, MissingMessageRoleError):
+    if isinstance(exc, (MissingMessageRoleError, UnresolvablePreviousResponseError)):
         return True
     if isinstance(exc, HTTPException):
         return exc.status_code < 500
