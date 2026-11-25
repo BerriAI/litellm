@@ -4,6 +4,8 @@ from typing import Final, Literal, TypeAlias
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.vertex_ai.common_utils import VertexAIModelRoute, get_vertex_ai_model_route
 
 DeferredToolsMode: TypeAlias = Literal["passthrough", "native", "emulate", "drop"]
 CLAUDE_CODE_TOOL_SEARCH_NAME: Final = "ToolSearch"
@@ -65,8 +67,28 @@ def usable_deferred_tools_mode(model_info: object, provider: str | None) -> Defe
     return mode
 
 
-def unusable_deferred_tools_refusal(model_info: object, provider: str | None) -> str | None:
+def builds_tools_without_deferral(provider: str | None, model: str, chat_params: Mapping[str, object]) -> bool:
+    match provider:
+        case "gemini":
+            return True
+        case "vertex_ai":
+            return get_vertex_ai_model_route(model) == VertexAIModelRoute.GEMINI
+        case "bedrock":
+            return BedrockModelInfo.get_bedrock_route(model, chat_params) in ("converse", "converse_like")
+        case _:
+            return False
+
+
+def unusable_deferred_tools_refusal(
+    model_info: object, provider: str | None, model: str, chat_params: Mapping[str, object]
+) -> str | None:
     mode: Final = deferred_tools_mode(model_info)
+    if mode == "passthrough" and builds_tools_without_deferral(provider, model, chat_params):
+        return (
+            f"model_info.deferred_tools passthrough keeps defer_loading on each tool, but the {provider} request "
+            f"LiteLLM builds for {model} has no field for it. Pick emulate or drop for this deployment, or set "
+            "drop_params to send deferred tools the drop way"
+        )
     if usable_deferred_tools_mode(model_info, provider) == mode:
         return None
     if mode == "native":
