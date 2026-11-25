@@ -19,11 +19,13 @@ from opentelemetry.sdk.trace.export import SimpleSpanProcessor  # noqa: E402
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter  # noqa: E402
 from opentelemetry.trace import SpanKind  # noqa: E402
 
+from litellm.integrations.langfuse.trace_id import resolve_trace_id  # noqa: E402
 from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config, is_otel_v2_enabled  # noqa: E402
 from litellm.integrations.otel.mount import instrument_fastapi_app  # noqa: E402
 from litellm.integrations.otel.plumbing import named_trace, providers  # noqa: E402
 from litellm.integrations.otel.plumbing.context import resolve_request_span_context  # noqa: E402
+from litellm.proxy.auth.user_api_key_auth import _ensure_litellm_received_at_on_request_state  # noqa: E402
 from litellm.proxy.litellm_pre_call_utils import add_otel_trace_id_to_request  # noqa: E402
 
 UUID: Final = "0b6f3a1c-9d2e-4f5a-8b7c-1d2e3f4a5b6c"
@@ -75,12 +77,7 @@ def _instrumented(monkeypatch, route=None, **instrument_kwargs):
         body: Final = await request.body()
         tracer.start_span("llm", context=resolve_request_span_context()).end()
         tracer.start_span("detached", context=trace.set_span_in_context(trace.INVALID_SPAN)).end()
-        received_at: Final = getattr(request.state, "litellm_received_at", None)
-        return fastapi.Response(
-            content=body,
-            media_type=request.headers.get("content-type"),
-            headers={} if received_at is None else {"x-received-at": f"{received_at.timestamp()}"},
-        )
+        return fastapi.Response(content=body, media_type=request.headers.get("content-type"))
 
     for path in PATHS:
         app.add_api_route(path, route or llm_route, methods=["POST"])
@@ -263,41 +260,56 @@ def test_requests_naming_no_trace_each_get_their_own(proxy, request_kwargs):
     assert UUID_HEX not in server
 
 
-def test_the_time_spent_reading_a_body_for_its_trace_name_counts_from_when_the_request_arrived(proxy):
-    client, exporter = proxy
+async def _queued_route(request: fastapi.Request):
+    await asyncio.sleep(QUEUED_SECONDS)
+    received_at: Final = _ensure_litellm_received_at_on_request_state(request)
+    handled_at: Final = time.time()
+    return fastapi.Response(
+        content=await request.body(),
+        headers={"x-received-at": f"{received_at.timestamp()}", "x-handled-at": f"{handled_at}"},
+    )
+
+
+QUEUED_SECONDS: Final = 0.2
+
+
+def test_a_request_counts_the_time_spent_reading_its_body_but_not_the_time_it_waited_before_the_route(monkeypatch):
+    client, exporter = _instrumented(monkeypatch, route=_queued_route)
     payload: Final = b'{"litellm_metadata": {"trace_id": "%s"}}' % UUID.encode()
     upload_seconds: Final = 0.2
-    rest_sent_at: Final = []
 
     def slow_upload():
         yield payload[:10]
         time.sleep(upload_seconds)
-        rest_sent_at.append(time.time())
         yield payload[10:]
 
     response: Final = client.post(PATHS[1], content=slow_upload(), headers={"content-type": "application/json"})
 
     (server,) = [span for span in exporter.get_finished_spans() if span.kind is SpanKind.SERVER]
+    received_at: Final = float(response.headers["x-received-at"])
     assert response.content == payload
     assert f"{server.context.trace_id:032x}" == UUID_HEX
-    assert server.end_time - server.start_time >= upload_seconds * 1e9
-    assert float(response.headers["x-received-at"]) <= rest_sent_at[0] - upload_seconds
-    assert abs(float(response.headers["x-received-at"]) * 1e9 - server.start_time) < 1e6
+    assert server.end_time - server.start_time >= (upload_seconds + QUEUED_SECONDS) * 1e9
+    assert float(response.headers["x-handled-at"]) - received_at >= upload_seconds
+    assert received_at * 1e9 - server.start_time >= QUEUED_SECONDS * 1e9
 
 
 @pytest.mark.parametrize(
-    "request_kwargs",
+    "request_kwargs, name",
     [
-        pytest.param({"json": {"metadata": {}}, "headers": {"langfuse_trace_id": UUID}}, id="header"),
-        pytest.param({"json": {"metadata": {}, "litellm_metadata": {"trace_id": UUID}}}, id="other-metadata-field"),
+        pytest.param({"json": {"metadata": {}}, "headers": {"langfuse_trace_id": UUID}}, UUID, id="header"),
+        pytest.param({"json": {"metadata": {}}, "headers": {"langfuse_trace_id": "run-7"}}, "run-7", id="not-hex"),
+        pytest.param(
+            {"json": {"metadata": {}, "litellm_metadata": {"trace_id": UUID}}}, UUID, id="other-metadata-field"
+        ),
     ],
 )
-def test_a_named_trace_does_not_become_the_requests_spend_session(monkeypatch, request_kwargs):
+def test_a_named_trace_keeps_the_id_its_caller_sent_as_the_requests_spend_session(monkeypatch, request_kwargs, name):
     client, _ = _instrumented(monkeypatch, route=_spend_session)
 
     responses: Final = [client.post(PATHS[0], **request_kwargs).json() for _ in range(2)]
 
-    assert responses == [{"litellm_trace_id": None, "server_trace": UUID_HEX}] * 2
+    assert responses == [{"litellm_trace_id": name, "server_trace": resolve_trace_id(name)}] * 2
 
 
 def test_a_request_naming_no_trace_keeps_its_server_trace_as_its_spend_session(monkeypatch):
@@ -327,6 +339,19 @@ def test_a_request_whose_name_is_skipped_warns_once_and_logs_each_later_one_at_d
     assert [record.levelno for record in skipped].count(logging.WARNING) == 1
     assert [record.levelno for record in skipped].count(logging.DEBUG) == 3
     assert UUID_HEX not in _trace_ids(exporter)
+
+
+def test_requests_skipped_for_different_content_encodings_warn_once(proxy, caplog):
+    client, _ = proxy
+    payload: Final = b'{"metadata": {"trace_id": "%s"}}' % UUID.encode()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        for coding in ("x-first", "x-second", "x-third"):
+            client.post(
+                PATHS[1], content=payload, headers={"content-type": "application/json", "content-encoding": coding}
+            )
+
+    assert len([record for record in caplog.records if "OTel V2" in record.getMessage()]) == 1
 
 
 def _sdk_logger():
@@ -551,7 +576,7 @@ async def test_a_body_sent_in_many_tiny_pieces_is_held_as_one_message():
 
     scope: Final = {"type": "http", "method": "POST", "headers": [(b"content-type", b"application/json")]}
     async with named_trace.read_named_trace(scope, receive, named_trace.LookaheadBudget()) as (named, replay):
-        assert named == int(UUID_HEX, 16)
+        assert named == UUID
         assert await replay() == {"type": "http.request", "body": body, "more_body": False}
         assert await replay() == {"type": "http.disconnect"}
 
@@ -665,11 +690,11 @@ async def test_partial_uploads_together_hold_no_more_than_the_budget():
         assert await replay() == second_pieces[1]
 
     rest_sent.set()
-    assert await first == int(OTHER_HEX, 16)
+    assert await first == OTHER_HEX
     async with named_trace.read_named_trace(
         JSON_POST, _sends({"type": "http.request", "body": _named_body(), "more_body": False}), budget
     ) as (named, _):
-        assert named == int(UUID_HEX, 16)
+        assert named == UUID
 
 
 @pytest.mark.asyncio
@@ -683,7 +708,7 @@ async def test_a_body_the_app_never_read_gives_its_budget_back_when_the_request_
         async with named_trace.read_named_trace(
             JSON_POST, _sends({"type": "http.request", "body": body, "more_body": False}), budget
         ) as (named, _):
-            assert named == int(UUID_HEX, 16)
+            assert named == UUID
 
 
 @pytest.mark.asyncio
@@ -696,7 +721,7 @@ async def test_a_body_the_app_has_read_gives_its_budget_back_while_the_request_r
     async with named_trace.read_named_trace(JSON_POST, _sends(sent), budget) as (named, replay):
         assert await replay() == sent
         async with named_trace.read_named_trace(JSON_POST, _sends(sent), budget) as (later, _):
-            assert (named, later) == (int(UUID_HEX, 16), int(UUID_HEX, 16))
+            assert (named, later) == (UUID, UUID)
 
 
 @pytest.mark.asyncio
@@ -716,7 +741,7 @@ async def test_a_compressed_body_names_no_trace_when_the_budget_cannot_cover_its
         assert await replay() == sent
     for _ in range(2):
         async with named_trace.read_named_trace(GZIP_JSON_POST, _sends(sent), enough) as (named, _):
-            assert named == int(UUID_HEX, 16)
+            assert named == UUID
 
 
 @pytest.mark.asyncio
@@ -750,7 +775,7 @@ async def test_a_compressed_body_is_not_held_up_by_another_requests_decoding(mon
             group.start_soon(decode, slow_body)
             await anyio.sleep(0.05)
             with anyio.fail_after(5):
-                assert await decode(_named_body()) == int(UUID_HEX, 16)
+                assert await decode(_named_body()) == UUID
             slow_decoding.set()
     finally:
         slow_decoding.set()
@@ -777,7 +802,7 @@ async def test_a_body_declared_over_the_apps_size_limit_is_never_read():
         named,
         _,
     ):
-        assert named == int(UUID_HEX, 16)
+        assert named == UUID
 
 
 @pytest.mark.asyncio
@@ -801,7 +826,7 @@ async def test_a_compressed_body_decoding_past_the_apps_size_limit_names_no_trac
         named,
         _,
     ):
-        assert named == int(UUID_HEX, 16)
+        assert named == UUID
 
 
 def test_the_apps_size_limit_for_each_request_bounds_its_lookahead(monkeypatch):

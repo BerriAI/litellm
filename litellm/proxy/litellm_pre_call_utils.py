@@ -305,11 +305,11 @@ def _trace_id_from_otel_span(span: "OtelSpan | None") -> str | None:
     return format(trace_id, "032x")
 
 
-def _request_named_trace_id() -> str | None:
-    from litellm.integrations.otel.plumbing.named_trace import request_named_trace_id
+def _caller_trace_name(trace_id: str) -> str | None:
+    from litellm.integrations.otel.plumbing.named_trace import request_named_trace_id, request_trace_name
 
     named: Final = request_named_trace_id()
-    return None if named is None else format(named, "032x")
+    return request_trace_name() if named is not None and format(named, "032x") == trace_id else None
 
 
 def add_otel_trace_id_to_request(
@@ -322,11 +322,12 @@ def add_otel_trace_id_to_request(
     if any(isinstance(m, dict) and m.get("trace_id") for m in (metadata, requester_metadata)):
         return
     trace_id: Final = _trace_id_from_otel_span(parent_otel_span)
-    if trace_id is None or trace_id == _request_named_trace_id():
+    if trace_id is None:
         return
-    data["litellm_trace_id"] = trace_id  # rebind-ok: data is an out-param
+    session_id: Final = _caller_trace_name(trace_id) or trace_id
+    data["litellm_trace_id"] = session_id  # rebind-ok: data is an out-param
     if isinstance(metadata, dict):
-        metadata["trace_id"] = trace_id
+        metadata["trace_id"] = session_id
 
 
 def _session_id_from_baggage(baggage: str) -> str | None:

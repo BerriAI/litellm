@@ -14,11 +14,11 @@ when the feature gate is off.
 import os
 import time
 from collections.abc import Callable, Mapping
-from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_logger
+from litellm.constants import BODY_READ_AHEAD_NS
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
 if TYPE_CHECKING:
@@ -82,19 +82,19 @@ class _RequestTraceExclusionMiddleware:
                 await self.app(scope, receive, send)
             return
         started_ns: Final = time.time_ns()
-        _stamp_arrival(scope, datetime.fromtimestamp(started_ns / 1e9, tz=timezone.utc))
         async with read_named_trace(scope, receive, self.lookahead_budget, self.max_request_body_bytes(scope)) as (
-            named,
+            name,
             request_receive,
         ):
-            with request_trace_scope(excluded), request_trace_naming(named, started_ns):
+            _stamp_read_ahead(scope, time.time_ns() - started_ns)
+            with request_trace_scope(excluded), request_trace_naming(name, started_ns):
                 await self.app(scope, request_receive, send)
 
 
-def _stamp_arrival(scope: "Scope", received_at: datetime) -> None:
+def _stamp_read_ahead(scope: "Scope", read_ahead_ns: int) -> None:
     state: Final[object] = scope.setdefault("state", {})
-    if isinstance(state, dict) and "litellm_received_at" not in state:
-        state["litellm_received_at"] = received_at
+    if isinstance(state, dict):
+        state[BODY_READ_AHEAD_NS] = read_ahead_ns
 
 
 # Passthrough routes are catch-alls (e.g. "/openai/{endpoint:path}"), so the

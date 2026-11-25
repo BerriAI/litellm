@@ -12,7 +12,7 @@ import base64
 import re
 import secrets
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import partial, reduce
 from typing import TYPE_CHECKING, Final, Protocol, TypeVar, cast
 
@@ -30,6 +30,7 @@ from litellm._internal_context import service_target, set_request_parent_otel_sp
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import (
+    BODY_READ_AHEAD_NS,
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     LITELLM_PROXY_BUDGET_NAME,
     MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY,
@@ -1658,8 +1659,8 @@ def pass_through_key(
 def _ensure_litellm_received_at_on_request_state(request: Request) -> datetime:
     """Idempotently stamp ``request.state.litellm_received_at`` with the moment
     litellm's own code started handling this request -- the first line of
-    ``user_api_key_auth``, before any auth/pre-call work runs, unless OTel V2
-    stamped it when the request reached the proxy. This is the
+    ``user_api_key_auth``, before any auth/pre-call work runs, less the time
+    OTel V2 spent reading the body ahead of it. This is the
     basis for the request-latency Prometheus metrics (see
     ``litellm/integrations/prometheus.py``), and unlike the OTEL SERVER span
     below, it is set unconditionally so those metrics don't depend on OTEL
@@ -1668,7 +1669,10 @@ def _ensure_litellm_received_at_on_request_state(request: Request) -> datetime:
     existing_received_at: Final[datetime | None] = getattr(request.state, "litellm_received_at", None)
     if existing_received_at is not None:
         return existing_received_at
-    received_at: Final = datetime.now(timezone.utc)
+    read_ahead_ns: Final[object] = getattr(request.state, BODY_READ_AHEAD_NS, 0)
+    received_at: Final = datetime.now(timezone.utc) - timedelta(
+        microseconds=read_ahead_ns / 1000 if isinstance(read_ahead_ns, int) else 0
+    )
     try:
         request.state.litellm_received_at = received_at
     except Exception:
@@ -2057,14 +2061,7 @@ async def user_api_key_auth_builder(
     )
 
     parent_otel_span: Span | None = None
-    # Prefer the receive-instant stamped by the early helper in
-    # user_api_key_auth (before body parse) — overwriting it would shorten
-    # the preprocessing-duration measurement by the body-parse window.
-    start_time: Final = getattr(request.state, "litellm_received_at", None) or datetime.now(timezone.utc)
-    try:
-        request.state.litellm_received_at = start_time
-    except Exception:
-        pass
+    start_time: Final = _ensure_litellm_received_at_on_request_state(request)
     route: Final[str] = get_request_route(request=request)
     denied_key: UserAPIKeyAuth | None = None  # rebind-ok: the key a denied request had resolved, for the failure log
 
