@@ -77,6 +77,7 @@ from ..adapters.handler import (
 )
 from ..deferred_tools import (
     native_messages_deferred_tools_refusal,
+    native_stop_sequences_refusal,
     native_tool_search_name,
     refusal_unless_dropped,
     routed_deferred_tools_mode,
@@ -950,6 +951,9 @@ def anthropic_messages_handler(
             route_model_info, custom_llm_provider, model, bridge.api_base
         )
         native_deferred_tools: Final = deferred_tools == "native"
+        _refuse_deferred_tools(
+            native_stop_sequences_refusal(deferred_tools, stop_sequences), drops_deferred_tools_setting
+        )
         request_messages: Final = cast("list[dict[str, object]]", messages)  # cast-ok: the handler takes untyped dicts
         from ..deferred_tool_emulation import deferred_tool_emulation, deferred_tools_messages
 

@@ -3197,6 +3197,7 @@ async def test_azure_messages_send_no_tool_search_unless_deferred_tools_is_nativ
             {"tool_choice": {"type": "tool", "name": "ToolSearch"}},
             "Remove tool_choice, or set drop_params",
         ),
+        ("azure/gpt-6.1-sol", {"deferred_tools": "native"}, {"stop_sequences": ["END"]}, "Remove stop_sequences"),
         ("anthropic/claude-opus-5-5", {"deferred_tools": "loaded"}, {}, "passthrough, native, emulate, drop"),
         ("openai/gpt-6.2-sol", {"deferred_tools": "passthrough"}, {}, "Pick native or emulate"),
         ("azure/gpt-6.1-sol", {"deferred_tools": "passthrough"}, {}, "Pick native or emulate"),
@@ -3230,6 +3231,7 @@ async def test_azure_messages_send_no_tool_search_unless_deferred_tools_is_nativ
         "native_without_client_tool_search",
         "native_where_tool_search_still_prompts_deferred_tools",
         "native_with_a_forced_tool_search",
+        "native_with_stop_sequences",
         "unknown_value_on_a_messages_api_route",
         "passthrough_where_deferral_needs_tool_search",
         "passthrough_on_azure",
@@ -3447,6 +3449,21 @@ async def test_native_deferred_tools_send_a_request_whose_tool_choice_is_not_an_
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
 
     assert await _azure_messages_tool_types({"deferred_tools": "native"}, tool_choice="") == {"function", "tool_search"}
+
+
+@pytest.mark.asyncio
+async def test_native_deferred_tools_send_stop_sequences_to_chat_completions_with_a_warning_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        tool_types: Final = await _azure_messages_tool_types(
+            {"deferred_tools": "native"}, stop_sequences=["END"], drop_params=True
+        )
+
+    assert tool_types == {"function"}
+    assert any("stop_sequences" in warning for warning in _deferred_tools_fallback_warnings(caplog))
 
 
 _FORECAST_TOOL: Final = {
