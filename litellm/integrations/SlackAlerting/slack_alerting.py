@@ -1465,11 +1465,12 @@ Model Info:
             "html": email_html_content,
         }
 
-        await send_email(
-            receiver_email=email_event["to"],
-            subject=email_event["subject"],
-            html=email_event["html"],
-        )
+        if recipient_email is not None:
+            await send_email(
+                receiver_email=recipient_email,
+                subject=email_event["subject"],
+                html=email_event["html"],
+            )
         if webhook_event.event_group == Litellm_EntityType.TEAM:
             from litellm.integrations.email_alerting import send_team_budget_alert
 
