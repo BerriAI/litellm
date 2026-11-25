@@ -307,13 +307,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     def extract_request_tool_names(self, data: Mapping[str, object]) -> list[str]:
         """Extract tool names from OpenAI chat completions request (tools[].function.name, functions[].name,
-        and the tools a replayed tool_search_output loads)."""
+        Gemini-native tools[].functionDeclarations[].name, and the tools a replayed tool_search_output loads)."""
         names: Final[list[str]] = []
         for tool in list_field(data, "tools"):
             if isinstance(tool, dict) and tool.get("type") == "function":
                 fn = tool.get("function")
                 if isinstance(fn, dict) and fn.get("name"):
                     names.append(str(fn["name"]))
+            names.extend(_native_declaration_names(tool))
         for fn in list_field(data, "functions"):
             if isinstance(fn, dict) and fn.get("name"):
                 names.append(str(fn["name"]))
@@ -1495,6 +1496,17 @@ class _BlockedChunk(TypedDict):
     model: ReadOnly[str]
     choices: ReadOnly[tuple[_BlockedChunkChoice, ...]]
     usage: NotRequired[ReadOnly[_BlockedChunkUsage]]
+
+
+def _native_declaration_names(tool: object) -> tuple[str, ...]:
+    if not isinstance(tool, dict):
+        return ()
+    declarations: Final = tool.get("functionDeclarations") or tool.get("function_declarations")
+    return tuple(
+        str(declaration["name"])
+        for declaration in (declarations if isinstance(declarations, list) else ())
+        if isinstance(declaration, dict) and declaration.get("name")
+    )
 
 
 def _chat_sse_chunk(payload: _BlockedChunk) -> bytes:

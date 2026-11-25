@@ -45,6 +45,20 @@ class TestExtractRequestToolNames:
             "run_sql",
         ]
 
+    @pytest.mark.parametrize("declarations_key", ["functionDeclarations", "function_declarations"])
+    def test_openai_chat_gemini_native_function_declarations(self, declarations_key):
+        data = {
+            "tools": [
+                {declarations_key: [{"name": "get_weather"}, {"name": "run_sql"}]},
+                {"type": "function", "function": {"name": "lookup"}},
+            ]
+        }
+        assert extract_request_tool_names("/v1/chat/completions", data) == [
+            "get_weather",
+            "run_sql",
+            "lookup",
+        ]
+
     def test_openai_chat_functions_legacy(self):
         data = {"functions": [{"name": "get_weather"}, {"name": "run_sql"}]}
         assert extract_request_tool_names("/v1/chat/completions", data) == [
