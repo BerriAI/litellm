@@ -46,6 +46,7 @@ def _capturing_client(
     def respond(request: httpx.Request) -> httpx.Response:
         captured["url"] = str(request.url)
         captured["authorization"] = request.headers.get("authorization")
+        captured["x-custom"] = request.headers.get("x-custom")
         captured["body"] = json.loads(request.content)
         return responses[0] if responses else httpx.Response(200, json=ARK_RESPONSE)
 
@@ -218,11 +219,25 @@ def test_generation_resolves_an_api_base_to_the_images_route(api_base: str | Non
     assert captured["url"] == expected_url
 
 
+@pytest.mark.parametrize(
+    ("environment", "expected_url"),
+    [
+        ({"ARK_API_BASE": "https://ark-only.example/api/v3"}, "https://ark-only.example/api/v3/images/generations"),
+        (
+            {"VOLCENGINE_API_BASE": "https://volcengine.example/api/v3", "ARK_API_BASE": "https://ark.example/api/v3"},
+            "https://volcengine.example/api/v3/images/generations",
+        ),
+    ],
+)
 def test_generation_and_edit_resolve_the_same_url_and_key_from_the_environment(
     monkeypatch: pytest.MonkeyPatch,
+    environment: dict[str, str],
+    expected_url: str,
 ) -> None:
     monkeypatch.delenv("VOLCENGINE_API_BASE", raising=False)
-    monkeypatch.setenv("ARK_API_BASE", "https://ark-only.example/api/v3")
+    monkeypatch.delenv("ARK_API_BASE", raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
     monkeypatch.setenv("VOLCENGINE_API_KEY", "volcengine-key")
     monkeypatch.setenv("ARK_API_KEY", "ark-key")
     generation: Final[dict[str, object]] = {}
@@ -236,9 +251,43 @@ def test_generation_and_edit_resolve_the_same_url_and_key_from_the_environment(
         client=_capturing_client(edit),
     )
 
+    assert generation["url"] == expected_url
     assert edit["url"] == generation["url"]
     assert generation["authorization"] == "Bearer volcengine-key"
     assert edit["authorization"] == generation["authorization"]
+
+
+def test_deployment_extra_headers_reach_ark_as_headers_and_never_the_body() -> None:
+    captured: Final[dict[str, object]] = {}
+
+    litellm.image_generation(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        prompt="a cat",
+        api_key="sk-ark",
+        extra_headers={"X-Custom": "kept"},
+        client=_capturing_client(captured),
+    )
+
+    body: Final = captured["body"]
+    assert isinstance(body, dict)
+    assert captured["x-custom"] == "kept"
+    assert "extra_headers" not in body
+    assert captured["authorization"] == "Bearer sk-ark"
+
+
+def test_a_caller_authorization_header_replaces_the_ark_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
+    monkeypatch.delenv("VOLCENGINE_API_KEY", raising=False)
+    captured: Final[dict[str, object]] = {}
+
+    litellm.image_generation(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        prompt="a cat",
+        extra_headers={"authorization": "Bearer header-key"},
+        client=_capturing_client(captured),
+    )
+
+    assert captured["authorization"] == "Bearer header-key"
 
 
 def test_generation_surfaces_the_ark_error_message() -> None:

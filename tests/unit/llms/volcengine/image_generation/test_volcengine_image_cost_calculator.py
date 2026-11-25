@@ -17,6 +17,14 @@ ARK_SEEDREAM_MODELS: Final = (
     "volcengine/doubao-seedream-5-0-pro-260628",
     "volcengine/doubao-seedream-5-5-261028",
 )
+BYTEPLUS_SEEDREAM_MODELS: Final = (
+    "dola-seedream-5-5-261028",
+    "dola-seedream-5-0-pro-260628",
+    "dola-seedream-5-0-flash-260915",
+    "seedream-5-0-lite-260128",
+    "seedream-4-5-251128",
+    "seedream-4-0-250828",
+)
 
 
 def _response(sizes: tuple[str, ...], *, input_images: int = 0, layers: tuple[int, ...] = ()) -> ImageResponse:
@@ -55,6 +63,20 @@ def test_output_images_bill_at_the_pixel_tier_ark_reports() -> None:
     )
 
     assert cost == 3.0
+
+
+# Tier cutoff is 1536^2 x 1.05^2 pixels per https://docs.byteplus.com/en/docs/ModelArk/1544106 (updated 2026-11-24)
+@pytest.mark.parametrize(("size", "expected_cost"), [("1612x1613", 1.0), ("1612x1614", 2.0)])
+def test_an_output_just_past_the_ark_tier_cutoff_bills_the_higher_tier(size: str, expected_cost: float) -> None:
+    model_info: Final[ModelInfo] = {"output_cost_per_image_1K": 1.0, "output_cost_per_image_2K": 2.0}
+
+    cost: Final = cost_calculator(
+        model="doubao-seedream-5-5-261028",
+        image_response=_response((size,)),
+        model_info=model_info,
+    )
+
+    assert cost == expected_cost
 
 
 def test_layer_decomposition_outputs_bill_at_the_layer_rate() -> None:
@@ -170,6 +192,16 @@ def test_every_ark_seedream_model_is_priced_as_an_image_model(model: str) -> Non
     assert info["litellm_provider"] == "volcengine"
     assert info["output_cost_per_image"] > 0
     assert info["source"].startswith("https://")
+
+
+@pytest.mark.parametrize("model", BYTEPLUS_SEEDREAM_MODELS)
+def test_a_byteplus_model_name_is_priced_without_a_base_model(model: str) -> None:
+    info: Final = GetModelCostMap.load_local_model_cost_map()[f"volcengine/{model}"]
+
+    cost: Final = cost_calculator(model=model, image_response=_response(("1024x1024",)))
+
+    assert cost == info.get("output_cost_per_image_1K", info["output_cost_per_image"])
+    assert cost > 0
 
 
 def test_the_volcengine_image_route_uses_the_provider_calculator() -> None:
