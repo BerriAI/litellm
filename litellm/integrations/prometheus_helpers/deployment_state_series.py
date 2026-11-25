@@ -44,6 +44,10 @@ class CoolingDown:
 SeriesHistory: TypeAlias = Serving | CoolingDown
 
 
+def monotonic_seconds() -> float:
+    return time.monotonic()
+
+
 def including(
     written: tuple[DeploymentStateSeries, ...], series: DeploymentStateSeries
 ) -> tuple[DeploymentStateSeries, ...]:
@@ -71,10 +75,10 @@ class DeploymentStateSeriesTracker:
         self,
         write: Callable[[DeploymentState, str, str | None, str | None, str], None],
         lock: AbstractContextManager[object] | None = None,
-        clock: Callable[[], float] = time.monotonic,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self._write = write
-        self._clock: Final = clock
+        self._clock: Final = monotonic_seconds if clock is None else clock
         self._serving: OrderedDict[str | None, Serving] = OrderedDict()  # mutable-ok: O(1) LRU
         self._cooling: dict[str | None, CoolingDown] = {}  # mutable-ok: emptied by each deployment's next success
         self._lock: AbstractContextManager[object] = Lock() if lock is None else lock

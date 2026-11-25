@@ -22,6 +22,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.integrations.prometheus import PrometheusLogger
+from litellm.integrations.prometheus_helpers import deployment_state_series
 from litellm.litellm_core_utils.litellm_logging import mask_api_base_credentials
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.redis.stores.connection import connect
@@ -1714,22 +1715,23 @@ def test_a_model_litellm_cannot_resolve_keeps_its_configured_name_and_has_no_pro
     assert resolved_model_and_provider("private-model", None) == ("private-model", "")
 
 
-@pytest.mark.parametrize(
-    ("router_cooldown_time", "expected_state"),
-    [
-        pytest.param(0.001, [1.0], id="router_cooldown_over"),
-        pytest.param(60.0, [2.0], id="router_cooldown_running"),
-    ],
-)
+class ManualClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown", "isolated_prometheus_registry")
 @pytest.mark.asyncio
 async def test_a_provider_error_reads_as_a_partial_outage_once_the_router_cooldown_is_over(
-    router_cooldown_time: float,
-    expected_state: list[float],
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
     deployment_state_values: Callable[[str], list[float]],
 ) -> None:
+    clock: Final = ManualClock()
+    monkeypatch.setattr(deployment_state_series, "monotonic_seconds", clock)
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setattr(litellm, "callbacks", [PrometheusLogger()])
     router: Final = Router(
@@ -1740,27 +1742,35 @@ async def test_a_provider_error_reads_as_a_partial_outage_once_the_router_cooldo
                 "model_info": {"id": "dep-1"},
             }
         ],
-        cooldown_time=router_cooldown_time,
+        cooldown_time=5.0,
         num_retries=0,
     )
+    bad_request: Final = {"error": {"message": "bad request", "type": "invalid_request_error"}}
     respx_mock.post(url__regex=r".*/chat/completions$").mock(
         side_effect=[
             httpx.Response(200, json=CHAT_COMPLETION),
-            httpx.Response(400, json={"error": {"message": "bad request", "type": "invalid_request_error"}}),
+            httpx.Response(400, json=bad_request),
+            httpx.Response(400, json=bad_request),
         ]
     )
     await router.acompletion(model="prod-chat", messages=[{"role": "user", "content": "hi"}])
     await await_scheduled_success_logging()
-
     await router_cooldown_event_callback(
         ctx=RoutingContext(router), deployment_id="dep-1", exception_status=401, cooldown_time=None
     )
-    await asyncio.sleep(0.05)
+
+    clock.now = 4.9
+    with pytest.raises(litellm.BadRequestError):
+        await router.acompletion(model="prod-chat", messages=[{"role": "user", "content": "hi"}])
+    await await_scheduled_success_logging()
+    during_cooldown: Final = deployment_state_values("dep-1")
+    clock.now = 5.0
     with pytest.raises(litellm.BadRequestError):
         await router.acompletion(model="prod-chat", messages=[{"role": "user", "content": "hi"}])
     await await_scheduled_success_logging()
 
-    assert deployment_state_values("dep-1") == expected_state
+    assert during_cooldown == [2.0]
+    assert deployment_state_values("dep-1") == [1.0]
 
 
 @pytest.fixture
