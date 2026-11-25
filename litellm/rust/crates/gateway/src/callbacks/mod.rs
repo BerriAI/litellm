@@ -5,6 +5,7 @@
 //! through [`fields`]. [`Point`] names each hook the gateway runs and how it ends, and a hook it does not run
 //! yet is never told.
 
+pub mod budget_check;
 pub mod budget_reservation;
 pub(crate) mod budgets;
 mod fields;

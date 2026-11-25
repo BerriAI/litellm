@@ -108,6 +108,8 @@ pub struct Key {
     priority: Option<Arc<str>>,
     /// The key's `key_alias`, which its calls are logged under.
     alias: Option<Arc<str>>,
+    /// The key's `key_name`, its masked text, which names it when it is over budget.
+    name: Option<Arc<str>>,
     /// The key's own budget, which its budget counter is planned from.
     own_budget: Budget,
     /// The first budget column the row holds, which `key_budgets` declines.
@@ -139,6 +141,10 @@ impl Key {
         self.alias.as_deref()
     }
 
+    pub(crate) fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
     pub(crate) fn budget(&self) -> Budget {
         self.own_budget
     }
@@ -156,6 +162,7 @@ impl Key {
             limits: KeyLimits::default(),
             priority: None,
             alias: alias.map(Arc::from),
+            name: None,
             own_budget: Budget::default(),
             budget: None,
             aliased: false,
@@ -164,6 +171,13 @@ impl Key {
 
     pub(crate) fn with_budget(self, own_budget: Budget) -> Self {
         Self { own_budget, ..self }
+    }
+
+    pub(crate) fn with_name(self, name: &str) -> Self {
+        Self {
+            name: Some(Arc::from(name)),
+            ..self
+        }
     }
 }
 
@@ -366,7 +380,6 @@ fn held(key: &CachedKey) -> Held {
             }),
         budget: carried![
             soft_budget_cooldown,
-            max_budget,
             soft_budget,
             budget_duration,
             budget_reset_at,
@@ -374,6 +387,7 @@ fn held(key: &CachedKey) -> Held {
             budget_fallbacks,
             budget_id,
             model_max_budget,
+            max_budget,
         ],
         aliased: aliases.is_carried(),
     }
@@ -432,6 +446,7 @@ pub(super) fn read(key: &CachedKey) -> Result<Keyed<Key>, &'static str> {
             },
             priority: metadata.priority.map(Arc::from),
             alias: key.key_alias.as_deref().map(Arc::from),
+            name: key.key_name.as_deref().map(Arc::from),
             own_budget: Budget {
                 max: key.max_budget,
                 spend: key.spend,
@@ -576,6 +591,37 @@ mod tests {
         #[case] field: &str,
     ) {
         assert_eq!(read(&cached(change)).err(), Some(field));
+    }
+
+    #[rstest]
+    #[case::a_max_budget_alone(json!({"max_budget": 5.0}), "max_budget")]
+    #[case::a_soft_budget(json!({"max_budget": 5.0, "soft_budget": 4.0}), "soft_budget")]
+    #[case::a_soft_budget_alert_cooldown(json!({"max_budget": 5.0, "soft_budget_cooldown": true}), "soft_budget_cooldown")]
+    #[case::a_budget_window(json!({"max_budget": 5.0, "budget_limits": [{"budget_duration": "1d", "max_budget": 1.0}]}), "budget_limits")]
+    #[case::a_budget_fallback(json!({"max_budget": 5.0, "budget_fallbacks": {"claude": ["haiku"]}}), "budget_fallbacks")]
+    #[case::a_per_model_budget(json!({"max_budget": 5.0, "model_max_budget": {"claude": {"budget_limit": 1.0}}}), "model_max_budget")]
+    #[case::a_budget_reset(json!({"max_budget": 5.0, "budget_duration": "30d"}), "budget_duration")]
+    fn a_budget_feature_beside_a_max_budget_is_named_over_it(
+        #[case] change: Fields,
+        #[case] column: &str,
+    ) {
+        assert_eq!(
+            read(&cached(change)).map(|key| key.row.budget),
+            Ok(Some(column))
+        );
+    }
+
+    #[rstest]
+    #[case::tags(json!({"tags": ["paid"]}))]
+    #[case::a_temporary_budget_increase(json!({"temp_budget_increase": 5.0, "temp_budget_expiry": "2100-01-01T00:00:00Z"}))]
+    #[case::throttling_once_over_budget(json!({"throttle_on_budget_exceeded": true}))]
+    fn a_budget_feature_in_the_metadata_beside_a_max_budget_is_named_as_the_metadata(
+        #[case] metadata: Fields,
+    ) {
+        assert_eq!(
+            read(&cached(json!({"max_budget": 5.0, "metadata": metadata}))).err(),
+            Some("metadata")
+        );
     }
 
     #[rstest]

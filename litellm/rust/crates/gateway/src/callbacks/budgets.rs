@@ -1,7 +1,8 @@
 //! The budget counters a caller holds through its key and what it belongs to, as the proxy's
 //! `_get_budget_counters` plans them for a reservation: one lifetime counter for each of the key,
-//! team, user, end user, team member, organization and project that has a positive budget, in
-//! that order. A counter starts from the spend its row holds.
+//! team, user, end user, team member, organization and project that has a budget, in that order.
+//! A counter starts from the spend its row holds. A reservation holds only against a positive
+//! budget, while the read-time checks refuse at a budget of zero or less too.
 //!
 //! Accepted difference, while the gateway declines every caller that holds one: no `budget_limits`
 //! window is planned, no counter is planned for a team the key only copies, and a user's or a
@@ -24,14 +25,14 @@ pub(crate) struct Settings {
     pub(crate) apply_user_budget_to_team_keys: bool,
 }
 
-/// The counter `entity_type` `entity_id` reserves against, when its budget is positive.
+/// The counter `entity_type` `entity_id` is held to, when it has a budget.
 fn planned(
     counter: SpendCounter,
     entity_type: &str,
     entity_id: String,
     budget: Budget,
 ) -> Option<PlannedCounter> {
-    let max_budget = budget.max.filter(|max| *max > 0.0)?;
+    let max_budget = budget.max?;
     Some(PlannedCounter {
         counter_key: counter.key(),
         max_budget,
@@ -406,10 +407,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case::zero(Some(0.0))]
-    #[case::negative(Some(-1.0))]
-    #[case::unset(None)]
-    fn a_budget_that_is_not_positive_plans_no_counter(#[case] max_budget: Option<f64>) {
+    #[case::zero(Some(0.0), true)]
+    #[case::negative(Some(-1.0), true)]
+    #[case::unset(None, false)]
+    fn only_an_unset_budget_plans_no_counter(
+        #[case] max_budget: Option<f64>,
+        #[case] holds_the_user: bool,
+    ) {
         let identity = caller(
             Holder::User(Named::Stored(user(max_budget))),
             EndUserRecord::default(),
@@ -420,7 +424,11 @@ mod tests {
             .map(|(_, kind, ..)| kind)
             .collect::<Vec<_>>();
 
-        assert_eq!(kinds, ["Key", "Organization", "Project"]);
+        assert_eq!(
+            kinds.contains(&"User".to_owned()),
+            holds_the_user,
+            "{kinds:?}"
+        );
     }
 
     #[rstest]

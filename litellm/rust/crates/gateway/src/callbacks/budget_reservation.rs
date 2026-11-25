@@ -10,6 +10,9 @@
 //! did, as Python's failure hook and `release_budget_reservation_on_cancel` do. Accepted
 //! difference: the provider counts as reached once the pre-call hook ends, before routing.
 //!
+//! With `general_settings.disable_budget_reservation` on nothing is held, and the read-time
+//! checks of `budget_check`, which run before this callback, are the only budget enforcement.
+//!
 //! Each counter is first warmed through `SpendReader`, as `_initialize_reservation_counters` runs
 //! `ensure_spend_counter_initialized`: a cold one is seeded from the spend its row holds, or raised
 //! to the spend its caller was authenticated with when it has no row, so concurrent calls charge it
@@ -62,6 +65,7 @@ pub struct Reserver {
     manifest: Manifest,
     budgets: Arc<Budgets>,
     spend: SpendReader,
+    disabled: bool,
 }
 
 /// The counters one request's caller reserves against, and what it holds on them, which it gives
@@ -143,6 +147,11 @@ fn plan_counter(counter: &PlannedCounter) -> BudgetPlanCounter {
     }
 }
 
+/// Python's `BudgetExceededError` for an over-budget caller, as an abort.
+pub(crate) fn over_budget(fields: Map<String, Value>) -> Abort {
+    refused(BUDGET_EXCEEDED, fields)
+}
+
 /// The exception `_refusal` raises for the engine's refusal, as an abort.
 fn refused(kind: &str, fields: Map<String, Value>) -> Abort {
     let text = |field: &str| {
@@ -195,11 +204,13 @@ pub(crate) fn refusal(abort: &Abort) -> Option<Refusal> {
 }
 
 impl Reserver {
-    pub fn new(budgets: Arc<Budgets>, stored: Arc<dyn RowSpend>) -> Arc<Self> {
+    /// `disabled` is `general_settings.disable_budget_reservation`.
+    pub fn new(budgets: Arc<Budgets>, stored: Arc<dyn RowSpend>, disabled: bool) -> Arc<Self> {
         Arc::new(Self {
             manifest: manifest(),
             spend: SpendReader::new(budgets.store().clone(), stored),
             budgets,
+            disabled,
         })
     }
 
@@ -216,7 +227,10 @@ impl Reserver {
         admitted: Option<&Admitted>,
     ) -> Holding {
         Holding {
-            counters: budgets::counters(identity, budgets::Settings::default()),
+            counters: budgets::counters(identity, budgets::Settings::default())
+                .into_iter()
+                .filter(|counter| counter.max_budget > 0.0)
+                .collect(),
             priced: admitted.map(|admitted| admitted.hold).ok_or(Unheld),
             held: Mutex::new(None),
             budgets: self.budgets.clone(),
@@ -279,7 +293,7 @@ impl Reserver {
     }
 
     async fn pre_call(&self, holding: &Holding) -> HookOutput {
-        if holding.counters.is_empty() {
+        if self.disabled || holding.counters.is_empty() {
             return Ok(None);
         }
         let hold = match holding.priced {
@@ -454,13 +468,26 @@ mod tests {
 
     /// A reserver over a counter that holds `warm` and a row that holds `row`.
     async fn reserver(warm: Option<f64>, row: Option<f64>) -> (Arc<SpendCounters>, Arc<Reserver>) {
+        reserving(warm, row, false)
+    }
+
+    /// [`reserver`], with `general_settings.disable_budget_reservation` set to `disabled`.
+    fn reserving(
+        warm: Option<f64>,
+        row: Option<f64>,
+        disabled: bool,
+    ) -> (Arc<SpendCounters>, Arc<Reserver>) {
         let store = Arc::new(SpendCounters::new(None));
         if let Some(spend) = warm {
             store
                 .set_local(&counter(), Number::Float(spend), None)
                 .unwrap();
         }
-        let reserver = Reserver::new(Arc::new(Budgets::new(store.clone())), Arc::new(Row(row)));
+        let reserver = Reserver::new(
+            Arc::new(Budgets::new(store.clone())),
+            Arc::new(Row(row)),
+            disabled,
+        );
         (store, reserver)
     }
 

@@ -170,13 +170,14 @@ pub(crate) mod test_prices {
         })
     }
 
-    /// `held-model` at [`INPUT`] and [`OUTPUT`], and `wider-model` with a higher input rate and
-    /// window but a lower output rate.
+    /// `held-model` at [`INPUT`] and [`OUTPUT`], `wider-model` with a higher input rate and
+    /// window but a lower output rate, and `free-model` at no cost.
     pub(crate) fn catalog() -> Catalog {
         let rows = json!({
             "held-model": row("anthropic", INPUT, OUTPUT, MAX_OUTPUT),
             "wider-model": row("anthropic", WIDER_INPUT, OUTPUT / 2.0, WIDER_MAX_OUTPUT),
             "openai-model": row("openai", INPUT, OUTPUT, MAX_OUTPUT),
+            "free-model": row("anthropic", 0.0, 0.0, MAX_OUTPUT),
         });
         Catalog::parse(&serde_json::to_vec(&rows).unwrap())
             .unwrap()
