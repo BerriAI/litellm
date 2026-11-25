@@ -19,6 +19,7 @@ LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY: Final = "litellm_pass_through_raw_body"
 
 # `model_info` of the router deployment a provider route (e.g. Vertex) resolved for this request.
 LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY: Final = "litellm_pass_through_deployment_model_info"
+LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_NAME_STATE_KEY: Final = "litellm_pass_through_deployment_model_name"
 
 # Resolves that `model_info` from the body actually forwarded, after the `custom_body` envelope and pre-call hooks.
 LITELLM_PASS_THROUGH_DEPLOYMENT_PRICING_STATE_KEY: Final = "litellm_pass_through_deployment_pricing"

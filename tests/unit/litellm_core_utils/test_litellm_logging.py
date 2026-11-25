@@ -864,6 +864,16 @@ def test_input_events_reach_the_replacement_and_not_the_global_callback_it_repla
     assert events == ["replacement pre", "replacement post"]
 
 
+def test_a_request_param_named_call_type_does_not_change_the_call_type_callbacks_see(
+    logging_obj: LitellmLogging,
+) -> None:
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={"call_type": CallTypes.pass_through.value}
+    )
+
+    assert logging_obj.model_call_details["call_type"] == "completion"
+
+
 def test_get_masked_api_base(logging_obj):
     api_base = "https://api.openai.com/v1"
     masked_api_base = logging_obj._get_masked_api_base(api_base)

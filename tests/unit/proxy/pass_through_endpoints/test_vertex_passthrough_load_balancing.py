@@ -1,14 +1,18 @@
 import asyncio
-from collections.abc import Awaitable, Callable
+from datetime import datetime
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException, Request
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import Router
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     VertexAIPassThroughHandler,
@@ -18,11 +22,15 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
+    _build_passthrough_failure_request_payload,
+    _log_passthrough_upstream_failure,
 )
+from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
 )
 from litellm.types.router import DeploymentTypedDict
+from litellm.types.utils import CallTypes
 
 
 @pytest.mark.asyncio
@@ -768,18 +776,6 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
     """The router deployment that rewrote the upstream URL is the one the logging kwargs must name, so
     the Prometheus model_id label (and SpendLogs.model_id) on a Vertex passthrough success reads the
     deployment's id instead of "" (LIT-1761)."""
-    mock_request: Final = Request({
-        "type": "http",
-        "method": "POST",
-        "scheme": "http",
-        "server": ("0.0.0.0", 4000),
-        "path": "/vertex_ai/v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
-        "headers": [],
-        "query_string": b"",
-    })
-    mock_handler = MagicMock()
-    mock_handler.get_default_base_target_url.return_value = "https://aiplatform.googleapis.com"
-
     mock_router = MagicMock()
     mock_router.select = AsyncMock()
     mock_router.select.return_value = {
@@ -793,21 +789,53 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
         "model_info": {"id": "vertex-gemini-38-flash-dep"},
     }
 
+    logging_kwargs = await _vertex_pass_through_logging_kwargs(mock_router, "gemini-3.8-flash", "lit-1761-call-id")
+
+    assert _routed_deployment_id(logging_kwargs) == "vertex-gemini-38-flash-dep"
+
+
+_VERTEX_GROUP: Final = "gemini-3.8-flash"
+_VERTEX_BODY: Final = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
+_MAPPING: Final = TypeAdapter(Mapping[str, object])
+
+
+def _routed_deployment_id(kwargs: Mapping[str, object]) -> object:
+    litellm_params: Final = _MAPPING.validate_python(kwargs["litellm_params"])
+    metadata: Final = _MAPPING.validate_python(litellm_params["metadata"])
+    return _MAPPING.validate_python(metadata["model_info"])["id"]
+
+
+async def _vertex_pass_through_logging_kwargs(
+    llm_router: object, url_model: str, call_id: str, body: Mapping[str, object] = _VERTEX_BODY
+) -> Mapping[str, object]:
+    endpoint: Final = f"v1/projects/p/locations/global/publishers/google/models/{url_model}:generateContent"
+    request: Final = Request({
+        "type": "http",
+        "method": "POST",
+        "scheme": "http",
+        "server": ("0.0.0.0", 4000),
+        "path": f"/vertex_ai/{endpoint}",
+        "headers": [],
+        "query_string": b"",
+    })
+    handler: Final = MagicMock()
+    handler.get_default_base_target_url.return_value = "https://aiplatform.googleapis.com"
+
     async def relay_returning_logging_kwargs(
         request: Request, fastapi_response: object, user_api_key_dict: UserAPIKeyAuth
-    ) -> dict:
+    ) -> dict[str, object]:
         return HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
             request=request,
             user_api_key_dict=user_api_key_dict,
             passthrough_logging_payload=MagicMock(),
             logging_obj=MagicMock(),
-            _parsed_body={"contents": [{"role": "user", "parts": [{"text": "hi"}]}]},
-            litellm_call_id="lit-1761-call-id",
+            _parsed_body=dict(body),
+            litellm_call_id=call_id,
         )
 
     with (
         patch(  # test-quality-ok: the route reads this proxy global at call time, nothing injects it
-            "litellm.proxy.proxy_server.llm_router", mock_router
+            "litellm.proxy.proxy_server.llm_router", llm_router
         ),
         patch(  # test-quality-ok: the route reads this proxy global at call time, nothing injects it
             "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router"
@@ -823,17 +851,113 @@ async def test_vertex_passthrough_attributes_the_call_to_the_resolved_deployment
         ),
     ):
         mock_pt_router.get_vertex_credentials.return_value = MagicMock()
-
-        logging_kwargs = await _base_vertex_proxy_route(
-            endpoint="v1/projects/p/locations/global/publishers/google/models/gemini-3.8-flash:generateContent",
-            request=mock_request,
+        relayed: Final = await _base_vertex_proxy_route(
+            endpoint=endpoint,
+            request=request,
             fastapi_response=MagicMock(),
-            get_vertex_pass_through_handler=mock_handler,
+            get_vertex_pass_through_handler=handler,
             general_settings={},
             user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
         )
+    return _MAPPING.validate_python(relayed)
 
-    assert logging_kwargs["litellm_params"]["metadata"]["model_info"]["id"] == "vertex-gemini-38-flash-dep"
+
+def _vertex_deployment(group: str, model: str, deployment_id: str) -> DeploymentTypedDict:
+    return {
+        "model_name": group,
+        "litellm_params": {
+            "model": model,
+            "vertex_project": "p",
+            "vertex_location": "global",
+            "use_in_pass_through": True,
+        },
+        "model_info": {"id": deployment_id},
+    }
+
+
+def _least_busy_of(router: Router) -> LeastBusyLoggingHandler:
+    return next(
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, LeastBusyLoggingHandler) and callback.router_cache is router.health().store
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("group", "model", "first_url_model", "second_url_model", "body"),
+    [
+        ("gemini-3.8-flash", "vertex_ai/gemini-3.8-flash", "gemini-3.8-flash", "gemini-3.8-flash", _VERTEX_BODY),
+        ("gemini-3.8-flash", "vertex_ai/gemini-3.8-flash", "alias", "alias", _VERTEX_BODY),
+        ("gemini-3.8-flash", "vertex_ai/gemini-3.8-flash", "alias", "gemini-3.8-flash", _VERTEX_BODY),
+        (
+            "gemini-3.8-flash",
+            "vertex_ai/gemini-3.8-flash",
+            "alias",
+            "alias",
+            {**_VERTEX_BODY, "metadata": {"deployment_model_name": "caller-named-group"}},
+        ),
+        ("vertex_ai/*", "vertex_ai/*", "gemini-3.8-flash", "gemini-3.8-flash", _VERTEX_BODY),
+    ],
+    ids=["group", "alias", "alias-then-group", "alias-with-a-caller-named-group", "wildcard"],
+)
+async def test_a_vertex_passthrough_call_in_flight_keeps_its_deployment_busy_whatever_name_the_url_uses(
+    group: str, model: str, first_url_model: str, second_url_model: str, body: Mapping[str, object]
+) -> None:
+    router: Final = Router(
+        model_list=[_vertex_deployment(group, model, "dep-a"), _vertex_deployment(group, model, "dep-b")],
+        model_group_alias={"alias": group},
+        routing_strategy="least-busy",
+    )
+
+    first: Final = await _vertex_pass_through_logging_kwargs(router, first_url_model, "first-call", body)
+    _least_busy_of(router).log_pre_api_call(model=first_url_model, messages=[], kwargs=first)
+    second: Final = await _vertex_pass_through_logging_kwargs(router, second_url_model, "second-call", body)
+
+    assert _routed_deployment_id(second) != _routed_deployment_id(first)
+
+
+@pytest.mark.asyncio
+async def test_a_vertex_passthrough_call_the_upstream_rejected_leaves_its_deployment_idle() -> None:
+    router: Final = Router(
+        model_list=[
+            _vertex_deployment(_VERTEX_GROUP, "vertex_ai/gemini-3.8-flash", "dep-a"),
+            _vertex_deployment(_VERTEX_GROUP, "vertex_ai/gemini-3.8-flash", "dep-b"),
+        ],
+        routing_strategy="least-busy",
+    )
+    kwargs: Final = await _vertex_pass_through_logging_kwargs(router, _VERTEX_GROUP, "rejected-call")
+    _least_busy_of(router).log_pre_api_call(model=_VERTEX_GROUP, messages=[], kwargs=kwargs)
+    logging_obj: Final = Logging(
+        model=_VERTEX_GROUP,
+        messages=[],
+        stream=False,
+        call_type=CallTypes.pass_through.value,
+        start_time=datetime.now(),
+        litellm_call_id="rejected-call",
+        function_id="rejected-call",
+    )
+    upstream_url: Final = (
+        "https://aiplatform.googleapis.com/v1/projects/p/locations/global/publishers/google/models/"
+        f"{_VERTEX_GROUP}:generateContent"
+    )
+
+    await _log_passthrough_upstream_failure(
+        response=httpx.Response(
+            400, json={"error": {"code": 400}}, request=httpx.Request("POST", upstream_url)
+        ),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        request_payload=_build_passthrough_failure_request_payload(
+            parsed_body=dict(_VERTEX_BODY),
+            kwargs=kwargs,
+            logging_obj=logging_obj,
+            custom_llm_provider="vertex_ai",
+        ),
+        logging_obj=logging_obj,
+    )
+
+    served: Final = _routed_deployment_id(kwargs)
+    assert router.health().store.get_cache(f"{_VERTEX_GROUP}_request_count:{served}") == 0
 
 
 _VERTEX_MODEL: Final = "gemini-3.8-flash"

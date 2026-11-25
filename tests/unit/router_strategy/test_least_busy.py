@@ -23,6 +23,7 @@ from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.attempt_settlement import routed_attempt
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.router_strategy.least_busy import (
     IN_FLIGHT_COUNT_TTL_SECONDS,
     SELECTION_RESERVATION_TTL_SECONDS,
@@ -166,6 +167,41 @@ def test_a_request_routed_through_litellm_metadata_counts_while_in_flight() -> N
     calling_worker.log_success_event(_routed_through_litellm_metadata("dep-a"), None, None, None)
 
     assert calling_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+def _chat_call_left_with_an_outer_routers_metadata(deployment_id: str) -> dict[str, object]:
+    return {
+        "litellm_params": {
+            "metadata": {
+                "model_group": "smart-router",
+                "deployment_model_name": GROUP,
+                "model_info": {"id": deployment_id},
+            },
+            "litellm_metadata": {
+                "model_group": "smart-router",
+                "deployment_model_name": "smart-router",
+                "model_info": {"id": "smart-router"},
+            },
+            "model_info": {"id": deployment_id},
+        },
+        "litellm_call_id": "call-1",
+    }
+
+
+def test_a_call_counts_under_the_group_stamped_with_its_own_deployment() -> None:
+    shared: Final = SharedRedisCounters()
+    calling_worker: Final = _worker(shared)
+    picking_worker: Final = _worker(shared)
+
+    calling_worker.log_pre_api_call(
+        model="m", messages=[], kwargs=_chat_call_left_with_an_outer_routers_metadata("dep-a")
+    )
+
+    assert picking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+    calling_worker.log_success_event(_chat_call_left_with_an_outer_routers_metadata("dep-a"), None, None, None)
+
+    assert picking_worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
 
 
 def test_a_closed_realtime_session_leaves_its_deployment_idle() -> None:
@@ -514,6 +550,93 @@ async def test_router_spreads_requests_that_start_together(
     assert sorted(call.request.headers["authorization"] for call in route.calls) == sorted(one_per_deployment * 2)
 
 
+def _openai_deployment(group: str, model: str, deployment_id: str) -> dict[str, object]:
+    return {
+        "model_name": group,
+        "litellm_params": {"model": model, "api_key": f"key-{deployment_id}"},
+        "model_info": {"id": deployment_id},
+    }
+
+
+def _router_with_names_in_front_of_one_tier() -> Router:
+    return Router(
+        model_list=[
+            _openai_deployment("tier", "openai/gpt-4.1-mini", "tier-a"),
+            _openai_deployment("tier", "openai/gpt-4.1-mini", "tier-b"),
+            _openai_deployment("openai/*", "openai/*", "wildcard-a"),
+            _openai_deployment("openai/*", "openai/*", "wildcard-b"),
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": "tier", "MEDIUM": "tier", "COMPLEX": "tier"}},
+                    "complexity_router_default_model": "tier",
+                },
+                "model_info": {"id": "smart-router"},
+            },
+        ],
+        model_group_alias={"alias": "tier"},
+        routing_strategy="least-busy",
+        num_retries=0,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("busy_model", "next_model"),
+    [
+        ("smart-router", "smart-router"),
+        ("smart-router", "tier"),
+        ("tier", "smart-router"),
+        ("alias", "tier"),
+        ("tier", "alias"),
+        ("openai/gpt-4.1-mini", "openai/gpt-4.1-nano"),
+    ],
+)
+async def test_a_call_in_flight_keeps_its_deployment_busy_whatever_name_routed_it_there(
+    busy_model: str, next_model: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    busy_call_reached_provider: Final = asyncio.Event()
+    busy_call_may_finish: Final = asyncio.Event()
+
+    async def hold_the_first_call(_: httpx.Request) -> httpx.Response:
+        if not busy_call_reached_provider.is_set():
+            busy_call_reached_provider.set()
+            await busy_call_may_finish.wait()
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-least-busy",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(side_effect=hold_the_first_call)
+    router: Final = _router_with_names_in_front_of_one_tier()
+    messages: Final = [{"role": "user", "content": "hi"}]
+
+    busy: Final = asyncio.create_task(router.acompletion(model=busy_model, messages=messages))
+    reached: Final = asyncio.create_task(busy_call_reached_provider.wait())
+    try:
+        await asyncio.wait((busy, reached), timeout=30, return_when=asyncio.FIRST_COMPLETED)
+        assert not busy.done(), busy.result()
+        assert reached.done(), "the first call never reached the provider"
+        following: Final = await router.acompletion(model=next_model, messages=messages)
+        busy_call_may_finish.set()
+        held: Final = await busy
+    finally:
+        busy_call_may_finish.set()
+        busy.cancel()
+        reached.cancel()
+
+    assert following._hidden_params["model_id"] != held._hidden_params["model_id"]
+
+
 class _ManualClock:
     def __init__(self) -> None:
         self.now = 0.0
@@ -770,6 +893,53 @@ def test_a_proxy_error_logged_on_a_request_whose_failure_was_already_logged_leav
     )
 
     assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_A
+
+
+@pytest.mark.asyncio
+async def test_a_pass_through_failure_seen_by_both_failure_paths_frees_only_its_own_call() -> None:
+    worker: Final = _worker(None)
+    failed: Final = {**_call_kwargs("dep-a", "failed-call"), "call_type": CallTypes.pass_through.value}
+    still_running: Final = {**_call_kwargs("dep-a", "still-running"), "call_type": CallTypes.pass_through.value}
+    worker.log_pre_api_call(model="m", messages=[], kwargs=failed)
+    worker.log_pre_api_call(model="m", messages=[], kwargs=still_running)
+
+    await worker.async_log_failure_event(failed, None, None, None)
+    await worker.async_post_call_failure_hook(
+        request_data=dict(failed), original_exception=Exception("upstream 400"), user_api_key_dict=UserAPIKeyAuth()
+    )
+
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("running_call_type", "failed_request"),
+    [
+        (
+            CallTypes.pass_through.value,
+            {"call_type": CallTypes.pass_through.value, "litellm_params": _call_kwargs("dep-a")["litellm_params"]},
+        ),
+        (
+            CallTypes.pass_through.value,
+            {**_call_kwargs("dep-a", "never-started"), "call_type": CallTypes.pass_through.value},
+        ),
+        (CallTypes.acompletion.value, {**_call_kwargs("dep-a", "running"), "call_type": CallTypes.pass_through.value}),
+    ],
+    ids=["no call id", "call id that never started", "a running chat call's id"],
+)
+async def test_a_pass_through_failure_naming_no_started_pass_through_call_leaves_the_running_call_counted(
+    running_call_type: str, failed_request: dict[str, object]
+) -> None:
+    worker: Final = _worker(None)
+    worker.log_pre_api_call(
+        model="m", messages=[], kwargs={**_call_kwargs("dep-a", "running"), "call_type": running_call_type}
+    )
+
+    await worker.async_post_call_failure_hook(
+        request_data=failed_request, original_exception=Exception("401"), user_api_key_dict=UserAPIKeyAuth()
+    )
+
+    assert worker.get_available_deployments(GROUP, HEALTHY) is DEPLOYMENT_B
 
 
 def test_a_call_logged_under_its_callers_group_name_frees_the_pick_made_for_another_group() -> None:
