@@ -7362,6 +7362,87 @@ def test_google_ai_studio_presence_penalty_supported():
     assert "presence_penalty" in supported_params
 
 
+_SERVED_BY_GEMINI_3_SUCCESSOR: Final = MappingProxyType(
+    {"deprecation_date": "2000-01-01", "successor_model": "gemini/gemini-3.8-flash"}
+)
+
+
+@pytest.mark.parametrize("param", ["presence_penalty", "frequency_penalty"])
+def test_ai_studio_answers_400_for_a_penalty_once_a_gemini_3_successor_serves_a_retired_model(
+    param: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Gemini 3 answers "Penalty is not enabled for this model", so the caller gets LiteLLM's 400 naming
+    drop_params instead"""
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, "gemini/gemini-2.5-zeta", dict(_SERVED_BY_GEMINI_3_SUCCESSOR))
+
+    with pytest.raises(litellm.UnsupportedParamsError, match="drop_params") as excinfo:
+        get_optional_params(model="gemini-2.5-zeta", custom_llm_provider="gemini", **{param: 0.5})
+
+    assert excinfo.value.status_code == 400
+    assert param in str(excinfo.value)
+
+
+def test_ai_studio_drops_penalties_under_drop_params_once_a_gemini_3_successor_serves_a_retired_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setitem(litellm.model_cost, "gemini/gemini-2.5-zeta", dict(_SERVED_BY_GEMINI_3_SUCCESSOR))
+
+    optional_params: Final = get_optional_params(
+        model="gemini-2.5-zeta",
+        custom_llm_provider="gemini",
+        presence_penalty=0.5,
+        frequency_penalty=0.3,
+        temperature=0.2,
+        drop_params=True,
+    )
+
+    assert optional_params == {"temperature": 0.2}
+
+
+@pytest.mark.parametrize(
+    ("custom_llm_provider", "row_key", "row"),
+    [
+        ("gemini", "gemini/gemini-2.5-zeta", {"deprecation_date": "2999-01-01", "successor_model": "gemini/gemini-3.8-flash"}),
+        ("gemini", "gemini/gemini-2.5-zeta", {"deprecation_date": "2000-01-01", "successor_model": "gemini/gemini-2.5-pro"}),
+        ("gemini", "gemini/gemini-2.5-zeta", {"deprecation_date": "2000-01-01"}),
+        ("gemini", "gemini/gemini-2.5-zeta", {"deprecation_date": "1 Dec 2000", "successor_model": "gemini/gemini-3.8-flash"}),
+        ("gemini", "gemini/gemini-2.5-zeta", {"deprecation_date": 20000101, "successor_model": "gemini/gemini-3.8-flash"}),
+        ("vertex_ai", "gemini/gemini-2.5-zeta", dict(_SERVED_BY_GEMINI_3_SUCCESSOR)),
+        ("vertex_ai", "gemini-2.5-zeta", {"deprecation_date": "2000-01-01", "successor_model": "gemini-3.8-flash"}),
+    ],
+    ids=[
+        "before-deprecation",
+        "pre-gemini-3-successor",
+        "no-successor",
+        "unparseable-date",
+        "non-string-date",
+        "vertex-reads-no-ai-studio-row",
+        "vertex-row",
+    ],
+)
+def test_penalties_reach_google_until_ai_studio_serves_a_gemini_3_successor(
+    custom_llm_provider: Literal["vertex_ai", "gemini"],
+    row_key: str,
+    row: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.utils import get_optional_params
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(litellm.model_cost, row_key, row)
+
+    optional_params: Final = get_optional_params(
+        model="gemini-2.5-zeta", custom_llm_provider=custom_llm_provider, presence_penalty=0.5, frequency_penalty=0.3
+    )
+
+    assert optional_params == {"presence_penalty": 0.5, "frequency_penalty": 0.3}
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("drop_params", [False, True])
 async def test_google_ai_studio_forwards_seed_to_generation_config(drop_params: bool):
