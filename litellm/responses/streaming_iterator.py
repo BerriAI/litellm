@@ -2594,7 +2594,7 @@ def _logged_input_items(client_frame: object) -> tuple[object, ...]:
     frame: Final = _json_object_or_none(client_frame)
     if frame is None or frame.get("type") != "response.create":
         return ()
-    input_items: Final = frame.get("input", [])
+    input_items: Final = _response_create_params(frame).get("input", [])
     if isinstance(input_items, str):
         return ({"role": "user", "content": input_items},)
     return tuple(_json_array_or_empty(input_items))
