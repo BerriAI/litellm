@@ -1274,8 +1274,139 @@ async def test_ensure_spend_counter_initialized_cold_seeds_from_source_cache(
     )
 
     assert fake_user_cache.async_get_cache.called is True
-    assert spend.commands == ["GET spend:user:u", "INCRBYFLOAT spend:user:u 7.0"]
+    assert spend.commands == ["GET spend:user:u", "SETMAX spend:user:u 7.0", "INCRBYFLOAT spend:user:u 0.0"]
     assert spend.redis == {"spend:user:u": 7.0}
+
+
+class _SharedAuthRoundTrip(FakeAuthCache):
+    """The shared auth cache's Redis with a ``GET`` whose reply takes a round trip; ``in_flight`` runs before it lands."""
+
+    def __init__(self, redis: dict[str, object], in_flight: Callable[[], Awaitable[object]] | None = None) -> None:
+        super().__init__(redis=redis)
+        self._in_flight: Final = in_flight
+
+    async def get(self, key: str, request: object) -> object:
+        await (asyncio.sleep(0) if self._in_flight is None else self._in_flight())
+        return await super().get(key, request)
+
+
+def _cache_end_user_spend(
+    monkeypatch: pytest.MonkeyPatch,
+    end_user_id: str,
+    spend: float,
+    in_flight: Callable[[], Awaitable[object]] | None = None,
+) -> None:
+    cache, _ = shared_cache(_SharedAuthRoundTrip({f"end_user_id:{end_user_id}": {"spend": spend}}, in_flight))
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redis", [{}, None], ids=["redis", "memory_only"])
+async def test_ensure_spend_counter_initialized_overlapping_cold_seeds_hold_the_cached_spend_once(
+    monkeypatch: pytest.MonkeyPatch, redis: dict[str, float] | None
+) -> None:
+    spend: Final = _spend_counters(monkeypatch, redis=redis)
+    end_user_id: Final = f"overlapping-{'memory' if redis is None else 'redis'}"
+    # The ledger twin runs this test again on its own event loop, and a reseed lock belongs to the loop that made it.
+    monkeypatch.setattr(ps.SpendCounterReseed, "_locks", type(ps.SpendCounterReseed._locks)())
+    _cache_end_user_spend(monkeypatch, end_user_id, 6.0)
+    monkeypatch.setattr(ps, "prisma_client", _make_prisma_with_end_user_row(spend=5.5))
+
+    await asyncio.gather(
+        *(
+            ps._ensure_spend_counter_initialized(
+                counter_key=f"spend:end_user:{end_user_id}", source_cache_key=AuthObject.end_user(end_user_id)
+            )
+            for _ in range(5)
+        )
+    )
+
+    assert (spend.memory if redis is None else spend.redis) == {f"spend:end_user:{end_user_id}": 6.0}
+
+
+@pytest.mark.asyncio
+async def test_ensure_spend_counter_initialized_cold_seed_keeps_the_cached_spend_when_a_charge_landed_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spend: Final = _spend_counters(monkeypatch)
+
+    async def _charge_lands() -> None:
+        await ps._increment_spend_counter_cache(counter_key="spend:end_user:charged-first", increment=0.25)
+
+    _cache_end_user_spend(monkeypatch, "charged-first", 6.0, in_flight=_charge_lands)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    await ps._ensure_spend_counter_initialized(
+        counter_key="spend:end_user:charged-first", source_cache_key=AuthObject.end_user("charged-first")
+    )
+
+    assert spend.redis == {"spend:end_user:charged-first": 6.0}
+
+
+@pytest.mark.asyncio
+async def test_ensure_spend_counter_initialized_cold_seed_raises_when_redis_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spend: Final = _spend_counters(monkeypatch, fail=True)
+    _cache_end_user_spend(monkeypatch, "redis-down", 6.0)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    with pytest.raises(NativeRedisStoreError, match="transport"):
+        await ps._ensure_spend_counter_initialized(
+            counter_key="spend:end_user:redis-down", source_cache_key=AuthObject.end_user("redis-down")
+        )
+
+    assert spend.redis == {}
+    assert spend.memory == {}
+
+
+@pytest.mark.asyncio
+async def test_ensure_spend_counter_initialized_cold_seed_increments_when_redis_refuses_the_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spend: Final = _spend_counters(monkeypatch, failing=frozenset({"set_max"}), failure="rejected")
+    _cache_end_user_spend(monkeypatch, "no-lua", 6.0)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    await ps._ensure_spend_counter_initialized(
+        counter_key="spend:end_user:no-lua", source_cache_key=AuthObject.end_user("no-lua")
+    )
+
+    assert spend.redis == {"spend:end_user:no-lua": 6.0}
+
+
+@pytest.mark.asyncio
+async def test_ensure_spend_counter_initialized_cold_seed_does_not_increment_when_the_script_may_have_applied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spend: Final = _spend_counters(monkeypatch, failing=frozenset({"set_max"}), failure="timeout")
+    _cache_end_user_spend(monkeypatch, "slow-redis", 6.0)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    with pytest.raises(NativeRedisStoreError, match="timeout"):
+        await ps._ensure_spend_counter_initialized(
+            counter_key="spend:end_user:slow-redis", source_cache_key=AuthObject.end_user("slow-redis")
+        )
+
+    assert spend.redis == {}
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_cold_end_user_counter_keeps_the_cached_spend_over_a_lagging_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spend: Final = _spend_counters(monkeypatch)
+    monkeypatch.setattr(ps, "prisma_client", _make_prisma_with_end_user_row(spend=9.5))
+
+    result: Final = await ps.get_current_spend(
+        counter_key="spend:end_user:customer-42",
+        fallback_spend=10.2,
+        max_budget=10.0,
+        fallback_authoritative=True,
+    )
+
+    assert result == 10.2
+    assert spend.redis == {}
 
 
 # ---------------------------------------------------------------------------

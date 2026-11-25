@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException
 import litellm
 from litellm._internal_context import current_billing_time, pinned_billing_time
 from litellm._logging import verbose_proxy_logger
-from litellm.cost_calculator import completion_cost
+from litellm.cost_calculator import base_model_for_pricing, completion_cost
 from litellm.litellm_core_utils.cost_discount import parse_cost_discount_key
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -120,7 +120,9 @@ def _resolve_model_for_cost_lookup(model: str) -> ResolvedCostModel:
                 custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
                 provider: Final = str(custom_llm_provider) if custom_llm_provider is not None else None
                 # base_model wins (needed for Azure custom deployment names)
-                base_model: Final = model_info.get("base_model") or litellm_params.get("base_model")
+                base_model: Final = base_model_for_pricing(model_info.get("base_model")) or base_model_for_pricing(
+                    litellm_params.get("base_model")
+                )
                 resolved_model: Final = base_model or litellm_params.get("model")
                 if resolved_model:
                     verbose_proxy_logger.debug("Resolved model '%s' to '%s' from router", model, resolved_model)
@@ -411,10 +413,11 @@ async def update_cost_margin_config(
         )
 
     # Validate that all providers are valid LiteLLM providers (except "global")
-    invalid_providers: Final = []
-    for provider in cost_margin_config:
-        if provider not in ("global", CUSTOMER_MARGIN_KEY) and provider not in LlmProvidersSet:
-            invalid_providers.append(provider)
+    invalid_providers: Final = [
+        provider
+        for provider in cost_margin_config
+        if provider not in ("global", CUSTOMER_MARGIN_KEY) and provider not in LlmProvidersSet
+    ]
 
     if invalid_providers:
         raise HTTPException(

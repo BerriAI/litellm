@@ -11,8 +11,10 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.in_memory_cache import DEFAULT_MAX_SIZE_IN_MEMORY
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+from litellm.models.team import LiteLLM_TeamTableCachedObj
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec, CacheValue
 from litellm.redis.stores.auth_cache import AuthCacheSettings, AuthCacheStore, AuthObject
+from litellm.redis.stores.auth_cache.handle import TeamRoster
 from litellm.redis.stores.connection import connect
 from litellm.rust_bridge._native import NativeRedisStoreError
 
@@ -104,6 +106,40 @@ class UserApiKeyCache:
     def get_local(self, key: AuthObject) -> object:
         """This worker's memory copy alone."""
         return self._store.get_local(key)
+
+    def has_local_team(self, key: AuthObject) -> bool:
+        return self._store.has_local_team(key)
+
+    async def get_team_fields(
+        self, key: AuthObject, fields: Sequence[str] | None = None, *, user_id: str | None = None
+    ) -> object:
+        try:
+            return await self._store.team_fields(key, fields, user_id)
+        except NativeRedisStoreError as e:
+            verbose_proxy_logger.error("UserApiKeyCache.get_team_fields failed for key=%r: %s", key.key, e)
+            return None
+
+    async def get_auth_team(self, key: AuthObject, user_id: str | None) -> LiteLLM_TeamTableCachedObj | None:
+        cached: Final = await self.get_team_fields(key, user_id=user_id)
+        if cached is None:
+            return None
+        decoded: Final = _validated(cached, key, LiteLLM_TeamTableCachedObj, "get_auth_team")
+        return decoded if isinstance(decoded, LiteLLM_TeamTableCachedObj) else None
+
+    async def get_team_snapshot(self, key: AuthObject) -> tuple[LiteLLM_TeamTableCachedObj, TeamRoster | None] | None:
+        try:
+            snapshot: Final = await self._store.team_snapshot(key)
+        except NativeRedisStoreError as e:
+            verbose_proxy_logger.error("UserApiKeyCache.get_team_snapshot failed for key=%r: %s", key.key, e)
+            return None
+        if snapshot is None:
+            return None
+        cached, roster = snapshot
+        decoded: Final = _validated(cached, key, LiteLLM_TeamTableCachedObj, "get_team_snapshot")
+        return (decoded, roster) if isinstance(decoded, LiteLLM_TeamTableCachedObj) else None
+
+    def add_local_team_spend(self, key: AuthObject, delta: float) -> None:
+        _ = self._store.add_local_team_spend(key, delta)
 
     def get_local_by_key(self, key: str) -> object:
         """This worker's memory copy under a wire key, for a hook that names no object."""

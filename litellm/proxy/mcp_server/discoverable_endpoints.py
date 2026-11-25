@@ -3,7 +3,7 @@ import html as _html
 import json
 import secrets
 import time
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import (
@@ -143,7 +143,7 @@ if TYPE_CHECKING:
 # Keyed by (server_id, resource_url) → (expires_at_epoch, payload).
 # A payload of ``None`` is a negative-result entry that prevents repeated
 # upstream fetches when the IdP consistently has no metadata to serve.
-_OAUTH_METADATA_CACHE: Final[dict[tuple[str, str], tuple[float, dict | None]]] = {}
+_OAUTH_METADATA_CACHE: Final[dict[tuple[str, str], tuple[float, dict[str, object] | None]]] = {}
 _OAUTH_METADATA_CACHE_TTL_SECONDS: Final = 300
 _OAUTH_METADATA_NEGATIVE_CACHE_TTL_SECONDS: Final = 60
 _OAUTH_METADATA_CACHE_MAX_SIZE: Final = 128
@@ -707,6 +707,7 @@ async def _store_per_user_token_server_side(
     identity_binding_proof: str | None = None,
     cimd_client_id: str | None = None,
     requested_scope: str | None = None,
+    refreshed_from: str | None = None,
 ) -> None:
     """Persist the OAuth token server-side and warm the Redis cache.
 
@@ -734,7 +735,7 @@ async def _store_per_user_token_server_side(
     except (TypeError, ValueError):
         expires_in = None
 
-    refresh_token: Final[str | None] = token_response.get("refresh_token") or None
+    refresh_token: Final[str | None] = token_response.get("refresh_token") or refreshed_from
     raw_scope: Final[object] = _DECODED_JSON.validate_python(token_response.get("scope", requested_scope))
     scopes: Final[list[str] | None] = raw_scope.split() if isinstance(raw_scope, str) else None
 
@@ -744,7 +745,7 @@ async def _store_per_user_token_server_side(
             store_user_oauth_credential,
         )
 
-        await store_user_oauth_credential(
+        stored: Final = await store_user_oauth_credential(
             prisma_client=prisma_client,
             user_id=user_id,
             server_id=server.server_id,
@@ -754,7 +755,10 @@ async def _store_per_user_token_server_side(
             scopes=scopes,
             identity_binding_proof=identity_binding_proof,
             **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
+            **({"refreshed_from": refreshed_from} if refreshed_from is not None else {}),
         )
+        if stored is False:
+            return
         verbose_logger.info(
             "_store_per_user_token_server_side: stored token for user=%s server=%s",
             user_id,
@@ -1405,7 +1409,7 @@ async def exchange_token_with_server(
                 status_code=400,
                 detail="refresh_token is required for refresh_token grant",
             )
-        token_data: dict = {
+        token_data: dict[str, str | None] = {
             "grant_type": "refresh_token",
             "refresh_token": upstream_refresh_token,
             **token_request.body,
@@ -1580,6 +1584,7 @@ async def exchange_token_with_server(
                         token_response=token_response,
                         identity_binding_proof=binding_proof,
                         requested_scope=requested_scope,
+                        **({"refreshed_from": refresh_token} if grant_type == "refresh_token" else {}),
                         **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
                     )
                 else:
@@ -1747,18 +1752,43 @@ async def _load_store_dcr_credentials(
     return credentials
 
 
-async def hydrate_config_server_dcr_client(mcp_server: MCPServer) -> bool:
-    """Overlay a config-declared server's persisted DCR client onto its in-memory object so token
-    refresh can authenticate. Config.yaml servers have no LiteLLM_MCPServerTable row, so their
-    minted client lives in the server-scoped store; without this overlay the in-memory server
-    carries no client_id after a restart. An explicit client_id set in config.yaml wins and is never
-    overwritten by a persisted store client."""
-    if mcp_server.client_id:
-        return False
-    credentials: Final = await _load_store_dcr_credentials(mcp_server)
-    if credentials is None:
-        return False
-    return _apply_persisted_dcr_credentials(mcp_server, credentials)
+async def hydrate_config_dcr_clients(servers: Sequence[MCPServer]) -> None:
+    from litellm.proxy.mcp_server.db import (  # noqa: PLC0415  # avoids circular import
+        get_mcp_server_oauth_client_credentials_by_id,
+    )
+    from litellm.proxy.utils import get_prisma_client_or_throw  # noqa: PLC0415  # avoids circular import
+
+    candidates: Final = tuple(server for server in servers if not server.client_id)
+    if not candidates:
+        return
+    try:
+        prisma_client: Final = get_prisma_client_or_throw(
+            "Database not connected. Cannot read MCP OAuth client registration."
+        )
+        stored: Final = await get_mcp_server_oauth_client_credentials_by_id(
+            prisma_client, tuple(server.server_id for server in candidates)
+        )
+    except Exception as exc:  # noqa: BLE001  # configuration hydration is best effort
+        verbose_logger.debug("Failed to read stored MCP OAuth clients: %s", exc)
+        return
+
+    for server in candidates:
+        if server.client_id:
+            continue
+        try:
+            credentials = _get_persisted_dcr_credentials(stored.get(server.server_id))
+            if (
+                credentials is not None
+                and credentials.client_id
+                and _apply_persisted_dcr_credentials(server, credentials)
+            ):
+                verbose_logger.debug(
+                    "hydrated persisted DCR client onto config MCP server server_id=%s", server.server_id
+                )
+        except Exception as exc:  # noqa: BLE001  # one bad client must not block other servers
+            verbose_logger.debug(
+                "load_servers_from_config: failed to hydrate DCR client for server_id=%s: %s", server.server_id, exc
+            )
 
 
 async def _resolve_persisted_dcr_client(
@@ -2059,7 +2089,9 @@ def client_supplied_redirect_uris(value: object) -> list[str] | None:
     return uris if len(uris) == len(value) else None
 
 
-_CLIENT_APPLICATION_TYPE: Final = TypeAdapter(Literal["native", "web"] | None)
+_CLIENT_APPLICATION_TYPE: Final[TypeAdapter[Literal["native", "web"] | None]] = TypeAdapter(
+    Literal["native", "web"] | None
+)
 
 
 def client_supplied_application_type(value: object) -> Literal["native", "web"] | None:
@@ -2227,8 +2259,8 @@ async def register_client_with_server(
     request: Request,
     mcp_server: MCPServer,
     client_name: str,
-    grant_types: list | None,
-    response_types: list | None,
+    grant_types: Sequence[object] | None,
+    response_types: Sequence[object] | None,
     token_endpoint_auth_method: str | None,
     fallback_client_id: str | None = None,
     replace_stale_client: bool = False,
@@ -2915,7 +2947,7 @@ async def callback(
 
 async def fetch_upstream_oauth_protected_resource(
     mcp_server: MCPServer,
-) -> dict | None:
+) -> dict[str, object] | None:
     """Fetch the upstream MCP server's ``.well-known/oauth-protected-resource``
     metadata for a pass-through server.
 
@@ -2951,7 +2983,7 @@ async def fetch_upstream_oauth_protected_resource(
             return cached[1]
         generation: Final = _OAUTH_METADATA_GENERATIONS.get(mcp_server.server_id, 0)
 
-        def store(payload: dict | None, ttl_seconds: int) -> None:
+        def store(payload: dict[str, object] | None, ttl_seconds: int) -> None:
             if _OAUTH_METADATA_GENERATIONS.get(mcp_server.server_id, 0) != generation:
                 return
             stored_at: Final = time.time()
@@ -3022,7 +3054,7 @@ async def _build_oauth_protected_resource_response(
     request: Request,
     mcp_server_name: str | None,
     use_standard_pattern: bool,
-) -> dict:
+) -> Mapping[str, object]:
     """
     Build OAuth protected resource response with the appropriate URL pattern.
 
@@ -3145,7 +3177,7 @@ async def _build_oauth_protected_resource_response(
     }
 
 
-def _obo_protected_resource_response(mcp_server: MCPServer | None, resource_url: str) -> dict | None:
+def _obo_protected_resource_response(mcp_server: MCPServer | None, resource_url: str) -> dict[str, object] | None:
     """The OBO (token_exchange) PRM, or None when this server is not OBO / no issuer is configured.
 
     The client SSOs with the IdP to obtain a subject token, which LiteLLM then exchanges, so discovery
@@ -3165,7 +3197,7 @@ def _obo_protected_resource_response(mcp_server: MCPServer | None, resource_url:
     }
 
 
-def _jwt_auth_issuers() -> list:
+def _jwt_auth_issuers() -> list[object]:
     """The OAuth issuer identifier(s) LiteLLM's JWT auth trusts, for the OBO PRM authorization_servers.
 
     In token_exchange the IdP that issues the subject JWT is the same one LiteLLM validates it
@@ -3176,7 +3208,7 @@ def _jwt_auth_issuers() -> list:
 
     from litellm.proxy.proxy_server import general_settings  # noqa: PLC0415
 
-    issuers: Final[list] = []
+    issuers: Final[list[object]] = []
     env_issuer: Final = os.getenv("JWT_ISSUER")
     if env_issuer:
         issuers.append(env_issuer)
@@ -3201,7 +3233,7 @@ def oauth_protected_resource_root(request: Request) -> dict[str, str | tuple[str
     }
 
 
-def _build_aggregate_protected_resource_response(request: Request) -> dict:
+def _build_aggregate_protected_resource_response(request: Request) -> dict[str, object]:
     """RFC 9728 metadata for the aggregate /mcp resource: the gateway itself is
     the authorization server. No per-server names or scopes leak here; access
     is resolved after sign-in from the authenticated user's grants.
@@ -3352,7 +3384,7 @@ def _build_oauth_authorization_server_response(
     mcp_server_name: str | None,
     *,
     issuer_path: str | None = None,
-) -> dict:
+) -> dict[str, object]:
     """Build OAuth authorization server metadata response (gateway-as-AS shape)."""
     request_base_url: Final = get_request_base_url(request)
     client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)

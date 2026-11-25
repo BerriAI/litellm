@@ -23,6 +23,7 @@ const RESPONSES: [&str; 2] = ["aresponses", "responses"];
 const EMBEDDING: [&str; 2] = ["aembedding", "embedding"];
 const TEXT_COMPLETION: [&str; 2] = ["atext_completion", "text_completion"];
 const EXTRACTION: [&str; 2] = ["extraction", "aextraction"];
+const REALTIME: [&str; 1] = ["_arealtime"];
 const MEDIA_TYPES: [&str; 10] = [
     "file",
     "input_file",
@@ -258,6 +259,13 @@ fn may_hold_embedding_media(value: &Value) -> bool {
     }
 }
 
+fn reads_input_as_media(request: &Map<String, Value>) -> bool {
+    ["inputType", "input_type"]
+        .into_iter()
+        .find_map(|key| get(request, key).as_str().filter(|kind| !kind.is_empty()))
+        .is_some_and(|kind| ["image", "video", "audio"].contains(&kind))
+}
+
 fn sequence_length(value: &Value) -> Out<i128> {
     match py(value)? {
         Py::Str(found) => Ok(length(found)),
@@ -322,7 +330,8 @@ pub fn input_and_output_tokens(
         if (messages.is_array() || responses) && may_hold_media(media_source) {
             return Err(PythonServed);
         }
-        if embedding_call && may_hold_embedding_media(raw_input) {
+        if embedding_call && (may_hold_embedding_media(raw_input) || reads_input_as_media(request))
+        {
             return Err(PythonServed);
         }
     }
@@ -340,8 +349,9 @@ pub fn input_and_output_tokens(
         0
     };
     let explicit = explicit_output_cap(request, call_type, cap)?;
-    let generates_no_output =
-        is_embedding_request(request, call_type) || EXTRACTION.contains(&call_type);
+    let generates_no_output = is_embedding_request(request, call_type)
+        || EXTRACTION.contains(&call_type)
+        || REALTIME.contains(&call_type);
     let floor = i128::from(no_max_tokens_output_floor(
         estimate.min_configured_tpm_limit,
         cap.default_max_tokens_estimate,
@@ -443,6 +453,7 @@ mod tests {
     )]
     // Embeddings generate no output.
     #[case::embedding(json!({"input": "abcdefgh"}), "aembedding", None, None, (2, 0))]
+    #[case::embedding_text_input_type(json!({"input": "abcdefgh", "input_type": "text"}), "aembedding", None, None, (2, 0))]
     #[case::genai_snake_case_config(
         json!({"contents": [{"role": "user", "parts": [{"text": "hello world!"}]}],
                "generation_config": {"max_output_tokens": 40, "candidate_count": 2}}),
@@ -482,6 +493,8 @@ mod tests {
         "aresponses"
     )]
     #[case::embedding_data_uri(json!({"input": "data:image/png;base64,AAAA"}), "aembedding")]
+    #[case::embedding_image_input_type(json!({"input": "AAAA", "input_type": "image"}), "aembedding")]
+    #[case::embedding_video_input_type(json!({"input": ["s3://b/c.mp4"], "inputType": "video"}), "aembedding")]
     fn media_is_left_to_python(#[case] data: Value, #[case] call_type: &str) {
         assert_eq!(
             estimated(data, call_type, None, None, true),

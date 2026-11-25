@@ -1,4 +1,5 @@
 import { SidebarBrand } from "@/components/shared/SidebarBrand";
+import { GatewayLensNavigation } from "@/components/lens/GatewayLensNavigation";
 import { canViewProjectsPage, projectReaderRoles } from "@/app/(dashboard)/hooks/projects/projectAccess";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -798,22 +799,28 @@ const Sidebar_: React.FC<SidebarProps> = ({
         </SidebarGroup>
         <SidebarContent>
           <ScrollArea className="min-h-0 flex-1">
-            <nav className="flex flex-col gap-0.5 px-3 pb-3">
-              {(inLensWorkspace ? [] : visibleGroups).map((group, gi) => (
-                <SidebarGroup key={group.groupLabel} className="gap-0.5 px-0 py-1">
-                  {gi > 0 && (
-                    <SidebarSeparator
-                      aria-hidden
-                      className="my-2 hidden data-horizontal:w-auto group-data-[collapsible=icon]:block"
-                    />
-                  )}
-                  <SidebarGroupLabel className="block h-auto pt-3 pb-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase group-data-[collapsible=icon]:hidden">
-                    {term(groupText(group.groupLabel))}
-                  </SidebarGroupLabel>
-                  <SidebarMenu className={navMenuClassName}>{group.items.map((item) => renderItem(item))}</SidebarMenu>
-                </SidebarGroup>
-              ))}
-            </nav>
+            {inLensWorkspace ? (
+              <GatewayLensNavigation collapsed={collapsed} />
+            ) : (
+              <nav className="flex flex-col gap-0.5 px-3 pb-3">
+                {visibleGroups.map((group, gi) => (
+                  <SidebarGroup key={group.groupLabel} className="gap-0.5 px-0 py-1">
+                    {gi > 0 && (
+                      <SidebarSeparator
+                        aria-hidden
+                        className="my-2 hidden data-horizontal:w-auto group-data-[collapsible=icon]:block"
+                      />
+                    )}
+                    <SidebarGroupLabel className="block h-auto pt-3 pb-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase group-data-[collapsible=icon]:hidden">
+                      {term(groupText(group.groupLabel))}
+                    </SidebarGroupLabel>
+                    <SidebarMenu className={navMenuClassName}>
+                      {group.items.map((item) => renderItem(item))}
+                    </SidebarMenu>
+                  </SidebarGroup>
+                ))}
+              </nav>
+            )}
           </ScrollArea>
         </SidebarContent>
 

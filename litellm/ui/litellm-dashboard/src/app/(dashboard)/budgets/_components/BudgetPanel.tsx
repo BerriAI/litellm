@@ -3,7 +3,7 @@
  *
  */
 
-import { Page, PageTabs, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
+import { PageTabs, PageTabsBar, PageTabsTrigger } from "@/components/shared/Page";
 import { Plus, Wallet } from "lucide-react";
 import React, { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -81,96 +81,97 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
   };
 
   return (
-    <Page className="h-full">
-      <PageTabs defaultValue="budgets">
-        <PageHeader>
-          <PageHeaderTitle>
-            <Wallet />
-            {t("budgets.panel.title")}
-          </PageHeaderTitle>
-          <PageHeaderDescription>{t("budgets.panel.description")}</PageHeaderDescription>
-          {canModify && (
-            <PageHeaderControls>
-              <Button onClick={() => setIsCreateModelVisible(true)}>
-                <Plus className="size-4" />
-                {t("budgets.panel.createButton")}
-              </Button>
-            </PageHeaderControls>
+    <PageTabs defaultValue="budgets">
+      <PageHeader>
+        <PageHeaderTitle>
+          <Wallet />
+          {t("budgets.panel.title")}
+        </PageHeaderTitle>
+        <PageHeaderDescription>{t("budgets.panel.description")}</PageHeaderDescription>
+        <PageHeaderControls>
+          <PageTabsBar
+            actions={
+              canModify && (
+                <Button onClick={() => setIsCreateModelVisible(true)}>
+                  <Plus className="size-4" />
+                  {t("budgets.panel.createButton")}
+                </Button>
+              )
+            }
+          >
+            <PageTabsTrigger value="budgets">{t("budgets.panel.tabs.budgets")}</PageTabsTrigger>
+            <PageTabsTrigger value="examples">{t("budgets.panel.tabs.examples")}</PageTabsTrigger>
+          </PageTabsBar>
+        </PageHeaderControls>
+      </PageHeader>
+      <TabsContent value="budgets" className="flex min-h-0 flex-1 flex-col" keepMounted>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <BudgetModal isModalVisible={isCreateModelVisible} setIsModalVisible={setIsCreateModelVisible} />
+          {selectedBudget && (
+            <EditBudgetModal
+              isModalVisible={isEditModalVisible}
+              setIsModalVisible={setIsEditModalVisible}
+              existingBudget={selectedBudget}
+            />
           )}
-        </PageHeader>
-        <PageTabsList>
-          <PageTabsTrigger value="budgets">{t("budgets.panel.tabs.budgets")}</PageTabsTrigger>
-          <PageTabsTrigger value="examples">{t("budgets.panel.tabs.examples")}</PageTabsTrigger>
-        </PageTabsList>
-        <TabsContent value="budgets" className="flex min-h-0 flex-1 flex-col" keepMounted>
-          <div className="flex min-h-0 flex-1 flex-col">
-            <BudgetModal isModalVisible={isCreateModelVisible} setIsModalVisible={setIsCreateModelVisible} />
-            {selectedBudget && (
-              <EditBudgetModal
-                isModalVisible={isEditModalVisible}
-                setIsModalVisible={setIsEditModalVisible}
-                existingBudget={selectedBudget}
-              />
-            )}
-            <BudgetTable
-              list={budgetList}
-              canModify={canModify}
-              onEditClick={handleEditCall}
-              onDeleteClick={handleDeleteClick}
-            />
-            <DeleteResourceModal
-              isOpen={isDeleteModalVisible}
-              title={t("budgets.panel.deleteModal.title")}
-              message={t("budgets.panel.deleteModal.message")}
-              resourceInformationTitle={t("budgets.panel.deleteModal.informationTitle")}
-              resourceInformation={[
-                { label: t("budgets.panel.deleteModal.budgetId"), value: selectedBudget?.budget_id, code: true },
-                { label: t("budgets.panel.deleteModal.maxBudget"), value: selectedBudget?.max_budget },
-                { label: t("budgets.panel.deleteModal.tpm"), value: selectedBudget?.tpm_limit },
-                { label: t("budgets.panel.deleteModal.rpm"), value: selectedBudget?.rpm_limit },
-                { label: t("budgets.panel.deleteModal.tpd"), value: selectedBudget?.tpd_limit },
-              ]}
-              onCancel={handleDeleteCancel}
-              onOk={handleDeleteConfirm}
-              confirmLoading={deleteBudget.isPending}
-            />
-          </div>
-        </TabsContent>
-        <TabsContent value="examples" className="min-h-0 flex-1 overflow-y-auto" keepMounted>
-          <div className="pt-6">
-            <p className="text-base text-muted-foreground">{t("budgets.panel.examples.intro")}</p>
-            <Tabs defaultValue="assign-budget">
-              <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
-                <TabsTrigger value="assign-budget" className="flex-none rounded-none px-4 py-2">
-                  {t("budgets.panel.examples.tabs.assignBudget")}
-                </TabsTrigger>
-                <TabsTrigger value="curl" className="flex-none rounded-none px-4 py-2">
-                  {t("budgets.panel.examples.tabs.curl")}
-                </TabsTrigger>
-                <TabsTrigger value="openai-sdk" className="flex-none rounded-none px-4 py-2">
-                  {t("budgets.panel.examples.tabs.openaiSdk")}
-                </TabsTrigger>
-              </TabsList>
-              <TabsContent value="assign-budget" keepMounted>
-                <SyntaxHighlighter language="bash" style={syntaxTheme}>
-                  {CREATE_END_USER_CURL_COMMAND}
-                </SyntaxHighlighter>
-              </TabsContent>
-              <TabsContent value="curl" keepMounted>
-                <SyntaxHighlighter language="bash" style={syntaxTheme}>
-                  {CHAT_COMPLETIONS_CURL_COMMAND}
-                </SyntaxHighlighter>
-              </TabsContent>
-              <TabsContent value="openai-sdk" keepMounted>
-                <SyntaxHighlighter language="python" style={syntaxTheme}>
-                  {OPENAI_SDK_PYTHON_CODE}
-                </SyntaxHighlighter>
-              </TabsContent>
-            </Tabs>
-          </div>
-        </TabsContent>
-      </PageTabs>
-    </Page>
+          <BudgetTable
+            list={budgetList}
+            canModify={canModify}
+            onEditClick={handleEditCall}
+            onDeleteClick={handleDeleteClick}
+          />
+          <DeleteResourceModal
+            isOpen={isDeleteModalVisible}
+            title={t("budgets.panel.deleteModal.title")}
+            message={t("budgets.panel.deleteModal.message")}
+            resourceInformationTitle={t("budgets.panel.deleteModal.informationTitle")}
+            resourceInformation={[
+              { label: t("budgets.panel.deleteModal.budgetId"), value: selectedBudget?.budget_id, code: true },
+              { label: t("budgets.panel.deleteModal.maxBudget"), value: selectedBudget?.max_budget },
+              { label: t("budgets.panel.deleteModal.tpm"), value: selectedBudget?.tpm_limit },
+              { label: t("budgets.panel.deleteModal.rpm"), value: selectedBudget?.rpm_limit },
+              { label: t("budgets.panel.deleteModal.tpd"), value: selectedBudget?.tpd_limit },
+            ]}
+            onCancel={handleDeleteCancel}
+            onOk={handleDeleteConfirm}
+            confirmLoading={deleteBudget.isPending}
+          />
+        </div>
+      </TabsContent>
+      <TabsContent value="examples" className="min-h-0 flex-1 overflow-y-auto" keepMounted>
+        <div className="pt-6">
+          <p className="text-base text-muted-foreground">{t("budgets.panel.examples.intro")}</p>
+          <Tabs defaultValue="assign-budget">
+            <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">
+              <TabsTrigger value="assign-budget" className="flex-none rounded-none px-4 py-2">
+                {t("budgets.panel.examples.tabs.assignBudget")}
+              </TabsTrigger>
+              <TabsTrigger value="curl" className="flex-none rounded-none px-4 py-2">
+                {t("budgets.panel.examples.tabs.curl")}
+              </TabsTrigger>
+              <TabsTrigger value="openai-sdk" className="flex-none rounded-none px-4 py-2">
+                {t("budgets.panel.examples.tabs.openaiSdk")}
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="assign-budget" keepMounted>
+              <SyntaxHighlighter language="bash" style={syntaxTheme}>
+                {CREATE_END_USER_CURL_COMMAND}
+              </SyntaxHighlighter>
+            </TabsContent>
+            <TabsContent value="curl" keepMounted>
+              <SyntaxHighlighter language="bash" style={syntaxTheme}>
+                {CHAT_COMPLETIONS_CURL_COMMAND}
+              </SyntaxHighlighter>
+            </TabsContent>
+            <TabsContent value="openai-sdk" keepMounted>
+              <SyntaxHighlighter language="python" style={syntaxTheme}>
+                {OPENAI_SDK_PYTHON_CODE}
+              </SyntaxHighlighter>
+            </TabsContent>
+          </Tabs>
+        </div>
+      </TabsContent>
+    </PageTabs>
   );
 };
 

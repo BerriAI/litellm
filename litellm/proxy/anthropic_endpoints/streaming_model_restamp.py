@@ -108,7 +108,7 @@ class AnthropicStreamModelRestamper:
 
     def __init__(self, requested_model: str) -> None:
         self._requested_model: Final = requested_model
-        self._held = b""
+        self._held: bytes = b""
         self._armed = True
 
     def process(self, chunk: object) -> object:

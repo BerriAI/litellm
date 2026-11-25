@@ -1,25 +1,31 @@
 //! The callbacks the gateway runs itself around an inference call, the native counterpart of
 //! the proxy's `custom_logger_v2` dispatcher. [`Callbacks`] holds them in the order Python runs
 //! them, and the [`Call`] of one request runs each hook the route tells it over them in that
-//! order. [`Point`] names each hook the gateway runs and how it ends, and a hook it does not run
+//! order, reading and patching the call's record (`litellm_gateway_inference::record`) by contract field
+//! through [`fields`]. [`Point`] names each hook the gateway runs and how it ends, and a hook it does not run
 //! yet is never told.
 
 mod fields;
+pub mod model_capacity;
+pub mod parallel_request_limiter;
 
 use std::sync::Arc;
 
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use litellm_callbacks::{
-    Abort, CallbackError, ErasedCallback, Hook, ManifestError, RequestState, Subscription, Verdict,
-    Violation,
+    Abort, Callback, CallbackError, ErasedCallback, Hook, ManifestError, RequestState,
+    Subscription, Verdict, Violation,
 };
 use litellm_error::{Report, Source};
-use litellm_gateway_inference::{CallHooks, CallType, HookError, Refusal, ServedCall};
-use parking_lot::Mutex;
+use litellm_gateway_auth::Authenticated;
+use litellm_gateway_inference::{
+    CallHooks, HookError, Refusal, ServedCall,
+    record::{self, CallState, Charged},
+};
 use serde_json::{Map, Value};
 use strum::VariantArray;
 
-use self::fields::Known;
+use crate::host::NativeRows;
 
 /// A hook the gateway runs for a call.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, VariantArray)]
@@ -85,23 +91,56 @@ enum Cause {
     Callback(#[from] CallbackError),
     #[error(transparent)]
     Violation(#[from] Violation),
+    #[error("no call record is in scope")]
+    NoRecord,
+}
+
+type FromCaller = Box<dyn Fn(&Authenticated<NativeRows>) -> RequestState + Send + Sync>;
+
+/// One callback of the stage and how its state for a request is made.
+pub struct Registered {
+    callback: Arc<dyn ErasedCallback>,
+    /// For a callback that keeps something of each request's caller, as Python's hooks are
+    /// handed the caller's `UserAPIKeyAuth`. `None` takes the callback's own `request_state`.
+    from_caller: Option<FromCaller>,
+}
+
+impl Registered {
+    /// `callback`, with its state for each request made from that request's caller.
+    pub fn for_caller<C: Callback>(
+        callback: Arc<C>,
+        state: impl Fn(&Authenticated<NativeRows>) -> C::State + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            callback,
+            from_caller: Some(Box::new(move |identity| Arc::new(state(identity)))),
+        }
+    }
+}
+
+impl From<Arc<dyn ErasedCallback>> for Registered {
+    fn from(callback: Arc<dyn ErasedCallback>) -> Self {
+        Self {
+            callback,
+            from_caller: None,
+        }
+    }
 }
 
 /// The callbacks every call runs, in the order each hook reaches them: the config's `callbacks`
-/// as written, then the proxy's own hooks, as `litellm.callbacks` holds them. None is built from
-/// a config yet, so each one a config names still sends its requests to Python.
+/// as written, then the proxy's own hooks, as `litellm.callbacks` holds them.
 #[derive(Default)]
 pub struct Callbacks {
-    callbacks: Vec<Arc<dyn ErasedCallback>>,
+    callbacks: Vec<Registered>,
 }
 
 impl Callbacks {
     /// `callbacks` in the order their hooks run. A manifest that subscribes to what its hook
     /// point cannot do, or that may abort on a hook the gateway ends no call from, is refused
     /// here, so no call runs it.
-    pub fn new(callbacks: Vec<Arc<dyn ErasedCallback>>) -> Result<Self, Unregistrable> {
-        for callback in &callbacks {
-            let manifest = callback.manifest();
+    pub fn new(callbacks: Vec<Registered>) -> Result<Self, Unregistrable> {
+        for registered in &callbacks {
+            let manifest = registered.callback.manifest();
             manifest.validate()?;
             let aborting = Point::VARIANTS
                 .iter()
@@ -122,32 +161,45 @@ impl Callbacks {
         Ok(Self { callbacks })
     }
 
-    pub(crate) fn begin(self: &Arc<Self>, call_type: CallType) -> Call {
+    pub(crate) fn begin(self: &Arc<Self>, identity: &Authenticated<NativeRows>) -> Call {
         Call {
+            charged: fields::charged(identity),
             states: self
                 .callbacks
                 .iter()
-                .map(|callback| callback.request_state())
+                .map(|registered| match &registered.from_caller {
+                    Some(state) => Some(state(identity)),
+                    None => registered.callback.request_state(),
+                })
                 .collect(),
             callbacks: self.clone(),
-            known: Mutex::new(Known::of(call_type)),
         }
     }
 }
 
-/// The hooks of one request: each callback's own state for it, and what is known of the call so
-/// far, which one callback's patch changes for the callbacks after it.
+/// The hooks of one request and each callback's own state for it. What is known of the call is
+/// its record, which one callback's patch changes for the callbacks after it.
 pub struct Call {
     callbacks: Arc<Callbacks>,
+    /// Who the call is charged to, written to its record with the body the pre-call hook holds.
+    charged: Charged,
     /// By each callback's place in `callbacks`.
     states: Vec<Option<RequestState>>,
-    known: Mutex<Known>,
 }
 
+/// The exception Python raises for `abort`: its `ProxyRateLimitError` for a limiter's refusal,
+/// with the headers in the order the limiter lists them, and the abort's own status and words
+/// for any other.
 fn refusal(abort: Abort) -> Refusal {
+    if let Some(limited) = parallel_request_limiter::rate_limited(&abort) {
+        return limited.into();
+    }
     Refusal {
-        status: StatusCode::from_u16(abort.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-        message: abort.message,
+        headers: abort.headers.into_iter().collect(),
+        ..Refusal::new(
+            StatusCode::from_u16(abort.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            abort.message,
+        )
     }
 }
 
@@ -164,7 +216,8 @@ impl Call {
     /// decides, the first to abort or fail ends it and the call.
     async fn run(&self, point: Point) -> Result<(), HookError> {
         let hook = point.hook();
-        for (callback, state) in self.callbacks.callbacks.iter().zip(&self.states) {
+        for (registered, state) in self.callbacks.callbacks.iter().zip(&self.states) {
+            let callback = &registered.callback;
             let manifest = callback.manifest();
             let Some(subscription) = manifest.subscription(hook) else {
                 continue;
@@ -201,7 +254,8 @@ impl Call {
         state: Option<&RequestState>,
     ) -> Result<Option<Abort>, Cause> {
         let hook = subscription.hook;
-        let input = self.known.lock().input(hook, subscription.reads);
+        let input = record::read(|entries| fields::input(entries, hook, subscription.reads))
+            .ok_or(Cause::NoRecord)?;
         let Some(verdict) = callback.handle(&input, state).await? else {
             return Ok(None);
         };
@@ -209,12 +263,13 @@ impl Call {
         match verdict {
             Verdict::Abort(abort) => Ok(Some(abort)),
             Verdict::Patch(patch) => {
-                let mut known = self.known.lock();
-                for op in patch.ops {
-                    if let Err(error) = known.write(op) {
-                        tracing::error!(callback = %name, ?hook, %error, "the patch was not applied");
+                record::write(|entries| {
+                    for op in patch.ops {
+                        if let Err(error) = fields::write(entries, op) {
+                            tracing::error!(callback = %name, ?hook, %error, "the patch was not applied");
+                        }
                     }
-                }
+                });
                 Ok(None)
             }
         }
@@ -223,9 +278,20 @@ impl Call {
 
 impl CallHooks for Call {
     async fn pre_call(&self, body: Map<String, Value>) -> Result<Map<String, Value>, HookError> {
-        self.known.lock().hold(body);
+        let mut unheld = Some(body);
+        record::write(|entries| {
+            entries.charge_to(self.charged.clone());
+            if let Some(body) = unheld.take() {
+                entries.hold(body);
+            }
+        });
         let ran = self.run(Point::PreCall).await;
-        let body = self.known.lock().release();
+        let body = record::write(CallState::release)
+            .or(unheld)
+            .unwrap_or_default();
+        if ran.is_ok() {
+            record::write(CallState::call_provider);
+        }
         ran.map(|()| body)
     }
 
@@ -235,21 +301,23 @@ impl CallHooks for Call {
 
     async fn response_headers(&self) -> HeaderMap {
         let _ = self.run(Point::ResponseHeaders).await;
-        self.known
-            .lock()
-            .response_headers()
-            .iter()
-            .filter_map(|(name, value)| header(name, value))
-            .collect()
+        record::read(|entries| {
+            entries
+                .response_headers()
+                .iter()
+                .filter_map(|(name, value)| header(name, value))
+                .collect()
+        })
+        .unwrap_or_default()
     }
 
     async fn succeeded(&self, served: ServedCall) {
-        self.known.lock().serve(served);
+        record::write(|entries| entries.serve(served));
         let _ = self.run(Point::AttemptEnded).await;
     }
 
     async fn failed(&self) {
-        self.known.lock().fail();
+        record::write(CallState::fail);
         let _ = self.run(Point::PostCallFailure).await;
         let _ = self.run(Point::AttemptEnded).await;
     }
@@ -263,12 +331,18 @@ mod tests {
     use litellm_callbacks::{
         Callback, Field, FieldSet, HookInput, HookOutput, Manifest, Patch, Selection,
     };
+    use parking_lot::Mutex;
     use rstest::rstest;
     use serde_json::json;
 
     use super::*;
 
     type Log = Arc<Mutex<Vec<String>>>;
+
+    /// Runs `hooks` as one call, with its own record.
+    async fn in_call<T>(hooks: impl std::future::Future<Output = T>) -> T {
+        record::scope(record::CallRecord::new(), hooks).await
+    }
     type Answer = fn(&HookInput) -> HookOutput;
 
     /// A callback that writes `<name>:<what it read of the limit statuses>` to the log all the
@@ -377,12 +451,13 @@ mod tests {
         ))
     }
 
-    fn call(callbacks: Vec<Arc<Scripted>>) -> Call {
-        let callbacks = callbacks
-            .into_iter()
-            .map(|callback| callback as Arc<dyn ErasedCallback>)
-            .collect();
-        Arc::new(Callbacks::new(callbacks).unwrap()).begin(CallType::AnthropicMessages)
+    fn registered(callback: Arc<Scripted>) -> Registered {
+        Registered::from(callback as Arc<dyn ErasedCallback>)
+    }
+
+    async fn call(callbacks: Vec<Arc<Scripted>>) -> Call {
+        let callbacks = callbacks.into_iter().map(registered).collect();
+        Arc::new(Callbacks::new(callbacks).unwrap()).begin(&crate::test_support::master())
     }
 
     fn body() -> Map<String, Value> {
@@ -392,7 +467,10 @@ mod tests {
     fn served() -> ServedCall {
         ServedCall {
             model_group: "claude".to_owned(),
+            deployment: None,
+            response_id: None,
             usage: None,
+            first_event: None,
         }
     }
 
@@ -414,9 +492,14 @@ mod tests {
             scripted("before", &log, &[pre_call(), ended()], silent),
             scripted("limiter", &log, &[pre_call()], publishes),
             scripted("after", &log, &[pre_call(), ended()], silent),
-        ]);
-        let admitted = call.pre_call(body()).await;
-        call.succeeded(served()).await;
+        ])
+        .await;
+        let admitted = in_call(async {
+            let admitted = call.pre_call(body()).await;
+            call.succeeded(served()).await;
+            admitted
+        })
+        .await;
 
         assert_eq!(
             (admitted.map_err(told), log.lock().clone()),
@@ -463,8 +546,9 @@ mod tests {
         let call = call(vec![
             scripted("first", &log, &[subscription], answer),
             scripted("second", &log, &[pre_call()], silent),
-        ]);
-        let refused = call.pre_call(body()).await;
+        ])
+        .await;
+        let refused = in_call(call.pre_call(body())).await;
 
         assert_eq!(
             (refused.map_err(told), log.lock().clone()),
@@ -484,9 +568,10 @@ mod tests {
         let call = call(vec![
             scripted("first", &log, &[ended()], answer),
             scripted("second", &log, &[ended()], silent),
-        ]);
+        ])
+        .await;
 
-        call.failed().await;
+        in_call(call.failed()).await;
 
         assert_eq!(
             log.lock().clone(),
@@ -502,14 +587,43 @@ mod tests {
     async fn each_request_has_its_own_state_for_a_callback() {
         let log = Log::default();
         let callbacks = Arc::new(
-            Callbacks::new(vec![scripted("counting", &log, &[ended()], silent) as _]).unwrap(),
+            Callbacks::new(vec![registered(scripted(
+                "counting",
+                &log,
+                &[ended()],
+                silent,
+            ))])
+            .unwrap(),
         );
-        callbacks.begin(CallType::AnthropicMessages).failed().await;
-        callbacks.begin(CallType::AnthropicMessages).failed().await;
+        let caller = crate::test_support::master();
+        in_call(callbacks.begin(&caller).failed()).await;
+        in_call(callbacks.begin(&caller).failed()).await;
 
         assert_eq!(
             log.lock().clone(),
             vec!["counting:AttemptEnded:1:-", "counting:AttemptEnded:1:-"]
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_callbacks_state_for_a_request_can_be_made_from_its_caller() {
+        let log = Log::default();
+        let seeded =
+            Registered::for_caller(scripted("seeded", &log, &[ended()], silent), |identity| {
+                AtomicU32::new(
+                    u32::from(**identity == litellm_gateway_auth_core::Caller::MasterKey) * 6,
+                )
+            });
+        let callbacks = Arc::new(Callbacks::new(vec![seeded]).unwrap());
+        let caller = crate::test_support::master();
+        let started_at = 7;
+
+        in_call(callbacks.begin(&caller).failed()).await;
+
+        assert_eq!(
+            log.lock().clone(),
+            vec![format!("seeded:AttemptEnded:{started_at}:-")]
         );
     }
 
@@ -520,10 +634,12 @@ mod tests {
             awaited: true,
             ..pre_call()
         };
-        let registered =
-            Callbacks::new(vec![
-                scripted("wrong", &log, &[awaited_and_aborting], silent) as _,
-            ]);
+        let registered = Callbacks::new(vec![registered(scripted(
+            "wrong",
+            &log,
+            &[awaited_and_aborting],
+            silent,
+        ))]);
         assert!(matches!(
             registered.err(),
             Some(Unregistrable::Manifest(ManifestError::Subscription {
@@ -540,7 +656,12 @@ mod tests {
             may_abort: true,
             ..Subscription::on(Hook::PostCallFailure)
         };
-        let registered = Callbacks::new(vec![scripted("wrong", &log, &[aborting], silent) as _]);
+        let registered = Callbacks::new(vec![registered(scripted(
+            "wrong",
+            &log,
+            &[aborting],
+            silent,
+        ))]);
         assert_eq!(
             registered.err(),
             Some(Unregistrable::Abort {

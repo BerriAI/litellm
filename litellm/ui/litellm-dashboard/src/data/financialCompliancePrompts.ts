@@ -2075,10 +2075,3 @@ export const financialCompliancePrompts: CompliancePrompt[] = [
     expectedResult: "pass",
   },
 ];
-
-export const financialFrameworkMeta = {
-  name: "Topic Blocking",
-  icon: "shield",
-  description:
-    "Content filter guardrails that block messages matching specific prohibited topics while allowing legitimate use of related words in context.",
-};

@@ -3,7 +3,7 @@ use litellm_host::interceptors::{RetriedRequest, RetryReason};
 use litellm_http::request::{header_value, with_header, without_headers};
 use litellm_llms_types::{
     formats::messages::{
-        ContentBlock, ContentBlockType, ContextEdit, ContextManagement, Message, MessageContent,
+        ContentBlock, ContentBlockType, ContextEdit, ContextManagement, Message,
         MessagesOptionalParams, MessagesRequest, Speed, ThinkingConfig, ThinkingDisplay,
     },
     providers::anthropic::{
@@ -34,11 +34,13 @@ use crate::{
         ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_AUTH_TOKEN_ENV,
         ANTHROPIC_BASE_URL_ENV, OauthHandling, OauthToken,
         anthropic_request_errors_on_thinking_binding_mismatch, complete_anthropic_url,
-        existing_betas, get_api_key, get_auth_header, has_advisor_tool, has_anthropic_credential,
+        drop_advisor_blocks, drop_non_string_system_texts, drop_non_string_user_texts,
+        drop_raw_advisor_blocks, drop_raw_non_string_user_texts, existing_betas, get_api_key,
+        get_auth_header, has_advisor_tool, has_anthropic_credential,
         is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
-        is_claude_strict_tools_rejection, is_tool_search_used, map_messages, merge_beta_headers,
-        minted_oauth_environment, optionally_handle_anthropic_oauth,
-        requires_native_compaction_beta, strip_advisor_blocks,
+        is_claude_strict_tools_rejection, is_tool_search_used, map_messages,
+        map_messages_rejecting_emptied, merge_beta_headers, minted_oauth_environment,
+        optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
         strip_encrypted_reasoning_blocks_restoring_redacted_data, strip_raw_advisor_blocks,
         strip_raw_encrypted_reasoning_blocks, strip_raw_unsigned_thinking_blocks,
         strip_thinking_blocks_from_anthropic_messages_request, strip_unsigned_thinking_blocks,
@@ -69,6 +71,15 @@ impl MessagesEndpoint for AnthropicMessagesConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         Ok(complete_anthropic_url(api_base, env_lookup))
+    }
+
+    fn checks_claude_signatures(
+        &self,
+        api_base: Option<&str>,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> bool {
+        !url_host(&complete_anthropic_url(api_base, env_lookup))
+            .is_some_and(|host| replays_unsigned_thinking(&host))
     }
 
     fn headers_for_url(&self, headers: Headers, url: &str) -> Headers {
@@ -213,6 +224,14 @@ const FOUNDRY_HOST_SUFFIXES: [&str; 3] = [
 ];
 
 const ANTHROPIC_API_HOST: &str = "api.anthropic.com";
+const UNSIGNED_THINKING_HOST_SUFFIXES: [&str; 6] = [
+    "deepseek.com",
+    "minimax.io",
+    "minimaxi.com",
+    "tencentcloudmaas.com",
+    "z.ai",
+    "bigmodel.cn",
+];
 
 fn url_host(url: &str) -> Option<String> {
     let absolute = if url.contains("://") {
@@ -227,6 +246,12 @@ fn url_host(url: &str) -> Option<String> {
 
 fn is_foundry_host(host: &str) -> bool {
     FOUNDRY_HOST_SUFFIXES
+        .iter()
+        .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
+}
+
+fn replays_unsigned_thinking(host: &str) -> bool {
+    UNSIGNED_THINKING_HOST_SUFFIXES
         .iter()
         .any(|suffix| host == *suffix || host.ends_with(&format!(".{suffix}")))
 }
@@ -366,28 +391,43 @@ pub(crate) fn transform_messages_request(
         .context_management
         .clone()
         .map(map_openai_context_management_to_anthropic);
+    let request = if context.drops_unsupported_params {
+        MessagesRequest {
+            params: MessagesOptionalParams {
+                system: request.params.system.and_then(drop_non_string_system_texts),
+                ..request.params
+            },
+            ..request
+        }
+    } else {
+        request
+    };
+    let messages = if context.drops_unsupported_params {
+        map_messages_rejecting_emptied(
+            request.messages,
+            drop_non_string_user_texts,
+            drop_raw_non_string_user_texts,
+        )?
+    } else {
+        request.messages
+    };
     let messages = if has_advisor_tool(request.params.tools.as_deref())
         || continues_message_thread(&request.params)
     {
-        request.messages
-    } else {
-        map_messages(
-            request.messages,
-            strip_advisor_blocks,
-            strip_raw_advisor_blocks,
-        )
-    };
-    let messages = if context.drops_unsupported_params {
-        drop_non_string_tool_result_texts(messages)
-    } else {
         messages
+    } else if context.drops_unsupported_params {
+        map_messages(messages, drop_advisor_blocks, drop_raw_advisor_blocks)
+    } else {
+        map_messages(messages, strip_advisor_blocks, strip_raw_advisor_blocks)
     };
     let messages = map_messages(
         messages,
         strip_encrypted_reasoning_blocks_restoring_redacted_data,
         strip_raw_encrypted_reasoning_blocks,
     );
-    let messages = if context.claude_base_model || is_claude_model(&request.model) {
+    let messages = if (context.claude_base_model || is_claude_model(&request.model))
+        && !context.keeps_unsigned_thinking
+    {
         map_messages(
             messages,
             strip_unsigned_thinking_blocks,
@@ -426,62 +466,6 @@ fn without_unstructured_output_format(
         },
         ..request
     }
-}
-
-fn is_python_str(value: &Value) -> bool {
-    match value {
-        Value::String(text) => {
-            litellm_host::raw_json::decode(text).is_none_or(|raw| raw.starts_with('"'))
-        }
-        _ => false,
-    }
-}
-
-fn is_non_string_text(part: &Value) -> bool {
-    part.get("type").and_then(Value::as_str) == Some("text")
-        && part.get("text").is_some_and(|text| !is_python_str(text))
-}
-
-fn without_non_string_texts(content: &mut Value) {
-    if let Value::Array(parts) = content {
-        parts.retain(|part| !is_non_string_text(part));
-    }
-}
-
-fn drop_non_string_tool_result_texts(
-    messages: Vec<Recognized<Message>>,
-) -> Vec<Recognized<Message>> {
-    messages
-        .into_iter()
-        .map(|message| match message {
-            Recognized::Known(mut message) => {
-                if message.role == "user"
-                    && let MessageContent::Blocks(blocks) = &mut message.content
-                {
-                    blocks
-                        .iter_mut()
-                        .filter(|block| block.is_type(ContentBlockType::ToolResult))
-                        .filter_map(|block| block.content.as_mut())
-                        .for_each(without_non_string_texts);
-                }
-                Recognized::Known(message)
-            }
-            Recognized::Unrecognized(mut message) => {
-                if message.get("role").and_then(Value::as_str) == Some("user")
-                    && let Some(Value::Array(blocks)) = message.get_mut("content")
-                {
-                    blocks
-                        .iter_mut()
-                        .filter(|block| {
-                            block.get("type").and_then(Value::as_str) == Some("tool_result")
-                        })
-                        .filter_map(|block| block.get_mut("content"))
-                        .for_each(without_non_string_texts);
-                }
-                Recognized::Unrecognized(message)
-            }
-        })
-        .collect()
 }
 
 pub(crate) fn update_headers_with_anthropic_beta(
@@ -719,7 +703,7 @@ pub fn drop_unsupported_params(
     let speed = match &params.speed {
         Some(speed) if !capabilities.supports_speed => {
             reject("speed", speed_repr(speed), "")?;
-            litellm_tracing::warn!(
+            tracing::warn!(
                 "Dropping unsupported `speed` for model={model} (drop_params=True). Fast mode is only supported on select Opus models."
             );
             None
@@ -970,6 +954,84 @@ mod tests {
     #[fixture]
     fn unmapped() -> MessagesModelCapabilities {
         MessagesModelCapabilities::default()
+    }
+
+    fn transformed_messages(
+        messages: Value,
+        drops_unsupported_params: bool,
+    ) -> Result<Value, Error> {
+        ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(
+                request(json!({"messages": messages})),
+                &MessagesTransformContext {
+                    drops_unsupported_params,
+                    ..MessagesTransformContext::with_lookup(unmapped(), false, &no_env)
+                },
+            )
+            .map(|transformed| serde_json::to_value(transformed).unwrap()["messages"].clone())
+    }
+
+    fn user_text(text: Value) -> Value {
+        json!({"type": "text", "text": text})
+    }
+
+    #[rstest]
+    #[case::null_text(json!(null))]
+    #[case::numeric_text(json!(5))]
+    fn a_user_s_non_string_text_is_sent_as_is_without_drop_params(#[case] text: Value) {
+        let messages =
+            json!([{"role": "user", "content": [user_text(text), user_text(json!("hi"))]}]);
+        assert_eq!(
+            transformed_messages(messages.clone(), false).unwrap(),
+            messages
+        );
+    }
+
+    #[rstest]
+    #[case::null_text(
+        json!([{"role": "user", "content": [user_text(json!(null)), user_text(json!("hi"))]}]),
+        json!([{"role": "user", "content": [user_text(json!("hi"))]}])
+    )]
+    #[case::numeric_text(
+        json!([{"role": "user", "content": [user_text(json!(5)), user_text(json!("hi"))]}]),
+        json!([{"role": "user", "content": [user_text(json!("hi"))]}])
+    )]
+    #[case::tool_result_part(
+        json!([{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [
+            user_text(json!(null)), user_text(json!("ok"))
+        ]}]}]),
+        json!([{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": [
+            user_text(json!("ok"))
+        ]}]}])
+    )]
+    #[case::emptied_user_message(
+        json!([
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+            {"role": "user", "content": [user_text(json!(null)), user_text(json!(5))]}
+        ]),
+        json!([{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi"}])
+    )]
+    fn drop_params_drops_a_user_s_non_string_text(
+        #[case] messages: Value,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(transformed_messages(messages, true).unwrap(), expected);
+    }
+
+    #[rstest]
+    fn drop_params_that_leaves_no_message_is_a_request_error() {
+        let dropped = transformed_messages(
+            json!([
+                {"role": "user", "content": [user_text(json!(null))]},
+                {"role": "user", "content": [user_text(json!(5))]}
+            ]),
+            true,
+        );
+        assert!(matches!(
+            dropped,
+            Err(Error::InvalidRequest(crate::ErrorDetail::EmptiedMessages))
+        ));
     }
 
     #[fixture]
@@ -1494,6 +1556,66 @@ mod tests {
         );
     }
 
+    fn web_search_use() -> Value {
+        json!({"type": "server_tool_use", "id": "srvtoolu_ws", "name": "web_search", "input": {"query": "pools"}})
+    }
+
+    #[rstest]
+    #[case::list_id_kept_without_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."}]),
+        false,
+        json!([{"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."}])
+    )]
+    #[case::list_id_dropped_under_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_1"], "content": "Advice."}]),
+        true,
+        json!([])
+    )]
+    #[case::unmatched_result_kept_without_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}]),
+        false,
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}])
+    )]
+    #[case::unmatched_result_dropped_under_drop_params(
+        json!([{"type": "advisor_tool_result", "tool_use_id": "srvtoolu_2", "content": "Advice."}]),
+        true,
+        json!([])
+    )]
+    fn advisor_history_left_unpaired_is_dropped_only_under_drop_params(
+        #[case] unpaired: Value,
+        #[case] drops_unsupported_params: bool,
+        #[case] kept: Value,
+        unmapped: MessagesModelCapabilities,
+    ) {
+        let context = MessagesTransformContext {
+            drops_unsupported_params,
+            ..MessagesTransformContext::with_lookup(unmapped, false, &no_env)
+        };
+        let content = [
+            vec![json!({"type": "server_tool_use", "id": "srvtoolu_1", "name": "advisor", "input": {}})],
+            unpaired.as_array().unwrap().clone(),
+            vec![web_search_use(), json!({"type": "text", "text": "Done."})],
+        ]
+        .concat();
+        let history = json!([
+            {"role": "user", "content": "Build a worker pool."},
+            {"role": "assistant", "content": content}
+        ]);
+        let transformed = ANTHROPIC_MESSAGES_CONFIG
+            .transform_anthropic_messages_request(request(json!({"messages": history})), &context)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(transformed).unwrap()["messages"][1]["content"],
+            json!(
+                [
+                    kept.as_array().unwrap().clone(),
+                    vec![web_search_use(), json!({"type": "text", "text": "Done."})]
+                ]
+                .concat()
+            )
+        );
+    }
+
     #[rstest]
     #[case::continue_turn(json!({"type": "continue", "previous_message_id": "msg_1"}), false)]
     #[case::continue_without_a_previous_message_id(json!({"type": "continue"}), false)]
@@ -1585,6 +1707,22 @@ mod tests {
     }
 
     #[rstest]
+    #[case::anthropic("https://api.anthropic.com", true)]
+    #[case::gateway("https://llm-gateway.example.com/anthropic", true)]
+    #[case::foundry("https://example.services.ai.azure.com/anthropic", true)]
+    #[case::deepseek("https://api.deepseek.com/anthropic", false)]
+    #[case::z_ai("https://api.z.ai/api/anthropic", false)]
+    fn only_an_anthropic_compatible_host_gets_unsigned_thinking_back(
+        #[case] api_base: &str,
+        #[case] checks: bool,
+    ) {
+        assert_eq!(
+            ANTHROPIC_MESSAGES_CONFIG.checks_claude_signatures(Some(api_base), &|_| None),
+            checks
+        );
+    }
+
+    #[rstest]
     fn unsigned_thinking_is_still_replayed_to_an_open_model(unmapped: MessagesModelCapabilities) {
         let messages = tool_turn(Some(
             json!({"type": "thinking", "thinking": "open model plan", "signature": ""}),
@@ -1646,6 +1784,7 @@ mod tests {
                     drops_unsupported_params: false,
                     global_drop_params: false,
                     claude_base_model: false,
+                    keeps_unsigned_thinking: false,
                 }
             );
             return;

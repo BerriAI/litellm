@@ -27,7 +27,7 @@ class ContainerHandle(LiteLLMPydanticObjectBase):
 
     model_config = {"extra": "allow"}
 
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default_factory=dict)
 
     @property
     def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
@@ -50,7 +50,7 @@ class CodeExecutionResult(LiteLLMPydanticObjectBase):
 
     model_config = {"extra": "allow"}
 
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default_factory=dict)
 
     @property
     def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
@@ -64,7 +64,7 @@ class CodeExecutionResult(LiteLLMPydanticObjectBase):
 class BaseSandboxConfig:
     """Provider-agnostic sandbox operations."""
 
-    def validate_environment(self, api_key: str | None = None, **kwargs) -> str:
+    def validate_environment(self, api_key: str | None = None, **kwargs: builtins.object) -> str:
         raise NotImplementedError("validate_environment must be implemented by provider")
 
     async def acreate_sandbox(

@@ -2489,6 +2489,31 @@ async def test_project_token_limit_admits_image_embedding_through_an_alias_of_an
     assert error.value.status_code == 429
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit_field", ["model_tpm_limit", "model_itpm_limit"])
+@pytest.mark.parametrize(
+    "backend",
+    ["bedrock/us.twelvelabs.marengo-embed-2-7-v1:0", "bedrock/twelvelabs.marengo-embed-3-0-v1:0"],
+    ids=["marengo_2_7", "marengo_3"],
+)
+@pytest.mark.parametrize("input_type_field", ["input_type", "inputType"])
+async def test_project_token_limit_admits_an_image_marengo_is_asked_to_read_as_an_image(
+    limit_field: str, backend: str, input_type_field: str
+) -> None:
+    handler, cache, auth, request = _project_limited_embedding_call(limit_field, (backend,))
+    image_request: Final = {**request, input_type_field: "image"}
+
+    await handler.async_pre_call_hook(user_api_key_dict=auth, cache=cache, data=image_request, call_type="aembedding")
+    with pytest.raises(HTTPException) as error:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=auth,
+            cache=cache,
+            data={**image_request, "input": "word " * 100_000},
+            call_type="aembedding",
+        )
+    assert error.value.status_code == 429
+
+
 def _malformed_embedding_uri(shape: str) -> str:
     payload: Final = _quota_media_payload("image", False)
     whole_quanta: Final = payload.rstrip("=")[: len(payload.rstrip("=")) // 4 * 4]

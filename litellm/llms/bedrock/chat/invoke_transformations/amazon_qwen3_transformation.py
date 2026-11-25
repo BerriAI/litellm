@@ -66,11 +66,11 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for k, v in non_default_params.items():
             if k == "max_tokens":
                 optional_params["max_tokens"] = v
@@ -90,10 +90,10 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, object],
+    ) -> dict[str, object]:
         """
         Transform OpenAI format to Qwen3 Bedrock invoke format
         """
@@ -101,7 +101,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         prompt: Final = self._convert_messages_to_prompt(messages)
 
         # Build the request body
-        request_body: Final = {
+        request_body: Final[dict[str, object]] = {
             "prompt": prompt,
         }
 
@@ -124,7 +124,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         Convert OpenAI messages format to Qwen3 prompt format
         Supports tool calls, multimodal content, and various message types
         """
-        prompt_parts: Final = []
+        prompt_parts: Final[list[str]] = []
 
         for message in messages:
             role = message.get("role", "")
@@ -136,7 +136,7 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
             elif role == "user":
                 # Handle multimodal content
                 if isinstance(content, list):
-                    text_content = []
+                    text_content: list[str] = []
                     for item in content:
                         if item.get("type") == "text":
                             text_content.append(item.get("text", ""))
@@ -171,10 +171,10 @@ class AmazonQwen3Config(AmazonInvokeConfig, BaseConfig):
         raw_response: httpx.Response,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
+        request_data: Mapping[str, object],
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
