@@ -543,9 +543,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         parsed_url: Final = urlparse(url)
         if custom_llm_provider == "chatgpt":
             return EndpointType.OPENAI
-        if custom_llm_provider in ("typesafe", "eu_jev", "laya", "bespoke") and parsed_url.path.removesuffix(
-            "/"
-        ).endswith("/v1/systemone"):
+        if custom_llm_provider in ("eu_jev", "laya", "bespoke") and parsed_url.path.removesuffix("/").endswith(
+            "/v1/systemone"
+        ):
             return EndpointType.DECISIONS
         if (
             ("generateContent") in url
