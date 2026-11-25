@@ -1354,6 +1354,7 @@ jobs:
             changes-category: python-310
             test-path: >-
               tests/unit/proxy/db/test_prisma_engine.py
+              tests/unit/proxy/db/test_prisma_planned_engine_restart.py
               tests/unit/integrations/custom_logger_v2/test_dispatcher.py
             python-version: "3.10"
             prisma-version: "0.15.0"

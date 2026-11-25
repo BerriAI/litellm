@@ -150,6 +150,7 @@ def test_redis_compat_path_filter(changed: str, expected: str) -> None:
         ("litellm/proxy/db/prisma_engine.py", "run"),
         ("litellm/proxy/db/prisma_client.py", "run"),
         ("tests/unit/proxy/db/test_prisma_engine.py", "run"),
+        ("tests/unit/proxy/db/test_prisma_planned_engine_restart.py", "run"),
         ("tests/unit/proxy/db/conftest.py", "run"),
         ("tests/_process_helpers.py", "run"),
         ("litellm/integrations/custom_logger_v2/dispatcher.py", "run"),
