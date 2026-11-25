@@ -1079,12 +1079,12 @@ def _wrap_entries(openai_jsonl_content):
 
 def _reads_as_number_boolean_or_date(value: str) -> bool:
     with contextlib.suppress(ValueError):
-        json.loads(value)
+        float(value)
         return True
     with contextlib.suppress(ValueError):
         date.fromisoformat(value)
         return True
-    return False
+    return value.lower() in ("true", "false")
 
 
 def _chat_batch_entry(custom_id: str | None) -> dict[str, object]:
@@ -1422,7 +1422,7 @@ class TestVertexEmbeddingsBatchInputTranslation:
     def test_should_round_trip_custom_id_through_top_level_key(self):
         (row,) = _wrap_entries([_embeddings_entry(custom_id="MyRequest-1")])
 
-        assert row["key"] == "MyRequest-1"
+        assert row["key"] == "MyRequest-1#0/1"
 
     def test_should_omit_key_when_no_custom_id(self):
         entry = _embeddings_entry()
@@ -1452,7 +1452,7 @@ class TestVertexEmbeddingsBatchInputTranslation:
         )
 
         assert row == {
-            "key": "request-1",
+            "key": "request-1#0/1",
             "request": {
                 "content": {"parts": [{"text": "hello world"}]},
                 "output_dimensionality": 768,
@@ -1478,7 +1478,7 @@ class TestVertexEmbeddingsBatchInputTranslation:
         )
 
         assert row == {
-            "key": "request-1",
+            "key": "request-1#0/1",
             "request": {
                 "content": {"parts": [{"text": "hello world"}]},
                 "output_dimensionality": 768,
@@ -1640,10 +1640,10 @@ class TestVertexEmbeddingsBatchInputTranslation:
             },
         ]
 
-    def test_should_keep_the_bare_custom_id_for_single_element_arrays(self):
+    def test_should_tag_a_single_element_array_like_a_plain_input(self):
         (row,) = _wrap_entries([_embeddings_entry(body={"model": "gemini-embedding-2", "input": ["only one"]})])
 
-        assert row["key"] == "request-1"
+        assert row["key"] == "request-1#0/1"
 
     def test_should_encode_a_custom_id_that_looks_like_a_fan_out_tag(self):
         """A customer custom_id ending in `#<i>/<n>` must not read back as fan-out metadata."""
@@ -1656,7 +1656,7 @@ class TestVertexEmbeddingsBatchInputTranslation:
             ]
         )
 
-        assert row["key"] == "request-1%230%2F2"
+        assert row["key"] == "request-1%230%2F2#0/1"
 
     def test_should_combine_a_nested_input_into_one_multipart_row(self):
         """Nested arrays are the combined-embedding shape, as on the online path."""
@@ -1676,7 +1676,7 @@ class TestVertexEmbeddingsBatchInputTranslation:
             ]
         )
 
-        assert row["key"] == "request-1"
+        assert row["key"] == "request-1#0/1"
         assert row["request"]["content"]["parts"] == [
             {"text": "a caption"},
             {
@@ -2045,6 +2045,16 @@ class TestVertexEmbeddingsBatchOutputTranslation:
         (result,) = self._transform(config, [self._vertex_embeddings_output_row()], url=url)
 
         assert result["response"]["body"]["model"] == "gemini-embedding-2"
+
+    @pytest.mark.parametrize("custom_ids", [("1", "2"), ("007", "042"), ("1e5", "true")])
+    def test_custom_ids_that_read_as_numbers_or_booleans_come_back_unchanged(self, config, custom_ids):
+        rows: Final = _wrap_entries([_embeddings_entry(custom_id=custom_id) for custom_id in custom_ids])
+
+        assert not any(_reads_as_number_boolean_or_date(row["key"]) for row in rows)
+        results: Final = self._transform(
+            config, [{**row, "status": "", "response": {"embedding": {"values": [0.1]}}} for row in rows]
+        )
+        assert [result["custom_id"] for result in results] == list(custom_ids)
 
     def test_should_surface_failed_embeddings_row_as_error(self, config):
         (result,) = self._transform(

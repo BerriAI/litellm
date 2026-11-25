@@ -303,17 +303,16 @@ def _get_litellm_batch_custom_id_from_labels(labels: Mapping[str, object] | None
         return "unknown"
     raw: Final = labels.get("litellm_custom_id_raw")
     if isinstance(raw, str) and raw:
-        raw_chunks: Final = [raw]
         chunk_prefix: Final = "litellm_custom_id_raw_"
-        indexed_chunks: Final[list[tuple[int, str]]] = []
-        for key, value in labels.items():
-            if key.startswith(chunk_prefix) and key[len(chunk_prefix) :].isdigit() and isinstance(value, str):
-                indexed_chunks.append((int(key[len(chunk_prefix) :]), value))
-        raw_chunks.extend(raw_label_chunk for _, raw_label_chunk in sorted(indexed_chunks, key=lambda item: item[0]))
-        decoded: Final = _decode_gcp_label_value_chunks(raw_chunks)
-        if decoded is not None:
-            return decoded
-        return raw
+        indexed_chunks: Final = sorted(
+            (int(key[len(chunk_prefix) :]), value)
+            for key, value in labels.items()
+            if key.startswith(chunk_prefix) and key[len(chunk_prefix) :].isdigit() and isinstance(value, str)
+        )
+        decoded: Final = _decode_gcp_label_value_chunks(
+            [raw, *(raw_label_chunk for _, raw_label_chunk in indexed_chunks)]
+        )
+        return raw if decoded is None else decoded
     readable: Final = labels.get("litellm_custom_id")
     return "unknown" if readable is None else str(readable)
 
@@ -718,9 +717,10 @@ def _vertex_batch_embeddings_key(custom_id: str, index: int, total: int) -> str:
     carries the element index and the group size; `_split_vertex_batch_key` reads them
     back out. The `custom_id` is percent-encoded so that a customer one ending in
     `#<index>/<total>` cannot be mistaken for that tag, which would merge two entries.
+    A single row carries the tag too, since Vertex loads the file through BigQuery, which
+    types a key column of values such as "007" as numbers and drops the leading zeros.
     """
-    encoded_custom_id = quote(custom_id, safe="")
-    return encoded_custom_id if total < 2 else f"{encoded_custom_id}#{index}/{total}"
+    return f"{quote(custom_id, safe='')}#{index}/{total}"
 
 
 def _vertex_embed_content_config(embed_content_request: Mapping[str, object]) -> Mapping[str, object]:
