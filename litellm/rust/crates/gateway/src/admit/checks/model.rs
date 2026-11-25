@@ -531,7 +531,7 @@ mod tests {
     }
 
     #[rstest]
-    fn a_deployment_whose_key_is_an_environment_reference_left_as_written_names_its_group() {
+    fn a_deployment_whose_key_is_any_pointer_python_lists_names_its_group() {
         let written = "    litellm_params:\n      model: anthropic/claude-haiku-5-5\n      api_key: os.environ/ANTHROPIC_API_KEY\n";
 
         assert_eq!(
