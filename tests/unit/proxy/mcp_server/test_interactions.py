@@ -178,7 +178,9 @@ async def test_modern_sampling_errors_abort_without_relaying_form_input() -> Non
 
     send, receive = anyio.create_memory_object_stream[SessionMessage](1)
     try:
-        interaction: Final = ModernClientInteraction(ClientSession(receive, send, sampling_callback=sampling), allow_elicitation=True)
+        interaction: Final = ModernClientInteraction(
+            ClientSession(receive, send, sampling_callback=sampling), allow_elicitation=True
+        )
         form: Final = ElicitRequest(
             params=ElicitRequestFormParams(message="Confirm", requested_schema={"type": "object", "properties": {}})
         )
@@ -255,3 +257,40 @@ async def test_gateway_rejects_invalid_interaction_boundaries(
         dispatch.assert_awaited_once()
     else:
         dispatch.assert_not_awaited()
+
+
+def test_continuation_preserves_resolved_uri_across_turns(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mcp.types import ReadResourceRequest, ReadResourceRequestParams
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "resolved-uri-salt")
+    context: Final = OperationContext(_caller=UserAPIKeyAuth(user_id="alice"))
+    operation: Final = ReadResourceRequest(params=ReadResourceRequestParams(uri="ui://widget/app.html?v=1"))
+    server: Final = MCPServer(server_id="upstream", name="upstream", url="https://example.com/mcp", transport="http")
+    first: Final = seal_continuation(
+        bind_target(InputRequiredResult(request_state="step-1"), server, resolved_uri="ui://widget/app.html?v=2"),
+        operation,
+        context,
+        now=100,
+    )
+    retry: Final = operation.model_copy(
+        update={"params": operation.params.model_copy(update={"request_state": first.request_state})}
+    )
+    opened: Final = open_continuation(retry, context, now=101)
+    assert opened is not None
+    assert opened.resolved_uri == "ui://widget/app.html?v=2"
+    second: Final = seal_continuation(
+        bind_target(InputRequiredResult(request_state="step-2"), server),
+        retry,
+        context,
+        now=102,
+        previous=opened,
+    )
+    reopened: Final = open_continuation(
+        operation.model_copy(
+            update={"params": operation.params.model_copy(update={"request_state": second.request_state})}
+        ),
+        context,
+        now=103,
+    )
+    assert reopened is not None
+    assert reopened.resolved_uri == "ui://widget/app.html?v=2"

@@ -5351,7 +5351,7 @@ class MCPServerManager:
         self,
         server: MCPServer,
         user_api_key_auth: UserAPIKeyAuth | None,
-        url: AnyUrl,
+        url: AnyUrl | str,
         mcp_auth_header: str | dict[str, str] | None = None,
         extra_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
@@ -5387,7 +5387,7 @@ class MCPServerManager:
         result: Final = await client.read_resource(
             url, input_responses=input_responses, request_state=request_state, allow_input_required=allow_input_required
         )
-        return bind_target(result, server) if isinstance(result, InputRequiredResult) else result
+        return bind_target(result, server, resolved_uri=str(url)) if isinstance(result, InputRequiredResult) else result
 
     async def get_prompt_from_server(
         self,

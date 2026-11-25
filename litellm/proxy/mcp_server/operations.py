@@ -12,6 +12,7 @@ from datetime import datetime
 from functools import partial, reduce
 from types import EllipsisType
 from typing import Final, NoReturn, Protocol, TypeAlias, overload
+from urllib.parse import parse_qsl, urlsplit
 
 import anyio
 from fastapi import HTTPException
@@ -283,9 +284,56 @@ class _ResourceOwnerAmbiguous:
     server_names: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _ResolvedResourceOwner:
+    server: MCPServer
+    url: AnyUrl | str
+
+
 _ResourceOwnerFailure: TypeAlias = (
     _ResourceOwnerRateLimited | ResourceListingFailed | _ResourceOwnerMissing | _ResourceOwnerAmbiguous
 )
+
+
+def _ui_uri_without_cache_buster(
+    uri: str,
+) -> tuple[tuple[str, str, str, tuple[tuple[str, str], ...], str], bool] | None:
+    if not uri.lower().startswith("ui://"):
+        return None
+    parts: Final = urlsplit(uri)
+    query_items: Final = parse_qsl(parts.query, keep_blank_values=True)
+    filtered_query: Final = tuple((key, value) for key, value in query_items if key != "v")
+    has_cache_buster: Final = len(filtered_query) != len(query_items)
+    return (parts.scheme, parts.netloc, parts.path, filtered_query, parts.fragment), has_cache_buster
+
+
+def _resolve_ui_cache_buster_fallback(
+    listings: Sequence[tuple[MCPServer, tuple[Resource, ...]]],
+    requested_uri: str,
+) -> _ResolvedResourceOwner | None:
+    requested: Final = _ui_uri_without_cache_buster(requested_uri)
+    if requested is None:
+        return None
+    requested_key, requested_has_v = requested
+    server_matches: Final = tuple(
+        (server, unique_uris)
+        for server, listing in listings
+        if (
+            unique_uris := tuple(
+                dict.fromkeys(
+                    str(resource.uri)
+                    for resource in listing
+                    if (candidate := _ui_uri_without_cache_buster(str(resource.uri))) is not None
+                    and candidate[0] == requested_key
+                    and (requested_has_v or candidate[1])
+                )
+            )
+        )
+    )
+    if len(server_matches) == 1 and len(server_matches[0][1]) == 1:
+        matched_server, matched_uris = server_matches[0]
+        return _ResolvedResourceOwner(server=matched_server, url=matched_uris[0])
+    return None
 
 
 def _withhold_fanned_out_caller_authorization(
@@ -300,7 +348,7 @@ def _withhold_fanned_out_caller_authorization(
     return extra_headers
 
 
-def _raise_resource_owner_failure(failure: _ResourceOwnerFailure, url: AnyUrl) -> NoReturn:
+def _raise_resource_owner_failure(failure: _ResourceOwnerFailure, url: AnyUrl | str) -> NoReturn:
     match failure:
         case _ResourceOwnerRateLimited(error=error):
             raise error
@@ -3270,7 +3318,7 @@ async def mcp_get_prompt(
 
 
 async def mcp_read_resource(
-    url: AnyUrl,
+    url: AnyUrl | str,
     user_api_key_auth: UserAPIKeyAuth | None = None,
     mcp_auth_header: str | None = None,
     mcp_servers: list[str] | None = None,
@@ -3298,7 +3346,7 @@ async def mcp_read_resource(
 
     candidates: Final = tuple(server for server in allowed_mcp_servers if not is_mcp_stdio_blocked(server.transport))
 
-    async def owner(candidate: MCPServer) -> MCPServer | ResourceListingFailed | None:
+    async def list_candidate(candidate: MCPServer) -> tuple[MCPServer, tuple[Resource, ...] | ResourceListingFailed]:
         candidate_auth, candidate_headers = _prepare_mcp_server_headers(
             server=candidate,
             mcp_server_auth_headers=mcp_server_auth_headers,
@@ -3317,37 +3365,42 @@ async def mcp_read_resource(
             raw_headers=raw_headers,
             client_ip=client_ip,
         )
-        if isinstance(listing, ResourceListingFailed):
-            return listing
-        return candidate if any(str(resource.uri) == str(url) for resource in listing) else None
+        return candidate, listing
 
-    async def resolve_owner() -> MCPServer | _ResourceOwnerFailure:
+    async def resolve_owner() -> _ResolvedResourceOwner | _ResourceOwnerFailure:
         admission: Final = await _admit_mcp_servers(candidates, user_api_key_auth)
         if admission.rejected_servers:
             return _ResourceOwnerRateLimited(error=admission.rejected_servers[0][1])
-        lookups: Final = tuple(asyncio.create_task(owner(candidate)) for candidate in candidates)
-        try:
-            for lookup in asyncio.as_completed(lookups):
-                if isinstance(failure := await lookup, ResourceListingFailed):
-                    return failure
-        finally:
-            for lookup in lookups:
-                lookup.cancel()
-            await asyncio.gather(*lookups, return_exceptions=True)
-        results: Final = tuple(lookup.result() for lookup in lookups)
-        owners: Final = tuple(result for result in results if isinstance(result, MCPServer))
-        if len(owners) == 1:
-            return owners[0]
-        if not owners:
-            return _ResourceOwnerMissing()
-        return _ResourceOwnerAmbiguous(server_names=tuple(owner.name for owner in owners))
+        results: Final = await asyncio.gather(*(list_candidate(candidate) for candidate in candidates))
+        failures: Final = tuple(listing for _, listing in results if isinstance(listing, ResourceListingFailed))
+        listings: Final = tuple(
+            (candidate, listing) for candidate, listing in results if not isinstance(listing, ResourceListingFailed)
+        )
+        requested_uri: Final = str(url)
+        exact_owners: Final = tuple(
+            candidate
+            for candidate, listing in listings
+            if any(str(resource.uri) == requested_uri for resource in listing)
+        )
+        if len(exact_owners) == 1:
+            return _ResolvedResourceOwner(server=exact_owners[0], url=url)
+        if len(exact_owners) > 1:
+            return _ResourceOwnerAmbiguous(server_names=tuple(owner.name for owner in exact_owners))
+        if failures:
+            return failures[0]
+        return _resolve_ui_cache_buster_fallback(listings, requested_uri) or _ResourceOwnerMissing()
 
     if len(allowed_mcp_servers) == 1:
         await _enforce_mcp_server_rate_limit(user_api_key_auth, allowed_mcp_servers[0])
-    resolved: Final = allowed_mcp_servers[0] if len(allowed_mcp_servers) == 1 else await resolve_owner()
+    resolved: Final = (
+        _ResolvedResourceOwner(server=allowed_mcp_servers[0], url=url)
+        if len(allowed_mcp_servers) == 1
+        else await resolve_owner()
+    )
     if isinstance(resolved, _ResourceOwnerFailure):
         _raise_resource_owner_failure(resolved, url)
-    server: Final = resolved
+    server: Final = resolved.server
+    target_url: Final = resolved.url
 
     server_auth_header, extra_headers = _prepare_mcp_server_headers(
         server=server,
@@ -3359,10 +3412,10 @@ async def mcp_read_resource(
         scope_servers=candidates,
     )
 
-    return await global_mcp_server_manager.read_resource_from_server(
+    result: Final = await global_mcp_server_manager.read_resource_from_server(
         server=server,
         user_api_key_auth=user_api_key_auth,
-        url=url,
+        url=target_url,
         mcp_auth_header=server_auth_header,
         extra_headers=_withhold_fanned_out_caller_authorization(server, extra_headers, candidates),
         raw_headers=raw_headers,
@@ -3371,6 +3424,9 @@ async def mcp_read_resource(
         request_state=request_state,
         allow_input_required=allow_input_required,
     )
+    if isinstance(result, BoundInputRequiredResult) and result.resolved_uri is None:
+        return result.model_copy(update={"resolved_uri": str(target_url)})
+    return result
 
 
 def _get_standard_logging_mcp_tool_call(
@@ -4063,6 +4119,13 @@ class GatewayOperations:
                         }
                         if state is not None
                         else None,
+                        **(
+                            {"uri": state.resolved_uri}
+                            if state is not None
+                            and isinstance(operation, ReadResourceRequest)
+                            and state.resolved_uri is not None
+                            else {}
+                        ),
                     }
                 )
             }

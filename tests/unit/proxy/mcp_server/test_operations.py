@@ -69,7 +69,7 @@ async def _served_catalog_tool() -> str:
         "ambiguous",
         "missing",
         "failure",
-        "slow_failure",
+        "incomplete_missing",
         "blocked_stdio",
         "scoped_bearer",
         "legacy_delegates",
@@ -83,7 +83,6 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
     caller_bearer: Final = "Bearer caller-upstream-token"
     reads: Final[asyncio.Queue[tuple[str, str | None]]] = asyncio.Queue()
     listing_authorizations: Final[asyncio.Queue[str | None]] = asyncio.Queue()
-    slow_listing_cancelled: Final = asyncio.Event()
     message: Final = TypeAdapter(JSONRPCMessage)
 
     async def respond(request: httpx2.Request) -> httpx2.Response:
@@ -121,13 +120,8 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
         listing_authorizations.put_nowait(request.headers.get("authorization"))
         if case == "failure" and request.url.host == "other.example":
             return httpx2.Response(503, text="private upstream diagnostic")
-        if case == "slow_failure" and request.url.host == "owner.example":
+        if case == "incomplete_missing" and request.url.host == "owner.example":
             return httpx2.Response(503, text="private upstream diagnostic")
-        if case == "slow_failure":
-            try:
-                await asyncio.Event().wait()
-            finally:
-                slow_listing_cancelled.set()
         if not (payload.params or {}).get("cursor"):
             return httpx2.Response(
                 200,
@@ -208,7 +202,7 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
             ),
         )
 
-    if case in ("unique", "blocked_stdio", "scoped_bearer", "legacy_delegates"):
+    if case in ("unique", "failure", "blocked_stdio", "scoped_bearer", "legacy_delegates"):
         result: Final = await read()
         assert result == ReadResourceResult(contents=[TextResourceContents(uri=uri, text="owner.example")])
         assert reads.qsize() == 1
@@ -237,13 +231,312 @@ async def test_resource_read_requires_unique_owner_from_complete_listings(
     with pytest.raises(MCPError) as rejected:
         await asyncio.wait_for(read(), timeout=30)
     assert rejected.value.error.code == INVALID_REQUEST, "owner failures must reach MCP clients as MCPError, not 500"
-    assert {"ambiguous": "ambiguous", "missing": "not found", "failure": "list resources", "slow_failure": "owner"}[
+    assert {"ambiguous": "ambiguous", "missing": "not found", "incomplete_missing": "owner"}[
         case
     ] in rejected.value.error.message.lower()
     assert reads.empty()
     assert "private upstream diagnostic" not in rejected.value.error.message
-    if case == "slow_failure":
-        await asyncio.wait_for(slow_listing_cancelled.wait(), timeout=30)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("requested_uri", "owner_uris", "other_uris", "other_fails", "expected_uri", "expected_error"),
+    [
+        (
+            "ui://widget/app.html?v=1",
+            ("ui://widget/app.html?v=2",),
+            (),
+            False,
+            "ui://widget/app.html?v=2",
+            None,
+        ),
+        (
+            "ui://widget/app.html?theme=dark&v=1&lang=en",
+            ("ui://widget/app.html?theme=dark&v=2&lang=en",),
+            (),
+            False,
+            "ui://widget/app.html?theme=dark&v=2&lang=en",
+            None,
+        ),
+        (
+            "ui://widget/app.html?v=1",
+            ("ui://widget/app.html",),
+            (),
+            False,
+            "ui://widget/app.html",
+            None,
+        ),
+        (
+            "ui://widget/app.html?v=1",
+            ("ui://widget/app.html?v=1", "ui://widget/app.html?v=2"),
+            (),
+            False,
+            "ui://widget/app.html?v=1",
+            None,
+        ),
+        (
+            "ui://widget/app.html?theme=dark&v=1",
+            ("ui://widget/app.html?theme=light&v=2",),
+            (),
+            False,
+            None,
+            "not found",
+        ),
+        (
+            "ui://widget/app.html?version=1",
+            ("ui://widget/app.html?version=2",),
+            (),
+            False,
+            None,
+            "not found",
+        ),
+        (
+            "ui://widget/app.html?v=1#tab1",
+            ("ui://widget/app.html?v=2#tab2",),
+            (),
+            False,
+            None,
+            "not found",
+        ),
+        (
+            "https://example.com/app.html?v=1",
+            ("https://example.com/app.html?v=2",),
+            (),
+            False,
+            None,
+            "not found",
+        ),
+        (
+            "ui://widget/app.html?v=1",
+            ("ui://widget/app.html?v=2",),
+            (),
+            True,
+            None,
+            "owner is unknown",
+        ),
+        (
+            "ui://widget/app.html?v=1",
+            ("ui://widget/app.html?v=2", "ui://widget/app.html?v=3"),
+            (),
+            False,
+            None,
+            "not found",
+        ),
+        (
+            "ui://widget/app.html?v=1",
+            ("ui://widget/app.html?v=2",),
+            ("ui://widget/app.html?v=3",),
+            False,
+            None,
+            "not found",
+        ),
+        (
+            "ui://widget/app.html?v=1",
+            ("ui://widget/app.html?v=2", "ui://widget/app.html?v=3"),
+            ("ui://widget/app.html?v=4",),
+            False,
+            None,
+            "not found",
+        ),
+    ],
+)
+async def test_resource_read_ui_cache_buster_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    requested_uri: str,
+    owner_uris: tuple[str, ...],
+    other_uris: tuple[str, ...],
+    other_fails: bool,
+    expected_uri: str | None,
+    expected_error: str | None,
+) -> None:
+    from mcp.shared.exceptions import MCPError
+    from mcp.types import INVALID_REQUEST, ReadResourceRequest, ReadResourceRequestParams
+
+    forwarded_reads: Final[asyncio.Queue[tuple[str, str]]] = asyncio.Queue()
+    message: Final = TypeAdapter(JSONRPCMessage)
+
+    async def respond(request: httpx2.Request) -> httpx2.Response:
+        if request.method == "DELETE":
+            return httpx2.Response(200)
+        payload: Final = message.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        if payload.method == "initialize":
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {
+                        "protocolVersion": "2025-03-26",
+                        "serverInfo": {"name": "upstream", "version": "1"},
+                        "capabilities": {"resources": {}},
+                    },
+                },
+            )
+        if payload.method == "resources/list":
+            if other_fails and request.url.host == "other.example":
+                return httpx2.Response(503, text="private upstream diagnostic")
+            uris: Final = owner_uris if request.url.host == "owner.example" else other_uris
+            return httpx2.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": payload.id,
+                    "result": {"resources": [{"name": "widget", "uri": item} for item in uris]},
+                },
+            )
+        assert payload.method == "resources/read"
+        read_uri: Final = str((payload.params or {}).get("uri", ""))
+        forwarded_reads.put_nowait((request.url.host, read_uri))
+        return httpx2.Response(
+            200,
+            json={
+                "jsonrpc": "2.0",
+                "id": payload.id,
+                "result": {"contents": [{"uri": read_uri, "text": f"{request.url.host}:{read_uri}"}]},
+            },
+        )
+
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(respond))
+    servers: Final = tuple(
+        MCPServer(
+            server_id=name,
+            name=name,
+            url=f"https://{name}.example/mcp",
+            transport=MCPTransport.http,
+            allow_all_keys=True,
+        )
+        for name in ("owner", "other")
+    )
+    caller: Final = UserAPIKeyAuth(api_key=hash_token("sk-ui-fallback"))
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", _mcp_rate_limited_proxy_logging())
+    for server in servers:
+        monkeypatch.setitem(manager.config_mcp_servers, server.server_id, server)
+
+    async def invoke() -> object:
+        return await GatewayOperations().execute(
+            ReadResourceRequest(params=ReadResourceRequestParams(uri=requested_uri)),
+            prepare_context(caller),
+        )
+
+    if expected_uri is not None:
+        result: Final = await invoke()
+        assert result == ReadResourceResult(
+            contents=[TextResourceContents(uri=expected_uri, text=f"owner.example:{expected_uri}")]
+        )
+        assert forwarded_reads.qsize() == 1
+        assert forwarded_reads.get_nowait() == ("owner.example", expected_uri)
+        return
+
+    assert expected_error is not None
+    with pytest.raises(MCPError) as rejected:
+        await invoke()
+    assert rejected.value.error.code == INVALID_REQUEST
+    assert expected_error in rejected.value.error.message.lower()
+    assert forwarded_reads.empty()
+
+
+@pytest.mark.asyncio
+async def test_resource_read_continuation_binds_resolved_ui_uri(monkeypatch: pytest.MonkeyPatch) -> None:
+    from mcp.types import (
+        ElicitRequest,
+        ElicitRequestFormParams,
+        ElicitResult,
+        InputRequiredResult,
+        ReadResourceRequest,
+        ReadResourceRequestParams,
+        Resource,
+    )
+
+    from litellm.proxy.mcp_server.contracts import WireCompat
+    from litellm.proxy.mcp_server.interactions import bind_target
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "resource-continuation-salt")
+    owner: Final = MCPServer(
+        server_id="owner-id",
+        name="owner",
+        url="https://owner.example/mcp",
+        transport=MCPTransport.http,
+        allow_all_keys=True,
+    )
+    other: Final = MCPServer(
+        server_id="other-id",
+        name="other",
+        url="https://other.example/mcp",
+        transport=MCPTransport.http,
+        allow_all_keys=True,
+    )
+    manager: Final = MCPServerManager()
+    for server in (owner, other):
+        monkeypatch.setitem(manager.config_mcp_servers, server.server_id, server)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", _mcp_rate_limited_proxy_logging())
+
+    stale_uri: Final = "ui://widget/app.html?v=1"
+    resolved_uri: Final = "ui://widget/app.html?v=2"
+    list_calls: Final[asyncio.Queue[str]] = asyncio.Queue()
+    read_calls: Final[asyncio.Queue[tuple[str, str, str | None]]] = asyncio.Queue()
+
+    async def fake_list_resources(server: MCPServer, **kwargs: object) -> tuple[Resource, ...]:
+        list_calls.put_nowait(server.server_id)
+        if server.server_id == owner.server_id:
+            return (Resource(name="widget", uri=resolved_uri),)
+        return ()
+
+    async def fake_read_resource(
+        server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        url: object,
+        **kwargs: object,
+    ) -> ReadResourceResult | InputRequiredResult:
+        request_state: Final = kwargs.get("request_state")
+        read_calls.put_nowait((server.server_id, str(url), str(request_state) if request_state is not None else None))
+        if request_state is None:
+            return bind_target(
+                InputRequiredResult(
+                    request_state="upstream-step-1",
+                    input_requests={
+                        "confirm": ElicitRequest(
+                            params=ElicitRequestFormParams(
+                                message="Confirm",
+                                requested_schema={"type": "object", "properties": {}},
+                            )
+                        )
+                    },
+                ),
+                server,
+                resolved_uri=str(url),
+            )
+        return ReadResourceResult(contents=[TextResourceContents(uri=str(url), text="resumed-ok")])
+
+    monkeypatch.setattr(manager, "list_resources_from_server", fake_list_resources)
+    monkeypatch.setattr(manager, "read_resource_from_server", fake_read_resource)
+
+    caller: Final = UserAPIKeyAuth(user_id="alice", api_key=hash_token("sk-resource-continuation"))
+    context: Final = prepare_context(caller, wire_compat=WireCompat.MODERN)
+    initial: Final = ReadResourceRequest(params=ReadResourceRequestParams(uri=stale_uri))
+
+    suspended: Final = await GatewayOperations().execute(initial, context)
+    assert isinstance(suspended, InputRequiredResult)
+    assert suspended.request_state is not None
+    assert read_calls.get_nowait() == (owner.server_id, resolved_uri, None)
+    assert list_calls.qsize() == 2
+
+    resumed_request: Final = ReadResourceRequest(
+        params=ReadResourceRequestParams(
+            uri=stale_uri,
+            request_state=suspended.request_state,
+            input_responses={"confirm": ElicitResult(action="accept")},
+        )
+    )
+    completed: Final = await GatewayOperations().execute(resumed_request, context)
+    assert completed == ReadResourceResult(contents=[TextResourceContents(uri=resolved_uri, text="resumed-ok")])
+    assert read_calls.get_nowait() == (owner.server_id, resolved_uri, "upstream-step-1")
+    assert list_calls.qsize() == 2
 
 
 def _listing_client() -> SimpleNamespace:
