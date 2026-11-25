@@ -228,7 +228,7 @@ def _decode_json_arguments(arguments: str) -> object:
         return {}
 
 
-def _get_function_arguments(function: FunctionDefinition) -> dict:
+def _get_function_arguments(function: FunctionDefinition) -> dict[str, object]:
     """Helper to safely get and parse function arguments."""
     arguments: Final = function.get("arguments", {})
     decoded: Final = _decode_json_arguments(arguments) if isinstance(arguments, str) else arguments

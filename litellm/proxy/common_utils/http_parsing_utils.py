@@ -840,7 +840,7 @@ def get_tags_from_request_body(request_body: Mapping[str, object]) -> list[str]:
     return [tag for tag in combined_tags if isinstance(tag, str)]
 
 
-def populate_request_with_path_params(request_data: dict[str, object], request: Request) -> dict:
+def populate_request_with_path_params(request_data: dict[str, object], request: Request) -> dict[str, object]:
     """
     Copy FastAPI path params and query params into the request payload so downstream checks
     (e.g. vector store RBAC, organization RBAC) see them the same way as body params.

@@ -453,7 +453,7 @@ class LassoGuardrail(CustomGuardrail):
         message_type: Literal["PROMPT", "COMPLETION"],
         messages: Sequence[Mapping[str, object]],
         messages_count: int,
-    ) -> dict:
+    ) -> dict[str, object]:
         """Handle masking with classifix endpoint.
 
         ``messages_count`` is the number of inspected items derived from

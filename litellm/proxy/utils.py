@@ -209,6 +209,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     MESSAGE_REDACTION_ENABLE_HEADERS,
     TokenDataCheckedFields,
@@ -1880,6 +1881,7 @@ _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRai
 _PROXY_ONLY_ERROR_LOGGED_FIELDS: Final = frozenset(
     {"model", "messages", "input", "prompt", "user", "stream", "litellm_call_id"}
 )
+_PROMPT_FIELDS: Final = frozenset(ModelParamHelper.get_exclude_params_for_model_parameters())
 _PROMPT_FIELD_BY_SETUP_CALL_TYPE: Final[Mapping[str | None, str]] = {
     CallTypes.aresponses.value: "input",
     CallTypes.atext_completion.value: "prompt",
@@ -4735,10 +4737,11 @@ class ProxyLogging:
             _litellm_params: Final[dict[str, object]] = {}  # mutable-ok: filled below, then handed to the logger
 
             litellm_param_keys: Final = LoggedLiteLLMParams.__annotations__.keys()
-            for k, v in _proxy_only_error_log_fields(request_fields, logged_metadata_keys).items():
+            logged_fields: Final = _proxy_only_error_log_fields(request_fields, logged_metadata_keys)
+            for k, v in logged_fields.items():
                 if k in litellm_param_keys:
                     _litellm_params[k] = v
-                elif k not in ("model", "user", "litellm_logging_obj"):
+                elif k not in ("model", "user", "litellm_logging_obj") and k not in _PROMPT_FIELDS:
                     _optional_params[k] = v
 
             existing: Final = _as_str_mapping(
@@ -4779,6 +4782,7 @@ class ProxyLogging:
                     if "custom_llm_provider" in attribution
                     else {}
                 ),
+                **{key: value for key, value in logged_fields.items() if key in _PROMPT_FIELDS},
             )
 
             input: list | str | dict = ""
