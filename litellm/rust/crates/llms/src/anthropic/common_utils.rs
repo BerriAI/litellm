@@ -1376,6 +1376,29 @@ pub fn is_anthropic_invalid_thinking_block_error(error_text: &str) -> bool {
         || lower.contains("must contain thinking")
 }
 
+static ANTHROPIC_TOOL_USE_ID_PATTERN_ERROR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?:tool_use\.id|tool_result\.tool_use_id): String should match pattern")
+        .expect("valid regex")
+});
+
+pub fn is_anthropic_tool_use_id_pattern_error(error_text: &str) -> bool {
+    ANTHROPIC_TOOL_USE_ID_PATTERN_ERROR
+        .is_match(error_text)
+        .unwrap_or(false)
+}
+
+/// The request's messages with their tool use ids renamed to Anthropic's pattern, or `None`
+/// when no id changes.
+pub fn messages_with_renamed_tool_use_ids(request_body: &Value) -> Option<Vec<Value>> {
+    let messages = request_body.get("messages")?.as_array()?;
+    let renamed = messages
+        .iter()
+        .cloned()
+        .map(sanitize_raw_tool_use_ids)
+        .collect::<Option<Vec<Value>>>()?;
+    (renamed != *messages).then_some(renamed)
+}
+
 pub fn is_anthropic_thinking_binding_mismatch_error(error_text: &str) -> bool {
     error_text
         .to_lowercase()

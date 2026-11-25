@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.tool_fields import DropPolicy
 from litellm.llms.anthropic.messages.context_management import AnthropicContextManagementError
 from litellm.llms.anthropic.messages.convertible_blocks import deployment_drops_params, unconvertible_blocks_error
+from litellm.llms.anthropic.messages.native.utils import deployment_renames_tool_use_ids
 from litellm.llms.anthropic.messages.responses_adapters.handler import (
     count_messages_as_sent,
     preserves_system_instructions,
@@ -132,6 +133,7 @@ class OpenAITokenCounter(BaseTokenCounter):
                     tools=tools,
                     output_format=output_format,
                     preserve_system_instructions=preserves_system_instructions(request_params),
+                    rewrites_tool_use_ids=deployment_renames_tool_use_ids(request_params, model_to_use),
                 )
             case "openai":
                 input_items, instructions = OpenAICountTokensConfig.messages_to_responses_input(

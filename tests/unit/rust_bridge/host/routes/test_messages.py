@@ -1812,8 +1812,9 @@ def _tool_round(tool_use_id: str) -> list[dict[str, object]]:
     ("model", "api_base", "base_env", "sent_id"),
     [
         pytest.param("anthropic/kimi-k2", "http://kimi.test", None, "functions.Bash:0", id="other-model-custom-base"),
+        pytest.param("anthropic/sonnet-prod", "http://gateway.test", None, "functions.Bash:0", id="alias-gateway-base"),
         pytest.param(
-            "anthropic/claude-sonnet-4-5", "http://kimi.test", None, "functions_Bash_0", id="claude-custom-base"
+            "anthropic/claude-sonnet-4-5", "http://kimi.test", None, "functions.Bash:0", id="claude-name-custom-base"
         ),
         pytest.param("anthropic/kimi-k2", None, "ANTHROPIC_API_BASE", "functions.Bash:0", id="anthropic-api-base-env"),
         pytest.param("anthropic/kimi-k2", None, None, "functions_Bash_0", id="anthropics-own-api"),
@@ -1849,10 +1850,10 @@ async def test_pre_request_hooks_rewrite_tool_use_ids_only_for_an_upstream_that_
     ("model", "sent_id"),
     [
         pytest.param("anthropic/kimi-k2", "functions.Bash:0", id="other-model"),
-        pytest.param("anthropic/claude-sonnet-4-5", "functions_Bash_0", id="claude"),
+        pytest.param("anthropic/claude-sonnet-4-5", "functions.Bash:0", id="claude-name"),
     ],
 )
-def test_body_params_prepare_tool_use_ids_for_a_custom_anthropic_base_by_model(
+def test_body_params_keep_tool_use_ids_for_a_custom_anthropic_base_whatever_the_model_name(
     monkeypatch: pytest.MonkeyPatch, asynchronous: bool, model: str, sent_id: str
 ) -> None:
     monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", False)

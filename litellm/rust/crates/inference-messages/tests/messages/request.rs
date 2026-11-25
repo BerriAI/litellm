@@ -1200,9 +1200,9 @@ fn sent_tool_round(id: &str) -> Value {
 #[rstest]
 #[case::other_model("kimi-k2", false, sent_tool_round("functions.Bash:0"))]
 #[case::other_model_python_prepared("kimi-k2", true, replayed_tool_round())]
-#[case::claude(MODEL, false, sent_tool_round("functions_Bash_0"))]
+#[case::claude_name(MODEL, false, sent_tool_round("functions.Bash:0"))]
 #[tokio::test]
-async fn a_custom_anthropic_base_gets_the_callers_tool_use_ids_unless_the_model_is_claude(
+async fn a_custom_anthropic_base_gets_the_callers_tool_use_ids_whatever_the_model_name(
     call: MessagesCall,
     #[case] model: &str,
     #[case] presanitized: bool,

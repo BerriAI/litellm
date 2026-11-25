@@ -27,6 +27,7 @@ class CountContextEdits:
     model: str
     tools: tuple[Mapping[str, object], ...] | None
     drop_invalid_edits: bool = False
+    renames_tool_use_ids: bool = True
 
 
 _CONTEXT_MANAGEMENT_SPEC: Final[TypeAdapter[Mapping[str, object] | tuple[Mapping[str, object], ...]]] = TypeAdapter(
@@ -41,12 +42,15 @@ def count_context_edits(
     litellm_params: Mapping[str, object],
     fallback_model: str,
 ) -> CountContextEdits:
+    from litellm.llms.anthropic.messages.native.utils import deployment_renames_tool_use_ids
+
     model: Final = litellm_params.get("model")
     return CountContextEdits(
         spec=None if context_management is None else context_management.spec,
         model=model if isinstance(model, str) else fallback_model,
         tools=None if tools is None else tuple(tools),
         drop_invalid_edits=context_management is not None and context_management.drop_invalid_edits,
+        renames_tool_use_ids=deployment_renames_tool_use_ids(litellm_params, fallback_model),
     )
 
 
@@ -96,7 +100,9 @@ async def _anthropic_inference_view(
     typed_system: Final = _typed_system(system)
     if isinstance(typed_system, ValidationError):
         return InferenceRequestView(messages=messages, system=system)
-    normalized: Final = native_messages_to_send(messages, drop_params=False)
+    normalized: Final = native_messages_to_send(
+        messages, drop_params=False, rewrites_tool_use_ids=edits.renames_tool_use_ids
+    )
     spec: Final = _typed_spec(edits.spec)
     try:
         prepared: Final = await prepare_context_managed_request(

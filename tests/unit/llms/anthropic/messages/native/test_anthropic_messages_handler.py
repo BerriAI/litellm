@@ -412,8 +412,9 @@ _ANTHROPIC_MESSAGE: Final = {
     ("model", "api_base", "base_env", "sent_id"),
     [
         pytest.param("anthropic/kimi-k2", "http://kimi.test", None, "functions.Bash:0", id="other-model-custom-base"),
+        pytest.param("anthropic/sonnet-prod", "http://gateway.test", None, "functions.Bash:0", id="alias-gateway-base"),
         pytest.param(
-            "anthropic/claude-sonnet-4-5", "http://kimi.test", None, "functions_Bash_0", id="claude-custom-base"
+            "anthropic/claude-sonnet-4-5", "http://kimi.test", None, "functions.Bash:0", id="claude-name-custom-base"
         ),
         pytest.param("anthropic/kimi-k2", None, "ANTHROPIC_API_BASE", "functions.Bash:0", id="anthropic-api-base-env"),
         pytest.param("anthropic/kimi-k2", None, "ANTHROPIC_BASE_URL", "functions.Bash:0", id="anthropic-base-url-env"),
@@ -480,6 +481,140 @@ def test_replayed_tool_use_ids_are_rewritten_for_a_host_that_can_serve_claude_un
     prepared, _system = prepare_native_messages(_replayed_tool_round("functions.Bash:0"), None, {}, model=model)
 
     assert prepared == _replayed_tool_round("functions_Bash_0")
+
+
+_TOOL_USE_ID_REJECTION: Final = "messages.1.content.0.tool_use.id: String should match pattern '^[a-zA-Z0-9_-]+$'"
+_THINKING_REJECTION: Final = "messages.1.content.0: Invalid `signature` in `thinking` block"
+
+
+def _anthropic_rejection(message: str) -> httpx.Response:
+    return httpx.Response(
+        400, json={"type": "error", "error": {"type": "invalid_request_error", "message": message}}
+    )
+
+
+def _replayed_thinking_tool_round(tool_use_id: str, thinking: bool) -> list[dict[str, object]]:
+    user, assistant, result = _replayed_tool_round(tool_use_id)
+    signed: Final = [{"type": "thinking", "thinking": "plan", "signature": "sig"}] if thinking else []
+    return [user, {**assistant, "content": [*signed, *assistant["content"]]}, result]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("rejections", "sent_rounds"),
+    [
+        pytest.param(
+            [_TOOL_USE_ID_REJECTION],
+            [("functions.Bash:0", True), ("functions_Bash_0", True)],
+            id="tool-use-id-pattern",
+        ),
+        pytest.param(
+            [_TOOL_USE_ID_REJECTION, _THINKING_REJECTION],
+            [("functions.Bash:0", True), ("functions_Bash_0", True), ("functions_Bash_0", False)],
+            id="tool-use-id-pattern-then-thinking-signature",
+        ),
+    ],
+)
+async def test_a_gateway_that_rejects_the_callers_tool_use_ids_gets_one_retry_with_renamed_ids(
+    monkeypatch: pytest.MonkeyPatch, rejections: list[str], sent_rounds: list[tuple[str, bool]]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("http://gateway.test/v1/messages").mock(
+            side_effect=[
+                *(_anthropic_rejection(message) for message in rejections),
+                httpx.Response(200, json=_ANTHROPIC_MESSAGE),
+            ]
+        )
+        await python_messages.anthropic_messages(
+            max_tokens=4096,
+            messages=_replayed_thinking_tool_round("functions.Bash:0", thinking=True),
+            model="anthropic/sonnet-prod",
+            api_base="http://gateway.test",
+            api_key="sk-test",
+            thinking={"type": "enabled", "budget_tokens": 2048},
+        )
+
+    assert [json.loads(call.request.content)["messages"] for call in route.calls] == [
+        _replayed_thinking_tool_round(tool_use_id, thinking) for tool_use_id, thinking in sent_rounds
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("rejection", "tool_use_id"),
+    [
+        pytest.param("tools.0.name: String should match pattern '^[a-zA-Z0-9_-]{1,128}$'", "functions.Bash:0", id="other-field"),
+        pytest.param(_TOOL_USE_ID_REJECTION, "toolu_01", id="ids-already-match"),
+    ],
+)
+async def test_a_gateway_rejection_that_renaming_cannot_fix_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, rejection: str, tool_use_id: str
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock(assert_all_called=True) as upstream:
+        route: Final = upstream.post("http://gateway.test/v1/messages").mock(
+            side_effect=[_anthropic_rejection(rejection), httpx.Response(200, json=_ANTHROPIC_MESSAGE)]
+        )
+        with pytest.raises(litellm.BadRequestError):
+            await python_messages.anthropic_messages(
+                max_tokens=16,
+                messages=_replayed_tool_round(tool_use_id),
+                model="anthropic/sonnet-prod",
+                api_base="http://gateway.test",
+                api_key="sk-test",
+            )
+
+    assert route.call_count == 1
+
+
+_CHAT_COMPLETION: Final = {
+    "id": "chatcmpl-1",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "claude-gateway",
+    "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "done"}}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("rejection", "sent_ids"),
+    [
+        pytest.param(_TOOL_USE_ID_REJECTION, ["functions.Bash:0", "functions_Bash_0"], id="tool-use-id-pattern"),
+        pytest.param("messages: text content blocks must be non-empty", ["functions.Bash:0"], id="other-400"),
+    ],
+)
+async def test_a_chat_bridged_gateway_that_rejects_the_callers_tool_use_ids_gets_them_renamed_once(
+    monkeypatch: pytest.MonkeyPatch, is_async: bool, rejection: str, sent_ids: list[str]
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    with respx.mock as upstream:
+        chat: Final = upstream.post("http://gateway.test/v1/chat/completions").mock(
+            side_effect=[
+                httpx.Response(400, json={"error": {"message": rejection, "type": "invalid_request_error"}}),
+                httpx.Response(200, json=_CHAT_COMPLETION),
+            ]
+        )
+        create: Final = litellm.anthropic.messages.acreate if is_async else litellm.anthropic.messages.create
+        try:
+            pending: Final = create(
+                model="hosted_vllm/claude-gateway",
+                api_base="http://gateway.test/v1",
+                api_key="sk-test",
+                max_tokens=16,
+                messages=_replayed_tool_round("functions.Bash:0"),
+                tools=[{"name": "Bash", "input_schema": {"type": "object", "properties": {}}}],
+            )
+            _ = await pending if is_async else pending
+        except litellm.BadRequestError:
+            pass
+
+    sent: Final = [json.loads(call.request.content)["messages"] for call in chat.calls]
+    assert [messages[1]["tool_calls"][0]["id"] for messages in sent] == sent_ids
+    assert [messages[2]["tool_call_id"] for messages in sent] == sent_ids
 
 
 @pytest.mark.asyncio

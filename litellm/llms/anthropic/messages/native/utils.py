@@ -295,9 +295,7 @@ _HOSTS_SERVING_CLAUDE_UNDER_ANY_DEPLOYMENT_NAME: Final = frozenset(
 )
 
 
-def _rewrites_tool_use_ids(model: str, custom_llm_provider: str | None, api_base: str | None) -> bool:
-    if "claude" in model.lower():
-        return True
+def renames_tool_use_ids_up_front(model: str, custom_llm_provider: str | None, api_base: str | None) -> bool:
     try:
         resolved_model, provider = resolve_model_and_provider_for_metadata(model, custom_llm_provider, api_base)
     except BadRequestError:
@@ -306,6 +304,17 @@ def _rewrites_tool_use_ids(model: str, custom_llm_provider: str | None, api_base
         return serves_anthropic_api_versions(AnthropicModelInfo.resolve_anthropic_api_base(api_base))
     return provider in _HOSTS_SERVING_CLAUDE_UNDER_ANY_DEPLOYMENT_NAME or (
         provider_messages_config(resolved_model, provider, api_base) is not None
+    )
+
+
+def deployment_renames_tool_use_ids(litellm_params: Mapping[str, object], fallback_model: str) -> bool:
+    model: Final = litellm_params.get("model")
+    provider: Final = litellm_params.get("custom_llm_provider")
+    api_base: Final = litellm_params.get("api_base")
+    return renames_tool_use_ids_up_front(
+        model if isinstance(model, str) else fallback_model,
+        provider if isinstance(provider, str) else None,
+        api_base if isinstance(api_base, str) else None,
     )
 
 
@@ -362,7 +371,7 @@ def prepare_native_messages(
             kwargs.get("drop_params"),
             model=model,
             custom_llm_provider=custom_llm_provider,
-            rewrites_tool_use_ids=_rewrites_tool_use_ids(model, custom_llm_provider, api_base),
+            rewrites_tool_use_ids=renames_tool_use_ids_up_front(model, custom_llm_provider, api_base),
         )
     )
     cleaned_system: Final = (

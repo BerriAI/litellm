@@ -18,10 +18,7 @@ use litellm_secret_value::SecretValue;
 use serde_json::{Map, Value, json};
 
 use super::{
-    handler::{
-        shape_anthropic_messages_request, shape_anthropic_messages_request_keeping_tool_use_ids,
-        with_sanitized_tool_use_ids,
-    },
+    handler::{shape_anthropic_messages_request_keeping_tool_use_ids, with_sanitized_tool_use_ids},
     thinking::{drop_unsupported_effort, translate_thinking},
 };
 use crate::anthropic::{
@@ -41,8 +38,9 @@ use crate::{
         drop_raw_advisor_blocks, drop_raw_non_string_user_texts, existing_betas, get_api_key,
         get_auth_header, has_advisor_tool, has_anthropic_credential,
         is_anthropic_invalid_thinking_block_error, is_anthropic_thinking_binding_mismatch_error,
-        is_claude_strict_tools_rejection, is_tool_search_used, map_messages,
-        map_messages_rejecting_emptied, merge_beta_headers, minted_oauth_environment,
+        is_anthropic_tool_use_id_pattern_error, is_claude_strict_tools_rejection,
+        is_tool_search_used, map_messages, map_messages_rejecting_emptied, merge_beta_headers,
+        messages_with_renamed_tool_use_ids, minted_oauth_environment,
         optionally_handle_anthropic_oauth, requires_native_compaction_beta, strip_advisor_blocks,
         strip_encrypted_reasoning_blocks_restoring_redacted_data, strip_raw_advisor_blocks,
         strip_raw_encrypted_reasoning_blocks, strip_raw_unsigned_thinking_blocks,
@@ -147,9 +145,6 @@ impl MessagesDialect for AnthropicMessagesConfig {
         request: MessagesRequest,
         options: MessagesShapeOptions,
     ) -> Result<MessagesRequest, Error> {
-        if is_claude_model(&request.model) {
-            return shape_anthropic_messages_request(request, options);
-        }
         shape_anthropic_messages_request_keeping_tool_use_ids(request, options)
     }
 
@@ -287,6 +282,11 @@ pub fn should_retry_anthropic_messages_on_http_error(
     if status != 400 {
         return false;
     }
+    if is_anthropic_tool_use_id_pattern_error(error_text)
+        && messages_with_renamed_tool_use_ids(request_body).is_some()
+    {
+        return true;
+    }
     let drops_rejected_strict_tools = context.drops_unsupported_params
         && is_claude_strict_tools_rejection(status, error_text)
         && tools_without_strict(request_body.get("tools")).is_some();
@@ -296,7 +296,10 @@ pub fn should_retry_anthropic_messages_on_http_error(
     let caller_asked_for_this_error =
         anthropic_request_errors_on_thinking_binding_mismatch(request_body)
             && is_anthropic_thinking_binding_mismatch_error(error_text);
-    !caller_asked_for_this_error && is_anthropic_invalid_thinking_block_error(error_text)
+    !caller_asked_for_this_error
+        && is_anthropic_invalid_thinking_block_error(error_text)
+        && strip_thinking_blocks_from_anthropic_messages_request(request_body.clone())
+            != *request_body
 }
 
 pub fn transform_anthropic_messages_request_on_http_error(
@@ -311,6 +314,12 @@ pub fn transform_anthropic_messages_request_on_http_error(
     } else {
         request_body
     };
+    let renamed_messages = (status == 400 && is_anthropic_tool_use_id_pattern_error(error_text))
+        .then(|| messages_with_renamed_tool_use_ids(&body))
+        .flatten();
+    if let (Some(renamed_messages), Value::Object(fields)) = (renamed_messages, &mut body) {
+        fields.insert("messages".to_owned(), Value::Array(renamed_messages));
+    }
     let without_strict = if is_claude_strict_tools_rejection(status, error_text) {
         tools_without_strict(body.get("tools"))
     } else {
@@ -1341,10 +1350,10 @@ mod tests {
         "http://127.0.0.1:8000/v1/messages",
         "functions.Bash:0"
     )]
-    #[case::claude_on_a_custom_host_rewrites(
+    #[case::claude_named_model_on_a_custom_host_keeps(
         "claude-sonnet-4-5",
         "http://127.0.0.1:8000/v1/messages",
-        "functions_Bash_0"
+        "functions.Bash:0"
     )]
     #[case::other_model_on_anthropics_api_rewrites("kimi-k2", ANTHROPIC_URL, "functions_Bash_0")]
     #[case::other_model_on_foundry_rewrites(

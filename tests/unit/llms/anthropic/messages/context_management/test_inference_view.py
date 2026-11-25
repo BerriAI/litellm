@@ -10,6 +10,7 @@ from litellm.llms.anthropic.messages.context_management.inference_view import (
     CountContextEdits,
     InferenceRequestView,
     InferenceRequestViewError,
+    count_context_edits,
     inference_request_view,
 )
 
@@ -237,3 +238,32 @@ async def test_anthropic_view_rejects_a_compact_trigger_inference_rejects() -> N
 
     assert isinstance(view, InferenceRequestViewError)
     assert view.status_code == 400
+
+
+def _tool_round(tool_use_id: str) -> tuple[dict[str, object], ...]:
+    return (
+        {"role": "user", "content": "run ls"},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": tool_use_id, "name": "Bash", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tool_use_id, "content": "README.md"}]},
+    )
+
+
+@pytest.mark.parametrize(
+    ("litellm_params", "counted_id"),
+    [
+        pytest.param({"model": "anthropic/kimi-k2", "api_base": "http://vllm.test"}, "functions.Bash:0", id="vllm-base"),
+        pytest.param({"model": "anthropic/kimi-k2"}, "functions_Bash_0", id="anthropics-own-api"),
+    ],
+)
+async def test_anthropic_view_counts_the_tool_use_ids_the_deployment_is_sent(
+    monkeypatch: pytest.MonkeyPatch, litellm_params: dict[str, str], counted_id: str
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_BASE", raising=False)
+    monkeypatch.delenv("ANTHROPIC_BASE_URL", raising=False)
+
+    view: Final = await inference_request_view(
+        _tool_round("functions.Bash:0"), None, "anthropic", count_context_edits(None, None, litellm_params, "kimi-k2")
+    )
+
+    assert isinstance(view, InferenceRequestView)
+    assert view.messages == list(_tool_round(counted_id))

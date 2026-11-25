@@ -31,12 +31,12 @@ def capabilities(monkeypatch: pytest.MonkeyPatch, *, sampling: bool) -> None:
 @pytest.mark.parametrize(
     ("model", "sent_id"),
     [
-        pytest.param("anthropic/claude-sonnet-5", "functions_Bash_0", id="claude"),
+        pytest.param("anthropic/claude-sonnet-5", "functions.Bash:0", id="claude-name"),
         pytest.param("anthropic/kimi-k2", "functions.Bash:0", id="other-model"),
     ],
 )
 @pytest.mark.asyncio
-async def test_replayed_tool_ids_are_rewritten_for_a_claude_model_on_a_custom_base(
+async def test_replayed_tool_ids_are_kept_for_any_model_name_on_a_custom_base(
     server: RecordingServer, model: str, sent_id: str
 ) -> None:
     history: Final = [
