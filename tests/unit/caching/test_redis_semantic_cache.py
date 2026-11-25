@@ -291,7 +291,9 @@ def test_redis_semantic_cache_reraises_unexpected_index_error():
         )
 
 
-def test_redis_semantic_cache_names_the_redisvl_requirement_when_redisvl_is_too_old(monkeypatch, caplog):
+def test_redis_semantic_cache_names_the_redisvl_requirement_when_redisvl_is_too_old(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
     monkeypatch.setitem(sys.modules, "redisvl.extensions.cache.llm", None)
