@@ -2123,9 +2123,7 @@ def resolve_effective_team_member_budget(
         if membership is not None:
             return membership.effective_budget_with_rollover(now)
         return member_budget.effective_max_budget(now)
-    if team_default_budget is None or team_default_budget.max_budget is None or team_default_budget.max_budget < 0:
-        return None
-    if team_default_budget.max_budget == 0 and member_budget is None:
+    if team_default_budget is None or team_default_budget.max_budget is None or team_default_budget.max_budget <= 0:
         return None
     return team_default_budget.max_budget + (
         member_budget.active_temp_budget_increase(now) if member_budget is not None else 0.0
