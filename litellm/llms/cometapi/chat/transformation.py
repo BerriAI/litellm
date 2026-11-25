@@ -30,8 +30,8 @@ class CometAPIConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -70,8 +70,8 @@ class CometAPIConfig(OpenAIGPTConfig):
         model: str,
         messages: list[AllMessageValues],
         optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
+        litellm_params: dict[str, object],
+        headers: dict[str, object],
     ) -> dict:
         """
         Transform the overall request to be sent to the API.
@@ -122,7 +122,9 @@ class CometAPIConfig(OpenAIGPTConfig):
             return join_api_base(api_base, f"v1/{endpoint}")
         return join_api_base(api_base, endpoint)
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         """
         Return CometAPI-specific error class
         """

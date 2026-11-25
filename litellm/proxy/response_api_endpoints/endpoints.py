@@ -28,7 +28,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from openai.types.responses import ResponseItemList
 from openai.types.responses.response_create_params import ResponseInputParam
-from pydantic import ConfigDict, TypeAdapter, ValidationError, with_config
+from pydantic import BeforeValidator, ConfigDict, TypeAdapter, ValidationError, with_config
 from starlette.websockets import WebSocket, WebSocketDisconnect
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
@@ -127,6 +127,7 @@ from litellm.responses.streaming_iterator import (
     GuardedResponsesWsFrame,
     ResponsesWsFrameGuard,
     ResponsesWsFrameRejection,
+    is_warmup_response_create,
     responses_ws_error_frame,
     responses_ws_error_type,
     spawn_logging_task,
@@ -2205,12 +2206,19 @@ def _extract_model_from_first_ws_event(first_event: object) -> str | None:
     return (nested.get("model") if isinstance(nested, dict) else None) or first_event.get("model")
 
 
+def _none_unless(*kinds: type[object]) -> BeforeValidator:
+    def keep(value: object) -> object:
+        return value if isinstance(value, kinds) else None
+
+    return BeforeValidator(keep)
+
+
 class _ResponseCreateRoutingHints(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
-    input: str | Sequence[object] | None = None
-    previous_response_id: str | None = None
-    response: "_ResponseCreateRoutingHints | None" = None
+    input: Annotated[str | Sequence[object] | None, _none_unless(Sequence)] = None
+    previous_response_id: Annotated[str | None, _none_unless(str)] = None
+    response: Annotated["_ResponseCreateRoutingHints | None", _none_unless(Mapping)] = None
 
 
 def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, object]:
@@ -2220,6 +2228,7 @@ def _routing_hints_from_first_ws_frame(first_message: str) -> Mapping[str, objec
         return EMPTY_MAPPING
     nested: Final = frame.response or frame
     hints: Final = {
+        "generate": False if is_warmup_response_create(first_message) else None,
         "input": frame.input if nested.input is None else nested.input,
         "previous_response_id": (
             frame.previous_response_id if nested.previous_response_id is None else nested.previous_response_id

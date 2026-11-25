@@ -418,7 +418,9 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
                 headers={},
             )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         """Get the appropriate error class for OpenRouter errors."""
         return OpenRouterException(
             message=error_message,

@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 import traceback
 import tracemalloc
 import uuid
@@ -29,7 +30,7 @@ import litellm.caching.redis_cache as redis_cache_module
 from litellm._internal_context import current_service_target
 from litellm.caching.caching import Cache, CacheMode, enable_cache, response_cache_phase, update_cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
-from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS
+from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS, SEMANTIC_CACHE_POLICY_KEY
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, RedisTimeoutLogThrottle
@@ -40,6 +41,7 @@ from litellm.types.caching import (
     LiteLLMCacheType,
     SemanticCacheScope,
 )
+from litellm.types.semantic_cache import SemanticCacheParams, SemanticCachePolicy
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
 _CACHING_TEST_MESSAGES: Final = [{"role": "user", "content": "who is ishaan 5222"}]
@@ -57,6 +59,15 @@ def redis_client_without_network(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("redis.Redis.info", lambda *args, **kwargs: {"redis_version": "7.2.0"})
     monkeypatch.setattr("redis.Redis.ping", lambda *args, **kwargs: True)
     monkeypatch.setattr("redis.asyncio.Redis.ping", AsyncMock(return_value=True))
+
+
+@pytest.fixture
+def redis_response_cache_clients(monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, MagicMock]:
+    sync_client: Final = MagicMock(info=MagicMock(return_value={"redis_version": "7.2.0"}))
+    async_client: Final = MagicMock(ping=AsyncMock(return_value=True))
+    monkeypatch.setattr("litellm._redis.get_redis_client", lambda **_: sync_client)
+    monkeypatch.setattr("litellm._redis.get_redis_async_client", lambda **_: async_client)
+    return sync_client, async_client
 
 
 def test_cache_key_debug_log_does_not_include_prompt_material(caplog):
@@ -593,6 +604,29 @@ def test_cache_key_tells_apart_requests_that_ask_for_token_ids_through_extra_bod
     assert cache.get_cache_key(**request, extra_body={"top_k": 5, "return_token_ids": True}) != other_extra_body_key
     assert cache.get_cache_key(**request, extra_body={"return_token_ids": False}) == plain_key
     assert cache.get_cache_key(**request, extra_body={"continuation_token": "abc"}) != plain_key
+
+
+@pytest.mark.parametrize(
+    "audio_format_ask",
+    [
+        {"responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}}},
+        {"generationConfig": {"responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}}}},
+        {"generation_config": {"response_format": {"audio": {"mime_type": "AUDIO_WAV"}}}},
+        {"extra_body": {"generationConfig": {"responseFormat": {"audio": {"mimeType": "AUDIO_WAV"}}}}},
+        {"extra_body": {"generation_config": {"response_format": {"audio": {"mime_type": "AUDIO_WAV"}}}}},
+    ],
+    ids=["responseFormat", "generationConfig", "generation_config", "extra_body-camelCase", "extra_body-snake_case"],
+)
+def test_cache_key_tells_apart_requests_that_name_a_gemini_audio_format(audio_format_ask: dict[str, object]) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {
+        "model": "gemini/gemini-3.8-flash-tts",
+        "messages": [{"role": "user", "content": "Say hello"}],
+        "modalities": ["audio"],
+        "audio": {"voice": "Kore"},
+    }
+
+    assert cache.get_cache_key(**request, **audio_format_ask) != cache.get_cache_key(**request)
 
 
 _EXTRA_BODY_REQUEST: Final = MappingProxyType(
@@ -1894,6 +1928,257 @@ async def test_caching_with_cache_controls(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.mark.asyncio
+async def test_scoped_ttl_rejects_old_exact_cache_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(time, "time", lambda: 110.0)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    result: Final = {"id": "stored-response"}
+    cache.cache.set_cache("existing-entry", {"timestamp": 100.0, "response": result})
+    scoped: Final = {SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(ttl=5))}
+
+    assert cache.get_cache(cache_key="existing-entry", cache=scoped) is None
+    assert await cache.async_get_cache(cache_key="existing-entry", cache=scoped) is None
+    assert cache.get_cache(cache_key="existing-entry") == result
+    assert cache.get_cache(cache_key="existing-entry", cache={"s-maxage": 0}) == result
+    large_age: Final = {"s-maxage": 10**400}
+    assert cache.get_cache(cache_key="existing-entry", cache=large_age) == result
+    assert await cache.async_get_cache(cache_key="existing-entry", cache=large_age) == result
+    assert cache.get_cache(cache_key="existing-entry", cache={**scoped, **large_age}) is None
+    relaxed: Final = {SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(ttl=20))}
+    assert cache.get_cache(cache_key="existing-entry", cache=relaxed) == result
+    assert cache.get_cache(cache_key="existing-entry", cache={**relaxed, "s-maxage": 0}) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("max_age", "accept_fresh"), [("nan", True), ("inf", True), ("-inf", False)])
+async def test_nonfinite_request_max_age_cannot_extend_scoped_ttl(
+    monkeypatch: pytest.MonkeyPatch, max_age: str, accept_fresh: bool
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: 110.0)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    fresh: Final = {"id": "fresh-response"}
+    cache.cache.set_cache("fresh", {"timestamp": 109.0, "response": fresh})
+    cache.cache.set_cache("stale", {"timestamp": 100.0, "response": {"id": "stale-response"}})
+    scoped: Final = {
+        SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(ttl=5)),
+        "s-max-age": max_age,
+    }
+
+    expected: Final = fresh if accept_fresh else None
+    assert cache.get_cache(cache_key="fresh", cache=scoped) == expected
+    assert await cache.async_get_cache(cache_key="fresh", cache=scoped) == expected
+    assert cache.get_cache(cache_key="stale", cache=scoped) is None
+    assert await cache.async_get_cache(cache_key="stale", cache=scoped) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_write", [False, True])
+@pytest.mark.parametrize("original_ttl", [2, 120])
+async def test_scoped_ttl_expires_replaced_local_entries_for_unscoped_readers(
+    monkeypatch: pytest.MonkeyPatch, async_write: bool, original_ttl: int
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: 100.0)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, ttl=120)
+    cache.add_cache({"id": "old-response"}, cache_key="existing-entry", cache={"ttl": original_ttl})
+    scoped: Final = {
+        "ttl": 120,
+        SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(ttl=5)),
+    }
+    replacement: Final = {"id": "new-response"}
+    if async_write:
+        await cache.async_add_cache(replacement, cache_key="existing-entry", cache=scoped)
+    else:
+        cache.add_cache(replacement, cache_key="existing-entry", cache=scoped)
+
+    monkeypatch.setattr(time, "time", lambda: 104.0)
+    assert cache.get_cache(cache_key="existing-entry") == replacement
+    monkeypatch.setattr(time, "time", lambda: 105.0)
+    assert cache.get_cache(cache_key="existing-entry") is None
+    assert await cache.async_get_cache(cache_key="existing-entry") is None
+
+
+@pytest.mark.asyncio
+async def test_disabled_scope_does_not_overwrite_existing_exact_cache_entry() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    result: Final = {"id": "stored-response"}
+    cache.add_cache(result, cache_key="existing-entry")
+    scoped: Final = {
+        SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(enabled=False))
+    }
+
+    cache.add_cache({"id": "sync-write"}, cache_key="existing-entry", cache=scoped)
+    await cache.async_add_cache({"id": "async-write"}, cache_key="existing-entry", cache=scoped)
+
+    assert cache.get_cache(cache_key="existing-entry") == result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("enabled", "ttl", "expected_id"),
+    [(None, None, "stored-response"), (False, None, None), (True, 5, "fresh-response"), (True, 15, "stored-response")],
+)
+async def test_batched_redis_reader_applies_scoped_policy(
+    monkeypatch: pytest.MonkeyPatch, enabled: bool | None, ttl: int | None, expected_id: str | None
+) -> None:
+    from litellm.proxy.hooks.batch_redis_get import PROXY_BatchRedisRequests
+
+    monkeypatch.setattr(time, "time", lambda: 110.0)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL, mode=CacheMode.default_off)
+    monkeypatch.setattr(litellm, "cache", cache)
+    reader: Final = PROXY_BatchRedisRequests()
+    worker_store: Final = InMemoryCache()
+    reader.in_memory_cache = worker_store
+    worker_store.set_cache("existing-entry", {"timestamp": 100.0, "response": {"id": "stored-response"}})
+    cache.cache.set_cache("existing-entry", {"timestamp": 109.0, "response": {"id": "fresh-response"}})
+    controls: Final = (
+        {}
+        if enabled is None
+        else {
+            SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(
+                scope="team", params=SemanticCacheParams(enabled=enabled, ttl=ttl)
+            )
+        }
+    )
+
+    assert await cache.async_get_cache(cache_key="existing-entry", cache=controls) == (
+        {"id": expected_id} if expected_id is not None else None
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True])
+@pytest.mark.parametrize("stored_ttl", [None, 5])
+async def test_redis_response_cache_reads_refreshed_entry_after_worker_copy_expires(
+    monkeypatch: pytest.MonkeyPatch,
+    redis_response_cache_clients: tuple[MagicMock, MagicMock],
+    sync: bool,
+    stored_ttl: int | None,
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: 110.0)
+    cache: Final = Cache(type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379")
+    assert isinstance(cache.cache, RedisCache)
+    worker: Final = InMemoryCache()
+    dual: Final = DualCache(redis_cache=cache.cache, in_memory_cache=worker)
+    stale: Final = {"timestamp": 100.0, "response": {"id": "worker-response"}}
+    worker.set_cache("shared-entry", {**stale, "response_cache_ttl": stored_ttl})
+    fresh: Final = {"id": "redis-response"}
+    stored: Final = json.dumps({"timestamp": 109.0, "response": fresh})
+    redis_get: Final = MagicMock(return_value=stored) if sync else AsyncMock(return_value=stored)
+    sync_client, async_client = redis_response_cache_clients
+    client: Final = sync_client if sync else async_client
+    client.get = redis_get
+    controls: Final = (
+        {SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(ttl=5))}
+        if stored_ttl is None
+        else {}
+    )
+
+    if sync:
+        assert cache.get_cache(dynamic_cache_object=dual, cache_key="shared-entry", cache=controls) == fresh
+        assert cache.get_cache(dynamic_cache_object=dual, cache_key="shared-entry", cache=controls) == fresh
+    else:
+        assert await cache.async_get_cache(dynamic_cache_object=dual, cache_key="shared-entry", cache=controls) == fresh
+        assert await cache.async_get_cache(dynamic_cache_object=dual, cache_key="shared-entry", cache=controls) == fresh
+    assert redis_get.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync", [False, True])
+async def test_redis_response_cache_keeps_worker_copy_when_shared_entry_is_stale(
+    monkeypatch: pytest.MonkeyPatch, redis_response_cache_clients: tuple[MagicMock, MagicMock], sync: bool
+) -> None:
+    monkeypatch.setattr(time, "time", lambda: 110.0)
+    cache: Final = Cache(type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379")
+    assert isinstance(cache.cache, RedisCache)
+    worker: Final = InMemoryCache()
+    dual: Final = DualCache(redis_cache=cache.cache, in_memory_cache=worker)
+    worker_response: Final = {"id": "worker-response"}
+    worker.set_cache("shared-entry", {"timestamp": 104.0, "response": worker_response})
+    stored: Final = json.dumps({"timestamp": 100.0, "response": {"id": "redis-response"}})
+    redis_get: Final = MagicMock(return_value=stored) if sync else AsyncMock(return_value=stored)
+    sync_client, async_client = redis_response_cache_clients
+    client: Final = sync_client if sync else async_client
+    client.get = redis_get
+    controls: Final = {SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(ttl=5))}
+
+    if sync:
+        assert cache.get_cache(dynamic_cache_object=dual, cache_key="shared-entry", cache=controls) is None
+        assert cache.get_cache(dynamic_cache_object=dual, cache_key="shared-entry") == worker_response
+    else:
+        assert await cache.async_get_cache(dynamic_cache_object=dual, cache_key="shared-entry", cache=controls) is None
+        assert await cache.async_get_cache(dynamic_cache_object=dual, cache_key="shared-entry") == worker_response
+    assert redis_get.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("read_path", ["sync", "async", "batched"])
+async def test_redis_response_cache_keeps_worker_write_during_shared_read(
+    monkeypatch: pytest.MonkeyPatch, redis_response_cache_clients: tuple[MagicMock, MagicMock], read_path: str
+) -> None:
+    from litellm.proxy.hooks.batch_redis_get import PROXY_BatchRedisRequests
+
+    monkeypatch.setattr(time, "time", lambda: 110.0)
+    cache: Final = Cache(type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379")
+    assert isinstance(cache.cache, RedisCache)
+    worker: Final = InMemoryCache()
+    dual: Final = DualCache(redis_cache=cache.cache, in_memory_cache=worker)
+    worker.set_cache("shared-entry", {"timestamp": 104.0, "response": {"id": "old-worker-response"}})
+    worker_response: Final = {"id": "new-worker-response"}
+    redis_response: Final = {"id": "redis-response"}
+    controls: Final = {SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(ttl=5))}
+
+    def read_redis(_: str) -> str:
+        worker.set_cache("shared-entry", {"timestamp": 109.0, "response": worker_response})
+        return json.dumps({"timestamp": 107.0, "response": redis_response})
+
+    sync_client, async_client = redis_response_cache_clients
+    if read_path == "sync":
+        sync_client.get = MagicMock(side_effect=read_redis)
+        assert cache.get_cache(dynamic_cache_object=dual, cache_key="shared-entry", cache=controls) == redis_response
+    else:
+        async_client.get = AsyncMock(side_effect=read_redis)
+        if read_path == "batched":
+            monkeypatch.setattr(litellm, "cache", cache)
+            reader: Final = PROXY_BatchRedisRequests()
+            reader.in_memory_cache = worker
+            assert await reader.async_get_cache(cache_key="shared-entry", cache=controls) == redis_response
+        else:
+            assert await cache.async_get_cache(
+                dynamic_cache_object=dual, cache_key="shared-entry", cache=controls
+            ) == redis_response
+    assert cache.get_cache(dynamic_cache_object=dual, cache_key="shared-entry") == worker_response
+
+
+@pytest.mark.asyncio
+async def test_scoped_ttl_reaches_redis_when_batching_is_configured(
+    monkeypatch: pytest.MonkeyPatch, redis_response_cache_clients: tuple[MagicMock, MagicMock]
+) -> None:
+    monkeypatch.setattr(litellm, "default_redis_ttl", 60)
+    cache: Final = Cache(type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379", redis_flush_size=100)
+    pipeline: Final = MagicMock()
+    pipeline.__aenter__.return_value = pipeline
+    pipeline.execute = AsyncMock()
+    _, async_client = redis_response_cache_clients
+    async_client.pipeline.return_value = pipeline
+    scoped: Final = {
+        "ttl": 120,
+        SEMANTIC_CACHE_POLICY_KEY: SemanticCachePolicy(scope="team", params=SemanticCacheParams(ttl=30)),
+    }
+
+    await cache.async_add_cache({"id": "buffered-response"}, cache_key="existing-entry")
+    pipeline.set.assert_not_called()
+    await cache.async_add_cache({"id": "scoped-response"}, cache_key="existing-entry", cache=scoped)
+
+    pipeline.execute.assert_awaited_once()
+    assert [
+        (command.kwargs["name"], json.loads(command.kwargs["value"])["response"], command.kwargs["ex"])
+        for command in pipeline.set.call_args_list
+    ] == [
+        ("existing-entry", {"id": "buffered-response"}, timedelta(seconds=60)),
+        ("existing-entry", {"id": "scoped-response"}, timedelta(seconds=30)),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_embedding_caching_redis_ttl(monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None) -> None:
     mock_pipeline: Final = AsyncMock()
     mock_set: Final = AsyncMock()
@@ -2341,3 +2626,180 @@ def test_excluded_call_types_leave_the_callers_lists_and_later_defaults_intact()
     assert supported == ["embedding", "aembedding", "completion"]
     assert excluded == ["embedding", "aembedding"]
     assert Cache(type=LiteLLMCacheType.LOCAL).supported_call_types == list(DEFAULT_CACHING_SUPPORTED_CALL_TYPES)
+
+
+class _FloatConversionFails:
+    def __init__(self, error: type[Exception]) -> None:
+        self.error = error
+
+    def __float__(self) -> float:
+        raise self.error("ttl conversion failed")
+
+
+class _ManualClock:
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def _refresh_local_entry(
+    async_write: bool, default_ttl: int | None, refresh_controls: dict[str, object], **write_kwargs: object
+) -> tuple[Cache, _ManualClock, float]:
+    clock: Final = _ManualClock(1_000_000.0)
+    cache: Final = Cache(type="local", ttl=default_ttl)
+    cache.cache = InMemoryCache(clock=clock)
+    first_written_at: Final = clock.now
+    cache.add_cache({"id": "first"}, cache_key="entry", cache={"ttl": 60})
+    clock.now += 5
+    refresh_kwargs: Final = {
+        "cache_key": "entry",
+        "cache": {**refresh_controls, "no-cache": True},
+        **write_kwargs,
+    }
+    if async_write:
+        await cache.async_add_cache({"id": "refreshed"}, **refresh_kwargs)
+    else:
+        cache.add_cache({"id": "refreshed"}, **refresh_kwargs)
+    return cache, clock, first_written_at
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_write", [False, True])
+@pytest.mark.parametrize(("request_ttl", "lifetime"), [(10, 10.0), (600, 600.0), ("5", 5.0), (2.5, 2.5)])
+async def test_local_response_cache_refresh_restarts_entry_lifetime_from_request_ttl(
+    async_write: bool, request_ttl: object, lifetime: float
+) -> None:
+    cache, clock, first_written_at = await _refresh_local_entry(async_write, None, {"ttl": request_ttl})
+    refreshed_at: Final = first_written_at + 5
+
+    clock.now = refreshed_at + lifetime - 1
+    assert cache.get_cache(cache_key="entry") == {"id": "refreshed"}
+    clock.now = refreshed_at + lifetime + 1
+    assert cache.get_cache(cache_key="entry") is None
+    assert await cache.async_get_cache(cache_key="entry") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_write", [False, True])
+@pytest.mark.parametrize(
+    ("default_ttl", "refresh_controls", "write_kwargs"),
+    [
+        *(
+            (None, {"ttl": ttl}, {})
+            for ttl in (
+                "abc",
+                [1],
+                None,
+                0,
+                -1,
+                "nan",
+                "inf",
+                float("inf"),
+                10**400,
+                True,
+                False,
+                _FloatConversionFails(TypeError),
+                _FloatConversionFails(RuntimeError),
+            )
+        ),
+        (None, {}, {}),
+        (10, {}, {}),
+        (None, {"ttl": 10}, {"replace_ttl": False}),
+    ],
+)
+async def test_local_response_cache_refresh_without_usable_request_ttl_keeps_live_entry_expiry(
+    caplog: pytest.LogCaptureFixture,
+    async_write: bool,
+    default_ttl: int | None,
+    refresh_controls: dict[str, object],
+    write_kwargs: dict[str, object],
+) -> None:
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        cache, clock, first_written_at = await _refresh_local_entry(
+            async_write, default_ttl, refresh_controls, **write_kwargs
+        )
+
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+    clock.now = first_written_at + 59
+    assert cache.get_cache(cache_key="entry") == {"id": "refreshed"}
+    clock.now = first_written_at + 61
+    assert cache.get_cache(cache_key="entry") is None
+
+
+@pytest.mark.asyncio
+async def test_local_embedding_cache_refresh_restarts_entry_lifetime_from_request_ttl() -> None:
+    clock: Final = _ManualClock(1_000_000.0)
+    cache: Final = Cache(type="local")
+    cache.cache = InMemoryCache(clock=clock)
+    request: Final = {"model": "text-embedding-3-small", "input": ["hello"]}
+    await cache.async_add_cache_pipeline(_embedding_response(prompt_tokens=1, num_items=1), **request)
+    clock.now += 5
+    await cache.async_add_cache_pipeline(
+        _embedding_response(prompt_tokens=2, num_items=1), **request, cache={"no-cache": True, "ttl": 10}
+    )
+    entry_key: Final = cache.get_cache_key(model="text-embedding-3-small", input="hello")
+
+    clock.now += 9
+    assert cache.cache.get_cache(entry_key) is not None
+    clock.now += 2
+    assert cache.cache.get_cache(entry_key) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [TypeError, RuntimeError])
+async def test_local_embedding_cache_refresh_with_unconvertible_request_ttl_keeps_live_entry_expiry(
+    caplog: pytest.LogCaptureFixture, error: type[Exception]
+) -> None:
+    clock: Final = _ManualClock(1_000_000.0)
+    cache: Final = Cache(type="local")
+    cache.cache = InMemoryCache(clock=clock)
+    request: Final = {"model": "text-embedding-3-small", "input": ["hello"]}
+    await cache.async_add_cache_pipeline(
+        _embedding_response(prompt_tokens=1, num_items=1), **request, cache={"ttl": 60}
+    )
+    clock.now += 5
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"):
+        await cache.async_add_cache_pipeline(
+            _embedding_response(prompt_tokens=2, num_items=1),
+            **request,
+            cache={"no-cache": True, "ttl": _FloatConversionFails(error)},
+        )
+    entry_key: Final = cache.get_cache_key(model="text-embedding-3-small", input="hello")
+
+    assert [r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR] == []
+    clock.now += 54
+    refreshed_entry: Final = cache.cache.get_cache(entry_key)
+    assert isinstance(refreshed_entry, dict)
+    assert refreshed_entry["response"]["prompt_tokens"] == 2
+    clock.now += 2
+    assert cache.cache.get_cache(entry_key) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("refresh_controls", "expires_after_first_write"), [({"ttl": 10}, 15.0), ({}, 600.0)])
+async def test_redis_response_cache_refresh_sets_worker_copy_lifetime_only_from_request_ttl(
+    redis_response_cache_clients: tuple[MagicMock, MagicMock],
+    refresh_controls: dict[str, object],
+    expires_after_first_write: float,
+) -> None:
+    _, async_client = redis_response_cache_clients
+    async_client.set = AsyncMock(return_value=True)
+    async_client.get = AsyncMock(return_value=None)
+    clock: Final = _ManualClock(1_000_000.0)
+    first_written_at: Final = clock.now
+    cache: Final = Cache(type="redis", host="127.0.0.1", port="6379")
+    dual: Final = DualCache(redis_cache=cache.cache, in_memory_cache=InMemoryCache(clock=clock))
+    await cache.async_add_cache({"id": "first"}, dynamic_cache_object=dual, cache_key="entry")
+    clock.now += 5
+    refreshed: Final = {"id": "refreshed"}
+    await cache.async_add_cache(
+        refreshed, dynamic_cache_object=dual, cache_key="entry", cache={**refresh_controls, "no-cache": True}
+    )
+
+    clock.now = first_written_at + expires_after_first_write - 1
+    assert await cache.async_get_cache(dynamic_cache_object=dual, cache_key="entry") == refreshed
+    clock.now = first_written_at + expires_after_first_write + 1
+    assert await cache.async_get_cache(dynamic_cache_object=dual, cache_key="entry") is None
+    assert async_client.set.await_count == 2

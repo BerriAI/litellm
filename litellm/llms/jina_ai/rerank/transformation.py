@@ -146,7 +146,7 @@ class JinaAIRerankConfig(BaseRerankConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         api_key: str | None = None,
         optional_params: Mapping[str, object] | None = None,
