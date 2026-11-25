@@ -6,11 +6,13 @@ branch coverage. Network calls are always mocked; the companion live
 suite lives in ``test_xecguard_live.py``.
 """
 
+import json
 import os
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 from fastapi.exceptions import HTTPException
 from litellm.proxy.guardrails.guardrail_hooks.xecguard.xecguard import (
@@ -1717,6 +1719,46 @@ class TestXecGuardLoggingHook:
             )
         payload = mock_post.call_args.kwargs["json"]
         assert payload["scan_type"] == "input"
+
+    @pytest.mark.asyncio
+    async def test_async_logging_hook_scans_responses_input_text_parts(
+        self, httpx_transport, xecguard_guardrail
+    ):
+        responses_turn = [
+            {"role": "system", "content": "You are a weather assistant"},
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "my ssn is 123-45-6789"}],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "I cannot store that"}],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "store it anyway"}],
+            },
+        ]
+        with respx.mock:
+            scan = respx.post("https://api.test.xecguard.local/xecguard/v1/scan").mock(
+                return_value=httpx.Response(
+                    200, json={"decision": "SAFE", "trace_id": "lg-6"}
+                )
+            )
+            await xecguard_guardrail.async_logging_hook(
+                kwargs={"messages": responses_turn, "standard_logging_object": {}},
+                result=None,
+                call_type="_aresponses_websocket",
+            )
+        assert json.loads(scan.calls.last.request.content)["messages"] == [
+            {"role": "system", "content": "You are a weather assistant"},
+            {"role": "user", "content": "my ssn is 123-45-6789"},
+            {"role": "assistant", "content": "I cannot store that"},
+            {"role": "user", "content": "store it anyway"},
+        ]
 
     @pytest.mark.asyncio
     async def test_async_logging_hook_unsafe_decision_recorded(
