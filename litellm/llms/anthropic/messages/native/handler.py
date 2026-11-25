@@ -952,7 +952,7 @@ def anthropic_messages_handler(
         )
         native_deferred_tools: Final = deferred_tools == "native"
         _refuse_deferred_tools(
-            native_stop_sequences_refusal(deferred_tools, stop_sequences), drops_deferred_tools_setting
+            native_stop_sequences_refusal(deferred_tools, stop_sequences, request_tools), drops_deferred_tools_setting
         )
         request_messages: Final = cast("list[dict[str, object]]", messages)  # cast-ok: the handler takes untyped dicts
         from ..deferred_tool_emulation import deferred_tool_emulation, deferred_tools_messages

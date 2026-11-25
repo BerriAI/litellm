@@ -3466,6 +3466,37 @@ async def test_native_deferred_tools_send_stop_sequences_to_chat_completions_wit
     assert any("stop_sequences" in warning for warning in _deferred_tools_fallback_warnings(caplog))
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tools",
+    [None, [tool for tool in _CLAUDE_CODE_TOOL_SEARCH_TOOLS if tool["name"] != "ToolSearch"]],
+    ids=["no_tools", "deferred_tools_without_tool_search"],
+)
+async def test_native_deferred_tools_send_stop_sequences_requests_without_tool_search_to_chat_completions(
+    tools: list[dict[str, object]] | None, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"), respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((openai.APIError, litellm.exceptions.APIConnectionError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=[{"role": "user", "content": "What is the forecast for Paris?"}],
+                model="openai/gpt-4.1",
+                api_key="deployment-key",
+                tools=tools,
+                model_info={"deferred_tools": "native"},
+                stop_sequences=["END"],
+            )
+
+    bodies: Final = [json.loads(call.request.content) for call in upstream.calls]
+    assert {call.request.url.path for call in upstream.calls} == {"/v1/chat/completions"}
+    assert [body["stop"] for body in bodies] == [["END"]] * len(bodies)
+    assert not _deferred_tools_fallback_warnings(caplog)
+
+
 _FORECAST_TOOL: Final = {
     "name": "mcp__weather__get_forecast",
     "description": "Get the forecast for a city",
