@@ -30,6 +30,7 @@ from integration._support.client import (
     Scenario,
     eventually,
     gateway_from_environment,
+    list_value,
     object_value,
     string_value,
 )
@@ -2038,7 +2039,6 @@ FOLLOW_UP_CALLS: Final = (
     ("GET", "/v1/files/{file_id}", "/v1/files/{file_id}"),
     ("GET", "/v1/files/{file_id}/content", "/v1/files/{file_id}/content"),
     ("DELETE", "/v1/files/{file_id}", "/v1/files/{file_id}"),
-    ("GET", "/v1/files?purpose=batch&custom_llm_provider=openai", "/v1/files"),
     ("GET", "/v1/batches/{batch_id}", "/v1/batches/{batch_id}"),
     ("POST", "/v1/batches/{batch_id}/cancel", "/v1/batches/{batch_id}/cancel"),
 )
@@ -2046,10 +2046,10 @@ FOLLOW_UP_CALL_IDS: Final = (
     "file_retrieve",
     "file_content",
     "file_delete",
-    "file_list",
     "batch_retrieve",
     "batch_cancel",
 )
+FILE_LIST_PATH: Final = "/v1/files?custom_llm_provider=openai"
 
 
 def _bearer(key: str) -> Mapping[str, str]:
@@ -2070,6 +2070,40 @@ def test_files_and_batches_calls_by_a_key_restricted_under_the_team_wildcard_use
     assert rag_rig.signatures() == (
         ("wildcard", method, route.format(file_id=file_id, batch_id=batch_id), f"Bearer {WILDCARD_API_KEY}"),
     )
+
+
+def _listed_file_ids(response: httpx.Response) -> tuple[str, ...]:
+    body: Final = object_value(response.json())
+    assert body["object"] == "list", response.text
+    return tuple(string_value(object_value(item)["id"]) for item in list_value(body["data"]))
+
+
+@pytest.mark.parametrize("caller", ("wildcard_bare_key", "wildcard_family_key"), ids=("bare_model", "family_wildcard"))
+def test_file_list_by_a_key_restricted_under_the_team_wildcard_returns_its_own_uploads_without_an_upstream_call(
+    rag_rig: RagRig, caller: Literal["wildcard_bare_key", "wildcard_family_key"]
+) -> None:
+    key: Final = _restricted_wildcard_key(rag_rig.tenants, caller)
+    file_id, _ = _batch_for(rag_rig, _bearer(key))
+
+    response: Final = rag_rig.gateway.request("GET", FILE_LIST_PATH, key=key)
+
+    assert response.status_code == 200, response.text
+    assert file_id in _listed_file_ids(response), response.text
+    assert rag_rig.signatures() == ()
+
+
+@pytest.mark.parametrize("caller", ("team_a_key", "wildcard_bare_key"), ids=("team_key", "restricted_wildcard_key"))
+def test_file_list_with_a_forwarded_provider_key_returns_the_callers_own_uploads_without_an_upstream_call(
+    rag_rig: RagRig, caller: Literal["team_a_key", "wildcard_bare_key"]
+) -> None:
+    headers: Final = _forwarding(getattr(rag_rig.tenants, caller))
+    file_id, _ = _batch_for(rag_rig, headers)
+
+    response: Final = rag_rig.gateway.request("GET", FILE_LIST_PATH, headers=headers)
+
+    assert response.status_code == 200, response.text
+    assert file_id in _listed_file_ids(response), response.text
+    assert rag_rig.signatures() == ()
 
 
 def test_batch_list_by_a_key_restricted_under_the_team_wildcard_is_answered_by_the_proxy_without_an_upstream_call(
