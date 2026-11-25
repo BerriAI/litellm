@@ -102,13 +102,9 @@ export function EmbeddedLens() {
               {t("lensWorkspace.unsupported.open")}
             </a>
           )}
-          {workspace.state === "accountChanged" ? (
-            <Button onClick={() => window.location.reload()}>{t("lensWorkspace.accountChanged.reload")}</Button>
-          ) : (
-            <Button variant="outline" onClick={retry}>
-              {t("lensWorkspace.retry")}
-            </Button>
-          )}
+          <Button variant="outline" onClick={retry}>
+            {t("lensWorkspace.retry")}
+          </Button>
           <a
             className={buttonVariants({ variant: "link" })}
             href="https://docs.litellm.ai/docs/proxy/lens"

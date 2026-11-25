@@ -59,18 +59,14 @@ it("restores the dashboard's storage fallback before opening Lens", async () => 
   }
 });
 
-it.each([
-  [401, "Could not connect to Lens"],
-  [403, "Could not connect to Lens"],
-  [409, "Reload to open Lens"],
-])("does not open Lens when the dashboard session is refused (%s)", async (status, heading) => {
+it.each([401, 403])("does not open Lens when the dashboard session is refused (%s)", async (status) => {
   window.sessionStorage.setItem("token", "dashboard-session-fixture");
   network
     .mockResolvedValueOnce(connection())
     .mockResolvedValueOnce(Response.json({ detail: "Sign in again" }, { status }));
   try {
     render();
-    expect(await screen.findByRole("heading", { name: heading })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Could not connect to Lens" })).toBeVisible();
     expect(screen.queryByTitle("Lens")).not.toBeInTheDocument();
     expect(network).toHaveBeenCalledTimes(2);
   } finally {

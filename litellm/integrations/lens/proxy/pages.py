@@ -12,7 +12,6 @@ from typing import Annotated, Final
 from urllib.parse import quote
 
 import httpx
-import jwt
 from fastapi import APIRouter, Body, HTTPException, Request, Response
 from pydantic import AnyHttpUrl
 from starlette.responses import JSONResponse, RedirectResponse
@@ -205,10 +204,6 @@ async def dashboard_session(
     return auth if auth.user_id == user_id else None
 
 
-def _expiry(verified_token: str) -> int:
-    return jwt.decode(verified_token, options={"verify_signature": False})["exp"]
-
-
 @router.post("/session", status_code=204, response_class=Response, include_in_schema=False)
 async def restore_dashboard_session(request: Request, token: Annotated[str, Body(embed=True)]) -> Response:
     from litellm.proxy.management_endpoints.ui_sso import (  # noqa: PLC0415  # proxy startup cycle
@@ -228,14 +223,8 @@ async def restore_dashboard_session(request: Request, token: Annotated[str, Body
 
     validation_request: Final = Request(dict(request.scope), receive)
     safe_set_request_parsed_body(validation_request, {})
-    auth: Final = await dashboard_session(validation_request, cookie=lambda _: session_identity_from_token(token))
-    current: Final = await dashboard_session(validation_request)
-    if auth is None and current is None:
+    if await dashboard_session(validation_request, cookie=lambda _: session_identity_from_token(token)) is None:
         raise HTTPException(401, "Sign in to LiteLLM to use Lens")
-    if auth is not None and current is not None and current.user_id != auth.user_id:
-        raise HTTPException(409, "The dashboard account changed. Reload the page")
-    if auth is None or (current is not None and _expiry(request.cookies["token"]) >= _expiry(token)):
-        return Response(status_code=204, headers=_PRIVATE)
     response: Final = Response(status_code=204, headers=_PRIVATE)
     set_session_token_cookie(response, request, token)
     return response

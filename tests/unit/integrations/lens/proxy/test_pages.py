@@ -190,52 +190,23 @@ def test_other_origins_cannot_restore_a_dashboard_session(session_client: TestCl
     assert "set-cookie" not in response.headers
 
 
-def test_a_stale_dashboard_tab_cannot_replace_another_live_account(session_client: TestClient) -> None:
-    current: Final = _dashboard_token(user_id="bob", key="sk-other-account")
-    session_client.cookies.set("token", current)
-    response: Final = session_client.post(
-        "/lens/session", json={"token": _dashboard_token()}, headers={"sec-fetch-site": "same-origin"}
-    )
-    assert response.status_code == 409
-    assert "set-cookie" not in response.headers
-    assert session_client.cookies.get("token") == current
-
-
 @pytest.mark.parametrize(
-    ("current_claims", "status"),
-    (({}, 204), ({"exp": int(SESSION_NOW.timestamp())}, 401), ({"key": "sk-revoked-session"}, 401)),
+    "lens_cookie",
+    (
+        _dashboard_token(exp=int((SESSION_EXPIRY + timedelta(minutes=30)).timestamp())),
+        _dashboard_token(user_id="bob", key="sk-other-account"),
+        _dashboard_token(key="sk-revoked-session"),
+    ),
+    ids=("later-expiry", "other-account", "revoked"),
 )
-@pytest.mark.parametrize(
-    "stored_claims",
-    ({"exp": int(SESSION_NOW.timestamp())}, {"key": "sk-revoked-session"}),
-)
-def test_stale_storage_uses_only_a_live_browser_cookie(
-    session_client: TestClient,
-    current_claims: dict[str, object],
-    stored_claims: dict[str, object],
-    status: int,
-) -> None:
-    current: Final = _dashboard_token(**current_claims)
-    session_client.cookies.set("token", current)
+def test_lens_follows_the_dashboard_login_whatever_cookie_it_had(session_client: TestClient, lens_cookie: str) -> None:
+    session_client.cookies.set("token", lens_cookie)
+    dashboard: Final = _dashboard_token()
     response: Final = session_client.post(
-        "/lens/session", json={"token": _dashboard_token(**stored_claims)}, headers={"sec-fetch-site": "same-origin"}
-    )
-    assert response.status_code == status
-    assert "set-cookie" not in response.headers
-    assert session_client.cookies.get("token") == current
-
-
-@pytest.mark.parametrize("stored_is_newer", (False, True), ids=("older-storage", "newer-storage"))
-def test_live_login_keeps_whichever_token_expires_later(session_client: TestClient, stored_is_newer: bool) -> None:
-    older: Final = _dashboard_token(exp=int((SESSION_EXPIRY - timedelta(minutes=30)).timestamp()))
-    newer: Final = _dashboard_token()
-    session_client.cookies.set("token", older if stored_is_newer else newer)
-    response: Final = session_client.post(
-        "/lens/session", json={"token": newer if stored_is_newer else older}, headers={"sec-fetch-site": "same-origin"}
+        "/lens/session", json={"token": dashboard}, headers={"sec-fetch-site": "same-origin"}
     )
     assert response.status_code == 204, response.text
-    kept: Final = SimpleCookie(response.headers.get("set-cookie", "")).get("token")
-    assert (kept.value if kept else None) == (newer if stored_is_newer else None)
+    assert SimpleCookie(response.headers["set-cookie"])["token"].value == dashboard
 
 
 @pytest.mark.parametrize("header", ("authorization", "x-litellm-api-key", "x-dashboard-key"))
