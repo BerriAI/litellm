@@ -112,6 +112,7 @@ from litellm.integrations.deepeval.deepeval import DeepEvalLogger
 from litellm.integrations.langtrace import langtrace_trace_endpoint
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
+from litellm.litellm_core_utils import model_cost_table
 from litellm.litellm_core_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.litellm_core_utils.agentic_followup_failure import ServedRound
 from litellm.litellm_core_utils.batch_utils import (
@@ -601,8 +602,8 @@ def _published_direction(
 def registered_model_info(model_id: str) -> ModelInfo:
     """``get_model_info`` for a cost-map key, under the provider its own cost-map row names. A deployment id can also
     read as another provider's model name, and the lookup would otherwise infer that provider and miss the row."""
-    registered: Final = litellm.model_cost.get(model_id)
-    provider: Final = registered.get("litellm_provider") if isinstance(registered, dict) else None
+    registered: Final = as_str_mapping(model_cost_table.published().get(model_id))
+    provider: Final = registered.get("litellm_provider") if registered is not None else None
     return litellm.get_model_info(model=model_id, custom_llm_provider=provider if isinstance(provider, str) else None)
 
 
