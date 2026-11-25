@@ -1,0 +1,50 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT credential_name,\n       credential_values AS \"credential_values: RawJson\",\n       credential_info AS \"credential_info: RawJson\"\nFROM \"LiteLLM_CredentialsTable\"\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "credential_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CredentialsTable\"",
+            "name": "credential_name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "credential_values: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CredentialsTable\"",
+            "name": "credential_values"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "credential_info: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_CredentialsTable\"",
+            "name": "credential_info"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "5f592040f72fee0b1394d2aab219d5139173b85bcd9c5996acfd4ba22223f3d5"
+}

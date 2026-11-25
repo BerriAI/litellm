@@ -7,7 +7,6 @@
 //! Billing is a deliberate lower bound on SpendLogs rows: when this list and the proxy's routes
 //! disagree, a request goes uncounted, never counted twice.
 
-/// `BillableCategory`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, strum::IntoStaticStr)]
 pub enum Category {
     #[strum(serialize = "llm")]
@@ -33,7 +32,6 @@ const LLM_ROUTE_SUFFIXES: [&str; 20] = [
     "/audio/transcriptions",
     "/audio/translations",
     "/audio/speech",
-    // Create; the GET list is excluded by the POST gate.
     "/videos",
     // `/v1/videos/{id}/remix`.
     "/remix",
@@ -57,7 +55,6 @@ const LLM_ROUTE_EXACT: [&str; 6] = [
     // AWS-SDK-shaped pass-through: the operation rides in the `X-Amz-Target` header.
     "/comprehendmedical",
     "/transcribe",
-    // The eu/jev decision API's one endpoint.
     "/eu_jev/v1/systemone",
 ];
 
@@ -67,7 +64,7 @@ const OPENSEARCH: &str = "/opensearch";
 /// `LiteLLMRoutes.mapped_pass_through_routes` without `/langfuse`, which forwards observability
 /// traffic rather than inference, and `/opensearch`, which counts only an index search. A path
 /// below one of these counts under the prefix. The proxy's tests check this list against the enum.
-pub const PASSTHROUGH_PREFIXES: [&str; 31] = [
+pub const PASSTHROUGH_PREFIXES: [&str; 30] = [
     "/backend-api/codex",
     "/bedrock",
     "/comprehendmedical",
@@ -89,7 +86,6 @@ pub const PASSTHROUGH_PREFIXES: [&str; 31] = [
     "/tinyfish",
     "/vllm",
     "/mistral",
-    "/typesafe",
     "/laya",
     "/bespoke",
     "/openrouter",

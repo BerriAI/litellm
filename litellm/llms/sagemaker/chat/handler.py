@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, pop_aws_auth_params
 from litellm.llms.bedrock.web_identity_session_policy import SAGEMAKER_SESSION_POLICY, WebIdentitySessionPolicy
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.openai import AllMessageValues
 from litellm.utils import ModelResponse, get_secret
 
 from ..common_utils import AWSEventStreamDecoder
@@ -95,13 +96,13 @@ class SagemakerChatHandler(BaseAWSLLM):
     def completion(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         model_response: ModelResponse,
-        print_verbose: Callable,
+        print_verbose: Callable[..., object],
         encoding: object,
         logging_obj: "LiteLLMLoggingObj",
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         timeout: float | httpx.Timeout | None = None,
         custom_prompt_dict={},
         logger_fn: object = None,

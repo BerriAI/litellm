@@ -1,15 +1,18 @@
 import asyncio
+import base64
 import contextlib
 import copy
 import datetime
 import gc
 import importlib.abc
+import io
 import json
 import logging
 import os
 import sys
 import types
 import threading
+import wave
 from concurrent.futures import Future
 import time
 import traceback
@@ -37,7 +40,7 @@ from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm import _logging as litellm_logger_settings
 from litellm._internal_context import current_request_parent_otel_span, in_post_response_phase
-from litellm._logging import session_id_var, trace_id_var, verbose_logger
+from litellm._logging import format_base64_size, session_id_var, trace_id_var, verbose_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.caching import DualCache
 from litellm.constants import (
@@ -512,7 +515,9 @@ def test_claude_subscription_cost_uses_allowance_only_with_oauth_evidence(
 
     cost: Final = logger.response_cost_calculator(response)
 
-    expected_additional: Final = additional_cost if isinstance(additional_cost, (int, float)) and additional_cost > 0 else 0.0
+    expected_additional: Final = (
+        additional_cost if isinstance(additional_cost, (int, float)) and additional_cost > 0 else 0.0
+    )
     assert cost == pytest.approx((0.0 if covered else 100 * 0.01 + 10 * 0.02) + expected_additional)
 
 
@@ -888,6 +893,23 @@ def test_pre_call_tolerates_missing_api_base(logging_obj):
     logging_obj.pre_call(input="", api_key="", additional_args={"api_base": None, "headers": {}})
 
     assert logging_obj.model_call_details["litellm_params"]["api_base"] == ""
+
+
+def test_pre_call_without_a_model_still_logs_the_call() -> None:
+    files_api_logging_obj: Final = LitellmLogging(
+        model=cast(str, None),
+        messages=[],
+        stream=False,
+        call_type="adelete_file",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+    )
+    files_api_logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+
+    files_api_logging_obj.pre_call(input="", api_key="call-key", additional_args={"api_base": None, "headers": {}})
+
+    assert files_api_logging_obj.model_call_details["log_event_type"] == "pre_api_call"
 
 
 _Callback: TypeAlias = str | Callable[..., object] | CustomLogger
@@ -3012,7 +3034,9 @@ async def test_failure_callbacks_release_exception_without_losing_traceback(
         def record(self, kwargs: dict[str, object]) -> None:
             failure: Final = kwargs.get("exception")
             trace: Final = kwargs.get("traceback_exception")
-            scoped: Final = logging_obj.guardrail_scoped_copy() if guardrail_scope else logging_obj.attempt_scoped_copy()
+            scoped: Final = (
+                logging_obj.guardrail_scoped_copy() if guardrail_scope else logging_obj.attempt_scoped_copy()
+            )
             scoped.dynamic_failure_callbacks = []
             scoped.failure_handler(cast(Exception, failure), cast(str, trace))
             observations.put_nowait(
@@ -3705,6 +3729,42 @@ async def test_async_success_handler_truncates_large_base64_off_the_event_loop(m
     assert payload not in logged_url
     assert scan_threads
     assert loop_thread not in scan_threads
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_logs_a_base64_image_source_as_a_size_placeholder(monkeypatch):
+    logged: Final = asyncio.Event()
+    captured: Final[dict[str, StandardLoggingPayload]] = {}  # mutable-ok: the callback hands its payload back here
+
+    class CaptureLogger(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            captured["standard_logging_object"] = kwargs["standard_logging_object"]
+            logged.set()
+
+    monkeypatch.setattr(litellm, "callbacks", [CaptureLogger()])
+    payload: Final = "P" * 300_000
+    await litellm.anthropic.messages.acreate(
+        model="anthropic/claude-haiku-5-5",
+        max_tokens=10,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe"},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": payload}},
+                ],
+            }
+        ],
+        mock_response="ok",
+    )
+    await asyncio.wait_for(logged.wait(), timeout=10)
+
+    logged_source: Final = captured["standard_logging_object"]["messages"][0]["content"][1]["source"]
+    assert logged_source == {
+        "type": "base64",
+        "media_type": "image/png",
+        "data": f"[base64_data truncated: {format_base64_size(len(payload))}]",
+    }
 
 
 @pytest.mark.parametrize(
@@ -5226,6 +5286,51 @@ def test_response_cost_calculator_native_generate_content_body_uses_usage_metada
 
     cost = logging_obj.response_cost_calculator(result=native_body)
     assert cost == pytest.approx(expected_cost)
+
+
+def _gemini_tts_wav_base64() -> str:
+    buffer: Final = io.BytesIO()
+    with wave.open(buffer, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(24000)
+        wav.writeframes(bytes(range(256)) * 8)
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+def _gemini_tts_reply(wav_base64: str) -> dict[str, object]:
+    return {
+        "candidates": [
+            {
+                "content": {"parts": [{"inlineData": {"mimeType": "audio/wav", "data": wav_base64}}], "role": "model"},
+                "finishReason": "STOP",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 7, "candidatesTokenCount": 40, "totalTokenCount": 47},
+        "modelVersion": "gemini-3.8-flash-tts",
+    }
+
+
+def test_native_generate_content_logs_the_tts_audio_the_caller_received():
+    wav_base64: Final = _gemini_tts_wav_base64()
+    reply: Final = _gemini_tts_reply(wav_base64)
+    logging_obj: Final = LitellmLogging(
+        model="gemini-3.8-flash-tts",
+        messages=[{"role": "user", "content": "Say hello"}],
+        stream=False,
+        call_type="agenerate_content",
+        start_time=time.time(),
+        litellm_call_id="tts-wav",
+        function_id="tts-wav",
+    )
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={}, model="gemini-3.8-flash-tts")
+    logging_obj.model_call_details["httpx_response"] = httpx.Response(200, json=reply)
+
+    logged: Final = logging_obj.normalize_endpoint_logging_result(reply)
+
+    assert isinstance(logged, litellm.ModelResponse)
+    assert logged.choices[0].message.audio.data == wav_base64
 
 
 def test_response_cost_calculator_does_not_transform_non_generate_content_dict():
@@ -11493,6 +11598,38 @@ def test_newrelic_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
         is_otel_v2_enabled.cache_clear()
 
 
+def test_mixpanel_dispatch_needs_otel_v2_and_builds_one_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.otel.logger import OpenTelemetryV2
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    def built() -> object:
+        return logging_module.build_custom_logger_compatible_class(
+            "mixpanel", internal_usage_cache=None, llm_router=None
+        )
+
+    logging_module._in_memory_loggers.clear()
+    monkeypatch.setenv("MIXPANEL_PROJECT_TOKEN", "test-token")
+    monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="LITELLM_OTEL_V2"):
+            built()
+        assert logging_module.get_custom_logger_compatible_class("mixpanel") is None
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        logger: Final = built()
+        assert isinstance(logger, OpenTelemetryV2)
+        assert logger.callback_name == "mixpanel"
+        assert built() is logger
+        assert logging_module.get_custom_logger_compatible_class("mixpanel") is logger
+    finally:
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+
+
 def test_newrelic_dispatch_keeps_legacy_agent_when_flag_off(monkeypatch):
     from litellm.integrations.newrelic import NewRelicLogger
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
@@ -15619,6 +15756,15 @@ def test_litellm_logging_no_log_param(monkeypatch, disable_no_log_param):
         event_hook="success_handler",
     )
     assert should_run_managed_files_callback is True
+
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+
+    should_run_spend_callback = litellm_logging_obj.should_run_callback(
+        callback=ProxyDBLogger(),
+        litellm_params={"no-log": True},
+        event_hook="success_handler",
+    )
+    assert should_run_spend_callback is True
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")

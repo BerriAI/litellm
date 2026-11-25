@@ -5,6 +5,7 @@ raise, dict targets naming no group, weighted failover past an affinity pin, and
 reasoning a fallback hop strips.
 """
 
+import datetime
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Final
 
@@ -216,7 +217,11 @@ async def test_a_team_wildcard_public_name_routes_with_its_wildcard_filled_in(
 
 
 @pytest.mark.asyncio
-async def test_a_usage_refusal_takes_the_fallback(make_core: MakeCore, host: ScriptedHost) -> None:
+async def test_a_usage_refusal_takes_the_fallback(
+    make_core: MakeCore, host: ScriptedHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now: Final = datetime.datetime(2026, 1, 1, 12, tzinfo=datetime.timezone.utc)
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", lambda: now)
     core: Final = build(
         make_core,
         model_list=[deployment("one", "o", rpm=1), deployment("safe", "s")],
@@ -232,7 +237,11 @@ async def test_a_usage_refusal_takes_the_fallback(make_core: MakeCore, host: Scr
 
 
 @pytest.mark.asyncio
-async def test_a_usage_refusal_carries_the_routing_note(make_core: MakeCore, host: ScriptedHost) -> None:
+async def test_a_usage_refusal_carries_the_routing_note(
+    make_core: MakeCore, host: ScriptedHost, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now: Final = datetime.datetime(2026, 1, 1, 12, tzinfo=datetime.timezone.utc)
+    monkeypatch.setattr("litellm.router_strategy.lowest_tpm_rpm_v2.get_utc_datetime", lambda: now)
     core: Final = make_core(
         model_list=[deployment("g", "d1", rpm=1)], routing_strategy="usage-based-routing-v2", num_retries=0
     )

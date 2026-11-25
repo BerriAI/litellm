@@ -1747,14 +1747,14 @@ class VertexAIModelInfo(BaseLLMModelInfo):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: Mapping[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         raise NotImplementedError("Vertex AI models are not supported yet")
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
@@ -2014,7 +2014,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 VertexGeminiCountContextError,
                 count_context_error_response,
                 gemini_count_contents,
-                malformed_tool_result_text_count_error,
+                malformed_messages_error,
                 provider_error_response,
                 unconvertible_messages_error,
                 vertex_gemini_count_context,
@@ -2037,7 +2037,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                 return count_context_error_response(count_context, request_model, model_to_use)
             blocks_error: Final = unconvertible_messages_error(
                 request_view.messages, messages_format
-            ) or malformed_tool_result_text_count_error(messages, messages_format, resolved_deployment)
+            ) or malformed_messages_error(messages, messages_format, resolved_deployment)
             if blocks_error is not None:
                 return count_context_error_response(blocks_error, request_model, model_to_use)
 

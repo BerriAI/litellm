@@ -58,7 +58,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
             "write": [("POST", "/vector_stores")],
         }
 
-    def validate_environment(self, headers: dict, litellm_params: GenericLiteLLMParams | None) -> dict:
+    def validate_environment(self, headers: dict[str, object], litellm_params: GenericLiteLLMParams | None) -> dict:
         params: Final = litellm_params or GenericLiteLLMParams()
         bearer_token: Final = resolve_openai_bearer_token(
             api_key=params.api_key, api_base=params.api_base, litellm_params=params.model_dump(exclude_none=True)
@@ -85,7 +85,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         """
         Get the Base endpoint for OpenAI Vector Stores API
@@ -107,9 +107,9 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         vector_store_search_optional_params: VectorStoreSearchOptionalRequestParams,
         api_base: str,
         litellm_logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         base_url, query_separator, query_string = api_base.partition("?")
         url: Final = f"{join_api_base(base_url, f'{encoded_vector_store_id}/search')}{query_separator}{query_string}"
@@ -143,7 +143,7 @@ class OpenAIVectorStoreConfig(BaseVectorStoreConfig):
         self,
         vector_store_create_optional_params: VectorStoreCreateOptionalRequestParams,
         api_base: str,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         url: Final = api_base  # Base URL for creating vector stores
         metadata: Final = vector_store_create_optional_params.get("metadata", None)
         metadata_payload: Final = add_openai_metadata(metadata)

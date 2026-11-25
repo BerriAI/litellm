@@ -67,10 +67,10 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
         is_openai_style: Final = self._is_openai_style_model(model)
 
@@ -129,14 +129,14 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         final_api_key: Final[str | None] = (
             api_key or get_secret_str("AIML_API_KEY") or get_secret_str("AIMLAPI_KEY")  # Alternative name
         )

@@ -1,7 +1,7 @@
 import asyncio
 import contextvars
 import json
-from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
+from collections.abc import Callable, Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from functools import partial
@@ -91,7 +91,7 @@ from litellm.responses.mcp.round_billing import (
     summed_cost_breakdown,
 )
 from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
-from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.responses.utils import ResponsesAPIRequestUtils, answered_by_the_chat_bridge
 from litellm.types.integrations.custom_logger import CHAT_COMPLETION_AGENTIC_SURFACE
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -284,20 +284,17 @@ def _request_trace_id(request_kwargs: Mapping[str, object]) -> str | None:
 
 
 def _langfuse_request_trace_id(request_kwargs: Mapping[str, object], standard_trace_id: str | None) -> str | None:
-    from litellm.integrations.langfuse.langfuse import langfuse_trace_id, langfuse_trace_metadata
+    from litellm.integrations.langfuse.langfuse import request_langfuse_trace_id
 
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
     if not isinstance(logging_obj, LiteLLMLoggingObj):
         return None
-    litellm_params: Final = _request_logging_params(logging_obj, request_kwargs)
-    trace_id: Final = langfuse_trace_id(
-        metadata=langfuse_trace_metadata(litellm_params.get("metadata"), litellm_params.get("proxy_server_request")),
+    return request_langfuse_trace_id(
+        _request_logging_params(logging_obj, request_kwargs),
         standard_trace_id=standard_trace_id,
         litellm_trace_id=logging_obj.litellm_trace_id,
         litellm_call_id=logging_obj.litellm_call_id,
-        proxy_server_request=litellm_params.get("proxy_server_request"),
     )
-    return trace_id if isinstance(trace_id, str) else None
 
 
 def _listing_trace_id(request_kwargs: Mapping[str, object], *, bridged_first_turn: bool) -> str | None:
@@ -671,17 +668,6 @@ def _bridges_to_chat_completions(
 
 
 _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED: Final = frozenset({"client_metadata"})
-
-
-_CHAT_COMPLETION_ID_PREFIX: Final = "chatcmpl-"
-
-
-def answered_by_the_chat_bridge(response_id: object) -> bool:
-    return isinstance(
-        response_id, str
-    ) and ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(response_id).startswith(
-        _CHAT_COMPLETION_ID_PREFIX
-    )
 
 
 def follows_a_bridged_model_router_turn(
@@ -3029,7 +3015,7 @@ def compact_responses(
 # ---------------------------------------------------------------------------
 
 
-def _build_litellm_metadata_for_ws(kwargs: dict) -> dict:
+def _build_litellm_metadata_for_ws(kwargs: dict) -> dict[str, object]:
     metadata: Final[dict] = {**(kwargs.get("litellm_metadata") or {})}
     guardrails: Final = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
     if guardrails:
@@ -3051,7 +3037,7 @@ def _deployment_reasoning_default(kwargs: Mapping[str, object]) -> Reasoning | d
     return LiteLLMResponsesTransformationHandler().map_reasoning_effort(reasoning_effort)
 
 
-_RESPONSES_WS_ROUTING_HINT_KEYS: Final = frozenset({"input", "previous_response_id"})
+_RESPONSES_WS_ROUTING_HINT_KEYS: Final = frozenset({"generate", "input", "previous_response_id"})
 
 
 def _first_ws_frame_with_routed_input(first_message: str, routed_input: object) -> str:
@@ -3102,6 +3088,7 @@ async def _aresponses_websocket(
     turn_admission: "ResponsesWsTurnAdmission | None" = None,
     turn_usage_recorder: "ResponsesWsTurnUsageRecorder | None" = None,
     responses_ws_frame_guard: "ResponsesWsFrameGuard | None" = None,
+    responses_ws_on_unfinished_turn: Callable[[], None] | None = None,
     **kwargs,
 ) -> Exception | None:
     """
@@ -3197,5 +3184,6 @@ async def _aresponses_websocket(
         turn_admission=turn_admission,
         turn_usage_recorder=turn_usage_recorder,
         frame_guard=responses_ws_frame_guard,
+        on_unfinished_turn=responses_ws_on_unfinished_turn,
         **remaining_kwargs,
     )

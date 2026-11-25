@@ -24,9 +24,10 @@ from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from claude_code._basic_messaging import run_basic_messaging_cell
 
 AZURE_MODELS = [
-    "claude-haiku-4-5-azure",
-    "claude-sonnet-4-5-azure",
-    "claude-opus-4-7-azure",
+    "claude-haiku-5-5-azure",
+    "claude-sonnet-5-5-azure",
+    "claude-opus-5-5-azure",
+    "claude-fable-5-2-azure",
 ]
 
 

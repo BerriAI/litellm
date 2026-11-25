@@ -2,7 +2,7 @@
 ## Helper utilities for cost_per_token()
 
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import partial
@@ -34,7 +34,7 @@ from litellm.types.utils import (
     Usage,
     text_tokens_without_nested_reasoning,
 )
-from litellm.utils import get_model_info
+from litellm.utils import get_model_info, get_model_info_for_call
 
 # Pre-resolved CallTypes enum values for fast membership checks
 _IMAGE_RESPONSE_CALL_TYPES: Final = frozenset(
@@ -1197,6 +1197,8 @@ def get_billed_token_rates(
     current_time: datetime | None = None,
     custom_cost_per_token: CostPerToken | None = None,
     model_info: ModelInfo | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
 ) -> BilledTokenRates | None:
     """Rates the cost calculator bills ``usage`` at, resolved exactly as the totals and the token-type
     breakdown resolve them. None when the model's pricing cannot be resolved."""
@@ -1206,7 +1208,9 @@ def get_billed_token_rates(
         resolved_model_info: Final = (
             model_info
             if model_info is not None
-            else get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+            else get_model_info_for_call(
+                model=model, custom_llm_provider=custom_llm_provider, api_base=api_base, api_key=api_key
+            )
         )
     except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model: no rates
         return None
@@ -1231,6 +1235,8 @@ def get_token_type_cost_breakdown(
     current_time: datetime | None = None,
     custom_cost_per_token: CostPerToken | None = None,
     model_info: ModelInfo | None = None,
+    api_base: str | None = None,
+    api_key: str | None = None,
 ) -> TokenTypeCostBreakdown:
     """
     Provider-agnostic cost of reasoning and cache tokens, derived from the usage
@@ -1256,6 +1262,8 @@ def get_token_type_cost_breakdown(
         current_time=current_time,
         custom_cost_per_token=custom_cost_per_token,
         model_info=model_info,
+        api_base=api_base,
+        api_key=api_key,
     )
     if rates is None:
         return TokenTypeCostBreakdown(0.0, 0.0, 0.0)
@@ -1340,6 +1348,45 @@ def calculate_prompt_caching_savings(
     return (read_discount - write_premium) * quote.uplift
 
 
+ImageTokenCostReporter = Callable[[float, float, TokenTypeCostBreakdown | None], None]
+
+
+def calculate_image_token_cost(
+    model: str,
+    usage: Usage,
+    custom_llm_provider: str,
+    model_info: ModelInfo | None,
+    report_token_cost: ImageTokenCostReporter | None,
+    vertex_location: str | None = None,
+    service_tier: str | None = None,
+) -> float:
+    pricing: Final = (
+        get_model_info(model=model, custom_llm_provider=custom_llm_provider) if model_info is None else model_info
+    )
+    billing_time: Final = current_billing_time()
+    input_cost, output_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+        model_info=pricing,
+        vertex_location=vertex_location,
+        service_tier=service_tier,
+        current_time=billing_time,
+    )
+    if report_token_cost is not None:
+        breakdown: Final = get_token_type_cost_breakdown(
+            model=model,
+            usage=usage,
+            custom_llm_provider=custom_llm_provider,
+            model_info=pricing,
+            vertex_location=vertex_location,
+            service_tier=service_tier,
+            current_time=billing_time,
+        )
+        report_token_cost(input_cost, output_cost, breakdown)
+    return input_cost + output_cost
+
+
 def calculate_image_response_cost_from_usage(
     model: str,
     image_response: ImageResponse,
@@ -1347,6 +1394,8 @@ def calculate_image_response_cost_from_usage(
     model_info: ModelInfo | None = None,
     vertex_location: str | None = None,
     service_tier: str | None = None,
+    *,
+    report_token_cost: ImageTokenCostReporter | None = None,
 ) -> float | None:
     """
     Calculate image generation cost from usage metadata when available.
@@ -1430,15 +1479,15 @@ def calculate_image_response_cost_from_usage(
         completion_tokens_details=completion_tokens_details,
     )
 
-    prompt_cost, completion_cost = generic_cost_per_token(
+    return calculate_image_token_cost(
         model=model,
         usage=normalized_usage,
         custom_llm_provider=custom_llm_provider,
         model_info=model_info,
         vertex_location=vertex_location,
         service_tier=service_tier,
+        report_token_cost=report_token_cost,
     )
-    return prompt_cost + completion_cost
 
 
 def calculate_image_response_web_search_cost(
@@ -1479,7 +1528,10 @@ class _ModelPricedImageCostCalculator(Protocol):
 
 
 def _model_priced_image_cost_calculator(
-    custom_llm_provider: str | None, model: str, pricing: ModelInfo | None
+    custom_llm_provider: str | None,
+    model: str,
+    pricing: ModelInfo | None,
+    report_token_cost: ImageTokenCostReporter | None,
 ) -> _ModelPricedImageCostCalculator | None:
     match custom_llm_provider:
         case litellm.LlmProviders.RECRAFT.value:
@@ -1504,7 +1556,11 @@ def _model_priced_image_cost_calculator(
             from litellm.llms.tencent.cost_calculator import image_cost_calculator as tencent_image_cost_calculator
             from litellm.llms.tencent.image_generation.transformation import is_tokenhub_image_model
 
-            return tencent_image_cost_calculator if is_tokenhub_image_model(model) else None
+            return (
+                partial(tencent_image_cost_calculator, report_token_cost=report_token_cost)
+                if is_tokenhub_image_model(model)
+                else None
+            )
         case litellm.LlmProviders.VOLCENGINE.value:
             if _deployment_prices_images_without_an_output_price(pricing):
                 return None
@@ -1526,7 +1582,11 @@ def _model_priced_image_cost_calculator(
                 cost_calculator as openai_gpt_image_cost_calculator,
             )
 
-            return partial(openai_gpt_image_cost_calculator, custom_llm_provider=litellm.LlmProviders.MINIMAX.value)
+            return partial(
+                openai_gpt_image_cost_calculator,
+                custom_llm_provider=litellm.LlmProviders.MINIMAX.value,
+                report_token_cost=report_token_cost,
+            )
         case _:
             return None
 
@@ -1554,11 +1614,13 @@ class CostCalculatorUtils:
         quality: str | None = None,
         n: int | None = None,
         size: str | None = None,
-        optional_params: dict | None = None,
+        optional_params: Mapping[str, object] | None = None,
         call_type: str | None = None,
         model_info: ModelInfo | None = None,
         vertex_location: str | None = None,
         service_tier: str | None = None,
+        *,
+        report_token_cost: ImageTokenCostReporter | None = None,
     ) -> float:
         """
         Route the image generation cost calculator based on the custom_llm_provider
@@ -1604,7 +1666,9 @@ class CostCalculatorUtils:
             )
             if xai_cost is not None:
                 return xai_cost
-        model_priced_calculator: Final = _model_priced_image_cost_calculator(custom_llm_provider, model, pricing)
+        model_priced_calculator: Final = _model_priced_image_cost_calculator(
+            custom_llm_provider, model, pricing, report_token_cost
+        )
 
         if model_priced_calculator is not None:
             return model_priced_calculator(model=model, image_response=completion_response, model_info=pricing)
@@ -1616,6 +1680,7 @@ class CostCalculatorUtils:
                     model_info=pricing,
                     vertex_location=vertex_location,
                     service_tier=service_tier,
+                    report_token_cost=report_token_cost,
                 )
         elif custom_llm_provider == litellm.LlmProviders.BEDROCK.value:
             if isinstance(completion_response, ImageResponse):
@@ -1623,7 +1688,7 @@ class CostCalculatorUtils:
                     model=model,
                     size=resolved_size,
                     image_response=completion_response,
-                    optional_params=optional_params,
+                    optional_params=None if optional_params is None else dict(optional_params),
                 )
             raise TypeError("completion_response must be of type ImageResponse for bedrock image cost calculation")
         elif custom_llm_provider == litellm.LlmProviders.GEMINI.value:
@@ -1639,6 +1704,7 @@ class CostCalculatorUtils:
                     model=model,
                     image_response=completion_response,
                     model_info=pricing,
+                    report_token_cost=report_token_cost,
                 )
             from litellm.llms.gemini.image_generation.cost_calculator import (
                 cost_calculator as gemini_image_cost_calculator,
@@ -1648,6 +1714,7 @@ class CostCalculatorUtils:
                 model=model,
                 image_response=completion_response,
                 model_info=pricing,
+                report_token_cost=report_token_cost,
             )
         elif custom_llm_provider == litellm.LlmProviders.AZURE_AI.value:
             return azure_ai_image_cost_calculator(
@@ -1657,6 +1724,7 @@ class CostCalculatorUtils:
                 n=resolved_n,
                 optional_params=optional_params,
                 model_info=pricing,
+                report_token_cost=report_token_cost,
             )
         elif custom_llm_provider == litellm.LlmProviders.FAL_AI.value:
             from litellm.llms.fal_ai.cost_calculator import (
@@ -1685,6 +1753,7 @@ class CostCalculatorUtils:
                     image_response=completion_response,
                     custom_llm_provider=custom_llm_provider,
                     model_info=pricing,
+                    report_token_cost=report_token_cost,
                 )
             # Fall through to default for DALL-E models
             return default_image_cost_calculator(

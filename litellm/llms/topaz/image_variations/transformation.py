@@ -45,10 +45,10 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
     def map_openai_params(
         self,
         non_default_params: dict,
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for k, v in non_default_params.items():
             if k == "response_format":
                 optional_params["output_format"] = v
@@ -99,7 +99,7 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
         self,
         model: str | None,
         image: FileTypes,
-        optional_params: dict,
+        optional_params: dict[str, object],
         headers: Mapping[str, object],
     ) -> HttpHandlerRequestFields:
         request_params: Final = HttpHandlerRequestFields(
@@ -167,7 +167,9 @@ class TopazImageVariationConfig(TopazModelInfo, BaseImageVariationConfig):
 
         return self._common_transform_response_image_variation(image_content, response_ms)
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | Headers
+    ) -> BaseLLMException:
         return TopazException(
             status_code=status_code,
             message=error_message,
