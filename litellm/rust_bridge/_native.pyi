@@ -2253,6 +2253,19 @@ class RustKeyRepository:
     def find(self, token: str, *, use_writer: bool = False) -> Future[object]: ...
 
 @final
+class RustKeyOwnersRepository:
+    def __new__(cls, database: NativeDatabase) -> RustKeyOwnersRepository: ...
+    def find(
+        self,
+        *,
+        user_id: str | None,
+        team_id: str | None,
+        membership_user_id: str | None,
+        organization_id: str | None,
+        project_id: str | None,
+    ) -> Future[str]: ...
+
+@final
 class RustJwtKeyMappingRepository:
     def __new__(cls, database: NativeDatabase) -> RustJwtKeyMappingRepository: ...
     def mapped_token(
@@ -2769,6 +2782,7 @@ __all__ = [
     "RustJwtKeyMappingRepository",
     "RustJwtMapping",
     "RustKeyContext",
+    "RustKeyOwnersRepository",
     "RustKeyRepository",
     "RustMappedClaims",
     "RustModelAccessGroupRepository",

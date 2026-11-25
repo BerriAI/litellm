@@ -78,7 +78,7 @@ class CoherePassthroughLoggingHandler(BasePassthroughLoggingHandler):
     def cohere_passthrough_handler(
         self,
         httpx_response: httpx.Response,
-        response_body: dict,
+        response_body: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         result: str,

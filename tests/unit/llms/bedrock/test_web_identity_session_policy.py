@@ -43,6 +43,7 @@ import pytest
 from botocore.session import get_session
 from pydantic import TypeAdapter
 
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.integrations.sqs import SQSLogger
 from litellm.llms.aws_polly.text_to_speech.transformation import AWSPollyTextToSpeechConfig
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
@@ -460,7 +461,9 @@ def _bedrock_knowledge_base_ingestion() -> BedrockRAGIngestion:
 
 
 def _bedrock_model_lister() -> BedrockModelLister:
-    return BedrockModelLister(deployment={"aws_region_name": "us-east-1"}, client=HTTPHandler())
+    return BedrockModelLister(
+        deployment={"aws_region_name": "us-east-1"}, client=HTTPHandler(), endpoint_failures=InMemoryCache()
+    )
 
 
 def _s3_vectors_ingestion() -> S3VectorsRAGIngestion:

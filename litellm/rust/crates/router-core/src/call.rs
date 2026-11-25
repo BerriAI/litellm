@@ -91,6 +91,7 @@ struct FallbackHop {
 struct FallbackChain {
     attempted: Vec<Tried>,
     scopes: u32,
+    provider_refused_window: bool,
 }
 
 /// What one level of the chain serves: a group, or the same group at a later `order`, with the
@@ -107,6 +108,7 @@ struct Target {
     failover_excluded: Arc<[String]>,
     /// The group a pre-routing hook selected for the level's failed attempt, if it rewrote it.
     routed: Option<String>,
+    last_resort: bool,
 }
 
 /// One level of the fallback chain as every step of it sees it: the call it belongs to, the
@@ -205,6 +207,55 @@ fn unattempted_chain(
                 || targets.iter().any(|next| match next.identity() {
                     FallbackTarget::Params(_) => true,
                     identity => !attempted.contains(&Tried::Target(identity)),
+                })
+        })
+}
+
+fn refused_by_provider(error: &Error) -> bool {
+    error
+        .attempt()
+        .is_some_and(|failure| failure.is_a("ContextWindowExceededError"))
+}
+
+fn context_window_fallback_resolves(level: &Level<'_>) -> bool {
+    let Level {
+        snapshot,
+        request,
+        target,
+        at,
+        chain,
+        ..
+    } = level;
+    let max_fallbacks = request
+        .max_fallbacks
+        .unwrap_or(snapshot.settings.max_fallbacks);
+    if request.disable_fallbacks || at.depth >= max_fallbacks {
+        return false;
+    }
+    let lists = Lists::of(snapshot, request);
+    let failed = target.routed.as_deref().unwrap_or(&target.group);
+    let mut lookup: Vec<&str> = Vec::new();
+    for group in target
+        .routed
+        .as_deref()
+        .into_iter()
+        .chain([target.group.as_str(), request.model.as_str()])
+    {
+        if !lookup.contains(&group) {
+            lookup.push(group);
+        }
+    }
+    lists
+        .context_window
+        .and_then(|list| list.lookup_groups(&lookup, lists.keys))
+        .is_some_and(|targets| {
+            targets
+                .iter()
+                .map(FallbackTarget::identity)
+                .any(|identity| match identity {
+                    FallbackTarget::Name(ref name) if name == failed => false,
+                    FallbackTarget::Params(_) => true,
+                    identity => !chain.attempted.contains(&Tried::Target(identity)),
                 })
         })
 }
@@ -414,6 +465,7 @@ impl<H: RouterHost> Call<'_, H> {
             excluded: Arc::from([]),
             failover_excluded: Arc::from([]),
             routed: None,
+            last_resort: false,
         };
         let level = Level {
             snapshot: &snapshot,
@@ -435,10 +487,10 @@ impl<H: RouterHost> Call<'_, H> {
     /// fallbacks if every attempt failed.
     fn with_fallbacks<'a>(
         &'a self,
-        level: Level<'a>,
+        mut level: Level<'a>,
     ) -> BoxFuture<'a, Result<RouterResponse<H::Response>, Error>> {
         Box::pin(async move {
-            let failed = match self.with_retries(&level).await {
+            let failed = match self.with_retries(&mut level).await {
                 Ok(response) => return Ok(response),
                 Err(failed) => failed,
             };
@@ -464,6 +516,17 @@ impl<H: RouterHost> Call<'_, H> {
             served_as,
         } = failed;
         let error = *error;
+        let last_resort = matches!(
+            error,
+            Error::ContextWindowExceeded {
+                held_for_fallback: true,
+                ..
+            }
+        )
+        .then(|| Target {
+            last_resort: true,
+            ..level.target.clone()
+        });
         let (snapshot, request, at) = (level.snapshot, level.request, level.at);
         self.level_failed(&level, &error, false);
         if self.raises_without_fallback(snapshot, request, &error) {
@@ -540,6 +603,16 @@ impl<H: RouterHost> Call<'_, H> {
             Err(raised) => raised,
         };
         if !order_path {
+            let error = match last_resort.filter(|_| !level.chain.provider_refused_window) {
+                Some(last_resort) => {
+                    level.target = last_resort;
+                    match self.with_retries(&mut level).await {
+                        Ok(response) => return Ok(response),
+                        Err(failed) => *failed.error,
+                    }
+                }
+                None => error,
+            };
             self.host.observe(&RouterEvent::FallbacksFailed {
                 level: at.level,
                 chain: true,
@@ -711,6 +784,7 @@ impl<H: RouterHost> Call<'_, H> {
                     excluded,
                     failover_excluded: target.failover_excluded.clone(),
                     routed: None,
+                    last_resort: false,
                 };
                 let parent = at;
                 let at = FallbackHop {
@@ -981,7 +1055,10 @@ impl<H: RouterHost> Call<'_, H> {
 
     /// `async_function_with_retries` for one level: the first attempt, then a retry while
     /// [`retry_step`] grants one. The loop sleeps, attempts and reports. The step decides.
-    async fn with_retries(&self, level: &Level<'_>) -> Result<RouterResponse<H::Response>, Failed> {
+    async fn with_retries(
+        &self,
+        level: &mut Level<'_>,
+    ) -> Result<RouterResponse<H::Response>, Failed> {
         let (snapshot, op, request, at) = (level.snapshot, level.op, level.request, level.at);
         let target = &level.target;
         let mut inputs = SelectInputs {
@@ -989,6 +1066,7 @@ impl<H: RouterHost> Call<'_, H> {
             excluded_ids: target.excluded.clone(),
             requested: Some(target.group.clone()),
             fallback_hop: at.level > 0,
+            refuse_uncertain: level.refuses_uncertain(),
             ..SelectInputs::default()
         };
         let counting = counting();
@@ -1003,6 +1081,7 @@ impl<H: RouterHost> Call<'_, H> {
             Ok(response) => return Ok(response),
             Err(failed) => failed,
         };
+        level.chain.provider_refused_window |= refused_by_provider(&failed.error);
         self.pick_failed(level, &failed.error);
         // A guardrail's block and a failure no retry can clear are re-raised as they are, before
         // anything else looks at them (`async_function_with_retries`).
@@ -1064,6 +1143,9 @@ impl<H: RouterHost> Call<'_, H> {
             {
                 inputs.failed_ids.push(id.clone());
             }
+            let provider_refused_window =
+                failure.is_a("ContextWindowExceededError") && failed.error.attempt().is_some();
+            inputs.refuse_uncertain |= provider_refused_window;
             let untried = match refused_by {
                 Some(refused) if !policy_applies && failure.is_a("ContextWindowExceededError") => {
                     let group = failed.routed.as_deref().unwrap_or(target.group.as_str());
@@ -1150,7 +1232,14 @@ impl<H: RouterHost> Call<'_, H> {
                 Err(next) if next.error.attempt().is_some_and(AttemptError::ends_retries) => {
                     return Err(refused_or(refusal, next));
                 }
+                Err(next)
+                    if provider_refused_window
+                        && matches!(*next.error, Error::ContextWindowExceeded { .. }) =>
+                {
+                    return Err(refused_or(refusal, failed));
+                }
                 Err(next) => {
+                    level.chain.provider_refused_window |= refused_by_provider(&next.error);
                     self.pick_failed(level, &next.error);
                     refusal = refusal
                         .or_else(|| context_window_refusal(&next).filter(|_| !policy_applies));
@@ -1886,6 +1975,11 @@ fn unary_retry_budget(level: &Level<'_>, failure: &AttemptError) -> (u32, bool) 
 }
 
 impl Level<'_> {
+    fn refuses_uncertain(&self) -> bool {
+        self.chain.provider_refused_window
+            || (!self.target.last_resort && context_window_fallback_resolves(self))
+    }
+
     /// [`retry_step`] for a failure in this level's group, with the fallback lists the request
     /// reads and the router's `retry_after`.
     fn retry_step(

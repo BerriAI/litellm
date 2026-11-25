@@ -1193,6 +1193,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "output_cost_per_billable_unit": {"type": "number"},
             "output_cost_per_image_token": {"type": "number"},
             "output_cost_per_image_token_batches": {"type": "number"},
+            "output_cost_per_image_token_flex": {"type": "number"},
             "output_cost_per_image_token_priority": {"type": "number"},
             "output_cost_per_video_token": {"type": "number"},
             "output_cost_per_pixel": {"type": "number"},
@@ -1527,6 +1528,7 @@ def test_cost_map_schema_accepts_vertex_modality_and_context_tiers() -> None:
         "input_cost_per_audio_token_above_200k_tokens_batches": 8e-6,
         "output_cost_per_image_token_priority": 9e-6,
         "output_cost_per_image_token_batches": 10e-6,
+        "output_cost_per_image_token_flex": 11e-6,
     }
 
     assert Draft7Validator(_COST_MAP_ROW_SCHEMA).is_valid({"synthetic-vertex-tier-model": row})

@@ -201,7 +201,9 @@ from litellm.litellm_core_utils.served_output_texts import (
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.litellm_core_utils.tool_fields import (
     BRIDGED_TOOL_NAMES_KWARG,
+    BridgedTool,
     BridgedToolNames,
+    full_names_by_sent_name,
     with_renamed_tool_calls,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
@@ -1244,7 +1246,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.client_facing_stream_model: str | None = None
         self.client_facing_response_id: str | None = None
         self.bridged_chat_request: BridgedChatRequest | None = None
-        self.bridged_tool_names: Mapping[str, str] = {}
+        self.bridged_tools: Mapping[str, BridgedTool] = {}
         self.zero_cost_warned: bool = False
         self.llm_caching_handler: LLMCachingHandler | None = None
 
@@ -1569,7 +1571,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         return next((provider for provider in candidates if isinstance(provider, str) and provider), None)
 
-    def _routed_deployment_model(self) -> str | None:
+    def routed_deployment_model(self) -> str | None:
         litellm_params: Final = self._model_call_details_view.get("litellm_params")
         metadata: Final = (
             StandardLoggingPayloadSetup.merge_litellm_metadata(_LITELLM_PARAMS.validate_python(litellm_params))
@@ -2075,7 +2077,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return custom_logger
         return None
 
-    def _get_raw_request_body(self, data: dict[str, object] | str | None) -> dict:
+    def _get_raw_request_body(self, data: dict[str, object] | str | None) -> dict[str, object]:
         if data is None:
             return {"error": "Received empty dictionary for raw request body"}
         if isinstance(data, str):
@@ -3783,7 +3785,7 @@ class Logging(LiteLLMLoggingBaseClass):
         elif self.call_type == CallTypes.aresponses_websocket.value and isinstance(result, list):  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
             logging_result = ResponsesWebSocketTokenUsageProcessor.create_logging_object(
                 results=result,  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
-                litellm_model_name=self._routed_deployment_model(),
+                litellm_model_name=self.routed_deployment_model(),
             )
 
         elif self.relays_llm_passthrough and isinstance(result, Response):
@@ -4051,7 +4053,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def _with_full_tool_names(self, response: _LoggedResponse) -> _LoggedResponse | ModelResponse | ModelResponseStream:
         if not isinstance(response, ModelResponse | ModelResponseStream):
             return response
-        return with_renamed_tool_calls(response, self.bridged_tool_names)
+        return with_renamed_tool_calls(response, full_names_by_sent_name(self.bridged_tools))
 
     def _as_served_chat_response(
         self, response: _LoggedResponse
@@ -6430,15 +6432,15 @@ class Logging(LiteLLMLoggingBaseClass):
             MappingProxyType(dict(optional_params)), MappingProxyType(dict(litellm_params))
         )
 
-    def record_bridged_tool_names(self, full_names_by_sent_name: Mapping[str, str]) -> None:
-        self.bridged_tool_names = dict(full_names_by_sent_name)
+    def record_bridged_tool_names(self, tools_by_sent_name: Mapping[str, BridgedTool]) -> None:
+        self.bridged_tools = dict(tools_by_sent_name)
         self._log_bridged_tool_names()
 
     def _log_bridged_tool_names(self) -> None:
-        if not self.bridged_tool_names:
+        if not self.bridged_tools:
             self.model_call_details.pop(BRIDGED_TOOL_NAMES_KWARG, None)
             return
-        self.model_call_details[BRIDGED_TOOL_NAMES_KWARG] = BridgedToolNames(tuple(self.bridged_tool_names.items()))
+        self.model_call_details[BRIDGED_TOOL_NAMES_KWARG] = BridgedToolNames(tuple(self.bridged_tools.items()))
 
     def record_bridged_responses_api_response(self, response: ResponsesAPIResponse) -> None:
         self.record_bridged_model_response(self._translate_responses_api_response_to_model_response(response))
@@ -9154,6 +9156,8 @@ def get_standard_logging_object_payload(
         clean_hidden_params: Final = StandardLoggingPayloadSetup.get_hidden_params(hidden_params)
         if cache_hit is True or (clean_hidden_params["response_cost"] is None and raw_response_cost is not None):
             clean_hidden_params["response_cost"] = llm_response_cost
+        if clean_hidden_params["litellm_model_name"] is None:
+            clean_hidden_params["litellm_model_name"] = logging_obj.routed_deployment_model()
         if clean_hidden_params["litellm_overhead_time_ms"] is None and status == "success":
             # /v1/messages dict results and the bridge stream wrappers keep it on the logging object;
             # failure payloads stay None like every response type that carries its own _hidden_params
