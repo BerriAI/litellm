@@ -13,6 +13,7 @@ use pkcs8::{
     EncryptedPrivateKeyInfo, SecretDocument,
     pkcs5::{self, pbes2},
 };
+use zeroize::Zeroizing;
 
 use crate::{KeyError, UnapprovedScheme};
 
@@ -55,13 +56,13 @@ pub(crate) fn decrypt(
         return Err(invalid());
     }
     let iterations = NonZeroU32::new(kdf.iteration_count).ok_or_else(invalid)?;
-    let mut key = [0; 32];
+    let mut key = Zeroizing::new([0; 32]);
     let key = &mut key[..key_size];
     pbkdf2::derive(prf, iterations, kdf.salt, password.as_bytes(), key);
-    let mut buffer = info.encrypted_data.to_vec();
+    let mut buffer = Zeroizing::new(info.encrypted_data.to_vec());
     let decrypted = UnboundCipherKey::new(algorithm, key)
         .and_then(PaddedBlockDecryptingKey::cbc_pkcs7)
         .and_then(|key| key.decrypt(&mut buffer, DecryptionContext::Iv128(FixedLength::from(iv))))
         .map_err(|_| KeyError::Decrypt(pkcs5::Error::DecryptFailed.into()))?;
-    SecretDocument::try_from(decrypted.to_vec()).map_err(|error| KeyError::Decrypt(error.into()))
+    SecretDocument::try_from(&*decrypted).map_err(|error| KeyError::Decrypt(error.into()))
 }

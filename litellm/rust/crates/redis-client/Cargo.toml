@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-fips = ["dep:aws-lc-rs"]
+fips = ["dep:aws-lc-rs", "dep:zeroize"]
 
 [dependencies]
 tracing.workspace = true
@@ -30,6 +30,7 @@ rustls-native-certs.workspace = true
 socket2 = "0.6.5"
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
+zeroize = { workspace = true, optional = true }
 
 [dev-dependencies]
 litellm-redis-testing.workspace = true
