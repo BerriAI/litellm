@@ -191,7 +191,10 @@ def test_an_allowlist_entry_without_a_scheme_admits_only_https(allowed_host: str
 
 def test_a_gateway_tool_the_caller_sent_is_kept_as_sent_beside_a_claimed_one():
     proxy_tool: Final = _mcp_tool("litellm_proxy/mcp/deepwiki")
-    claims: Final = _plan([proxy_tool, _mcp_tool("https://mcp.example.com/mcp")], allowed_hosts=("mcp.example.com",))
+    claims: Final = _plan(
+        [proxy_tool, _mcp_tool("https://mcp.example.com/mcp", {"server_label": "example"})],
+        allowed_hosts=("mcp.example.com",),
+    )
 
     assert _plan([proxy_tool]) is None
     assert claims is not None
