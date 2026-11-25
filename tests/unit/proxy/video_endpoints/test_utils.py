@@ -763,6 +763,49 @@ async def test_video_list_target_finds_the_providers_deployment_anywhere_in_a_mi
     assert target == VideoListTarget(model=deployment_id, deployment_id=deployment_id)
 
 
+def _two_seedance_groups_router(group_alias: dict[str, str]) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "seedance-a",
+                "litellm_params": {"model": "volcengine/dreamina-seedance-2-5-260628", "api_key": "ark-key-a"},
+                "model_info": {"id": "dep-a"},
+            },
+            {
+                "model_name": "seedance-b",
+                "litellm_params": {"model": "volcengine/dreamina-seedance-2-5-260628", "api_key": "ark-key-b"},
+                "model_info": {"id": "dep-b"},
+            },
+        ],
+        model_group_alias=group_alias,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("custom_llm_provider", [None, "volcengine"])
+@pytest.mark.parametrize(
+    ("key", "router_settings", "group_alias"),
+    [
+        (UserAPIKeyAuth(api_key="hashed", aliases={"seedance-a": "seedance-b"}), None, {}),
+        (UserAPIKeyAuth(api_key="hashed", team_model_aliases={"seedance-a": "seedance-b"}), None, {}),
+        (UserAPIKeyAuth(api_key="hashed"), {"model_group_alias": {"seedance-a": "seedance-b"}}, {}),
+        (UserAPIKeyAuth(api_key="hashed"), None, {"seedance-a": "seedance-b"}),
+    ],
+    ids=["key-alias", "team-alias", "key-or-team-router-settings", "router-group-alias"],
+)
+async def test_video_list_target_pins_the_group_the_callers_aliases_send_a_named_model_to(
+    key: UserAPIKeyAuth,
+    router_settings: dict[str, object] | None,
+    group_alias: dict[str, str],
+    custom_llm_provider: str | None,
+) -> None:
+    target: Final = await video_list_target(
+        "seedance-a", custom_llm_provider, _two_seedance_groups_router(group_alias), key, router_settings
+    )
+
+    assert target == VideoListTarget(model="dep-b", deployment_id="dep-b")
+
+
 @pytest.mark.asyncio
 async def test_video_list_target_falls_back_to_a_config_deployment_the_project_allows_over_the_teams() -> None:
     router: Final = Router(

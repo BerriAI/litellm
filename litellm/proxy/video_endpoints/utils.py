@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 import orjson
@@ -158,18 +159,39 @@ class VideoListTarget:
     deployment_id: str | None = None
 
 
+async def _served_list_group(
+    requested_model: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: "Router | None",
+    router_settings: Mapping[str, object] | None,
+) -> str:
+    from litellm.proxy.common_request_processing import resolve_per_request_model_group_alias
+    from litellm.proxy.litellm_pre_call_utils import request_served_model
+
+    prepared: Final = request_served_model(requested_model, user_api_key_dict, None, llm_router)
+    if llm_router is None:
+        return prepared
+    per_request: Final = await resolve_per_request_model_group_alias(
+        prepared, router_settings or MappingProxyType({}), user_api_key_dict, llm_router
+    )
+    served: Final = per_request or prepared
+    return llm_router.registry().resolve(served, kind="alias") or served
+
+
 async def video_list_target(
     requested_model: str | None,
     custom_llm_provider: object,
     llm_router: "Router | None",
     user_api_key_dict: UserAPIKeyAuth,
+    router_settings: Mapping[str, object] | None = None,
 ) -> VideoListTarget:
     provider: Final = custom_llm_provider if isinstance(custom_llm_provider, str) else None
     if requested_model:
         await authorize_model_for_key(
             model_id=requested_model, llm_router=llm_router, user_api_key_dict=user_api_key_dict
         )
-        pinned: Final = first_deployment_id_in_group(llm_router, requested_model, user_api_key_dict.team_id, provider)
+        group: Final = await _served_list_group(requested_model, user_api_key_dict, llm_router, router_settings)
+        pinned: Final = first_deployment_id_in_group(llm_router, group, user_api_key_dict.team_id, provider)
         return VideoListTarget(model=pinned or requested_model, deployment_id=pinned)
     if provider is None:
         return VideoListTarget()

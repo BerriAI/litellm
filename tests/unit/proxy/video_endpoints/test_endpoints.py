@@ -202,7 +202,13 @@ def harness():
         stack.enter_context(patch.object(proxy_server, "llm_router", router))
         stack.enter_context(patch.object(proxy_server, "proxy_logging_obj", logging))
         stack.enter_context(patch.object(proxy_server, "general_settings", {}))
-        stack.enter_context(patch.object(proxy_server, "proxy_config", MagicMock()))
+        stack.enter_context(
+            patch.object(
+                proxy_server,
+                "proxy_config",
+                MagicMock(get_hierarchical_router_settings=AsyncMock(return_value=None)),
+            )
+        )
         stack.enter_context(
             patch.object(proxy_server, "select_data_generator", MagicMock())
         )
@@ -707,11 +713,25 @@ async def test_list__listed_ids_name_the_deployment_that_served_them(harness):
     ] == ["dep-seedance"] * 3
 
 
-def _seedance_deployment() -> Deployment:
+@pytest.mark.asyncio
+async def test_list__named_model_follows_the_keys_or_teams_router_settings_alias(harness):
+    deployments: Final = {"seedance-video": _seedance_deployment(), "seedance-b": _seedance_deployment("dep-seedance-b")}
+    harness.router.get_credential_deployment.side_effect = lambda model_id, team_id=None: deployments.get(model_id)
+    harness.router.get_model_from_alias.return_value = None
+    proxy_server.proxy_config.get_hierarchical_router_settings.return_value = {
+        "model_group_alias": {"seedance-video": "seedance-b"}
+    }
+
+    await call_list(harness, query={"model": "seedance-video"})
+
+    assert harness.processor_data()["model"] == "dep-seedance-b"
+
+
+def _seedance_deployment(deployment_id: str = "dep-seedance") -> Deployment:
     return Deployment(
         model_name="seedance-video",
         litellm_params=LiteLLM_Params(model="volcengine/doubao-seedance-2-0-mini-260615"),
-        model_info=ModelInfo(id="dep-seedance"),
+        model_info=ModelInfo(id=deployment_id),
     )
 
 

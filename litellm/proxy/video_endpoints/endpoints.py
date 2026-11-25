@@ -170,6 +170,7 @@ async def video_list(
     from litellm.proxy.proxy_server import (
         general_settings,
         llm_router,
+        prisma_client,
         proxy_config,
         proxy_logging_obj,
         select_data_generator,
@@ -186,11 +187,15 @@ async def video_list(
         or get_custom_llm_provider_from_request_query(request=request)
         or await get_custom_llm_provider_from_request_body(request=request)
     )
+    router_settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict, prisma_client, proxy_logging_obj
+    )
     target: Final = await video_list_target(
         requested_model=request.query_params.get("model") or request.headers.get(MODEL_ROUTING_HEADER_NAME),
         custom_llm_provider=custom_llm_provider,
         llm_router=llm_router,
         user_api_key_dict=user_api_key_dict,
+        router_settings=router_settings,
     )
     data: Final[dict[str, object]] = {
         "query_params": dict(request.query_params),
