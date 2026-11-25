@@ -37,7 +37,7 @@ from typing_extensions import assert_never
 
 from litellm._internal_context import request_parent_otel_span, service_target
 from litellm.constants import DEFAULT_COOLDOWN_TIME_SECONDS, SEMANTIC_CACHE_POLICY_KEY
-from litellm.exceptions import UnresolvablePreviousResponseError
+from litellm.exceptions import UnknownPreviousResponseError
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.litellm_core_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -5318,7 +5318,7 @@ class _Driver:
         stamp_error(self._plan, error, deployment, served)  # pyright: ignore[reportUnknownArgumentType]  # litellm's untyped helpers and request values
         self._core._endpoints.attempt_failed(self._plan, error, deployment, call, str(step.get("model")))  # pyright: ignore[reportPrivateUsage]  # see above
         self._last_error = error
-        if isinstance(error, UnresolvablePreviousResponseError):
+        if isinstance(error, UnknownPreviousResponseError):
             self._ending_error = error
         level: Final = step.get("fallback_level")
         retry: Final = step.get("retry")

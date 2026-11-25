@@ -1424,10 +1424,13 @@ def answered_by_the_chat_bridge(response_id: object) -> bool:
     )
 
 
+_RESPONSES_API_ID_PREFIX: Final = "resp_"
+
+
 def held_by_a_provider(response_id: str) -> bool:
-    return ResponsesAPIRequestUtils.get_model_id_from_response_id(
+    return ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
         response_id
-    ) is not None and not answered_by_the_chat_bridge(response_id)
+    ).startswith(_RESPONSES_API_ID_PREFIX)
 
 
 class ResponseAPILoggingUtils:

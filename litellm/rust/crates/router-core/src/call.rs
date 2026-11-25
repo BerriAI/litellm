@@ -276,6 +276,7 @@ fn is_bad_request_without_fallback(failure: &AttemptError) -> bool {
         "ContextWindowExceededError",
         "ContentPolicyViolationError",
         "UnsupportedEndpointError",
+        "UnresolvablePreviousResponseError",
     ]
     .iter()
     .any(|class| failure.is_a(class))

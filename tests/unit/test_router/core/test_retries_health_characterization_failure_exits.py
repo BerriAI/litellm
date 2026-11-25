@@ -58,6 +58,21 @@ def selection_failure() -> Exception:
     return error
 
 
+def previous_response_rejected() -> Exception:
+    message: Final = "Previous response with id 'resp_gone' not found."
+    return litellm.BadRequestError(
+        message=message,
+        llm_provider="openai",
+        model="gpt-4o",
+        body={
+            "type": "invalid_request_error",
+            "param": "previous_response_id",
+            "code": "previous_response_not_found",
+            "message": message,
+        },
+    )
+
+
 def caller_auth_error() -> Exception:
     return litellm.CallerCredentialAuthenticationError(
         message="not connected", llm_provider="github_copilot", model="gpt-4o"
@@ -87,8 +102,12 @@ async def settle() -> None:
 
 @pytest.mark.parametrize(
     ("builder", "params"),
-    [(selection_failure, {}), (auth_error, {"token_exchange_endpoint": TOKEN_EXCHANGE})],
-    ids=["selection-failure", "caller-scoped-oauth"],
+    [
+        (selection_failure, {}),
+        (auth_error, {"token_exchange_endpoint": TOKEN_EXCHANGE}),
+        (previous_response_rejected, {}),
+    ],
+    ids=["selection-failure", "caller-scoped-oauth", "provider-400-naming-the-previous-response"],
 )
 @pytest.mark.asyncio
 async def test_an_attempt_failure_outside_the_deployment_is_neither_counted_nor_cooled(
@@ -105,8 +124,12 @@ async def test_an_attempt_failure_outside_the_deployment_is_neither_counted_nor_
 
 @pytest.mark.parametrize(
     ("builder", "params"),
-    [(selection_failure, {}), (auth_error, {"token_exchange_endpoint": TOKEN_EXCHANGE})],
-    ids=["selection-failure", "caller-scoped-oauth"],
+    [
+        (selection_failure, {}),
+        (auth_error, {"token_exchange_endpoint": TOKEN_EXCHANGE}),
+        (previous_response_rejected, {}),
+    ],
+    ids=["selection-failure", "caller-scoped-oauth", "provider-400-naming-the-previous-response"],
 )
 def test_a_sync_attempt_failure_outside_the_deployment_is_neither_counted_nor_cooled(
     make_core: MakeCore, host: ScriptedHost, builder: ErrorBuilder, params: dict[str, object]

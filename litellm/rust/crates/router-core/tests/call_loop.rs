@@ -493,6 +493,7 @@ fn follow_up_to_a_provider_held_response() -> AttemptError {
         "MalformedRequestFieldError".into(),
         "BadRequestError".into(),
     ];
+    failed.names_provider = true;
     failed
 }
 
@@ -1991,6 +1992,28 @@ async fn a_fallback_that_cannot_rebuild_a_provider_held_response_hands_it_to_the
         .unwrap();
     assert_eq!(response.deployment_id, "c1");
     assert_eq!(host.selected(), ["p1", "b1", "c1"]);
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_provider_held_follow_up_falls_back_without_fallback_on_unsupported_params(
+    mut config: RouterConfig,
+) {
+    config.fallback_on_unsupported_params = Some(false);
+    let host = Arc::new(ScriptedHost::failing(
+        "primary",
+        vec![follow_up_to_a_provider_held_response()],
+    ));
+    let router = router(
+        config,
+        json!({"num_retries": 0, "fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let response = router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    assert_eq!(response.deployment_id, "b1");
 }
 
 #[rstest]
