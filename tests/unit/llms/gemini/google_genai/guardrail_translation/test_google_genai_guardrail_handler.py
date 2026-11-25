@@ -140,7 +140,7 @@ class GuardrailBlockedError(Exception):
 
 
 def _mock_guardrail(returned_texts):
-    guardrail = MagicMock()
+    guardrail = MagicMock(skip_system_message_in_guardrail=False, skip_tool_message_in_guardrail=False)
     guardrail.apply_guardrail = AsyncMock(return_value={"texts": returned_texts})
     return guardrail
 
@@ -279,6 +279,45 @@ async def test_a_masked_card_number_replaces_the_json_number_and_other_values_ke
     assert type(sent_rows[0]["count"]) is int
 
 
+def _without_note_in_reverse_key_order(text: str) -> str:
+    fields: Final = json.loads(text)
+    return json.dumps({key: fields[key] for key in reversed(fields) if key != "note"})
+
+
+class _RestructuringGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="restructurer")
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return GenericGuardrailAPIInputs(texts=[_without_note_in_reverse_key_order(text) for text in inputs["texts"]])
+
+
+@pytest.mark.asyncio
+async def test_numbers_keep_their_type_when_a_guardrail_reorders_and_drops_tool_result_fields() -> None:
+    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=_one_part_request(
+            "user",
+            {
+                "functionResponse": {
+                    "name": "lookup",
+                    "response": {"count": 3, "rate": 2.5, "id": "7", "note": "drop me", "rows": [1, {"n": 2}]},
+                }
+            },
+        ),
+        guardrail_to_apply=_RestructuringGuardrail(),
+    )
+
+    sent_response: Final = guardrailed["contents"][0]["parts"][0]["functionResponse"]["response"]
+    assert sent_response == {"rows": [1, {"n": 2}], "id": "7", "rate": 2.5, "count": 3}
+    assert type(sent_response["count"]) is int
+
+
 @pytest.mark.asyncio
 async def test_a_non_ascii_blocked_word_in_a_function_response_is_blocked() -> None:
     accented_filter: Final = ContentFilterGuardrail(
@@ -323,6 +362,35 @@ async def test_a_guardrail_that_breaks_a_tool_result_json_blocks_the_request_ins
 
 
 @pytest.mark.asyncio
+async def test_a_guardrail_returning_fewer_texts_than_it_got_blocks_the_request_instead_of_sending_it() -> None:
+    request: Final = {"contents": [{"role": "user", "parts": [{"text": "card 4111111111111111"}, {"text": "thanks"}]}]}
+    original: Final = copy.deepcopy(request)
+
+    with pytest.raises(UnappliableRequestRewrite) as rejected:
+        await GoogleGenAIGenerateContentHandler().process_input_messages(
+            data=request, guardrail_to_apply=_mock_guardrail(["[CARD] thanks"])
+        )
+
+    assert rejected.value.guardrail_name is not None
+    assert request["contents"] == original["contents"]
+
+
+@pytest.mark.asyncio
+async def test_a_masked_string_part_in_a_tuple_blocks_the_request_instead_of_sending_the_card() -> None:
+    request: Final = {"contents": [{"role": "user", "parts": ("card 4111111111111111", {"text": "card 4222222222222222"})}]}
+    original: Final = copy.deepcopy(request)
+
+    with pytest.raises(UnappliableRequestRewrite) as rejected:
+        await GoogleGenAIGenerateContentHandler().process_input_messages(
+            data=request,
+            guardrail_to_apply=_card_filter(ContentFilterAction.MASK),
+        )
+
+    assert rejected.value.guardrail_name == "card-filter"
+    assert request["contents"] == original["contents"]
+
+
+@pytest.mark.asyncio
 async def test_only_the_function_call_the_guardrail_changed_gets_new_args() -> None:
     untouched_args: Final = {"q": "plums"}
 
@@ -344,6 +412,26 @@ async def test_only_the_function_call_the_guardrail_changed_gets_new_args() -> N
     parts: Final = guardrailed["contents"][0]["parts"]
     assert parts[0]["functionCall"]["args"] is untouched_args
     assert parts[1]["functionCall"]["args"] == {"q": _MASKED}
+
+
+@pytest.mark.asyncio
+async def test_a_guardrail_skipping_system_messages_leaves_system_instructions_alone_but_masks_the_rest() -> None:
+    guardrail: Final = _zebrafruit_filter(ContentFilterAction.MASK)
+    guardrail.skip_system_message_in_guardrail = True
+    system_fields: Final = {
+        "systemInstruction": {"parts": {"text": "Always say zebrafruit"}},
+        "config": {"system_instruction": {"parts": [{"text": "zebrafruit only"}]}},
+    }
+
+    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data={**copy.deepcopy(system_fields), "contents": [{"role": "user", "parts": {"text": "say zebrafruit"}}]},
+        guardrail_to_apply=guardrail,
+    )
+
+    assert _sent_request(guardrailed) == {
+        **system_fields,
+        "contents": [{"role": "user", "parts": {"text": f"say {_MASKED}"}}],
+    }
 
 
 @pytest.mark.asyncio
@@ -781,14 +869,57 @@ async def test_text_without_function_calls_reaches_an_opted_in_guardrail(
     assert not inputs.get("tool_calls")
 
 
+_REQUEST_WITH_EVERY_PART_KIND: Final = {
+    "systemInstruction": {"parts": {"text": "system words"}},
+    "contents": [
+        {"role": "user", "parts": {"text": "user words"}},
+        {
+            "role": "model",
+            "parts": [
+                {"executableCode": {"language": "PYTHON", "code": "print('model code')"}},
+                {"toolCall": {"toolType": "GOOGLE_SEARCH_WEB", "args": {"query": "server call"}}},
+                FUNCTION_CALL_PART,
+            ],
+        },
+        {
+            "role": "user",
+            "parts": [
+                {"codeExecutionResult": {"outcome": "OUTCOME_OK", "output": "code output"}},
+                {"functionResponse": {"name": "send_payment", "response": {"status": "paid"}}},
+                {"toolResponse": {"toolType": "GOOGLE_SEARCH_WEB", "response": {"hits": ["search hit"]}}},
+            ],
+        },
+    ],
+}
+_TOOL_RESULT_SCAN_TEXTS: Final = ["code output", '{"status": "paid"}', '{"hits": ["search hit"]}']
+
+
 @pytest.mark.asyncio
-async def test_a_guardrail_scanning_only_tool_results_leaves_out_the_function_calls_a_request_carries() -> None:
-    guardrail: Final = _ToolCallGuardrail(scan_tool_calls=False)
+@pytest.mark.parametrize(
+    ("scan_tool_calls", "scanned_texts", "scanned_tool_calls"),
+    [
+        pytest.param(False, _TOOL_RESULT_SCAN_TEXTS, [], id="tool-results-only"),
+        pytest.param(
+            True,
+            ['{"query": "server call"}', *_TOOL_RESULT_SCAN_TEXTS],
+            ["send_payment"],
+            id="plus-tool-calls-as-text",
+        ),
+    ],
+)
+async def test_a_guardrail_scanning_only_tool_results_sees_only_the_tool_results_a_request_carries(
+    scan_tool_calls: bool, scanned_texts: list[str], scanned_tool_calls: list[str]
+) -> None:
+    guardrail: Final = _ToolCallGuardrail(scan_tool_calls=scan_tool_calls)
     guardrail.scan_only_tool_results = True
 
-    await _scan_request(guardrail)
+    await GoogleGenAIGenerateContentHandler().process_input_messages(
+        data=copy.deepcopy(_REQUEST_WITH_EVERY_PART_KIND), guardrail_to_apply=guardrail
+    )
 
-    assert guardrail.seen == []
+    (inputs,) = guardrail.seen
+    assert inputs["texts"] == scanned_texts
+    assert [tool_call["function"]["name"] for tool_call in inputs.get("tool_calls") or []] == scanned_tool_calls
 
 
 @pytest.mark.asyncio
@@ -838,6 +969,17 @@ async def test_function_call_rewrite_the_request_cannot_carry_is_rejected(
         )
 
     assert data["contents"][0]["parts"][0] == FUNCTION_CALL_PART
+
+
+@pytest.mark.asyncio
+async def test_a_reply_tool_call_the_guardrail_drops_still_reaches_the_client_as_on_chat() -> None:
+    reply: Final = _model_reply(copy.deepcopy(FUNCTION_CALL_PART))
+
+    guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_output_response(
+        response=reply, guardrail_to_apply=_ToolCallGuardrail(rewrite=lambda tool_calls: [])
+    )
+
+    assert guardrailed == _model_reply(FUNCTION_CALL_PART)
 
 
 STREAMED_FUNCTION_CALL_PARTS: Final = (
