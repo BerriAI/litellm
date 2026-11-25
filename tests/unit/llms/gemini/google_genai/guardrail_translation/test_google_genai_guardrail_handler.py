@@ -337,13 +337,23 @@ def _without_zebrafruit_rows(text: str) -> str:
 
 
 @pytest.mark.asyncio
-async def test_numbers_keep_their_type_when_a_guardrail_drops_a_tool_result_list_item() -> None:
+@pytest.mark.parametrize(
+    ("rows", "kept_rows"),
+    [
+        ([1, "zebrafruit", 2.5, {"n": 3}], [1, 2.5, {"n": 3}]),
+        (["1", 1, "zebrafruit"], ["1", 1]),
+        ([1, "1", "zebrafruit", 1], [1, "1", 1]),
+    ],
+)
+async def test_list_items_keep_their_type_when_a_guardrail_drops_a_tool_result_list_item(
+    rows: list[object], kept_rows: list[object]
+) -> None:
     guardrailed: Final = await GoogleGenAIGenerateContentHandler().process_input_messages(
-        data=_function_response_with_rows([1, "zebrafruit", 2.5, {"n": 3}]),
+        data=_function_response_with_rows(rows),
         guardrail_to_apply=_RestructuringGuardrail(rewrite=_without_zebrafruit_rows),
     )
 
-    assert _sent_request(guardrailed) == _function_response_with_rows([1, 2.5, {"n": 3}])
+    assert _sent_request(guardrailed) == _function_response_with_rows(kept_rows)
 
 
 @pytest.mark.asyncio

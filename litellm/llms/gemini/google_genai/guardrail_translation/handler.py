@@ -16,7 +16,8 @@ import json
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain, groupby, pairwise
+from functools import partial
+from itertools import accumulate, chain, groupby, pairwise
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, TypeAlias
 
@@ -187,11 +188,27 @@ def _with_original_numbers(original: object, guardrailed: object, depth: int) ->
     if original_items is None or guardrailed_items is None:
         return guardrailed
     if len(original_items) != len(guardrailed_items):
-        originals_by_text: Final = {_json_scan_text(item): item for item in original_items}
-        return [originals_by_text.get(_json_scan_text(value), value) for value in guardrailed_items]
+        return _with_kept_originals(original_items, guardrailed_items)
     return [
         _with_original_numbers(item, value, depth + 1)
         for item, value in zip(original_items, guardrailed_items, strict=True)
+    ]
+
+
+def _end_of_next_match(original_texts: Sequence[str], start: int, text: str) -> int:
+    return next((index + 1 for index in range(start, len(original_texts)) if original_texts[index] == text), start)
+
+
+def _with_kept_originals(original_items: Sequence[object], guardrailed_items: Sequence[object]) -> Sequence[object]:
+    original_texts: Final = tuple(_json_scan_text(item) for item in original_items)
+    match_ends: Final = accumulate(
+        (_json_scan_text(value) for value in guardrailed_items),
+        partial(_end_of_next_match, original_texts),
+        initial=0,
+    )
+    return [
+        original_items[end - 1] if end != start else value
+        for value, (start, end) in zip(guardrailed_items, pairwise(match_ends), strict=True)
     ]
 
 
