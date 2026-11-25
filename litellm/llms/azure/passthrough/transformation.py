@@ -64,7 +64,7 @@ def without_api_version(api_base: str) -> str:
 
 
 class AzurePassthroughConfig(BasePassthroughConfig):
-    def is_streaming_request(self, endpoint: str, request_data: dict) -> bool:
+    def is_streaming_request(self, endpoint: str, request_data: Mapping[str, object]) -> bool:
         return bool(request_data.get("stream"))
 
     def get_complete_url(
@@ -73,7 +73,7 @@ class AzurePassthroughConfig(BasePassthroughConfig):
         api_key: str | None,
         model: str,
         endpoint: str,
-        request_query_params: dict | None,
+        request_query_params: Mapping[str, object] | None,
         litellm_params: dict,
     ) -> tuple["URL", str]:
         base_target_url: Final = self.get_api_base(api_base)
@@ -102,14 +102,14 @@ class AzurePassthroughConfig(BasePassthroughConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         return BaseAzureLLM.base_validate_azure_environment(
             headers=headers,
             litellm_params=GenericLiteLLMParams.model_validate({**litellm_params, "api_key": api_key}),

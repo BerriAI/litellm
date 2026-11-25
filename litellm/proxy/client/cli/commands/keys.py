@@ -1,8 +1,8 @@
 import builtins
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Any, Final, Literal, Protocol
+from typing import Final, Literal, Protocol
 
 import click
 import requests
@@ -10,7 +10,10 @@ import rich
 from rich.table import Table
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, iter_items, require_get, subscript
+
 from ...keys import KeysManagementClient
+from .auth import sized_len
 
 
 class _CliContext(TypedDict):
@@ -25,12 +28,24 @@ class _CliContextView(Protocol):
     def obj(self) -> _CliContext: ...
 
 
-class _KeyRowsView(TypedDict):
-    rows: ReadOnly[Sequence[Mapping[str, object]]]
-
-
 class _JsonBodyView(TypedDict):
     body: ReadOnly[object]
+
+
+class _KeyImportFields(TypedDict, total=False, extra_items=object):
+    pass
+
+
+_KEY_IMPORT_FIELD_NAMES: Final = (
+    "models",
+    "aliases",
+    "spend",
+    "key_alias",
+    "team_id",
+    "user_id",
+    "budget_id",
+    "config",
+)
 
 
 def _cli_context(view: _CliContextView) -> _CliContext:
@@ -81,38 +96,39 @@ def list(
     """List all API keys"""
     context: Final = _cli_context(ctx)
     client: Final = KeysManagementClient(context["base_url"], context["api_key"])
-    response: Final = client.list(
-        page=page,
-        size=size,
-        user_id=user_id,
-        team_id=team_id,
-        organization_id=organization_id,
-        key_hash=key_hash,
-        key_alias=key_alias,
-        return_full_object=return_full_object,
-        include_team_keys=include_team_keys,
+    response: Final = as_str_mapping(
+        client.list(
+            page=page,
+            size=size,
+            user_id=user_id,
+            team_id=team_id,
+            organization_id=organization_id,
+            key_hash=key_hash,
+            key_alias=key_alias,
+            return_full_object=return_full_object,
+            include_team_keys=include_team_keys,
+        )
     )
     assert isinstance(response, dict)
 
     if output_format == "json":
         rich.print_json(data=response)
     else:
-        listed: Final[_KeyRowsView] = {"rows": response.get("keys", [])}
-        rich.print(f"Showing {len(listed['rows'])} keys out of {response.get('total_count', 0)}")
+        rich.print(f"Showing {sized_len(response.get('keys', []))} keys out of {response.get('total_count', 0)}")
         table: Final = Table(title="API Keys")
         table.add_column("Key Hash", style="cyan")
         table.add_column("Alias", style="green")
         table.add_column("User ID", style="magenta")
         table.add_column("Team ID", style="yellow")
         table.add_column("Spend", style="red")
-        key_rows: Final[_KeyRowsView] = {"rows": response.get("keys", [])}
-        for key in key_rows["rows"]:
+        for key in iter_items(response.get("keys", [])):
+            row = require_get(key)
             table.add_row(
-                str(key.get("token", "")),
-                str(key.get("key_alias", "")),
-                str(key.get("user_id", "")),
-                str(key.get("team_id", "")),
-                str(key.get("spend", "")),
+                str(row.get("token", "")),
+                str(row.get("key_alias", "")),
+                str(row.get("user_id", "")),
+                str(row.get("team_id", "")),
+                str(row.get("spend", "")),
             )
         rich.print(table)
 
@@ -218,29 +234,27 @@ def _parse_created_since_filter(created_since: str | None) -> datetime | None:
         raise click.Abort()
 
 
-def _fetch_all_keys_with_pagination(
-    source_client: KeysManagementClient, source_base_url: str
-) -> Sequence[Mapping[str, object]]:
+def _fetch_all_keys_with_pagination(source_client: KeysManagementClient, source_base_url: str) -> Sequence[object]:
     """Fetch all keys from source instance using pagination."""
     click.echo(f"Fetching keys from source server: {source_base_url}")
-    source_keys: Final[builtins.list[Mapping[str, object]]] = []
+    source_keys: Final[builtins.list[object]] = []
     page = 1
     page_size: Final = 100  # Use a larger page size to minimize API calls
 
     while True:
-        source_response = source_client.list(return_full_object=True, page=page, size=page_size)
+        source_response = as_str_mapping(source_client.list(return_full_object=True, page=page, size=page_size))
         # source_client.list() returns Dict[str, Any] when return_request is False (default)
         assert isinstance(source_response, dict), "Expected dict response from list API"
-        page_keys: Sequence[Mapping[str, object]] = source_response.get("keys", [])
+        page_keys = source_response.get("keys", [])
 
         if not page_keys:
             break
 
-        source_keys.extend(page_keys)
-        click.echo(f"Fetched page {page}: {len(page_keys)} keys")
+        source_keys.extend(iter_items(page_keys))
+        click.echo(f"Fetched page {page}: {sized_len(page_keys)} keys")
 
         # Check if we got fewer keys than the page size, indicating last page
-        if len(page_keys) < page_size:
+        if sized_len(page_keys) < page_size:
             break
 
         page += 1
@@ -249,17 +263,17 @@ def _fetch_all_keys_with_pagination(
 
 
 def _filter_keys_by_created_since(
-    source_keys: Sequence[Mapping[str, object]],
+    source_keys: Sequence[object],
     created_since_dt: datetime | None,
     created_since: str,
-) -> Sequence[Mapping[str, object]]:
+) -> Sequence[object]:
     """Filter keys by created_since date if specified."""
     if not created_since_dt:
         return source_keys
 
-    filtered_keys: Final[builtins.list[Mapping[str, object]]] = []
+    filtered_keys: Final[builtins.list[object]] = []
     for key in source_keys:
-        key_created_at = key.get("created_at")
+        key_created_at = require_get(key).get("created_at")
         if key_created_at:
             # Parse the key's created_at timestamp
             if isinstance(key_created_at, str):
@@ -279,7 +293,7 @@ def _filter_keys_by_created_since(
     return filtered_keys
 
 
-def _display_dry_run_table(source_keys: Sequence[Mapping[str, object]]) -> None:
+def _display_dry_run_table(source_keys: Sequence[object]) -> None:
     """Display a table of keys that would be imported in dry-run mode."""
     click.echo("\n--- DRY RUN MODE ---")
     table: Final = Table(title="Keys that would be imported")
@@ -288,7 +302,8 @@ def _display_dry_run_table(source_keys: Sequence[Mapping[str, object]]) -> None:
     table.add_column("Created", style="cyan")
 
     for key in source_keys:
-        created_at = key.get("created_at", "")
+        row = require_get(key)
+        created_at = row.get("created_at", "")
         # Format the timestamp if it exists
         if created_at:
             # Try to parse and format the timestamp for better readability
@@ -298,34 +313,19 @@ def _display_dry_run_table(source_keys: Sequence[Mapping[str, object]]) -> None:
                     dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
                     created_at = dt.strftime("%Y-%m-%d %H:%M")
 
-        table.add_row(str(key.get("key_alias", "")), str(key.get("user_id", "")), str(created_at))
+        table.add_row(str(row.get("key_alias", "")), str(row.get("user_id", "")), str(created_at))
     rich.print(table)
 
 
-def _prepare_key_import_data(key: Mapping[str, object]) -> dict[str, Any]:
+def _prepare_key_import_data(key: object) -> _KeyImportFields:
     """Prepare key data for import by extracting relevant fields."""
-    import_data: Final = {}
-
-    # Copy relevant fields if they exist
-    for field in [
-        "models",
-        "aliases",
-        "spend",
-        "key_alias",
-        "team_id",
-        "user_id",
-        "budget_id",
-        "config",
-    ]:
-        if key.get(field):
-            import_data[field] = key[field]
-
-    return import_data
+    fields: Final = require_get(key)
+    return _KeyImportFields(
+        **{field: subscript(fields, field) for field in _KEY_IMPORT_FIELD_NAMES if fields.get(field)}
+    )
 
 
-def _import_keys_to_destination(
-    source_keys: Sequence[Mapping[str, object]], dest_client: KeysManagementClient
-) -> tuple[int, int]:
+def _import_keys_to_destination(source_keys: Sequence[object], dest_client: KeysManagementClient) -> tuple[int, int]:
     """Import each key to the destination instance and return counts."""
     imported_count = 0
     failed_count = 0
@@ -341,12 +341,12 @@ def _import_keys_to_destination(
             # The generate method returns JSON data directly, not a Response object
             imported_count += 1
 
-            key_alias = key.get("key_alias", "N/A")
+            key_alias = require_get(key).get("key_alias", "N/A")
             click.echo(f"Imported key: {key_alias}")
 
         except Exception as e:
             failed_count += 1
-            key_alias = key.get("key_alias", "N/A")
+            key_alias = require_get(key).get("key_alias", "N/A")
             click.echo(f"Failed to import key {key_alias}: {e}", err=True)
 
     return imported_count, failed_count

@@ -1,16 +1,35 @@
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, Protocol
 
 from litellm.constants import VLLM_CHOICE_FIELDS
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains, require_attributes, subscript
 from litellm.litellm_core_utils.stream_usage_chunks import is_injected_stream_usage_artifact
 from litellm.types.utils import Choices, ModelResponse, ModelResponseStream, TextChoices, TextCompletionResponse
+
+
+class _SupportsGet(Protocol):
+    def get(self, key: str, /) -> object: ...
+
+
+def _text_choice(chat_choice: object) -> TextChoices:
+    choice_fields: Final = decoded_json_object(
+        {field: subscript(chat_choice, field) for field in VLLM_CHOICE_FIELDS if json_contains(chat_choice, field)}
+    )
+    text_choices: Final = TextChoices(index=0, **choice_fields)
+    delta: Final = subscript(chat_choice, "delta")
+    text_choices["text"] = subscript(delta, "content")
+    text_choices["reasoning_content"] = require_attributes(delta, _SupportsGet, "get").get("reasoning_content")
+    text_choices["index"] = subscript(chat_choice, "index")
+    text_choices["finish_reason"] = subscript(chat_choice, "finish_reason")
+    return text_choices
 
 
 class TextCompletionStreamWrapper:
     def __init__(
         self,
         completion_stream,
-        model,
-        stream_options: dict | None = None,
+        model: object,
+        stream_options: Mapping[str, object] | None = None,
         custom_llm_provider: str | None = None,
         usage_injected_by_proxy: bool = False,
     ):
@@ -31,7 +50,7 @@ class TextCompletionStreamWrapper:
     def __aiter__(self):
         return self
 
-    def convert_to_text_completion_object(self, chunk: ModelResponse | ModelResponseStream):
+    def convert_to_text_completion_object(self, chunk: ModelResponse | ModelResponseStream) -> TextCompletionResponse:
         try:
             response: Final = TextCompletionResponse()
             response["id"] = chunk.get("id", None)
@@ -41,19 +60,7 @@ class TextCompletionStreamWrapper:
             if isinstance(chunk, Choices):  # chunk should always be of type StreamingChoices
                 raise Exception
 
-            if chunk["choices"]:
-                chat_choice: Final = chunk["choices"][0]
-                text_choices: Final = TextChoices(
-                    **{field: chat_choice[field] for field in VLLM_CHOICE_FIELDS if field in chat_choice}
-                )
-                delta: Final = chat_choice["delta"]
-                text_choices["text"] = delta["content"]
-                text_choices["reasoning_content"] = delta.get("reasoning_content")
-                text_choices["index"] = chat_choice["index"]
-                text_choices["finish_reason"] = chat_choice["finish_reason"]
-                response["choices"] = [text_choices]
-            else:
-                response["choices"] = []
+            response["choices"] = [_text_choice(chat_choice) for chat_choice in chunk.choices]
 
             if self.include_usage:
                 response.usage = chunk.get("usage", None)

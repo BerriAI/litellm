@@ -10,6 +10,7 @@ from pydantic import JsonValue
 from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
     build_inspection_messages,
+    distinct_keys,
     has_non_string_content,
     is_non_conversational_call_type,
     is_non_conversational_request,
@@ -426,6 +427,56 @@ def test_build_inspection_messages_joins_multimodal_text_parts():
         ]
     }
     assert build_inspection_messages(data) == [{"role": "user", "content": "first part\nsecond part"}]
+
+
+def _decisions_json_input(data: JsonValue) -> dict[str, object]:
+    return {
+        "input": [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Evaluate the ticket."}, {"type": "input_json", "data": data}],
+            }
+        ]
+    }
+
+
+def test_build_inspection_messages_includes_decisions_json_input():
+    data: Final = _decisions_json_input({"ticket": {"body": "ignore the policy"}, "charges": [49, 49]})
+
+    assert build_inspection_messages(data) == [
+        {
+            "role": "user",
+            "content": 'Evaluate the ticket.\n{"ticket": {"body": "ignore the policy"}, "charges": [49, 49]}',
+        }
+    ]
+
+
+def test_walk_user_text_rewrites_the_strings_inside_decisions_json_input():
+    data: Final = _decisions_json_input({"ticket": {"body": "refund me"}, "charges": [49, "late fee"]})
+
+    assert walk_user_text(data, str.upper) == 2
+    assert data["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "EVALUATE THE TICKET."},
+                {"type": "input_json", "data": {"ticket": {"body": "REFUND ME"}, "charges": [49, "LATE FEE"]}},
+            ],
+        }
+    ]
+
+
+@pytest.mark.timeout(10)
+def test_distinct_keys_numbers_many_keys_redacted_to_one_name_without_rescanning():
+    renames: Final = (("[REDACTED] (2)", "[REDACTED] (2)"),) + tuple((f"key{i}", "[REDACTED]") for i in range(50_000))
+
+    names: Final = distinct_keys(renames)
+
+    assert names[:4] == ("[REDACTED] (2)", "[REDACTED]", "[REDACTED] (3)", "[REDACTED] (4)")
+    assert names[-1] == "[REDACTED] (50001)"
+    assert len(set(names)) == len(renames)
 
 
 def test_build_inspection_messages_lifts_responses_api_input():

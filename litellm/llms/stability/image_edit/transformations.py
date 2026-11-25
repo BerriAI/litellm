@@ -6,13 +6,14 @@ Handles transformation between OpenAI-compatible format and Stability AI API for
 API Reference: https://platform.stability.ai/docs/api-reference
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import decoded_json_object, json_contains, subscript
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -31,12 +32,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-
-class _StabilityImageEditResponse(TypedDict, total=False):
-    image: ReadOnly[str]
-    finish_reason: ReadOnly[str]
-    seed: ReadOnly[int]
-    errors: ReadOnly[Sequence[str]]
+_DECODED_JSON: Final = TypeAdapter(object)
 
 
 class StabilityImageEditConfig(BaseImageEditConfig):
@@ -67,7 +63,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI parameters to Stability AI parameters.
 
@@ -153,12 +149,12 @@ class StabilityImageEditConfig(BaseImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: Mapping[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Validate environment and set up headers for Stability AI.
         """
@@ -177,11 +173,11 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
-        image_edit_optional_request_params: dict,
+        image: FileTypes | Sequence[FileTypes | None] | None,
+        image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+        headers: Mapping[str, object],
+    ) -> tuple[dict[str, object], RequestFiles]:
         """
         Transform OpenAI-style request to Stability AI request format.
 
@@ -268,7 +264,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         OpenAI expects: {"data": [{"b64_json": "base64..."}], "created": timestamp}
         """
         try:
-            response_data: Final[_StabilityImageEditResponse] = raw_response.json()
+            response_json: Final = _DECODED_JSON.validate_python(raw_response.json())
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error parsing Stability AI response: {e}",
@@ -277,14 +273,15 @@ class StabilityImageEditConfig(BaseImageEditConfig):
             )
 
         # Check for errors in response
-        if "errors" in response_data:
+        if json_contains(response_json, "errors"):
             raise self.get_error_class(
-                error_message=f"Stability AI error: {response_data['errors']}",
+                error_message=f"Stability AI error: {subscript(response_json, 'errors')}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
 
         # Check finish_reason
+        response_data: Final = decoded_json_object(response_json)
         finish_reason: Final = response_data.get("finish_reason", "")
         if finish_reason == "CONTENT_FILTERED":
             raise self.get_error_class(

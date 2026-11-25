@@ -612,3 +612,68 @@ def test_redact_credentials_in_payload_leaves_a_realistic_tool_schema_intact():
     assert "REDACTED" not in str(result["tools"])
     assert result["tools"][0] == tool
     assert result["api_key"] == "REDACTED"
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "apiKey",
+        "clientSecret",
+        "accessToken",
+        "secretAccessKey",
+        "x-apiKey",
+        "APIKey",
+        "OpenAIAPIKey",
+        "AWSSecret",
+        "XAPIKey",
+    ],
+)
+def test_split_camel_case_opt_in_catches_camel_case_credential_names(key: str):
+    assert SensitiveDataMasker(split_camel_case=True).is_sensitive_key(key) is True
+
+
+@pytest.mark.parametrize("key", ["apiKey", "clientSecret", "tokenCount", "keyAlias", "accessLevel"])
+def test_default_masker_does_not_split_camel_case(key: str):
+    assert SensitiveDataMasker().is_sensitive_key(key) is False
+
+
+def test_split_camel_case_keeps_pricing_and_count_fields_clear():
+    masker: Final = SensitiveDataMasker(split_camel_case=True)
+
+    assert masker.is_sensitive_key("maxTokens") is False
+    assert masker.is_sensitive_key("inputCostPerToken") is False
+
+
+@pytest.mark.parametrize("key", ["sEt-CoOkIe", "AUTHORIZATION", "Api-Key", "X-API-KEY"])
+def test_split_camel_case_does_not_break_odd_cased_plain_names(key: str):
+    assert SensitiveDataMasker(split_camel_case=True).is_sensitive_key(key) is True
+
+
+def test_empty_non_sensitive_overrides_disables_the_cost_exemption():
+    strict: Final = SensitiveDataMasker(non_sensitive_overrides=frozenset())
+
+    assert SensitiveDataMasker().is_sensitive_key("cost_center_api_key") is False
+    assert strict.is_sensitive_key("cost_center_api_key") is True
+    assert strict.is_sensitive_key("cost_center") is False
+
+
+def test_redact_credentials_in_payload_drops_listed_keys_at_any_depth_with_the_given_masker():
+    from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
+
+    payload: Final = {
+        "logging": [{"callback_vars": {"langfuse_secret_key": "s"}}],
+        "cost_center_api_key": "sk-cost",
+        "nested": {"scim_roles": ["r"], "keep": 1, "deeper": [{"logging": {}, "apiKey": "k"}]},
+    }
+
+    result: Final = redact_credentials_in_payload(
+        payload,
+        SensitiveDataMasker(non_sensitive_overrides=frozenset(), split_camel_case=True),
+        dropped_keys=frozenset({"logging", "scim_roles"}),
+    )
+
+    assert result == {
+        "cost_center_api_key": "REDACTED",
+        "nested": {"keep": 1, "deeper": [{"apiKey": "REDACTED"}]},
+    }
+    assert redact_credentials_in_payload(payload)["cost_center_api_key"] == "sk-cost"

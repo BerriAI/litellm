@@ -24,7 +24,7 @@ from tests.integration._support.process import graceful_stop_seconds, owned_prox
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 
-DEFAULT_ROUTES: Final = ("llm_api_routes", "/key/spend/report")
+DEFAULT_ROUTES: Final = ("llm_api_routes", "/key/spend/report", "/key/info")
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _PROBE_PREFIX: Final = "route-probe-"
 _RACE_PREFIX: Final = "route-race-"
@@ -143,13 +143,18 @@ def test_default_with_a_non_string_route_is_ignored(
         assert (created["allowed_routes"], _stored_routes(non_string_default, token)) == (expected, expected)
 
 
-def test_default_routes_open_own_spend_report_and_nothing_wider(defaults: Gateway) -> None:
+@pytest.mark.parametrize("service_account", (False, True), ids=("user_key", "service_account_key"))
+def test_default_routes_open_own_key_info_and_spend_report(defaults: Gateway, service_account: bool) -> None:
     with defaults.scenario() as scenario:
         model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
-        user: Final = scenario.user(user_role="internal_user")
-        token: Final = _created_key(
-            scenario, defaults.post("/key/generate", {"user_id": user, "key_type": "llm_api", "models": [model]})
+        team: Final = scenario.team(team_member_permissions=["/key/generate"]) if service_account else None
+        owner: Final[dict[str, JsonValue]] = (
+            {"team_id": team} if team is not None else {"user_id": scenario.user(user_role="internal_user")}
         )
+        route: Final = "/key/service-account/generate" if service_account else "/key/generate"
+        created: Final = defaults.post(route, {**owner, "key_type": "llm_api", "models": [model]})
+        token: Final = _created_key(scenario, created)
+        assert _stored_routes(defaults, token) == list(DEFAULT_ROUTES)
         other: Final = _full_access_key(scenario, user_id=scenario.user(user_role="internal_user"))
         defaults.chat(model, key=token, text=f"default routes {uuid.uuid4().hex}")
         logged: Final = eventually(
@@ -166,6 +171,9 @@ def test_default_routes_open_own_spend_report_and_nothing_wider(defaults: Gatewa
         own: Final = defaults.request("GET", "/key/spend/report", key=token, params=window)
         assert own.status_code == 200, own.text
         assert [object_value(row)["api_key"] for row in list_value(_JSON.validate_json(own.content))] == [_hash(token)]
+        info: Final = defaults.request("GET", "/key/info", key=token)
+        assert info.status_code == 200, info.text
+        assert object_value(JSON_OBJECT.validate_json(info.content)["info"])["allowed_routes"] == list(DEFAULT_ROUTES)
 
         foreign: Final = defaults.request(
             "GET", "/key/spend/report", key=token, params={**window, "api_key": _hash(other)}
@@ -173,7 +181,8 @@ def test_default_routes_open_own_spend_report_and_nothing_wider(defaults: Gatewa
         assert foreign.status_code == 403, foreign.text
         global_report: Final = defaults.request("GET", "/global/spend/report", key=token, params=window)
         assert global_report.status_code == 403, global_report.text
-        minted: Final = defaults.request("POST", "/key/generate", {}, key=token)
+        mint_fields: Final[dict[str, JsonValue]] = {"team_id": team} if team is not None else {}
+        minted: Final = defaults.request("POST", "/key/generate", mint_fields, key=token)
         assert minted.status_code == 403, minted.text
 
 

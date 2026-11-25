@@ -451,10 +451,11 @@ def test_failure_hook_replacement_ends_a_queue_stream_that_fails_before_the_firs
     marker: Final = _marker()
     body: Final = _body("clean", marker, (_RAISING,), "raise-builtin-after-0", _REPLACE, priority=0)
     response: Final = rig.proxy.gateway.request("POST", "/queue/chat/completions", body)
-    ended: Final = _ended_in_band(response, 200)
-    assert ended.content == "", response.text
-    assert ended.error["code"] == "403", ended.error
-    assert ended.error["message"] == _REPLACEMENT_MESSAGE, ended.error
+    assert response.status_code == 403, response.text
+    assert response.headers["content-type"] == "application/json", response.headers
+    assert JSON_OBJECT.validate_json(response.content) == {
+        "error": {"message": _REPLACEMENT_MESSAGE, "type": "permission_error", "param": None, "code": "403"}
+    }, response.text
     assert _CRASH_MESSAGE not in response.text, response.text
     assert _calls_with(rig.upstream, marker) == 1
 
@@ -482,8 +483,7 @@ def _responses_body(marker: str, *directives: str) -> dict[str, JsonValue]:
 
 def _failed_response_error(response: httpx.Response) -> dict[str, JsonValue]:
     assert response.status_code == 200, response.text
-    lines: Final = _data_lines(response.text)
-    assert lines[-1] == "[DONE]" and lines.count("[DONE]") == 1, response.text
+    assert "[DONE]" not in _data_lines(response.text), response.text
     events: Final = _payloads(response.text)
     kinds: Final = tuple(string_value(event["type"]) for event in events)
     assert kinds[0] == "response.created" and kinds[-1] == "response.failed", response.text

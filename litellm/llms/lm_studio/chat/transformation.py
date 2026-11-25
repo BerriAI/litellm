@@ -28,11 +28,11 @@ class LMStudioChatConfig(OpenAIGPTConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: dict[str, object],
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         for param, value in list(non_default_params.items()):
             if param == "response_format" and isinstance(value, dict):
                 if value.get("type") == "json_schema":

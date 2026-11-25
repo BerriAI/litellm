@@ -21,6 +21,8 @@ from litellm.a2a_protocol.utils import A2ARequestUtils
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils import thread_pool_executor as thread_pool_executor_module
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.responses.streaming_iterator import drain_logging_tasks
+from tests.unit.litellm_core_utils.weakly_parked_logger import weakly_parked_logger
 
 
 class RecordingCustomLogger(CustomLogger):
@@ -98,10 +100,10 @@ class _AgentChunk:
 
 @pytest.mark.asyncio
 async def test_stream_completion_counts_tokens_off_the_event_loop(monkeypatch):
-    from tests.large_text import text
     from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
+        uncounted_text,
         warm_tokenizer,
     )
 
@@ -119,12 +121,12 @@ async def test_stream_completion_counts_tokens_off_the_event_loop(monkeypatch):
     )
 
     async def _stream():
-        yield _AgentChunk(text * 100)
+        yield _AgentChunk(uncounted_text())
 
     iterator = A2AStreamingIterator(
         stream=_stream(),
         request=SimpleNamespace(
-            params=SimpleNamespace(message={"role": "user", "parts": [{"kind": "text", "text": text * 100}]})
+            params=SimpleNamespace(message={"role": "user", "parts": [{"kind": "text", "text": uncounted_text()}]})
         ),
         logging_obj=logging_obj,
         agent_name="test-agent",
@@ -324,3 +326,36 @@ async def test_stream_counts_the_whole_reply_once(
     _ = [chunk async for chunk in iterator]
 
     assert logging_obj.model_call_details["usage"].completion_tokens == A2ARequestUtils.count_tokens(reply)
+
+
+@pytest.mark.asyncio
+async def test_stream_success_log_survives_garbage_collection_while_its_callback_is_pending() -> None:
+    async with weakly_parked_logger() as logger:
+        logging_obj: Final = LitellmLogging(
+            model="a2a/test-agent",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="a2a_send_message_streaming",
+            start_time=datetime(2026, 11, 16, 12, 0, 0),
+            litellm_call_id="a2a-parked",
+            function_id="a2a-parked",
+            dynamic_async_success_callbacks=[logger],
+        )
+
+        async def _stream() -> AsyncIterator[_AgentChunk]:
+            yield _AgentChunk("Hello")
+
+        iterator: Final = A2AStreamingIterator(
+            stream=_stream(),
+            request=SimpleNamespace(
+                params=SimpleNamespace(message={"role": "user", "parts": [{"kind": "text", "text": "hi"}]})
+            ),
+            logging_obj=logging_obj,
+            agent_name="test-agent",
+        )
+
+        yielded: Final = len([chunk async for chunk in iterator])
+        survived: Final = await logger.survives_collection()
+        await drain_logging_tasks()
+
+        assert (yielded, survived, logger.parks, logger.finished.is_set()) == (1, True, 1, True)

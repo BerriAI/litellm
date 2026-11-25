@@ -1,7 +1,5 @@
 import json
 import os
-import pathlib
-import shlex
 import stat
 import sys
 import time
@@ -22,9 +20,11 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     BACKUP_PATH,
     CLAUDE_SETTINGS_PATH,
     CONFIGURE_STATE_PATH,
+    LAUNCH_KEY_OVERLAY_PREFIX,
     OWNED_ENV_KEYS,
     OWNED_TOP_LEVEL_KEYS,
     SETTINGS_FILE_OWNERS,
+    ApiKeyHelper,
     ClaudeSettingsError,
     KeepModel,
     SettingsFileOwner,
@@ -35,7 +35,12 @@ from litellm.proxy.client.cli.commands.claude_settings import (
     configure_claude_settings,
     install_statusline_script,
     configure_state_path,
+    installed_executable,
+    is_lite_api_key_helper,
+    is_lite_api_key_helper_for,
+    lite_api_key_helper,
     merge_claude_settings,
+    remove_launch_settings_files,
     statusline_command,
     unconfigure_claude_settings,
     with_status_line,
@@ -48,7 +53,8 @@ def _owners(*backup_paths):
 
 
 CLAUDE_SETTINGS_MODULE = "litellm.proxy.client.cli.commands.claude_settings"
-AUTH_MODULE = "litellm.proxy.client.cli.commands.auth"
+
+
 @pytest.fixture
 def paths(tmp_path):
     return tmp_path / "claude" / "settings.json", tmp_path / "backup.json"
@@ -57,7 +63,9 @@ def paths(tmp_path):
 def _static_configure(base_url, settings_path, owners, state_path=None):
     """`lite configure claude --api-key`'s shape: a virtual key as a static token, no pinned model."""
     state = state_path if state_path is not None else settings_path.parent.parent / "state.json"
-    configure_claude_settings(base_url.rstrip("/"), StaticToken("sk-virtual-key"), KeepModel(), settings_path, state, owners)
+    configure_claude_settings(
+        base_url.rstrip("/"), StaticToken("sk-virtual-key"), KeepModel(), settings_path, state, owners
+    )
 
 
 class TestConfigureClaudeSettings:
@@ -102,7 +110,9 @@ class TestConfigureClaudeSettings:
         settings_path, backup_path = paths
         settings_path.parent.mkdir(parents=True)
         settings_path.write_text(
-            json.dumps({"apiKeyHelper": "/usr/local/bin/lite auth print-token", "env": {"ANTHROPIC_API_KEY": "sk-leaked"}})
+            json.dumps(
+                {"apiKeyHelper": "/usr/local/bin/lite auth print-token", "env": {"ANTHROPIC_API_KEY": "sk-leaked"}}
+            )
         )
 
         _static_configure("https://proxy.example.com", settings_path, _owners(backup_path))
@@ -163,6 +173,102 @@ class TestConfigureClaudeSettings:
         finally:
             settings_path.parent.chmod(0o700)
         assert not settings_path.exists()
+
+
+class TestLiteApiKeyHelper:
+    def test_quotes_every_token_for_cmd_on_windows(self):
+        helper = lite_api_key_helper(
+            "https://proxy.example.com", platform="win32", which=lambda name: r"C:\Program Files\lite\lite.exe"
+        )
+
+        assert helper is not None
+        assert helper.command == (
+            r'"C:\Program Files\lite\lite.exe" "--base-url" "https://proxy.example.com" "auth" "print-token"'
+        )
+
+    def test_no_lite_on_path_means_no_helper(self):
+        assert lite_api_key_helper("https://proxy.example.com", which=lambda name: None) is None
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "/usr/local/bin/lite --base-url https://proxy.example.com auth print-token",
+            "'/home/me/my tools/lite' --base-url https://other.example.com auth print-token",
+            r'"C:\Program Files\lite\lite.exe" "--base-url" "https://proxy.example.com" "auth" "print-token"',
+        ],
+        ids=["posix", "posix-quoted-path", "windows"],
+    )
+    def test_recognizes_a_helper_any_lite_wrote_for_any_proxy(self, command):
+        assert is_lite_api_key_helper(command)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "/opt/mine/helper",
+            "/usr/local/bin/lite auth print-token --verbose",
+            "",
+            None,
+            ["lite", "auth", "print-token"],
+        ],
+        ids=["users-own-helper", "other-trailing-args", "disabled", "unset", "not-a-string"],
+    )
+    def test_leaves_every_other_helper_alone(self, command):
+        assert not is_lite_api_key_helper(command)
+
+    @pytest.mark.parametrize(
+        ("command", "matches"),
+        [
+            ("/usr/local/bin/lite --base-url https://proxy.example.com auth print-token", True),
+            ("'/home/me/my tools/lite' --base-url https://proxy.example.com auth print-token", True),
+            (r'"C:\Program Files\lite\lite.exe" "--base-url" "https://proxy.example.com" "auth" "print-token"', True),
+            ("/usr/local/bin/lite --base-url https://other.example.com auth print-token", False),
+            ("/usr/local/bin/lite --base-url https://proxy.example.com/v2 auth print-token", False),
+            ("/opt/mine/helper", False),
+            (None, False),
+        ],
+        ids=["posix", "posix-quoted-path", "windows", "other-proxy", "other-path-on-the-proxy", "users-own", "unset"],
+    )
+    def test_matches_a_helper_any_lite_wrote_for_this_proxy_only(self, command, matches):
+        assert is_lite_api_key_helper_for(command, "https://proxy.example.com/") is matches
+
+
+@pytest.mark.skipif(sys.platform.startswith("win"), reason="runs the command through sh, as Claude Code does on POSIX")
+class TestInstalledExecutable:
+    @staticmethod
+    def _script(path, body):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"#!/bin/sh\n{body}\n")
+        path.chmod(0o700)
+
+    def test_falls_back_to_path_when_this_python_has_no_lite(self, tmp_path, monkeypatch):
+        self._script(tmp_path / "pipx" / "lite", "echo pipx")
+        (tmp_path / "venv" / "bin").mkdir(parents=True)
+        monkeypatch.setenv("PATH", str(tmp_path / "pipx"))
+
+        assert installed_executable("lite", scripts_dir=str(tmp_path / "venv" / "bin")) == str(
+            tmp_path / "pipx" / "lite"
+        )
+
+    def test_a_lite_planted_in_the_working_directory_never_becomes_the_helper(self, tmp_path, monkeypatch):
+        self._script(tmp_path / "repo" / "lite", "echo planted")
+        self._script(tmp_path / "pipx" / "lite", "echo pipx")
+        (tmp_path / "venv" / "bin").mkdir(parents=True)
+        monkeypatch.chdir(tmp_path / "repo")
+
+        found = installed_executable(
+            "lite", scripts_dir=str(tmp_path / "venv" / "bin"), environ={"PATH": f"{os.pathsep}{tmp_path / 'pipx'}"}
+        )
+
+        assert found == str(tmp_path / "pipx" / "lite")
+
+    def test_finds_the_lite_exe_launcher_a_windows_python_installs(self, tmp_path):
+        self._script(tmp_path / "venv" / "Scripts" / "lite.exe", "")
+
+        found = installed_executable(
+            "lite", scripts_dir=str(tmp_path / "venv" / "Scripts"), environ={"PATH": ""}, platform="win32"
+        )
+
+        assert found == str(tmp_path / "venv" / "Scripts" / "lite.exe")
 
 
 class TestConflictingOwnersOfTheSettingsFile:
@@ -313,6 +419,77 @@ class TestMergeClaudeSettings:
         assert "model" not in merged
         assert not any(key in merged["env"] for key in ANTHROPIC_DEFAULT_MODEL_ENV_KEYS)
 
+    def test_a_static_token_sends_claude_codes_own_traces_and_logs_to_the_proxy_under_that_token(self):
+        merged = merge_claude_settings({}, "http://127.0.0.1:4000/", StaticToken("token-abc"))
+        telemetry = {key: value for key, value in merged["env"].items() if key.startswith(("OTEL_", "CLAUDE_CODE_"))}
+        assert telemetry == {
+            "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
+            "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+            "CLAUDE_CODE_ENHANCED_TELEMETRY_BETA": "1",
+            "CLAUDE_CODE_PROPAGATE_TRACEPARENT": "1",
+            "OTEL_TRACES_EXPORTER": "otlp",
+            "OTEL_LOGS_EXPORTER": "otlp",
+            "OTEL_EXPORTER_OTLP_PROTOCOL": "http/protobuf",
+            "OTEL_LOG_USER_PROMPTS": "1",
+            "OTEL_LOG_ASSISTANT_RESPONSES": "1",
+            "OTEL_LOG_TOOL_DETAILS": "1",
+            "OTEL_LOG_TOOL_CONTENT": "1",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4000",
+            "OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer token-abc",
+        }
+
+    def test_a_helper_login_sends_telemetry_under_headers_claude_code_reruns_the_helper_for(self):
+        settings = {"env": {"OTEL_EXPORTER_OTLP_HEADERS": "Authorization=Bearer sk-expired-login"}}
+        merged = merge_claude_settings(settings, "http://127.0.0.1:4000/", HELPER)
+        assert merged["otelHeadersHelper"] == f"{HELPER.command} --otel-headers"
+        assert merged["env"]["OTEL_EXPORTER_OTLP_ENDPOINT"] == "http://127.0.0.1:4000"
+        assert merged["env"]["OTEL_LOGS_EXPORTER"] == "otlp"
+        assert "OTEL_EXPORTER_OTLP_HEADERS" not in merged["env"]
+
+    @pytest.mark.parametrize("credential", [StaticToken("token-abc"), ApiKeyHelper("/usr/local/bin/lite auth print-token")])
+    def test_a_collector_set_for_one_signal_is_dropped_so_the_gateway_key_only_reaches_the_gateway(self, credential):
+        settings = {
+            "env": {
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT": "https://collector.example/v1/traces",
+                "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT": "https://collector.example/v1/logs",
+                "OTEL_EXPORTER_OTLP_TRACES_HEADERS": "x-collector=1",
+                "OTEL_EXPORTER_OTLP_LOGS_HEADERS": "x-collector=1",
+                "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT": "https://collector.example/v1/metrics",
+                "OTEL_EXPORTER_OTLP_METRICS_HEADERS": "x-collector=1",
+            }
+        }
+        merged = merge_claude_settings(settings, "http://127.0.0.1:4000/", credential)
+        assert [key for key in merged["env"] if key.startswith("OTEL_EXPORTER_OTLP_") and "ENDPOINT" in key] == [
+            "OTEL_EXPORTER_OTLP_ENDPOINT"
+        ]
+        assert not [key for key in merged["env"] if key.endswith(("_TRACES_HEADERS", "_LOGS_HEADERS", "_METRICS_HEADERS"))]
+
+    def test_a_content_setting_the_user_turned_off_stays_off(self):
+        settings = {"env": {"OTEL_LOG_USER_PROMPTS": "0", "OTEL_LOG_TOOL_CONTENT": "0"}}
+        merged = merge_claude_settings(settings, "http://127.0.0.1:4000/", StaticToken("token-abc"))
+        assert {key: value for key, value in merged["env"].items() if key.startswith("OTEL_LOG_")} == {
+            "OTEL_LOG_USER_PROMPTS": "0",
+            "OTEL_LOG_ASSISTANT_RESPONSES": "1",
+            "OTEL_LOG_TOOL_DETAILS": "1",
+            "OTEL_LOG_TOOL_CONTENT": "0",
+        }
+
+    def test_a_static_token_replaces_an_earlier_logins_headers_helper(self):
+        merged = merge_claude_settings(
+            {"otelHeadersHelper": f"{HELPER.command} --otel-headers"},
+            "http://127.0.0.1:4000/",
+            StaticToken("token-abc"),
+        )
+        assert "otelHeadersHelper" not in merged
+
+    def test_a_helper_lands_top_level_and_blanks_the_token_a_shell_export_would_win_with(self):
+        settings = {"env": {"ANTHROPIC_AUTH_TOKEN": "sk-expired-login", "ANTHROPIC_API_KEY": "leaked"}}
+        merged = merge_claude_settings(settings, "http://127.0.0.1:4000/", HELPER)
+        assert merged["apiKeyHelper"] == HELPER.command
+        assert merged["env"]["ANTHROPIC_BASE_URL"] == "http://127.0.0.1:4000"
+        assert merged["env"]["ANTHROPIC_AUTH_TOKEN"] == ""
+        assert "ANTHROPIC_API_KEY" not in merged["env"]
+
     def test_keeps_existing_switch_values_and_unrelated_keys_without_mutating_the_input(self):
         settings = {"theme": "dark", "env": {"SOME_OTHER_VAR": "value", "ENABLE_TOOL_SEARCH": "false"}}
         merged = merge_claude_settings(settings, "http://127.0.0.1:4000", StaticToken("token-abc"))
@@ -374,6 +551,7 @@ class TestMergeClaudeSettings:
 PROXY = "http://127.0.0.1:4000"
 ANTHROPIC = "https://api.anthropic.com"
 RELOGIN = StaticToken("sk-fresh-login")
+HELPER = ApiKeyHelper("/usr/local/bin/lite --base-url http://127.0.0.1:4000 auth print-token")
 ORIGINAL = {
     "theme": "dark",
     "permissions": {"allow": ["Bash"]},
@@ -432,6 +610,15 @@ class _Rig:
 # to be one test each; the receipt's rules are what make them all come out right.
 UNDO_SCENARIOS = {
     "plain round trip": (ORIGINAL, [], ORIGINAL, {"kept": ()}),
+    "helper round trip": (ORIGINAL, [], ORIGINAL, {"kept": ()}, {"credential": HELPER, "model": KeepModel()}),
+    "helper with no file before": (None, [], None, {"file_removed": True}, {"credential": HELPER}),
+    "re-logins switching between the token and the helper keep the first snapshot": (
+        ORIGINAL,
+        [{"credential": HELPER, "model": KeepModel()}, {"credential": RELOGIN, "model": KeepModel()}],
+        ORIGINAL,
+        {"kept": ()},
+        {"credential": HELPER, "model": KeepModel()},
+    ),
     "no file before": (None, [], None, {"file_removed": True}),
     "no env before": ({"theme": "dark"}, [], {"theme": "dark"}, {}),
     "null env before": ({"theme": "dark", "env": None}, [], {"theme": "dark", "env": None}, {}),
@@ -460,6 +647,18 @@ UNDO_SCENARIOS = {
                 "env.ANTHROPIC_AUTH_TOKEN",
                 "env.ENABLE_TOOL_SEARCH",
                 "env.CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY",
+                "env.CLAUDE_CODE_ENABLE_TELEMETRY",
+                "env.CLAUDE_CODE_ENHANCED_TELEMETRY_BETA",
+                "env.CLAUDE_CODE_PROPAGATE_TRACEPARENT",
+                "env.OTEL_TRACES_EXPORTER",
+                "env.OTEL_LOGS_EXPORTER",
+                "env.OTEL_EXPORTER_OTLP_PROTOCOL",
+                "env.OTEL_LOG_USER_PROMPTS",
+                "env.OTEL_LOG_ASSISTANT_RESPONSES",
+                "env.OTEL_LOG_TOOL_DETAILS",
+                "env.OTEL_LOG_TOOL_CONTENT",
+                "env.OTEL_EXPORTER_OTLP_ENDPOINT",
+                "env.OTEL_EXPORTER_OTLP_HEADERS",
                 "statusLine",
             },
             "kept": (),
@@ -770,18 +969,6 @@ class TestStatusLine:
         merged = merge_claude_settings({}, PROXY, StaticToken("tok"), status_line=self.COMMAND)
         assert merged["statusLine"] == {"type": "command", "command": self.COMMAND}
 
-    def test_the_installed_script_is_the_bundled_one_and_the_command_runs_this_interpreter(self, tmp_path):
-        from litellm.proxy.client.cli.commands import statusline_script
-
-        script = tmp_path / "lite" / "statusline.py"
-        command = install_statusline_script(script)
-        assert script.read_bytes().split(b"\n", 1)[1] == pathlib.Path(statusline_script.__file__).read_bytes()
-        assert shlex.split(command) == [sys.executable, str(script)]
-        assert command == statusline_command(script)
-        assert stat.S_IMODE(script.stat().st_mode) == 0o600
-        assert stat.S_IMODE(script.parent.stat().st_mode) == 0o700
-        assert install_statusline_script(script) == command
-
     def test_a_reinstall_replaces_the_script_in_one_step_and_a_refused_one_leaves_the_old_script_whole(self, tmp_path):
         # Claude Code may be running the script at the moment `lite` reinstalls it; the file it has open
         # must stay complete, and a reinstall that cannot land must not leave a truncated script behind.
@@ -864,7 +1051,9 @@ class TestStatusLine:
         assert "Keeping the status line" in capsys.readouterr().err
 
     @pytest.mark.parametrize("package_version", ("unknown", "", "invalid-version"))
-    @pytest.mark.parametrize("existing", (None, b"print('legacy footer')\n", b"# litellm-statusline-version: invalid\n"))
+    @pytest.mark.parametrize(
+        "existing", (None, b"print('legacy footer')\n", b"# litellm-statusline-version: invalid\n")
+    )
     def test_an_unknown_cli_version_can_install_and_refresh_an_unversioned_footer(
         self, tmp_path: Path, package_version: str, existing: bytes | None
     ) -> None:
@@ -909,7 +1098,9 @@ class TestStatusLine:
             return install_statusline_script(script, package_version=second_version)
 
         with ThreadPoolExecutor(max_workers=2) as pool:
-            first: Final = pool.submit(install_statusline_script, script, package_version=first_version, write=paused_write)
+            first: Final = pool.submit(
+                install_statusline_script, script, package_version=first_version, write=paused_write
+            )
             try:
                 assert first_writing.wait(5), "First installer did not reach the write"
                 second: Final = pool.submit(second_install)
@@ -921,7 +1112,10 @@ class TestStatusLine:
             assert first.result(timeout=5) == statusline_command(script)
             assert second.result(timeout=5) == statusline_command(script)
 
-        assert script.read_bytes() == b"# litellm-statusline-version: 3.0\n" + Path(statusline_script.__file__).read_bytes()
+        assert (
+            script.read_bytes()
+            == b"# litellm-statusline-version: 3.0\n" + Path(statusline_script.__file__).read_bytes()
+        )
 
     def test_a_failed_install_keeps_the_footer_and_releases_the_lock(self, tmp_path: Path) -> None:
         script: Final = tmp_path / "statusline.py"
@@ -973,3 +1167,21 @@ class TestStatusLine:
         assert "ANTHROPIC_AUTH_TOKEN" not in restored.get("env", {})
         assert restored["statusLine"]["command"] == statusline_command(script)
         assert "statusLine" not in outcome.restored
+
+
+@pytest.mark.skipif(os.name != "posix" or os.geteuid() == 0, reason="needs a directory its owner cannot write")
+def test_a_key_file_that_cannot_be_removed_is_named_so_the_user_can_delete_it(tmp_path, capsys):
+    config_dir = tmp_path / "cfg"
+    config_dir.mkdir()
+    stuck = config_dir / f"{LAUNCH_KEY_OVERLAY_PREFIX}0123456789abcdef.json"
+    stuck.write_text("{}")
+    config_dir.chmod(0o500)
+    try:
+        remove_launch_settings_files(config_dir)
+    finally:
+        config_dir.chmod(0o700)
+
+    output = capsys.readouterr()
+    assert stuck.exists()
+    assert str(stuck) in output.err
+    assert "Removed" not in output.out

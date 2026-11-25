@@ -2,6 +2,7 @@ import json
 import re
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 
@@ -10,6 +11,7 @@ from litellm.integrations.bitbucket.bitbucket_prompt_manager import (
     BitBucketPromptManager,
     BitBucketPromptTemplate,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 def test_bitbucket_prompt_template_creation():
@@ -502,3 +504,19 @@ rate: 0.5"""
     assert parsed["disabled"] is False
     assert parsed["count"] == 42
     assert parsed["rate"] == 0.5
+
+
+def test_bitbucket_client_reads_repository_info_and_branches_from_the_api() -> None:
+    def bitbucket_api(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/2.0/repositories/test-workspace/test-repo":
+            return httpx.Response(200, json={"full_name": "test-workspace/test-repo", "is_private": True})
+        if request.url.path == "/2.0/repositories/test-workspace/test-repo/refs/branches":
+            return httpx.Response(200, json={"values": [{"name": "main"}, {"name": "dev"}]})
+        return httpx.Response(404)
+
+    client = BitBucketClient({"workspace": "test-workspace", "repository": "test-repo", "access_token": "test-token"})
+    client.http_handler = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(bitbucket_api)))
+
+    assert client.get_repository_info() == {"full_name": "test-workspace/test-repo", "is_private": True}
+    assert [branch["name"] for branch in client.get_branches()] == ["main", "dev"]
+    assert client.test_connection() is True

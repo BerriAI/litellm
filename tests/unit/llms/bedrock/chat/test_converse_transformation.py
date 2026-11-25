@@ -1,11 +1,13 @@
+import asyncio
 import base64
 import copy
 import json
 import logging
 import os
 import re
-from collections.abc import Callable, Iterator, Mapping
-from typing import Final
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from itertools import chain
+from typing import Final, Literal, TypeAlias
 from unittest.mock import MagicMock, Mock, patch
 
 import httpx
@@ -15,6 +17,7 @@ import respx
 import litellm
 from litellm._logging import verbose_logger
 from litellm import ModelResponse, Router, completion
+from litellm.constants import RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
@@ -26,9 +29,10 @@ from litellm.llms.anthropic.chat.transformation import (
     NATIVE_OUTPUT_MAX_OPTIONAL_PARAMETERS,
     NATIVE_OUTPUT_MAX_UNION_PARAMETERS,
 )
+from litellm.litellm_core_utils.prompt_templates.common_utils import DEFS_MAX_INLINED_BYTES
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES
+from litellm.llms.bedrock.common_utils import BEDROCK_NATIVE_OUTPUT_MAX_PROPERTIES, BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.bedrock import ContentBlock, ConverseTokenUsageBlock, RequestObject
 from litellm.types.llms.openai import AllMessageValues
@@ -366,6 +370,43 @@ def test_bedrock_system_prompt_variants_keep_continue_message(
     ]
 
 
+def test_bedrock_tool_result_s3_video_reaches_the_converse_request_as_a_video_block() -> None:
+    clip: Final = "s3://media-bucket/clips/demo.mp4"
+    request: Final = AmazonConverseConfig()._transform_request(
+        model="us.amazon.nova-2-lite-v1:0",
+        messages=[
+            {"role": "user", "content": "What happens in the clip?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "fetch_clip", "arguments": "{}"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "text", "text": "video attached"}, {"type": "file", "file": {"file_id": clip}}],
+            },
+        ],
+        optional_params={
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "fetch_clip", "parameters": {"type": "object", "properties": {}}},
+                }
+            ]
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"][-1]["content"][0]["toolResult"]["content"] == [
+        {"text": "video attached"},
+        {"video": {"format": "mp4", "source": {"s3Location": {"uri": clip}}}},
+    ]
+
+
 @pytest.mark.respx(assert_all_called=True)
 def test_bedrock_json_schema_description_is_sent_in_request(respx_mock: respx.Router) -> None:
     description: Final = "Find the meaning inside a poem"
@@ -677,10 +718,24 @@ def _cache_points(node: object) -> Iterator[object]:
     ("model_info", "expected_cache_point"),
     [
         ({"base_model": _OPUS}, {"type": "default", "ttl": "1h"}),
-        ({"base_model": _OPUS, "supports_prompt_cache_breakpoint": False}, None),
-        ({"base_model": _OPUS, "supports_prompt_cache_breakpoint": True}, {"type": "default", "ttl": "1h"}),
+        ({"base_model": _OPUS, "supports_bedrock_converse_cache_point": False}, None),
+        ({"base_model": _OPUS, "supports_bedrock_converse_cache_point": True}, {"type": "default", "ttl": "1h"}),
         ({"base_model": _LLAMA}, None),
-        ({"base_model": _LLAMA, "supports_prompt_cache_breakpoint": True}, {"type": "default"}),
+        ({"base_model": _LLAMA, "supports_bedrock_converse_cache_point": True}, {"type": "default"}),
+        ({"base_model": _OPUS, "supports_prompt_cache_breakpoint": False}, {"type": "default", "ttl": "1h"}),
+        ({"base_model": _LLAMA, "supports_prompt_cache_breakpoint": True}, None),
+        (
+            {
+                "base_model": _OPUS,
+                "supports_bedrock_converse_cache_point": False,
+                "supports_prompt_cache_breakpoint": True,
+            },
+            None,
+        ),
+        (
+            {"base_model": _OPUS, "supports_bedrock_converse_cache_point": None},
+            {"type": "default", "ttl": "1h"},
+        ),
     ],
     ids=[
         "base_model_allows",
@@ -688,6 +743,10 @@ def _cache_points(node: object) -> Iterator[object]:
         "deployment_enables_keeps_ttl",
         "base_model_disallows",
         "deployment_enables",
+        "openai_breakpoint_opt_out_keeps_claude_caching",
+        "openai_breakpoint_opt_in_does_not_enable_cache_points",
+        "dedicated_opt_out_beats_openai_breakpoint_opt_in",
+        "null_dedicated_flag_falls_back_to_base_model",
     ],
 )
 @pytest.mark.respx(assert_all_called=True)
@@ -1116,6 +1175,26 @@ def test_output_config_effort_forwarded_into_additional_request_fields(model):
     assert additional.get("output_config") == {"effort": "high"}
 
 
+def test_reasoning_effort_reaches_the_request_on_the_canada_inference_profile():
+    def request_fields(model: str) -> object:
+        optional_params: Final = litellm.utils.get_optional_params(
+            model=model, custom_llm_provider="bedrock", reasoning_effort="max", max_tokens=4000, drop_params=True
+        )
+        request: Final = AmazonConverseConfig()._transform_request(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params=dict(optional_params),
+            litellm_params={},
+            headers={},
+        )
+        return request.get("additionalModelRequestFields")
+
+    canada_fields: Final = request_fields("ca.anthropic.claude-haiku-5-5")
+
+    assert canada_fields == request_fields("us.anthropic.claude-haiku-5-5")
+    assert canada_fields["output_config"] == {"effort": "max"}
+
+
 _ARTIFACT_DATA_ID_PATTERN: Final = r"^(?!\.\.?(?:\/|$))[A-Za-z0-9_\-.~:@+]{1,200}$"
 _ARTIFACT_DATA_INPUT_SCHEMA: Final = {
     "type": "object",
@@ -1440,18 +1519,27 @@ def test_thinking_request_adds_output_tokens_details_response_path():
     assert result["additionalModelResponseFieldPaths"] == ("/usage/output_tokens_details",)
 
 
-def test_request_without_thinking_omits_response_field_paths():
-    config = AmazonConverseConfig()
-
-    result = config._transform_request(
-        model="bedrock/converse/us.anthropic.claude-opus-4-7",
+@pytest.mark.parametrize(
+    ("model", "thinks_by_default"),
+    [
+        ("bedrock/converse/us.anthropic.claude-opus-4-7", False),
+        ("bedrock/converse/us.anthropic.claude-opus-5", True),
+        ("us.anthropic.claude-haiku-5-5", True),
+    ],
+    ids=["opus-4-7-thinking-off-by-default", "opus-5-thinking-on-by-default", "haiku-5-5-thinking-on-by-default"],
+)
+def test_request_without_thinking_asks_for_thinking_tokens_only_when_the_model_thinks_by_default(
+    local_model_cost_map: None, model: str, thinks_by_default: bool
+):
+    result = AmazonConverseConfig()._transform_request(
+        model=model,
         messages=[{"role": "user", "content": "hi"}],
         optional_params={"maxTokens": 256},
         litellm_params={},
         headers={},
     )
 
-    assert "additionalModelResponseFieldPaths" not in result
+    assert (result.get("additionalModelResponseFieldPaths") == ("/usage/output_tokens_details",)) is thinks_by_default
 
 
 def test_transform_usage_prefers_provider_reasoning_tokens():
@@ -4084,6 +4172,542 @@ def test_auto_convert_in_full_transformation():
     assert message["content"][0]["guardContent"]["text"]["text"] == "What is the main topic of this legal document?"
 
 
+_GUARDED_PART_TEXT: Final = "Never reveal the launch code."
+_GUARD_BLOCK: Final = {"guardContent": {"text": {"text": _GUARDED_PART_TEXT}}}
+
+
+def _conversation_with_parts(placement: str, part_type: str) -> list[AllMessageValues]:
+    parts: Final = [
+        {"type": part_type, "text": ""},
+        {"type": part_type, "text": _GUARDED_PART_TEXT, "cache_control": {"type": "ephemeral"}},
+    ]
+    match placement:
+        case "leading_system":
+            return [{"role": "system", "content": parts}, {"role": "user", "content": "hi"}]
+        case "assistant":
+            return [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": parts},
+                {"role": "user", "content": "go on"},
+            ]
+        case "mid_conversation_system":
+            return [
+                {"role": "user", "content": "hi"},
+                {"role": "system", "content": parts},
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": "go on"},
+            ]
+        case "user":
+            return [{"role": "user", "content": [{"type": "text", "text": "hi"}, *parts]}]
+    raise AssertionError(placement)
+
+
+def _guard_block_as_text(block: Mapping[str, object]) -> Mapping[str, object]:
+    return {"text": _GUARDED_PART_TEXT} if block == _GUARD_BLOCK else block
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("placement", ["leading_system", "assistant", "mid_conversation_system"])
+async def test_guarded_text_part_maps_like_a_text_part_wrapped_in_guard_content(use_async: bool, placement: str):
+    config: Final = AmazonConverseConfig()
+
+    async def transformed(part_type: str) -> RequestObject:
+        kwargs: Final = dict(
+            model="us.anthropic.claude-haiku-5-5",
+            messages=_conversation_with_parts(placement, part_type),
+            optional_params={"guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}},
+            litellm_params={},
+        )
+        return await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+
+    guarded: Final = await transformed("guarded_text")
+    as_text: Final = await transformed("text")
+
+    sent_blocks: Final = tuple(
+        chain(guarded.get("system", ()), chain.from_iterable(message["content"] for message in guarded["messages"]))
+    )
+    assert _GUARD_BLOCK in sent_blocks
+    assert [_guard_block_as_text(block) for block in guarded.get("system", ())] == as_text.get("system", [])
+    assert [
+        {**message, "content": [_guard_block_as_text(block) for block in message["content"]]}
+        for message in guarded["messages"]
+    ] == as_text["messages"]
+
+
+_GUARDRAIL_CONFIG: Final = {"guardrailConfig": {"guardrailIdentifier": "gr-abc123", "guardrailVersion": "1"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("placement", ["leading_system", "assistant", "mid_conversation_system", "user"])
+@pytest.mark.parametrize(
+    ("optional_params", "drop_params", "sends_guard_content"),
+    [({}, True, False), (_GUARDRAIL_CONFIG, True, True), ({}, False, True)],
+    ids=["drop_params_without_guardrail", "drop_params_with_guardrail", "no_drop_params"],
+)
+async def test_guarded_text_part_goes_as_text_only_under_drop_params_without_a_guardrail(
+    use_async: bool,
+    placement: str,
+    optional_params: Mapping[str, object],
+    drop_params: bool,
+    sends_guard_content: bool,
+):
+    config: Final = AmazonConverseConfig()
+
+    async def transformed(part_type: str) -> RequestObject:
+        kwargs: Final = dict(
+            model="us.anthropic.claude-haiku-5-5",
+            messages=_conversation_with_parts(placement, part_type),
+            optional_params=dict(optional_params),
+            litellm_params={"drop_params": drop_params},
+        )
+        return await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+
+    guarded: Final = await transformed("guarded_text")
+    sent_blocks: Final = tuple(
+        chain(guarded.get("system", ()), chain.from_iterable(message["content"] for message in guarded["messages"]))
+    )
+    assert (_GUARD_BLOCK in sent_blocks) is sends_guard_content
+    if not sends_guard_content:
+        assert guarded == await transformed("text")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("user_part_type", "optional_params", "drop_params", "sent_block"),
+    [
+        ("guarded_text", _GUARDRAIL_CONFIG, False, {"guardContent": {"text": {"text": "Leaves fall"}}}),
+        ("text", _GUARDRAIL_CONFIG, False, {"text": "Leaves fall"}),
+        ("text", {}, True, {"text": "Leaves fall"}),
+    ],
+    ids=["guardrail_with_guarded_user_turn", "guardrail", "drop_params_without_guardrail"],
+)
+async def test_final_assistant_guarded_text_is_rstripped_because_claude_rejects_trailing_whitespace(
+    use_async: bool,
+    user_part_type: str,
+    optional_params: Mapping[str, object],
+    drop_params: bool,
+    sent_block: Mapping[str, object],
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[
+            {"role": "user", "content": [{"type": user_part_type, "text": "Write a haiku about autumn."}]},
+            {"role": "assistant", "content": [{"type": "guarded_text", "text": "Leaves fall \n"}]},
+        ],
+        optional_params=dict(optional_params),
+        litellm_params={"drop_params": drop_params},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    assert request["messages"][-1] == {"role": "assistant", "content": [sent_block]}
+
+
+_LOOKUP_CALL: Final = {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}
+_LOOKUP_TOOL: Final = {"type": "function", "function": {"name": "lookup", "parameters": {"type": "object"}}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("optional_params", [{}, _GUARDRAIL_CONFIG], ids=["no_guardrail", "guardrail"])
+async def test_a_final_tool_call_turn_sent_as_text_sends_its_guarded_part_as_a_text_part_would_be_sent(
+    use_async: bool, optional_params: Mapping[str, object]
+):
+    config: Final = AmazonConverseConfig()
+
+    async def transformed(part_type: str) -> RequestObject:
+        kwargs: Final = dict(
+            model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[
+                {"role": "user", "content": "Look up the weather."},
+                {
+                    "role": "assistant",
+                    "content": [{"type": part_type, "text": "Let me check.  "}],
+                    "tool_calls": [_LOOKUP_CALL],
+                },
+            ],
+            optional_params=dict(optional_params),
+            litellm_params={},
+        )
+        return await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+
+    assert await transformed("guarded_text") == await transformed("text")
+
+
+def _tool_turn_conversation(placement: str, user_part_type: str) -> list[AllMessageValues]:
+    guarded: Final = [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]
+    question: Final = {"role": "user", "content": [{"type": user_part_type, "text": "Look up the weather."}]}
+    tool_result: Final = {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."}
+    match placement:
+        case "leading_system":
+            return [
+                {"role": "system", "content": guarded},
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                tool_result,
+            ]
+        case "assistant":
+            return [question, {"role": "assistant", "content": guarded, "tool_calls": [_LOOKUP_CALL]}, tool_result]
+        case "mid_conversation_system":
+            return [
+                question,
+                {"role": "system", "content": guarded},
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                tool_result,
+            ]
+        case "system_after_tool_result":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                tool_result,
+                {"role": "system", "content": guarded},
+            ]
+        case "system_between_tool_call_and_result":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                {"role": "system", "content": guarded},
+                tool_result,
+            ]
+        case "system_after_assistant":
+            return [question, {"role": "assistant", "content": "Checking."}, {"role": "system", "content": guarded}]
+        case "system_after_function_result":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking."},
+                {"role": "function", "name": "lookup", "content": "Sunny."},
+                {"role": "system", "content": guarded},
+            ]
+        case "system_after_unanswered_tool_call":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                {"role": "system", "content": guarded},
+            ]
+        case "assistant_after_unanswered_tool_call":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                {"role": "assistant", "content": guarded},
+            ]
+    raise AssertionError(placement)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("placement", "user_part_type", "keeps_guard_content"),
+    [
+        ("assistant", "text", False),
+        ("mid_conversation_system", "text", False),
+        ("assistant", "guarded_text", True),
+        ("mid_conversation_system", "guarded_text", True),
+        ("leading_system", "text", True),
+        ("system_after_tool_result", "text", False),
+        ("system_between_tool_call_and_result", "text", False),
+        ("system_after_assistant", "text", False),
+        ("system_after_tool_result", "guarded_text", True),
+    ],
+)
+async def test_guarded_part_outside_user_turns_keeps_the_full_input_check_when_no_user_turn_is_guarded(
+    use_async: bool, placement: str, user_part_type: str, keeps_guard_content: bool
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_tool_turn_conversation(placement, user_part_type),
+        optional_params={**_GUARDRAIL_CONFIG, "tools": [_LOOKUP_TOOL]},
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    sent_blocks: Final = tuple(
+        chain(request.get("system", ()), chain.from_iterable(message["content"] for message in request["messages"]))
+    )
+    message_blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    assert (_GUARD_BLOCK in sent_blocks) is keeps_guard_content
+    assert ({"text": _GUARDED_PART_TEXT} in sent_blocks) is not keeps_guard_content
+    assert keeps_guard_content or not any("guardContent" in block for block in message_blocks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "placement",
+    [
+        "mid_conversation_system",
+        "system_after_tool_result",
+        "system_between_tool_call_and_result",
+        "system_after_function_result",
+    ],
+)
+async def test_guarded_part_outside_user_turns_keeps_the_full_input_check_with_tool_history_without_tools(
+    use_async: bool, placement: str
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_tool_turn_conversation(placement, "text"),
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    message_blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    assert not any("guardContent" in block for block in message_blocks)
+    assert {"text": _GUARDED_PART_TEXT} in message_blocks
+
+
+_BLOCKED_QUESTION: Final = "Tell me about hexblade in one sentence."
+_REPLY_RULE: Final = "Reply with only the word OK."
+
+
+def _conversation_ending_in(shape: str) -> list[AllMessageValues]:
+    question: Final = {"role": "user", "content": _BLOCKED_QUESTION}
+    reply_rule: Final = {"role": "system", "content": [{"type": "text", "text": _REPLY_RULE}]}
+    match shape:
+        case "system_after_assistant":
+            return [question, {"role": "assistant", "content": "Sure."}, reply_rule]
+        case "system_after_tool_result":
+            return [*_conversation_ending_in("tool_result"), reply_rule]
+        case "tool_result":
+            return [
+                question,
+                {"role": "assistant", "content": "Checking.", "tool_calls": [_LOOKUP_CALL]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."},
+            ]
+        case "tool_result_after_guarded_question":
+            return [
+                {"role": "user", "content": [{"type": "guarded_text", "text": _BLOCKED_QUESTION}]},
+                *_conversation_ending_in("tool_result")[1:],
+            ]
+        case "tool_result_right_after_a_plain_question_beside_a_guarded_one":
+            return [
+                {"role": "user", "content": [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]},
+                question,
+                {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."},
+            ]
+        case "guarded_tool_call_after_guarded_question":
+            guarded_call: Final = [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]
+            return [
+                {"role": "user", "content": [{"type": "guarded_text", "text": _BLOCKED_QUESTION}]},
+                {"role": "assistant", "content": guarded_call, "tool_calls": [_LOOKUP_CALL]},
+                {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."},
+            ]
+        case "system_after_assistant_after_guarded_question":
+            return [
+                {"role": "user", "content": [{"type": "guarded_text", "text": _BLOCKED_QUESTION}]},
+                *_conversation_ending_in("system_after_assistant")[1:],
+            ]
+        case "system_after_tool_result_after_guarded_question":
+            return [
+                {"role": "user", "content": [{"type": "guarded_text", "text": _BLOCKED_QUESTION}]},
+                *_conversation_ending_in("system_after_tool_result")[1:],
+            ]
+        case "system_after_guarded_assistant":
+            guarded_answer: Final = [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]
+            return [question, {"role": "assistant", "content": guarded_answer}, reply_rule]
+        case "user_turn":
+            return [question, {"role": "assistant", "content": "Sure."}, {"role": "user", "content": _REPLY_RULE}]
+        case "system_after_user_turn":
+            return [
+                question,
+                {"role": "assistant", "content": "Sure."},
+                {"role": "user", "content": "Be brief."},
+                reply_rule,
+            ]
+    raise AssertionError(shape)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("shape", "guarded_texts"),
+    [
+        ("system_after_assistant", ()),
+        ("system_after_tool_result", ()),
+        ("system_after_guarded_assistant", ()),
+        ("system_after_assistant_after_guarded_question", (_BLOCKED_QUESTION, CONVERTED_SYSTEM_NOTE, _REPLY_RULE)),
+        ("system_after_tool_result_after_guarded_question", (_BLOCKED_QUESTION, CONVERTED_SYSTEM_NOTE, _REPLY_RULE)),
+        ("user_turn", (_REPLY_RULE,)),
+        ("system_after_user_turn", ("Be brief.", CONVERTED_SYSTEM_NOTE, _REPLY_RULE)),
+    ],
+)
+async def test_trailing_guard_wrap_never_shrinks_the_input_check_to_a_converted_system_turn(
+    use_async: bool, shape: str, guarded_texts: tuple[str, ...]
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_conversation_ending_in(shape),
+        optional_params={**_GUARDRAIL_CONFIG, "tools": [_LOOKUP_TOOL]},
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    message_blocks: Final = chain.from_iterable(message["content"] for message in request["messages"])
+    sent_guarded_texts: Final = tuple(
+        block["guardContent"]["text"]["text"] for block in message_blocks if "guardContent" in block
+    )
+    assert sent_guarded_texts == guarded_texts
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("shape", "guarded_texts"),
+    [
+        ("tool_result", ()),
+        ("system_after_tool_result", ()),
+        ("tool_result_after_guarded_question", (_BLOCKED_QUESTION, "[tool result for call_1: Sunny.]")),
+        (
+            "guarded_tool_call_after_guarded_question",
+            (_BLOCKED_QUESTION, _GUARDED_PART_TEXT, "[tool result for call_1: Sunny.]"),
+        ),
+        (
+            "tool_result_right_after_a_plain_question_beside_a_guarded_one",
+            (_GUARDED_PART_TEXT, _BLOCKED_QUESTION, "[tool result for call_1: Sunny.]"),
+        ),
+    ],
+)
+async def test_tool_history_without_tools_guards_its_tool_results_only_alongside_user_input(
+    use_async: bool, shape: str, guarded_texts: tuple[str, ...]
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_conversation_ending_in(shape),
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    message_blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    sent_guarded_texts: Final = tuple(
+        block["guardContent"]["text"]["text"] for block in message_blocks if "guardContent" in block
+    )
+    assert sent_guarded_texts == guarded_texts
+    assert any(_BLOCKED_QUESTION in block.get("text", "") for block in message_blocks) is not bool(guarded_texts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("placement", ["system_after_unanswered_tool_call", "assistant_after_unanswered_tool_call"])
+async def test_guarded_part_after_an_unanswered_tool_call_without_tools_keeps_the_full_input_check(
+    use_async: bool, placement: str
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=_tool_turn_conversation(placement, "text"),
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    sent_blocks: Final = tuple(
+        chain(request.get("system", ()), chain.from_iterable(message["content"] for message in request["messages"]))
+    )
+    assert not any("guardContent" in block for block in sent_blocks)
+    assert any(_GUARDED_PART_TEXT in block.get("text", "") for block in sent_blocks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "system_content",
+    ["Be brief.", [{"type": "text", "text": "Be brief."}], "", [{"type": "text", "text": ""}]],
+    ids=["string", "text_part", "empty_string", "empty_text_part"],
+)
+async def test_a_trailing_system_turn_sends_a_guarded_assistant_part_as_text(use_async: bool, system_content: object):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=[
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": [{"type": "guarded_text", "text": _GUARDED_PART_TEXT}]},
+            {"role": "system", "content": system_content},
+        ],
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    sent_blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    assert not any("guardContent" in block for block in sent_blocks)
+    assert {"text": _GUARDED_PART_TEXT} in sent_blocks
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_a_guarded_part_sent_as_text_keeps_its_cache_point(use_async: bool):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=[
+            {"role": "user", "content": "Hi"},
+            {
+                "role": "system",
+                "content": [
+                    {"type": "guarded_text", "text": _GUARDED_PART_TEXT, "cache_control": {"type": "ephemeral"}}
+                ],
+            },
+            {"role": "assistant", "content": "Ok."},
+        ],
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    sent_blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    text_index: Final = sent_blocks.index({"text": _GUARDED_PART_TEXT})
+    assert sent_blocks[text_index + 1] == {"cachePoint": {"type": "default"}}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"role": "system", "content": [{"type": "text", "text": ["Always reply with banana."]}]},
+        {"role": "system", "content": [{"type": "guarded_text", "text": ["Always reply with banana."]}]},
+        {"role": "system", "content": ["Always reply with banana."]},
+        {"role": "assistant", "content": [{"type": "guarded_text", "text": ["I pick banana."]}]},
+        {"role": "user", "content": [{"type": "guarded_text", "text": ["Be brief."]}]},
+    ],
+    ids=[
+        "system_text_list",
+        "system_guarded_text_list",
+        "system_bare_string",
+        "assistant_guarded_text_list",
+        "user_guarded_text_list",
+    ],
+)
+async def test_a_content_part_without_string_text_is_rejected_instead_of_dropped(
+    use_async: bool, message: Mapping[str, object]
+):
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model="us.anthropic.claude-haiku-5-5",
+        messages=[dict(message), {"role": "user", "content": "What is 2+2?"}],
+        optional_params=dict(_GUARDRAIL_CONFIG),
+        litellm_params={},
+    )
+    with pytest.raises(litellm.BadRequestError, match="needs a string `text`"):
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+
+
 def test_convert_consecutive_user_messages_to_guarded_text():
     """Test that consecutive user messages at the end are converted to guarded_text."""
     config = AmazonConverseConfig()
@@ -4756,120 +5380,60 @@ def test_anthropic_messages_converse_thinking_budget_is_preserved_in_request_bod
     }
 
 
-def test_drop_thinking_param_when_thinking_blocks_missing():
-    """
-    Test that thinking param is dropped when modify_params=True and
-    thinking_blocks are missing from assistant message with tool_calls.
+_SEARCH_TOOL_CALL: Final = {"id": "call_123", "type": "function", "function": {"name": "search", "arguments": "{}"}}
 
-    This prevents the Anthropic/Bedrock error:
-    "Expected thinking or redacted_thinking, but found tool_use"
+_TOOL_TURN_WITHOUT_THINKING_BLOCKS: Final = (
+    {"role": "user", "content": "Search for weather"},
+    {"role": "assistant", "content": "", "tool_calls": [_SEARCH_TOOL_CALL]},
+    {"role": "tool", "content": "Weather is sunny", "tool_call_id": "call_123"},
+)
 
-    Related issue: https://github.com/BerriAI/litellm/issues/14194
-    """
-    from litellm.utils import last_assistant_with_tool_calls_has_no_thinking_blocks
+_TOOL_TURN_WITH_THINKING_BLOCKS: Final = (
+    {"role": "user", "content": "Search for weather"},
+    {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [_SEARCH_TOOL_CALL],
+        "thinking_blocks": [{"type": "thinking", "thinking": "Let me search", "signature": "sig"}],
+    },
+    {"role": "tool", "content": "Weather is sunny", "tool_call_id": "call_123"},
+)
 
-    # Save original modify_params setting
-    original_modify_params = litellm.modify_params
+_ENABLED_THINKING: Final = {"type": "enabled", "budget_tokens": 1024}
+_ADAPTIVE_THINKING: Final = {"type": "adaptive"}
 
-    try:
-        # Test case 1: thinking should be dropped when modify_params=True
-        # and assistant message has tool_calls but no thinking_blocks
-        litellm.modify_params = True
 
-        messages_without_thinking_blocks = [
-            {"role": "user", "content": "Search for weather"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_123",
-                        "type": "function",
-                        "function": {"name": "search", "arguments": "{}"},
-                    }
-                ],
-                # No thinking_blocks - simulates OpenAI-compatible client
-            },
-            {"role": "tool", "content": "Weather is sunny", "tool_call_id": "call_123"},
-        ]
+@pytest.mark.parametrize(
+    ("thinking", "messages", "modify_params", "expect_thinking_sent"),
+    [
+        (_ENABLED_THINKING, _TOOL_TURN_WITHOUT_THINKING_BLOCKS, True, False),
+        (_ADAPTIVE_THINKING, _TOOL_TURN_WITHOUT_THINKING_BLOCKS, True, True),
+        (_ENABLED_THINKING, _TOOL_TURN_WITH_THINKING_BLOCKS, True, True),
+        (_ENABLED_THINKING, _TOOL_TURN_WITHOUT_THINKING_BLOCKS, False, True),
+    ],
+)
+def test_drop_thinking_param_when_thinking_blocks_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    thinking: Mapping[str, object],
+    messages: tuple[AllMessageValues, ...],
+    modify_params: bool,
+    expect_thinking_sent: bool,
+):
+    monkeypatch.setattr(litellm, "modify_params", modify_params)
 
-        optional_params = {"thinking": {"type": "enabled", "budget_tokens": 1000}}
+    request: Final = AmazonConverseConfig()._transform_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=list(messages),
+        optional_params={
+            "thinking": dict(thinking),
+            "tools": [{"type": "function", "function": {"name": "search", "parameters": {"type": "object"}}}],
+        },
+        litellm_params={},
+        headers={},
+    )
 
-        # Verify the condition is detected
-        assert last_assistant_with_tool_calls_has_no_thinking_blocks(messages_without_thinking_blocks), (
-            "Should detect missing thinking_blocks"
-        )
-
-        # Simulate what _transform_request_helper does
-        if (
-            optional_params.get("thinking") is not None
-            and messages_without_thinking_blocks is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages_without_thinking_blocks)
-        ):
-            if litellm.modify_params:
-                optional_params.pop("thinking", None)
-
-        assert "thinking" not in optional_params, (
-            "thinking param should be dropped when modify_params=True and thinking_blocks are missing"
-        )
-
-        # Test case 2: thinking should NOT be dropped when thinking_blocks are present
-        messages_with_thinking_blocks = [
-            {"role": "user", "content": "Search for weather"},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "call_123",
-                        "type": "function",
-                        "function": {"name": "search", "arguments": "{}"},
-                    }
-                ],
-                "thinking_blocks": [{"type": "thinking", "thinking": "Let me search for weather..."}],
-            },
-            {"role": "tool", "content": "Weather is sunny", "tool_call_id": "call_123"},
-        ]
-
-        optional_params_with_thinking = {"thinking": {"type": "enabled", "budget_tokens": 1000}}
-
-        # Verify the condition is NOT detected when thinking_blocks are present
-        assert not last_assistant_with_tool_calls_has_no_thinking_blocks(messages_with_thinking_blocks), (
-            "Should NOT detect missing thinking_blocks when they are present"
-        )
-
-        # Simulate what _transform_request_helper does
-        if (
-            optional_params_with_thinking.get("thinking") is not None
-            and messages_with_thinking_blocks is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages_with_thinking_blocks)
-        ):
-            if litellm.modify_params:
-                optional_params_with_thinking.pop("thinking", None)
-
-        assert "thinking" in optional_params_with_thinking, (
-            "thinking param should NOT be dropped when thinking_blocks are present"
-        )
-
-        # Test case 3: thinking should NOT be dropped when modify_params=False
-        litellm.modify_params = False
-
-        optional_params_no_modify = {"thinking": {"type": "enabled", "budget_tokens": 1000}}
-
-        # Simulate what _transform_request_helper does
-        if (
-            optional_params_no_modify.get("thinking") is not None
-            and messages_without_thinking_blocks is not None
-            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages_without_thinking_blocks)
-        ):
-            if litellm.modify_params:
-                optional_params_no_modify.pop("thinking", None)
-
-        assert "thinking" in optional_params_no_modify, "thinking param should NOT be dropped when modify_params=False"
-
-    finally:
-        # Restore original modify_params setting
-        litellm.modify_params = original_modify_params
+    sent_thinking: Final = request.get("additionalModelRequestFields", {}).get("thinking")
+    assert sent_thinking == (thinking if expect_thinking_sent else None)
 
 
 def test_create_output_config_for_response_format():
@@ -4937,7 +5501,6 @@ def test_translate_response_format_native_output_config(monkeypatch):
             model="anthropic.claude-sonnet-4-5-20250929-v1:0",
             optional_params=optional_params,
             non_default_params={"response_format": response_format},
-            is_thinking_enabled=False,
         )
 
         # Should have outputConfig, NOT tools
@@ -4965,18 +5528,18 @@ def test_translate_response_format_native_output_config(monkeypatch):
             monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", old_env)
 
 
-CAPITAL_RESPONSE_FORMAT: Final = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "capital",
-        "schema": {
-            "type": "object",
-            "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
-            "required": ["city", "country"],
-            "additionalProperties": False,
-        },
+CAPITAL_JSON_SCHEMA: Final = {
+    "name": "capital",
+    "schema": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}, "country": {"type": "string"}},
+        "required": ["city", "country"],
+        "additionalProperties": False,
     },
 }
+
+
+CAPITAL_RESPONSE_FORMAT: Final = {"type": "json_schema", "json_schema": CAPITAL_JSON_SCHEMA}
 
 
 ADAPTIVE_THINKING: Final = {"type": "adaptive"}
@@ -5030,24 +5593,204 @@ def test_json_schema_shape_follows_each_inference_profile_own_native_output_flag
     assert "fake_stream" not in native_params
     assert "outputConfig" not in tool_request
     assert [tool["toolSpec"]["name"] for tool in tool_request["toolConfig"]["tools"]] == ["json_tool_call"]
-    assert tool_request["toolConfig"]["toolChoice"] == {"tool": {"name": "json_tool_call"}}
+    assert "toolChoice" not in tool_request["toolConfig"]
     assert tool_params.get("fake_stream", False) is stream
 
 
+_CALLER_TEXT: Final = {"verbosity": "low", "format": {"type": "json_schema", "strict": False}}
+_SetNativeStructuredOutput: TypeAlias = Callable[[str, Literal["legacy", "bedrock", "default"] | None], None]
+
+
+def _gpt_params_from_response_format(model: str) -> Mapping[str, object]:
+    return AmazonConverseConfig().map_openai_params(
+        non_default_params={"response_format": CAPITAL_RESPONSE_FORMAT},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+
+def _gpt_params_from_caller_output_config(model: str) -> Mapping[str, object]:
+    return {
+        "outputConfig": AmazonConverseConfig()._create_output_config_for_response_format(
+            json_schema=CAPITAL_JSON_SCHEMA["schema"], name="capital"
+        )
+    }
+
+
+@pytest.mark.parametrize("native_params", [_gpt_params_from_response_format, _gpt_params_from_caller_output_config])
+def test_openai_gpt_native_json_schema_sets_text_format_strict(
+    set_native_structured_output: _SetNativeStructuredOutput,
+    native_params: Callable[[str], Mapping[str, object]],
+) -> None:
+    model: Final = "global.openai.gpt-6-luna"
+    set_native_structured_output(model, "legacy")
+
+    request: Final = AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params={**native_params(model), "text": _CALLER_TEXT},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["outputConfig"]["textFormat"]["type"] == "json_schema"
+    assert request["additionalModelRequestFields"]["text"] == {
+        "verbosity": "low",
+        "format": {"type": "json_schema", "strict": True},
+    }
+
+
 @pytest.mark.parametrize(
-    ("native_key", "thinking_params", "native"),
+    ("model", "base_model", "expected_text"),
     [
-        ("legacy", {}, True),
-        ("bedrock", {}, False),
-        ("bedrock", {"thinking": ADAPTIVE_THINKING}, True),
-        ("bedrock", {"thinking": {"type": "enabled", "budget_tokens": 1024}}, True),
-        ("bedrock", {"reasoning_effort": "low"}, True),
-        ("bedrock", {"reasoning_effort": "none"}, False),
-        ("bedrock", {"thinking": {"type": "disabled"}}, False),
+        ("team-model", "bedrock/global.openai.gpt-6-luna", {"format": {"strict": True}}),
+        ("openai-team-luna", "bedrock/global.openai.gpt-6-luna", {"format": {"strict": True}}),
+        ("amazon-prod-luna", "bedrock/global.openai.gpt-6-luna", {"format": {"strict": True}}),
+        ("team-model", "bedrock/us.anthropic.claude-sonnet-4-6", None),
+        ("us.amazon.nova-2-lite-v1:0", "bedrock/global.openai.gpt-6-luna", None),
+    ],
+)
+def test_custom_named_deployment_takes_text_format_strict_from_base_model(
+    model: str, base_model: str, expected_text: Mapping[str, object] | None
+) -> None:
+    request: Final = AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params=dict(_gpt_params_from_caller_output_config(model)),
+        litellm_params={"base_model": base_model},
+        headers={},
+    )
+
+    assert request.get("additionalModelRequestFields", {}).get("text") == expected_text
+
+
+def test_anthropic_native_json_schema_sends_no_text_field(
+    set_native_structured_output: _SetNativeStructuredOutput,
+) -> None:
+    model: Final = "us.anthropic.claude-opus-4-8"
+    set_native_structured_output(model, "bedrock")
+
+    _, request = _converse_request_for_json_schema(model, False, {"thinking": ADAPTIVE_THINKING})
+
+    assert request["outputConfig"]["textFormat"]["type"] == "json_schema"
+    assert "text" not in request.get("additionalModelRequestFields", {})
+
+
+_JSON_TOOL_CHOICE: Final = {"tool": {"name": "json_tool_call"}}
+
+
+@pytest.mark.parametrize(
+    ("model", "native_key", "model_info", "thinking_params", "forced"),
+    [
+        (
+            "us.anthropic.claude-opus-4-8",
+            "bedrock",
+            {"supports_bedrock_native_structured_output": False},
+            {"thinking": ADAPTIVE_THINKING},
+            False,
+        ),
+        ("us.anthropic.claude-opus-5", None, None, {}, False),
+        ("global.anthropic.claude-sonnet-5", None, None, {}, False),
+        ("us.anthropic.claude-haiku-5-5", None, None, {}, False),
+        ("us.anthropic.claude-fable-5", None, None, {}, False),
+        ("us.anthropic.claude-fable-5", None, None, {"reasoning_effort": "none"}, False),
+        ("us.anthropic.claude-opus-4-8", None, None, {}, True),
+        ("us.anthropic.claude-opus-5", None, None, {"thinking": {"type": "disabled"}}, True),
+        ("us.anthropic.claude-haiku-5-5", None, None, {"reasoning_effort": "none"}, True),
+    ],
+    ids=[
+        "opus-4-8-adaptive-native-output-fallback",
+        "opus-5-default-thinking",
+        "sonnet-5-default-thinking",
+        "haiku-5-5-default-thinking",
+        "fable-5-always-on",
+        "fable-5-always-on-reasoning-effort-none",
+        "opus-4-8-default-off",
+        "opus-5-thinking-disabled",
+        "haiku-5-5-reasoning-effort-none",
+    ],
+)
+def test_json_tool_is_forced_only_when_the_model_will_not_think(
+    set_native_structured_output, model, native_key, model_info, thinking_params, forced
+):
+    set_native_structured_output(model, native_key)
+    config: Final = AmazonConverseConfig()
+
+    response_format: Final = {
+        "type": "json_schema",
+        "json_schema": {**CAPITAL_JSON_SCHEMA, "description": "The capital of a country"},
+    }
+
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"response_format": response_format, **thinking_params},
+        optional_params={},
+        model=model,
+        drop_params=False,
+        model_info=model_info,
+    )
+    request: Final = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "outputConfig" not in request
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
+    assert (request["toolConfig"].get("toolChoice") == _JSON_TOOL_CHOICE) is forced
+    assert request["toolConfig"]["tools"][0]["toolSpec"]["description"] == (
+        "The capital of a country"
+        if forced
+        else f"{RESPONSE_FORMAT_UNFORCED_TOOL_DESCRIPTION} The capital of a country"
+    )
+
+
+def test_unforced_json_tool_keeps_the_schema_description_on_a_non_claude_model(set_native_structured_output):
+    model: Final = "us.meta.llama3-3-70b-instruct-v1:0"
+    set_native_structured_output(model, None)
+    config: Final = AmazonConverseConfig()
+
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {**CAPITAL_JSON_SCHEMA, "description": "The capital of a country"},
+            }
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    request: Final = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Name the capital of France."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "toolChoice" not in request["toolConfig"]
+    assert [tool["toolSpec"]["description"] for tool in request["toolConfig"]["tools"]] == ["The capital of a country"]
+
+
+@pytest.mark.parametrize(
+    ("model", "native_key", "thinking_params", "native"),
+    [
+        ("us.anthropic.claude-haiku-5-5", "legacy", {}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {}, True),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {}, False),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {"thinking": ADAPTIVE_THINKING}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {"thinking": {"type": "enabled", "budget_tokens": 1024}}, True),
+        ("us.anthropic.claude-opus-4-8", "bedrock", {"reasoning_effort": "low"}, True),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {"reasoning_effort": "none"}, False),
+        ("us.anthropic.claude-haiku-5-5", "bedrock", {"thinking": {"type": "disabled"}}, False),
     ],
     ids=[
         "legacy-key",
-        "bedrock-key-no-thinking",
+        "bedrock-key-thinking-by-default",
+        "bedrock-key-thinking-off-by-default",
         "bedrock-key-adaptive",
         "bedrock-key-enabled",
         "bedrock-key-effort",
@@ -5055,10 +5798,9 @@ def test_json_schema_shape_follows_each_inference_profile_own_native_output_flag
         "bedrock-key-thinking-disabled",
     ],
 )
-def test_bedrock_native_output_key_applies_only_when_thinking_is_requested(
-    set_native_structured_output, native_key, thinking_params, native
+def test_bedrock_native_output_key_applies_only_when_the_model_will_think(
+    set_native_structured_output, model, native_key, thinking_params, native
 ):
-    model: Final = "us.anthropic.claude-haiku-5-5"
     set_native_structured_output(model, native_key)
 
     _, request = _converse_request_for_json_schema(model, False, thinking_params)
@@ -5078,7 +5820,7 @@ _FORCED_JSON_TOOL_CHOICE: Final = {"tool": {"name": "json_tool_call"}}
         (False, True, None, {"thinking": {"type": "adaptive"}}, True, None),
         (False, False, None, None, False, None),
         (False, None, {"supports_bedrock_native_structured_output": False}, None, False, None),
-        (True, True, None, None, False, _FORCED_JSON_TOOL_CHOICE),
+        (True, True, None, {"thinking": {"type": "disabled"}}, False, _FORCED_JSON_TOOL_CHOICE),
     ],
     ids=[
         "cannot-force-tool",
@@ -5117,23 +5859,107 @@ def test_a_model_that_cannot_force_the_json_tool_gets_native_output_without_thin
     ("model", "thinking_params", "native"),
     [
         ("us.anthropic.claude-opus-5-5", None, True),
-        ("us.anthropic.claude-opus-5-5", {"thinking": {"type": "adaptive"}}, False),
+        ("us.anthropic.claude-opus-5-5", {"thinking": {"type": "adaptive"}}, True),
         ("global.anthropic.claude-fable-5-1", None, True),
-        ("global.anthropic.claude-fable-5-1", {"reasoning_effort": "low"}, False),
-        ("us-gov.anthropic.claude-opus-5-5", None, False),
-        ("us-gov.anthropic.claude-fable-5-1", None, False),
-        ("us-gov-west-1/anthropic.claude-opus-5-5", None, False),
-        ("converse/us-gov-east-1/anthropic.claude-fable-5-1", None, False),
+        ("global.anthropic.claude-fable-5-1", {"reasoning_effort": "low"}, True),
+        ("us-gov.anthropic.claude-opus-5-5", None, True),
+        ("us-gov.anthropic.claude-fable-5-1", None, True),
+        ("us-gov-west-1/anthropic.claude-opus-5-5", None, True),
+        ("converse/us-gov-east-1/anthropic.claude-fable-5-1", None, True),
         ("us-east-1/anthropic.claude-opus-5-5", None, True),
     ],
 )
-def test_models_whose_thinking_stops_under_native_output_keep_the_json_tool_only_when_thinking(
+def test_native_output_follows_model_cost_map_for_bedrock_profiles(
     model: str, thinking_params: Mapping[str, object] | None, native: bool
 ) -> None:
     _, request = _converse_request_for_json_schema(model, False, thinking_params)
 
     assert ("outputConfig" in request) is native
     assert ("toolConfig" in request) is not native
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "thinking_params", "native"),
+    [
+        ("us.anthropic.claude-opus-5-5", {"thinking": {"type": "disabled"}}, True),
+        ("global.anthropic.claude-fable-5-1", {"thinking": {"type": "adaptive"}}, True),
+        ("global.anthropic.claude-fable-5-1", {"thinking": {"type": "disabled"}}, True),
+        ("us.anthropic.claude-sonnet-5", None, True),
+        ("us.anthropic.claude-sonnet-5", {"thinking": {"type": "adaptive"}}, True),
+        ("us.anthropic.claude-sonnet-5", {"thinking": {"type": "disabled"}}, True),
+        ("us.anthropic.claude-haiku-5-5", None, True),
+        ("us.anthropic.claude-haiku-5-5", {"thinking": {"type": "adaptive"}}, True),
+        ("us.anthropic.claude-haiku-5-5", {"thinking": {"type": "disabled"}}, True),
+        ("us-gov.anthropic.claude-sonnet-5", None, True),
+        ("us-gov.anthropic.claude-haiku-5-5", None, True),
+        ("us.anthropic.claude-opus-5", None, True),
+        ("us.anthropic.claude-opus-5", {"thinking": {"type": "adaptive"}}, True),
+        ("us.anthropic.claude-opus-5", {"thinking": {"type": "disabled"}}, True),
+        ("us.anthropic.claude-opus-4-8", None, True),
+        ("us.anthropic.claude-opus-4-8", {"thinking": {"type": "adaptive"}}, True),
+        ("us.anthropic.claude-opus-4-8", {"thinking": {"type": "disabled"}}, True),
+        ("us-gov.anthropic.claude-opus-5", None, False),
+        ("us-gov.anthropic.claude-opus-4-8", None, False),
+    ],
+    ids=[
+        "opus-5-5-disabled",
+        "fable-5-1-adaptive",
+        "fable-5-1-disabled",
+        "sonnet-5-unset",
+        "sonnet-5-adaptive",
+        "sonnet-5-disabled",
+        "haiku-5-5-unset",
+        "haiku-5-5-adaptive",
+        "haiku-5-5-disabled",
+        "sonnet-5-us-gov",
+        "haiku-5-5-us-gov",
+        "opus-5-unset",
+        "opus-5-adaptive",
+        "opus-5-disabled",
+        "opus-4-8-unset",
+        "opus-4-8-adaptive",
+        "opus-4-8-disabled",
+        "opus-5-us-gov",
+        "opus-4-8-us-gov",
+    ],
+)
+def test_model_cost_native_output_defaults_hold_across_thinking_modes(
+    model: str, thinking_params: Mapping[str, object] | None, native: bool
+) -> None:
+    _, request = _converse_request_for_json_schema(model, False, thinking_params)
+
+    if native:
+        assert request["outputConfig"]["textFormat"]["type"] == "json_schema"
+        assert "toolConfig" not in request
+        return
+
+    assert "outputConfig" not in request
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "thinking_params"),
+    [
+        ("us.anthropic.claude-opus-5-5", {"thinking": {"type": "adaptive"}}),
+        ("global.anthropic.claude-fable-5-1", {"thinking": {"type": "adaptive"}}),
+        ("us.anthropic.claude-sonnet-5", {"thinking": {"type": "disabled"}}),
+        ("us.anthropic.claude-haiku-5-5", None),
+        ("us.anthropic.claude-opus-5", None),
+    ],
+)
+@pytest.mark.parametrize("stream", [False, True])
+def test_deployment_opt_out_keeps_the_json_tool_on_models_that_default_to_native_output(
+    model: str, thinking_params: Mapping[str, object] | None, stream: bool
+) -> None:
+    optional_params, request = _converse_request_for_json_schema(
+        model, stream, thinking_params, model_info={"supports_bedrock_native_structured_output": False}
+    )
+
+    assert "outputConfig" not in request
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["json_tool_call"]
+    assert optional_params.get("fake_stream", False) is stream
 
 
 def _converse_capital_answer(request: httpx.Request) -> httpx.Response:
@@ -5149,9 +5975,7 @@ def _converse_capital_answer(request: httpx.Request) -> httpx.Response:
 
 
 @pytest.mark.usefixtures("local_model_cost_map")
-@pytest.mark.parametrize(
-    "model", ["us.anthropic.claude-opus-5-5", "global.anthropic.claude-sonnet-5-5", "global.anthropic.claude-fable-5-1"]
-)
+@pytest.mark.parametrize("model", ["global.anthropic.claude-sonnet-5-5"])
 def test_streamed_json_schema_on_a_model_that_cannot_force_a_tool_still_calls_converse_without_streaming(
     model: str,
 ) -> None:
@@ -5464,7 +6288,9 @@ def test_schema_past_a_native_output_size_limit_keeps_the_tool_path(
 
 
 @pytest.mark.parametrize(
-    ("native_key", "native_past_limit"), [("legacy", True), ("bedrock", False)], ids=["legacy-key", "bedrock-key"]
+    ("native_key", "native_past_limit"),
+    [("legacy", True), ("default", True), ("bedrock", False)],
+    ids=["legacy-key", "default-key", "bedrock-key"],
 )
 def test_field_count_limit_sends_the_json_tool_only_on_the_bedrock_native_key(
     set_native_structured_output, native_key, native_past_limit
@@ -5542,6 +6368,141 @@ def test_defs_that_double_at_every_level_reach_native_output_without_being_expan
     assert sent["properties"]["root"] == {"$ref": "#/$defs/Level0"}
 
 
+def _tool(name: str, parameters: Mapping[str, object]) -> Mapping[str, object]:
+    return {"type": "function", "function": {"name": name, "parameters": parameters}}
+
+
+def _completion_with_tools(model: str, tools: Sequence[Mapping[str, object]], client: HTTPHandler) -> None:
+    litellm.completion(
+        model=f"bedrock/converse/{model}",
+        messages=[{"role": "user", "content": "Call a tool."}],
+        tools=tools,
+        aws_access_key_id="AKIATOOLSCHEMAKEY",
+        aws_secret_access_key="tool-schema-secret",
+        aws_region_name="us-west-2",
+        client=client,
+    )
+
+
+@pytest.mark.parametrize(
+    ("model", "keeps_refs"),
+    [("us.anthropic.claude-sonnet-5-5", True), ("us.amazon.nova-2-lite-v1:0", False)],
+    ids=["claude-resolves-defs", "nova-needs-inlining"],
+)
+def test_shared_tool_defs_stay_references_only_for_models_that_resolve_them(model, keeps_refs):
+    schema: Final = _doubling_defs_schema(8)
+
+    request: Final = AmazonConverseConfig()._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Call a tool."}],
+        optional_params={"tools": [_tool("walk_tree", schema)]},
+        litellm_params={},
+        headers={},
+    )
+
+    sent: Final = request["toolConfig"]["tools"][0]["toolSpec"]["inputSchema"]["json"]
+    assert (sent.get("$defs") == schema["$defs"]) is keeps_refs
+    assert (sent["properties"] == schema["properties"]) is keeps_refs
+    assert ("$ref" in _schema_keys(sent)) is keeps_refs
+
+
+@pytest.mark.timeout(30)
+def test_tool_defs_that_double_at_every_level_fail_fast_with_a_400_naming_the_tool():
+    client: Final = HTTPHandler()
+
+    with (
+        patch.object(client, "post") as mock_post,
+        pytest.raises(litellm.BadRequestError, match="tool 'walk_tree'") as raised,
+    ):
+        _completion_with_tools("us.amazon.nova-2-lite-v1:0", [_tool("walk_tree", _doubling_defs_schema(17))], client)
+
+    assert raised.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+def test_tool_defs_that_inline_to_megabytes_still_reach_models_that_need_inlining():
+    description: Final = "k" * 3_000_000
+    parameters: Final = {
+        "type": "object",
+        "properties": {"key": {"$ref": "#/$defs/Key"}},
+        "$defs": {"Key": {"type": "string", "description": description}},
+    }
+
+    sent: Final = _bedrock_tools_pt([_tool("lookup", parameters)], model="us.amazon.nova-2-lite-v1:0")
+
+    assert sent[0]["toolSpec"]["inputSchema"]["json"]["properties"]["key"]["description"] == description
+
+
+def test_tool_defs_inlining_budget_covers_every_tool_in_the_request():
+    description_bytes: Final = DEFS_MAX_INLINED_BYTES * 2 // 5
+    tools: Final = [
+        _tool(
+            f"lookup_{index}",
+            {
+                "type": "object",
+                "properties": {"key": {"$ref": "#/$defs/Key"}},
+                "$defs": {"Key": {"type": "string", "description": "k" * description_bytes}},
+            },
+        )
+        for index in range(3)
+    ]
+    client: Final = HTTPHandler()
+
+    sent_alone: Final = _bedrock_tools_pt(tools[-1:], model="us.amazon.nova-2-lite-v1:0")
+    with (
+        patch.object(client, "post") as mock_post,
+        pytest.raises(litellm.BadRequestError, match="tool 'lookup_2'") as raised,
+    ):
+        _completion_with_tools("us.amazon.nova-2-lite-v1:0", tools, client)
+
+    assert sent_alone[0]["toolSpec"]["inputSchema"]["json"]["properties"]["key"]["type"] == "string"
+    assert raised.value.status_code == 400
+    mock_post.assert_not_called()
+
+
+def _legacy_doubling_defs_schema(depth: int) -> Mapping[str, object]:
+    schema: Final = _doubling_defs_schema(depth)
+    return {**{key: value for key, value in schema.items() if key != "$defs"}, "definitions": schema["$defs"]}
+
+
+@pytest.mark.timeout(30)
+@pytest.mark.parametrize(
+    ("model", "schema"),
+    [
+        ("us.anthropic.claude-sonnet-5-5", _legacy_doubling_defs_schema(17)),
+        ("us.amazon.nova-2-lite-v1:0", _doubling_defs_schema(17)),
+    ],
+    ids=["claude-legacy-definitions", "nova-defs"],
+)
+def test_tool_defs_past_the_inlining_budget_fall_back_through_context_window_fallbacks(model, schema):
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "bedrock-model",
+                "litellm_params": {
+                    "model": f"bedrock/converse/{model}",
+                    "aws_access_key_id": "AKIATOOLSCHEMAKEY",
+                    "aws_secret_access_key": "tool-schema-secret",
+                    "aws_region_name": "us-west-2",
+                },
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "openai/gpt-5.5", "api_key": "sk-backup", "mock_response": "from backup"},
+            },
+        ],
+        context_window_fallbacks=[{"bedrock-model": ["backup"]}],
+    )
+
+    response: Final = router.completion(
+        model="bedrock-model",
+        messages=[{"role": "user", "content": "Call a tool."}],
+        tools=[_tool("walk_tree", schema)],
+    )
+
+    assert response.choices[0].message.content == "from backup"
+
+
 @pytest.mark.parametrize(
     ("native_key", "forwarded"), [("legacy", True), ("bedrock", False)], ids=["legacy-key", "bedrock-key"]
 )
@@ -5596,7 +6557,6 @@ def test_translate_response_format_fallback_tool_call():
         model="anthropic.claude-3-haiku-20240307-v1:0",
         optional_params=optional_params,
         non_default_params={"response_format": response_format},
-        is_thinking_enabled=False,
     )
 
     # Should use tool-call approach, NOT outputConfig (model doesn't support native structured outputs)
@@ -5633,7 +6593,6 @@ def test_native_structured_output_no_fake_stream(monkeypatch):
             model="anthropic.claude-sonnet-4-5-20250929-v1:0",
             optional_params=optional_params,
             non_default_params={"response_format": response_format, "stream": True},
-            is_thinking_enabled=False,
         )
 
         assert "outputConfig" in result
@@ -5954,7 +6913,6 @@ def test_json_object_no_schema_skips_tool_injection(monkeypatch):
             model="anthropic.claude-sonnet-4-5-20250929-v1:0",
             optional_params=optional_params,
             non_default_params=non_default_params,
-            is_thinking_enabled=False,
         )
 
         # Should NOT use native outputConfig (no schema provided)
@@ -7840,7 +8798,7 @@ def test_neutralize_orphaned_tool_blocks_rewrites_when_no_tools():
     (#24158, #27138)."""
     messages = _orphaned_tool_history_messages()
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
 
     serialized = json.dumps(result)
     assert "tool_calls" not in serialized
@@ -7861,7 +8819,9 @@ def test_neutralize_orphaned_tool_blocks_rewrites_when_tools_empty(tools_value):
     structured tool blocks with no toolConfig."""
     messages = _orphaned_tool_history_messages()
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={"tools": tools_value})
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
+        messages, optional_params={"tools": tools_value}, guards_tool_results=False
+    )
 
     serialized = json.dumps(result)
     assert "tool_calls" not in serialized
@@ -7877,7 +8837,7 @@ def test_neutralize_orphaned_tool_blocks_rewrites_tool_result_only_history():
         {"role": "tool", "tool_call_id": "call_xyz", "content": "lookup result"},
     ]
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
 
     assert not any(m.get("role") in ("tool", "function") for m in result)
     serialized = json.dumps(result)
@@ -7914,7 +8874,7 @@ def test_neutralize_orphaned_tool_blocks_non_text_result_marked_not_empty():
         },
     ]
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
 
     rewritten = next(m for m in result if m.get("role") == "user" and m is not messages[0])
     text = rewritten["content"]
@@ -7930,6 +8890,7 @@ def test_neutralize_orphaned_tool_blocks_noop_when_tools_present():
     result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(
         messages,
         optional_params={"tools": [{"type": "function", "function": {"name": "x"}}]},
+        guards_tool_results=False,
     )
 
     assert result is messages
@@ -7939,7 +8900,7 @@ def test_neutralize_orphaned_tool_blocks_noop_when_no_tool_history():
     """Plain conversation with no tool blocks is returned unchanged."""
     messages = [{"role": "user", "content": "hi"}]
 
-    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
+    result = AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
 
     assert result is messages
 
@@ -7950,7 +8911,7 @@ def test_neutralize_orphaned_tool_blocks_logs_warning(caplog):
     messages = _orphaned_tool_history_messages()
 
     with caplog.at_level("WARNING"):
-        AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={})
+        AmazonConverseConfig._neutralize_orphaned_tool_blocks(messages, optional_params={}, guards_tool_results=False)
 
     assert any("neutralizing orphaned tool blocks" in record.getMessage() for record in caplog.records)
 
@@ -8043,42 +9004,6 @@ def test_transform_request_tool_result_only_history(monkeypatch):
 
     _assert_no_structured_tool_blocks(result)
     assert "lookup result" in json.dumps(result)
-
-
-def test_transform_request_neutralized_tool_output_is_guarded(monkeypatch):
-    """With guardrailConfig present, a neutralized tool result that becomes the
-    trailing user turn must be emitted as guardContent, not plain text, so
-    untrusted tool output does not bypass the guardrail (neutralize must run
-    before guarded-text conversion)."""
-    monkeypatch.setattr(litellm, "modify_params", False)
-    config = AmazonConverseConfig()
-
-    result = config._transform_request(
-        model="us.anthropic.claude-opus-4-5-20251101-v1:0",
-        messages=[
-            {"role": "user", "content": "look it up"},
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "c1",
-                        "type": "function",
-                        "function": {"name": "lookup", "arguments": "{}"},
-                    }
-                ],
-            },
-            {"role": "tool", "tool_call_id": "c1", "content": "secret tool output"},
-        ],
-        optional_params={"guardrailConfig": {"guardrailIdentifier": "gid", "guardrailVersion": "1"}},
-        litellm_params={},
-        headers={},
-    )
-
-    _assert_no_structured_tool_blocks(result)
-    serialized = json.dumps(result)
-    assert "guardContent" in serialized
-    assert "secret tool output" in serialized
 
 
 def test_transform_request_neutralized_tool_output_guarded_mid_history(monkeypatch):
@@ -9436,6 +10361,9 @@ def test_not_found_error(model, path, monkeypatch):
     assert exc_info.value.status_code == 404
     assert exc_info.value.response.status_code == 404
     assert exc_info.value.response.headers["x-amzn-requestid"] == "req-123"
+    assert exc_info.value.response.json() == {"message": "The provided model identifier is invalid."}
+    assert "authorization" in sent[0].headers
+    assert "authorization" not in exc_info.value.response.request.headers
     assert [request.url.raw_path for request in sent] == [path]
 
 
@@ -10192,7 +11120,6 @@ def test_converse_reserves_the_tool_cache_point_within_the_cap(tool_cache_params
     assert request["toolConfig"]["tools"][-1] == cache_point
 
 
-
 @pytest.mark.parametrize(
     "unsent_tool_params",
     [
@@ -10241,6 +11168,7 @@ def test_converse_leaves_the_cap_to_markers_when_a_marked_tool_is_not_sent(
         cache_point,
     ]
     assert cache_point not in request.get("toolConfig", {}).get("tools", [])
+
 
 def _converse_tool_turn(*result_parts: dict[str, object]) -> list[dict[str, object]]:
     return [
@@ -10343,16 +11271,22 @@ def test_converse_translates_prompt_cache_breakpoint_on_an_unmapped_arn_only_whe
 
     flagged_arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/claude-flagged"
     unflagged_arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/mistral"
+    openai_flagged_arn: Final = "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/openai-flag"
     Router(
         model_list=[
             {
                 "model_name": "claude-profile",
                 "litellm_params": {"model": f"bedrock/{flagged_arn}", "aws_region_name": "us-east-1"},
-                "model_info": {"supports_prompt_cache_breakpoint": True},
+                "model_info": {"supports_bedrock_converse_cache_point": True},
             },
             {
                 "model_name": "mistral-profile",
                 "litellm_params": {"model": f"bedrock/{unflagged_arn}", "aws_region_name": "us-east-1"},
+            },
+            {
+                "model_name": "openai-flagged-profile",
+                "litellm_params": {"model": f"bedrock/{openai_flagged_arn}", "aws_region_name": "us-east-1"},
+                "model_info": {"supports_prompt_cache_breakpoint": True},
             },
         ]
     )
@@ -10363,7 +11297,9 @@ def test_converse_translates_prompt_cache_breakpoint_on_an_unmapped_arn_only_whe
             messages=[
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", **ttl}}],
+                    "content": [
+                        {"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", **ttl}}
+                    ],
                 }
             ],
             optional_params={},
@@ -10373,7 +11309,7 @@ def test_converse_translates_prompt_cache_breakpoint_on_an_unmapped_arn_only_whe
     assert user_content(flagged_arn, {}) == [{"text": "Hello"}, {"cachePoint": {"type": "default"}}]
     assert user_content(unflagged_arn, {}) == [{"text": "Hello"}]
     assert user_content(unflagged_arn, {"ttl": "30m"}) == [{"text": "Hello"}]
-
+    assert user_content(openai_flagged_arn, {}) == [{"text": "Hello"}]
 
 
 def test_converse_prompt_cache_breakpoint_follows_the_arn_flag_over_its_base_model(local_model_cost_map):
@@ -10386,12 +11322,12 @@ def test_converse_prompt_cache_breakpoint_follows_the_arn_flag_over_its_base_mod
             {
                 "model_name": "opted-in",
                 "litellm_params": {"model": f"bedrock/{opted_in_arn}", "aws_region_name": "us-east-1"},
-                "model_info": {"supports_prompt_cache_breakpoint": True},
+                "model_info": {"supports_bedrock_converse_cache_point": True},
             },
             {
                 "model_name": "opted-out",
                 "litellm_params": {"model": f"bedrock/{opted_out_arn}", "aws_region_name": "us-east-1"},
-                "model_info": {"supports_prompt_cache_breakpoint": False},
+                "model_info": {"supports_bedrock_converse_cache_point": False},
             },
         ]
     )
@@ -10402,7 +11338,9 @@ def test_converse_prompt_cache_breakpoint_follows_the_arn_flag_over_its_base_mod
             messages=[
                 {
                     "role": "user",
-                    "content": [{"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", **ttl}}],
+                    "content": [
+                        {"type": "text", "text": "Hello", "prompt_cache_breakpoint": {"mode": "explicit", **ttl}}
+                    ],
                 }
             ],
             optional_params={},
@@ -10490,7 +11428,9 @@ def test_converse_prompt_cache_breakpoint_on_guarded_user_text_keeps_its_cache_p
 def test_converse_guarded_user_text_keeps_no_cache_point_on_a_model_not_known_to_take_one(local_model_cost_map):
     request: Final = litellm.AmazonConverseConfig()._transform_request(
         model="arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/unmapped1",
-        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}}]}],
+        messages=[
+            {"role": "user", "content": [{"type": "text", "text": "Hello", "cache_control": {"type": "ephemeral"}}]}
+        ],
         optional_params={"guardrailConfig": {"guardrailIdentifier": "gr-1", "guardrailVersion": "DRAFT"}},
         litellm_params={},
     )
@@ -11494,7 +12434,10 @@ _OUTPUT_CONFIG_FORMAT: Final = {
     ids=["adaptive", "reasoning_effort", "budget", "output_config_format"],
 )
 @pytest.mark.parametrize("model", ["us.anthropic.claude-opus-4-8", "global.anthropic.claude-sonnet-5"])
-def test_uses_opt_in_native_output_when_the_opt_in_drove_native_output(local_model_cost_map, model, request_params):
+def test_uses_opt_in_native_output_when_the_opt_in_drove_native_output(
+    set_native_structured_output, model, request_params
+):
+    set_native_structured_output(model, "bedrock")
     optional_params: Final = _converse_params(model, None, request_params)
 
     assert AmazonConverseConfig().uses_opt_in_native_output(model, optional_params, {"model_info": {"id": "d1"}})
@@ -11525,7 +12468,10 @@ def test_uses_opt_in_native_output_is_false_when_native_output_did_not_come_from
     assert not AmazonConverseConfig().uses_opt_in_native_output(model, optional_params, {"model_info": model_info})
 
 
-def test_uses_opt_in_native_output_reads_the_base_model_of_an_application_inference_profile(local_model_cost_map):
+def test_uses_opt_in_native_output_reads_the_base_model_of_an_application_inference_profile(
+    set_native_structured_output,
+):
+    set_native_structured_output("us.anthropic.claude-opus-4-8", "bedrock")
     profile: Final = "arn:aws:bedrock:us-east-1:000000000000:application-inference-profile/profile-id"
     litellm_params: Final = {"base_model": "bedrock/us.anthropic.claude-opus-4-8"}
     optional_params: Final = _converse_params(
@@ -11593,8 +12539,9 @@ _BEDROCK_SCHEMA_REFUSAL: Final = "output_config.format.schema: pattern is too co
 )
 @pytest.mark.respx(assert_all_called=True)
 def test_a_refused_native_schema_is_sent_again_only_when_the_retry_drops_native_output(
-    caller_params: dict, expected_calls: int, respx_mock: respx.Router, local_model_cost_map: None
+    caller_params: dict, expected_calls: int, respx_mock: respx.Router, local_model_cost_map: None, monkeypatch
 ) -> None:
+    monkeypatch.setitem(litellm.model_cost["us.anthropic.claude-opus-4-8"], "supports_native_structured_output", False)
     route: Final = respx_mock.post(url__regex=r"/converse$").mock(
         return_value=httpx.Response(400, json={"message": _BEDROCK_SCHEMA_REFUSAL})
     )
@@ -11615,6 +12562,62 @@ def test_a_refused_native_schema_is_sent_again_only_when_the_retry_drops_native_
     assert route.call_count == expected_calls
     assert all("outputConfig" in json.loads(call.request.content) for call in route.calls[:1])
     assert all("outputConfig" not in json.loads(call.request.content) for call in route.calls[1:])
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("model", ["us.anthropic.claude-sonnet-5", "us.anthropic.claude-opus-5"])
+def test_a_default_native_schema_rejection_retries_with_the_json_tool(
+    respx_mock: respx.Router, local_model_cost_map: None, model: str
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"/converse$").mock(
+        return_value=httpx.Response(400, json={"message": _BEDROCK_SCHEMA_REFUSAL})
+    )
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape(_BEDROCK_SCHEMA_REFUSAL)):
+        completion(
+            model=f"bedrock/converse/{model}",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            response_format=CAPITAL_RESPONSE_FORMAT,
+            thinking={"type": "disabled"},
+            num_retries=0,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            client=HTTPHandler(),
+        )
+
+    assert route.call_count == 2
+    first_request: Final = json.loads(route.calls[0].request.content)
+    retry_request: Final = json.loads(route.calls[1].request.content)
+    assert "outputConfig" in first_request and "toolConfig" not in first_request
+    assert "toolConfig" in retry_request and "outputConfig" not in retry_request
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_an_unforceable_tool_native_schema_rejection_retries_with_the_json_tool(
+    respx_mock: respx.Router, local_model_cost_map: None
+) -> None:
+    route: Final = respx_mock.post(url__regex=r"/converse$").mock(
+        return_value=httpx.Response(400, json={"message": _BEDROCK_SCHEMA_REFUSAL})
+    )
+
+    with pytest.raises(litellm.BadRequestError, match=re.escape(_BEDROCK_SCHEMA_REFUSAL)):
+        completion(
+            model="bedrock/converse/anthropic.claude-fable-5-1",
+            messages=[{"role": "user", "content": "What is the capital of France?"}],
+            response_format=CAPITAL_RESPONSE_FORMAT,
+            num_retries=0,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            client=HTTPHandler(),
+        )
+
+    assert route.call_count == 2
+    first_request: Final = json.loads(route.calls[0].request.content)
+    retry_request: Final = json.loads(route.calls[1].request.content)
+    assert "outputConfig" in first_request and "toolConfig" not in first_request
+    assert "toolConfig" in retry_request and "outputConfig" not in retry_request
 
 
 CONTROL_PLANE_ENDPOINT: Final = "https://bedrock-fips.us-east-1.amazonaws.com"
@@ -11731,9 +12734,26 @@ def test_converse_sends_no_tools_when_drop_params_drops_every_hosted_mcp_tool(mo
     assert "tool_choice" not in json.dumps(request)
 
 
+@pytest.mark.parametrize("model", ["us.anthropic.claude-haiku-5-5", "us.amazon.nova-2-lite-v1:0"])
+def test_converse_clears_a_tool_choice_naming_the_hosted_mcp_tool_drop_params_dropped(monkeypatch, model):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    request: Final = _converse_request_for_tools(
+        model,
+        {
+            "tools": [_HOSTED_MCP_TOOL, _WEATHER_FUNCTION_TOOL],
+            "tool_choice": {"type": "function", "function": {"name": "deepwiki"}},
+        },
+        drop_params=True,
+    )
+    assert [tool["toolSpec"]["name"] for tool in request["toolConfig"]["tools"]] == ["get_weather"]
+    assert "deepwiki" not in json.dumps(request)
+
+
 def _warnings_naming(caplog: pytest.LogCaptureFixture, param: str) -> tuple[str, ...]:
     return tuple(
-        r.getMessage() for r in caplog.records if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and f"Dropping {param}=" in r.getMessage()
     )
 
 
@@ -11897,9 +12917,15 @@ def test_converse_sends_only_the_header_betas_when_header_and_body_both_carry_be
 
 def _five_cache_hint_conversation() -> list[dict[str, object]]:
     return [
-        {"role": "system", "content": [{"type": "text", "text": "system prompt", "cache_control": {"type": "ephemeral"}}]},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "system prompt", "cache_control": {"type": "ephemeral"}}],
+        },
         {"role": "user", "content": [{"type": "text", "text": "turn 1", "cache_control": {"type": "ephemeral"}}]},
-        {"role": "assistant", "content": [{"type": "text", "text": "answer 1", "cache_control": {"type": "ephemeral"}}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "answer 1", "cache_control": {"type": "ephemeral"}}],
+        },
         {"role": "user", "content": [{"type": "text", "text": "turn 2", "cache_control": {"type": "ephemeral"}}]},
         {"role": "assistant", "content": "answer 2"},
         {"role": "user", "content": [{"type": "text", "text": "turn 3", "cache_control": {"type": "ephemeral"}}]},
@@ -11916,7 +12942,10 @@ def _five_cache_hint_conversation() -> list[dict[str, object]]:
     ],
 )
 def test_converse_claude_request_over_the_cache_control_cap_drops_the_oldest_hints_only_under_drop_params(
-    drop_params: bool | str, expected_system_cache_points: int, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+    drop_params: bool | str,
+    expected_system_cache_points: int,
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     messages: Final = _five_cache_hint_conversation()
@@ -11933,6 +12962,21 @@ def test_converse_claude_request_over_the_cache_control_cap_drops_the_oldest_hin
     assert len(list(_cache_points(request["system"]))) == expected_system_cache_points
     assert [len(list(_cache_points(message))) for message in request["messages"]] == [1, 1, 1, 0, 1]
     assert messages == messages_before
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("us.anthropic.claude-sonnet-5", {"type": "disabled"}),
+        ("us.anthropic.claude-haiku-4-5", None),
+        ("us.anthropic.claude-sonnet-5-5", None),
+    ],
+)
+def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None) -> None:
+    params: Final[dict[str, object]] = {}
+    AmazonConverseConfig()._handle_reasoning_effort_parameter(model, "none", params)
+    assert params.get("thinking") == expected
+    assert "output_config" not in params
 
 
 def test_converse_claude_tool_message_with_several_marked_blocks_counts_as_one_cache_point_against_the_cap(
@@ -11976,3 +13020,274 @@ def test_converse_claude_tool_message_with_several_marked_blocks_counts_as_one_c
 
     assert len(list(_cache_points(request["messages"]))) == 3
     assert messages == messages_before
+
+
+_MISTRAL_TOOL_USE_ID: Final = re.compile(r"[a-zA-Z0-9]{9}")
+_REPLAYED_TOOL_CALL_IDS: Final = ("call_u0U86kcRTK484QKTyPKASCeg", "call_abc123", "toolu_01ABCdef", "D681PevKs")
+
+
+def _replayed_tool_history() -> list[AllMessageValues]:
+    return [
+        {"role": "user", "content": "Weather and time in Paris?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": tool_call_id, "type": "function", "function": {"name": f"tool_{n}", "arguments": "{}"}}
+                for n, tool_call_id in enumerate(_REPLAYED_TOOL_CALL_IDS)
+            ],
+        },
+        *(
+            {"role": "tool", "tool_call_id": tool_call_id, "content": "ok"}
+            for tool_call_id in _REPLAYED_TOOL_CALL_IDS
+        ),
+        {"role": "user", "content": "Sum it up."},
+    ]
+
+
+async def _sent_tool_use_ids(model: str, use_async: bool) -> tuple[list[str], list[str]]:
+    config: Final = AmazonConverseConfig()
+    kwargs: Final = dict(
+        model=model,
+        messages=_replayed_tool_history(),
+        optional_params={
+            "tools": [
+                {"type": "function", "function": {"name": f"tool_{n}", "parameters": {"type": "object"}}}
+                for n in range(len(_REPLAYED_TOOL_CALL_IDS))
+            ]
+        },
+        litellm_params={},
+    )
+    request: Final = (
+        await config._async_transform_request(**kwargs) if use_async else config._transform_request(**kwargs)
+    )
+    blocks: Final = tuple(chain.from_iterable(message["content"] for message in request["messages"]))
+    return (
+        [block["toolUse"]["toolUseId"] for block in blocks if "toolUse" in block],
+        [block["toolResult"]["toolUseId"] for block in blocks if "toolResult" in block],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("model", ["mistral.mistral-large-3-675b-instruct", "us.mistral.pixtral-large-2502-v1:0"])
+async def test_converse_sends_mistral_tool_use_ids_as_nine_alphanumeric_characters(model: str, use_async: bool):
+    tool_use_ids, tool_result_ids = await _sent_tool_use_ids(model, use_async)
+
+    assert tool_result_ids == tool_use_ids
+    assert all(_MISTRAL_TOOL_USE_ID.fullmatch(tool_use_id) for tool_use_id in tool_use_ids)
+    assert len(set(tool_use_ids)) == len(_REPLAYED_TOOL_CALL_IDS)
+    assert tool_use_ids[3] == "D681PevKs"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+async def test_converse_keeps_tool_use_ids_for_a_model_that_is_not_mistral(use_async: bool):
+    tool_use_ids, tool_result_ids = await _sent_tool_use_ids("us.anthropic.claude-haiku-5-5", use_async)
+
+    assert tool_use_ids == tool_result_ids == list(_REPLAYED_TOOL_CALL_IDS)
+
+
+@pytest.mark.parametrize(
+    ("thinking", "sent_thinking"),
+    [
+        pytest.param({"type": "adaptive"}, {"type": "adaptive"}, id="adaptive_is_kept"),
+        pytest.param({"type": "enabled", "budget_tokens": 2000}, None, id="budget_is_dropped"),
+    ],
+)
+def test_modify_params_keeps_adaptive_thinking_when_tool_call_history_has_no_thinking_blocks(
+    thinking: dict[str, object], sent_thinking: dict[str, object] | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    request: Final = AmazonConverseConfig()._transform_request(
+        model="us.anthropic.claude-opus-4-8",
+        messages=[
+            {"role": "user", "content": "Use the add tool to compute 2 + 3."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "add", "arguments": '{"a": 2}'}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "5"},
+        ],
+        optional_params={
+            "thinking": thinking,
+            "maxTokens": 4096,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "add",
+                        "parameters": {"type": "object", "properties": {"a": {"type": "integer"}}},
+                    },
+                }
+            ],
+        },
+        litellm_params={},
+        headers={},
+    )
+
+    assert request.get("additionalModelRequestFields", {}).get("thinking") == sent_thinking
+
+
+_CONVERSE_CLAUDE: Final = "anthropic.claude-haiku-4-5-20251001-v1:0"
+_CONVERSE_REPLAYED_THINKING: Final = {"type": "thinking", "thinking": "The user said hi.", "signature": "sig-1"}
+_CONVERSE_WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+}
+
+
+def _thinking_blocks_turn(thinking_blocks: object) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "Hi"},
+        {"role": "assistant", "content": "Hello", "thinking_blocks": thinking_blocks},
+        {"role": "user", "content": "Go on"},
+    ]
+
+
+def _thinking_blocks_tool_turn(thinking_blocks: object) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "Weather?"},
+        {
+            "role": "assistant",
+            "content": None,
+            "thinking_blocks": thinking_blocks,
+            "tool_calls": [
+                {"id": "toolu_01", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_01", "content": "rain"},
+    ]
+
+
+def _thinking_blocks_request(
+    messages: list[dict[str, object]],
+    *,
+    drop_params: bool = False,
+    use_async: bool = False,
+    optional_params: dict[str, object] | None = None,
+) -> RequestObject:
+    config: Final = AmazonConverseConfig()
+    params: Final = dict(optional_params or {})
+    if use_async:
+        return asyncio.run(
+            config._async_transform_request(
+                model=_CONVERSE_CLAUDE,
+                messages=messages,
+                optional_params=params,
+                litellm_params={"drop_params": drop_params},
+                headers={},
+            )
+        )
+    return config._transform_request(
+        model=_CONVERSE_CLAUDE,
+        messages=messages,
+        optional_params=params,
+        litellm_params={"drop_params": drop_params},
+        headers={},
+    )
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize(
+    ("thinking_blocks", "type_name"),
+    [
+        pytest.param(5, "int", id="integer"),
+        pytest.param(1.5, "float", id="float"),
+        pytest.param(True, "bool", id="true"),
+    ],
+)
+def test_converse_answers_400_naming_numeric_thinking_blocks(
+    local_model_cost_map, thinking_blocks: object, type_name: str, use_async: bool
+):
+    with pytest.raises(BedrockError) as raised:
+        _thinking_blocks_request(
+            [{"role": "system", "content": "Be terse"}, *_thinking_blocks_turn(thinking_blocks)],
+            use_async=use_async,
+        )
+
+    assert (raised.value.status_code, raised.value.message) == (
+        400,
+        f"Invalid type for 'messages[2].thinking_blocks': expected a list, got {type_name}",
+    )
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+@pytest.mark.parametrize("thinking_blocks", [5, 1.5, True])
+def test_converse_drops_numeric_thinking_blocks_under_drop_params(
+    local_model_cost_map, thinking_blocks: object, use_async: bool
+):
+    assert _thinking_blocks_request(
+        _thinking_blocks_turn(thinking_blocks), drop_params=True, use_async=use_async
+    ) == _thinking_blocks_request(_thinking_blocks_turn(None), drop_params=True, use_async=use_async)
+
+
+@pytest.mark.parametrize("use_async", [False, True])
+def test_converse_drops_thinking_when_a_dropped_number_leaves_a_tool_turn_without_blocks(
+    local_model_cost_map, monkeypatch: pytest.MonkeyPatch, use_async: bool
+):
+    monkeypatch.setattr(litellm, "modify_params", True)
+    optional_params: Final = {
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "tools": [_CONVERSE_WEATHER_TOOL],
+    }
+
+    assert _thinking_blocks_request(
+        _thinking_blocks_tool_turn(5), drop_params=True, use_async=use_async, optional_params=optional_params
+    ) == _thinking_blocks_request(
+        _thinking_blocks_tool_turn(None), drop_params=True, use_async=use_async, optional_params=optional_params
+    )
+
+
+@pytest.mark.parametrize("drop_params", [False, True])
+@pytest.mark.parametrize(
+    ("thinking_blocks", "equivalent"),
+    [
+        pytest.param(0, None, id="zero"),
+        pytest.param(False, None, id="false"),
+        pytest.param("abc", None, id="string"),
+        pytest.param({"a": 1}, None, id="object"),
+        pytest.param(["abc"], None, id="string_block"),
+        pytest.param(
+            [_CONVERSE_REPLAYED_THINKING, "abc"], [_CONVERSE_REPLAYED_THINKING], id="string_after_a_block"
+        ),
+    ],
+)
+def test_converse_keeps_building_thinking_blocks_shapes_that_worked(
+    local_model_cost_map, thinking_blocks: object, equivalent: object, drop_params: bool
+):
+    assert _thinking_blocks_request(
+        _thinking_blocks_turn(thinking_blocks), drop_params=drop_params
+    ) == _thinking_blocks_request(_thinking_blocks_turn(equivalent), drop_params=drop_params)
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi", "thinking_blocks": 5},
+                {"role": "assistant", "content": "Hello", "tool_calls": 5},
+                {"role": "user", "content": "Go on"},
+            ],
+            id="number_on_a_user_turn",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello", "thinking_blocks": 0, "tool_calls": 5},
+                {"role": "user", "content": "Go on"},
+            ],
+            id="zero_on_the_failing_turn",
+        ),
+    ],
+)
+def test_converse_never_blames_thinking_blocks_for_another_fields_type_error(
+    local_model_cost_map, messages: list[dict[str, object]]
+):
+    with pytest.raises(TypeError):
+        _thinking_blocks_request(messages, optional_params={"tools": [_CONVERSE_WEATHER_TOOL]})

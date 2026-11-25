@@ -636,7 +636,8 @@ def _registered(host: ScriptedHost) -> Mapping[str, int]:
 def test_retire_releases_every_callback_the_core_registered_on_its_host(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
-    core = make_core(model_list=_model_list())
+    # least-busy registers its selector on the host on both cores; the Python core adds its outcome callbacks.
+    core = make_core(model_list=_model_list(), routing_strategy="least-busy")
     assert _registered(host) != {}
 
     core.retire()
@@ -645,8 +646,8 @@ def test_retire_releases_every_callback_the_core_registered_on_its_host(
 
 
 def test_retire_leaves_another_cores_callbacks_registered(make_core: MakeCore, host: ScriptedHost) -> None:
-    kept = make_core(model_list=_model_list())
-    retired = make_core(model_list=[deployment("other", "o")])
+    kept = make_core(model_list=_model_list(), routing_strategy="least-busy")
+    retired = make_core(model_list=[deployment("other", "o")], routing_strategy="least-busy")
     registered_by_both = _registered(host)
 
     retired.retire()

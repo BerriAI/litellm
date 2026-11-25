@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
-from codex.run import Command, codex_run
+from codex.run import Command, McpCall, codex_run
 
 E2E_PYTEST_INI: Final = Path(__file__).resolve().parents[2] / "e2e" / "pytest.ini"
 
@@ -60,6 +60,30 @@ class TestCodexRun:
 
         assert run.patched_files == (Path("/w/app.py"),)
 
+    def test_only_an_mcp_tool_call_that_completed_counts_and_keeps_the_text_the_tool_returned(self) -> None:
+        def call(status: str, result: Mapping[str, object] | None) -> str:
+            item: Final = {
+                "id": status,
+                "type": "mcp_tool_call",
+                "server": "vault",
+                "tool": "read_secret",
+                "arguments": {},
+                "result": result,
+                "error": None if result else {"message": "tool call failed"},
+                "status": status,
+            }
+            return _line({"type": "item.completed", "item": item})
+
+        returned: Final = {
+            "content": [{"type": "text", "text": "marker-7f3a91"}],
+            "structured_content": {"result": "marker-7f3a91"},
+        }
+        run: Final = codex_run(
+            exit_code=0, stdout="\n".join((call("completed", returned), call("failed", None))), stderr=""
+        )
+
+        assert run.mcp_calls == (McpCall(server="vault", tool="read_secret", output="marker-7f3a91"),)
+
     def test_a_turn_that_gave_up_on_a_5xx_is_rerun_by_the_suites_network_rule(self) -> None:
         failed: Final = _line(
             {"type": "turn.failed", "error": {"message": "exceeded retry limit, last status: 502 Bad Gateway"}}
@@ -83,6 +107,25 @@ class TestCodexRun:
         assert codex_run(exit_code=0, stdout=newer_codex, stderr="") == codex_run(
             exit_code=0, stdout=ROUND_TRIP, stderr=""
         )
+
+    def test_each_completed_web_search_counts_and_one_still_running_does_not(self) -> None:
+        search: Final = {
+            "id": "exec-07141cd4-a1e4-41ad-8bbd-27a117e188b4",
+            "type": "web_search",
+            "query": "https://pypi.org/project/litellm/",
+            "action": {"type": "open_page", "url": "https://pypi.org/project/litellm/"},
+        }
+        searching: Final = "\n".join(
+            (
+                _line({"type": "item.started", "item": {**search, "query": "", "action": {"type": "other"}}}),
+                _line({"type": "item.completed", "item": search}),
+                _line({"type": "item.started", "item": {**search, "id": "exec-2", "action": {"type": "other"}}}),
+                ROUND_TRIP,
+            )
+        )
+
+        assert codex_run(exit_code=0, stdout=searching, stderr="").web_searches == 1
+        assert codex_run(exit_code=0, stdout=ROUND_TRIP, stderr="").web_searches == 0
 
 
 def _only_rerun_patterns(ini: Path) -> tuple[str, ...]:

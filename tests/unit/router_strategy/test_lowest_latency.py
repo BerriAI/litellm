@@ -7,10 +7,12 @@
 import copy
 import json
 import sys
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from typing import Final
 from unittest.mock import Mock
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
@@ -20,7 +22,7 @@ from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.responses.utils import ResponseAPILoggingUtils
 from litellm.router import Router
 from litellm.router_strategy.lowest_latency import LowestLatencyLoggingHandler, RoutingArgs
-from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponseAPIUsage, ResponsesAPIResponse
 
 DEPLOYMENT_ID = "9876"
 KWARGS = {
@@ -1716,3 +1718,29 @@ async def test_timeout_penalty_updates_normalized_latency_and_avoids_failed_depl
         healthy_deployments=[{"model_info": {"id": name}, "litellm_params": {}} for name in ("native", "bridge")],
     )
     assert selected["model_info"]["id"] == "bridge"
+
+
+async def _log_speech_clip(
+    handler: LowestLatencyLoggingHandler, sync_mode: bool, seconds: float, metadata: Mapping[str, object]
+) -> None:
+    kwargs: Final = {
+        "litellm_params": {"metadata": {"model_group": "tts", **metadata}, "model_info": {"id": DEPLOYMENT_ID}}
+    }
+    clip: Final = HttpxBinaryResponseContent(httpx.Response(status_code=200, content=b"audio"))
+    if sync_mode:
+        handler.log_success_event(kwargs, clip, 0.0, seconds)
+    else:
+        await handler.async_log_success_event(kwargs, clip, 0.0, seconds)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False], ids=["sync", "async"])
+async def test_speech_clip_the_caller_hung_up_on_counts_its_request_but_not_its_latency(sync_mode: bool) -> None:
+    cache: Final = DualCache()
+    handler: Final = LowestLatencyLoggingHandler(router_cache=cache)
+    await _log_speech_clip(handler, sync_mode, seconds=6.0, metadata={})
+    await _log_speech_clip(handler, sync_mode, seconds=1.0, metadata={"client_disconnected": True})
+
+    recorded: Final = cache.get_cache(key="tts_map")[DEPLOYMENT_ID]
+    assert recorded["latency_normalized"] == [pytest.approx(6.0)]
+    assert sum(minute["rpm"] for minute in recorded.values() if isinstance(minute, dict)) == 2
