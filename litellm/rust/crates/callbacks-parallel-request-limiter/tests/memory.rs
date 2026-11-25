@@ -359,6 +359,7 @@ async fn a_failure_settled_after_its_window_expired_counts_toward_the_next_reser
     assert_eq!(refused.headers["rate_limit_type"], "tokens");
 }
 
+#[rstest]
 #[tokio::test]
 async fn a_charge_stays_counted_while_a_hundred_other_keys_are_charged_in_its_window() {
     let (limiter, _, clock) = limiter_whose_memory_shares_its_clock(true);
