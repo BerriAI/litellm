@@ -15910,9 +15910,10 @@
         "close": "Close"
       },
       "accountingDelay": {
-        "title": "Usage totals may be delayed",
-        "detail_one": "Recent spend may be missing from these totals. {{count}} delivery pending. Oldest wait {{minutes}} min.",
-        "detail_other": "Recent spend may be missing from these totals. {{count}} deliveries pending. Oldest wait {{minutes}} min."
+        "title": "Spend reporting is delayed",
+        "detail_one": "{{pending}} spend update pending. Oldest wait {{minutes}} min.",
+        "detail_other": "{{pending}} spend updates pending. Oldest wait {{minutes}} min.",
+        "unavailable": "Spend reporting status unavailable"
       },
       "clientScope": {
         "allUsers": "All users",

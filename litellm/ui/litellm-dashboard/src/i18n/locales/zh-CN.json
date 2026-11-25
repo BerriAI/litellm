@@ -15623,6 +15623,11 @@
         "description": "使用可复用的凭据时，它会在此视图中显示为带有 <prefix/>前缀的标签。",
         "close": "关闭"
       },
+      "accountingDelay": {
+        "title": "支出统计有延迟",
+        "detail_other": "{{pending}} 笔支出更新待处理，最早的一笔已等待 {{minutes}} 分钟。",
+        "unavailable": "暂时无法获取支出统计状态"
+      },
       "clientScope": {
         "allUsers": "全部用户",
         "myUsage": "我的用量"

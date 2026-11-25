@@ -7,7 +7,7 @@
  */
 
 import { skipToken, useQuery } from "@tanstack/react-query";
-import { BarChart3, Clock, Download, Link2, Search, X } from "lucide-react";
+import { BarChart3, Clock, Download, Info, Link2, Search, X } from "lucide-react";
 import { useQueryStates } from "nuqs";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -167,12 +167,17 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
   const usageView = allowedViews.includes(selectedUsageView) ? selectedUsageView : DEFAULT_USAGE_VIEW;
   const shouldCheckAccountingDelay =
     isAdmin && usageView === "global" && selectedTab === "cost" && urlParams.user === null;
-  const { data: accountingDelay } = useQuery({
+  const { data: accountingDelay, isError: accountingStatusError } = useQuery({
     queryKey: ["spendAccountingStatus", accessToken],
     queryFn: shouldCheckAccountingDelay && accessToken ? () => spendAccountingStatusCall(accessToken) : skipToken,
     staleTime: 30_000,
     refetchInterval: 30_000,
   });
+  const confirmedAccountingDelay = accountingStatusError ? null : accountingDelay;
+  const accountingNoticeTitle =
+    shouldCheckAccountingDelay && (accountingStatusError || confirmedAccountingDelay)
+      ? t(accountingStatusError ? "usage.pageView.accountingDelay.unavailable" : "usage.pageView.accountingDelay.title")
+      : "";
 
   const selectedClient = CLIENT_USAGE_VIEWS.includes(usageView) ? urlParams.client : null;
 
@@ -566,6 +571,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                     </div>
                   </div>
                   <TabsContent value="cost" keepMounted>
+                    <span role="status" className="sr-only">
+                      {accountingNoticeTitle}
+                    </span>
                     <UsageOverview
                       results={sortedDailyResults}
                       totals={totals}
@@ -573,16 +581,21 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations, teamsLoadin
                       requestCountsPending={requestCountsPending}
                       budget={currentUser?.max_budget ?? null}
                       accountingNotice={
-                        shouldCheckAccountingDelay && accountingDelay ? (
-                          <Alert variant="warning" role="status">
-                            <Clock aria-hidden="true" />
-                            <AlertTitle>{t("usage.pageView.accountingDelay.title")}</AlertTitle>
-                            <AlertDescription className="text-inherit">
-                              {t("usage.pageView.accountingDelay.detail", {
-                                count: accountingDelay.pending_count,
-                                minutes: Math.floor(accountingDelay.oldest_pending_seconds / 60),
-                              })}
-                            </AlertDescription>
+                        accountingNoticeTitle ? (
+                          <Alert variant={accountingStatusError ? "info" : "warning"} role="note">
+                            {accountingStatusError ? <Info aria-hidden="true" /> : <Clock aria-hidden="true" />}
+                            <AlertTitle>{accountingNoticeTitle}</AlertTitle>
+                            {confirmedAccountingDelay && (
+                              <AlertDescription className="text-inherit">
+                                {t("usage.pageView.accountingDelay.detail", {
+                                  count: confirmedAccountingDelay.pending_count,
+                                  pending: t("format.number", { val: confirmedAccountingDelay.pending_count }),
+                                  minutes: t("format.number", {
+                                    val: Math.floor(confirmedAccountingDelay.oldest_pending_seconds / 60),
+                                  }),
+                                })}
+                              </AlertDescription>
+                            )}
                           </Alert>
                         ) : null
                       }
