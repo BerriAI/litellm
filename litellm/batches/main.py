@@ -1085,7 +1085,10 @@ def cancel_batch(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message=f"LiteLLM doesn't support {custom_llm_provider} for 'cancel_batch'. Only 'openai', 'azure', 'vertex_ai', and 'bedrock' are supported.",
+                message=(
+                    f"LiteLLM doesn't support {custom_llm_provider} for 'cancel_batch'. "
+                    "Only 'openai', 'azure', 'vertex_ai', 'bedrock', and 'xai' are supported."
+                ),
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(

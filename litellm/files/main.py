@@ -71,6 +71,11 @@ from litellm.utils import (
 
 base_llm_http_handler = BaseLLMHTTPHandler()
 
+_FILES_SUPPORTED_PROVIDERS_MSG: Final = (
+    "Only 'openai', 'azure', 'gemini', 'vertex_ai', 'bedrock', 'manus', 'anthropic', 'mistral', and 'xai' are"
+    " supported."
+)
+
 ####### ENVIRONMENT VARIABLES ###################
 
 
@@ -275,7 +280,9 @@ def create_file(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message=f"LiteLLM doesn't support {custom_llm_provider} for 'create_file'. Only ['openai', 'azure', 'vertex_ai', 'manus', 'anthropic'] are supported.",
+                message=(
+                    f"LiteLLM doesn't support {custom_llm_provider} for 'create_file'. {_FILES_SUPPORTED_PROVIDERS_MSG}"
+                ),
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(
@@ -452,7 +459,10 @@ def file_retrieve(
                 )
             else:
                 raise litellm.exceptions.BadRequestError(
-                    message=f"LiteLLM doesn't support {custom_llm_provider} for 'file_retrieve'. Only 'openai', 'azure', 'manus', and 'anthropic' are supported.",
+                    message=(
+                        f"LiteLLM doesn't support {custom_llm_provider} for 'file_retrieve'. "
+                        f"{_FILES_SUPPORTED_PROVIDERS_MSG}"
+                    ),
                     model="n/a",
                     llm_provider=custom_llm_provider,
                     response=httpx.Response(
@@ -626,7 +636,10 @@ def file_delete(
                 )
             else:
                 raise litellm.exceptions.BadRequestError(
-                    message=f"LiteLLM doesn't support {custom_llm_provider} for 'file_delete'. Only 'openai', 'azure', 'gemini', 'manus', and 'anthropic' are supported.",
+                    message=(
+                        f"LiteLLM doesn't support {custom_llm_provider} for 'file_delete'. "
+                        f"{_FILES_SUPPORTED_PROVIDERS_MSG}"
+                    ),
                     model="n/a",
                     llm_provider=custom_llm_provider,
                     response=httpx.Response(
@@ -789,7 +802,9 @@ def file_list(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message=f"LiteLLM doesn't support {custom_llm_provider} for 'file_list'. Only 'openai', 'azure', 'manus', and 'anthropic' are supported.",
+                message=(
+                    f"LiteLLM doesn't support {custom_llm_provider} for 'file_list'. {_FILES_SUPPORTED_PROVIDERS_MSG}"
+                ),
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(
@@ -994,7 +1009,10 @@ def file_content(
             )
         else:
             raise litellm.exceptions.BadRequestError(
-                message=f"LiteLLM doesn't support {custom_llm_provider} for 'file_content'. Supported providers are 'openai', 'azure', 'vertex_ai', 'bedrock', 'manus', 'anthropic'.",
+                message=(
+                    f"LiteLLM doesn't support {custom_llm_provider} for 'file_content'. "
+                    f"{_FILES_SUPPORTED_PROVIDERS_MSG}"
+                ),
                 model="n/a",
                 llm_provider=custom_llm_provider,
                 response=httpx.Response(
