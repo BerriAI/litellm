@@ -44,6 +44,11 @@ def split_mantle_region_prefix(model: str) -> tuple[str | None, str]:
     return None, model
 
 
+def mantle_url_region(api_base: str, params: Mapping[str, object]) -> str:
+    host_match: Final = MANTLE_HOST_RE.match(api_base.rstrip("/"))
+    return host_match.group(1) if host_match else resolve_mantle_region({**params, "api_base": api_base})
+
+
 def resolve_mantle_region(params: Mapping[str, object]) -> str:
     region: Final = params.get("aws_region_name")
     if isinstance(region, str) and region:
@@ -109,13 +114,7 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
         # Pin the credential-scope region to the region of the actual signing URL
         # so the SigV4 scope and URL host can never disagree, even when a stale
         # api_base and aws_region_name point at different regions.
-        host_match: Final = MANTLE_HOST_RE.match(api_base.rstrip("/"))
-        optional_params = {
-            **optional_params,
-            "aws_region_name": (
-                host_match.group(1) if host_match else self._resolve_region({**optional_params, "api_base": api_base})
-            ),
-        }
+        optional_params = {**optional_params, "aws_region_name": mantle_url_region(api_base, optional_params)}
         headers = {k: v for k, v in headers.items() if k.lower() != "authorization"}
         try:
             return sign(headers=headers, optional_params=optional_params)
@@ -180,6 +179,7 @@ def live_model_cost() -> Mapping[str, object]:
 
 def mantle_supports_all_json_schema_keywords(
     model: str,
+    region: str,
     litellm_params: Mapping[str, object] | GenericLiteLLMParams,
     model_cost: Mapping[str, object],
 ) -> bool:
@@ -187,11 +187,23 @@ def mantle_supports_all_json_schema_keywords(
     if declared is not None:
         return declared
     bare_model: Final = split_mantle_region_prefix(model)[1]
-    match as_str_mapping(model_cost.get(f"bedrock_mantle/{bare_model}")):
+    listed: Final = next(
+        (
+            flag
+            for key in (f"bedrock_mantle/{region}/{bare_model}", f"bedrock_mantle/{bare_model}")
+            if (flag := _listed_all_json_schema_keywords_support(model_cost.get(key))) is not None
+        ),
+        None,
+    )
+    return not bare_model.startswith("google.gemma-4") if listed is None else listed
+
+
+def _listed_all_json_schema_keywords_support(row: object) -> bool | None:
+    match as_str_mapping(row):
         case {"supports_all_json_schema_keywords": bool(listed)}:
             return listed
         case _:
-            return not bare_model.startswith("google.gemma-4")
+            return None
 
 
 def drop_schema_keywords_gemma_4_rejects(schema: Mapping[str, object]) -> Mapping[str, object]:

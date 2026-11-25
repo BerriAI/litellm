@@ -2876,8 +2876,16 @@ def _keyword_schema():
     return {
         "type": "object",
         "properties": {
-            "answers": {"type": "object", "propertyNames": {"type": "string"}, "additionalProperties": {"type": "string"}},
-            "tags": {"type": "array", "uniqueItems": True, "items": {"type": "object", "propertyNames": {"maxLength": 3}}},
+            "answers": {
+                "type": "object",
+                "propertyNames": {"type": "string"},
+                "additionalProperties": {"type": "string"},
+            },
+            "tags": {
+                "type": "array",
+                "uniqueItems": True,
+                "items": {"type": "object", "propertyNames": {"maxLength": 3}},
+            },
             "choice": {"anyOf": [{"type": "array", "uniqueItems": False}, {"type": "null"}]},
             "uniqueItems": {"type": "boolean", "default": {"uniqueItems": True}},
             "if": {"type": "string", "examples": [{"propertyNames": "data"}]},
@@ -2918,13 +2926,13 @@ class TestDropSchemaKeywords:
 
         tags_not: Final = {"uniqueItems": True, "items": {"type": "object", "propertyNames": {"maxLength": 3}}}
         root_not: Final = {"if": {"type": "object"}, "then": {"required": ["tags"]}}
-        schema = {
+        schema: Final = {
             "type": "object",
             "properties": {"tags": {"type": "array", "uniqueItems": True, "not": tags_not}},
             "not": root_not,
         }
 
-        result = drop_schema_keywords(schema, _DROPPED_KEYWORDS)
+        result: Final = drop_schema_keywords(schema, _DROPPED_KEYWORDS)
 
         assert result == {
             "type": "object",
@@ -2933,13 +2941,42 @@ class TestDropSchemaKeywords:
         }
         assert tags_not == {"uniqueItems": True, "items": {"type": "object", "propertyNames": {"maxLength": 3}}}
 
+    def test_drops_the_keywords_from_the_component_schemas_a_ref_reaches(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
+
+        parameters: Final = {"p": {"name": "p", "schema": {"type": "array", "uniqueItems": True}}}
+        schema: Final = {
+            "type": "object",
+            "properties": {"v": {"$ref": "#/components/schemas/T"}},
+            "components": {
+                "schemas": {
+                    "T": {"type": "array", "uniqueItems": True, "items": {"type": "object", "propertyNames": {}}},
+                    "Anything": True,
+                },
+                "parameters": parameters,
+            },
+        }
+
+        result: Final = drop_schema_keywords(schema, _DROPPED_KEYWORDS)
+
+        assert result == {
+            "type": "object",
+            "properties": {"v": {"$ref": "#/components/schemas/T"}},
+            "components": {
+                "schemas": {"T": {"type": "array", "items": {"type": "object"}}, "Anything": True},
+                "parameters": parameters,
+            },
+        }
+        assert schema["components"]["schemas"]["T"]["uniqueItems"] is True
+
     def test_returns_the_same_object_when_no_keyword_is_in_a_schema_position(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
 
-        schema = {
+        schema: Final = {
             "type": "object",
             "properties": {"uniqueItems": {"type": "array", "items": {"type": "string"}}},
             "$defs": {"if": {"type": "string", "default": "propertyNames"}},
+            "components": {"schemas": {"uniqueItems": {"type": "string"}}, "parameters": {"if": {"name": "if"}}},
         }
 
         assert drop_schema_keywords(schema, _DROPPED_KEYWORDS) is schema

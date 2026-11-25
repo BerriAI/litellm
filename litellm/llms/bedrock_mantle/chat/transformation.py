@@ -27,6 +27,8 @@ from litellm.llms.bedrock_mantle.common_utils import (
     drop_schema_keywords_gemma_4_rejects,
     live_model_cost,
     mantle_supports_all_json_schema_keywords,
+    mantle_url_region,
+    resolve_mantle_region,
 )
 from litellm.llms.mistral.common_utils import with_mistral_tool_call_ids
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
@@ -74,10 +76,19 @@ def _chat_value_gemma_4_accepts(key: str, value: object) -> object:
     return _chat_entry_gemma_4_accepts(value, path)
 
 
+def _chat_request_region(litellm_params: Mapping[str, object]) -> str:
+    api_base: Final = litellm_params.get("api_base")
+    if isinstance(api_base, str) and api_base:
+        return mantle_url_region(api_base, litellm_params)
+    return resolve_mantle_region(litellm_params)
+
+
 def _with_schemas_model_accepts(
     params: Mapping[str, object], model: str, litellm_params: Mapping[str, object]
 ) -> Mapping[str, object]:
-    if mantle_supports_all_json_schema_keywords(model, litellm_params, live_model_cost()):
+    if mantle_supports_all_json_schema_keywords(
+        model, _chat_request_region(litellm_params), litellm_params, live_model_cost()
+    ):
         return params
     verbose_logger.debug(
         "Bedrock Mantle %s does not support all JSON schema keywords, so the ones it rejects are dropped", model

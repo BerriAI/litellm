@@ -1758,11 +1758,27 @@ def drop_schema_keywords(schema: Mapping[str, object], keywords: frozenset[str])
 
     Only schema positions are walked, as in :func:`drop_non_python_regex_patterns`, so a
     property or ``$defs`` entry that is only named like a keyword stays, and so does a key
-    inside ``default``, ``examples`` or ``const`` data. A ``not`` subschema is kept as sent,
-    since dropping a keyword under it would forbid values the caller allowed. The input is
-    never mutated, and the same object comes back when nothing was dropped.
+    inside ``default``, ``examples`` or ``const`` data. The root ``components.schemas`` entries
+    are walked too, since a ``#/components/schemas/...`` ref reaches them. A ``not`` subschema is
+    kept as sent, since dropping a keyword under it would forbid values the caller allowed. The
+    input is never mutated, and the same object comes back when nothing was dropped.
     """
-    return _schema_rebuilt(schema, partial(_node_without_keywords, keywords=keywords))
+    rewrite: Final = partial(_node_without_keywords, keywords=keywords)
+    return _with_component_schemas_rebuilt(_schema_rebuilt(schema, rewrite), rewrite)
+
+
+def _with_component_schemas_rebuilt(
+    schema: Mapping[str, object],
+    rewrite: Callable[[Mapping[str, object], Mapping[int, Mapping[str, object]]], Mapping[str, object]],
+) -> Mapping[str, object]:
+    components: Final = _schema_at(schema, "components")
+    schemas: Final = None if components is None else _schema_at(components, "schemas")
+    if components is None or schemas is None:
+        return schema
+    rebuilt: Final = {**schemas, **{name: _schema_rebuilt(sub, rewrite) for name, sub in _named_schemas(schemas)}}
+    if all(rebuilt[name] is schemas[name] for name in schemas):
+        return schema
+    return {**schema, "components": {**components, "schemas": rebuilt}}
 
 
 def with_sanitized_schema_at(
