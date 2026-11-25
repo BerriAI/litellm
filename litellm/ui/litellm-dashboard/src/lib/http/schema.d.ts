@@ -14288,6 +14288,9 @@ export interface paths {
          *
          *     Parameters:
          *     - project_id: *str* - The project id to fetch info for
+         *     - include_model_spend: *bool* - When the stored `model_spend` is empty, fill it with the spend logs recorded for
+         *       this project since it was created, summed per model. Pruned or disabled spend logs are not counted, so it can
+         *       differ from `spend`, which budget resets set back to zero. Defaults to false.
          *
          *     Example:
          *     ```bash
@@ -78657,6 +78660,7 @@ export interface operations {
         parameters: {
             query: {
                 project_id: string;
+                include_model_spend?: boolean;
             };
             header?: never;
             path?: never;
