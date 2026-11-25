@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 from typing_extensions import Self
 
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.otel.runtime import background_job_span
 from litellm.proxy.db.autorouter_session_rollup import (
     AutoRouterTurnTransaction,
     write_autorouter_turn,
@@ -659,8 +660,6 @@ async def _flush_records(
 
 
 async def flush_baseline_accounting(client: PrismaClient) -> None:
-    from litellm.proxy.utils import request_spend_log_flush
-
     store: Final = BaselineAccountingStore.for_client(client)
     async with client.baseline_accounting_lock:
         batch: Final = tuple(client.baseline_accounting_transactions[:32])
@@ -672,6 +671,15 @@ async def flush_baseline_accounting(client: PrismaClient) -> None:
         )
         client.baseline_accounting_transactions = client.baseline_accounting_transactions[32:]
         more_queued: Final = bool(client.baseline_accounting_transactions)
+    with background_job_span("flush_baseline_accounting"):
+        await _flush_baseline_batch(client, store, batch, more_queued)
+
+
+async def _flush_baseline_batch(
+    client: PrismaClient, store: BaselineAccountingStore, batch: tuple[BaselineAccountingRecord, ...], more_queued: bool
+) -> None:
+    from litellm.proxy.utils import request_spend_log_flush
+
     try:
         remaining: Final = await asyncio.wait_for(_flush_records(store, batch), timeout=5)
     except (Exception, asyncio.CancelledError) as error:

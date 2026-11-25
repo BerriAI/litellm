@@ -178,6 +178,15 @@ def current_request_parent_otel_span() -> Span | None:
 
 
 @contextmanager
+def without_request_parent_otel_span() -> Generator[None]:
+    token: Final = _request_parent_otel_span.set(None)
+    try:
+        yield
+    finally:
+        _restore(_request_parent_otel_span, token)
+
+
+@contextmanager
 def request_parent_otel_span(span: Span | None) -> Generator[None]:
     """Anchor the datastore service spans made inside this block, and by the tasks it starts, under the span an SDK
     caller passed. A request that already anchored its own, as the proxy does at auth, keeps it."""

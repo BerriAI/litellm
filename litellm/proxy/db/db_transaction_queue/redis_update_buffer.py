@@ -32,6 +32,7 @@ from litellm.constants import (
     REDIS_UPDATE_BUFFER_KEY,
     REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY,
 )
+from litellm.integrations.otel.runtime import background_job_span
 from litellm.litellm_core_utils.core_helpers import as_object_list, iter_items
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
@@ -730,10 +731,11 @@ class RedisUpdateBuffer:
         """Atomically take up to ``limit`` parked spend-log rows out of Redis."""
         if self.redis_cache is None or not self.should_commit_spend_updates_to_redis():
             return ()
-        popped: Final = await self.redis_cache.async_lpop(
-            key=REDIS_SPEND_LOGS_BUFFER_KEY,
-            count=limit,
-        )
+        with background_job_span("recover_parked_spend_logs"):
+            popped: Final = await self.redis_cache.async_lpop(
+                key=REDIS_SPEND_LOGS_BUFFER_KEY,
+                count=limit,
+            )
         if popped is None:
             return ()
         listed_rows: Final = as_object_list(popped)

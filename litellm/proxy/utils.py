@@ -77,7 +77,7 @@ from litellm.constants import (
     VLLM_CHOICE_FIELDS,
 )
 from litellm.cost_calculator import BaseTokenUsageProcessor, base_model_for_pricing
-from litellm.integrations.otel.runtime import seed_request_identity
+from litellm.integrations.otel.runtime import background_job_span, seed_request_identity
 from litellm.litellm_core_utils.bug_report import (
     bug_report_notice,
     should_report_bug,
@@ -8542,39 +8542,44 @@ class PrismaClient:
         while True:
             try:
                 await asyncio.sleep(self._db_health_watchdog_interval_seconds)
-                async with db_span("db_health_watchdog", None):
-                    await asyncio.wait_for(
-                        query_raw_rows(self.db, "SELECT 1"),
-                        timeout=self._db_health_watchdog_probe_timeout_seconds,
-                    )
-                if isinstance(self.db, RoutingPrismaWrapper) and self.db.writer_unavailable:
-                    await self.attempt_db_reconnect(
-                        reason="db_health_watchdog_writer_unavailable",
-                        timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
-                    )
-                    continue
-                await self._recover_unavailable_reader()
-                if await asyncio.wait_for(
-                    self._writer_is_read_only(self.writer_db),
-                    timeout=self._db_health_watchdog_probe_timeout_seconds,
-                ):
-                    await self.recreate_read_only_writer(
-                        reason="db_health_watchdog_writer_read_only",
-                        timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
-                    )
-                    continue
-                self._db_read_only_recreate_streak = 0
-                self._db_read_only_recreate_ts = 0.0
+                with background_job_span("db_health_watchdog"):
+                    await self._db_health_watchdog_iteration()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                if isinstance(e, asyncio.TimeoutError) or PrismaDBExceptionHandler.is_database_infrastructure_error(e):
-                    await self.attempt_db_reconnect(
-                        reason="db_health_watchdog_connection_error",
-                        timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
-                    )
-                else:
-                    verbose_proxy_logger.debug("Prisma DB health watchdog observed non-DB error: %s", e)
+
+    async def _db_health_watchdog_iteration(self) -> None:
+        try:
+            async with db_span("db_health_watchdog", None):
+                await asyncio.wait_for(
+                    query_raw_rows(self.db, "SELECT 1"),
+                    timeout=self._db_health_watchdog_probe_timeout_seconds,
+                )
+            if isinstance(self.db, RoutingPrismaWrapper) and self.db.writer_unavailable:
+                await self.attempt_db_reconnect(
+                    reason="db_health_watchdog_writer_unavailable",
+                    timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
+                )
+                return
+            await self._recover_unavailable_reader()
+            if await asyncio.wait_for(
+                self._writer_is_read_only(self.writer_db),
+                timeout=self._db_health_watchdog_probe_timeout_seconds,
+            ):
+                await self.recreate_read_only_writer(
+                    reason="db_health_watchdog_writer_read_only",
+                    timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
+                )
+                return
+            self._db_read_only_recreate_streak = 0
+            self._db_read_only_recreate_ts = 0.0
+        except Exception as e:
+            if isinstance(e, asyncio.TimeoutError) or PrismaDBExceptionHandler.is_database_infrastructure_error(e):
+                await self.attempt_db_reconnect(
+                    reason="db_health_watchdog_connection_error",
+                    timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
+                )
+            else:
+                verbose_proxy_logger.debug("Prisma DB health watchdog observed non-DB error: %s", e)
 
     async def recreate_read_only_writer(self, reason: str, timeout_seconds: float | None = None) -> bool:
         """Force-recreate the client behind a writer session that rejects writes
@@ -9624,11 +9629,12 @@ async def update_spend_logs_job(
     """
     from litellm.proxy.db.baseline_accounting import flush_baseline_accounting
 
-    if await _total_queued_spend_transactions(prisma_client) == 0:
-        await flush_baseline_accounting(prisma_client)
-        return
-    async with prisma_client.spend_log_write_lock:
-        await _run_spend_logs_job(prisma_client, db_writer_client, proxy_logging_obj)
+    with background_job_span("flush_spend_logs"):
+        if await _total_queued_spend_transactions(prisma_client) == 0:
+            await flush_baseline_accounting(prisma_client)
+            return
+        async with prisma_client.spend_log_write_lock:
+            await _run_spend_logs_job(prisma_client, db_writer_client, proxy_logging_obj)
 
 
 async def _write_spend_logs_in_python(

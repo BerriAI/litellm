@@ -16,6 +16,7 @@ from litellm.constants import (
     SCHEDULED_JOB_RUN_HISTORY_LIMIT,
     SCHEDULED_JOB_TICK_TIMEOUT_SECONDS,
 )
+from litellm.integrations.otel.runtime import background_job_span
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.proxy.db.db_span import db_span
 from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import bounded_tx, trusted_sql
@@ -299,9 +300,10 @@ class ScheduledJobRunner:
             return
         self._running = True
         try:
-            claimed: Final = await self._safe_plan_and_claim(prisma_client)
-            if claimed is not None:
-                await self._execute(prisma_client, claimed)
+            with background_job_span(self.job.name):
+                claimed: Final = await self._safe_plan_and_claim(prisma_client)
+                if claimed is not None:
+                    await self._execute(prisma_client, claimed)
         finally:
             self._running = False
 

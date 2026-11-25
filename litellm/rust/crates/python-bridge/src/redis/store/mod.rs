@@ -31,19 +31,12 @@ use pyo3::{
 };
 
 use crate::execution::{run_async_value, run_sync_value};
-use crate::redis::{
-    client::NativeRedisClient,
-    events::{EventLoop, RedisCall, ReportContext},
-};
+use crate::redis::{client::NativeRedisClient, events::RedisCall};
 
 /// The labels `RedisCache` reports for this operation, in the caller's context so its
 /// `service_target` reaches the service event, dispatched on the loop the caller runs on.
 fn call(py: Python<'_>, call_type: &'static str) -> PyResult<RedisCall> {
-    Ok(RedisCall {
-        context: ReportContext::of_caller(py)?,
-        event_loop: EventLoop::running(py),
-        call_type,
-    })
+    RedisCall::caller(py, Some(call_type))
 }
 
 pub(crate) fn targeted_call(
@@ -65,7 +58,7 @@ pub(crate) fn relabel(tag: &CallTag, call_type: &'static str) -> CallTag {
         Some(call) => RedisCall {
             context: call.context.clone(),
             event_loop: call.event_loop.clone(),
-            call_type,
+            call_type: Some(call_type),
         }
         .tag(),
         None => Arc::clone(tag),

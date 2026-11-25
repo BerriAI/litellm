@@ -403,6 +403,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.integrations.lens.proxy.adapter import router as lens_router
 from litellm.integrations.lens.proxy.pages import router as lens_pages_router
+from litellm.integrations.otel.runtime import background_job_span, traced_background_job
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
@@ -1455,10 +1456,11 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
 async def _flush_spend_on_shutdown() -> None:
     from litellm.proxy.utils import update_daily_tag_spend
 
-    await flush_spend_counters_on_shutdown()
-    if prisma_client is not None:
-        await update_daily_tag_spend(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
-    await _flush_spend_logs_queue_on_shutdown()
+    with background_job_span("shutdown_spend_flush"):
+        await flush_spend_counters_on_shutdown()
+        if prisma_client is not None:
+            await update_daily_tag_spend(prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj)
+        await _flush_spend_logs_queue_on_shutdown()
 
 
 async def flush_rust_callbacks_on_shutdown() -> None:
@@ -2146,7 +2148,7 @@ async def _proxy_lifespan(app: FastAPI, resources: AsyncExitStack) -> AsyncGener
     )
     if model_info_scheduler is not None:
         model_info_scheduler.add_job(
-            ProxyStartupEvent.refresh_model_info,
+            traced_background_job("model_info_refresh", ProxyStartupEvent.refresh_model_info),
             "interval",
             seconds=MODEL_INFO_REFRESH_SECONDS,
             id="refresh_model_info",
@@ -4650,7 +4652,8 @@ def _schedule_background_health_check_db_save(
         start_time,
         checked_by=checked_by,
     )
-    asyncio.create_task(_window_gated_health_check_db_save(save, pod_lock_manager, lock_ttl))
+    save_job: Final = traced_background_job("health_check_db_save", _window_gated_health_check_db_save)
+    asyncio.create_task(save_job(save, pod_lock_manager, lock_ttl))
 
 
 def _get_endpoint_exception_status(endpoint: dict, exceptions: dict[str, object]) -> int:
@@ -11585,7 +11588,7 @@ class ProxyStartupEvent:
         worker_heartbeat: Final = ProxyWorkerHeartbeat(prisma_client=prisma_client)
         await worker_heartbeat.beat()
         scheduler.add_job(
-            worker_heartbeat.beat,
+            traced_background_job("worker_heartbeat", worker_heartbeat.beat),
             "interval",
             seconds=PROXY_WORKER_HEARTBEAT_INTERVAL_SECONDS,
             id="proxy_worker_heartbeat_job",
@@ -11603,7 +11606,7 @@ class ProxyStartupEvent:
             )
 
             scheduler.add_job(
-                budget_reset_job.reset_budget,
+                traced_background_job("budget_reset", budget_reset_job.reset_budget),
                 "interval",
                 seconds=budget_interval,
                 # REMOVED jitter parameter - major cause of memory leak
@@ -11614,7 +11617,7 @@ class ProxyStartupEvent:
 
         ### UPDATE SPEND ###
         scheduler.add_job(
-            update_spend,
+            traced_background_job("update_spend", update_spend),
             "interval",
             seconds=batch_writing_interval,
             # REMOVED jitter parameter - major cause of memory leak
@@ -11628,7 +11631,7 @@ class ProxyStartupEvent:
         from litellm.proxy.utils import commit_tool_discoveries
 
         scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
-            commit_tool_discoveries,
+            traced_background_job("commit_tool_discoveries", commit_tool_discoveries),
             "interval",
             seconds=batch_writing_interval,
             args=[prisma_client, proxy_logging_obj],
@@ -11643,7 +11646,7 @@ class ProxyStartupEvent:
         from litellm.proxy.utils import update_daily_tag_spend
 
         scheduler.add_job(
-            update_daily_tag_spend,
+            traced_background_job("update_daily_tag_spend", update_daily_tag_spend),
             "interval",
             seconds=tag_spend_update_interval,
             args=[prisma_client, proxy_logging_obj],
@@ -11658,7 +11661,7 @@ class ProxyStartupEvent:
 
         ### UPDATE GATEWAY REQUEST COUNTS (SGR) ###
         scheduler.add_job(
-            flush_gateway_requests,
+            traced_background_job("flush_gateway_requests", flush_gateway_requests),
             "interval",
             seconds=batch_writing_interval,
             args=(prisma_client, gateway_request_accumulator, _gateway_request_redis_buffer()),
@@ -11669,7 +11672,7 @@ class ProxyStartupEvent:
 
         ### UPDATE FAILED REQUEST COUNTS BY CALLER AND STATUS ###
         scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # apscheduler is untyped
-            flush_request_errors,
+            traced_background_job("flush_request_errors", flush_request_errors),
             "interval",
             seconds=batch_writing_interval,
             args=(prisma_client, request_error_accumulator, _request_error_redis_buffer()),
@@ -11720,7 +11723,7 @@ class ProxyStartupEvent:
 
         ### PERIODIC RELOADS (model cost map, anthropic beta headers) ###
         scheduler.add_job(
-            proxy_config.check_periodic_reloads,
+            traced_background_job("periodic_config_reload", proxy_config.check_periodic_reloads),
             "interval",
             seconds=config_reload_interval_seconds,
             args=[prisma_client],
@@ -11738,7 +11741,7 @@ class ProxyStartupEvent:
             # MEMORY LEAK FIX: Increase interval from 10s to 30s minimum
             # Frequent polling was causing excessive memory allocations
             scheduler.add_job(
-                proxy_config.add_deployment,
+                traced_background_job("deployment_reload", proxy_config.add_deployment),
                 "interval",
                 seconds=config_reload_interval_seconds,
                 # REMOVED jitter parameter - major cause of memory leak
@@ -11764,7 +11767,7 @@ class ProxyStartupEvent:
             await proxy_config.reload_search_tools_from_db()
             if prisma_client is not None:
                 scheduler.add_job(
-                    proxy_config.reload_search_tools_from_db,
+                    traced_background_job("search_tools_reload", proxy_config.reload_search_tools_from_db),
                     "interval",
                     seconds=config_reload_interval_seconds,
                     id="reload_search_tools_job",
@@ -11779,7 +11782,7 @@ class ProxyStartupEvent:
                 if not isinstance(mcp_reload_interval_seconds, int) or mcp_reload_interval_seconds <= 0:
                     mcp_reload_interval_seconds = 30
                 scheduler.add_job(
-                    proxy_config.reload_mcp_servers_from_db,
+                    traced_background_job("mcp_servers_reload", proxy_config.reload_mcp_servers_from_db),
                     "interval",
                     seconds=mcp_reload_interval_seconds,
                     id="reload_mcp_servers_job",
@@ -11830,7 +11833,7 @@ class ProxyStartupEvent:
                 await run_performance_alerts(PerformanceAlertRepository(prisma_client, enterprise=premium_user is True))
 
         scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler does not provide typed job methods
-            run_performance_alerts_job,
+            traced_background_job("performance_alerts", run_performance_alerts_job),
             "interval",
             seconds=RUN_INTERVAL.total_seconds(),
             id="performance_alerts",
@@ -11859,7 +11862,7 @@ class ProxyStartupEvent:
             ).run(slack)
 
         scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler does not provide typed job methods
-            send_performance_alert_summaries,
+            traced_background_job("performance_alert_summaries", send_performance_alert_summaries),
             "interval",
             minutes=5,
             next_run_time=datetime.now(timezone.utc),
@@ -11898,7 +11901,7 @@ class ProxyStartupEvent:
                 )
 
             scheduler.add_job(
-                _scheduled_ptu_rollup,
+                traced_background_job("ptu_rollup", _scheduled_ptu_rollup),
                 "cron",
                 hour=0,
                 minute=15,
@@ -12110,7 +12113,7 @@ class ProxyStartupEvent:
                         LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
                     )
                     scheduler.add_job(
-                        key_rotation_manager.process_rotations,
+                        traced_background_job("key_rotation", key_rotation_manager.process_rotations),
                         "interval",
                         seconds=LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
                         id="key_rotation_job",
@@ -12127,7 +12130,7 @@ class ProxyStartupEvent:
             from litellm.constants import LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS
 
             scheduler.add_job(  # pyright: ignore[reportUnknownMemberType]  # APScheduler stubs are incomplete
-                expiry_alert_manager.process_alerts,
+                traced_background_job("key_expiry_alerts", expiry_alert_manager.process_alerts),
                 "interval",
                 seconds=LITELLM_KEY_EXPIRY_ALERT_CHECK_INTERVAL_SECONDS,
                 id="key_expiry_alert_job",
@@ -12215,7 +12218,10 @@ class ProxyStartupEvent:
                         LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS,
                     )
                     scheduler.add_job(
-                        expired_ui_session_key_cleanup_manager.cleanup_expired_keys,
+                        traced_background_job(
+                            "expired_ui_session_key_cleanup",
+                            expired_ui_session_key_cleanup_manager.cleanup_expired_keys,
+                        ),
                         "interval",
                         seconds=LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_INTERVAL_SECONDS,
                         id=EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
@@ -12273,7 +12279,7 @@ class ProxyStartupEvent:
             )
 
         scheduler.add_job(
-            check,
+            traced_background_job("budget_alerts", check),
             "cron",
             hour=1,
             minute=15,
@@ -12339,7 +12345,7 @@ class ProxyStartupEvent:
                 await proxy_logging_obj.slack_alerting_instance.send_monthly_spend_report()
 
             scheduler.add_job(
-                _scheduled_weekly_spend_report,
+                traced_background_job("weekly_spend_report", _scheduled_weekly_spend_report),
                 "interval",
                 days=days,
                 next_run_time=datetime.now(timezone.utc) + timedelta(seconds=10 + random.randint(0, 300)),
@@ -12349,7 +12355,7 @@ class ProxyStartupEvent:
             )
 
             scheduler.add_job(
-                _scheduled_monthly_spend_report,
+                traced_background_job("monthly_spend_report", _scheduled_monthly_spend_report),
                 "cron",
                 day=1,
                 id=MONTHLY_SPEND_REPORT_JOB_ID,
@@ -12376,7 +12382,7 @@ class ProxyStartupEvent:
                 await proxy_logging_obj.slack_alerting_instance.send_user_spend_alerts()
 
             scheduler.add_job(
-                _scheduled_user_spend_alerts,
+                traced_background_job("user_spend_alerts", _scheduled_user_spend_alerts),
                 "interval",
                 seconds=user_spend_check_interval,
                 next_run_time=datetime.now(timezone.utc) + timedelta(seconds=10 + random.randint(0, 60)),
@@ -12399,7 +12405,7 @@ class ProxyStartupEvent:
                     await proxy_logging_obj.slack_alerting_instance.send_fallback_stats_from_prometheus()
 
                 scheduler.add_job(
-                    _scheduled_fallback_stats,
+                    traced_background_job("fallback_stats", _scheduled_fallback_stats),
                     "cron",
                     hour=PROMETHEUS_FALLBACK_STATS_SEND_TIME_HOURS,
                     minute=0,

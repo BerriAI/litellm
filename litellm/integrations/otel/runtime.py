@@ -9,16 +9,18 @@ identity unconditionally.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Generator, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Generator, Mapping
 from contextlib import AbstractContextManager, contextmanager
-from functools import cache
-from typing import TYPE_CHECKING, Final, TypeAlias
+from functools import cache, wraps
+from typing import TYPE_CHECKING, Final, ParamSpec, TypeAlias, TypeVar
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
 
 PhaseEventAttributes: TypeAlias = Mapping[str, str | int]
 PhaseAttributes: TypeAlias = Mapping[str, str | int | float | bool]
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
 
 
 @cache
@@ -28,6 +30,7 @@ def _otel_runtime() -> (
         Callable[..., None],
         Callable[[str, PhaseEventAttributes | None], None],
         Callable[[PhaseAttributes], None],
+        Callable[[str, float | None, Span | None, bool], AbstractContextManager[None]],
     ]
     | None
 ):
@@ -41,7 +44,37 @@ def _otel_runtime() -> (
         from litellm.integrations.otel import logger
     except Exception:
         return None
-    return (logger.phase_span, logger.seed_request_identity, logger.phase_event, logger.phase_attributes)
+    return (
+        logger.phase_span,
+        logger.seed_request_identity,
+        logger.phase_event,
+        logger.phase_attributes,
+        logger.background_job_span,
+    )
+
+
+@contextmanager
+def background_job_span(
+    name: str, *, start_time: float | None = None, parent: Span | None = None, detached: bool = False
+) -> Generator[None]:
+    runtime: Final = _otel_runtime()
+    if runtime is None:
+        yield
+        return
+    with runtime[4](name, start_time, parent, detached):
+        yield
+
+
+def traced_background_job(name: str, job: Callable[_P, Awaitable[_T]]) -> Callable[_P, Coroutine[object, object, _T]]:
+    @wraps(job)
+    async def run(
+        *args: _P.args,
+        **kwargs: _P.kwargs,  # kwargs-ok: ParamSpec forwards the wrapped job's signature
+    ) -> _T:
+        with background_job_span(name):
+            return await job(*args, **kwargs)
+
+    return run
 
 
 @contextmanager

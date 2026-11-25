@@ -17,7 +17,7 @@ use pyo3::{
     types::{PyDict, PyList},
 };
 
-use crate::redis::store::store_error;
+use crate::redis::{events::RedisCall, store::store_error};
 
 fn failure_error(failure: &Failure) -> PyErr {
     match &**failure {
@@ -47,6 +47,7 @@ fn stamp(reservation: &Bound<'_, PyDict>, outcome: &CounterOutcome) -> PyResult<
 /// Starts the counter step for `step` as an execution the proxy drives.
 pub(crate) fn start(
     budgets: Arc<Budgets>,
+    call: RedisCall,
     step: CounterStep,
     record: Option<BudgetReservation>,
     reservation: Option<Py<PyDict>>,
@@ -55,8 +56,7 @@ pub(crate) fn start(
 ) -> Execution {
     run_hosted(
         move |host| async move {
-            budgets
-                .charge_counters(&host, request.as_ref(), &step, record.as_ref())
+            call.scope(budgets.charge_counters(&host, request.as_ref(), &step, record.as_ref()))
                 .await
         },
         host,

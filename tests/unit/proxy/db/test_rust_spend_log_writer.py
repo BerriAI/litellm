@@ -1,6 +1,7 @@
 import asyncio
 import threading
 from collections.abc import AsyncIterator, Mapping, Sequence
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -253,13 +254,24 @@ async def test_installing_moves_python_rows_ahead_and_uninstalling_moves_them_ba
 @pytest.mark.asyncio
 async def test_an_outage_raises_a_native_failure_and_requeues_the_pass_at_the_head() -> None:
     client: Final = FakePrismaClient()
-    writer: Final = await install_rust_spend_log_writer(client, await _unreachable_database(_REFUSED), _LEDGER_ON)
+    caller_context: Final[ContextVar[str | None]] = ContextVar("spend_log_flush_context", default=None)
+    observed_contexts: Final[set[str | None]] = set()  # mutable-ok: records the context across retry events
+    database: Final = await NativeDatabase.connect(
+        MagicMock(record=lambda *_: observed_contexts.add(caller_context.get())),
+        await DatabaseEndpoint.resolve(_REFUSED, 1),
+        None,
+    )
+    writer: Final = await install_rust_spend_log_writer(client, database, _LEDGER_ON)
     proxy_logging_obj: Final = _proxy_logging()
     rows: Final = [_charged("a"), _row("b")]
     await enqueue_spend_logs(client, rows)
 
-    with pytest.raises(NativeDatabaseFailure) as failure:
-        await update_spend(client, None, proxy_logging_obj)
+    token = caller_context.set("spend-log-flush")
+    try:
+        with pytest.raises(NativeDatabaseFailure) as failure:
+            await update_spend(client, None, proxy_logging_obj)
+    finally:
+        caller_context.reset(token)
     await asyncio.sleep(0)
     requeued: Final = await dequeue_spend_logs(client, 10)
     await uninstall_rust_spend_log_writer(client)
@@ -269,6 +281,7 @@ async def test_an_outage_raises_a_native_failure_and_requeues_the_pass_at_the_he
     assert failure.value.kind == "unreachable"
     assert requeued == rows
     assert proxy_logging_obj.failure_handler.await_count == 1
+    assert observed_contexts == {"spend-log-flush"}
 
 
 @pytest.mark.asyncio

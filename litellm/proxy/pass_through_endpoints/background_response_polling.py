@@ -9,6 +9,7 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.otel.runtime import background_job_span
 from litellm.interactions.background_cost_polling import PollSchedule, poll_intervals
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared client factory has an untyped params dict
@@ -354,28 +355,29 @@ async def _sweep(
     api_base: str,
     poll_headers: PollHeaders,
 ) -> tuple["asyncio.Task[None]", ...]:
-    now: Final = poller.now()
-    await creators.prune(now - BACKGROUND_RESPONSE_CREATOR_RETENTION)
-    api_base_origin: Final = _origin(httpx.URL(api_base))
-    unleased: Final = await creators.unleased(now - timedelta(seconds=poller.schedule.timeout_seconds), now)
-    resumable: Final = tuple(
-        creator
-        for creator in unleased
-        if _resumable(creator, api_base_origin) and not poller.polls(creator.response_id)
-    )[: poller.free_poll_slots()]
-    if not resumable:
-        return ()
-    headers: Final = await poll_headers(api_base)
-    if headers is None:
-        verbose_proxy_logger.warning(
-            "Not resuming %s background response polls: the OpenAI pass-through has no credential, so a later "
-            "read through the proxy bills the key that created each",
-            len(resumable),
+    with background_job_span("sweep_background_response_polls"):
+        now: Final = poller.now()
+        await creators.prune(now - BACKGROUND_RESPONSE_CREATOR_RETENTION)
+        api_base_origin: Final = _origin(httpx.URL(api_base))
+        unleased: Final = await creators.unleased(now - timedelta(seconds=poller.schedule.timeout_seconds), now)
+        resumable: Final = tuple(
+            creator
+            for creator in unleased
+            if _resumable(creator, api_base_origin) and not poller.polls(creator.response_id)
+        )[: poller.free_poll_slots()]
+        if not resumable:
+            return ()
+        headers: Final = await poll_headers(api_base)
+        if headers is None:
+            verbose_proxy_logger.warning(
+                "Not resuming %s background response polls: the OpenAI pass-through has no credential, so a later "
+                "read through the proxy bills the key that created each",
+                len(resumable),
+            )
+            return ()
+        taken: Final = await asyncio.gather(
+            *(creators.take_lease(creator.response_id, now, poller.lease_until()) for creator in resumable)
         )
-        return ()
-    taken: Final = await asyncio.gather(
-        *(creators.take_lease(creator.response_id, now, poller.lease_until()) for creator in resumable)
-    )
     leased: Final = tuple(creator for creator, took in zip(resumable, taken, strict=True) if took)
     started: Final = (
         poller.start(creator, _resumed_poll_request(creator, headers), settle, creators) for creator in leased

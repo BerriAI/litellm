@@ -2,14 +2,14 @@
 
 import sys
 from collections import OrderedDict
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, ClassVar, Final, cast
 
-from opentelemetry.context import Context, attach, get_current
+from opentelemetry.context import Context, attach, detach, get_current
 from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import (
@@ -26,6 +26,7 @@ from opentelemetry.trace import TracerProvider as ApiTracerProvider
 from typing_extensions import TypedDict, Unpack
 
 import litellm
+from litellm._internal_context import without_request_parent_otel_span
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.emitter import SpanEmitter, stamp_error
@@ -35,6 +36,7 @@ from litellm.integrations.otel.model.config import (
     DEFAULT_EMIT_BACKGROUND_SERVICE_SPANS,
     OpenTelemetryV2Config,
     excluded_db_systems_from,
+    is_otel_v2_enabled,
 )
 from litellm.integrations.otel.model.metadata import (
     LLMCallEvent,
@@ -66,6 +68,7 @@ from litellm.integrations.otel.plumbing.context import (
     request_destinations,
     request_root_http_route,
     request_root_span,
+    request_traces_excluded,
     resolve_internal_call_span_context,
     resolve_mcp_span_context,
     resolve_parent_context,
@@ -743,9 +746,9 @@ class OpenTelemetryV2(CustomLogger):
         # as a root; anything with a parent emits regardless.
         if error_override is None and start_time is None and end_time is None and parent_otel_span is None:
             return None
-        db_override: Final = self.background_service_spans_db_override
-        emit_background: Final = self.config.emit_background_service_spans if db_override is None else db_override
-        if not emit_background and not is_recordable_span(get_current_span(resolve_parent_context(parent_otel_span))):
+        if not self.emits_background_service_spans and not is_recordable_span(
+            get_current_span(resolve_parent_context(parent_otel_span))
+        ):
             return None
         if error_override is not None and data.error is None:
             data = replace(data, error=SpanError(message=error_override))
@@ -819,6 +822,22 @@ class OpenTelemetryV2(CustomLogger):
                         server_span.set_attribute(key, value)
         except Exception:
             pass
+
+    @property
+    def emits_background_service_spans(self) -> bool:
+        override: Final = self.background_service_spans_db_override
+        return self.config.emit_background_service_spans if override is None else override
+
+    @contextmanager
+    def start_background_job_span(self, job: str, start_time: float | None = None) -> "Generator[None]":
+        span: Final = self._emitter.start_span(
+            SpanRole.BACKGROUND_JOB,
+            f"litellm.background.{job}",
+            parent_context=set_span_in_context(INVALID_SPAN),
+            start_time_ns=to_ns(start_time),
+        )
+        with use_span(span, end_on_exit=True), post_response_root(span):
+            yield
 
     @contextmanager
     def start_phase_span(self, name: str) -> "Iterator[Span]":
@@ -1105,6 +1124,42 @@ def fan_out_provider() -> ApiTracerProvider:
         )
         return logger.tracer_provider
     return get_tracer_provider()
+
+
+@contextmanager
+def background_job_span(
+    job: str, start_time: float | None = None, parent: Span | None = None, detached: bool = False
+) -> "Generator[None]":
+    logger: Final = _registered_v2_logger()
+    if logger is None or not is_otel_v2_enabled():
+        yield
+        return
+    if detached:
+        token: Final = attach(set_span_in_context(INVALID_SPAN))
+        try:
+            with without_request_parent_otel_span():
+                scope: Final = (
+                    logger.start_background_job_span(job, start_time)
+                    if (logger.emits_background_service_spans and not request_traces_excluded())
+                    else nullcontext()
+                )
+                with scope:
+                    yield
+        finally:
+            detach(token)
+        return
+    if not logger.emits_background_service_spans:
+        yield
+        return
+    if (
+        is_recordable_span(get_current_span(resolve_parent_context(parent)))
+        or request_root_span() is not None
+        or request_traces_excluded()
+    ):
+        yield
+        return
+    with logger.start_background_job_span(job, start_time):
+        yield
 
 
 @contextmanager

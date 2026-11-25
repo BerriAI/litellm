@@ -14,7 +14,10 @@ use pyo3::{
 };
 use serde::de::DeserializeOwned;
 
-use crate::redis::store::{request::NativeRequestRedis, spend_counters::NativeSpendCounters};
+use crate::redis::{
+    events::RedisCall,
+    store::{request::NativeRequestRedis, spend_counters::NativeSpendCounters},
+};
 
 fn from_model<T: DeserializeOwned>(model: &Bound<'_, PyAny>) -> PyResult<T> {
     from_py_argument(&model.call_method0("model_dump")?)
@@ -61,9 +64,9 @@ impl NativeBudgets {
         #[pyo3(from_py_with = from_py_argument)] observed: Vec<BudgetCounterSpend>,
     ) -> PyResult<Bound<'py, PyAny>> {
         let budgets = Arc::clone(&self.0);
+        let call = RedisCall::caller(py, None)?;
         run_async_value(py, async move {
-            budgets
-                .admit(plan, &observed)
+            call.scope(budgets.admit(plan, &observed))
                 .await
                 .map(Pythonized)
                 .map_err(PyRuntimeError::new_err)
@@ -76,20 +79,22 @@ impl NativeBudgets {
     #[pyo3(signature = (step, record, reservation, request, host, /))]
     fn charge_counters(
         &self,
+        py: Python<'_>,
         #[pyo3(from_py_with = from_py_argument)] step: CounterStep,
         #[pyo3(from_py_with = from_optional_record)] record: Option<BudgetReservation>,
         reservation: Option<Py<PyDict>>,
         request: Option<PyRef<'_, NativeRequestRedis>>,
         host: Py<PyAny>,
-    ) -> Execution {
-        crate::budget_counters::start(
+    ) -> PyResult<Execution> {
+        Ok(crate::budget_counters::start(
             Arc::clone(&self.0),
+            RedisCall::caller(py, None)?,
             step,
             record,
             reservation,
             request.map(|request| request.0.clone()),
             host,
-        )
+        ))
     }
 
     fn settle<'py>(
@@ -102,18 +107,18 @@ impl NativeBudgets {
         apply_consistent: bool,
     ) -> PyResult<Bound<'py, PyAny>> {
         let budgets = Arc::clone(&self.0);
+        let call = RedisCall::caller(py, None)?;
         run_async_value(py, async move {
-            budgets
-                .settle(&Settle {
-                    reservation: &reservation,
-                    window_resets: &window_resets,
-                    observed: &observed,
-                    actual,
-                    apply_consistent,
-                })
-                .await
-                .map(Pythonized)
-                .map_err(settle_error)
+            call.scope(budgets.settle(&Settle {
+                reservation: &reservation,
+                window_resets: &window_resets,
+                observed: &observed,
+                actual,
+                apply_consistent,
+            }))
+            .await
+            .map(Pythonized)
+            .map_err(settle_error)
         })
     }
 }

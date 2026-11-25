@@ -14,6 +14,7 @@ from typing_extensions import assert_never
 from litellm._internal_context import current_request_parent_otel_span, service_target
 from litellm._logging import verbose_logger
 from litellm._service_logger import ServiceLogging
+from litellm.integrations.otel.runtime import background_job_span
 from litellm.types.services import ServiceTypes
 
 CallFailure: TypeAlias = Literal["timeout", "transport", "server", "decode"]
@@ -66,13 +67,22 @@ def _spawn(hook: Hook) -> None:
     asyncio.get_running_loop().create_task(_guarded(hook))
 
 
-def _emit(event_loop: asyncio.AbstractEventLoop | None, hook: Hook) -> None:
+def _emit(
+    event_loop: asyncio.AbstractEventLoop | None,
+    hook: Hook,
+    start_time: float,
+) -> None:
     """Schedule ``hook`` as a task on ``event_loop`` in the current context, as ``RedisCache`` did with
     ``asyncio.create_task``; with no open loop, run it here the way ``ServiceLogging``'s sync hooks do."""
+
+    async def report() -> None:
+        with background_job_span("rust_redis", start_time=start_time, parent=current_request_parent_otel_span()):
+            await hook()
+
     if event_loop is None or event_loop.is_closed():
-        asyncio.run(_guarded(hook))
+        asyncio.run(_guarded(report))
         return
-    event_loop.call_soon_threadsafe(_spawn, hook)
+    event_loop.call_soon_threadsafe(_spawn, report)
 
 
 def deadline_flush_context() -> Context:
@@ -107,6 +117,7 @@ def record_redis_call(
                     start_time=start_time,
                     end_time=end_time,
                 ),
+                start_time,
             )
         case "timeout" | "transport" | "server" | "decode":
             error: Final = _redis_error(failure)
@@ -121,6 +132,7 @@ def record_redis_call(
                     start_time=start_time,
                     end_time=end_time,
                 ),
+                start_time,
             )
             health: Final = _health_failure(failure)
             if health is not None:

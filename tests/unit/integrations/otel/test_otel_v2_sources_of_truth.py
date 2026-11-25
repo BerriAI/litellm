@@ -115,7 +115,7 @@ def test_registry_parent_integrity_no_orphans():
 
 
 def test_registry_hierarchy_shape():
-    assert set(root_roles()) == {SpanRole.PROXY_REQUEST}
+    assert set(root_roles()) == {SpanRole.PROXY_REQUEST, SpanRole.BACKGROUND_JOB}
     # Guardrails parent to the request span, not the LLM call: a pre-call
     # guardrail runs before the LLM call exists, so it's a sibling of it. MCP
     # spans nest under the transport span of the request carrying that message.
