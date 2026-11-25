@@ -2488,6 +2488,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
         if isinstance(parsed_chunk, BaseModel):
             parsed_chunk = _DECODED_JSON.validate_python(parsed_chunk.model_dump())
+        stream_event: Final = parsed_chunk
         if not isinstance(parsed_chunk, dict):
             raise ValueError(f"Chat provider: Invalid chunk type {type(parsed_chunk)}")
 
@@ -2650,7 +2651,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 raise ValueError(f"Chat provider: Invalid text delta {parsed_chunk}")
         elif (
             event_type == ResponsesAPIStreamEvents.REFUSAL_DELTA.value
-            and isinstance(refusal := require_attributes(parsed_chunk, _StreamEvent, "get").get("delta"), str)
+            and isinstance(refusal := require_attributes(stream_event, _StreamEvent, "get").get("delta"), str)
             and refusal
         ):
             return ModelResponseStream(
