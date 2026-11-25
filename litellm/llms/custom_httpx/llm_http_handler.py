@@ -621,7 +621,7 @@ class _AsyncFilesEnvironmentValidator(Protocol):
         litellm_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict: ...  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    ) -> dict[str, object]: ...  # mutable-ok: mirrors the sync validate_environment contract this overrides
 
 
 async def _avalidate_files_environment(
@@ -854,7 +854,7 @@ def _bridged_chat_request_fields(data: Mapping[str, object], logging_obj: LiteLL
     return bounded_call_id_fields(data)
 
 
-def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> bytes | str | dict:
+def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> bytes | str | dict[str, object]:
     """A pre-signed request carries its auth inside its own ``headers`` key, which
     logging treats as request body (only the top-level headers channel gets masked),
     so mask it here before the request is handed to ``pre_call``."""
@@ -1451,7 +1451,7 @@ class BaseLLMHTTPHandler:
         signed_json_body: bytes | None,
         original_data: dict[str, object],
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict[str, object],
         litellm_params: dict[str, object],
@@ -4128,7 +4128,7 @@ class BaseLLMHTTPHandler:
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> dict | Coroutine[object, object, dict]:
+    ) -> dict[str, object] | Coroutine[object, object, dict[str, object]]:
         if _is_async:
             return self.async_list_responses_input_items(
                 response_id=response_id,
@@ -4210,7 +4210,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             verbose_logger.debug(
                 "Creating HTTP client for list_input_items with shared_session: %s",
@@ -5913,7 +5913,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseFilesConfig,
         headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
         litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
-    ) -> dict:  # mutable-ok: validate_environment returns the header dict the files contract types
+    ) -> dict[str, object]:  # mutable-ok: validate_environment returns the header dict the files contract types
         return provider_config.validate_environment(
             api_key=litellm_params.get("api_key"),
             headers=headers,
@@ -7693,7 +7693,7 @@ class BaseLLMHTTPHandler:
             model,
             image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
         )
-        multipart: Final = image_edit_provider_config.use_multipart_form_data()
+        json_body: Final = image_edit_provider_config.uses_json_body(image, image_edit_optional_request_params)
         stream_body: Final = _ascii_image_edit_stream_body(data, files)
 
         def send(stream: bool = False) -> httpx.Response:
@@ -7705,19 +7705,19 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                     stream=stream,
                 )
-            if multipart:
+            if json_body:
                 return sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=data,
-                    files=files,
+                    json=data,
                     timeout=timeout,
                     stream=stream,
                 )
             return sync_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                json=data,
+                data=data,
+                files=files,
                 timeout=timeout,
                 stream=stream,
             )
@@ -7831,7 +7831,7 @@ class BaseLLMHTTPHandler:
             model,
             image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
         )
-        multipart: Final = image_edit_provider_config.use_multipart_form_data()
+        json_body: Final = image_edit_provider_config.uses_json_body(image, image_edit_optional_request_params)
         stream_body: Final = _ascii_image_edit_stream_body(data, files)
 
         async def send(stream: bool = False) -> httpx.Response:
@@ -7843,19 +7843,19 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                     stream=stream,
                 )
-            if multipart:
+            if json_body:
                 return await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=data,
-                    files=files,
+                    json=data,
                     timeout=timeout,
                     stream=stream,
                 )
             return await async_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                json=data,
+                data=data,
+                files=files,
                 timeout=timeout,
                 stream=stream,
             )
@@ -13245,7 +13245,7 @@ class BaseLLMHTTPHandler:
         self,
         request_body: dict,
         headers: dict[str, object],
-    ) -> tuple[dict | None, list | None]:
+    ) -> tuple[dict[str, object] | None, list | None]:
         """
         Helper to prepare multipart/form-data request for skills API.
 

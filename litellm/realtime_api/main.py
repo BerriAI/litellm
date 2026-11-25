@@ -1386,6 +1386,18 @@ async def realtime_health_check(
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime.construct_url(api_base=openai_api_base, query_params={"model": model})
+    elif custom_llm_provider == "elevenlabs":
+        from ..llms.elevenlabs.realtime.transformation import (
+            elevenlabs_realtime_health_check,
+            realtime_options_from_params,
+        )
+
+        return await elevenlabs_realtime_health_check(
+            model=model,
+            api_base=resolved_api_base,
+            api_key=health_check_api_key,
+            options=realtime_options_from_params(resolved_params),
+        )
     elif custom_llm_provider == "soniox":
         return await soniox_realtime_health_check(
             model=model,

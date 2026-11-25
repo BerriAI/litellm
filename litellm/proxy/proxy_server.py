@@ -451,9 +451,13 @@ from litellm.llms.anthropic.messages.context_management.inference_view import (
 )
 from litellm.llms.anthropic.messages.convertible_blocks import (
     deployment_drops_params,
-    drop_non_string_tool_result_texts,
-    malformed_tool_result_count_error,
+    emptied_messages_error,
+    malformed_text_count_error,
+    non_string_system_text_error,
+    non_string_user_text_error,
+    without_non_string_system_texts,
 )
+from litellm.llms.anthropic.messages.native.utils import native_messages_to_send
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, exclude_rsa_key_exchange_and_chacha20
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler as JwksHTTPHandler
@@ -5655,6 +5659,8 @@ def _general_settings_row_is_readable(row: _ConfigParamValueRow | None) -> bool:
     return row is None or row.param_value is None or isinstance(row.param_value, Mapping)
 
 
+# The Rust gateway keeps a copy in litellm/rust/crates/config/src/db/settings/keys.rs, which
+# test_rust_gateway_copy_of_db_settings_keys_matches_python in tests/unit/proxy/test_proxy_server.py enforces.
 def _db_managed_general_settings_keys() -> frozenset[str]:
     return frozenset((*ConfigGeneralSettings.model_fields, *_CLEANUP_SCHEDULE_KEYS, "allowed_ips", "email_settings"))
 
@@ -5747,6 +5753,8 @@ def _log_ignored_cost_map_copy(model_id: str, fields: tuple[str, ...]) -> None:
     )
 
 
+# The Rust gateway keeps a copy in litellm/rust/crates/config/src/db/settings/keys.rs, which
+# test_rust_gateway_copy_of_db_settings_keys_matches_python in tests/unit/proxy/test_proxy_server.py enforces.
 _DB_CONFIG_CALLBACK_EVENT_TYPES: Final[Mapping[str, tuple[Literal["success", "failure"], ...]]] = MappingProxyType(
     {"success_callback": ("success",), "failure_callback": ("failure",), "callbacks": ("success", "failure")}
 )
@@ -8139,7 +8147,7 @@ class ProxyConfig:
 
     def decrypt_and_set_db_env_variables(
         self, environment_variables: dict, return_original_value: bool = False
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Decrypts a dictionary of environment variables and then sets them in the environment
 
@@ -8204,7 +8212,7 @@ class ProxyConfig:
     _encrypt_env_variables_for_db = encrypt_env_variables_for_db
 
     @staticmethod
-    def _parse_router_settings_value(value: object) -> dict | None:
+    def _parse_router_settings_value(value: object) -> dict[str, object] | None:
         """
         Parse a router_settings value that may be a dict or a JSON/YAML string.
 
@@ -8244,7 +8252,7 @@ class ProxyConfig:
         user_api_key_dict: Optional["UserAPIKeyAuth"],
         prisma_client: PrismaClient | None,
         proxy_logging_obj: Optional["ProxyLogging"] = None,
-    ) -> dict | None:
+    ) -> dict[str, object] | None:
         """
         Get router_settings in priority order: Key > Team
 
@@ -12888,12 +12896,6 @@ async def model_list(
 
     hidden_names: Final = await _listing_hidden_names(healthy_only)
 
-    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import typesafe_allowlist_model_names
-
-    asks_for_allowlist_names: Final = (
-        include_model_access_groups is True and return_wildcard_routes is True and only_model_access_groups is not True
-    )
-
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
         # Get all proxy models as if user is a proxy admin
@@ -12916,10 +12918,7 @@ async def model_list(
                 get_complete_model_list,
                 key_models=[],
                 team_models=[],
-                proxy_model_list=[
-                    *proxy_model_list,
-                    *(typesafe_allowlist_model_names() if asks_for_allowlist_names else ()),
-                ],
+                proxy_model_list=proxy_model_list,
                 user_model=None,
                 infer_model_from_keys=False,
                 return_wildcard_routes=include_wildcard_routes,
@@ -12991,9 +12990,6 @@ async def model_list(
             object="list",
         )
 
-    offers_typesafe_allowlist_names: Final = (
-        asks_for_allowlist_names and team_id is None and user_api_key_has_admin_view(user_api_key_dict)
-    )
     key_listing: Final = await _key_model_listing(
         user_api_key_dict,
         caller_aliases,
@@ -13004,7 +13000,6 @@ async def model_list(
         include_wildcard_routes=include_wildcard_routes,
         include_metadata=include_metadata or False,
         fallback_type=fallback_type,
-        offered_model_names=typesafe_allowlist_model_names() if offers_typesafe_allowlist_names else (),
     )
     listing: Final = key_listing.rows
     entries: Final = key_listing.entries
@@ -15518,7 +15513,28 @@ def _counted_request_messages(
         return None
     if messages_format != "anthropic":
         return list(messages)
-    return list(drop_non_string_tool_result_texts(messages, deployment_drops_params(deployment)))
+    drops: Final = deployment_drops_params(deployment)
+    user_text_error: Final = None if drops else non_string_user_text_error(messages)
+    if user_text_error is not None:
+        raise ProxyException(message=user_text_error, type="invalid_request_error", param="messages", code=400)
+    kept: Final = native_messages_to_send(messages, drops)
+    emptied_error: Final = emptied_messages_error(messages, kept)
+    if emptied_error is not None:
+        raise ProxyException(message=emptied_error, type="invalid_request_error", param="messages", code=400)
+    return kept or list(messages)
+
+
+def _counted_request_system(
+    system: JsonValue,
+    messages_format: TokenCountMessagesFormat,
+    deployment: Mapping[str, object] | None,
+) -> JsonValue:
+    error: Final = None if messages_format != "anthropic" else non_string_system_text_error(system)
+    if error is None or not isinstance(system, list):
+        return system
+    if not deployment_drops_params(deployment):
+        raise ProxyException(message=error, type="invalid_request_error", param="system", code=400)
+    return without_non_string_system_texts(system)
 
 
 async def _try_provider_token_count(
@@ -16624,7 +16640,8 @@ async def _count_request_tokens(
         prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     )
     request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
-    local_count_error: Final = malformed_tool_result_count_error(request_messages, messages_format, count_deployment)
+    request_system: Final = _counted_request_system(system, messages_format, count_deployment)
+    local_count_error: Final = malformed_text_count_error(request_messages, messages_format, count_deployment)
     malformed_messages: Final = (
         None
         if local_count_error is None
@@ -16645,7 +16662,7 @@ async def _count_request_tokens(
         else await _gateway_request_view(
             route,
             request_messages,
-            system,
+            request_system,
             _COUNT_TOOLS.validate_python(tools),
             messages_format,
             context_edits,
@@ -16658,7 +16675,7 @@ async def _count_request_tokens(
     inference_messages: Final = (
         request_messages if edited_request is None else [dict(message) for message in edited_request.messages]
     )
-    inference_system: Final = system if edited_request is None else edited_request.system
+    inference_system: Final = request_system if edited_request is None else edited_request.system
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     routed_deployment: Final = _ROUTED_DEPLOYMENT.validate_python(deployment)
     routed_request: Final = (
@@ -16764,7 +16781,7 @@ async def _count_request_tokens(
         if route not in NATIVE_MESSAGES_TARGETS or context_edits is None or request_messages is None
         else await _bridged_request_view(
             request_messages,
-            system,
+            request_system,
             _COUNT_TOOLS.validate_python(tools),
             messages_format,
             replace(context_edits, drop_invalid_edits=False),
@@ -16778,7 +16795,7 @@ async def _count_request_tokens(
     local_messages: Final = (
         request_messages if counted_view is None else [dict(message) for message in counted_view.messages]
     )
-    post_edit_system: Final = system if counted_view is None else counted_view.system
+    post_edit_system: Final = request_system if counted_view is None else counted_view.system
     local_system: Final = (
         system_without_claude_code_billing_header(post_edit_system)
         if messages_format == "anthropic" and route in (Target.CHAT_COMPLETIONS, Target.RESPONSES)
@@ -16989,7 +17006,7 @@ async def _check_if_model_is_user_added(
     models: list[dict],
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient | None,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """
     Check if model is in db
 
@@ -17281,7 +17298,7 @@ def get_direct_access_models(
     return tuple(model_id for model_id in user_model_ids if model_id in key_model_ids)
 
 
-def _filter_models_to_user_accessible(all_models: list[dict]) -> list[dict]:
+def _filter_models_to_user_accessible(all_models: list[dict]) -> list[dict[str, object]]:
     """Keep only deployments the caller can use via direct access or team membership."""
     return [
         _model
@@ -17296,7 +17313,7 @@ async def _populate_team_access_on_models(
     prisma_client: PrismaClient,
     llm_router: Router,
     all_models: list[dict],
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """
     Populate `model_info.access_via_team_ids` and `model_info.direct_access`
     without filtering the model list.
@@ -17354,7 +17371,7 @@ async def get_all_team_and_direct_access_models(
     prisma_client: PrismaClient,
     llm_router: Router,
     all_models: list[dict],
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """
     Get all models across all teams user is in.
     """
@@ -19068,7 +19085,7 @@ async def _get_v1_model_info_allowed_model_names_with_access_groups(
 def _filter_v1_model_info_deployments(
     all_models: list[dict[str, object]],
     allowed_model_names: Collection[str] | None,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     if allowed_model_names is None:
         return all_models
     return [model for model in all_models if _deployment_matches_allowed_model_names(model, allowed_model_names)]
@@ -20593,7 +20610,7 @@ async def onboarding(invite_link: str, request: Request):
     }
 
 
-def _get_onboarding_claims_from_request(request: Request) -> dict:
+def _get_onboarding_claims_from_request(request: Request) -> dict[str, object]:
     global master_key, general_settings
 
     if master_key is None:

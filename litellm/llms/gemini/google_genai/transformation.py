@@ -411,7 +411,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
 
         return GenerateContentResponse(**response)
 
-    def convert_citation_sources_to_citations(self, response: dict) -> dict:
+    def convert_citation_sources_to_citations(self, response: dict) -> dict[str, object]:
         """
         Convert citation sources to citations.
         API's camelCase citationSources becomes the SDK's snake_case citations

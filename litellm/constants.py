@@ -463,6 +463,7 @@ MCP_PEEKED_BODY_SCOPE_KEY: Final = "litellm_mcp_peeked_body"
 MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS: Final = 5.0
 REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
 REALTIME_METERED_USAGE_KEY: Final = "realtime_metered_usage"
+REALTIME_TRANSCRIPTION_ADDON_MODELS_KEY: Final = "realtime_transcription_addon_models"
 FAILED_PROMPT_TOKEN_ESTIMATE_KEY: Final = "failed_prompt_token_estimate"
 OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS: Final = 30
 OPENAI_LIVE_SESSION_CLOSE_TIMEOUT_SECONDS: Final = 5
@@ -1158,6 +1159,7 @@ openai_compatible_endpoints: Final[list[str]] = [
     "https://api.prisminference.com/v1",
     "https://api.reka.ai/v1",
     "https://inference.runanywhere.ai/v1",
+    "https://api-ap-southeast-1.modelarts-maas.com/openai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
     "https://api.openinfer.ai/v1",
     "https://vanchin.streamlake.ai/api/gateway/v1/endpoints",
@@ -1249,6 +1251,7 @@ openai_compatible_providers: Final[list[str]] = [
     "reka",
     "streamlake",
     "wally",
+    "huawei_maas",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
@@ -2106,6 +2109,8 @@ LENGTH_OF_LITELLM_GENERATED_KEY: Final = get_env_int("LENGTH_OF_LITELLM_GENERATE
 MINIMUM_CUSTOM_KEY_LENGTH: Final = get_env_int("MINIMUM_CUSTOM_KEY_LENGTH", 16)
 SECRET_MANAGER_REFRESH_INTERVAL: Final = get_env_int("SECRET_MANAGER_REFRESH_INTERVAL", 86400)
 OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS: Final = frozenset({"openai", "azure"})
+# The Rust gateway keeps a copy in litellm/rust/crates/config/src/db/settings/keys.rs, which
+# test_rust_gateway_copy_of_db_settings_keys_matches_python in tests/unit/proxy/test_proxy_server.py enforces.
 LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "default_internal_user_params",
     "default_team_params",
@@ -2326,12 +2331,17 @@ PROVIDER_ERROR_BODY_ATTRIBUTE: Final = "provider_error_body"
 CREDENTIAL_FIELD_NAME_FRAGMENTS: Final[tuple[str, ...]] = (
     "accesskey",
     "accesstoken",
+    "accountkey",
     "apikey",
     "authtoken",
     "bearer",
     "clientsecret",
+    "connectionstring",
     "credential",
+    "encryptionkey",
     "idtoken",
+    "licensekey",
+    "masterkey",
     "passphrase",
     "passwd",
     "password",
@@ -2339,7 +2349,9 @@ CREDENTIAL_FIELD_NAME_FRAGMENTS: Final[tuple[str, ...]] = (
     "refreshtoken",
     "secret",
     "sessiontoken",
+    "sharedkey",
     "signingkey",
+    "subscriptionkey",
 )
 CREDENTIAL_FIELD_NAME_WORDS: Final[frozenset[str]] = frozenset(
     {"auth", "authorization", "cookie", "pass", "pwd", "session", "sig", "signature", "token"}
