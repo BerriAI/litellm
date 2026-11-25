@@ -585,6 +585,12 @@ def _apply_configured_bool_overrides(instance: CustomGuardrail, litellm_params: 
         instance.scan_raw_request = bool(litellm_params.scan_raw_request)
 
 
+def _guardrail_initializer(
+    guardrail_type: str,
+) -> Callable[..., CustomGuardrail | Sequence[CustomGuardrail] | None] | None:
+    return guardrail_initializer_registry.get(guardrail_type)
+
+
 def _as_callback_tuple(
     initialized: CustomGuardrail | Sequence[CustomGuardrail] | None,
 ) -> GuardrailCallbacks:
@@ -880,7 +886,7 @@ class InMemoryGuardrailHandler:
         config_file_path: str | None,
         llm_router: Optional["Router"],
     ) -> GuardrailCallbacks:
-        initializer: Final = guardrail_initializer_registry.get(guardrail_type)
+        initializer: Final = _guardrail_initializer(guardrail_type)
         if initializer:
             import inspect
 

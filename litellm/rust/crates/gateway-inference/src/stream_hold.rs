@@ -2,7 +2,8 @@
 //! generated content its client has nothing to lose, so its blocks are kept instead of sent on,
 //! and the stream settles one of two ways: it commits and every block goes out as the provider
 //! sent it, or it fails first and `routing::call` decides what answers the request, as Python's
-//! `wrap_anthropic_stream` does.
+//! `wrap_anthropic_stream` does, except that Python also sends `message_start` on at once while only
+//! a retry can take over and the request has no message `thread`.
 //!
 //! [`hold`] waits for the stream's next block for as long as the stream takes to send it. The
 //! attempt's own timeout, which bounds the whole upstream response, is what ends a stream that

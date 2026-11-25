@@ -1257,11 +1257,12 @@ class FallbackAwareAnthropicMessagesStream:
         }
 
 
-def _anthropic_stream_sends_message_start_live(policy: Mapping[str, object]) -> bool:
+def _anthropic_stream_sends_message_start_live(policy: Mapping[str, object], request: Mapping[str, object]) -> bool:
     return (
         policy.get("can_retry") is True
         and policy.get("can_fall_back") is not True
         and policy.get("refusal_fallback") is not True
+        and request.get("thread") is None
     )
 
 
@@ -1437,7 +1438,8 @@ def wrap_anthropic_stream(
 ) -> FallbackAwareAnthropicMessagesStream:
     """``_aanthropic_messages_streaming_iterator``, read as whole SSE frames: while a retry or a fallback
     can still take over, keepalive frames go out live and every other frame is held until content, except
-    that ``message_start`` goes out live while only a retry can, and the retry drops its own; an error
+    that ``message_start`` goes out live while only a retry can and the request has no message ``thread``
+    (whose next turn names the answering attempt's message id), and the retry drops its own; an error
     frame, a raised error or a safeguard refusal before content is retried in the group, then falls back,
     as the core decides."""
     from litellm.llms.anthropic.messages.native.fake_stream_iterator import FakeAnthropicMessagesStreamIterator
@@ -1471,7 +1473,7 @@ def wrap_anthropic_stream(
         has_generated_content = not (  # rebind-ok: set once content is seen, the buffer cap is hit, or nothing can take over
             policy.get("can_retry") is True or policy.get("can_fall_back") is True
         )
-        sends_message_start_live: Final = _anthropic_stream_sends_message_start_live(policy)
+        sends_message_start_live: Final = _anthropic_stream_sends_message_start_live(policy, attempt.request)
         message_start_sent = False  # rebind-ok: set once message_start went out ahead of the held frames
         buffered: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
         content_seen = False  # rebind-ok: set at the first chunk past message_start and pings

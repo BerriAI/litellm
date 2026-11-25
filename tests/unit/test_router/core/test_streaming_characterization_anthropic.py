@@ -80,7 +80,7 @@ RETRY_MESSAGE_START: Final = sse(
 
 
 def tool_use_start(tool_use_id: str) -> bytes:
-    block: Final = {"type": "tool_use", "id": tool_use_id, "name": "lookup", "input": {}}
+    block: Final[Mapping[str, object]] = {"type": "tool_use", "id": tool_use_id, "name": "lookup", "input": {}}
     return sse("content_block_start", {"type": "content_block_start", "index": 0, "content_block": block})
 
 
@@ -504,7 +504,7 @@ async def test_with_only_a_retry_left_message_start_reaches_the_client_before_co
 async def test_with_only_a_retry_left_decoded_event_chunks_reach_the_client_without_a_retry(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
-    events: Final = (
+    events: Final[tuple[Mapping[str, object], ...]] = (
         {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "content": []}},
         {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
         {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "A"}},
@@ -550,6 +550,24 @@ async def test_with_a_fallback_left_lifecycle_frames_are_held_until_content_even
     await read_into(await open_stream(core, **request_kwargs), received)
     assert reads[frames.index(SIGNATURE_DELTA)] == (PING,)
     assert received == [PING, MESSAGE_START, THINKING_START, SIGNATURE_DELTA, BLOCK_STOP, MESSAGE_STOP]
+
+
+@pytest.mark.parametrize(
+    "thread",
+    [{"type": "create"}, {"type": "continue", "previous_message_id": "msg_0"}],
+    ids=["create", "continue"],
+)
+async def test_a_threaded_request_gets_the_message_start_of_the_retry_that_answers_it(
+    make_core: MakeCore, host: ScriptedHost, thread: dict[str, object]
+) -> None:
+    host.answer(
+        "openai/a",
+        anthropic_stream(MESSAGE_START, THINKING_START, PING, error_frame()),
+        anthropic_stream(RETRY_MESSAGE_START, THINKING_START, SIGNATURE_DELTA, BLOCK_STOP, MESSAGE_STOP),
+    )
+    core = make_core(model_list=[deployment("a", "a")], num_retries=1)
+    frames = await collect_bytes(await open_stream(core, thread=thread))
+    assert b"".join(frames) == PING + RETRY_MESSAGE_START + THINKING_START + SIGNATURE_DELTA + BLOCK_STOP + MESSAGE_STOP
 
 
 @pytest.mark.parametrize(
