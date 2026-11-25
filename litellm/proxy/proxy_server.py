@@ -451,9 +451,13 @@ from litellm.llms.anthropic.messages.context_management.inference_view import (
 )
 from litellm.llms.anthropic.messages.convertible_blocks import (
     deployment_drops_params,
-    drop_non_string_tool_result_texts,
-    malformed_tool_result_count_error,
+    emptied_messages_error,
+    malformed_text_count_error,
+    non_string_system_text_error,
+    non_string_user_text_error,
+    without_non_string_system_texts,
 )
+from litellm.llms.anthropic.messages.native.utils import native_messages_to_send
 from litellm.llms.custom_httpx.aiohttp_pool_diagnostics import build_pool_wait_trace_config
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, exclude_rsa_key_exchange_and_chacha20
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler as JwksHTTPHandler
@@ -15505,7 +15509,28 @@ def _counted_request_messages(
         return None
     if messages_format != "anthropic":
         return list(messages)
-    return list(drop_non_string_tool_result_texts(messages, deployment_drops_params(deployment)))
+    drops: Final = deployment_drops_params(deployment)
+    user_text_error: Final = None if drops else non_string_user_text_error(messages)
+    if user_text_error is not None:
+        raise ProxyException(message=user_text_error, type="invalid_request_error", param="messages", code=400)
+    kept: Final = native_messages_to_send(messages, drops)
+    emptied_error: Final = emptied_messages_error(messages, kept)
+    if emptied_error is not None:
+        raise ProxyException(message=emptied_error, type="invalid_request_error", param="messages", code=400)
+    return kept or list(messages)
+
+
+def _counted_request_system(
+    system: JsonValue,
+    messages_format: TokenCountMessagesFormat,
+    deployment: Mapping[str, object] | None,
+) -> JsonValue:
+    error: Final = None if messages_format != "anthropic" else non_string_system_text_error(system)
+    if error is None or not isinstance(system, list):
+        return system
+    if not deployment_drops_params(deployment):
+        raise ProxyException(message=error, type="invalid_request_error", param="system", code=400)
+    return without_non_string_system_texts(system)
 
 
 async def _try_provider_token_count(
@@ -16611,7 +16636,8 @@ async def _count_request_tokens(
         prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     )
     request_messages: Final = _counted_request_messages(messages, messages_format, count_deployment)
-    local_count_error: Final = malformed_tool_result_count_error(request_messages, messages_format, count_deployment)
+    request_system: Final = _counted_request_system(system, messages_format, count_deployment)
+    local_count_error: Final = malformed_text_count_error(request_messages, messages_format, count_deployment)
     malformed_messages: Final = (
         None
         if local_count_error is None
@@ -16632,7 +16658,7 @@ async def _count_request_tokens(
         else await _gateway_request_view(
             route,
             request_messages,
-            system,
+            request_system,
             _COUNT_TOOLS.validate_python(tools),
             messages_format,
             context_edits,
@@ -16645,7 +16671,7 @@ async def _count_request_tokens(
     inference_messages: Final = (
         request_messages if edited_request is None else [dict(message) for message in edited_request.messages]
     )
-    inference_system: Final = system if edited_request is None else edited_request.system
+    inference_system: Final = request_system if edited_request is None else edited_request.system
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     routed_deployment: Final = _ROUTED_DEPLOYMENT.validate_python(deployment)
     routed_request: Final = (
@@ -16751,7 +16777,7 @@ async def _count_request_tokens(
         if route not in NATIVE_MESSAGES_TARGETS or context_edits is None or request_messages is None
         else await _bridged_request_view(
             request_messages,
-            system,
+            request_system,
             _COUNT_TOOLS.validate_python(tools),
             messages_format,
             replace(context_edits, drop_invalid_edits=False),
@@ -16765,7 +16791,7 @@ async def _count_request_tokens(
     local_messages: Final = (
         request_messages if counted_view is None else [dict(message) for message in counted_view.messages]
     )
-    post_edit_system: Final = system if counted_view is None else counted_view.system
+    post_edit_system: Final = request_system if counted_view is None else counted_view.system
     local_system: Final = (
         system_without_claude_code_billing_header(post_edit_system)
         if messages_format == "anthropic" and route in (Target.CHAT_COMPLETIONS, Target.RESPONSES)
