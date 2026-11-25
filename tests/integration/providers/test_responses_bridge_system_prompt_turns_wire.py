@@ -49,11 +49,12 @@ class _Deployment:
     api_key: str
     api_version: str | None = None
     aws_region_name: str | None = None
+    api_base_path: str = ""
 
     def register(self, scenario: Scenario, api_base: str) -> str:
         return scenario.model(
             model=self.model,
-            api_base=api_base,
+            api_base=f"{api_base}{self.api_base_path}",
             api_key=self.api_key,
             api_version=self.api_version,
             aws_region_name=self.aws_region_name,
@@ -63,6 +64,10 @@ class _Deployment:
 _DEPLOYMENTS: Final = (
     pytest.param(_Deployment("openai/gpt-6.2-sol", "synthetic-openai-key"), id="openai"),
     pytest.param(_Deployment("azure/gpt-6.2-sol", "synthetic-azure-key", api_version="2025-04-01-preview"), id="azure"),
+    pytest.param(
+        _Deployment("azure_ai/gpt-6.2-sol", "synthetic-foundry-key", api_base_path="/api/projects/qa/openai/v1"),
+        id="azure_ai",
+    ),
     pytest.param(
         _Deployment("bedrock_mantle/openai.gpt-6.2-sol", "synthetic-mantle-key", aws_region_name="us-east-1"),
         id="bedrock_mantle",
