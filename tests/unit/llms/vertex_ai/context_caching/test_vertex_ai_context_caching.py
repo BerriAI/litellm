@@ -8,14 +8,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
+import responses
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.common_utils import VertexAIError
-from litellm.llms.vertex_ai.gemini import transformation as gemini_transformation
 from litellm.types.llms.openai import AllMessageValues
 from litellm.llms.vertex_ai.context_caching.known_cached_contents import KnownCachedContents
 from litellm.llms.vertex_ai.context_caching.transformation import transform_openai_messages_to_gemini_context_caching
@@ -3020,17 +3022,14 @@ _SERVED_IMAGE: Final = b"\x89PNG\r\n\x1a\nserved"
 def _serve_images(monkeypatch: pytest.MonkeyPatch, status_code: int) -> list[str]:
     fetched: Final[list[str]] = []
 
-    def serve(client: object, url: str, **kwargs: object) -> httpx.Response:
-        fetched.append(url)
-        return httpx.Response(
-            status_code, content=_SERVED_IMAGE, headers={"content-type": "image/png"}, request=httpx.Request("GET", url)
-        )
+    def serve(request: httpx.Request) -> httpx.Response:
+        fetched.append(str(request.url))
+        return httpx.Response(status_code, content=_SERVED_IMAGE, headers={"content-type": "image/png"})
 
-    async def async_serve(client: object, url: str, **kwargs: object) -> httpx.Response:
-        return serve(client, url, **kwargs)
-
-    monkeypatch.setattr(image_handling, "safe_get", serve)
-    monkeypatch.setattr(image_handling, "async_safe_get", async_serve)
+    transport: Final = httpx.MockTransport(serve)
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "module_level_client", HTTPHandler(client=httpx.Client(transport=transport)))
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=transport))
     return fetched
 
 
@@ -3237,33 +3236,52 @@ async def _vertex_cache_check(
     return result, calls
 
 
+_PRIVATE_BUTTON_METADATA: Final = {"host": "storage.googleapis.com", "path": "/storage/v1/b/private-bucket/o/button"}
+
+
+def _service_account_credentials() -> str:
+    key: Final = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    return json.dumps(
+        {
+            "type": "service_account",
+            "project_id": "request-project",
+            "private_key_id": "request-key",
+            "private_key": key.private_bytes(
+                serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
+            ).decode(),
+            "client_email": "cache@request-project.iam.gserviceaccount.com",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+    )
+
+
 @pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
 async def test_a_private_extensionless_gs_image_before_the_mark_is_typed_with_the_request_credentials(
-    monkeypatch: pytest.MonkeyPatch, use_async: bool
+    use_async: bool,
 ) -> None:
-    lookups: Final[list[tuple[str, str | None, object]]] = []
-
-    def record_lookup(image_url: str, vertex_project: str | None = None, vertex_credentials: object = None) -> str:
-        lookups.append((image_url, vertex_project, vertex_credentials))
-        return "image/png"
-
-    monkeypatch.setattr(gemini_transformation, "_get_gcs_object_content_type", record_lookup)
-    _, calls = await _vertex_cache_check(
-        _conversation_cached_through_notes(
-            _button_question({"url": "gs://private-bucket/button"}), {"role": "assistant", "content": "Deploy."}
-        ),
-        {},
-        "gemini-2.5-flash",
-        use_async,
-        litellm_params={"vertex_project": "request-project", "vertex_credentials": "request-credentials"},
-    )
+    with responses.RequestsMock() as google_auth, respx.mock(using="httpcore") as gcs:
+        google_auth.add(
+            responses.POST,
+            "https://oauth2.googleapis.com/token",
+            json={"access_token": "request-token", "expires_in": 3600, "token_type": "Bearer"},
+        )
+        metadata: Final = gcs.get(**_PRIVATE_BUTTON_METADATA).respond(json={"contentType": "image/png"})
+        _, calls = await _vertex_cache_check(
+            _conversation_cached_through_notes(
+                _button_question({"url": "gs://private-bucket/button"}), {"role": "assistant", "content": "Deploy."}
+            ),
+            {},
+            "gemini-2.5-flash",
+            use_async,
+            litellm_params={"vertex_project": "request-project", "vertex_credentials": _service_account_credentials()},
+        )
 
     created: Final = next(
         json.loads(call.content)
         for call in calls
         if call.method == "POST" and call.url.path.endswith("/cachedContents")
     )
-    assert lookups == [("gs://private-bucket/button", "request-project", "request-credentials")]
+    assert [call.request.headers.get("Authorization") for call in metadata.calls] == ["Bearer request-token"]
     assert created["contents"][0]["parts"][1] == {
         "file_data": {"mime_type": "image/png", "file_uri": "gs://private-bucket/button"}
     }
@@ -3277,24 +3295,23 @@ def _runs_on_an_event_loop() -> bool:
     return True
 
 
-async def test_an_async_gemini_cache_types_an_extensionless_gs_image_off_the_event_loop(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_an_async_gemini_cache_types_an_extensionless_gs_image_off_the_event_loop() -> None:
     lookups_on_the_loop: Final[list[bool]] = []
 
-    def record_lookup(image_url: str, vertex_project: str | None = None, vertex_credentials: object = None) -> str:
+    def serve_metadata(request: httpx.Request) -> httpx.Response:
         lookups_on_the_loop.append(_runs_on_an_event_loop())
-        return "image/png"
+        return httpx.Response(200, json={"contentType": "image/png"})
 
-    monkeypatch.setattr(gemini_transformation, "_get_gcs_object_content_type", record_lookup)
-    (_, _, cache_name), _ = await _vertex_cache_check(
-        _conversation_cached_through_notes(
-            _button_question({"url": "gs://private-bucket/button"}), {"role": "assistant", "content": "Deploy."}
-        ),
-        {},
-        "gemini-2.5-flash",
-        use_async=True,
-    )
+    with respx.mock(using="httpcore") as gcs:
+        gcs.get(**_PRIVATE_BUTTON_METADATA).mock(side_effect=serve_metadata)
+        (_, _, cache_name), _ = await _vertex_cache_check(
+            _conversation_cached_through_notes(
+                _button_question({"url": "gs://private-bucket/button"}), {"role": "assistant", "content": "Deploy."}
+            ),
+            {},
+            "gemini-2.5-flash",
+            use_async=True,
+        )
 
     assert cache_name == "cachedContents/created"
     assert lookups_on_the_loop == [False]
