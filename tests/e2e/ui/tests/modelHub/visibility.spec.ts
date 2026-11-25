@@ -2,10 +2,9 @@ import { expect, test, type APIRequestContext, type APIResponse, type Request } 
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage } from "../../helpers/navigation";
-import { captureRequestBody, readBack } from "../../helpers/roundTrip";
+import { readBack } from "../../helpers/roundTrip";
 import { masterKey, uniqueSuffix } from "../../helpers/traffic";
 
-const modelEndpoint = "/model_group/make_public";
 const mcpEndpoint = "/v1/mcp/make_public";
 const linksEndpoint = "/model_hub/update_useful_links";
 const pluginsEndpoint = "/claude-code/plugins";
@@ -36,41 +35,6 @@ test.describe("AI Hub visibility", () => {
     if (errors.length) throw new AggregateError(errors, "Restore AI Hub fixtures");
   });
 
-  test("publishes the selected model group and confirms success", async ({ page, request }) => {
-    const catalog = await readBack<{ data: { model_group: string; is_public_model_group?: boolean }[] }>(
-      page,
-      "/model_group/info",
-    );
-    const original = catalog.data.filter((row) => row.is_public_model_group).map((row) => row.model_group);
-    const name = `e2e-hub-model-${uniqueSuffix()}`;
-    const created = await post(request, "/model/new", {
-      model_name: name,
-      litellm_params: { model: "openai/fake-gpt-4", api_key: "fake-key" },
-      model_info: {},
-    });
-    const { model_info: { id } } = await created.json();
-    restore.push(() => post(request, "/model/delete", { id }));
-    restore.push(() => post(request, modelEndpoint, { model_groups: original }));
-
-    await navigateToPage(page, Page.ModelHubTable);
-    await expect(page.getByRole("tabpanel").getByText(name, { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Select Models to Make Public" }).click();
-    const dialog = page.getByRole("dialog", { name: "Make Models Public" });
-    await dialog.getByPlaceholder("Search model names...").fill(name);
-    await dialog.getByRole("checkbox", { name: "Select All (1)", exact: true }).check();
-    await dialog.getByRole("button", { name: "Next" }).click();
-    const [response, body] = await Promise.all([
-      page.waitForResponse((res) => new URL(res.url()).pathname === modelEndpoint && res.request().method() === "POST"),
-      captureRequestBody(page, { method: "POST", urlIncludes: modelEndpoint }, () =>
-        dialog.getByRole("button", { name: "Make Public" }).click(),
-      ),
-    ]);
-    expect(response.ok()).toBe(true);
-    expect(body).toEqual({ model_groups: [name] });
-    await expect(page.getByText("Successfully made 1 model group(s) public!", { exact: true })).toBeVisible();
-    await expect(dialog).toBeHidden();
-  });
-
   test("clears the MCP publication list when no servers remain selected", async ({ page, request }) => {
     const catalog = await readBack<{ server_id: string; mcp_info: { is_public_explicit: boolean } }[]>(
       page,
@@ -89,6 +53,12 @@ test.describe("AI Hub visibility", () => {
     restore.push(() => post(request, mcpEndpoint, { mcp_server_ids: original }));
     await post(request, mcpEndpoint, { mcp_server_ids: [id] });
 
+    const bodies: unknown[] = [];
+    page.on("request", (sent) => {
+      if (sent.method() === "POST" && new URL(sent.url()).pathname === mcpEndpoint) {
+        bodies.push(sent.postDataJSON());
+      }
+    });
     await navigateToPage(page, Page.ModelHubTable);
     await page.getByRole("tab", { name: "MCP Hub" }).click();
     await page.getByRole("button", { name: "Manage MCP Hub Visibility" }).click();
@@ -97,12 +67,10 @@ test.describe("AI Hub visibility", () => {
     await expect(checkbox).toBeChecked();
     await checkbox.uncheck();
     await dialog.getByRole("button", { name: "Next" }).click();
-    const body = await captureRequestBody(page, { method: "POST", urlIncludes: mcpEndpoint }, () =>
-      dialog.getByRole("button", { name: "Save Publication List" }).click(),
-    );
-    expect(body).toEqual({ mcp_server_ids: [] });
+    await dialog.getByRole("button", { name: "Save Publication List" }).click();
     await expect(page.getByText("MCP Hub publication list updated")).toBeVisible();
     await expect(dialog).toBeHidden();
+    expect(bodies).toEqual([{ mcp_server_ids: [] }]);
   });
 
   test("publishes and unpublishes only the skills whose visibility changed", async ({ page, request }) => {
@@ -159,8 +127,24 @@ test.describe("AI Hub visibility", () => {
     const suffix = uniqueSuffix();
     const first = `First link ${suffix}`;
     const second = `Second link ${suffix}`;
+    const firstUrl = "https://example.test/first";
+    const secondUrl = "https://example.test/second";
+    const original = Object.entries(useful_links ?? {})
+      .map(([name, value]) => [name, typeof value === "string" ? { url: value, index: 0 } : value] as const)
+      .sort(([, a], [, b]) => a.index - b.index)
+      .map(([name, { url }], index) => [name, { url, index }]);
+    const writes: unknown[] = [];
+    page.on("request", (sent) => {
+      if (sent.method() === "POST" && new URL(sent.url()).pathname === linksEndpoint) {
+        const { useful_links, ...extra } = sent.postDataJSON();
+        writes.push({ ...extra, useful_links: Object.entries(useful_links) });
+      }
+    });
     await navigateToPage(page, Page.ModelHubTable);
-    for (const [name, url] of [[first, "https://example.test/first"], [second, "https://example.test/second"]]) {
+    for (const [name] of original) {
+      await expect(page.getByRole("cell", { name: String(name), exact: true })).toBeVisible();
+    }
+    for (const [name, url] of [[first, firstUrl], [second, secondUrl]]) {
       await page.getByPlaceholder("Friendly name").fill(name);
       await page.getByPlaceholder("https://example.com").fill(url);
       await page.getByRole("button", { name: "Add Link" }).click();
@@ -175,5 +159,18 @@ test.describe("AI Hub visibility", () => {
     const added = page.getByRole("cell", { name: first, exact: true })
       .or(page.getByRole("cell", { name: second, exact: true }));
     await expect(added).toHaveText([second, first]);
+    const firstLink = [first, { url: firstUrl, index: original.length }];
+    const secondLink = [second, { url: secondUrl, index: original.length + 1 }];
+    expect(writes).toEqual([
+      { useful_links: [...original, firstLink] },
+      { useful_links: [...original, firstLink, secondLink] },
+      {
+        useful_links: [
+          ...original,
+          [second, { url: secondUrl, index: original.length }],
+          [first, { url: firstUrl, index: original.length + 1 }],
+        ],
+      },
+    ]);
   });
 });

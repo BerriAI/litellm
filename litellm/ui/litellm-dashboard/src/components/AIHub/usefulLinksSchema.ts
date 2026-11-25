@@ -7,15 +7,16 @@ const linkDraft = z.object({
 
 const editDraft = linkDraft.extend({
   id: z.string(),
+  url: z.unknown(),
   index: z.unknown().optional(),
 });
 
 export type UsefulLink = z.output<typeof editDraft>;
 
 export const createUsefulLinksSchemas = (links: readonly Pick<UsefulLink, "displayName" | "id">[]) => {
-  const linkError = ({ displayName, url }: z.output<typeof linkDraft>, editingId?: string) => {
+  const linkError = ({ displayName, url }: Pick<UsefulLink, "displayName" | "url">, editingId?: string) => {
     try {
-      new URL(url);
+      new URL(url as string);
     } catch {
       return "invalidUrl";
     }

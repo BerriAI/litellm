@@ -49,7 +49,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
               return {
                 id: `${(value as any).index ?? 0}-${displayName}`,
                 displayName,
-                url: (value as any).url as string,
+                url: value.url,
                 index: (value as any).index ?? 0,
               };
             } else {
@@ -326,7 +326,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                           <TableCell className="py-0.5">
                             <input
                               type="text"
-                              value={editingLink.url}
+                              value={editingLink.url as string}
                               onChange={(e) => editForm.setValue("link", { ...editingLink, url: e.target.value })}
                               className="w-full px-2 py-1 border border-border rounded-md text-sm"
                             />
@@ -351,7 +351,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                       ) : (
                         <>
                           <TableCell className="py-0.5 text-sm text-foreground">{link.displayName}</TableCell>
-                          <TableCell className="py-0.5 text-sm text-muted-foreground">{link.url}</TableCell>
+                          <TableCell className="py-0.5 text-sm text-muted-foreground">{link.url as string}</TableCell>
                           <TableCell className="py-0.5 whitespace-nowrap">
                             {isRearranging ? (
                               <div className="flex space-x-2">
@@ -376,7 +376,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
                               <div className="flex space-x-2">
                                 <TableIconActionButton
                                   variant="Open"
-                                  onClick={() => setCurrentLink(link.url)}
+                                  onClick={() => setCurrentLink(link.url as string)}
                                   tooltipText={t("aiHub.usefulLinks.openLink")}
                                   dataTestId={`open-link-${link.id}`}
                                 />
