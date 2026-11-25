@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use litellm_cache_response::{CacheOptions, CachePolicy, CacheScope};
 use litellm_gateway_auth::Authenticated;
-use litellm_gateway_auth_core::{Caller, Rows, StoredKey};
+use litellm_gateway_auth_core::{Caller, Credential, Rows, StoredKey, Token};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
@@ -23,11 +23,16 @@ struct Controls {
 type Prepared = (Map<String, Value>, CacheOptions);
 
 /// Whose answers a cached answer may be served to. A key is named by the hash its row is stored
-/// under, so every credential that stands for one key shares its answers.
+/// under, so every credential that stands for one key shares its answers. A JWT that acts as
+/// itself is named by its verified claims, so only that token shares them.
 fn scope<R: Rows<Key: StoredKey>>(caller: &Caller<R>) -> String {
-    let [authority, id] = match caller.hash() {
-        None => ["litellm:master-key", "master"],
-        Some(hash) => ["litellm:virtual-key", hash.as_str()],
+    let (authority, id) = match (&caller.credential, caller.hash()) {
+        (Credential::Jwt { jwt, .. }, _) => {
+            let claims = Value::Object(jwt.claims.clone()).to_string();
+            ("litellm:jwt", Token::new(claims).hash().as_str().to_owned())
+        }
+        (_, Some(hash)) => ("litellm:virtual-key", hash.as_str().to_owned()),
+        (_, None) => ("litellm:master-key", "master".to_owned()),
     };
     serde_json::json!([authority, id, id]).to_string()
 }
@@ -77,10 +82,13 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::test_support::{Held, key};
+    use crate::test_support::{Held, jwt, key};
 
     #[rstest]
-    #[case::the_master_key(Caller::master_key(()), r#"["litellm:master-key","master","master"]"#)]
+    #[case::the_master_key(
+        Caller::master_key(None),
+        r#"["litellm:master-key","master","master"]"#
+    )]
     #[case::a_key_by_its_stored_hash(
         key("stored", false),
         r#"["litellm:virtual-key","stored","stored"]"#
@@ -90,5 +98,22 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(scope(&caller), expected);
+    }
+
+    #[test]
+    fn a_jwt_shares_cached_answers_only_with_the_same_token() {
+        let alice = scope(&jwt(serde_json::json!({"sub": "alice", "exp": 1})));
+        let [_, claims_hash, _]: [String; 3] = serde_json::from_str(&alice).unwrap();
+
+        let scopes = [
+            scope(&jwt(serde_json::json!({"sub": "alice", "exp": 1}))),
+            scope(&jwt(serde_json::json!({"sub": "alice", "exp": 2}))),
+            scope(&jwt(serde_json::json!({"sub": "bob", "exp": 1}))),
+            scope(&Caller::<Held>::master_key(None)),
+            scope(&key(&claims_hash, false)),
+        ]
+        .map(|other| other == alice);
+
+        assert_eq!(scopes, [true, false, false, false, false]);
     }
 }

@@ -182,8 +182,10 @@ impl Counted {
     /// holds, its alias and its team's id and alias. A key copy of a team holds no alias here.
     fn of(identity: &Authenticated<NativeRows>) -> Self {
         let (priority, key_alias) = match &identity.credential {
-            Credential::MasterKey => (None, None),
-            Credential::Key { key } => (key.priority().cloned(), key.alias().map(str::to_owned)),
+            Credential::MasterKey | Credential::Jwt { .. } => (None, None),
+            Credential::Key { key, .. } => {
+                (key.priority().cloned(), key.alias().map(str::to_owned))
+            }
         };
         let team = identity.affiliation.holder.team();
         Self {

@@ -10,7 +10,7 @@ pub(crate) mod user;
 
 use std::collections::BTreeSet;
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 pub use claims::{
     MappedClaims, UserInfo, agent_claim, all_team_ids, end_user_id, is_admin, is_allowed_domain,
@@ -149,7 +149,7 @@ pub struct ClaimIdentity<R> {
 /// beside `affiliation` until that build moves into the core.
 #[derive(Clone, Debug, PartialEq)]
 pub struct JwtIdentity<R: Rows> {
-    pub claims: Value,
+    pub claims: Map<String, Value>,
     pub is_proxy_admin: bool,
     // TODO: `user_id`, `team_id` and `org_id` repeat ids `affiliation` holds. They go with `Rows`
     // ("Open on the types" item 4 on the Auth High-level Picture page): Python's opaque rows cannot

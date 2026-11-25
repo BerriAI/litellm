@@ -211,7 +211,8 @@ impl AuthStore {
             return Ok(Some(org));
         }
         let read = self.organizations.organization(organization_id, true);
-        let org = litellm_db::within(Some(self.lookup_deadline), async { Ok(read.await) }).await??;
+        let org =
+            litellm_db::within(Some(self.lookup_deadline), async { Ok(read.await) }).await??;
         if let Some(org) = &org {
             self.write(&object, org.clone(), Some(ORG_CACHE_TTL)).await;
         }

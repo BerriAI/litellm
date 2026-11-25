@@ -259,11 +259,12 @@ impl Caller {
                 Some(PROXY_ADMIN_NAME.to_owned()),
                 KeyLimits::default(),
             ),
-            auth_core::Credential::Key { key } => (
+            auth_core::Credential::Key { key, .. } => (
                 identity.hash().map(ToString::to_string),
                 user.map(|user| user.id().to_owned()),
                 key.limits().clone(),
             ),
+            auth_core::Credential::Jwt { .. } => (None, None, KeyLimits::default()),
         };
         Self {
             api_key,
@@ -271,7 +272,9 @@ impl Caller {
             team_id: team.map(|team| team.id().to_owned()),
             org_id: org.as_ref().map(|org| org.id().to_owned()),
             project_id: project.as_ref().map(|project| project.id().to_owned()),
-            end_user_id: end_user.end_user_id.clone(),
+            end_user_id: end_user
+                .as_ref()
+                .and_then(|end_user| end_user.end_user_id.clone()),
             limits,
             user: user
                 .and_then(Named::stored)
@@ -285,7 +288,10 @@ impl Caller {
                 .membership()
                 .map(|member| member.limits)
                 .unwrap_or_default(),
-            end_user: end_user.limits,
+            end_user: end_user
+                .as_ref()
+                .map(|end_user| end_user.limits)
+                .unwrap_or_default(),
             org: org
                 .as_ref()
                 .and_then(Named::stored)
@@ -891,7 +897,7 @@ mod tests {
 
     #[rstest]
     fn the_master_key_is_limited_under_the_end_user_its_request_names() {
-        let master = Authenticated::from(auth_core::Caller::master_key(EndUserRecord {
+        let master = Authenticated::from(auth_core::Caller::master_key(Some(EndUserRecord {
             end_user_id: Some("e1".to_owned()),
             found: true,
             limits: MinuteLimits {
@@ -899,7 +905,7 @@ mod tests {
                 tpm: Some(40),
             },
             ..EndUserRecord::default()
-        }));
+        })));
 
         assert_eq!(described(&master), [described_as("end_user", "e1", 4, 40)]);
     }

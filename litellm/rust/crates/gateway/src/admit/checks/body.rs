@@ -130,10 +130,7 @@ mod tests {
 
     #[rstest]
     #[case::text(r#"{"user_id":"eu-1"}"#, Some("eu-1"))]
-    #[case::text_inside_whitespace(
-        r#"{"user_id":" \u001c\u0085eu-1\u3000\n"}"#,
-        Some("eu-1")
-    )]
+    #[case::text_inside_whitespace(r#"{"user_id":" \u001c\u0085eu-1\u3000\n"}"#, Some("eu-1"))]
     #[case::space_alone(r#"{"user_id":" \u001f\t"}"#, None)]
     #[case::empty_text(r#"{"user_id":""}"#, None)]
     #[case::no_user_id("{}", None)]

@@ -25,7 +25,7 @@ mod token;
 mod value;
 
 pub use affiliation::{Affiliation, Holder, Named, Team, TeamCopy};
-pub use caller::{Caller, Credential, NotACaller, StoredKey};
+pub use caller::{Caller, Credential, JwtActor, JwtStamp, NotACaller, StoredKey, Via};
 pub use error::{
     AddressNotAllowed, AgentIdentityFailure, AssertionRejection, AuthzDenial, BudgetExceeded,
     ClaimDenial, DeniedList, Error, JwtDenial, KeyDenial, KeyError, KeyFailure, ModelAccessDenied,

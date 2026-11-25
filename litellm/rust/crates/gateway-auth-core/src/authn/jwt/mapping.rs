@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use litellm_config::UnregisteredJwtClientBehavior as Behavior;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{Claims, JwtSettings};
 use crate::{
@@ -102,7 +102,7 @@ pub enum KeyOrigin {
 /// user the policy loaded for it before an auto-registration.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MappedJwt<U> {
-    pub claims: Value,
+    pub claims: Map<String, Value>,
     pub end_user_id: Option<String>,
     pub user_email: Option<String>,
     pub origin: KeyOrigin,
@@ -413,7 +413,7 @@ async fn mapped_outcome<H: AuthHost>(
         (_, user_email) => user_email,
     };
     let jwt = MappedJwt {
-        claims: Value::Object(claims.0.clone()),
+        claims: claims.0.clone(),
         end_user_id: claims::end_user_id(claims, settings).filter(|text| !text.is_empty()),
         user_email,
         origin: KeyOrigin::Mapping,
@@ -491,7 +491,7 @@ mod tests {
 
     fn identity() -> JwtIdentity<Labels> {
         JwtIdentity {
-            claims: json!({}),
+            claims: Map::new(),
             is_proxy_admin: false,
             user_id: None,
             user_email: None,

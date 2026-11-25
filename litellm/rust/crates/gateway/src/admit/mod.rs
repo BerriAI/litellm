@@ -224,7 +224,7 @@ impl Admit {
             return Err(Reason::new(Refused::Body, column));
         }
         Ok(Authenticated::from(Caller {
-            end_user,
+            end_user: Some(end_user),
             ..Caller::clone(&caller)
         }))
     }
@@ -451,7 +451,10 @@ mod tests {
 
         let caller = admitted.extensions().get::<Preauthenticated<NativeRows>>();
         assert_eq!(
-            caller.map(|caller| caller.0.end_user.end_user_id.as_deref()),
+            caller.map(|caller| {
+                let end_user = caller.0.end_user.as_ref();
+                end_user.and_then(|end_user| end_user.end_user_id.as_deref())
+            }),
             Some(end_user_id)
         );
     }

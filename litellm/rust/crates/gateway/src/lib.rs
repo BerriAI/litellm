@@ -207,10 +207,7 @@ pub fn router(state: AppState, config: &Config) -> Router {
 mod tests {
     use axum::http::StatusCode;
     use litellm_gateway_auth::Authenticated;
-    use litellm_gateway_auth_core::{
-        Affiliation, Caller, Credential, Token,
-        record::{Budget, EndUserRecord},
-    };
+    use litellm_gateway_auth_core::{Affiliation, Caller, Credential, Token, record::Budget};
     use litellm_gateway_inference::{
         CallHooks, HookError, Host, RouterTiers,
         record::{self, CallRecord},
@@ -265,9 +262,10 @@ mod tests {
                         rpm: Some(0),
                         ..KeyLimits::default()
                     }),
+                via: litellm_gateway_auth_core::Via::OwnToken,
             },
             affiliation: Affiliation::nobody(),
-            end_user: EndUserRecord::default(),
+            end_user: None,
         });
         let body: Map<String, Value> = Map::from_iter([("model".to_owned(), json!("held-model"))]);
 

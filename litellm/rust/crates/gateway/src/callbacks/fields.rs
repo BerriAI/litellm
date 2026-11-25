@@ -68,11 +68,12 @@ pub(super) fn charged(identity: &Authenticated<NativeRows>) -> Charged {
             None,
             Some(PROXY_ADMIN_NAME.to_owned()),
         ),
-        Credential::Key { key } => (
+        Credential::Key { key, .. } => (
             identity.hash().map(ToString::to_string),
             key.alias().map(str::to_owned),
             key.record().user_id.clone(),
         ),
+        Credential::Jwt { .. } => (None, None, None),
     };
     Charged {
         key_hash,
@@ -81,7 +82,9 @@ pub(super) fn charged(identity: &Authenticated<NativeRows>) -> Charged {
         team: holder.team().map(Team::label),
         org: org.as_ref().map(Named::label),
         project: project.as_ref().map(Named::label),
-        end_user_id: end_user.end_user_id.clone(),
+        end_user_id: end_user
+            .as_ref()
+            .and_then(|end_user| end_user.end_user_id.clone()),
     }
 }
 
@@ -743,10 +746,10 @@ mod tests {
     }
 
     fn master_for(end_user_id: &str) -> Authenticated<NativeRows> {
-        Authenticated::from(Caller::master_key(EndUserRecord {
+        Authenticated::from(Caller::master_key(Some(EndUserRecord {
             end_user_id: Some(end_user_id.to_owned()),
             ..EndUserRecord::default()
-        }))
+        })))
     }
 
     #[rstest]

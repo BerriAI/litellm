@@ -17,6 +17,8 @@ serde.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
+litellm-config.workspace = true
 rstest.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 tower = { version = "0.5.3", features = ["util"] }

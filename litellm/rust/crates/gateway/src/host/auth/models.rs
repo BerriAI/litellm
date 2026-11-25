@@ -14,8 +14,8 @@ use super::NativeRows;
 /// when it was authenticated. A team the caller names with no row behind it has no list.
 pub(crate) fn layers(identity: &Authenticated<NativeRows>) -> impl Iterator<Item = Layer<'_>> {
     let key = match &identity.credential {
-        Credential::MasterKey => None,
-        Credential::Key { key } => Some(Layer::Key(ModelList::read(key.models()))),
+        Credential::MasterKey | Credential::Jwt { .. } => None,
+        Credential::Key { key, .. } => Some(Layer::Key(ModelList::read(key.models()))),
     };
     let team = identity
         .affiliation
@@ -41,8 +41,8 @@ fn team_list(team: &Team<NativeRows>) -> Option<ModelList<'_>> {
 /// `models` plus its `team_models` in `can_key_call_model`.
 pub(crate) fn allowed_models(identity: &Authenticated<NativeRows>) -> Vec<String> {
     let key = match &identity.credential {
-        Credential::MasterKey => &[][..],
-        Credential::Key { key } => key.models(),
+        Credential::MasterKey | Credential::Jwt { .. } => &[][..],
+        Credential::Key { key, .. } => key.models(),
     };
     let team = match identity.affiliation.holder.team() {
         Some(Team::Row(record)) => &record.models[..],

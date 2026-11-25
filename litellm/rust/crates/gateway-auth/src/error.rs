@@ -93,7 +93,7 @@ impl From<NotACaller> for Error {
     fn from(identity: NotACaller) -> Self {
         match identity {
             NotACaller::NoMasterKey => Self::Unconfigured,
-            NotACaller::UserAuthRoute | NotACaller::CachedAdmin | NotACaller::Jwt => {
+            NotACaller::UserAuthRoute | NotACaller::CachedAdmin | NotACaller::AutoRegisteredJwt => {
                 Self::NotNative
             }
         }
@@ -158,7 +158,7 @@ mod tests {
     #[case::no_master_key(NotACaller::NoMasterKey, "unconfigured")]
     #[case::the_user_auth_route(NotACaller::UserAuthRoute, "not_native")]
     #[case::a_cached_admin_key(NotACaller::CachedAdmin, "not_native")]
-    #[case::a_jwt(NotACaller::Jwt, "not_native")]
+    #[case::an_auto_registered_jwt(NotACaller::AutoRegisteredJwt, "not_native")]
     fn an_identity_no_host_serves_is_refused(#[case] identity: NotACaller, #[case] answered: &str) {
         assert_eq!(<&'static str>::from(Error::from(identity)), answered);
     }
