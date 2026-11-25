@@ -298,6 +298,8 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
                 or key == "models"
                 and isinstance(data_json[key], list)
                 and len(data_json[key]) == 0
+                or key == "model_max_budget"
+                and data_json[key] == {}
             ):
                 data_json[key] = value
 

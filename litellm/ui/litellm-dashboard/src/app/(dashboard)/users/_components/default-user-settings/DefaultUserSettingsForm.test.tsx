@@ -62,6 +62,7 @@ const SAVED_BODY = {
   max_budget: 100,
   budget_duration: "30d",
   models: ["gpt-5.2"],
+  model_max_budget: null,
   teams: [{ team_id: "team-alpha", max_budget_in_team: 25, user_role: "user" }],
 };
 
@@ -160,6 +161,24 @@ describe("DefaultUserSettingsForm", () => {
 
     await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
     expect(updateSettings).toHaveBeenCalledWith({ ...SAVED_BODY, max_budget: 250 });
+  });
+
+  it("keeps per-model budgets the form has no field for when the other settings are saved", async () => {
+    const user = userEvent.setup();
+    const perModelBudgets = { "gpt-5.2": { max_budget: 10, budget_duration: "30d" } };
+    const { updateSettings } = renderForm({
+      fetchSettings: vi
+        .fn()
+        .mockResolvedValue({ ...SETTINGS, values: { ...SETTINGS.values, model_max_budget: perModelBudgets } }),
+    });
+
+    await enterEditMode(user);
+    await user.clear(await screen.findByLabelText("Max Budget (USD)"));
+    await user.type(screen.getByLabelText("Max Budget (USD)"), "250");
+    await user.click(await saveButton());
+
+    await waitFor(() => expect(updateSettings).toHaveBeenCalledTimes(1));
+    expect(updateSettings).toHaveBeenCalledWith({ ...SAVED_BODY, max_budget: 250, model_max_budget: perModelBudgets });
   });
 
   it("saves a sub-cent budget the browser would veto under a 0.01 step", async () => {

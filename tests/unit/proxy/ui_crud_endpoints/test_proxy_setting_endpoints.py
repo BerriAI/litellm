@@ -4917,3 +4917,67 @@ def test_background_chat_settings_failed_save_does_not_enable_runtime(background
     assert client.get("/get/background_chat_settings").json()["enabled"] is False
     assert proxy_server.polling_via_cache_enabled is False
     audit.assert_not_awaited()
+
+
+def _new_user_params_after_saving_defaults(monkeypatch, request_fields: dict[str, object]) -> dict[str, object]:
+    import litellm
+    from litellm.proxy._types import NewUserRequest
+    from litellm.proxy.management_endpoints.internal_user_endpoints import _update_internal_new_user_params
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "default_internal_user_params", {})
+    saved = client.patch(
+        "/update/internal_user_settings",
+        json={"model_max_budget": {"gpt-4o": {"max_budget": 10.0, "budget_duration": "30d"}}},
+    )
+    assert saved.status_code == 200, saved.text
+
+    data = NewUserRequest(user_role=LitellmUserRoles.INTERNAL_USER, **request_fields)
+    return _update_internal_new_user_params(data.model_dump(), data)
+
+
+def test_default_model_max_budget_is_saved_and_returned(mock_proxy_config, mock_auth, monkeypatch):
+    import litellm
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "default_internal_user_params", {})
+    budgets: Final = {"gpt-4o": {"max_budget": 10.0, "budget_duration": "30d"}}
+
+    saved = client.patch("/update/internal_user_settings", json={"model_max_budget": budgets})
+
+    assert saved.status_code == 200, saved.text
+    assert litellm.default_internal_user_params["model_max_budget"] == budgets
+    stored = mock_proxy_config["config"]["litellm_settings"]["default_internal_user_params"]
+    assert stored["model_max_budget"] == budgets
+    returned = client.get("/get/internal_user_settings").json()["values"]["model_max_budget"]
+    assert returned == {"gpt-4o": {"max_budget": 10.0, "budget_duration": "30d", "tpm_limit": None, "rpm_limit": None}}
+
+
+def test_default_model_max_budget_rejects_a_malformed_budget(mock_proxy_config, mock_auth, monkeypatch):
+    import litellm
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr(litellm, "default_internal_user_params", {"max_budget": 5.0})
+
+    resp = client.patch(
+        "/update/internal_user_settings",
+        json={"model_max_budget": {"gpt-4o": {"max_budget": "not a number"}}},
+    )
+
+    assert resp.status_code == 422
+    assert litellm.default_internal_user_params == {"max_budget": 5.0}
+    assert mock_proxy_config["save_call_count"]() == 0
+
+
+def test_saved_default_model_max_budget_reaches_a_new_user(mock_proxy_config, mock_auth, monkeypatch):
+    params = _new_user_params_after_saving_defaults(monkeypatch, {})
+
+    assert params["model_max_budget"] == {"gpt-4o": {"max_budget": 10.0, "budget_duration": "30d"}}
+
+
+def test_explicit_model_max_budget_on_a_new_user_wins_over_the_default(mock_proxy_config, mock_auth, monkeypatch):
+    own: Final = {"claude-sonnet": {"max_budget": 3.0}}
+
+    params = _new_user_params_after_saving_defaults(monkeypatch, {"model_max_budget": own})
+
+    assert params["model_max_budget"] == own

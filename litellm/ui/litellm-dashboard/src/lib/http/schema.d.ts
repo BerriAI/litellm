@@ -35088,6 +35088,13 @@ export interface components {
              */
             max_budget?: number | null;
             /**
+             * Model Max Budget
+             * @description Default budget for each model for new users (e.g. {'gpt-4o': {'max_budget': 10, 'budget_duration': '30d'}})
+             */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
+            /**
              * Models
              * @description Default list of models that new users can access
              */

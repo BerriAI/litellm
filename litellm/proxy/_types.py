@@ -5575,6 +5575,10 @@ class DefaultInternalUserParams(LiteLLMPydanticObjectBase):
         description="Default budget duration for new users (e.g. 'daily', 'weekly', 'monthly')",
     )
     models: list[str] | None = Field(default=None, description="Default list of models that new users can access")
+    model_max_budget: GenericBudgetConfigType | None = Field(
+        default=None,
+        description="Default budget for each model for new users (e.g. {'gpt-4o': {'max_budget': 10, 'budget_duration': '30d'}})",
+    )
 
     teams: list[str] | list[NewUserRequestTeam] | None = Field(
         default=None,
