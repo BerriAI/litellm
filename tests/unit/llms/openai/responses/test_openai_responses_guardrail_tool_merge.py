@@ -287,6 +287,33 @@ def test_dropping_half_of_many_same_named_tools_reads_each_tool_a_bounded_number
     assert max(reads.values()) <= 8
 
 
+def test_a_kept_member_stays_in_its_own_namespace_when_other_same_named_tools_are_too_many_to_match() -> None:
+    first_namespace: Final = {
+        "type": "namespace",
+        "name": "a__b",
+        "description": "First namespace",
+        "tools": [_doc_getter("c", "First namespace member.")],
+    }
+    second_namespace: Final = {
+        "type": "namespace",
+        "name": "a",
+        "description": "Second namespace",
+        "tools": [_doc_getter("b__c", "Second namespace member.")],
+    }
+    mcp_tools: Final = [
+        {"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"} for _ in range(23)
+    ]
+    original: Final = [first_namespace, second_namespace, *mcp_tools]
+    groups: Final = _groups(original)
+    flat: Final = _flat(groups)
+
+    merged: Final = merge_guardrailed_tools(original, groups, flat[1:])
+
+    assert merged is not None
+    assert merged[0] is second_namespace
+    assert list(merged[1:]) == mcp_tools
+
+
 def test_edited_mcp_tool_is_rewritten():
     original = [{"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp"}]
     groups = _groups(original)

@@ -267,6 +267,20 @@ def _positioned_matches(
     )
 
 
+def _keys_within_budget(
+    shared: Sequence[tuple[str, tuple[int, ...]]],
+    flattened_positions: Mapping[str, tuple[int, ...]],
+    anchor_count: int,
+) -> frozenset[str]:
+    by_cost: Final = tuple(sorted(shared, key=lambda group: len(group[1]) * len(flattened_positions[group[0]])))
+    totals: Final = accumulate(len(kept) * len(flattened_positions[key]) for key, kept in by_cost)
+    return frozenset(
+        key
+        for (key, _), total in zip(by_cost, totals, strict=True)
+        if total <= _MAX_SCORED_PAIRS and total * anchor_count <= _MAX_ORDER_CHECKS
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class _GuardrailedKeys:
     keys: tuple[IndexedKey, ...]
@@ -287,12 +301,11 @@ def _guardrailed_keys(
         if len(kept) == 1 and len(flattened_positions.get(key, ())) == 1
     )
     shared: Final = tuple((key, kept) for key, kept in positions.items() if len(flattened_positions.get(key, ())) > 1)
-    scored_pairs: Final = sum(len(kept) * len(flattened_positions[key]) for key, kept in shared)
-    if scored_pairs > _MAX_SCORED_PAIRS or scored_pairs * len(anchors) > _MAX_ORDER_CHECKS:
-        return _GuardrailedKeys(keys=_indexed_keys(keys, positions), rebuilt=frozenset())
+    matched_by_content: Final = _keys_within_budget(shared, flattened_positions, len(anchors))
     realigned: Final = tuple(
         _positioned_matches(flattened, guardrailed, flattened_positions[key], kept, rebuildable_originals, anchors)
         for key, kept in shared
+        if key in matched_by_content
     )
     if any(group is None for group in realigned):
         return None
