@@ -527,6 +527,45 @@ def test_responses_bridge_points_skip_injection_when_function_call_marks_fill_th
         assert anthropic_labels(_only_request(wire)) == _CLIENT_MARKED
 
 
+def _responses_turn_ending_in_tool_results(model: str, marker: str) -> dict[str, JsonValue]:
+    return {
+        **responses_body(model, marker),
+        "input": [
+            {"role": "user", "content": final_text(marker)},
+            *(
+                {
+                    "type": "function_call",
+                    "call_id": call_id(city),
+                    "name": "lookup_weather",
+                    "arguments": json.dumps({"city": city}),
+                }
+                for city in CITIES
+            ),
+            *({"type": "function_call_output", "call_id": call_id(city), "output": "sunny."} for city in CITIES),
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("index", "marked"),
+    (
+        pytest.param(-1, f"user:tool_result:{call_id(CITIES[-1])}", id="last-message"),
+        pytest.param("-1", f"user:tool_result:{call_id(CITIES[-1])}", id="last-message-from-json"),
+        pytest.param(0, None, id="first-input-item"),
+    ),
+)
+def test_responses_bridge_index_point_marks_the_message_it_counts_to(
+    gateway: Gateway, index: JsonValue, marked: str | None
+) -> None:
+    marker: Final = new_marker()
+    points: Final[list[JsonValue]] = [{"location": "message", "role": "system"}, {"location": "message", "index": index}]
+    with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=points)
+        response: Final = gateway.request("POST", "/v1/responses", _responses_turn_ending_in_tool_results(model, marker))
+        assert response.status_code == 200, response.text
+        assert anthropic_labels(_only_request(wire)) == [SYSTEM_LABEL, marked or final_label(marker)]
+
+
 @pytest.mark.timeout(_OWNED_PROXY_TIMEOUT)
 def test_response_cache_serves_the_capped_request_once(uncapped_gateway: Gateway) -> None:
     marker: Final = new_marker()

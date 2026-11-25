@@ -953,12 +953,11 @@ async def test_positional_points_address_the_input_item_the_caller_indexed(instr
 
 @pytest.mark.asyncio
 async def test_out_of_bounds_positional_points_are_not_revived_by_a_longer_list():
-    """An ordinal addresses the list in front of the pass that reads it.
+    """An ordinal counted from the start addresses the list in front of the pass that reads it.
 
     Carrying one forward would re-resolve it against the bridge's longer list, where an
     index that named nothing in the caller's `input` can land on a real message -- the
-    system prompt included. Positional points are resolved where they were written or not
-    at all.
+    system prompt included. Such points are resolved where they were written or not at all.
     """
     mock_post = AsyncMock(return_value=MockResponse(_ANTHROPIC_MESSAGES_PAYLOAD, 200))
     body = await _bridged_body(
@@ -969,6 +968,31 @@ async def test_out_of_bounds_positional_points_are_not_revived_by_a_longer_list(
 
     assert "cache_control" not in json.dumps(body["system"])
     assert "cache_control" not in json.dumps(body["messages"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("index", [-1, "-1"])
+async def test_a_point_counted_from_the_end_marks_the_trailing_tool_result(index):
+    """An agent loop's turn ends in function_call_output items, which have no role and so are
+    missing from the Responses layer's list. Counted from the end there, the point landed on
+    the user message and left the whole tool chain uncached on every step."""
+    mock_post = AsyncMock(return_value=MockResponse(_ANTHROPIC_MESSAGES_PAYLOAD, 200))
+    body = await _bridged_body(
+        mock_post,
+        points=[{"location": "message", "index": index}],
+        input=[
+            {"role": "user", "content": "Read a.txt"},
+            {"type": "function_call", "call_id": "call_a", "name": "read_file", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_a", "output": "contents of a.txt"},
+        ],
+    )
+
+    last_block = body["messages"][-1]["content"][-1]
+    assert last_block["type"] == "tool_result"
+    assert last_block["cache_control"] == {"type": "ephemeral"}
+    assert [i for i, msg in enumerate(body["messages"]) if "cache_control" in json.dumps(msg)] == [
+        len(body["messages"]) - 1
+    ]
 
 
 def _four_user_turns() -> list:
