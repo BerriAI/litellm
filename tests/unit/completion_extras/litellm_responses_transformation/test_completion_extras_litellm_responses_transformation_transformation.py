@@ -572,6 +572,71 @@ def test_bridged_chat_rejects_background_on_a_model_the_provider_cannot_stream_l
     assert upstream.call_count == 0
 
 
+def test_bridged_chat_rejects_background_on_a_deployment_that_passes_responses_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
+    monkeypatch.setitem(
+        model_cost, "custom_openai/passthrough-model", {"litellm_provider": "custom_openai", "mode": "responses"}
+    )
+
+    with respx.mock(assert_all_called=False) as router:
+        upstream: Final = router.post(url__startswith="https://example.invalid/v1/responses").mock(
+            return_value=httpx.Response(200, json=_searched_responses_body("passthrough-model"))
+        )
+        with pytest.raises(litellm.UnsupportedParamsError) as raised:
+            litellm.completion(
+                model="custom_openai/passthrough-model",
+                messages=[{"role": "user", "content": "ping"}],
+                api_base="https://example.invalid/v1",
+                api_key="test-key",
+                background=True,
+                model_info={"mode": "responses", "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]},
+            )
+
+    assert raised.value.status_code == 400
+    assert "background" in raised.value.message
+    assert upstream.call_count == 0
+
+
+def test_bridged_chat_keeps_serving_background_on_a_deployment_that_falls_back_to_chat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_cost: Final = cast(MutableMapping[str, object], litellm.model_cost)  # cast-ok: litellm.model_cost is untyped
+    monkeypatch.setitem(
+        model_cost, "azure_ai/serverless-responses-model", {"litellm_provider": "azure_ai", "mode": "responses"}
+    )
+    api_base: Final = "https://serverless-endpoint.eastus2.models.ai.azure.com"
+
+    with respx.mock(assert_all_called=True) as router:
+        upstream: Final = router.post(url__startswith=api_base).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-serverless",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "serverless-responses-model",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                },
+            )
+        )
+        response: Final = litellm.completion(
+            model="azure_ai/serverless-responses-model",
+            messages=[{"role": "user", "content": "ping"}],
+            api_base=api_base,
+            api_key="test-key",
+            background=True,
+        )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "pong"
+    assert "background" not in json.loads(upstream.calls.last.request.content)
+
+
 @_BRIDGED_PROVIDERS
 def test_bridged_chat_stream_forwards_background_and_streams_the_run(
     monkeypatch: pytest.MonkeyPatch, model: str, url: str, provider_kwargs: Mapping[str, object]

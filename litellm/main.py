@@ -5661,14 +5661,17 @@ def _bridge_params_without_unretrievable_background_run(
     routing_kwargs: Mapping[str, object],
     model: str,
     custom_llm_provider: str,
+    api_base: str | None,
+    deployment_model_info: Mapping[str, object] | None,
 ) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
+    from litellm.responses.main import forwards_background_upstream
+
     extra_body: Final = as_str_mapping(optional_params.get("extra_body")) or {}
     if extra_body.get("stream", streams_upstream) is True and not fakes_stream(optional_params):
         return optional_params
-    responses_config: Final = ProviderConfigManager.get_provider_responses_api_config(
-        provider=custom_llm_provider, model=model
-    )
-    if responses_config is None or not responses_config.forwards_background():
+    if not forwards_background_upstream(
+        f"{custom_llm_provider}/{model}", custom_llm_provider, deployment_model_info, api_base
+    ):
         return optional_params
     from litellm.completion_extras.litellm_responses_transformation.transformation import without_background_run
     from litellm.litellm_core_utils.tool_fields import drop_policy
@@ -6631,6 +6634,8 @@ def completion(
                 routing_kwargs=routing_kwargs,
                 model=model,
                 custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                deployment_model_info=typed_deployment_model_info,
             )
             reasoning_drop_warnings.log_unless_dropped_effort_sent(bridge_optional_params)
             bridged: Final = responses_api_bridge.completion(
