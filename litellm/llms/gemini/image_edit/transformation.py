@@ -16,6 +16,7 @@ from litellm.llms.gemini.common_utils import (
     get_gemini_image_generation_config,
     map_openai_image_params_to_gemini,
 )
+from litellm.llms.gemini.empty_image_response import empty_image_response_error
 from litellm.llms.gemini.image_usage_transformation import (
     transform_gemini_image_usage,
 )
@@ -177,6 +178,8 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         model_response.data = cast(list[OpenAIImage], data_list)
         if "usageMetadata" in payload:
             model_response.usage = transform_gemini_image_usage(dict(decoded_json_object(payload["usageMetadata"])))
+        if not data_list:
+            raise empty_image_response_error(payload, model, "gemini", raw_response, model_response)
         return model_response
 
     def _prepare_inline_image_parts(self, image: FileTypes | Sequence[FileTypes | None]) -> list[dict[str, object]]:
