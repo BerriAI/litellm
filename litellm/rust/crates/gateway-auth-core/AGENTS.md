@@ -74,6 +74,21 @@ These are target invariants. Where the code still lags them, the Notion page lis
 - When the bridge answers a read or write natively, the trait method stays, since every host still has to answer it. Only the Python side goes: its `RustAuthStep`, its bridge `Ask`, and its `answer.py` case and `PythonAuthHost` method, all in `litellm/proxy/auth/host/`
 - So the trait shrinks only by decisions, while the Python host shrinks by both. It reaches `custom_validate` alone only once every Prisma query has ported and `user_api_key_cache` has moved to Rust. Until then the reads that are left stay Python answers, and nothing schedules those ports
 
+## Request body check
+
+- `body::check` decides whether a caller's request body may reach a handler, a port of Python's `is_request_body_safe`. It is pure. The caller hands in everything it decides on, the way `authz::authorize` takes a `ModelAsk`
+- A caller runs it in three steps
+  - `body::needs` names what the body can reach: the model names (its model, the route's, every fallback target the body names) and every `litellm_credential_name` it carries. It walks the body as `check` does with every override granted, so it lists everything a check on the real data can read before it stops
+  - The caller resolves the model names to a `Reachable`, the deployments of each group they reach through aliases, the router's fallbacks and the groups each deployment found routes under, and reads the credentials with `body::credentials`, which asks `AuthHost::credential`, a store port
+  - `body::check` takes the body, the `Reachable`, the `Credentials`, `Names` and `Policy`
+- The rules a second host would otherwise write again live here: decoding a mapping sent as JSON text, the form's bracket-spelled metadata (`body/form.rs`), the URL destination allowlist (`body/destination.rs`) and an `api_base` opt-in pattern, read in Python's regex dialect through `fancy-regex`
+- No rule reads a raw body. The host turns it into `Params` and `CallerValue`, which hold only what a rule may read and have no method that resolves a value as a secret
+- `Names` is built once from `HostTables`, the parameter lists Python still owns. `Policy` holds the `general_settings` and `litellm_settings` facts
+- No gateway route runs it yet, and the Python proxy still runs its own copy until it switches over
+- Gaps against the invariants above
+  - A refusal is a `body::Rejection` in `error/body.rs`, with the caller's text in `Display`. It is not a `crate::Error` and has no `PublicDenial`, because every Python caller still raises it as a `ValueError`
+  - `body/surface.rs` names the routes whose bodies carry their own fields, outside `routes/table.rs`
+
 ## IO
 
 - The core awaits only `AuthHost`. A host may answer any method natively, so the bridge driver awaits Rust futures as well as Python answers

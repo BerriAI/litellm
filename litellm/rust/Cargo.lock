@@ -4299,6 +4299,7 @@ name = "litellm-gateway-auth-core"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "fancy-regex 0.19.2",
  "http 1.4.2",
  "jiff",
  "jsonwebtoken",

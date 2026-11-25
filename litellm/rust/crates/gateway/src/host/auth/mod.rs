@@ -23,6 +23,7 @@ use litellm_gateway_auth_core::{
         jwt::{KeyMappingRow, KeyMappingWrite, MappedClaim, MappedKey},
         key::{CachedTeam, Keyed},
     },
+    body::Params,
     identity::{
         jwt::{
             AliasRead, DelegatedTeam, FinishedJwt, IdentityRead, ManagedAgent, ModelAccess, Org,
@@ -395,6 +396,12 @@ impl AuthHost for NativeAuthHost {
 
     async fn with_team(&self, _: &Key, team: &Infallible) -> Result<Key, Error> {
         match *team {}
+    }
+
+    // TODO: declined until the gateway reads the credentials table, which the native request body
+    // check needs once a gateway route runs it
+    async fn credential(&self, _: &str) -> Result<Option<Params>, Error> {
+        declined("credential")
     }
 }
 
