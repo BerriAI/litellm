@@ -7111,6 +7111,9 @@ def test_stream_chunks_have_generated_content_detects_text_and_non_text():
     reasoning_chunk = _chunk(Delta(reasoning_content="Thinking"))
     assert _stream_chunks_have_generated_content([reasoning_chunk]) is True
 
+    signature_only_chunk = _chunk(Delta(reasoning_details=[{"type": "reasoning.text", "signature": "sig", "index": 0}]))
+    assert _stream_chunks_have_generated_content([empty_chunk, signature_only_chunk]) is True
+
     tool_call_delta = Delta(
         tool_calls=[
             ChatCompletionDeltaToolCall(

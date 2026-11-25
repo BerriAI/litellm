@@ -9687,6 +9687,7 @@ class TestContinuationDisqualifiers:
             "tool_calls",
             "function_call",
             "reasoning_content",
+            "reasoning_details",
             "thinking_blocks",
             "reasoning_items",
             "audio",
