@@ -1654,6 +1654,7 @@ class TestRunAgent:
             base_env={"HOME": "/home/me"},
             sync_models=lambda *a: {"OPENCODE_CONFIG_CONTENT": '{"provider":{}}'},
             which=lambda name: "/usr/local/bin/opencode",
+            run=_OpencodeVersion(),
             verify=lambda *a: None,
             launcher=lambda p, a, e: calls.update(env=dict(e)),
         )
@@ -1678,6 +1679,7 @@ class TestRunAgent:
             base_env={"HOME": "/home/me"},
             sync_models=fake_sync,
             which=lambda name: "/usr/local/bin/opencode",
+            run=_OpencodeVersion(),
             verify=lambda *a: order.append("verify"),
             launcher=lambda p, a, e: order.append("launch"),
         )
@@ -1726,6 +1728,7 @@ class TestRunAgent:
             sync_models=fake_sync,
             warn=warnings.append,
             which=lambda name: "/usr/local/bin/opencode",
+            run=_OpencodeVersion(),
             verify=lambda *a: pytest.fail("--skip-verify must not verify"),
             launcher=lambda p, a, e: calls.update(env=dict(e)),
         )
@@ -1743,6 +1746,7 @@ class TestRunAgent:
             sync_models=lambda *a: ModelSyncSkipped("proxy said no"),
             warn=lambda message: calls.setdefault("warned", message),
             which=lambda name: "/usr/local/bin/opencode",
+            run=_OpencodeVersion(),
             verify=lambda *a: None,
             launcher=lambda p, a, e: calls.update(env=dict(e)),
         )
@@ -2652,6 +2656,89 @@ class TestRunAgent:
             launcher=lambda *a: order.append("launch"),
         )
         assert order == ["launch"]
+
+
+class _OpencodeVersion:
+    def __init__(self, stdout="opencode v2.4.1\n", returncode=0, raises=None):
+        self.stdout = stdout
+        self.returncode = returncode
+        self.raises = raises
+        self.calls = []
+
+    def __call__(self, args, **kwargs):
+        self.calls.append(tuple(args))
+        if self.raises is not None:
+            raise self.raises
+        return subprocess.CompletedProcess(args, self.returncode, self.stdout, "")
+
+
+def _launched_args(command, run, **kwargs):
+    launched = {}
+    run_agent(
+        "http://localhost:4000",
+        "sk-current",
+        command,
+        base_env={},
+        which=lambda name: f"/usr/local/bin/{name}",
+        verify=lambda *a: None,
+        sync_models=lambda *a: ModelSyncSkipped("not needed"),
+        warn=lambda message: None,
+        launcher=lambda p, a, e: launched.update(args=tuple(a), env=dict(e)),
+        preparers={},
+        run=run,
+        **kwargs,
+    )
+    return launched["args"], launched["env"]
+
+
+class TestOpencodeStandalone:
+    @pytest.mark.parametrize(
+        ("run", "standalone"),
+        [
+            (_OpencodeVersion("opencode v2.4.1\n"), True),
+            (_OpencodeVersion("opencode v10.0.0\n"), True),
+            (_OpencodeVersion("2.0.0\n"), True),
+            (_OpencodeVersion("1.19.6\n"), False),
+            (_OpencodeVersion("opencode v2.4.1\n", returncode=1), False),
+            (_OpencodeVersion("dev\n"), False),
+            (_OpencodeVersion(""), False),
+            (_OpencodeVersion(raises=OSError("not executable")), False),
+            (_OpencodeVersion(raises=subprocess.TimeoutExpired("opencode", 10)), False),
+        ],
+        ids=[
+            "opencode_2",
+            "opencode_10",
+            "bare_2",
+            "opencode_1",
+            "version_check_fails",
+            "unparseable",
+            "no_output",
+            "cannot_run",
+            "times_out",
+        ],
+    )
+    def test_only_an_opencode_2_or_later_launch_gets_its_own_server(self, run, standalone):
+        args, env = _launched_args(["opencode", "run", "hi"], run)
+        assert args == (("opencode", "--standalone", "run", "hi") if standalone else ("opencode", "run", "hi"))
+        assert env["OPENAI_API_KEY"] == "sk-current"
+        assert run.calls[0][0] == "/usr/local/bin/opencode"
+
+    @pytest.mark.parametrize(
+        "user_args",
+        [["--server", "http://127.0.0.1:4096"], ["--server=http://127.0.0.1:4096"], ["--standalone", "run", "hi"]],
+        ids=["server", "server_equals", "standalone"],
+    )
+    def test_a_server_the_user_picked_is_kept(self, user_args):
+        run = _OpencodeVersion()
+        args, _ = _launched_args(["opencode", *user_args], run)
+        assert args == ("opencode", *user_args)
+
+    @pytest.mark.parametrize("agent", ["claude", "codex", "pi"])
+    def test_other_agents_never_get_the_flag(self, agent):
+        run = _OpencodeVersion()
+        args, _ = _launched_args([agent], run)
+        assert "--standalone" not in args
+        assert run.calls == []
 
 
 _WINDOWS_CLAUDE_EXE = "C:\\Program Files\\Claude\\claude.exe"

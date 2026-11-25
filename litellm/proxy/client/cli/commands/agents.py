@@ -1008,10 +1008,11 @@ def _stock_codex_models(
         return ModelSyncSkipped(f"`{name} debug models` printed no model catalog: {e.errors()[0]['msg']}")
 
 
-def _codex_version(
+def _binary_version(
     binary: str, env: Mapping[str, str], *, run: Callable[..., subprocess.CompletedProcess[str]]
 ) -> str | None:
-    """The version `codex --version` prints (`codex-cli 0.165.0`), or None when it cannot be read."""
+    """The last word `binary --version` prints (`codex-cli 0.165.0`, `opencode v2.4.1`), or None when it cannot be
+    read."""
     try:
         completed: Final = run(
             _windows_command(binary, (binary, "--version")),
@@ -1025,6 +1026,29 @@ def _codex_version(
         return None
     words: Final = completed.stdout.split()
     return words[-1] if completed.returncode == 0 and words else None
+
+
+_OPENCODE_STANDALONE_FLAG: Final = "--standalone"
+_OPENCODE_SERVER_FLAG: Final = "--server"
+_MAJOR_VERSION: Final = re.compile(r"v?(\d+)\.")
+
+
+def opencode_standalone_args(
+    binary: str,
+    args: Sequence[str],
+    env: Mapping[str, str],
+    *,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> tuple[str, ...]:
+    """OpenCode 2.x reuses one background server that keeps the key it started with, so each launch asks for its
+    own server, unless the user already picked one."""
+    if any(
+        arg in (_OPENCODE_STANDALONE_FLAG, _OPENCODE_SERVER_FLAG) or arg.startswith(f"{_OPENCODE_SERVER_FLAG}=")
+        for arg in args
+    ):
+        return ()
+    major: Final = _MAJOR_VERSION.match(_binary_version(binary, env, run=run) or "")
+    return (_OPENCODE_STANDALONE_FLAG,) if major is not None and int(major.group(1)) >= 2 else ()
 
 
 def codex_model_sync_args(
@@ -1083,7 +1107,7 @@ def codex_model_sync_args(
     model_info: Final = _fetch_validated(base_url.rstrip("/") + "/v1/model/info", api_key, _DeploymentListing, get=get)
     deployments: Final = model_info.data if model_info is not None else None
     groups: Final = fetch_model_limits(base_url, api_key, get=get)
-    version: Final = _codex_version(binary, base_env, run=run)
+    version: Final = _binary_version(binary, base_env, run=run)
     catalog: Final = codex_model_catalog(
         listing,
         stock,
@@ -1280,6 +1304,7 @@ def run_agent(
     write_overlay: Callable[[str, str, Mapping[str, str]], Path] = write_settings_overlay,
     project_dir: Path | None = None,
     key_from_stored_login: bool = False,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> None:
     """Validate, wire the environment, and hand off to the agent.
 
@@ -1329,6 +1354,11 @@ def run_agent(
 
     prepare: Final = None if subscription else preparers.get(os.path.basename(command[0]))
     prepared_args: Final = tuple(prepare(base_url, api_key, env_before_sync)) if prepare is not None else ()
+    standalone_args: Final = (
+        opencode_standalone_args(binary, command[1:], env_before_sync, run=run)
+        if os.path.basename(command[0]) == "opencode"
+        else ()
+    )
 
     env: Final = MappingProxyType(
         {
@@ -1348,6 +1378,7 @@ def run_agent(
         *agent_launch_args(command[0], base_url, subscription=subscription),
         *synced_args,
         *prepared_args,
+        *standalone_args,
     )
     settings_args, forwarded = (
         subscription_launch_args(
