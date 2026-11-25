@@ -574,6 +574,32 @@ def test_a_sync_image_refusal_counts_its_answered_tokens_toward_the_deployment_l
 
 
 @pytest.mark.asyncio
+async def test_unbilled_image_recitations_give_back_their_output_token_reservation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[_gemini_image_deployment("image", {"otpm": 50_000})],
+        optional_pre_call_checks=["enforce_model_rate_limits"],
+        num_retries=0,
+    )
+    recitation: Final = {"finishReason": "IMAGE_RECITATION", "content": {"role": "model"}}
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            route = upstream.post(url__startswith="https://image.invalid").mock(
+                return_value=httpx.Response(200, json={"candidates": [recitation], "usageMetadata": _BILLED_REFUSAL_USAGE})
+            )
+            for _ in range(5):
+                with pytest.raises(litellm.ContentPolicyViolationError):
+                    await router.aimage_generation(model="image", prompt="a single small red dot")
+    finally:
+        router.discard()
+
+    assert route.call_count == 5
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("limit", [pytest.param({"tpm": 1000}, id="tpm"), pytest.param({"itpm": 700}, id="itpm")])
 async def test_an_image_refusal_from_a_fallback_counts_its_answered_tokens_toward_the_fallback_limits(
     limit: dict[str, int], monkeypatch: pytest.MonkeyPatch

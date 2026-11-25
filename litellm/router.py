@@ -140,6 +140,7 @@ from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.llms.gemini.empty_image_response import (
     IMAGE_ANSWER_ERRORS,
+    SETTLED_BY_THE_ASYNC_FAILURE_HOOK,
     billed_deployment_tokens,
     success_tokens_without_failed_image_answers,
 )
@@ -8971,6 +8972,29 @@ class Router:
     ) -> str | None:
         from litellm.types.caching import RedisPipelineIncrementOperation
 
+        if total_tokens <= 0 and rpm_increment <= 0:
+            return None
+        keys: Final = self._deployment_usage_keys(deployment_id, deployment_name, model_group)
+        if keys is None:
+            return None
+        pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = [
+            RedisPipelineIncrementOperation(key=key, increment_value=increment_value, ttl=RoutingArgs.ttl.value)
+            for key, increment_value in zip(keys, (total_tokens, rpm_increment))
+        ]
+        post_increment_values: Final = await self.cache.async_increment_cache_pipeline(
+            increment_list=pipeline_operations,
+            parent_otel_span=parent_otel_span,
+        )
+        if post_increment_values is not None and self.cache.redis_cache is not None:
+            for operation, value in zip(pipeline_operations, post_increment_values):
+                await self.cache.async_set_cache(
+                    operation["key"], int(value), local_only=True, ttl=RoutingArgs.ttl.value
+                )
+        return keys[0]
+
+    def _deployment_usage_keys(
+        self, deployment_id: str, deployment_name: str | None, model_group: str
+    ) -> tuple[str, str] | None:
         deployment_info: Final = self.get_deployment(model_id=deployment_id)
         if deployment_info is None:
             return None
@@ -8994,30 +9018,41 @@ class Router:
             deployment_info.model_dump()
         ):
             return None
-        if total_tokens <= 0 and rpm_increment <= 0:
-            return None
 
         current_minute: Final = get_utc_datetime().strftime("%H-%M")  # use the same timezone regardless of system clock
-        tpm_key: Final = RouterCacheEnum.TPM.value.format(
-            id=deployment_id, current_minute=current_minute, model=deployment_name
+        return (
+            RouterCacheEnum.TPM.value.format(id=deployment_id, current_minute=current_minute, model=deployment_name),
+            RouterCacheEnum.RPM.value.format(id=deployment_id, current_minute=current_minute, model=deployment_name),
+        )
+
+    def _count_sync_image_answer_usage(self, call_details: Mapping[str, object]) -> None:
+        if call_details.get("call_type") in SETTLED_BY_THE_ASYNC_FAILURE_HOOK:
+            return
+        call_params: Final = as_str_mapping(call_details.get("litellm_params")) or {}
+        router_metadata: Final = (
+            as_str_mapping(call_params.get("litellm_metadata")) or as_str_mapping(call_params.get("metadata")) or {}
+        )
+        model_group: Final = router_metadata.get("model_group")
+        deployment_id: Final = (as_str_mapping(call_params.get("model_info")) or {}).get("id")
+        if not isinstance(model_group, str) or not isinstance(deployment_id, (str, int)):
+            return
+        deployment_name: Final = router_metadata.get("deployment")
+        current_minute: Final = get_utc_datetime().strftime("%H-%M")
+        billed: Final = billed_deployment_tokens(call_details)
+        keys: Final = (
+            None
+            if billed is None
+            else self._deployment_usage_keys(str(deployment_id), billed.deployment_name, model_group)
         )
         rpm_key: Final = RouterCacheEnum.RPM.value.format(
             id=deployment_id, current_minute=current_minute, model=deployment_name
         )
-        pipeline_operations: Final[list[RedisPipelineIncrementOperation]] = [
-            RedisPipelineIncrementOperation(key=key, increment_value=increment_value, ttl=RoutingArgs.ttl.value)
-            for key, increment_value in ((tpm_key, total_tokens), (rpm_key, rpm_increment))
-        ]
-        post_increment_values: Final = await self.cache.async_increment_cache_pipeline(
-            increment_list=pipeline_operations,
-            parent_otel_span=parent_otel_span,
+        increments: Final = (
+            ((rpm_key, 1),) if billed is None or keys is None else ((rpm_key, 1), (keys[0], billed.tokens))
         )
-        if post_increment_values is not None and self.cache.redis_cache is not None:
-            for operation, value in zip(pipeline_operations, post_increment_values):
-                await self.cache.async_set_cache(
-                    operation["key"], int(value), local_only=True, ttl=RoutingArgs.ttl.value
-                )
-        return tpm_key
+        with service_target(ROUTER_USAGE_TARGET):
+            for key, value in increments:
+                _ = self.cache.increment_cache(key=key, value=value, ttl=RoutingArgs.ttl.value)
 
     def sync_deployment_callback_on_success(
         self,
@@ -9084,6 +9119,9 @@ class Router:
                 return False
 
             if isinstance(exception, IMAGE_ANSWER_ERRORS):
+                self._count_sync_image_answer_usage(
+                    cast("Mapping[str, object]", kwargs)  # cast-ok: untyped kwargs dict
+                )
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
                     "The deployment answered without an image, which is not a deployment failure."

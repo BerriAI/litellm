@@ -3779,6 +3779,44 @@ async def test_failure_event_settles_tpm_reservation_at_a_billed_image_refusal_w
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("reservation", (True, False))
+async def test_a_billed_image_refusal_counts_toward_key_tpm_with_or_without_token_reservation_v3(
+    reservation: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", str(reservation).lower())
+    _api_key: Final = hash_token(f"sk-billed-image-refusal-reservation-{reservation}")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    tokens_key: Final = handler.create_rate_limit_keys(key="api_key", value=_api_key, rate_limit_type="tokens")
+    await handler.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key=_api_key, tpm_limit=10_000),
+        cache=local_cache,
+        data={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 50,
+            "litellm_call_id": "refused-with-or-without-reservation",
+        },
+        call_type="completion",
+    )
+    counted_at_admission: Final = 0 if reservation else int(await local_cache.async_get_cache(key=tokens_key) or 0)
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_call_id": "refused-with-or-without-reservation",
+            "exception": _billed_refusal(),
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+            "combined_usage_object": Usage(prompt_tokens=777, completion_tokens=0, total_tokens=777),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) - counted_at_admission == 777
+
+
+@pytest.mark.asyncio
 async def test_fallback_served_after_a_billed_image_refusal_keeps_both_hops_tokens_v3():
     _api_key = hash_token("sk-billed-image-refusal-then-served")
     local_cache = DualCache()

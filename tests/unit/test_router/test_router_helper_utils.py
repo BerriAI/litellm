@@ -1036,6 +1036,41 @@ async def test_an_image_answer_without_an_image_counts_its_answered_tokens_in_th
         router.discard()
 
 
+@pytest.mark.usefixtures("router_minute_pinned")
+def test_a_sync_image_answer_without_an_image_counts_its_answered_tokens_in_the_model_group_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "image",
+                "litellm_params": {
+                    "model": "gemini/gemini-3.1-flash-image",
+                    "api_key": "test-key",
+                    "api_base": "https://image.invalid/v1",
+                    "tpm": 100000,
+                },
+                "model_info": {"id": "image"},
+            }
+        ],
+        num_retries=0,
+    )
+    refusal: Final = {
+        "candidates": [{"finishReason": "IMAGE_PROHIBITED_CONTENT", "content": {"role": "model"}}],
+        "usageMetadata": {"promptTokenCount": 777, "candidatesTokenCount": 333, "totalTokenCount": 1110},
+    }
+
+    try:
+        with respx.mock(assert_all_called=False) as upstream:
+            upstream.post(url__startswith="https://").mock(return_value=httpx.Response(200, json=refusal))
+            with pytest.raises(litellm.ContentPolicyViolationError):
+                router.image_generation(model="image", prompt="a single small red dot")
+        assert asyncio.run(router.get_model_group_usage("image")) == (1110, 1)
+    finally:
+        router.discard()
+
+
 def _image_router() -> Router:
     return Router(
         model_list=[

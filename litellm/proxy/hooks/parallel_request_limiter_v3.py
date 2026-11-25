@@ -5329,27 +5329,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             stash: Final = get_request_stash_for_call(_call_id_from_callback_kwargs(kwargs))
             await self._release_stashed_parallel_slot(stash, litellm_parent_otel_span, in_logging_callback=True)
 
-            pipeline_operations: Final = self._build_success_event_pipeline_operations(
-                kwargs=kwargs,
-                response_obj=response_obj,
-                rate_limit_type=rate_limit_type,
+            await self._apply_tpm_operations(
+                self._build_success_event_pipeline_operations(
+                    kwargs=kwargs,
+                    response_obj=response_obj,
+                    rate_limit_type=rate_limit_type,
+                ),
+                litellm_parent_otel_span,
             )
-            unguarded_operations: Final = [
-                operation for operation in pipeline_operations if _as_window_guarded(operation) is None
-            ]
-            window_guarded_operations: Final = tuple(
-                guarded for operation in pipeline_operations if (guarded := _as_window_guarded(operation)) is not None
-            )
-            if unguarded_operations:
-                await self.async_increment_tokens_with_ttl_preservation(
-                    pipeline_operations=unguarded_operations,
-                    parent_otel_span=litellm_parent_otel_span,
-                )
-            if window_guarded_operations:
-                await self.async_increment_reservation_aware_tokens(
-                    pipeline_operations=window_guarded_operations,
-                    parent_otel_span=litellm_parent_otel_span,
-                )
             io_token_operations: Final = self._build_io_token_reservation_ops(
                 kwargs=kwargs,
                 response_obj=response_obj,
@@ -5368,6 +5355,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit success event: %s", e)
+
+    async def _apply_tpm_operations(
+        self, operations: Sequence[RedisPipelineIncrementOperation], parent_otel_span: Span | None
+    ) -> None:
+        unguarded_operations: Final = [operation for operation in operations if _as_window_guarded(operation) is None]
+        window_guarded_operations: Final = tuple(
+            guarded for operation in operations if (guarded := _as_window_guarded(operation)) is not None
+        )
+        if unguarded_operations:
+            await self.async_increment_tokens_with_ttl_preservation(
+                pipeline_operations=unguarded_operations,
+                parent_otel_span=parent_otel_span,
+            )
+        if window_guarded_operations:
+            await self.async_increment_reservation_aware_tokens(
+                pipeline_operations=window_guarded_operations,
+                parent_otel_span=parent_otel_span,
+            )
 
     @with_service_target("rate_limits")
     async def async_logging_hook(
@@ -5450,9 +5455,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     def _billed_failure_after_settlement_ops(
         self, stash: RequestRateLimiterStash, tpm_actual: int, itpm_actual: int, otpm_actual: int
-    ) -> list[RedisPipelineIncrementOperation]:
+    ) -> tuple[RedisPipelineIncrementOperation, ...]:
         nothing_held: Final[frozenset[tuple[str, str]]] = frozenset()
-        return [
+        return (
             *self._build_reservation_aware_tpm_ops(
                 targets=tuple(scope for scope in stash.reserved_scopes if scope[0] != PTU_TEAM_DESCRIPTOR_KEY),
                 reserved_scopes=nothing_held,
@@ -5471,7 +5476,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 actual_tokens=otpm_actual,
                 reserved_tokens=0,
             ),
-        ]
+        )
 
     def _build_ptu_failure_settlement_ops(
         self,
@@ -5552,6 +5557,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if stash is not None and stash.reservation_released and provider_billed:
                 pipeline_operations.extend(
                     self._billed_failure_after_settlement_ops(stash, tpm_actual, itpm_actual, otpm_actual)
+                )
+            if stash is not None and stash.reserved_tokens <= 0 and provider_billed and tpm_actual > 0:
+                await self._apply_tpm_operations(
+                    self._build_success_event_pipeline_operations(
+                        kwargs=kwargs, response_obj=None, rate_limit_type=self.get_rate_limit_type()
+                    ),
+                    litellm_parent_otel_span,
                 )
 
             # Settle project ITPM/OTPM reservations the same way: at the
