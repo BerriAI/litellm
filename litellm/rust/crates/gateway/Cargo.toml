@@ -75,6 +75,9 @@ litellm-yaml.workspace = true
 serde_yaml_ng = "0.10.0"
 litellm-http = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
+litellm-callbacks-spend-log.workspace = true
+litellm-callbacks-spend-logger.workspace = true
+litellm-redaction.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["sync", "test-util"] }
 flate2 = "1.1.10"
