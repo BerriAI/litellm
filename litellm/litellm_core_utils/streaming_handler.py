@@ -1036,12 +1036,13 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_azure_text_completion_chunk(self, chunk):
+    def handle_azure_text_completion_chunk(self, chunk: object):
         try:
             text = ""
             is_finished = False
             finish_reason = None
             choices: Final[Sequence[_TextCompletionChoiceLike]] = getattr(chunk, "choices", [])
+            self._raise_on_text_completion_abort(chunk, choices)
             if len(choices) > 0:
                 text = choices[0].text
                 if choices[0].finish_reason is not None:
@@ -1063,6 +1064,11 @@ class CustomStreamWrapper:
             llm_provider=self.custom_llm_provider,
         )
 
+    def _raise_on_text_completion_abort(self, chunk: object, choices: Sequence[_TextCompletionChoiceLike]) -> None:
+        if any(choice.finish_reason == "abort" for choice in choices):
+            chunk_model: Final[str] = getattr(chunk, "model", "")
+            raise self._upstream_abort_error(chunk_model)
+
     def handle_openai_text_completion_chunk(self, chunk: object):
         try:
             text = ""
@@ -1070,9 +1076,7 @@ class CustomStreamWrapper:
             finish_reason = None
             usage = None
             choices: Final[Sequence[_TextCompletionChoiceLike]] = getattr(chunk, "choices", [])
-            if any(choice.finish_reason == "abort" for choice in choices):
-                chunk_model: Final[str] = getattr(chunk, "model", "")
-                raise self._upstream_abort_error(chunk_model)
+            self._raise_on_text_completion_abort(chunk, choices)
             if len(choices) > 0:
                 text = choices[0].text
                 if choices[0].finish_reason is not None:
