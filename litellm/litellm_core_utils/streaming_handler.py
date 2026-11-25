@@ -53,6 +53,7 @@ from litellm.litellm_core_utils.hidden_params import (
     set_hidden_param,
     stored_attribute,
 )
+from litellm.litellm_core_utils.indexless_tool_calls import IndexlessToolCalls
 from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import object_items
 from litellm.litellm_core_utils.model_response_utils import (
     is_model_response_stream_empty,
@@ -651,6 +652,7 @@ class CustomStreamWrapper:
         )
         self.proxy_drops_choiceless_chunks: Final = getattr(logging_obj, "stream_usage_stripped", False) is True
         self.tool_call = False
+        self._indexless_tool_calls: Final = IndexlessToolCalls()
         # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self.chunks: list[ModelResponseStream] = []
         self._repeated_messages_count = 1
@@ -2059,6 +2061,9 @@ class CustomStreamWrapper:
                                 if delta.function_call.arguments is None:
                                     delta.function_call.arguments = ""
                             elif delta.tool_calls is not None:
+                                self._indexless_tool_calls.assign(
+                                    delta.tool_calls, getattr(upstream_chunk.choices[0], "index", 0)
+                                )
                                 if isinstance(delta.tool_calls, list):
                                     for t in delta.tool_calls:
                                         if hasattr(t, "functions") and hasattr(

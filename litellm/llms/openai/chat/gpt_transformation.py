@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
     subscript,
 )
+from litellm.litellm_core_utils.indexless_tool_calls import IndexlessToolCalls
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     extract_reasoning_content,
     handle_invalid_parallel_tool_calls,
@@ -1078,6 +1079,10 @@ class OpenAIUnknownModelConfig(OpenAIGPTConfig):
 
 
 class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
+    def __init__(self, streaming_response, sync_stream: bool, json_mode: bool | None = False):
+        super().__init__(streaming_response, sync_stream, json_mode)
+        self._indexless_tool_calls: Final = IndexlessToolCalls()
+
     def _map_reasoning_to_reasoning_content(self, choices: list) -> list:
         """
         Map 'reasoning' field to 'reasoning_content' field in delta.
@@ -1129,6 +1134,7 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
                     message="Upstream generation aborted (finish_reason=abort)",
                 )
             choices: Final = self._map_reasoning_to_reasoning_content(raw_choices)
+            self._indexless_tool_calls.assign_choices(choices)
             fingerprint: Final = _OBJECT_MAPPING.validate_python(chunk).get("system_fingerprint")
 
             kwargs: Final[dict[str, object]] = {

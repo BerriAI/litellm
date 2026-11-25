@@ -157,6 +157,144 @@ async def test_ollama_stream_ids_match_usage_and_spend_logs(
     assert all(chunk.id == "chatcmpl-0" for chunk in chunks)
 
 
+def _indexless_call(call_id: str | None, name: str | None, arguments: str) -> dict[str, object]:
+    function: Final[dict[str, object]] = {"arguments": arguments, **({"name": name} if name else {})}
+    return {"function": function, **({"id": call_id, "type": "function"} if call_id else {})}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+@pytest.mark.parametrize(
+    "deltas,expected",
+    [
+        (
+            (
+                [_indexless_call("call_108766", "get_weather", '{"city":"Taipei"}')],
+                [_indexless_call("call_108772", "get_weather", '{"city":"Kaohsiung"}')],
+            ),
+            [("call_108766", {"city": "Taipei"}), ("call_108772", {"city": "Kaohsiung"})],
+        ),
+        (
+            (
+                [
+                    _indexless_call("call_a", "get_weather", '{"city":"Paris"}'),
+                    _indexless_call("call_b", "get_weather", '{"city":"London"}'),
+                ],
+            ),
+            [("call_a", {"city": "Paris"}), ("call_b", {"city": "London"})],
+        ),
+        (
+            (
+                [_indexless_call("call_a", "get_weather", '{"city":')],
+                [_indexless_call(None, None, '"Paris"}')],
+                [_indexless_call("call_b", "get_weather", '{"city":"Tokyo"}')],
+            ),
+            [("call_a", {"city": "Paris"}), ("call_b", {"city": "Tokyo"})],
+        ),
+    ],
+    ids=["one_call_per_chunk", "calls_share_a_chunk", "continuation_without_id"],
+)
+async def test_stream_keeps_tool_calls_apart_when_the_server_omits_index(
+    async_stream: bool,
+    transport: str,
+    deltas: tuple[list[dict[str, object]], ...],
+    expected: list[tuple[str, dict[str, str]]],
+) -> None:
+    parser: Final = OpenAIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+    bodies: Final = [
+        *({"choices": [{"index": 0, "delta": {"role": "assistant", "tool_calls": calls}}]} for calls in deltas),
+        {"choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": "stop"}]},
+    ]
+    raw_chunks: Final = [
+        {"id": "chunk-0", "object": "chat.completion.chunk", "model": "gemini-3.1-flash-lite", "created": 1, **body}
+        for body in json.loads(json.dumps(bodies))
+    ]
+    chunks: Final = [
+        ChatCompletionChunk.construct(**body) if transport == "sdk" else parser.chunk_parser(body)
+        for body in raw_chunks
+    ]
+    stream: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="gemini-3.1-flash-lite",
+        custom_llm_provider="openai",
+        logging_obj=Logging(
+            model="gemini-3.1-flash-lite",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=1.0,
+            litellm_call_id="indexless-tool-calls",
+            function_id="test",
+        ),
+    )
+    received: Final = [chunk async for chunk in stream] if async_stream else list(stream)
+    assembled: Final = litellm.stream_chunk_builder(chunks=received)
+    calls: Final = assembled.choices[0].message.tool_calls or []
+
+    assert [(call.id, json.loads(call.function.arguments)) for call in calls] == expected
+    streamed_indices: Final = {
+        tool_call.id: tool_call.index
+        for chunk in received
+        if chunk.choices
+        for tool_call in chunk.choices[0].delta.tool_calls or ()
+        if tool_call.id
+    }
+    assert sorted(streamed_indices.values()) == list(range(len(expected)))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("async_stream", [False, True])
+@pytest.mark.parametrize("transport", ["sdk", "http_handler"])
+async def test_indexless_tool_calls_are_numbered_per_choice(async_stream: bool, transport: str) -> None:
+    # n=2: each choice streams one index-less call, so each call is index 0 within its own choice.
+    parser: Final = OpenAIChatCompletionStreamingHandler(streaming_response=None, sync_stream=True)
+    bodies: Final = [
+        {
+            "choices": [
+                {"index": 0, "delta": {"role": "assistant", "tool_calls": [_indexless_call("call_a", "f", "{}")]}}
+            ]
+        },
+        {
+            "choices": [
+                {"index": 1, "delta": {"role": "assistant", "tool_calls": [_indexless_call("call_b", "f", "{}")]}}
+            ]
+        },
+        {"choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": "stop"}]},
+    ]
+    raw_chunks: Final = [
+        {"id": "chunk-0", "object": "chat.completion.chunk", "model": "gemini-3.1-flash-lite", "created": 1, **body}
+        for body in json.loads(json.dumps(bodies))
+    ]
+    chunks: Final = [
+        ChatCompletionChunk.construct(**body) if transport == "sdk" else parser.chunk_parser(body)
+        for body in raw_chunks
+    ]
+    stream: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=chunks),
+        model="gemini-3.1-flash-lite",
+        custom_llm_provider="openai",
+        logging_obj=Logging(
+            model="gemini-3.1-flash-lite",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            call_type="acompletion",
+            start_time=1.0,
+            litellm_call_id="indexless-tool-calls-per-choice",
+            function_id="test",
+        ),
+    )
+    received: Final = [chunk async for chunk in stream] if async_stream else list(stream)
+    streamed_indices: Final = {
+        tool_call.id: tool_call.index
+        for chunk in received
+        for choice in chunk.choices or ()
+        for tool_call in choice.delta.tool_calls or ()
+        if tool_call.id
+    }
+    assert streamed_indices == {"call_a": 0, "call_b": 0}
+
+
 @pytest.fixture
 def initialized_custom_stream_wrapper() -> CustomStreamWrapper:
     streaming_handler = CustomStreamWrapper(
