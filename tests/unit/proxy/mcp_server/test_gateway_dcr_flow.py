@@ -1,5 +1,6 @@
 """Tests for the aggregate gateway DCR flow (register, authorize, complete, token)."""
 
+import asyncio
 import hashlib
 import json
 import re
@@ -1419,6 +1420,80 @@ async def test_multi_server_scope_seals_set_through_consent_redemption_and_refre
     )
     assert refreshed.status_code == 200
     assert _opened_principal(json.loads(refreshed.body)).resource_server_ids == ("alpha-id", "beta-id")
+
+
+class _SlowVendorCredential:
+    def __init__(self) -> None:
+        self.events: tuple[str, ...] = ()
+
+    async def __call__(self, user_id: str, server_id: str) -> str:
+        self.events = (*self.events, f"start {server_id}")
+        await asyncio.sleep(0)
+        self.events = (*self.events, f"end {server_id}")
+        return "present"
+
+
+@pytest.mark.asyncio
+async def test_multi_server_connect_page_checks_every_vendor_login_at_once() -> None:
+    from unittest.mock import patch
+
+    client_id: Final = (await _register([REDIRECT_URI]))["client_id"]
+    alpha: Final = _scoped_mcp_server(name="alpha")
+    beta: Final = _scoped_mcp_server(name="beta")
+    servers_by_id: Final = {alpha.server_id: alpha, beta.server_id: beta}
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_identifier.side_effect = {"alpha": alpha, "beta": beta}.get
+        response: Final = _scoped_authorize(
+            client_id, "https://llm.example.com/mcp", scope="litellm:mcp_server:alpha litellm:mcp_server:beta"
+        )
+    handle, cookies = _flow_cookie_from(response)
+    vendor: Final = _SlowVendorCredential()
+
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_id.side_effect = servers_by_id.get
+        described: Final = await describe_connect_flow(
+            request=_request("/authorize/flow", cookies=cookies),
+            flow_handle=handle,
+            session_user_id="u1",
+            lookup_vendor_credential=vendor,
+            lookup_server_reachability=_ServerReachability(),
+        )
+
+    assert [server["connected"] for server in json.loads(described.body)["servers"]] == [True, True]
+    assert vendor.events == ("start alpha-id", "start beta-id", "end alpha-id", "end beta-id"), (
+        "one slow vendor login check must not hold up the next"
+    )
+
+
+@pytest.mark.asyncio
+async def test_upstream_permission_page_checks_every_vendor_login_at_once() -> None:
+    from unittest.mock import patch
+
+    from litellm.proxy.mcp_server.oauth_utils import encode_upstream_scope
+
+    client_id: Final = (await _register([REDIRECT_URI]))["client_id"]
+    alpha: Final = _scoped_mcp_server(name="alpha")
+    beta: Final = _scoped_mcp_server(name="beta")
+    scopes: Final = " ".join(
+        [encode_upstream_scope(alpha.server_id, "alpha.write"), encode_upstream_scope(beta.server_id, "beta.write")]
+    )
+    handle, cookies = _flow_cookie_from(_scoped_authorize(client_id, "https://llm.example.com", scope=scopes))
+    vendor: Final = _SlowVendorCredential()
+
+    with patch(_MANAGER_PATCH) as manager:
+        manager.get_mcp_server_by_id.side_effect = {alpha.server_id: alpha, beta.server_id: beta}.get
+        described: Final = await describe_connect_flow(
+            request=_request("/authorize/flow", cookies=cookies),
+            flow_handle=handle,
+            session_user_id="u1",
+            lookup_vendor_credential=vendor,
+            lookup_server_reachability=_ServerReachability(),
+        )
+
+    assert json.loads(described.body)["state"] == "unscoped"
+    assert vendor.events == ("start alpha-id", "start beta-id", "end alpha-id", "end beta-id"), (
+        "one slow vendor login check must not hold up the next"
+    )
 
 
 @pytest.mark.asyncio

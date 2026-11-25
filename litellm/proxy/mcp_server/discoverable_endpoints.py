@@ -35,6 +35,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
@@ -125,6 +126,7 @@ from litellm.proxy.mcp_server.oauth_utils import (
     validate_trusted_redirect_uri,
     well_known_root_suffix,
 )
+from litellm.proxy.mcp_server.outbound_credentials.adapter import to_server_spec
 from litellm.proxy.mcp_server.proxy_api_credentials import (
     lookup_consent_teams,
     mint_proxy_credential,
@@ -2612,9 +2614,28 @@ async def _vendor_credential_state(user_id: str, server_id: str) -> VendorCreden
         credential: Final = await get_user_oauth_credential(prisma_client, user_id, server_id, use_writer=True)
     except Exception:  # noqa: BLE001  # a credential-read fault must fail the scoped grant closed
         return "unavailable"
-    if oauth_grant_state(credential) == "absent" or credential is None or credential.get("needs_scopes"):
+    grant: Final = oauth_grant_state(credential)
+    if grant == "absent" or credential is None or credential.get("needs_scopes"):
         return "absent"
-    return "present"
+    if grant == "valid":
+        return "present"
+    return await _refreshed_vendor_credential_state(user_id, server_id)
+
+
+async def _refreshed_vendor_credential_state(user_id: str, server_id: str) -> VendorCredentialState:
+    from litellm.proxy.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # circular import at module load
+        global_mcp_server_manager,
+    )
+
+    server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+    if server is None or to_server_spec(server) is None:
+        return "present"
+    await global_mcp_server_manager.drop_cached_user_oauth_token(user_id, server_id)
+    try:
+        refreshed: Final = await global_mcp_server_manager.has_user_oauth_token(server, UserAPIKeyAuth(user_id=user_id))
+    except Exception:  # noqa: BLE001  # a credential-read fault must fail the scoped grant closed
+        return "unavailable"
+    return "present" if refreshed else "absent"
 
 
 @router.get("/authorize/flow")
