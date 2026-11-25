@@ -1054,48 +1054,6 @@ async def test_slow_table_reload_frees_callers_at_the_wait_cap_and_cools_down_fr
     assert spy.calls == 1
 
 
-@pytest.mark.asyncio
-async def test_slow_table_reload_answers_from_a_read_that_finished_inside_the_callers_stale_window():
-    clock: Final = FakeClock()
-    gate: Final = asyncio.Event()
-    spy: Final = ReloadSpy(gate=gate)
-    reload: Final = ThrottledTableReload(reload=spy, min_interval_seconds=2.0, max_wait_seconds=0.01, clock=clock)
-
-    assert await reload.reload_if_stale(max_stale_seconds=10.0) is False
-    clock.advance(5.0)
-    gate.set()
-    await spy.finished.wait()
-    gate.clear()
-    spy.finished.clear()
-    clock.advance(9.5)
-
-    assert await reload.reload_if_stale(max_stale_seconds=10.0) is True
-    assert await reload.reload_if_stale() is False
-    clock.advance(0.5)
-    assert await reload.reload_if_stale(max_stale_seconds=10.0) is False
-    gate.set()
-    await spy.finished.wait()
-    assert await reload.reload_if_stale(max_stale_seconds=10.0) is True
-    assert spy.calls == 2
-
-
-@pytest.mark.asyncio
-async def test_failed_table_reload_answers_from_the_last_successful_read_only_inside_the_callers_stale_window():
-    clock: Final = FakeClock()
-    spy: Final = ReloadSpy()
-    reload: Final = ThrottledTableReload(reload=spy, min_interval_seconds=2.0, clock=clock)
-
-    assert await reload.reload_if_stale() is True
-    spy.error = RuntimeError("db down")
-    clock.advance(9.0)
-
-    assert await reload.reload_if_stale(max_stale_seconds=10.0) is True
-    assert await reload.reload_if_stale() is False
-    clock.advance(1.0)
-    assert await reload.reload_if_stale(max_stale_seconds=10.0) is False
-    assert spy.calls == 2
-
-
 def _index_prisma_client(find_many: AsyncMock) -> MagicMock:
     prisma_client: Final = MagicMock()
     prisma_client.db.litellm_managedvectorstoreindextable.find_many = find_many

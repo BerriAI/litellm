@@ -155,7 +155,6 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
 from litellm.proxy.common_utils.model_listing_utils import alias_map
 from litellm.proxy.common_utils.openai_error_payload import LITELLM_CALL_ID_HEADER
 from litellm.proxy.common_utils.registry_read_through import (
-    READ_THROUGH_MAX_STALE_SECONDS,
     VectorStoreIndexLookup,
     get_vector_store_with_read_through,
     lookup_vector_store_index,
@@ -306,7 +305,7 @@ def _unroutable_search_index(
     match lookup:
         case "managed":
             return None
-        case "unmanaged" if relay_configured:
+        case "unmanaged" | "unknown" if relay_configured:
             return None
         case "unmanaged":
             not_registered: Final[RelayRejection] = {
@@ -2980,14 +2979,8 @@ async def azure_proxy_route(
     )  # azure model is in the url - e.g. https://{endpoint}/openai/deployments/{deployment-id}/completions?api-version=2024-10-21
 
     search_index_name: Final = get_azure_ai_search_index_from_endpoint(endpoint)
-    relay_api_base: Final = get_secret_str(secret_name="AZURE_API_BASE") if search_index_name is not None else None
     search_index_lookup: Final = (
-        await lookup_vector_store_index(
-            search_index_name,
-            max_stale_seconds=READ_THROUGH_MAX_STALE_SECONDS if relay_api_base is not None else 0.0,
-        )
-        if search_index_name is not None
-        else None
+        await lookup_vector_store_index(search_index_name) if search_index_name is not None else None
     )
     is_managed_search_index: Final = search_index_lookup == "managed"
 
