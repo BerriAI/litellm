@@ -97,22 +97,6 @@ def _forward(
             id="haiku-4.5-budget-capped-below-max-tokens",
         ),
         pytest.param(
-            "claude-haiku-4-5",
-            {
-                "thinking": {"type": "adaptive", "display": "omitted"},
-                "output_config": {"effort": "high"},
-                "max_tokens": 1024,
-            },
-            {},
-            id="haiku-4.5-max-tokens-below-minimum-budget",
-        ),
-        pytest.param(
-            "claude-opus-4-5",
-            {"thinking": {"type": "adaptive", "display": "omitted"}, "output_config": {"effort": "high"}},
-            {"output_config": {"effort": "high"}},
-            id="opus-4.5-keeps-effort-drops-adaptive",
-        ),
-        pytest.param(
             "claude-opus-4-5",
             {"thinking": {"type": "adaptive", "display": "omitted"}, "output_config": {"effort": "xhigh"}},
             {"thinking": {"type": "enabled", "budget_tokens": 8192}},
@@ -357,22 +341,6 @@ def test_disabled_thinking_is_dropped_only_for_always_on_thinking_models(
         ),
         pytest.param(
             "claude-haiku-4-5",
-            {"reasoning_effort": "high", "max_tokens": 1024},
-            {},
-            id="haiku-4.5-max-tokens-below-minimum-budget",
-        ),
-        pytest.param(
-            "claude-opus-4-7",
-            {
-                "reasoning_effort": "none",
-                "thinking": {"type": "adaptive", "display": "omitted"},
-                "output_config": {"effort": "high"},
-            },
-            {},
-            id="none-clears-thinking-and-effort",
-        ),
-        pytest.param(
-            "claude-haiku-4-5",
             {"reasoning_effort": "high", "thinking": {"type": "enabled", "budget_tokens": 2000}},
             {"thinking": {"type": "enabled", "budget_tokens": 2000}},
             id="callers-thinking-wins",
@@ -406,16 +374,6 @@ def test_reasoning_effort_becomes_the_thinking_shape_each_model_accepts(
             },
             {"thinking": {"type": "enabled", "budget_tokens": 4096}},
             id="haiku-4.5-drops-temperature-0-with-effort",
-        ),
-        pytest.param(
-            "claude-opus-4-5",
-            {
-                "temperature": 0,
-                "thinking": {"type": "adaptive", "display": "omitted"},
-                "output_config": {"effort": "high"},
-            },
-            {"output_config": {"effort": "high"}},
-            id="opus-4.5-drops-temperature-0-with-effort",
         ),
         pytest.param(
             "claude-haiku-4-5",
@@ -471,6 +429,64 @@ def _tool_loop(assistant_content: list[JsonValue]) -> dict[str, JsonValue]:
             {"role": "user", "content": [tool_result]},
         ],
     }
+
+
+@pytest.mark.parametrize(
+    ("upstream_model", "sent", "received"),
+    (
+        pytest.param(
+            "claude-haiku-4-5",
+            {
+                "thinking": {"type": "adaptive", "display": "omitted"},
+                "output_config": {"effort": "high"},
+                "max_tokens": 1024,
+            },
+            {},
+            id="haiku-4.5-adaptive-max-tokens-below-minimum-budget",
+        ),
+        pytest.param(
+            "claude-opus-4-5",
+            {"thinking": {"type": "adaptive", "display": "omitted"}, "output_config": {"effort": "high"}},
+            {"output_config": {"effort": "high"}},
+            id="opus-4.5-keeps-effort-drops-adaptive",
+        ),
+        pytest.param(
+            "claude-haiku-4-5",
+            {"reasoning_effort": "high", "max_tokens": 1024},
+            {},
+            id="haiku-4.5-effort-max-tokens-below-minimum-budget",
+        ),
+        pytest.param(
+            "claude-opus-4-7",
+            {
+                "reasoning_effort": "none",
+                "thinking": {"type": "adaptive", "display": "omitted"},
+                "output_config": {"effort": "high"},
+            },
+            {},
+            id="none-clears-thinking-and-effort",
+        ),
+        pytest.param(
+            "claude-opus-4-5",
+            {
+                "temperature": 0,
+                "thinking": {"type": "adaptive", "display": "omitted"},
+                "output_config": {"effort": "high"},
+            },
+            {"output_config": {"effort": "high"}},
+            id="opus-4.5-drops-temperature-0-with-effort",
+        ),
+    ),
+)
+def test_clear_thinking_edit_is_dropped_with_the_thinking_litellm_drops(
+    gateway: Gateway, upstream_model: str, sent: dict[str, JsonValue], received: dict[str, JsonValue]
+) -> None:
+    forwarded: Final = _forward(gateway, upstream_model, sent)
+    assert forwarded.reasoning == received, forwarded
+    assert forwarded.other_changes == {"context_management": {"expected": cc.CONTEXT_MANAGEMENT, "upstream": None}}, (
+        forwarded.other_changes
+    )
+    assert forwarded.reasoning_betas == cc.CLAUDE_CODE_REASONING_BETAS, forwarded.reasoning_betas
 
 
 @pytest.mark.parametrize(

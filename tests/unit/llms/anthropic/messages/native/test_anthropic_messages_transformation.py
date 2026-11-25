@@ -848,7 +848,7 @@ def test_an_advisor_block_with_a_list_id_is_dropped_only_under_drop_params(
 )
 def test_none_disables_only_optional_default_thinking(model: str, expected: dict[str, str] | None) -> None:
     params: Final[dict[str, object]] = {"reasoning_effort": "none", "output_config": {"effort": "high"}}
-    AnthropicMessagesConfig._translate_reasoning_effort_to_anthropic(model, params, 1024, "anthropic")
+    AnthropicMessagesConfig()._translate_reasoning_effort_to_anthropic(model, params, 1024, "anthropic")
     assert params == ({"thinking": expected} if expected is not None else {})
 
 

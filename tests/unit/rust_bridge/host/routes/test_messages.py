@@ -466,6 +466,71 @@ def test_body_params_derive_no_effort_from_a_param_the_deployment_lists(
     assert set(messages_host.body_params(request, asynchronous=True)).difference({"messages", "model"}) == expected_keys
 
 
+_CLEAR_THINKING_EDIT: Final = {"type": "clear_thinking_20251015"}
+_CLEAR_TOOL_USES_EDIT: Final = {"type": "clear_tool_uses_20250919"}
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+@pytest.mark.parametrize(
+    ("model", "thinking", "kept_edits"),
+    [
+        pytest.param(
+            "claude-sonnet-4-5",
+            {"type": "enabled", "budget_tokens": 1024},
+            [_CLEAR_TOOL_USES_EDIT],
+            id="dropped-thinking-takes-the-edit",
+        ),
+        pytest.param(
+            "claude-sonnet-5-5",
+            {"type": "adaptive"},
+            [_CLEAR_THINKING_EDIT, _CLEAR_TOOL_USES_EDIT],
+            id="model-thinking-by-default-keeps-the-edit",
+        ),
+        pytest.param(
+            "claude-sonnet-4-5",
+            None,
+            [_CLEAR_THINKING_EDIT, _CLEAR_TOOL_USES_EDIT],
+            id="no-thinking-sent-keeps-the-edit",
+        ),
+    ],
+)
+def test_body_params_drop_the_clear_thinking_edit_with_a_deployment_dropped_thinking(
+    model: str, thinking: dict[str, object] | None, kept_edits: list[dict[str, str]]
+) -> None:
+    request: Final[dict[str, object]] = {
+        "model": model,
+        "custom_llm_provider": "anthropic",
+        "messages": [],
+        "max_tokens": 2048,
+        "thinking": thinking,
+        "context_management": {"edits": [_CLEAR_THINKING_EDIT, _CLEAR_TOOL_USES_EDIT]},
+        "additional_drop_params": ["thinking"],
+    }
+
+    body: Final = messages_host.body_params(request, asynchronous=True)
+
+    assert (body.get("thinking"), body["context_management"]) == (None, {"edits": kept_edits})
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_body_params_keep_the_clear_thinking_edit_when_the_effort_turns_thinking_back_on() -> None:
+    edits: Final = [_CLEAR_THINKING_EDIT, _CLEAR_TOOL_USES_EDIT]
+    request: Final[dict[str, object]] = {
+        "model": "claude-sonnet-4-5",
+        "custom_llm_provider": "anthropic",
+        "messages": [],
+        "max_tokens": 2048,
+        "thinking": {"type": "adaptive"},
+        "output_config": {"effort": "high"},
+        "context_management": {"edits": edits},
+        "additional_drop_params": ["thinking"],
+    }
+
+    body: Final = messages_host.body_params(request, asynchronous=True)
+
+    assert body["context_management"] == {"edits": edits}
+
+
 @pytest.mark.parametrize(
     ("thread", "expected"),
     [

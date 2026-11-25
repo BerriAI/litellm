@@ -582,6 +582,143 @@ async fn additional_drop_params_remove_fields_before_sending(call: MessagesCall)
 }
 
 #[rstest]
+#[case::thinking_dropped(
+    MessagesModelCapabilities::default(),
+    json!({"type": "enabled", "budget_tokens": 1024}),
+    json!([{"type": "clear_tool_uses_20250919"}])
+)]
+#[case::model_thinks_by_default(
+    MessagesModelCapabilities {
+        thinking_on_by_default: true,
+        ..MessagesModelCapabilities::default()
+    },
+    json!({"type": "adaptive"}),
+    json!([{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}])
+)]
+#[case::no_thinking_sent(
+    MessagesModelCapabilities::default(),
+    Value::Null,
+    json!([{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}])
+)]
+#[tokio::test]
+async fn additional_drop_params_thinking_drops_the_clear_thinking_edit(
+    call: MessagesCall,
+    #[case] capabilities: MessagesModelCapabilities,
+    #[case] thinking: Value,
+    #[case] expected_edits: Value,
+) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        shaping: MessagesShaping {
+            capabilities,
+            settings: MessagesSettings {
+                additional_drop_params: vec!["thinking".into()],
+                ..MessagesSettings::default()
+            },
+            ..MessagesShaping::default()
+        },
+        ..with_fields(
+            call,
+            json!({
+                "thinking": thinking,
+                "context_management": {"edits": [{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}]},
+            }),
+        )
+    })
+    .await;
+
+    let sent = only_request(&upstream).await.json();
+    assert_eq!(sent.get("thinking"), None);
+    assert_eq!(sent["context_management"]["edits"], expected_edits);
+}
+
+#[rstest]
+#[case::reasoning_effort_turns_thinking_back_on(
+    MessagesModelCapabilities {
+        supports_reasoning: true,
+        ..MessagesModelCapabilities::default()
+    },
+    json!({"reasoning_effort": "high"}),
+    json!({"type": "enabled", "budget_tokens": 2999}),
+    json!([{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}])
+)]
+#[case::legacy_effort_turns_thinking_back_on(
+    MessagesModelCapabilities {
+        supports_reasoning: true,
+        ..MessagesModelCapabilities::default()
+    },
+    json!({"output_config": {"effort": "high"}}),
+    json!({"type": "enabled", "budget_tokens": 2999}),
+    json!([{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}])
+)]
+#[case::native_effort_leaves_thinking_off(
+    MessagesModelCapabilities {
+        supports_reasoning: true,
+        supports_output_config: true,
+        effort_tiers: SupportedEffortTiers { high: true, ..SupportedEffortTiers::default() },
+        ..MessagesModelCapabilities::default()
+    },
+    json!({"output_config": {"effort": "high"}}),
+    Value::Null,
+    json!([{"type": "clear_tool_uses_20250919"}])
+)]
+#[case::adaptive_model_effort_leaves_thinking_off(
+    MessagesModelCapabilities {
+        supports_reasoning: true,
+        supports_adaptive_thinking: true,
+        ..MessagesModelCapabilities::default()
+    },
+    json!({"output_config": {"effort": "high"}}),
+    Value::Null,
+    json!([{"type": "clear_tool_uses_20250919"}])
+)]
+#[tokio::test]
+async fn additional_drop_params_thinking_leaves_the_edit_to_the_effort_translation(
+    call: MessagesCall,
+    #[case] capabilities: MessagesModelCapabilities,
+    #[case] effort: Value,
+    #[case] expected_thinking: Value,
+    #[case] expected_edits: Value,
+) {
+    let upstream = upstream([message_response()]).await;
+
+    run_message(MessagesCall {
+        api_key: Some("sk".into()),
+        api_base: Some(upstream.uri()),
+        shaping: MessagesShaping {
+            capabilities,
+            settings: MessagesSettings {
+                additional_drop_params: vec!["thinking".into()],
+                ..MessagesSettings::default()
+            },
+            ..MessagesShaping::default()
+        },
+        ..with_fields(
+            call,
+            object(json!({
+                "max_tokens": 3000,
+                "thinking": {"type": "adaptive"},
+                "context_management": {"edits": [{"type": "clear_thinking_20251015"}, {"type": "clear_tool_uses_20250919"}]},
+            }))
+            .into_iter()
+            .chain(object(effort))
+            .collect(),
+        )
+    })
+    .await;
+
+    let sent = only_request(&upstream).await.json();
+    assert_eq!(
+        sent.get("thinking").cloned().unwrap_or(Value::Null),
+        expected_thinking
+    );
+    assert_eq!(sent["context_management"]["edits"], expected_edits);
+}
+
+#[rstest]
 #[case::claude_base_model(Some("anthropic/claude-sonnet-4-5"), json!([]))]
 #[case::open_base_model(Some("deepseek/deepseek-v4-pro"), json!([{"type": "thinking", "thinking": "plan", "signature": ""}]))]
 #[case::no_base_model(None, json!([{"type": "thinking", "thinking": "plan", "signature": ""}]))]

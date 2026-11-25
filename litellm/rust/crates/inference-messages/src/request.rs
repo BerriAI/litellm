@@ -29,6 +29,7 @@ use litellm_env::Lookup;
 use litellm_host::interceptors::{Interceptors, ProviderIdentity, RequestContext, WireRequest};
 use litellm_http::request::without_headers;
 use litellm_inference::context::CallContext;
+use litellm_llms::anthropic::messages::thinking::without_dropped_thinking;
 use litellm_llms::anthropic::messages::transformation::is_claude_model;
 use litellm_llms::base_llm::{
     auth::{
@@ -354,9 +355,10 @@ fn effective_request(
         .config()
         .shape_request(request, shaping.settings.shape_options())?;
     requested_optional_params(
-        without_additional_drop_params(
+        without_dropped_keys(
             shaped,
             &top_level_paths(&shaping.settings.additional_drop_params),
+            context,
         )?,
         provider,
         context,
@@ -464,6 +466,21 @@ fn without_additional_drop_params(
     Ok(MessagesRequest {
         params: serde_json::from_value(trimmed).map_err(invalid_request)?,
         ..request
+    })
+}
+
+fn without_dropped_keys(
+    request: MessagesRequest,
+    keys: &[String],
+    context: &MessagesTransformContext,
+) -> Result<MessagesRequest, Error> {
+    let drops_sent_thinking =
+        request.params.thinking.is_some() && keys.iter().any(|key| key == "thinking");
+    let trimmed = without_additional_drop_params(request, keys)?;
+    Ok(if drops_sent_thinking {
+        without_dropped_thinking(trimmed, &context.thinking)
+    } else {
+        trimmed
     })
 }
 

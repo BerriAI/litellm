@@ -68,6 +68,7 @@ from litellm.llms.anthropic.common_utils import (
     AnthropicError,
     AnthropicModelInfo,
     anthropic_pass_through_api_base,
+    drop_clear_thinking_edits_for_dropped_thinking,
     strip_provider_specific_fields_from_anthropic_messages,
 )
 from litellm.llms.anthropic.messages.convertible_blocks import reject_non_string_system_text
@@ -223,15 +224,32 @@ def _anthropic_metadata(params: Mapping[str, object]) -> Mapping[str, object]:
     return {**params, "metadata": only(metadata, "user_id")}
 
 
+def _without_unthought_edits(
+    params: Mapping[str, object], request: Mapping[str, object], dropped: Sequence[str]
+) -> Mapping[str, object]:
+    if "thinking" not in dropped or request.get("thinking") is None:
+        return params
+    kept: Final = {**params}
+    drop_clear_thinking_edits_for_dropped_thinking(
+        kept, str(request["model"]), optional_str(request.get("custom_llm_provider")) or "anthropic"
+    )
+    return kept
+
+
 def _body_fields(request: Mapping[str, object]) -> Mapping[str, object]:
+    dropped: Final = handler.additional_drop_paths(request)
     params: Final = _anthropic_metadata(
-        known_params(
-            _BODY_FIELDS.difference(
-                handler.additional_drop_paths(request),
-                _dropped_thread(request),
-                () if _diagnostics_provider(request) is None else ("diagnostics",),
+        _without_unthought_edits(
+            known_params(
+                _BODY_FIELDS.difference(
+                    dropped,
+                    _dropped_thread(request),
+                    () if _diagnostics_provider(request) is None else ("diagnostics",),
+                ),
+                request,
             ),
             request,
+            dropped,
         )
     )
     if deployment_reasoning_effort_levels(request.get("model_info")) is None:

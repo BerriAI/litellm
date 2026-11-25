@@ -178,8 +178,8 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
     ) -> str:
         return join_api_base(deepseek_anthropic_base(api_base), "v1/messages")
 
-    @staticmethod
     def _translate_adaptive_effort_for_non_adaptive_model(
+        self,
         model: str,
         optional_params: dict[str, object],  # mutable-ok: the base hook edits the request params in place
         max_tokens: int | None,
@@ -187,7 +187,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
     ) -> None:
         if not is_known_non_reasoning_model(model, custom_llm_provider):
             return None
-        return AnthropicMessagesConfig._translate_adaptive_effort_for_non_adaptive_model(  # pyright: ignore[reportUnknownMemberType]  # the base hook takes a bare dict
+        return super()._translate_adaptive_effort_for_non_adaptive_model(
             model=model,
             optional_params=optional_params,
             max_tokens=max_tokens,
