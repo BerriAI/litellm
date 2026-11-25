@@ -201,19 +201,29 @@ async def _async_inline_cached_turns(
     return (*cached_messages[:turns_start], *turns)
 
 
+def _clears_the_cache_floor(
+    cached_messages: Sequence[AllMessageValues],
+    tools: Sequence[ChatCompletionToolParam] | None,
+    deployment_model: str,
+    cache_model: str,
+    custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+) -> bool:
+    return is_prompt_caching_valid_prompt(
+        model=cache_model,
+        messages=list(cached_messages),
+        tools=None if tools is None else list(tools),
+        custom_llm_provider=custom_llm_provider,
+        min_token_count=_prompt_cache_min_tokens((deployment_model, cache_model), custom_llm_provider),
+    )
+
+
 def _context_caching_skip_reason(
     cached_messages: Sequence[AllMessageValues],
-    uncached_messages: Sequence[AllMessageValues],
     tools: Sequence[ChatCompletionToolParam] | None,
     deployment_model: str,
     cache_model: str,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
 ) -> str | None:
-    if not uncached_messages:
-        return (
-            "Vertex AI context caching: the cached prefix covers the whole request, and an explicit cache only "
-            "serves that exact prefix, so implicit caching serves it without a storage fee."
-        )
     if not cached_messages_end_on_supported_turn(cached_messages):
         return (
             "Vertex AI context caching: cached message block ends on a model turn once "
@@ -224,14 +234,8 @@ def _context_caching_skip_reason(
             "Vertex AI context caching: a cached turn links web media that Gemini fetches itself, which the "
             "cachedContents API does not take."
         )
-    min_tokens: Final = _prompt_cache_min_tokens((deployment_model, cache_model), custom_llm_provider)
-    if not is_prompt_caching_valid_prompt(
-        model=cache_model,
-        messages=list(cached_messages),
-        tools=None if tools is None else list(tools),
-        custom_llm_provider=custom_llm_provider,
-        min_token_count=min_tokens,
-    ):
+    if not _clears_the_cache_floor(cached_messages, tools, deployment_model, cache_model, custom_llm_provider):
+        min_tokens: Final = _prompt_cache_min_tokens((deployment_model, cache_model), custom_llm_provider)
         return f"Vertex AI context caching: cached content is below minimum token count ({min_tokens})."
     return None
 
@@ -545,18 +549,26 @@ class ContextCachingEndpoints(VertexBase):
         supports_system_message: Final = get_supports_system_message(
             model=model, custom_llm_provider=custom_llm_provider
         )
+        target: Final = _cache_target(custom_llm_provider, api_base, model, vertex_project, vertex_location)
+        tools: Final = optional_params.get("tools")
+        tool_choice: Final = optional_params.get("tool_choice")
         cached_messages, non_cached_messages = separate_cached_messages(
-            messages=messages, supports_system_message=supports_system_message
+            messages=messages,
+            system_run_holds_a_cache=partial(
+                _clears_the_cache_floor,
+                tools=tools,
+                deployment_model=model,
+                cache_model=target.model,
+                custom_llm_provider=custom_llm_provider,
+            ),
+            supports_system_message=supports_system_message,
         )
 
         if len(cached_messages) == 0:
             return messages, optional_params, None
 
-        target: Final = _cache_target(custom_llm_provider, api_base, model, vertex_project, vertex_location)
-        tools: Final = optional_params.get("tools")
-        tool_choice: Final = optional_params.get("tool_choice")
         skip_reason: Final = _context_caching_skip_reason(
-            cached_messages, messages[len(cached_messages) :], tools, model, target.model, custom_llm_provider
+            cached_messages, tools, model, target.model, custom_llm_provider
         )
         if skip_reason is not None:
             verbose_logger.debug("%s Skipping context caching.", skip_reason)
@@ -590,7 +602,7 @@ class ContextCachingEndpoints(VertexBase):
         http_client: Final = client if isinstance(client, HTTPHandler) else _sync_cache_client(timeout)
 
         ## CHECK IF CACHED ALREADY
-        ttl: Final = cached_block_ttl(messages)
+        ttl: Final = cached_block_ttl(messages, cached_messages)
         generated_cache_key: Final = _cache_key(cached_messages, ttl, tools, tool_choice, target.model)
         try:
             google_cache_name: Final = self.check_cache(
@@ -707,18 +719,26 @@ class ContextCachingEndpoints(VertexBase):
         supports_system_message: Final = get_supports_system_message(
             model=model, custom_llm_provider=custom_llm_provider
         )
+        target: Final = _cache_target(custom_llm_provider, api_base, model, vertex_project, vertex_location)
+        tools: Final = optional_params.get("tools")
+        tool_choice: Final = optional_params.get("tool_choice")
         cached_messages, non_cached_messages = separate_cached_messages(
-            messages=messages, supports_system_message=supports_system_message
+            messages=messages,
+            system_run_holds_a_cache=partial(
+                _clears_the_cache_floor,
+                tools=tools,
+                deployment_model=model,
+                cache_model=target.model,
+                custom_llm_provider=custom_llm_provider,
+            ),
+            supports_system_message=supports_system_message,
         )
 
         if len(cached_messages) == 0:
             return messages, optional_params, None
 
-        target: Final = _cache_target(custom_llm_provider, api_base, model, vertex_project, vertex_location)
-        tools: Final = optional_params.get("tools")
-        tool_choice: Final = optional_params.get("tool_choice")
         skip_reason: Final = _context_caching_skip_reason(
-            cached_messages, messages[len(cached_messages) :], tools, model, target.model, custom_llm_provider
+            cached_messages, tools, model, target.model, custom_llm_provider
         )
         if skip_reason is not None:
             verbose_logger.debug("%s Skipping context caching.", skip_reason)
@@ -755,7 +775,7 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        ttl: Final = cached_block_ttl(messages)
+        ttl: Final = cached_block_ttl(messages, cached_messages)
         generated_cache_key: Final = _cache_key(cached_messages, ttl, tools, tool_choice, target.model)
         scope: Final = KnownCachedContents.scope(
             url, custom_llm_provider, headers, vertex_project=target.project, vertex_location=target.location

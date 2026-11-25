@@ -5,7 +5,7 @@ Why separate file? Make it easy to see how transformation works
 """
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -150,22 +150,25 @@ def _marked_block(messages: Sequence[AllMessageValues]) -> _MarkedBlock | None:
     return _MarkedBlock(len(leading_system_run), range(filtered_messages[0][0], marked_end))
 
 
-def cached_block_ttl(messages: Sequence[AllMessageValues]) -> str | None:
+def cached_block_ttl(messages: Sequence[AllMessageValues], cached_messages: Sequence[AllMessageValues]) -> str | None:
     """
     The TTL the caller marked on the leading system run or the first continuous cached block, read before
     separate_cached_messages trims a later system run off either end of that block, so a reminder that carries
-    the only TTL still sets how long the cache lives.
+    the only TTL still sets how long the cache lives. A marked system run cached alone keeps its own TTL, the
+    one the next turn reads once its mark moves past the system run, so both turns share one cache.
     """
     marked: Final = _marked_block(messages)
     if marked is None:
         return None
-    return extract_ttl_from_cached_messages(
-        [*messages[: marked.leading_run_end], *(messages[idx] for idx in marked.block)]
-    )
+    leading_system_run: Final = messages[: marked.leading_run_end]
+    if len(cached_messages) <= marked.leading_run_end and any(map(is_cached_message, leading_system_run)):
+        return extract_ttl_from_cached_messages(leading_system_run)
+    return extract_ttl_from_cached_messages([*leading_system_run, *(messages[idx] for idx in marked.block)])
 
 
 def separate_cached_messages(
     messages: list[AllMessageValues],
+    system_run_holds_a_cache: Callable[[Sequence[AllMessageValues]], bool],
     supports_system_message: bool = True,
 ) -> tuple[list[AllMessageValues], list[AllMessageValues]]:
     """
@@ -178,8 +181,10 @@ def separate_cached_messages(
     block stays out of the cached set, since it would let a block that ends on a model turn reach the cache
     only because a reminder follows it, and a block made only of such a run caches the leading system run
     alone, so a reminder added each turn changes neither the cached set nor its cache key. A block that would
-    leave only system messages uncached caches the leading system run alone too, since a cache of the whole
-    conversation is never read again once the next turn arrives, while the system run is. The remaining
+    leave only system messages uncached caches the leading system run alone too when an unmarked turn comes
+    before the block or the system run holds a cache by itself, since a client that marks each newest turn
+    never reads a cache of the whole conversation again, while it reads the system run every turn. Otherwise
+    the whole marked prefix is cached, so a repeat of the same request reads it. The remaining
     messages come back with their system messages already converted to user turns in place. A model without
     system message support gets its later system messages back as they are, so the request renders them the
     way it does without a cache.
@@ -193,11 +198,13 @@ def separate_cached_messages(
     block_cached_end: Final = (
         max(marked.leading_run_end, block_end) if block_start < block_end else marked.leading_run_end
     )
-    cached_end: Final = (
-        marked.leading_run_end
-        if all(is_system_message(message) for message in messages[block_cached_end:])
-        else block_cached_end
+    caches_the_system_run_alone: Final = all(
+        is_system_message(message) for message in messages[block_cached_end:]
+    ) and (
+        any(not is_system_message(message) for message in messages[marked.leading_run_end : block_start])
+        or system_run_holds_a_cache(messages[: marked.leading_run_end])
     )
+    cached_end: Final = marked.leading_run_end if caches_the_system_run_alone else block_cached_end
     remaining_messages: Final = messages[cached_end:]
     return (
         messages[:cached_end],
