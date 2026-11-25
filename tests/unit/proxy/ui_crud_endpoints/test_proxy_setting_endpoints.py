@@ -5018,3 +5018,25 @@ def test_unlicensed_proxy_leaves_a_config_default_model_max_budget_off_new_users
 
     assert params["model_max_budget"] == {}
     assert params["max_budget"] == 5.0
+
+
+@pytest.mark.parametrize("budget", [{"max_budget": 10.0}, {"max_budget": 10.0, "budget_duration": "soon"}])
+def test_default_model_max_budget_without_a_usable_duration_is_refused(
+    mock_proxy_config, mock_auth, monkeypatch, budget
+):
+    import litellm
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr(litellm, "default_internal_user_params", {"max_budget": 5.0})
+
+    resp = client.patch(
+        "/update/internal_user_settings",
+        json={"model_max_budget": {"gpt-4o": {"max_budget": 1.0, "budget_duration": "30d"}, "gpt-5.2": budget}},
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "gpt-5.2" in resp.json()["detail"]["error"]
+    assert "gpt-4o" not in resp.json()["detail"]["error"]
+    assert litellm.default_internal_user_params == {"max_budget": 5.0}
+    assert mock_proxy_config["save_call_count"]() == 0
