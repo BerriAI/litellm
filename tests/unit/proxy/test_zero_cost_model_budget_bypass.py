@@ -1139,3 +1139,43 @@ def test_backend_model_waiver_rejected_when_matching_registered_deployment_id() 
     assert is_model_cost_zero("free-group", router) is True
     assert is_model_cost_zero("openai/gpt-4o-mini", router) is False
     assert _deployments_served_for("openai/gpt-4o-mini", router) == ()
+
+
+def test_backend_model_waiver_rejected_when_default_deployment_is_set() -> None:
+    """When default_deployment is configured, unmapped backend names route to default_deployment and keep budget checks."""
+    from litellm.proxy.auth.auth_checks import _deployments_served_for
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "free-group",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_key": "sk-free",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+                "model_info": {
+                    "id": "free-group-id",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            },
+        ]
+    )
+    router.default_deployment = {
+        "model_name": "paid-default",
+        "litellm_params": {
+            "model": "openai/gpt-4o",
+            "api_key": "sk-paid",
+            "input_cost_per_token": 0.00001,
+            "output_cost_per_token": 0.00003,
+        },
+        "model_info": {
+            "id": "paid-default-id",
+        },
+    }
+
+    assert is_model_cost_zero("free-group", router) is True
+    assert is_model_cost_zero("openai/gpt-4o-mini", router) is False
+    assert _deployments_served_for("openai/gpt-4o-mini", router) == ()
