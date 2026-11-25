@@ -12,6 +12,7 @@ from typing_extensions import NotRequired, ReadOnly, TypeAliasType, TypedDict, U
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
+from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
@@ -126,10 +127,21 @@ def _masked_text(checks: _ChecksResult) -> str | None:
 
 class _CallerMetadata(TypedDict, total=False):
     user_api_key_user_email: ReadOnly[str | None]
+    user_api_key_request_route: ReadOnly[str | None]
+
+
+class _StreamFlag(TypedDict, total=False):
+    stream: ReadOnly[object]
+
+
+class _ProxyServerRequest(TypedDict, total=False):
+    body: ReadOnly[_StreamFlag | None]
 
 
 class _PolicyRequestData(TypedDict, total=False):
     model: ReadOnly[str | None]
+    stream: ReadOnly[object]
+    proxy_server_request: ReadOnly[_ProxyServerRequest | None]
     litellm_metadata: ReadOnly[_CallerMetadata | None]
     metadata: ReadOnly[_CallerMetadata | None]
 
@@ -142,6 +154,40 @@ def _policy_request_data(request_data: object) -> _PolicyRequestData:
         return _POLICY_REQUEST_DATA.validate_python(request_data)
     except ValidationError:
         return {}
+
+
+def _stream_cannot_carry_a_mask(request_data: object, input_type: str) -> bool:
+    """Whether a masked model response would be replaced by the original text on its way to the client.
+
+    Streamed responses are rewritten in place only on chat completions (``incremental_diff``);
+    every other streamed route replays the original chunks, so a mask must become a block there.
+    A request this cannot read is treated as such a stream, so masking never fails open.
+    """
+    if input_type != "response":
+        return False
+    try:
+        data: Final = _POLICY_REQUEST_DATA.validate_python(request_data)
+    except ValidationError:
+        return True
+    body: Final = (data.get("proxy_server_request") or {}).get("body") or {}
+    if data.get("stream") is not True and body.get("stream") is not True:
+        return False
+    routes: Final = (
+        (data.get("metadata") or {}).get("user_api_key_request_route"),
+        (data.get("litellm_metadata") or {}).get("user_api_key_request_route"),
+    )
+    route: Final = next((route for route in routes if route), None)
+    call_types: Final = get_call_types_for_route(route) if route else None
+    if not call_types:
+        return True
+    # Deferred: the translation handlers import the proxy, which imports the guardrail hooks.
+    from litellm.llms import load_guardrail_translation_mappings  # noqa: PLC0415  # circular import
+    from litellm.llms.openai.chat.guardrail_translation.handler import (  # noqa: PLC0415  # circular import
+        OpenAIChatCompletionsHandler,
+    )
+
+    handler: Final[object] = load_guardrail_translation_mappings().get(call_types[0])
+    return not (isinstance(handler, type) and issubclass(handler, OpenAIChatCompletionsHandler))
 
 
 def _caller_email(data: _PolicyRequestData) -> str:
@@ -199,6 +245,12 @@ class BeyondGuardGuardrail(CustomGuardrail):
         self.application = (beyondguard_application or "").strip()
         self.destination_url = (beyondguard_destination_url or "").strip()
         self.user_email_header = (beyondguard_user_email_header or "").strip() or _DEFAULT_USER_EMAIL_HEADER
+        # Streamed responses are checked once, at end of stream. On chat completions a mask is written
+        # into the stream as a diff; other streamed routes hold the text until the verdict and turn a
+        # mask into a block (see _stream_cannot_carry_a_mask), so unmasked text is never released.
+        self.streaming_transform_mode: Final[Literal["block_only", "incremental_diff"]] = "incremental_diff"
+        self.streaming_end_of_stream_only: Final = True
+        self.streaming_buffer_until_moderated: Final = True
         self.http_client = http_client or get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
@@ -239,6 +291,8 @@ class BeyondGuardGuardrail(CustomGuardrail):
                 return inputs
             case _Block() | _Failure():
                 self._raise(verdict)
+            case _Mask() if _stream_cannot_carry_a_mask(request_data, input_type):
+                self._raise_unmaskable_stream()
             case _Mask(text=masked) if len(checked) == 1:
                 return self._with_texts(inputs, texts, positions, (masked,))
             case _Mask():
@@ -341,6 +395,14 @@ class BeyondGuardGuardrail(CustomGuardrail):
                 )
             case _:
                 assert_never(verdict)
+
+    def _raise_unmaskable_stream(self) -> NoReturn:
+        raise GuardrailRaisedException(
+            guardrail_name=self.guardrail_name or GUARDRAIL_NAME,
+            message="Blocked by BeyondGuard (response needs masking, which this streamed route cannot apply)",
+            should_wrap_with_default_message=False,
+            blocked_content=True,
+        )
 
     @staticmethod
     def _with_texts(

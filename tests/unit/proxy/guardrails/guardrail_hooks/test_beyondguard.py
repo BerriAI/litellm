@@ -309,3 +309,86 @@ async def test_policy_headers_are_sent_on_mask_rechecks() -> None:
     )
     assert len(fake.calls) == 4
     assert all(headers["X-Application"] == "app" for _, _, headers in fake.calls)
+
+
+def _masking_bg() -> FakeBeyondGuard:
+    def respond(payload: dict) -> httpx.Response:
+        if "@" in _user_text(payload):
+            return httpx.Response(200, json=_body(True, sanitized=True, masked=MASKED))
+        return httpx.Response(200, json=_body(True))
+
+    return FakeBeyondGuard(respond)
+
+
+def test_streamed_responses_are_checked_once_and_held_until_the_verdict() -> None:
+    guardrail: Final = _guardrail(FakeBeyondGuard(lambda _: httpx.Response(200)))
+    assert guardrail.streaming_transform_mode == "incremental_diff"
+    assert guardrail.streaming_end_of_stream_only is True
+    assert guardrail.streaming_buffer_until_moderated is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["/v1/messages", "/v1/responses", "/unknown/route", None])
+async def test_streamed_mask_on_a_route_without_stream_rewrites_blocks(route: str | None) -> None:
+    request_data: Final[dict[str, object]] = {  # mutable-ok: request_data as the proxy passes it
+        "stream": True,
+        **({"litellm_metadata": {"user_api_key_request_route": route}} if route else {}),
+    }
+    with pytest.raises(GuardrailRaisedException) as raised:
+        await _guardrail(_masking_bg()).apply_guardrail({"texts": ["mail a@example.com"]}, request_data, "response")
+    assert raised.value.blocked_content is True
+    assert "cannot apply" in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_streamed_mask_on_chat_completions_and_request_masks_are_kept() -> None:
+    streamed: Final = {"stream": True, "metadata": {"user_api_key_request_route": "/v1/chat/completions"}}
+    response: Final = await _guardrail(_masking_bg()).apply_guardrail(
+        {"texts": ["a@example.com"]}, streamed, "response"
+    )
+    request: Final = await _guardrail(_masking_bg()).apply_guardrail(
+        {"texts": ["a@example.com"]}, {"stream": True}, "request"
+    )
+    assert response["texts"] == [MASKED]
+    assert request["texts"] == [MASKED]
+
+
+@pytest.mark.asyncio
+async def test_streamed_chat_completion_reaches_the_client_masked() -> None:
+    """Runs the real streaming iterator: the client must get the masked text, never the original."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    guardrail: Final = BeyondGuardGuardrail(
+        api_key="in-token",
+        api_base=API_BASE,
+        beyondguard_endpoint_id="in-endpoint",
+        http_client=_masking_bg(),
+        guardrail_name="beyondguard-test",
+        event_hook="post_call",
+        default_on=True,
+    )
+
+    async def source_stream():
+        for content in ("Customer mail is ", "jane@example.com", ", write an apology."):
+            yield ModelResponseStream(
+                model="gpt-4o-mini", choices=[StreamingChoices(index=0, delta=Delta(content=content))]
+            )
+        yield ModelResponseStream(
+            model="gpt-4o-mini", choices=[StreamingChoices(index=0, delta=Delta(content=None), finish_reason="stop")]
+        )
+
+    assembled = ""
+    async for chunk in UnifiedLLMGuardrails().async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test", request_route="/chat/completions"),
+        response=source_stream(),
+        request_data={"messages": [{"role": "user", "content": "hi"}], "stream": True},
+        guardrail_to_apply=guardrail,
+    ):
+        for choice in chunk.choices:
+            if choice.delta.content:
+                assembled += choice.delta.content
+
+    assert "jane@example.com" not in assembled
+    assert "****" in assembled
