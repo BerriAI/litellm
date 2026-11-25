@@ -19083,6 +19083,7 @@ export interface paths {
          *     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"extra_info": "some info"}
          *     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit for this team - applied across all keys for this team.
          *     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit for this team - applied across all keys for this team.
+         *     - model_tpm_limit_counts_cached_tokens: Optional[Dict[str, bool]] - Models whose cached input tokens count against this team's `model_tpm_limit`. Cached input tokens are left out by default. Set a model to true when the provider counts them against its own quota, as OpenAI does. Example: {"gpt-4": true}
          *     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
          *     - default_estimated_output_tokens_per_model: Optional[Dict[str, int]] - Per-model override of the above. Example: {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
          *     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
@@ -19349,6 +19350,7 @@ export interface paths {
          *     - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
          *     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
          *     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+         *     - model_tpm_limit_counts_cached_tokens: Optional[Dict[str, bool]] - Models whose cached input tokens count against this team's `model_tpm_limit`. Cached input tokens are left out by default. Set a model to true when the provider counts them against its own quota, as OpenAI does. Example: {"gpt-4": true}
          *     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
          *     - default_estimated_output_tokens_per_model: Optional[Dict[str, int]] - Per-model override of the above. Example: {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
          *     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
@@ -20087,42 +20089,6 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
-        trace?: never;
-    };
-    "/typesafe/{endpoint}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        get: operations["typesafe_proxy_route_typesafe__endpoint__get"];
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        put: operations["typesafe_proxy_route_typesafe__endpoint__put"];
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        post: operations["typesafe_proxy_route_typesafe__endpoint__post"];
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        delete: operations["typesafe_proxy_route_typesafe__endpoint__delete"];
-        options?: never;
-        head?: never;
-        /**
-         * Typesafe Proxy Route
-         * @description [Docs](https://docs.litellm.ai/docs/pass_through/typesafe)
-         */
-        patch: operations["typesafe_proxy_route_typesafe__endpoint__patch"];
         trace?: never;
     };
     "/update/background_chat_settings": {
@@ -30103,7 +30069,7 @@ export interface components {
             sanitize_error_detail: boolean | null;
             /**
              * Scan Only Tool Results
-             * @description When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.
+             * @description When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant message text. It limits message text only, so tool calls and tool descriptions are still scanned when scan_tool_calls_as_text or scan_tool_descriptions_as_text is also set. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.
              */
             scan_only_tool_results?: boolean | null;
             /**
@@ -30113,12 +30079,12 @@ export interface components {
             scan_raw_request?: boolean | null;
             /**
              * Scan Tool Calls As Text
-             * @description For the bedrock guardrail, whose ApplyGuardrail API has no tool-call content type. When True, the name and arguments of every tool call are also scanned as text: tool calls in the request history as input, tool calls generated by the model as output. A blocked tool call blocks the request or response. A tool call the policy masks is blocked too: masked text is never written into the arguments, so they stay valid JSON. Costs one extra guardrail call when tool calls are present.
+             * @description For the bedrock guardrail, whose ApplyGuardrail API has no tool-call content type. When True, every tool call is also scanned as text, its name and each argument key and value as a separate block. Tool calls in the request history, including Gemini functionCall parts, are scanned as input, and a masked argument value is written back into the request in the shape the caller sent. Tool calls generated by the model are scanned as output, and a mask there blocks the response. A blocked tool call blocks the request or response, and so does a mask that touches a tool name or argument key.
              */
             scan_tool_calls_as_text?: boolean | null;
             /**
              * Scan Tool Descriptions As Text
-             * @description For text-only guardrails (panw_prisma_airs, presidio, bedrock). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, a pre_call guardrail also scans every description string in tools[] (tool and parameter descriptions) as text, blocking or masking them like message text. Costs one extra guardrail call per tool that has a description.
+             * @description For text-only guardrails (panw_prisma_airs, presidio, bedrock). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, the guardrail also scans every description string in tools[] (tool and parameter descriptions) as text. A pre_call guardrail blocks or masks them like message text, and a logging_only guardrail whose logging_only_scope covers the request records its verdict on a copy. Mode must include pre_call, or logging_only on a guardrail that supports logging_only_scope, otherwise the guardrail is rejected on create or update and the setting is ignored at config load. Costs one extra guardrail call per tool that has a description.
              */
             scan_tool_descriptions_as_text?: boolean | null;
             /**
@@ -30468,6 +30434,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -30479,6 +30449,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -30490,6 +30464,10 @@ export interface components {
             image?: string[] | null;
             /** Image[] */
             "image[]"?: string[] | null;
+            /** Markup */
+            markup?: string[] | null;
+            /** Markup[] */
+            "markup[]"?: string[] | null;
             /** Mask */
             mask?: string[] | null;
             /** Mask[] */
@@ -39439,6 +39417,8 @@ export interface components {
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Image Token Flex */
+            output_cost_per_image_token_flex?: number | null;
             /** Output Cost Per Image Token Priority */
             output_cost_per_image_token_priority?: number | null;
             /** Output Cost Per Pixel */
@@ -41133,7 +41113,7 @@ export interface components {
             sanitize_error_detail: boolean | null;
             /**
              * Scan Only Tool Results
-             * @description When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant content. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.
+             * @description When True, unified guardrails only evaluate tool results, the untrusted data an agent feeds back into the model, and skip system, user, and assistant message text. It limits message text only, so tool calls and tool descriptions are still scanned when scan_tool_calls_as_text or scan_tool_descriptions_as_text is also set. Intended for agent harnesses whose own prompt scaffolding is trusted but often trips prompt-attack detectors.
              */
             scan_only_tool_results?: boolean | null;
             /**
@@ -41143,12 +41123,12 @@ export interface components {
             scan_raw_request?: boolean | null;
             /**
              * Scan Tool Calls As Text
-             * @description For the bedrock guardrail, whose ApplyGuardrail API has no tool-call content type. When True, the name and arguments of every tool call are also scanned as text: tool calls in the request history as input, tool calls generated by the model as output. A blocked tool call blocks the request or response. A tool call the policy masks is blocked too: masked text is never written into the arguments, so they stay valid JSON. Costs one extra guardrail call when tool calls are present.
+             * @description For the bedrock guardrail, whose ApplyGuardrail API has no tool-call content type. When True, every tool call is also scanned as text, its name and each argument key and value as a separate block. Tool calls in the request history, including Gemini functionCall parts, are scanned as input, and a masked argument value is written back into the request in the shape the caller sent. Tool calls generated by the model are scanned as output, and a mask there blocks the response. A blocked tool call blocks the request or response, and so does a mask that touches a tool name or argument key.
              */
             scan_tool_calls_as_text?: boolean | null;
             /**
              * Scan Tool Descriptions As Text
-             * @description For text-only guardrails (panw_prisma_airs, presidio, bedrock). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, a pre_call guardrail also scans every description string in tools[] (tool and parameter descriptions) as text, blocking or masking them like message text. Costs one extra guardrail call per tool that has a description.
+             * @description For text-only guardrails (panw_prisma_airs, presidio, bedrock). Guardrails whose APIs accept the request's tools[] already scan it natively. When True, the guardrail also scans every description string in tools[] (tool and parameter descriptions) as text. A pre_call guardrail blocks or masks them like message text, and a logging_only guardrail whose logging_only_scope covers the request records its verdict on a copy. Mode must include pre_call, or logging_only on a guardrail that supports logging_only_scope, otherwise the guardrail is rejected on create or update and the setting is ignored at config load. Costs one extra guardrail call per tool that has a description.
              */
             scan_tool_descriptions_as_text?: boolean | null;
             /**
@@ -43542,6 +43522,10 @@ export interface components {
             model_tpm_limit?: {
                 [key: string]: number;
             } | null;
+            /** Model Tpm Limit Counts Cached Tokens */
+            model_tpm_limit_counts_cached_tokens?: {
+                [key: string]: boolean;
+            } | null;
             /**
              * Models
              * @default []
@@ -45127,6 +45111,10 @@ export interface components {
             /** Model Tpm Limit */
             model_tpm_limit?: {
                 [key: string]: number;
+            } | null;
+            /** Model Tpm Limit Counts Cached Tokens */
+            model_tpm_limit_counts_cached_tokens?: {
+                [key: string]: boolean;
             } | null;
             /** Models */
             models?: unknown[] | null;
@@ -54715,6 +54703,10 @@ export interface components {
             model_tpm_limit?: {
                 [key: string]: number;
             } | null;
+            /** Model Tpm Limit Counts Cached Tokens */
+            model_tpm_limit_counts_cached_tokens?: {
+                [key: string]: boolean;
+            } | null;
             /** Models */
             models?: unknown[] | null;
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
@@ -56947,6 +56939,8 @@ export interface components {
             output_cost_per_image_token?: number | null;
             /** Output Cost Per Image Token Batches */
             output_cost_per_image_token_batches?: number | null;
+            /** Output Cost Per Image Token Flex */
+            output_cost_per_image_token_flex?: number | null;
             /** Output Cost Per Image Token Priority */
             output_cost_per_image_token_priority?: number | null;
             /** Output Cost Per Pixel */
@@ -85888,161 +85882,6 @@ export interface operations {
             header?: never;
             path: {
                 operation: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    typesafe_proxy_route_typesafe__endpoint__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                endpoint: string;
             };
             cookie?: never;
         };

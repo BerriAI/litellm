@@ -3015,7 +3015,7 @@ def compact_responses(
 # ---------------------------------------------------------------------------
 
 
-def _build_litellm_metadata_for_ws(kwargs: dict) -> dict:
+def _build_litellm_metadata_for_ws(kwargs: dict) -> dict[str, object]:
     metadata: Final[dict] = {**(kwargs.get("litellm_metadata") or {})}
     guardrails: Final = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
     if guardrails:

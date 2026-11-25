@@ -79,7 +79,7 @@ class PGVectorStoreConfig(OpenAIVectorStoreConfig):
         litellm_logging_obj: LiteLLMLoggingObj,
         litellm_params: dict[str, object],
         extra_body: dict[str, object] | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, object]]:
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url: Final = join_api_base(api_base, f"{encoded_vector_store_id}/search")
         _, request_body = super().transform_search_vector_store_request(

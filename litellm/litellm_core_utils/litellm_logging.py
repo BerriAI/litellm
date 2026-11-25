@@ -1571,7 +1571,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         return next((provider for provider in candidates if isinstance(provider, str) and provider), None)
 
-    def _routed_deployment_model(self) -> str | None:
+    def routed_deployment_model(self) -> str | None:
         litellm_params: Final = self._model_call_details_view.get("litellm_params")
         metadata: Final = (
             StandardLoggingPayloadSetup.merge_litellm_metadata(_LITELLM_PARAMS.validate_python(litellm_params))
@@ -2077,7 +2077,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return custom_logger
         return None
 
-    def _get_raw_request_body(self, data: dict[str, object] | str | None) -> dict:
+    def _get_raw_request_body(self, data: dict[str, object] | str | None) -> dict[str, object]:
         if data is None:
             return {"error": "Received empty dictionary for raw request body"}
         if isinstance(data, str):
@@ -3785,7 +3785,7 @@ class Logging(LiteLLMLoggingBaseClass):
         elif self.call_type == CallTypes.aresponses_websocket.value and isinstance(result, list):  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
             logging_result = ResponsesWebSocketTokenUsageProcessor.create_logging_object(
                 results=result,  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
-                litellm_model_name=self._routed_deployment_model(),
+                litellm_model_name=self.routed_deployment_model(),
             )
 
         elif self.relays_llm_passthrough and isinstance(result, Response):
@@ -9156,6 +9156,8 @@ def get_standard_logging_object_payload(
         clean_hidden_params: Final = StandardLoggingPayloadSetup.get_hidden_params(hidden_params)
         if cache_hit is True or (clean_hidden_params["response_cost"] is None and raw_response_cost is not None):
             clean_hidden_params["response_cost"] = llm_response_cost
+        if clean_hidden_params["litellm_model_name"] is None:
+            clean_hidden_params["litellm_model_name"] = logging_obj.routed_deployment_model()
         if clean_hidden_params["litellm_overhead_time_ms"] is None and status == "success":
             # /v1/messages dict results and the bridge stream wrappers keep it on the logging object;
             # failure payloads stay None like every response type that carries its own _hidden_params
