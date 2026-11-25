@@ -235,7 +235,8 @@ impl Reserver {
         counters
             .iter()
             .zip(warmed)
-            .filter_map(|(planned, warmed)| warmed.then(|| planned.clone()))
+            .filter(|(_, warmed)| *warmed)
+            .map(|(planned, _)| planned.clone())
             .collect()
     }
 
