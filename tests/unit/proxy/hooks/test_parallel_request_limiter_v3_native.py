@@ -1012,6 +1012,27 @@ async def test_a_key_without_a_team_gets_no_team_io_counter_from_its_own_metadat
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["metadata", "team_metadata"], ids=["key", "team"])
+@pytest.mark.parametrize(
+    "malformed",
+    ["abc", ["x"], {"gpt-4o": "abc"}, {"gpt-4o": ["x"]}],
+    ids=["text", "list", "text limit", "list limit"],
+)
+async def test_malformed_key_or_team_io_limit_metadata_is_ignored_and_the_request_is_admitted(
+    backend: int | None, scope: str, malformed: object
+) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+    request: Final = Request(
+        _auth(team_id="t1", **{scope: {"model_itpm_limit": malformed, "model_otpm_limit": malformed}}),
+        {**_CHAT, "max_tokens": 20},
+    )
+
+    assert await _run(side, 0, _admit, request) is None
+
+    assert _io_tokens(side) == [None, None, None, None]
+
+
+@pytest.mark.asyncio
 async def test_a_responses_websocket_frame_is_held_to_key_and_team_io_limits_and_refunded_when_refused(
     backend: int | None,
 ) -> None:

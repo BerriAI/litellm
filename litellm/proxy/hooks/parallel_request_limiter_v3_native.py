@@ -10,7 +10,7 @@ from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -87,6 +87,7 @@ _RESERVATION: Final = TypeAdapter(BatchEnqueuedTokenReservation)
 _OVER_LIMIT: Final = TypeAdapter(BatchEnqueuedTokenOverLimit)
 _OUTCOME: Final = TypeAdapter(dict[str, object])
 _PTU_FIELDS: Final = TypeAdapter(dict[str, str | int | float])
+_MODEL_LIMITS: Final = TypeAdapter(dict[str, int])
 _READS: Final = frozenset(
     {
         Field.key_identity,
@@ -625,6 +626,17 @@ def _metadata_member(metadata: object, name: str) -> object:
     return entries.get(name) if entries else None
 
 
+def _io_limits(auth: UserAPIKeyAuth, scope: str, name: str) -> Mapping[str, int] | None:
+    limits: Final = _metadata_member(_member(auth, scope), name)
+    if limits is None:
+        return None
+    try:
+        return _MODEL_LIMITS.validate_python(limits)
+    except ValidationError:
+        verbose_proxy_logger.warning("Ignoring %s.%s: expected a mapping of model group to integer", scope, name)
+        return None
+
+
 def _auth_metadata(auth: UserAPIKeyAuth | None) -> Mapping[str, object]:
     if auth is None:
         return MappingProxyType({})
@@ -632,16 +644,16 @@ def _auth_metadata(auth: UserAPIKeyAuth | None) -> Mapping[str, object]:
     return {
         "key_model_rpm_limit": _metadata_member(_member(auth, "metadata"), "model_rpm_limit"),
         "key_model_tpm_limit": _metadata_member(_member(auth, "metadata"), "model_tpm_limit"),
-        "key_model_itpm_limit": _metadata_member(_member(auth, "metadata"), "model_itpm_limit"),
-        "key_model_otpm_limit": _metadata_member(_member(auth, "metadata"), "model_otpm_limit"),
+        "key_model_itpm_limit": _io_limits(auth, "metadata", "model_itpm_limit"),
+        "key_model_otpm_limit": _io_limits(auth, "metadata", "model_otpm_limit"),
         "key_tag_rpm_limit": _metadata_member(_member(auth, "metadata"), "tag_rpm_limit"),
         "model_max_budget": {model: budget for model, budget in budgets.items() if _entries(budget) is not None}
         if budgets
         else None,
         "team_model_rpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_rpm_limit"),
         "team_model_tpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_tpm_limit"),
-        "team_model_itpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_itpm_limit"),
-        "team_model_otpm_limit": _metadata_member(_member(auth, "team_metadata"), "model_otpm_limit"),
+        "team_model_itpm_limit": _io_limits(auth, "team_metadata", "model_itpm_limit"),
+        "team_model_otpm_limit": _io_limits(auth, "team_metadata", "model_otpm_limit"),
         "organization_model_rpm_limit": _metadata_member(_member(auth, "organization_metadata"), "model_rpm_limit"),
         "organization_model_tpm_limit": _metadata_member(_member(auth, "organization_metadata"), "model_tpm_limit"),
         "project_model_rpm_limit": _metadata_member(_member(auth, "project_metadata"), "model_rpm_limit"),

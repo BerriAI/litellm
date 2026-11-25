@@ -65,6 +65,8 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     ITPM_DESCRIPTOR_KEYS,
     OTPM_DESCRIPTOR_KEYS,
+    PROJECT_ITPM_DESCRIPTOR_KEY,
+    PROJECT_OTPM_DESCRIPTOR_KEY,
     ReservationWindowIdentity,
     WindowGuardedIncrement,
     atomic_check_and_increment_by_n,
@@ -115,6 +117,7 @@ else:
 _BATCH_BODY_ADAPTER: Final = TypeAdapter(dict[str, object])
 _DECODED_JSON: Final = TypeAdapter(object)
 _MODEL_LIMITS: Final = TypeAdapter(dict[str, int])
+_PROJECT_IO_DESCRIPTOR_KEYS: Final = frozenset({PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY})
 _WINDOW_START_ADAPTER: Final[TypeAdapter[int | float | str | None]] = TypeAdapter(int | float | str | None)
 
 
@@ -912,16 +915,19 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             for _d in descriptors
         ]
 
-        project_io_descriptors, project_io_increments = (
-            await self._create_project_io_descriptors_for_models(
-                user_api_key_dict=user_api_key_dict,
-                per_model_usage=batch_usage.per_model_usage,
+        io_charges: Final = tuple(
+            (descriptor, increment)
+            for descriptor, increment in zip(
+                *await self._create_project_io_descriptors_for_models(
+                    user_api_key_dict=user_api_key_dict,
+                    per_model_usage=batch_usage.per_model_usage,
+                ),
+                strict=True,
             )
-            if include_project_io_limits
-            else ([], [])
+            if include_project_io_limits or descriptor["key"] not in _PROJECT_IO_DESCRIPTOR_KEYS
         )
-        descriptors = [*descriptors, *project_io_descriptors]
-        increments = [*increments, *project_io_increments]
+        descriptors = [*descriptors, *(descriptor for descriptor, _ in io_charges)]
+        increments = [*increments, *(increment for _, increment in io_charges)]
 
         rate_limit_response: Final = await atomic_check_and_increment_by_n(
             self.parallel_request_limiter,
@@ -1480,17 +1486,16 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                         )
                         if not project_covers_batch or descriptor["key"].endswith(BATCH_TPD_DESCRIPTOR_SUFFIX)
                     ]
-                    if remaining_descriptors or not project_covers_batch:
-                        await self._refund_enqueued_reservation_if_rejected(
-                            user_api_key_dict,
-                            self._check_and_increment_batch_counters(  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
-                                user_api_key_dict=user_api_key_dict,
-                                data=data,
-                                batch_usage=batch_usage,
-                                descriptors=remaining_descriptors,
-                                include_project_io_limits=not project_covers_batch,
-                            ),
-                        )
+                    await self._refund_enqueued_reservation_if_rejected(
+                        user_api_key_dict,
+                        self._check_and_increment_batch_counters(  # pyright: ignore[reportUnknownMemberType]  # hook data is the untyped proxy request dict
+                            user_api_key_dict=user_api_key_dict,
+                            data=data,
+                            batch_usage=batch_usage,
+                            descriptors=remaining_descriptors,
+                            include_project_io_limits=not project_covers_batch,
+                        ),
+                    )
                 verbose_proxy_logger.debug("Batch enqueued-token reservation succeeded")
                 return data
 

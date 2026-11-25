@@ -695,7 +695,6 @@ impl Request<'_> {
         )
     }
 
-    /// Separate input and output token quotas per model, each read only from its own scope's metadata.
     fn io(&self) -> Result<Vec<Value>, BuildError> {
         let metadata = self.metadata;
         let scopes = [

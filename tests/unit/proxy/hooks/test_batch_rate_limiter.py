@@ -1013,6 +1013,40 @@ async def test_key_and_team_output_limits_size_and_charge_the_output_a_batch_row
 
 
 @pytest.mark.asyncio
+async def test_key_output_limit_still_refuses_a_batch_the_project_enqueued_token_limit_covers(
+    alias_routed_batch: respx.MockRouter,
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS),))
+    )
+    _, _, batch_limiter = _make_limiters()
+    user_api_key_dict: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-batch"),
+        models=[_BATCH_ALIAS],
+        metadata={"model_otpm_limit": {_BATCH_ALIAS: 1}},
+        project_id="project-1",
+        project_metadata={"model_batch_enqueued_token_limit": {_BATCH_ALIAS: 1000000}},
+    )
+
+    await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=DualCache(),
+        data=dict(_alias_routing("body")),
+        call_type="acreate_batch",
+    )
+    with pytest.raises(HTTPException) as refused:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=DualCache(),
+            data=dict(_alias_routing("body")),
+            call_type="acreate_batch",
+        )
+
+    assert refused.value.status_code == 429
+    assert "model_per_key_otpm" in str(refused.value.detail)
+
+
+@pytest.mark.asyncio
 async def test_alias_routed_row_is_charged_once_when_the_alias_and_deployment_model_share_a_quota_group(
     openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
