@@ -3,6 +3,7 @@ import inspect
 import json
 import sys
 from datetime import datetime
+from types import SimpleNamespace
 from typing import Any, Dict, Final, Optional
 from unittest.mock import AsyncMock, MagicMock
 
@@ -5104,3 +5105,43 @@ async def test_rest_guardrail_bearer_excludes_admission_key(
         assert observed.get_nowait() == expected
     finally:
         global_mcp_tool_registry.unregister_tools_with_prefix("guarded-")
+
+
+@pytest.mark.asyncio
+async def test_a_rest_listing_401_on_the_stored_delegate_token_marks_the_stored_login(
+    monkeypatch: pytest.MonkeyPatch, credentials_prisma: SimpleNamespace
+) -> None:
+    import httpx2
+
+    from litellm.proxy.mcp_server import db
+    from litellm.proxy.mcp_server.exceptions import MCPUpstreamAuthError
+    from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+    async def refuse(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(401, headers={"www-authenticate": 'Bearer error="invalid_token"'})
+
+    server: Final = MCPServer(
+        server_id="docs-id",
+        name="docs",
+        url="https://upstream.example/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        delegate_auth_to_upstream=True,
+    )
+    await db.store_user_oauth_credential(credentials_prisma, "u1", server.server_id, "stored-dead")
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(refuse))
+    monkeypatch.setattr(rest_endpoints, "global_mcp_server_manager", manager)
+    caller: Final = UserAPIKeyAuth(user_id="u1")
+
+    with pytest.raises(MCPUpstreamAuthError):
+        await rest_endpoints._get_tools_for_single_server(
+            server,
+            None,
+            user_api_key_auth=caller,
+            extra_headers=await rest_endpoints._get_user_oauth_extra_headers(server, caller),
+            apply_tool_filters=False,
+        )
+
+    grant: Final = await db.get_user_oauth_credential(credentials_prisma, "u1", server.server_id)
+    assert grant is not None and grant.get("access_token_rejected") is True

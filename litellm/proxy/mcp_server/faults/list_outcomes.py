@@ -116,10 +116,12 @@ def upstream_auth_challenge(exc: BaseException) -> tuple[int, str | None] | None
     rides with it can never come from two different responses in the tree. Non-auth responses do not
     end the scan: a causal 401 behind an unrelated 5xx must still be found, or the client never
     receives the challenge it needs to re-authenticate."""
-    for response in _iter_upstream_responses(exc):
-        if response.status_code in (401, 403):
-            return response.status_code, response.headers.get("www-authenticate")
-    return None
+    response: Final = upstream_auth_rejection(exc)
+    return None if response is None else (response.status_code, response.headers.get("www-authenticate"))
+
+
+def upstream_auth_rejection(exc: BaseException) -> httpx.Response | httpx2.Response | None:
+    return next((response for response in _iter_upstream_responses(exc) if response.status_code in (401, 403)), None)
 
 
 def upstream_insufficient_scope(exc: BaseException) -> str | None:

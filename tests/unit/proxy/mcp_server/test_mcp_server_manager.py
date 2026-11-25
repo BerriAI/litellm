@@ -12113,14 +12113,42 @@ class TestCreateMcpClientV2Graft:
         assert client._get_auth_headers()["Authorization"] == "Bearer hook-jwt"
 
 
-def _upstream_status_error(status_code: int, challenge: str) -> httpx.HTTPStatusError:
-    request = httpx.Request("POST", "https://upstream.example/mcp")
+def _upstream_status_error(status_code: int, challenge: str, authorization: str | None = None) -> httpx.HTTPStatusError:
+    sent_headers: Final = {} if authorization is None else {"Authorization": authorization}
+    request: Final = httpx.Request("POST", "https://upstream.example/mcp", headers=sent_headers)
     response = httpx.Response(
         status_code,
         headers={"WWW-Authenticate": challenge},
         request=request,
     )
     return httpx.HTTPStatusError("upstream rejected token", request=request, response=response)
+
+
+def _rejected_listing_server(
+    auth_type: MCPAuth = MCPAuth.oauth2,
+    oauth2_flow: Literal["authorization_code", "client_credentials"] | None = "authorization_code",
+    delegate_auth_to_upstream: bool = False,
+    is_byok: bool = False,
+) -> MCPServer:
+    return MCPServer(
+        server_id="rejecting",
+        name="rejecting",
+        url="https://up.example.com/mcp",
+        transport=MCPTransport.http,
+        auth_type=auth_type,
+        oauth2_flow=oauth2_flow if auth_type == MCPAuth.oauth2 else None,
+        delegate_auth_to_upstream=delegate_auth_to_upstream,
+        is_byok=is_byok,
+        authentication_token="static" if auth_type == MCPAuth.bearer_token else None,
+    )
+
+
+def _rejection_recording_manager(recorder: _RejectedTokenRecorder) -> MCPServerManager:
+    return MCPServerManager(
+        per_user_oauth_token_store=_InvalidationLog(),
+        per_user_token_cache=_InvalidationLog(),
+        record_rejected_user_token=recorder,
+    )
 
 
 class TestMCPToolsListAuthSurfacing:
@@ -12248,6 +12276,164 @@ class TestMCPToolsListAuthSurfacing:
         assert (exc_info.value.status_code, exc_info.value.www_authenticate) == (403, challenge)
         grant: Final = await db.get_user_oauth_credential(credentials_prisma, "alice", "managed-list")
         assert grant is not None and grant.get("needs_scopes") == note
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("raised_at", ["listing", "client build"])
+    @pytest.mark.parametrize(
+        ("server", "reported"),
+        [
+            pytest.param(_rejected_listing_server(delegate_auth_to_upstream=True), True, id="legacy-delegate"),
+            pytest.param(_rejected_listing_server(is_byok=True), True, id="byok-oauth2"),
+            pytest.param(_rejected_listing_server(), False, id="gateway-managed-v2"),
+            pytest.param(_rejected_listing_server(oauth2_flow="client_credentials"), False, id="client-credentials"),
+            pytest.param(_rejected_listing_server(auth_type=MCPAuth.oauth_delegate), False, id="oauth-delegate"),
+            pytest.param(_rejected_listing_server(auth_type=MCPAuth.bearer_token), False, id="static-bearer"),
+            pytest.param(
+                _rejected_listing_server(auth_type=MCPAuth.bearer_token, is_byok=True), False, id="byok-static-bearer"
+            ),
+        ],
+    )
+    async def test_a_listing_401_reports_the_stored_bearer_only_for_a_v1_per_user_oauth_server(
+        self, server: MCPServer, reported: bool, raised_at: str, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        recorder: Final = _RejectedTokenRecorder()
+        manager: Final = _rejection_recording_manager(recorder)
+        rejection: Final = _upstream_status_error(401, 'Bearer error="invalid_token"', "Bearer stored-token")
+        client: Final = _listing_client()
+        client.list_tools_result = AsyncMock(side_effect=rejection)
+        failed_build: Final = RuntimeError("client build failed")
+        failed_build.__cause__ = rejection
+        manager.create_mcp_client = AsyncMock(
+            **({"return_value": client} if raised_at == "listing" else {"side_effect": failed_build})
+        )
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"), pytest.raises(MCPUpstreamAuthError):
+            await manager.get_tools_page(
+                server,
+                extra_headers={"Authorization": "Bearer stored-token"},
+                user_api_key_auth=UserAPIKeyAuth(user_id="alice"),
+                stored_token="stored-token",
+            )
+
+        assert recorder.marks == ((("alice", server.server_id, "stored-token"),) if reported else ())
+        assert ("(error='invalid_token')" in caplog.text) is reported
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("failure", "stored_token", "caller", "reported"),
+        [
+            pytest.param(
+                _upstream_status_error(401, "Bearer", "bearer sent-token"), "sent-token", "alice", True, id="401"
+            ),
+            pytest.param(
+                _upstream_status_error(403, "Bearer", "Bearer sent-token"), "sent-token", "alice", False, id="403"
+            ),
+            pytest.param(
+                _upstream_status_error(503, "Bearer", "Bearer sent-token"), "sent-token", "alice", False, id="503"
+            ),
+            pytest.param(
+                HTTPException(status_code=401, headers={"WWW-Authenticate": "Bearer"}),
+                "sent-token",
+                "alice",
+                False,
+                id="gateway-own-401",
+            ),
+            pytest.param(
+                _upstream_status_error(401, "Bearer", "Bearer sent-token"), None, "alice", False, id="no-stored-token"
+            ),
+            pytest.param(_upstream_status_error(401, "Bearer"), None, "alice", False, id="no-stored-token-or-header"),
+            pytest.param(
+                _upstream_status_error(401, "Bearer", "Bearer callers-own-token"),
+                "sent-token",
+                "alice",
+                False,
+                id="401-on-another-bearer",
+            ),
+            pytest.param(
+                _upstream_status_error(401, "Bearer"),
+                "sent-token",
+                "alice",
+                False,
+                id="401-after-the-token-was-dropped",
+            ),
+            pytest.param(
+                _upstream_status_error(401, "Bearer", "Bearer sent-token"), "sent-token", None, False, id="no-user"
+            ),
+            pytest.param(RuntimeError("connection reset"), "sent-token", "alice", False, id="no-response"),
+        ],
+    )
+    async def test_only_an_upstream_401_on_the_stored_bearer_is_reported_for_a_legacy_delegate_listing(
+        self,
+        failure: Exception,
+        stored_token: str | None,
+        caller: str | None,
+        reported: bool,
+    ) -> None:
+        server: Final = _rejected_listing_server(delegate_auth_to_upstream=True)
+        recorder: Final = _RejectedTokenRecorder()
+        manager: Final = _rejection_recording_manager(recorder)
+        client: Final = _listing_client()
+        client.list_tools_result = AsyncMock(side_effect=failure)
+        manager.create_mcp_client = AsyncMock(
+            **({"return_value": client} if isinstance(failure, httpx.HTTPStatusError) else {"side_effect": failure})
+        )
+
+        with pytest.raises((MCPUpstreamAuthError, MCPServerListError)):
+            await manager.get_tools_page(
+                server,
+                extra_headers={"Authorization": "Bearer sent-token"},
+                user_api_key_auth=UserAPIKeyAuth(user_id=caller),
+                stored_token=stored_token,
+            )
+
+        assert recorder.marks == ((("alice", server.server_id, "sent-token"),) if reported else ())
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("stored_row", "stored_token", "sent", "marked"),
+        [
+            pytest.param(True, "stored-token", "stored-token", True, id="stored-token"),
+            pytest.param(True, None, "callers-own-token", False, id="callers-own-token"),
+            pytest.param(False, None, "callers-own-token", False, id="no-stored-row"),
+        ],
+    )
+    async def test_a_legacy_delegate_listing_401_marks_the_stored_login_only_when_it_sent_that_token(
+        self,
+        credentials_prisma: SimpleNamespace,
+        caplog: pytest.LogCaptureFixture,
+        stored_row: bool,
+        stored_token: str | None,
+        sent: str,
+        marked: bool,
+    ) -> None:
+        from litellm.proxy.mcp_server import db
+
+        server: Final = _rejected_listing_server(delegate_auth_to_upstream=True)
+        if stored_row:
+            await db.store_user_oauth_credential(credentials_prisma, "alice", server.server_id, "stored-token")
+        reads_before: Final = credentials_prisma.writer_db.litellm_mcpusercredentials.reads
+        token_store: Final = _InvalidationLog()
+        token_cache: Final = _InvalidationLog()
+        manager: Final = MCPServerManager(per_user_oauth_token_store=token_store, per_user_token_cache=token_cache)
+        client: Final = _listing_client()
+        client.list_tools_result = AsyncMock(
+            side_effect=_upstream_status_error(401, 'Bearer error="invalid_token"', f"Bearer {sent}")
+        )
+        manager.create_mcp_client = AsyncMock(return_value=client)
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"), pytest.raises(MCPUpstreamAuthError):
+            await manager.get_tools_page(
+                server,
+                extra_headers={"Authorization": f"Bearer {sent}"},
+                user_api_key_auth=UserAPIKeyAuth(user_id="alice"),
+                stored_token=stored_token,
+            )
+
+        grant: Final = await db.get_user_oauth_credential(credentials_prisma, "alice", server.server_id)
+        assert (grant is not None and grant.get("access_token_rejected") is True) is marked
+        assert ("rejected the stored OAuth token" in caplog.text) is marked
+        assert (credentials_prisma.writer_db.litellm_mcpusercredentials.reads > reads_before + 1) is marked
+        assert token_store.dropped == token_cache.dropped == ((("alice", server.server_id),) if marked else ())
 
     @pytest.mark.asyncio
     async def test_get_tools_from_server_surfaces_non_challenge_http_error_as_internal_fault(self):

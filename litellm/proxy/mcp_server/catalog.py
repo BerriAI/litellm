@@ -767,7 +767,8 @@ async def prepare_tool_listing_headers(
     context: OperationContext,
     allowed_mcp_servers: Sequence[MCPServer],
     prefetched_oauth_creds: Mapping[str, OAuthCredentialPayload] | None,
-) -> tuple[str | Mapping[str, str] | None, Mapping[str, str] | None, str | Mapping[str, str] | None]:
+) -> tuple[str | Mapping[str, str] | None, Mapping[str, str] | None, str | Mapping[str, str] | None, str | None]:
+    from litellm.proxy.auth.auth_utils import bearer_credential
     from litellm.proxy.mcp_server.operations import (
         _get_byok_credential,
         _get_user_oauth_extra_headers_from_db,
@@ -799,21 +800,27 @@ async def prepare_tool_listing_headers(
     # time; building it here would double-resolve and be shadowed by the v2 graft. The
     # preemptive 401 already challenged a missing token, so one exists for the connect.
     migrated_to_v2: Final = to_server_spec(server) is not None
-    if (
+    prefers_stored_token: Final = (
         not migrated_to_v2
         and server.auth_type == MCPAuth.oauth2
         and getattr(server, "needs_user_oauth_token", False)
         and user_api_key_auth is not None
-    ):
-        db_headers: Final = await _get_user_oauth_extra_headers_from_db(
+    )
+    db_headers: Final = (
+        await _get_user_oauth_extra_headers_from_db(
             server,
             user_api_key_auth,
             prefetched_creds=prefetched_oauth_creds,
         )
-        if db_headers:
-            extra_headers = db_headers
+        if prefers_stored_token
+        else None
+    )
+    if db_headers:
+        extra_headers = db_headers
 
-    elif not migrated_to_v2 and extra_headers is None and server.auth_type == MCPAuth.oauth2:
+    elif (
+        not prefers_stored_token and not migrated_to_v2 and extra_headers is None and server.auth_type == MCPAuth.oauth2
+    ):
         extra_headers = await _get_user_oauth_extra_headers_from_db(
             server,
             user_api_key_auth,
@@ -824,7 +831,8 @@ async def prepare_tool_listing_headers(
     if server.is_byok and server.auth_type != MCPAuth.oauth2 and server_auth_header is None:
         server_auth_header = await _get_byok_credential(server, user_api_key_auth)
 
-    return server_auth_header, extra_headers, catalog_auth_header
+    stored_token: Final = bearer_credential(db_headers["Authorization"]) if db_headers else None
+    return server_auth_header, extra_headers, catalog_auth_header, stored_token
 
 
 def challenge_rejected_credential(server: MCPServer, outcome: ServerOutcome, listed: Sequence[MCPServer]) -> None:
@@ -868,7 +876,7 @@ async def get_filtered_server_tools(
     if server is None:
         return ListToolsResult(tools=[]), ServerListOk(tool_count=0)
 
-    prepared_auth, prepared_headers, prepared_catalog_auth = await prepare_tool_listing_headers(
+    prepared_auth, prepared_headers, prepared_catalog_auth, stored_token = await prepare_tool_listing_headers(
         server, context, allowed_mcp_servers, prefetched_oauth_creds
     )
     server_auth_header: Final = dict(prepared_auth) if isinstance(prepared_auth, Mapping) else prepared_auth
@@ -896,6 +904,7 @@ async def get_filtered_server_tools(
                     catalog_auth_header=catalog_auth_header,
                     record_listing=False,
                     use_tool_list_cache=use_tool_list_cache,
+                    stored_token=stored_token,
                 )
             )
         else:
@@ -914,6 +923,7 @@ async def get_filtered_server_tools(
                 record_listing=False,
                 listing_updates=listing_updates,
                 use_tool_list_cache=use_tool_list_cache,
+                stored_token=stored_token,
             )
         tools: Final = page.tools
         filtered_tools = filter_tools_by_allowed_tools(tools, server)

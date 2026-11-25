@@ -94,6 +94,7 @@ from litellm.proxy._types import (
     is_per_server_oauth_discovery_eligible,
 )
 from litellm.proxy.agent_endpoints.auth.managed_authorization import managed_agent_policy
+from litellm.proxy.auth.auth_utils import bearer_credential
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.user_api_key_cache import get_management_object_ttl
@@ -120,6 +121,7 @@ from litellm.proxy.mcp_server.faults.list_outcomes import (
     raise_classified_list_failure,
     retry_upstream_rate_limit,
     upstream_auth_challenge,
+    upstream_auth_rejection,
     upstream_insufficient_scope,
 )
 from litellm.proxy.mcp_server.interactions import bind_target
@@ -147,6 +149,7 @@ from litellm.proxy.mcp_server.outbound_credentials.adapter import (
     to_server_spec,
     to_subject,
 )
+from litellm.proxy.mcp_server.outbound_credentials.httpx_auth import challenge_error
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     InvalidatableOAuthTokenStore,
     run_to_completion,
@@ -4578,6 +4581,7 @@ class MCPServerManager:
         catalog_auth_header: str | dict[str, str] | None | EllipsisType = ...,
         record_listing: bool = False,
         use_tool_list_cache: bool = True,
+        stored_token: str | None = None,
     ) -> list[MCPTool]:
         result: Final = await self.get_tools_page(
             server=server,
@@ -4592,6 +4596,7 @@ class MCPServerManager:
             catalog_auth_header=catalog_auth_header,
             record_listing=record_listing,
             use_tool_list_cache=use_tool_list_cache,
+            stored_token=stored_token,
         )
         return result.tools
 
@@ -4614,6 +4619,7 @@ class MCPServerManager:
         record_listing: bool = False,
         listing_updates: ExitStack | None = None,
         use_tool_list_cache: bool = True,
+        stored_token: str | None = None,
     ) -> ListToolsResult:
         from litellm.proxy.mcp_server.tool_registry import (
             global_mcp_tool_registry,
@@ -4782,6 +4788,7 @@ class MCPServerManager:
             # client triggers the upstream OAuth flow. The multi-server
             # aggregator catches this explicitly to keep absorbing.
             await _note_scope_refusal(server, user_api_key_auth, upstream_auth_error)
+            await self._forget_rejected_stored_token(server, user_api_key_auth, upstream_auth_error, stored_token)
             if server.is_dcr_bridge and upstream_auth_error.www_authenticate is not None:
                 raise MCPUpstreamAuthError(
                     status_code=upstream_auth_error.status_code,
@@ -4813,6 +4820,7 @@ class MCPServerManager:
                 "Failed to get tools from server %s: %s%s", server.name, type(e).__name__, _upstream_failure_suffix(e)
             )
             await _note_scope_refusal(server, user_api_key_auth, e)
+            await self._forget_rejected_stored_token(server, user_api_key_auth, e, stored_token)
             raise_classified_list_failure(e, server.name, suppress_challenge=server.is_dcr_bridge)
 
     def _admin_tools_list_ttl(self, server: MCPServer) -> int | None:
@@ -6383,7 +6391,7 @@ class MCPServerManager:
     ) -> MCPTool | BlockedTool:
         from litellm.proxy.mcp_server.catalog import prepare_tool_listing_headers
 
-        server_auth_header, extra_headers, catalog_auth_header = await prepare_tool_listing_headers(
+        server_auth_header, extra_headers, catalog_auth_header, stored_token = await prepare_tool_listing_headers(
             server, context, (server,), None
         )
         upstream: Final = await self.get_tools_from_server(
@@ -6400,6 +6408,7 @@ class MCPServerManager:
             ),
             record_listing=False,
             use_tool_list_cache=False,
+            stored_token=stored_token,
         )
         selected: Final = tuple(tool for tool in upstream if tool.name == name)
         scan: Final = await scan_tool_descriptions(
@@ -7237,6 +7246,25 @@ class MCPServerManager:
             await self.invalidate_user_oauth_token_cache(user_id, server_id)
 
         await run_to_completion(forget())
+
+    async def _forget_rejected_stored_token(
+        self,
+        server: MCPServer,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        error: BaseException,
+        stored_token: str | None,
+    ) -> None:
+        if stored_token is None or not server.needs_user_oauth_token or to_server_spec(server) is not None:
+            return
+        user_id: Final = user_api_key_auth.user_id if user_api_key_auth is not None else None
+        rejection: Final = upstream_auth_rejection(error)
+        if not user_id or rejection is None or rejection.status_code != 401:
+            return
+        if bearer_credential(rejection.request.headers.get("authorization", "")) != stored_token:
+            return  # a cross-origin redirect drops the credential, so its 401 says nothing about the token
+        await self.forget_rejected_user_token(
+            user_id, server.server_id, stored_token, challenge_error(rejection.headers.get("www-authenticate"))
+        )
 
     async def _resolve_oauth2_headers_for_tool_call(
         self,

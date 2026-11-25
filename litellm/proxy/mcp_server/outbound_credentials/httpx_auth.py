@@ -46,8 +46,8 @@ class StaticHeaderAuth(httpx2.Auth):
         yield request
 
 
-def _challenge_error(response: httpx2.Response) -> str | None:
-    _, _, params = (response.headers.get("www-authenticate") or "").partition(" ")
+def challenge_error(www_authenticate: str | None) -> str | None:
+    _, _, params = (www_authenticate or "").partition(" ")
     fields: Final = (field.partition("=") for field in parse_http_list(params))
     return next((value.strip().strip('"') for key, _, value in fields if key.strip().lower() == "error"), None)
 
@@ -72,7 +72,7 @@ class UserGrantBearerAuth(httpx2.Auth):
         if response.status_code != 401 or response.request.headers.get(self.header_name) != sent:
             return  # a cross-origin redirect drops the credential, so its 401 says nothing about the token
         try:
-            await self._on_rejected(token, _challenge_error(response))
+            await self._on_rejected(token, challenge_error(response.headers.get("www-authenticate")))
         except Exception as exc:  # noqa: BLE001  # a failed report must not replace the upstream's 401
             verbose_logger.warning("MCP rejected OAuth token was not recorded: %s", type(exc).__name__)
 

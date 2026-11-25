@@ -31,6 +31,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     user_api_key_has_admin_view,
 )
+from litellm.proxy.auth.auth_utils import bearer_credential
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
@@ -769,6 +770,7 @@ if MCP_AVAILABLE:
                 proxy_logging_obj=proxy_logging_obj,
                 record_listing=record_listing,
                 use_tool_list_cache=use_tool_list_cache,
+                stored_token=bearer_credential((extra_headers or {}).get("Authorization", "")),
             )
         )
 

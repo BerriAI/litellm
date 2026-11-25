@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 from typing import Final, Literal
@@ -9,6 +10,8 @@ import pytest
 from mcp.server.context import ServerRequestContext
 from mcp.shared.exceptions import MCPError
 from mcp.types import (
+    JSONRPCMessage,
+    JSONRPCRequest,
     ListPromptsRequest,
     ListPromptsResult,
     ListResourcesRequest,
@@ -20,6 +23,7 @@ from mcp.types import (
     PaginatedRequestParams,
     Tool,
 )
+from pydantic import TypeAdapter
 from starlette.requests import Request
 
 from litellm.proxy._types import UserAPIKeyAuth
@@ -942,6 +946,101 @@ async def test_tools_listing_challenges_a_single_server_whose_token_the_upstream
     assert listing.tools == []
     assert outcome.tag == "auth_required"
     assert (not gate.pending) is challenged
+
+
+class _VendorAccepting:
+    def __init__(self, token: str) -> None:
+        self.token = token
+        self.sent: tuple[str, ...] = ()
+
+    async def respond(self, request: httpx2.Request) -> httpx2.Response:
+        if request.method == "DELETE":
+            return httpx2.Response(200)
+        self.sent = (*self.sent, request.headers.get("authorization", ""))
+        if request.headers.get("authorization") != f"Bearer {self.token}":
+            return httpx2.Response(401, headers={"www-authenticate": 'Bearer error="invalid_token"'})
+        payload: Final = _JSONRPC.validate_json(request.content)
+        if not isinstance(payload, JSONRPCRequest):
+            return httpx2.Response(202)
+        result: Final = (
+            {"tools": [{"name": "whoami", "inputSchema": {"type": "object"}}]}
+            if payload.method == "tools/list"
+            else {
+                "protocolVersion": "2025-03-26",
+                "serverInfo": {"name": "vendor", "version": "1"},
+                "capabilities": {"tools": {}},
+            }
+        )
+        return httpx2.Response(200, json={"jsonrpc": "2.0", "id": payload.id, "result": result})
+
+
+_JSONRPC: Final = TypeAdapter(JSONRPCMessage)
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_delegate_listing_falls_back_to_the_callers_bearer_once_the_stored_token_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, credentials_prisma: SimpleNamespace
+) -> None:
+    from litellm.proxy.mcp_server import db
+
+    server: Final = _server(MCPAuth.oauth2, oauth2_flow="authorization_code", delegate_auth_to_upstream=True)
+    await db.store_user_oauth_credential(credentials_prisma, "u1", server.server_id, "stored-dead")
+    vendor: Final = _VendorAccepting("caller-fresh")
+    manager: Final = MCPServerManager(upstream_transport=httpx2.MockTransport(vendor.respond))
+    monkeypatch.setattr(mcp_operations, "global_mcp_server_manager", manager)
+    context: Final = mcp_operations.prepare_context(
+        UserAPIKeyAuth(token="h", user_id="u1"),
+        oauth2_headers={"Authorization": "Bearer caller-fresh"},
+        raw_headers={"x-litellm-api-key": "sk-admission", "authorization": "Bearer caller-fresh"},
+    )
+
+    async def list_tools() -> tuple[ListToolsResult, str, frozenset[str]]:
+        stored: Final = await db.get_user_oauth_credential(credentials_prisma, "u1", server.server_id)
+        already_sent: Final = len(vendor.sent)
+        listing, outcome = await catalog.get_filtered_server_tools(
+            server,
+            context=context,
+            allowed_mcp_servers=[server],
+            prefetched_oauth_creds={} if stored is None else {server.server_id: stored},
+        )
+        return listing, outcome.tag, frozenset(vendor.sent[already_sent:])
+
+    rejected: Final = await list_tools()
+    recovered: Final = await list_tools()
+
+    assert (rejected[1], rejected[2]) == ("auth_required", frozenset({"Bearer stored-dead"}))
+    assert (recovered[1], recovered[2]) == ("ok", frozenset({"Bearer caller-fresh"}))
+    assert [tool.name for tool in recovered[0].tools] == ["docs-whoami"]
+
+
+@pytest.mark.asyncio
+async def test_a_legacy_delegate_listing_401_on_the_callers_own_bearer_reports_no_stored_token(
+    monkeypatch: pytest.MonkeyPatch, credentials_prisma: SimpleNamespace, caplog: pytest.LogCaptureFixture
+) -> None:
+    server: Final = _server(MCPAuth.oauth2, oauth2_flow="authorization_code", delegate_auth_to_upstream=True)
+    other: Final = _server(
+        MCPAuth.oauth2, name="other", oauth2_flow="authorization_code", delegate_auth_to_upstream=True
+    )
+    vendor: Final = _VendorAccepting("caller-fresh")
+    monkeypatch.setattr(
+        mcp_operations,
+        "global_mcp_server_manager",
+        MCPServerManager(upstream_transport=httpx2.MockTransport(vendor.respond)),
+    )
+    context: Final = mcp_operations.prepare_context(
+        UserAPIKeyAuth(token="h", user_id="u1"),
+        oauth2_headers={"Authorization": "Bearer caller-stale"},
+        raw_headers={"x-litellm-api-key": "sk-admission", "authorization": "Bearer caller-stale"},
+    )
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        _, outcome = await catalog.get_filtered_server_tools(
+            server, context=context, allowed_mcp_servers=[server, other], prefetched_oauth_creds={}
+        )
+
+    assert (outcome.tag, set(vendor.sent)) == ("auth_required", {"Bearer caller-stale"})
+    assert "rejected the stored OAuth token" not in caplog.text
+    assert credentials_prisma.writer_db.litellm_mcpusercredentials.reads == 0
 
 
 @pytest.mark.asyncio

@@ -883,7 +883,7 @@ async def test_list_tools_rest_api_success():
 
 
 @pytest.mark.asyncio
-async def test_get_tools_from_mcp_servers():
+async def test_get_tools_from_mcp_servers() -> None:
     """Test _get_tools_from_mcp_servers function with both specific and no server filters"""
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.mcp_server.mcp_server_manager import (
@@ -986,6 +986,7 @@ async def test_get_tools_from_mcp_servers():
                 catalog_auth_header=None,
                 record_listing=True,
                 use_tool_list_cache: bool = True,
+                stored_token: str | None = None,
             ):
                 if server.server_id == "server1_id":
                     return [mock_tool_1]
@@ -1985,7 +1986,7 @@ def test_create_tool_response_objects():
 
 
 @pytest.mark.asyncio
-async def test_get_tools_for_single_server():
+async def test_get_tools_for_single_server() -> None:
     """Test _get_tools_for_single_server function."""
     from mcp.types import Tool as MCPTool
 
@@ -2030,6 +2031,7 @@ async def test_get_tools_for_single_server():
             proxy_logging_obj=ANY,
             record_listing=False,
             use_tool_list_cache=True,
+            stored_token=None,
         )
 
         # Verify the result
