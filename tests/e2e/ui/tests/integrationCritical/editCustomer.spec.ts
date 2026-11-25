@@ -1,5 +1,4 @@
-import { test, expect, type APIRequestContext, type Locator, type Page, type Request } from "@playwright/test";
-import { ADMIN_STORAGE_PATH } from "../../constants";
+import { test as base, expect, type APIRequestContext, type Locator, type Page, type Request } from "@playwright/test";
 import { dismissFeedbackPopup } from "../../helpers/navigation";
 import { masterKey, uniqueSuffix } from "../../helpers/traffic";
 
@@ -18,22 +17,33 @@ async function addCustomerToBudget(request: APIRequestContext, customer: Custome
   expect(created.ok(), await created.text()).toBe(true);
 }
 
-async function createCustomer(request: APIRequestContext): Promise<Customer> {
-  const id = `e2e-edit-customer-${uniqueSuffix()}`;
-  const customer = { id, budgetId: `${id}-budget` };
-  const budget = await request.post("/budget/new", {
-    headers: headers(),
-    data: { budget_id: customer.budgetId, max_budget: ORIGINAL_BUDGET },
-  });
-  expect(budget.ok(), await budget.text()).toBe(true);
-  await addCustomerToBudget(request, customer);
-  return customer;
-}
+const test = base.extend<{ customer: Customer }>({
+  customer: async ({ request }, use) => {
+    const id = `e2e-edit-customer-${uniqueSuffix()}`;
+    const customer = { id, budgetId: `${id}-budget` };
+    const budget = await request.post("/budget/new", {
+      headers: headers(),
+      data: { budget_id: customer.budgetId, max_budget: ORIGINAL_BUDGET },
+    });
+    expect(budget.ok(), await budget.text()).toBe(true);
 
-async function deleteCustomer(request: APIRequestContext, customer: Customer): Promise<void> {
-  await request.post("/customer/delete", { headers: headers(), data: { user_ids: [customer.id] } });
-  await request.post("/budget/delete", { headers: headers(), data: { id: customer.budgetId } });
-}
+    try {
+      await addCustomerToBudget(request, customer);
+      await use(customer);
+    } finally {
+      try {
+        const removed = await request.post("/customer/delete", {
+          headers: headers(),
+          data: { user_ids: [customer.id] },
+        });
+        expect(removed.ok() || removed.status() === 404, await removed.text()).toBe(true);
+      } finally {
+        const removed = await request.post("/budget/delete", { headers: headers(), data: { id: customer.budgetId } });
+        expect(removed.ok(), await removed.text()).toBe(true);
+      }
+    }
+  },
+});
 
 const isCustomerUpdate = (req: Request) =>
   req.method() === "POST" && new URL(req.url()).pathname.replace(/\/+$/, "").endsWith("/customer/update");
@@ -42,7 +52,6 @@ const editButton = (page: Page) => page.getByRole("button", { name: "Edit", exac
 const editDialog = (page: Page) => page.getByRole("dialog", { name: "Edit customer" });
 const aliasInput = (dialog: Locator) => dialog.getByLabel("Alias", { exact: true });
 const budgetInput = (dialog: Locator) => dialog.getByLabel("Max Budget (USD)", { exact: true });
-const saveButton = (dialog: Locator) => dialog.getByRole("button", { name: "Save", exact: true });
 
 async function openCustomer(page: Page, customer: Customer, heading: string): Promise<void> {
   await expect(async () => {
@@ -59,27 +68,30 @@ async function openEditDialog(page: Page): Promise<Locator> {
   return dialog;
 }
 
-async function saveAndCapture(page: Page, dialog: Locator): Promise<{ body: unknown; status: number | undefined }> {
+async function saveAndCapture(
+  page: Page,
+  dialog: Locator,
+  name = "Save",
+): Promise<{ body: unknown; status: number | undefined }> {
   const sent = page.waitForRequest(isCustomerUpdate);
-  await saveButton(dialog).click();
+  await dialog.getByRole("button", { name, exact: true }).click();
   const req = await sent;
   return { body: req.postDataJSON(), status: (await req.response())?.status() };
 }
 
 test.describe("Edit customer dialog", () => {
-  test.use({ storageState: ADMIN_STORAGE_PATH });
-
-  let customer: Customer;
-
-  test.beforeEach(async ({ request }) => {
-    customer = await createCustomer(request);
+  test.beforeEach(async ({ page }) => {
+    await page.goto("/ui/login");
+    await page.getByPlaceholder("Enter your username").fill("admin");
+    await page.getByPlaceholder("Enter your password").fill(masterKey());
+    await page.getByRole("button", { name: "Login", exact: true }).click();
+    await expect(page).toHaveURL((url) => url.pathname.startsWith("/ui") && !url.pathname.includes("login"));
   });
 
-  test.afterEach(async ({ request }) => {
-    await deleteCustomer(request, customer);
-  });
-
-  test("saving a new alias and budget updates the customer and reopens with the saved values", async ({ page }) => {
+  test("saving a new alias and budget updates the customer and reopens with the saved values", async ({
+    page,
+    customer,
+  }) => {
     await openCustomer(page, customer, ORIGINAL_ALIAS);
     const dialog = await openEditDialog(page);
     await expect(aliasInput(dialog)).toHaveValue(ORIGINAL_ALIAS);
@@ -99,7 +111,7 @@ test.describe("Edit customer dialog", () => {
     await expect(budgetInput(reopened)).toHaveValue("40");
   });
 
-  test("the budget field keeps only the digits and decimal point the user types", async ({ page }) => {
+  test("the budget field keeps only the digits and decimal point the user types", async ({ page, customer }) => {
     await openCustomer(page, customer, ORIGINAL_ALIAS);
     const dialog = await openEditDialog(page);
 
@@ -111,7 +123,7 @@ test.describe("Edit customer dialog", () => {
     expect(saved.body).toEqual({ user_id: customer.id, alias: ORIGINAL_ALIAS, blocked: false, max_budget: 12.5 });
   });
 
-  test("clearing the alias and budget sends null for both", async ({ page }) => {
+  test("clearing the alias and budget sends null for both", async ({ page, customer }) => {
     await openCustomer(page, customer, ORIGINAL_ALIAS);
     const dialog = await openEditDialog(page);
 
@@ -125,6 +137,7 @@ test.describe("Edit customer dialog", () => {
   test("a save the server rejects shows its error, keeps the typed values, and the retry goes through", async ({
     page,
     request,
+    customer,
   }) => {
     await openCustomer(page, customer, ORIGINAL_ALIAS);
     const dialog = await openEditDialog(page);
@@ -146,7 +159,7 @@ test.describe("Edit customer dialog", () => {
     await expect(dialog).toBeHidden();
   });
 
-  test("cancel discards the draft without sending anything", async ({ page }) => {
+  test("cancel discards the draft without sending anything", async ({ page, customer }) => {
     const updates: Request[] = [];
     page.on("request", (req) => {
       if (isCustomerUpdate(req)) updates.push(req);
@@ -163,5 +176,29 @@ test.describe("Edit customer dialog", () => {
     await expect(aliasInput(reopened)).toHaveValue(ORIGINAL_ALIAS);
     await expect(budgetInput(reopened)).toHaveValue(String(ORIGINAL_BUDGET));
     expect(updates).toHaveLength(0);
+  });
+
+  test.describe("Mobile", () => {
+    test.use({ viewport: { width: 375, height: 812 }, isMobile: true, hasTouch: true });
+
+    test("the Chinese dialog saves a non-ASCII alias on mobile", async ({ page, customer }) => {
+      await page.evaluate(() => localStorage.setItem("litellm_language", "zh-CN"));
+      await openCustomer(page, customer, ORIGINAL_ALIAS);
+      await page.getByRole("button", { name: "编辑", exact: true }).tap();
+
+      const dialog = page.getByRole("dialog", { name: "编辑客户", exact: true });
+      const alias = dialog.getByLabel("别名", { exact: true });
+      await expect(alias).toHaveValue(ORIGINAL_ALIAS);
+      await expect(dialog.getByLabel("预算上限（USD）", { exact: true })).toHaveValue(String(ORIGINAL_BUDGET));
+      await alias.fill("测试客户");
+
+      const saved = await saveAndCapture(page, dialog, "保存");
+      expect(saved).toEqual({
+        body: { user_id: customer.id, alias: "测试客户", blocked: false, max_budget: ORIGINAL_BUDGET },
+        status: 200,
+      });
+      await expect(dialog).toBeHidden();
+      await expect(page.getByRole("heading", { level: 1, name: "测试客户" })).toBeVisible();
+    });
   });
 });
