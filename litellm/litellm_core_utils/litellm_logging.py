@@ -683,6 +683,11 @@ class Logging(LiteLLMLoggingBaseClass):
         self._pre_call_session_id: str = session_id_var.get()
         _sid: Final = kwargs.get("litellm_session_id") if kwargs else None
         self.litellm_session_id: str = str(_sid) if _sid else ""
+        self.stream_usage_stripped: Final = (
+            kwargs is not None
+            and "_litellm_strip_stream_usage" in kwargs
+            and kwargs["_litellm_strip_stream_usage"] is True
+        )
         # supports_correlation_logging is False for calls originating from the
         # sync client entry point (wrapper() in utils.py): a plain OS thread
         # has no per-call context isolation the way an asyncio Task does, and
