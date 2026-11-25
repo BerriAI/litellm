@@ -128,8 +128,8 @@ mod tests {
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     )]
     #[case::virtual_key(
-        "sk-1234",
-        "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"
+        "sk-a1b2c3d4",
+        "f393cd8b654baaa3028cd002c5ea4414e557ecc5b3d499c189664e8afe82c501"
     )]
     #[case::utf8(
         "sk-ü-ключ",
