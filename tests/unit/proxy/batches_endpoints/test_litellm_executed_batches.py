@@ -540,10 +540,11 @@ def test_executed_batch_runner_lost_only_for_a_stale_non_terminal_batch(
     [
         ({"custom_llm_provider": "hosted_vllm", "model": "openai/gpt-4o"}, "hosted_vllm"),
         ({"model": "hosted_vllm/qwen"}, "hosted_vllm"),
+        ({"model": "fireworks_ai/accounts/fireworks/models/gpt-oss-120b"}, "fireworks_ai"),
         ({"custom_llm_provider": "openai", "model": "gpt-4o"}, None),
         ({"model": "gpt-4o"}, None),
     ],
-    ids=["explicit hosted_vllm", "model prefix", "explicit openai", "openai model"],
+    ids=["explicit hosted_vllm", "model prefix", "fireworks model", "explicit openai", "openai model"],
 )
 def test_litellm_executed_provider_of(credentials: Mapping[str, object], expected: str | None) -> None:
     assert litellm_executed_provider_of(credentials) == expected
@@ -624,6 +625,20 @@ async def test_litellm_executed_provider_for_leaves_a_server_with_its_own_files_
     probe = FakeFilesApiProbe(lacks_files_api, [])
     assert await litellm_executed_provider_for(VLLM_CREDENTIALS, probe) == expected
     assert probe.upstreams == [("http://vllm.test/v1/", "vllm-key")]
+
+
+@pytest.mark.parametrize(
+    ("lacks_files_api", "expected"), [(True, "fireworks_ai"), (False, None)], ids=["no files api", "files api"]
+)
+async def test_litellm_executed_provider_for_probes_fireworks_at_its_inference_base(
+    monkeypatch: pytest.MonkeyPatch, lacks_files_api: bool, expected: str | None
+) -> None:
+    monkeypatch.delenv("FIREWORKS_API_BASE", raising=False)
+    probe: Final = FakeFilesApiProbe(lacks_files_api, [])
+    credentials: Final = {"model": "fireworks_ai/accounts/fireworks/models/gpt-oss-120b", "api_key": "fw-key"}
+
+    assert await litellm_executed_provider_for(credentials, probe) == expected
+    assert probe.upstreams == [("https://api.fireworks.ai/inference/v1", "fw-key")]
 
 
 @pytest.mark.parametrize(

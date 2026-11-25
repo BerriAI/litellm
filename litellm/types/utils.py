@@ -4978,7 +4978,9 @@ FILE_CONTENT_STREAMING_PROVIDERS: Final[frozenset[str]] = frozenset(
     {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value, LlmProviders.GEMINI.value}
 )
 
-LITELLM_EXECUTED_BATCH_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.HOSTED_VLLM.value})
+LITELLM_EXECUTED_BATCH_PROVIDERS: Final[frozenset[str]] = frozenset(
+    {LlmProviders.HOSTED_VLLM.value, LlmProviders.FIREWORKS_AI.value}
+)
 
 ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "litellm_proxy", "vertex_ai", "xai"]
 
