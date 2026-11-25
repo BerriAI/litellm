@@ -1,12 +1,19 @@
 use std::time::Duration;
 
+use axum::{
+    http::{HeaderName, HeaderValue},
+    response::Response,
+};
 use litellm_cache_response::{CacheOptions, CachePolicy, CacheScope};
 use litellm_gateway_auth::Authenticated;
 use litellm_gateway_auth_core::{Caller, Rows, StoredKey};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 
-use crate::{BodyError, ExposedHeader};
+use crate::{
+    BodyError, ExposedHeader,
+    record::{self, AttemptRecord},
+};
 
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -72,47 +79,21 @@ fn duration(seconds: f64) -> Result<Duration, BodyError> {
     }
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct CacheHeaders(std::sync::Arc<std::sync::OnceLock<String>>);
-
-impl litellm_host::interceptors::Interceptors<litellm_inference::Error> for CacheHeaders {
-    async fn before_provider_request(
-        &self,
-        wire: litellm_host::interceptors::WireRequest,
-        _: litellm_host::interceptors::RequestContext,
-    ) -> Result<litellm_host::interceptors::WireRequest, litellm_inference::Error> {
-        Ok(wire)
-    }
-
-    async fn after_provider_response(
-        &self,
-        _: litellm_host::interceptors::RawResponse,
-    ) -> Result<(), litellm_inference::Error> {
-        Ok(())
-    }
-
-    async fn result_ready(
-        &self,
-        facts: litellm_host::interceptors::ExecutionFacts,
-    ) -> Result<(), litellm_inference::Error> {
-        if let litellm_host::interceptors::ResultSource::Cache { key } = facts.source {
-            let _ = self.0.set(key);
-        }
-        Ok(())
-    }
-}
-
-impl CacheHeaders {
-    pub(crate) fn apply(&self, mut response: axum::response::Response) -> axum::response::Response {
-        if let Some(key) = self.0.get()
-            && let Ok(value) = axum::http::HeaderValue::from_str(key)
-        {
-            response
-                .headers_mut()
-                .insert(axum::http::HeaderName::from(ExposedHeader::CacheKey), value);
-        }
+/// `response` with the `x-litellm-cache-key` of the cached answer the call was served from.
+pub(crate) fn with_cache_key(mut response: Response) -> Response {
+    let key = record::read(|entries| {
+        entries
+            .attempt()
+            .and_then(AttemptRecord::cache_key)
+            .and_then(|key| HeaderValue::from_str(key).ok())
+    })
+    .flatten();
+    if let Some(value) = key {
         response
+            .headers_mut()
+            .insert(HeaderName::from(ExposedHeader::CacheKey), value);
     }
+    response
 }
 
 #[cfg(test)]

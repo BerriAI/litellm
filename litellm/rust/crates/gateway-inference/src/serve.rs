@@ -3,7 +3,7 @@
 //! model its body names goes through router-core, the hooks hear the outcome that served it, the
 //! route renders it, and a call that ends on an error is answered in the route's error format.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use axum::{
     Extension,
@@ -73,14 +73,26 @@ pub(crate) trait Endpoint: RouteAttempt {
     /// Those counts as Python's litellm `Usage`, `None` for a route that counts no tokens.
     fn usage(counts: Counts) -> Option<ChatCompletionsUsage>;
 
-    /// The provider's id for a complete outcome's answer.
-    fn response_id(outcome: &Self::Outcome) -> Option<String>;
+    /// The provider's id for a complete output's answer.
+    fn response_id(output: &Self::Output) -> Option<String>;
 
     /// The provider's id for a stream's answer, when the event whose `data` this is names it.
     fn stream_response_id(data: &str) -> Option<String>;
 
-    /// The outcome that served the call as the response the client reads.
-    fn render(outcome: Self::Outcome, reported: ReportedModel<'_>) -> Result<Response, Error>;
+    /// Whether a call of this route with `body` runs under a deployment's stream timeout.
+    fn streamed(body: &Map<String, Value>) -> bool {
+        routing::streamed(body)
+    }
+
+    /// The process `request_timeout` a call of this route to deployment `deployment_id` reads
+    /// after the router's timeout, `None` for a route that reads none.
+    fn configured_timeout<H: Host>(gateway: &Gateway<H>, deployment_id: &str) -> Option<Duration> {
+        let _ = (gateway, deployment_id);
+        None
+    }
+
+    /// The output that served the call as the response the client reads.
+    fn render(output: Self::Output, reported: ReportedModel<'_>) -> Result<Response, Error>;
 }
 
 /// Serves `body` as one call of the route `build` makes of it. A body that could not be read is
@@ -98,17 +110,25 @@ where
     let (gateway, identity) = (&*call.gateway, &call.identity);
     let serve = |hooks: Arc<H::Hooks>, body: Map<String, Value>| async move {
         let model = request::model(&body)?.to_owned();
+        let streamed = E::streamed(&body);
         let endpoint = build(body)?;
         let routed = routing::call(gateway, identity, E::OP, E::PATH, &model, &endpoint).await?;
         let routing = Routing::served(&routed);
+        let deployment = routing::served_deployment(
+            gateway,
+            &routed.deployment_id,
+            streamed,
+            E::configured_timeout(gateway, &routed.deployment_id),
+        );
         let reported = ReportedModel::of(&model, &routed);
         let served = ServedBy {
             deployment: gateway.router.registry().deployment(&routed.deployment_id),
             model_group: routed.model_group,
         };
-        let mut outcome = routed.output.response;
-        let post_call = hooks::post_call::<E, _>(&hooks, &mut outcome, served).await?;
-        Ok(post_call.answer((Extension(routing), E::render(outcome, reported)?)))
+        let (mut output, recorded) = routed.output.response;
+        record::write(|entries| entries.routed(routing.clone(), deployment, recorded));
+        let post_call = hooks::post_call::<E, _>(&hooks, &mut output, served).await?;
+        Ok(post_call.answer((Extension(routing), E::render(output, reported)?)))
     };
     record::write(|entries| {
         entries.serve_as(E::CALL_TYPE);
