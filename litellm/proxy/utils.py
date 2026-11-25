@@ -10501,8 +10501,10 @@ def normalize_route_for_root_path(route: str) -> str | None:
     return route
 
 
+# Require at least one leading path segment (e.g. /litellm/.well-known/...) so bare
+# root-relative factory paths like "/.well-known/litellm-ui-config" stay untouched.
 UI_CONFIG_ENDPOINT_PATTERN: Final = re.compile(
-    r"(?<![a-zA-Z0-9_/-])/(?:[a-zA-Z0-9_.-]+/)*\.well-known/litellm-ui-config"
+    r"(?<![a-zA-Z0-9_/-])/(?:[a-zA-Z0-9_.-]+/)+\.well-known/litellm-ui-config"
 )
 UI_ASSET_PREFIX_PATTERN: Final = re.compile(r"(?<![a-zA-Z0-9_/-])/(?:[a-zA-Z0-9_.-]+/)*_next/")
 

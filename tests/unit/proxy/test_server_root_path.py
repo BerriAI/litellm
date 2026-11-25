@@ -161,8 +161,45 @@ def test_rewrite_ui_content_healing_and_reconfiguration():
     assert utils.rewrite_ui_content(reconfigured, "/bar/litellm") == reconfigured
 
 
+PACKAGED_UI_CONFIG_CHUNK_FIXTURE = (
+    'let r=b??t,n=r?`${r}/litellm/.well-known/litellm-ui-config`:"/litellm/.well-known/litellm-ui-config";'
+    'let e_=s3.q.useQuery("get","/.well-known/litellm-ui-config").data?.mcp_stdio_enabled;'
+)
+
+
+def test_rewrite_ui_content_preserves_bare_root_relative_config_path():
+    """
+    Verify literal packaged UI chunk shapes:
+    - Prefixed discovery URLs (/litellm/.well-known/litellm-ui-config) are rewritten idempotently.
+    - Bare root-relative request factory paths ("/.well-known/litellm-ui-config") stay untouched
+      because the request factory prepends getBaseUrl() at call time.
+    """
+    first = utils.rewrite_ui_content(
+        content=PACKAGED_UI_CONFIG_CHUNK_FIXTURE,
+        server_root_path="/foo/litellm",
+    )
+    second = utils.rewrite_ui_content(
+        content=first,
+        server_root_path="/foo/litellm",
+    )
+
+    assert second == first
+    assert "`${r}/foo/litellm/.well-known/litellm-ui-config`" in first
+    assert ':"/foo/litellm/.well-known/litellm-ui-config";' in first
+    assert 'useQuery("get","/.well-known/litellm-ui-config")' in first
+    assert 'useQuery("get","/foo/litellm/.well-known/litellm-ui-config")' not in first
+
+    reconfigured = utils.rewrite_ui_content(
+        content=first,
+        server_root_path="/bar/litellm",
+    )
+    assert "`${r}/bar/litellm/.well-known/litellm-ui-config`" in reconfigured
+    assert ':"/bar/litellm/.well-known/litellm-ui-config";' in reconfigured
+    assert 'useQuery("get","/.well-known/litellm-ui-config")' in reconfigured
+
+
 def test_rewrite_ui_content_actual_packaged_ui_chunk():
-    """Verify idempotency on the actual packaged UI chunk file if available."""
+    """Verify idempotency and bare-path preservation on the actual packaged UI chunks if available."""
     from pathlib import Path
 
     current_dir = Path(__file__).resolve().parent
@@ -172,6 +209,7 @@ def test_rewrite_ui_content_actual_packaged_ui_chunk():
     if not packaged_ui_path.exists():
         return
 
+    bare_literal = '"/.well-known/litellm-ui-config"'
     for chunk in packaged_ui_path.rglob("*.js"):
         content = chunk.read_text(encoding="utf-8", errors="ignore")
         if ".well-known/litellm-ui-config" in content:
@@ -179,7 +217,12 @@ def test_rewrite_ui_content_actual_packaged_ui_chunk():
             twice = utils.rewrite_ui_content(once, "/foo/litellm")
             assert once == twice
             assert "/foo/foo/litellm" not in twice
-            assert "/foo/litellm/.well-known/litellm-ui-config" in twice
+            if "/litellm/.well-known/litellm-ui-config" in content:
+                assert "/foo/litellm/.well-known/litellm-ui-config" in twice
+            elif bare_literal in content:
+                assert "/foo/litellm/.well-known/litellm-ui-config" not in twice
+            if bare_literal in content:
+                assert twice.count(bare_literal) == content.count(bare_literal)
 
 
 def test_rewrite_ui_content_asset_reconfiguration_and_prefix_edge_cases():
