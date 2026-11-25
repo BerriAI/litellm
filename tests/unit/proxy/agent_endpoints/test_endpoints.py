@@ -1,12 +1,17 @@
+import asyncio
+import itertools
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from prisma.models import LiteLLM_AgentsTable
@@ -19,6 +24,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.agent_endpoints import endpoints as agent_endpoints
+from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
     RestrictedAgentAccess,
 )
@@ -29,8 +35,9 @@ from litellm.proxy.agent_endpoints.endpoints import (
     router,
     user_api_key_auth,
 )
-from litellm.types.agents import AgentResponse, PatchAgentRequest
+from litellm.types.agents import AgentResponse, MakeAgentsPublicRequest, PatchAgentRequest
 from litellm.types.proxy.agent_identity import AgentIdentityBinding
+from tests.unit.proxy.fake_config_table import ConfigRows, ReplicaPrisma, RowsWithIds, StoredConfigRow
 
 
 def _sample_agent_card_params() -> dict:
@@ -1293,77 +1300,489 @@ def test_merged_agent_card_url_has_no_double_slash_without_proxy_base_url(
     assert "//a2a" not in interface_url
 
 
-class _DbBackedProxyConfig:
-    """Round-trips `litellm_settings` through the DB overlay the proxy applies on every
-    `get_config()`, which is what re-assigns the `litellm.public_*` globals in production.
-
-    Storage goes through JSON the way the `litellm_config` row does, so every read hands back
-    freshly built values instead of the objects the endpoint still holds a reference to."""
-
-    def __init__(self, stored_litellm_settings: dict[str, object] | None = None) -> None:
-        self.stored_litellm_settings_json: str = json.dumps(stored_litellm_settings or {})
-
-    async def get_config(self) -> dict[str, dict[str, object]]:
-        from litellm.proxy.proxy_server import ProxyConfig
-
-        config: Final[dict[str, dict[str, object]]] = {"litellm_settings": {}}
-        db_param_value: Final[dict[str, object]] = json.loads(self.stored_litellm_settings_json)
-        if not db_param_value:
-            return config
-        proxy_config: Final = ProxyConfig()
-        db_values: Final = proxy_config._prepared_db_settings_values("litellm_settings", db_param_value)
-        proxy_config._apply_litellm_settings_db_values(db_values)
-        return {"litellm_settings": dict(proxy_config.litellm_settings.resolved())}
-
-    async def save_config(self, new_config: dict[str, dict[str, object]]) -> None:
-        self.stored_litellm_settings_json = json.dumps(new_config.get("litellm_settings") or {})
+_PROXY_ADMIN: Final = UserAPIKeyAuth(user_id="test-user", user_role=LitellmUserRoles.PROXY_ADMIN)
 
 
-def test_make_agent_public_twice_keeps_both_agents_public(monkeypatch: pytest.MonkeyPatch) -> None:
-    """A second /make_public call must not drop the agent published by the first one."""
+def _replica_that_missed_a_publish(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    stored_public_agent_groups: list[str | int],
+    store_model_in_db: bool = True,
+    agents_only_in_db: tuple[str, ...] = (),
+) -> tuple[ConfigRows, AgentRegistry]:
     import litellm
     from litellm.proxy.agent_endpoints import agent_registry as agent_registry_module
-    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+    from litellm.proxy.proxy_server import ProxyConfig
 
     registry: Final = AgentRegistry()
     registry.register_agent(_sample_agent_response(agent_id="agent-1", agent_name="Agent One"))
     registry.register_agent(_sample_agent_response(agent_id="agent-2", agent_name="Agent Two"))
+    rows: Final = ConfigRows({"litellm_settings": {"public_agent_groups": stored_public_agent_groups}})
+    cached_rows: Final = {"litellm_settings": {"public_agent_groups": []}}
 
     monkeypatch.setattr(agent_registry_module, "global_agent_registry", registry)
-    monkeypatch.setattr(litellm, "public_agent_groups", None)
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
-    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", _DbBackedProxyConfig())
+    monkeypatch.setattr(litellm, "public_agent_groups", [])
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        ReplicaPrisma(rows, cached_rows, tables={"litellm_agentstable": RowsWithIds("agent_id", agents_only_in_db)}),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", store_model_in_db)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {"store_model_in_db": store_model_in_db})
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+    return rows, registry
 
-    first: Final = client.post("/v1/agents/agent-1/make_public", headers={"Authorization": "Bearer test-key"})
-    second: Final = client.post("/v1/agents/agent-2/make_public", headers={"Authorization": "Bearer test-key"})
 
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert second.json()["public_agent_groups"] == ["agent-1", "agent-2"]
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored", [["agent-1"], ["agent-1", 7]], ids=["agent-listed", "a-number-listed"])
+async def test_make_agent_public_keeps_an_agent_another_replica_published(
+    monkeypatch: pytest.MonkeyPatch, stored: list[str | int]
+) -> None:
+    rows, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=stored)
+
+    response: Final = await agent_endpoints.make_agent_public(agent_id="agent-2", user_api_key_dict=_PROXY_ADMIN)
+
+    assert response["public_agent_groups"] == ["agent-1", "agent-2"]
+    assert rows.stored("litellm_settings")["public_agent_groups"] == ["agent-1", "agent-2"]
     assert [agent.agent_id for agent in registry.get_public_agent_list()] == ["agent-1", "agent-2"]
 
 
-def test_make_agent_public_rejects_an_agent_published_only_in_the_db(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The duplicate guard must fire off the stored list, not just what this process published."""
-    import litellm
-    from litellm.proxy.agent_endpoints import agent_registry as agent_registry_module
-    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+@pytest.mark.asyncio
+async def test_make_agent_public_concurrent_publishes_all_stay_public(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows, _ = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=[])
 
-    registry: Final = AgentRegistry()
-    registry.register_agent(_sample_agent_response(agent_id="agent-1", agent_name="Agent One"))
-
-    monkeypatch.setattr(agent_registry_module, "global_agent_registry", registry)
-    monkeypatch.setattr(litellm, "public_agent_groups", None)
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.proxy_config",
-        _DbBackedProxyConfig({"public_agent_groups": ["agent-1"]}),
+    await asyncio.gather(
+        agent_endpoints.make_agent_public(agent_id="agent-1", user_api_key_dict=_PROXY_ADMIN),
+        agent_endpoints.make_agent_public(agent_id="agent-2", user_api_key_dict=_PROXY_ADMIN),
     )
 
-    duplicate: Final = client.post("/v1/agents/agent-1/make_public", headers={"Authorization": "Bearer test-key"})
+    assert sorted(rows.stored("litellm_settings")["public_agent_groups"]) == ["agent-1", "agent-2"]
 
-    assert duplicate.status_code == 400
-    assert "already in public agent groups" in duplicate.json()["detail"]
+
+@pytest.mark.asyncio
+async def test_make_agent_public_rejects_an_agent_another_replica_published(monkeypatch: pytest.MonkeyPatch) -> None:
+    rows, _ = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=["agent-1"])
+
+    with pytest.raises(HTTPException) as duplicate:
+        await agent_endpoints.make_agent_public(agent_id="agent-1", user_api_key_dict=_PROXY_ADMIN)
+
+    assert duplicate.value.status_code == 400
+    assert "already in public agent groups" in duplicate.value.detail
+    assert rows.stored("litellm_settings")["public_agent_groups"] == ["agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_make_agent_public_refuses_a_list_the_config_file_owns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from litellm.proxy import proxy_server
+
+    rows, _ = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=[])
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text("litellm_settings:\n  public_agent_groups: [agent-1]\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_config_file_path", str(config_file))
+    await proxy_server.proxy_config.get_config()
+
+    with pytest.raises(HTTPException) as already_public:
+        await agent_endpoints.make_agent_public(agent_id="agent-1", user_api_key_dict=_PROXY_ADMIN)
+    with pytest.raises(HTTPException) as refused:
+        await agent_endpoints.make_agent_public(agent_id="agent-2", user_api_key_dict=_PROXY_ADMIN)
+
+    assert already_public.value.status_code == 400
+    assert "already in public agent groups" in already_public.value.detail
+    assert refused.value.status_code == 400
+    assert refused.value.detail["keys"] == ["public_agent_groups"]
+    assert rows.stored("litellm_settings")["public_agent_groups"] == []
+
+
+@pytest.mark.asyncio
+async def test_make_agent_public_appends_to_the_config_file_without_db_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=[], store_model_in_db=False)
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text("litellm_settings:\n  public_agent_groups: [agent-1]\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_config_file_path", str(config_file))
+
+    response: Final = await agent_endpoints.make_agent_public(agent_id="agent-2", user_api_key_dict=_PROXY_ADMIN)
+    with pytest.raises(HTTPException) as duplicate:
+        await agent_endpoints.make_agent_public(agent_id="agent-1", user_api_key_dict=_PROXY_ADMIN)
+
+    assert response["public_agent_groups"] == ["agent-1", "agent-2"]
+    assert yaml.safe_load(config_file.read_text())["litellm_settings"]["public_agent_groups"] == ["agent-1", "agent-2"]
+    assert duplicate.value.status_code == 400
+
+
+def _hold_the_first_invalidation_until_the_next_one(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    real_invalidate: Final = proxy_server.invalidate_config_param
+    next_invalidation: Final = asyncio.Event()
+    invalidations: Final = itertools.count()
+
+    async def invalidate(param_name: str) -> None:
+        if next(invalidations) == 0:
+            await asyncio.wait_for(next_invalidation.wait(), timeout=5)
+        else:
+            next_invalidation.set()
+        await real_invalidate(param_name)
+
+    monkeypatch.setattr(proxy_server, "invalidate_config_param", invalidate)
+
+
+@pytest.mark.asyncio
+async def test_make_agent_public_concurrent_publishes_stay_in_the_worker_list_when_invalidation_is_slow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+
+    rows, _ = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=[])
+    _hold_the_first_invalidation_until_the_next_one(monkeypatch)
+
+    await asyncio.gather(
+        agent_endpoints.make_agent_public(agent_id="agent-1", user_api_key_dict=_PROXY_ADMIN),
+        agent_endpoints.make_agent_public(agent_id="agent-2", user_api_key_dict=_PROXY_ADMIN),
+    )
+
+    assert rows.stored("litellm_settings")["public_agent_groups"] == ["agent-1", "agent-2"]
+    assert litellm.public_agent_groups == ["agent-1", "agent-2"]
+
+
+@pytest.mark.asyncio
+async def test_make_agent_public_is_seen_by_the_next_settings_read_on_this_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy import utils as proxy_utils
+
+    rows, _ = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=["agent-1"])
+    live_replica: Final = ReplicaPrisma(rows)
+    monkeypatch.setattr(proxy_server, "prisma_client", live_replica)
+    monkeypatch.setattr(proxy_utils, "litellm_config_cache", DualCache())
+    await proxy_utils.get_config_param(live_replica, "litellm_settings")
+
+    await agent_endpoints.make_agent_public(agent_id="agent-2", user_api_key_dict=_PROXY_ADMIN)
+
+    cached_row: Final = await proxy_utils.get_config_param(live_replica, "litellm_settings")
+    assert cached_row.param_value["public_agent_groups"] == ["agent-1", "agent-2"]
+    assert proxy_server.proxy_config.litellm_settings.get("public_agent_groups") == ["agent-1", "agent-2"]
+
+
+def _make_agents_public(agent_ids: list[str], *, previous_agent_ids: list[str] | None):
+    return agent_endpoints.make_agents_public(
+        request=MakeAgentsPublicRequest(agent_ids=agent_ids, previous_agent_ids=previous_agent_ids),
+        user_api_key_dict=_PROXY_ADMIN,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored, previous, requested, expected",
+    [
+        (["agent-1"], [], ["agent-2"], ["agent-1", "agent-2"]),
+        (["agent-1", "agent-2"], ["agent-1", "agent-2"], ["agent-2"], ["agent-2"]),
+        (["agent-2"], ["agent-1"], ["agent-1"], ["agent-2"]),
+        (["agent-1"], [], ["agent-1"], ["agent-1"]),
+        (["agent-2", "agent-1"], ["agent-1"], ["agent-1", "agent-2"], ["agent-2", "agent-1"]),
+        ([], [], ["agent-2", "agent-1", "agent-2"], ["agent-2", "agent-1"]),
+    ],
+    ids=[
+        "keeps-an-agent-the-stale-modal-never-showed",
+        "drops-only-the-deselected-agent",
+        "keeps-another-writers-removal",
+        "skips-an-agent-already-stored",
+        "keeps-the-stored-order",
+        "adds-in-request-order-once",
+    ],
+)
+async def test_make_agents_public_applies_only_the_modal_change_to_the_stored_list(
+    monkeypatch: pytest.MonkeyPatch, stored: list[str], previous: list[str], requested: list[str], expected: list[str]
+) -> None:
+    import litellm
+
+    rows, _ = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=stored)
+
+    response: Final = await _make_agents_public(requested, previous_agent_ids=previous)
+
+    assert response["public_agent_groups"] == expected
+    assert rows.stored("litellm_settings")["public_agent_groups"] == expected
+    assert litellm.public_agent_groups == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored, previous, requested, expected",
+    [
+        (["agent-1", "agent-gone"], ["agent-1"], ["agent-1", "agent-2"], ["agent-1", "agent-2"]),
+        (["agent-1", "agent-gone"], ["agent-gone"], ["agent-gone", "agent-2"], ["agent-1", "agent-2"]),
+        (["agent-db-only"], [], ["agent-1"], ["agent-db-only", "agent-1"]),
+        (["agent-1", 7], ["agent-1"], ["agent-1", "agent-2"], ["agent-1", "agent-2"]),
+    ],
+    ids=[
+        "drops-a-deleted-agent-the-modal-never-showed",
+        "drops-a-deleted-agent-a-stale-modal-still-ticked",
+        "keeps-an-agent-this-worker-has-not-loaded",
+        "drops-a-number-listed",
+    ],
+)
+async def test_make_agents_public_drops_only_agents_that_no_longer_exist(
+    monkeypatch: pytest.MonkeyPatch, stored: list[str | int], previous: list[str], requested: list[str], expected: list[str]
+) -> None:
+    import litellm
+
+    rows, _ = _replica_that_missed_a_publish(
+        monkeypatch, stored_public_agent_groups=stored, agents_only_in_db=("agent-db-only",)
+    )
+    monkeypatch.setattr(litellm, "public_agent_groups", list(stored))
+
+    response: Final = await _make_agents_public(requested, previous_agent_ids=previous)
+
+    assert response["public_agent_groups"] == expected
+    assert rows.stored("litellm_settings")["public_agent_groups"] == expected
+
+
+@pytest.mark.asyncio
+async def test_make_agents_public_rejects_a_newly_ticked_agent_that_does_not_exist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows, _ = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=["agent-1"])
+
+    with pytest.raises(HTTPException) as rejected:
+        await _make_agents_public(["agent-1", "agent-gone"], previous_agent_ids=["agent-1"])
+
+    assert rejected.value.status_code == 404
+    assert rows.stored("litellm_settings")["public_agent_groups"] == ["agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_make_agents_public_concurrent_modal_saves_keep_both_agents(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+
+    rows, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=[])
+    _hold_the_first_invalidation_until_the_next_one(monkeypatch)
+
+    await asyncio.gather(
+        _make_agents_public(["agent-1"], previous_agent_ids=[]),
+        _make_agents_public(["agent-2"], previous_agent_ids=[]),
+    )
+
+    assert rows.stored("litellm_settings")["public_agent_groups"] == ["agent-1", "agent-2"]
+    assert litellm.public_agent_groups == ["agent-1", "agent-2"]
+    assert [agent.agent_id for agent in registry.get_public_agent_list()] == ["agent-1", "agent-2"]
+
+
+@pytest.mark.asyncio
+async def test_make_agents_public_treats_a_config_agents_legacy_id_as_the_same_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=[])
+    config_agent: Final = {"agent_name": "Config Agent", "agent_card_params": _sample_agent_card_params()}
+    registry.load_agents_from_config([config_agent])
+    stable_id: Final = registry.stable_agent_id(next(iter(registry.config_agent_legacy_ids)))
+    legacy_id: Final = next(iter(registry.ids_for_agent(stable_id) - {stable_id}))
+    rows.serialized_rows["litellm_settings"] = json.dumps({"public_agent_groups": [legacy_id, "agent-1"]})
+
+    kept: Final = await _make_agents_public([stable_id, "agent-1"], previous_agent_ids=[])
+    unpublished: Final = await _make_agents_public(["agent-1"], previous_agent_ids=[stable_id, "agent-1"])
+
+    assert kept["public_agent_groups"] == [legacy_id, "agent-1"]
+    assert unpublished["public_agent_groups"] == ["agent-1"]
+    assert rows.stored("litellm_settings")["public_agent_groups"] == ["agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_make_agents_public_matches_a_legacy_id_in_previous_agent_ids_to_the_stored_agent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=[])
+    config_agent: Final = {"agent_name": "Config Agent", "agent_card_params": _sample_agent_card_params()}
+    registry.load_agents_from_config([config_agent])
+    stable_id: Final = registry.stable_agent_id(next(iter(registry.config_agent_legacy_ids)))
+    legacy_id: Final = next(iter(registry.ids_for_agent(stable_id) - {stable_id}))
+    rows.serialized_rows["litellm_settings"] = json.dumps({"public_agent_groups": [stable_id, "agent-1"]})
+
+    unchanged: Final = await _make_agents_public([stable_id, "agent-1"], previous_agent_ids=[legacy_id, "agent-1"])
+    unpublished: Final = await _make_agents_public(["agent-1"], previous_agent_ids=[legacy_id, "agent-1"])
+
+    assert unchanged["public_agent_groups"] == [stable_id, "agent-1"]
+    assert unpublished["public_agent_groups"] == ["agent-1"]
+    assert rows.stored("litellm_settings")["public_agent_groups"] == ["agent-1"]
+
+
+@pytest.mark.asyncio
+async def test_make_agents_public_stores_one_id_when_both_ids_of_a_config_agent_are_ticked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=[])
+    config_agent: Final = {"agent_name": "Config Agent", "agent_card_params": _sample_agent_card_params()}
+    registry.load_agents_from_config([config_agent])
+    legacy_id: Final = next(iter(registry.config_agent_legacy_ids))
+    stable_id: Final = registry.stable_agent_id(legacy_id)
+
+    response: Final = await _make_agents_public([legacy_id, stable_id, "agent-1"], previous_agent_ids=[])
+
+    assert response["public_agent_groups"] == [legacy_id, "agent-1"]
+    assert rows.stored("litellm_settings")["public_agent_groups"] == [legacy_id, "agent-1"]
+
+
+def _deletable_agent_one(monkeypatch: pytest.MonkeyPatch, rows: ConfigRows, registry: AgentRegistry) -> AsyncMock:
+    agents_table: Final = SimpleNamespace(
+        find_unique=AsyncMock(return_value={"agent_id": "agent-1", "agent_name": "Agent One"})
+    )
+    delete_agent_from_db: Final = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        ReplicaPrisma(rows, tables={"litellm_agentstable": agents_table}),
+    )
+    monkeypatch.setattr(
+        agent_endpoints, "AGENT_REGISTRY", MagicMock(wraps=registry, delete_agent_from_db=delete_agent_from_db)
+    )
+    return delete_agent_from_db
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored", [["agent-1", "agent-2"], ["agent-1", 7, "agent-2"]], ids=["agents-listed", "a-number-listed"]
+)
+async def test_delete_agent_unpublishes_it_so_a_new_agent_reusing_its_id_starts_private(
+    monkeypatch: pytest.MonkeyPatch, stored: list[str | int]
+) -> None:
+    import litellm
+
+    rows, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=stored)
+    _ = _deletable_agent_one(monkeypatch, rows, registry)
+
+    response: Final = await agent_endpoints.delete_agent(agent_id="agent-1", user_api_key_dict=_PROXY_ADMIN)
+
+    assert response == {"message": "Agent agent-1 deleted successfully"}
+    assert rows.stored("litellm_settings")["public_agent_groups"] == ["agent-2"]
+    assert litellm.public_agent_groups == ["agent-2"]
+
+
+@pytest.mark.asyncio
+async def test_delete_agent_leaves_the_config_file_alone_when_settings_are_not_stored_in_the_db(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    rows, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=[], store_model_in_db=False)
+    config_file: Final = tmp_path / "config.yaml"
+    config_text: Final = (
+        "# operator note\n"
+        "general_settings:\n"
+        "  master_key: os.environ/AGENT_DELETE_TEST_MASTER_KEY\n"
+        "litellm_settings:\n"
+        "  public_agent_groups: [agent-1, agent-2]\n"
+    )
+    config_file.write_text(config_text)
+    monkeypatch.setenv("AGENT_DELETE_TEST_MASTER_KEY", "sk-must-stay-out-of-the-file")
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_config_file_path", str(config_file))
+    delete_agent_from_db: Final = _deletable_agent_one(monkeypatch, rows, registry)
+
+    response: Final = await agent_endpoints.delete_agent(agent_id="agent-1", user_api_key_dict=_PROXY_ADMIN)
+
+    assert response == {"message": "Agent agent-1 deleted successfully"}
+    delete_agent_from_db.assert_awaited_once()
+    assert config_file.read_text() == config_text
+
+
+class _DisconnectingConfigRows(ConfigRows):
+    async def find_first(self, *, where: Mapping[str, str]) -> StoredConfigRow | None:
+        raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+
+
+@pytest.mark.parametrize(
+    "stored_rows",
+    [
+        pytest.param(
+            ConfigRows({"litellm_settings": {"public_agent_groups": ["agent-1", 7]}}), id="the stored list is invalid"
+        ),
+        pytest.param(
+            _DisconnectingConfigRows({"litellm_settings": {"public_agent_groups": ["agent-1"]}}),
+            id="the database connection drops",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_delete_agent_still_deletes_when_the_stored_public_list_cannot_be_rewritten(
+    monkeypatch: pytest.MonkeyPatch, stored_rows: ConfigRows
+) -> None:
+    _, registry = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=["agent-1"])
+    delete_agent_from_db: Final = _deletable_agent_one(monkeypatch, stored_rows, registry)
+
+    response: Final = await agent_endpoints.delete_agent(agent_id="agent-1", user_api_key_dict=_PROXY_ADMIN)
+
+    assert response == {"message": "Agent agent-1 deleted successfully"}
+    delete_agent_from_db.assert_awaited_once()
+    assert [agent.agent_name for agent in registry.get_agent_list()] == ["Agent Two"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "listed", [["agent-1"], ["agent-gone", 7]], ids=["agents-listed", "a-deleted-agent-and-a-number-listed"]
+)
+async def test_make_agents_public_without_previous_agent_ids_replaces_the_stored_list(
+    monkeypatch: pytest.MonkeyPatch, listed: list[str | int]
+) -> None:
+    import litellm
+    from litellm.proxy import proxy_server
+
+    _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=["agent-1"])
+    monkeypatch.setattr(litellm, "public_agent_groups", listed)
+    saved_configs: Final = []
+    monkeypatch.setattr(
+        proxy_server.proxy_config, "get_config", AsyncMock(return_value={"litellm_settings": {"drop_params": True}})
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_config,
+        "save_config",
+        AsyncMock(side_effect=lambda new_config: saved_configs.append(new_config)),
+    )
+
+    response: Final = await _make_agents_public(["agent-2"], previous_agent_ids=None)
+
+    assert response["public_agent_groups"] == ["agent-2"]
+    assert litellm.public_agent_groups == ["agent-2"]
+    assert saved_configs == [{"litellm_settings": {"drop_params": True, "public_agent_groups": ["agent-2"]}}]
+
+
+@pytest.mark.asyncio
+async def test_make_agents_public_refuses_a_change_to_a_list_the_config_file_owns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from litellm.proxy import proxy_server
+
+    rows, _ = _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=[])
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text("litellm_settings:\n  public_agent_groups: [agent-1]\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_config_file_path", str(config_file))
+    await proxy_server.proxy_config.get_config()
+
+    unchanged: Final = await _make_agents_public(["agent-1"], previous_agent_ids=["agent-1"])
+    with pytest.raises(HTTPException) as refused:
+        await _make_agents_public(["agent-1", "agent-2"], previous_agent_ids=["agent-1"])
+
+    assert unchanged["public_agent_groups"] == ["agent-1"]
+    assert refused.value.status_code == 400
+    assert refused.value.detail["keys"] == ["public_agent_groups"]
+    assert rows.stored("litellm_settings")["public_agent_groups"] == []
+
+
+@pytest.mark.asyncio
+async def test_make_agents_public_applies_the_modal_change_to_the_config_file_without_db_settings(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import litellm
+
+    _replica_that_missed_a_publish(monkeypatch, stored_public_agent_groups=[], store_model_in_db=False)
+    config_file: Final = tmp_path / "config.yaml"
+    config_file.write_text("litellm_settings:\n  public_agent_groups: [agent-1]\n")
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_config_file_path", str(config_file))
+
+    added: Final = await _make_agents_public(["agent-2"], previous_agent_ids=[])
+    unchanged: Final = await _make_agents_public(["agent-1", "agent-2"], previous_agent_ids=["agent-1", "agent-2"])
+
+    assert added["public_agent_groups"] == unchanged["public_agent_groups"] == ["agent-1", "agent-2"]
+    assert yaml.safe_load(config_file.read_text())["litellm_settings"]["public_agent_groups"] == ["agent-1", "agent-2"]
+    assert litellm.public_agent_groups == ["agent-1", "agent-2"]
 
 
 @pytest.mark.parametrize("enabled, claim_field, expected", [(True, "azp", True), (False, "azp", False), (True, None, False)])

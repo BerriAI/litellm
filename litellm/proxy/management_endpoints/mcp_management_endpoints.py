@@ -19,7 +19,7 @@ import functools
 import importlib
 import json
 import os
-from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -129,6 +129,18 @@ def does_mcp_server_exist(mcp_server_records: Iterable[_HasServerId], mcp_server
     return False
 
 
+def _set_public_mcp_servers(public_mcp_servers: tuple[str, ...]) -> None:
+    litellm.public_mcp_servers = list(public_mcp_servers)
+
+
+def _unregistered_server_ids(
+    server_ids: Iterable[object], registered: Callable[[str], object | None]
+) -> frozenset[str]:
+    return frozenset(
+        server_id for server_id in server_ids if isinstance(server_id, str) and registered(server_id) is None
+    )
+
+
 DEFAULT_MCP_REGISTRY_VERSION: Final = "1.0.0"
 
 if TYPE_CHECKING:
@@ -234,6 +246,7 @@ if MCP_AVAILABLE:
         oauth_credentials_for_upstream_edit,
         purge_user_oauth_credentials_for_server,
         reject_mcp_server,
+        served_mcp_server_ids,
         set_mcp_server_pinned_tools,
         stale_mcp_auth_fields,
         store_user_credential,
@@ -2631,6 +2644,8 @@ if MCP_AVAILABLE:
                 },
             )
 
+        from litellm.proxy.proxy_server import proxy_config
+
         # try to delete the mcp server
         mcp_server_record_deleted: Final = await delete_mcp_server(prisma_client, server_id)
 
@@ -2640,6 +2655,12 @@ if MCP_AVAILABLE:
                 detail={"error": f"MCP Server not found, passed server_id={server_id}"},
             )
         global_mcp_server_manager.remove_server(mcp_server_record_deleted)
+        await proxy_config.remove_from_list_setting(
+            section_name="litellm_settings",
+            key="public_mcp_servers",
+            item=server_id,
+            on_written=_set_public_mcp_servers,
+        )
 
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()
@@ -3381,10 +3402,8 @@ if MCP_AVAILABLE:
             from litellm.proxy.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
-            from litellm.proxy.proxy_server import proxy_config
+            from litellm.proxy.proxy_server import prisma_client, proxy_config
 
-            # Load existing config
-            config: Final = await proxy_config.get_config()
             # Check if user has admin permissions
             if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
                 raise HTTPException(
@@ -3394,14 +3413,46 @@ if MCP_AVAILABLE:
                     },
                 )
 
-            for server_id in request.mcp_server_ids:
-                server = global_mcp_server_manager.get_mcp_server_by_id(server_id=server_id)
-                if server is None:
-                    raise HTTPException(
-                        status_code=404,
-                        detail=f"MCP Server with ID {server_id} not found",
-                    )
+            unregistered: Final = _unregistered_server_ids(
+                (*request.mcp_server_ids, *(litellm.public_mcp_servers or ())),
+                global_mcp_server_manager.get_mcp_server_by_id,
+            )
+            missing: Final = (
+                unregistered
+                if prisma_client is None or not unregistered
+                else unregistered.difference(await served_mcp_server_ids(prisma_client, unregistered))
+            )
+            previously_listed: Final = frozenset(request.previous_mcp_server_ids or ())
+            unknown: Final = next(
+                (
+                    server_id
+                    for server_id in request.mcp_server_ids
+                    if server_id in missing and server_id not in previously_listed
+                ),
+                None,
+            )
+            if unknown is not None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"MCP Server with ID {unknown} not found",
+                )
 
+            if request.previous_mcp_server_ids is not None:
+                stored_public_mcp_servers: Final = await proxy_config.apply_list_setting_delta(
+                    section_name="litellm_settings",
+                    key="public_mcp_servers",
+                    requested=tuple(server_id for server_id in request.mcp_server_ids if server_id not in missing),
+                    previous=(*request.previous_mcp_server_ids, *missing),
+                    on_written=_set_public_mcp_servers,
+                )
+                return {
+                    "message": "Successfully updated public mcp servers",
+                    "public_mcp_servers": list(stored_public_mcp_servers),
+                    "updated_by": user_api_key_dict.user_id,
+                }
+
+            # Load existing config
+            config: Final = await proxy_config.get_config()
             # Update config with new settings
             if "litellm_settings" not in config or config["litellm_settings"] is None:
                 config["litellm_settings"] = {}

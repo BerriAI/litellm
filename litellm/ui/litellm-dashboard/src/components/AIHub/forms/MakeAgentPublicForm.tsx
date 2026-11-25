@@ -31,11 +31,13 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
   const { t } = useTranslation();
   const [currentStep, setCurrentStep] = useState(0);
   const [selectedAgents, setSelectedAgents] = useState<Set<string>>(new Set());
+  const [preselectedAgents, setPreselectedAgents] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);
 
   const handleClose = () => {
     setCurrentStep(0);
     setSelectedAgents(new Set());
+    setPreselectedAgents(new Set());
     onClose();
   };
 
@@ -83,6 +85,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
         .map((agent) => agent.agent_id || agent.name);
 
       setSelectedAgents(new Set(alreadyPublicAgents));
+      setPreselectedAgents(new Set(alreadyPublicAgents));
     }
   }, [visible, agentHubData]);
 
@@ -97,7 +100,7 @@ const MakeAgentPublicForm: React.FC<MakeAgentPublicFormProps> = ({
       const agentIdsToMakePublic = Array.from(selectedAgents);
 
       // Make batch API call for all agents
-      await makeAgentsPublicCall(accessToken, agentIdsToMakePublic);
+      await makeAgentsPublicCall(accessToken, agentIdsToMakePublic, Array.from(preselectedAgents));
 
       toast.success(t("aiHub.makeAgentPublic.success", { total: agentIdsToMakePublic.length }));
       handleClose();

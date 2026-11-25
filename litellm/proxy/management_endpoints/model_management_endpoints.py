@@ -24,7 +24,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -287,8 +287,16 @@ class UpdatePublicModelGroupsRequest(LiteLLMBaseModel):
     """Request model for updating public model groups"""
 
     model_groups: list[str] = Field(description="List of model group names to make public")
+    previous_model_groups: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "The public model group list the caller started from. When set, only the model groups added or removed "
+            "relative to it change, so model groups another admin published or unpublished meanwhile keep that "
+            "change. When omitted, model_groups replaces the stored list."
+        ),
+    )
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class _ProxyModelRow(Protocol):
@@ -3703,6 +3711,10 @@ async def update_model(
         raise proxy_exception_for(e, default_status_code=status.HTTP_400_BAD_REQUEST) from e
 
 
+def _set_public_model_groups(public_model_groups: tuple[str, ...]) -> None:
+    litellm.public_model_groups = list(public_model_groups)
+
+
 @router.post(
     "/model_group/make_public",
     description="Update which model groups are public",
@@ -3749,6 +3761,20 @@ async def update_public_model_groups(
                 detail={"error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."},
             )
 
+        if request.previous_model_groups is not None:
+            stored_public_model_groups: Final = await proxy_config.apply_list_setting_delta(
+                section_name="litellm_settings",
+                key="public_model_groups",
+                requested=request.model_groups,
+                previous=request.previous_model_groups,
+                on_written=_set_public_model_groups,
+            )
+            return {
+                "message": "Successfully updated public model groups",
+                "public_model_groups": list(stored_public_model_groups),
+                "updated_by": user_api_key_dict.user_id,
+            }
+
         # Load existing config first (this may overwrite in-memory litellm settings
         # from DB values via _update_config_from_db), so set the in-memory value AFTER
         config: Final = await proxy_config.get_config()
@@ -3790,6 +3816,89 @@ async def update_public_model_groups(
         )
 
 
+_USEFUL_LINKS: Final = TypeAdapter(Mapping[str, JsonValue])
+_PUBLIC_MODEL_GROUPS_LINKS: Final = TypeAdapter(dict[str, str | dict[str, object]])
+
+
+def _set_public_model_groups_links(public_model_groups_links: Mapping[str, JsonValue]) -> None:
+    litellm.public_model_groups_links = _PUBLIC_MODEL_GROUPS_LINKS.validate_python(public_model_groups_links)
+
+
+def _link_url(link: JsonValue) -> JsonValue:
+    return link.get("url") if isinstance(link, dict) else link
+
+
+def _link_index(link: JsonValue) -> int:
+    index: Final = link.get("index", 0) if isinstance(link, dict) else 0
+    return index if isinstance(index, int) else 0
+
+
+def _at_index(link: JsonValue, index: int) -> JsonValue:
+    return {**link, "index": index} if isinstance(link, dict) else {"url": link, "index": index}
+
+
+def _names_with_url(names: tuple[str, ...], links: Mapping[str, JsonValue], url: str) -> tuple[str, ...]:
+    return tuple(name for name in names if _link_url(links[name]) == url)
+
+
+def _renamed_links(
+    requested: Mapping[str, JsonValue], previous: Mapping[str, JsonValue], stored: Mapping[str, JsonValue]
+) -> Mapping[str, str]:
+    removed: Final = tuple(
+        sorted((name for name in previous if name not in requested), key=lambda name: name not in stored)
+    )
+    added: Final = tuple(name for name in requested if name not in previous)
+    removed_urls: Final = frozenset(
+        url for url in (_link_url(previous[name]) for name in removed) if isinstance(url, str)
+    )
+    return MappingProxyType(
+        dict(
+            itertools.chain.from_iterable(
+                zip(_names_with_url(added, requested, url), _names_with_url(removed, previous, url))
+                for url in removed_urls
+            )
+        )
+    )
+
+
+def _merged_useful_links(
+    stored: Mapping[str, JsonValue], *, requested: Mapping[str, JsonValue], previous: Mapping[str, JsonValue]
+) -> Mapping[str, JsonValue]:
+    renamed_from: Final = _renamed_links(requested, previous, stored)
+    renamed: Final = {
+        name: _at_index(stored[old_name], _link_index(requested[name]))
+        for name, old_name in renamed_from.items()
+        if old_name in stored
+    }
+    edited: Final = {
+        name: link
+        for name, link in requested.items()
+        if name not in renamed_from and (name not in previous or _link_url(link) != _link_url(previous[name]))
+    }
+    moved: Final = {
+        name: _at_index(stored[name], _link_index(link))
+        for name, link in requested.items()
+        if name in stored
+        and name in previous
+        and name not in edited
+        and _link_index(link) != _link_index(previous[name])
+    }
+    removed: Final = frozenset(previous).difference(requested)
+    kept: Final = {name: link for name, link in stored.items() if name not in removed}
+    return _changed_links_after_taken_positions(
+        {**kept, **moved, **edited, **renamed}, changed=frozenset(moved).union(edited, renamed)
+    )
+
+
+def _changed_links_after_taken_positions(
+    links: Mapping[str, JsonValue], *, changed: frozenset[str]
+) -> Mapping[str, JsonValue]:
+    taken: Final = frozenset(_link_index(link) for name, link in links.items() if name not in changed)
+    tied: Final = tuple(name for name, link in links.items() if name in changed and _link_index(link) in taken)
+    after_last: Final = max((_link_index(link) for link in links.values()), default=-1) + 1
+    return {**links, **{name: _at_index(links[name], after_last + offset) for offset, name in enumerate(tied)}}
+
+
 @router.post(
     "/model_hub/update_useful_links",
     description="Update useful links",
@@ -3815,6 +3924,21 @@ async def update_useful_links(
                     "error": f"Only proxy admins can update public model groups. Your role={user_api_key_dict.user_role}"
                 },
             )
+
+        if request.previous_useful_links is not None:
+            requested_links: Final = _USEFUL_LINKS.validate_python(request.useful_links)
+            previous_links: Final = _USEFUL_LINKS.validate_python(request.previous_useful_links)
+            stored_useful_links: Final = await proxy_config.merge_mapping_setting(
+                section_name="litellm_settings",
+                key="public_model_groups_links",
+                merge=lambda stored: _merged_useful_links(stored, requested=requested_links, previous=previous_links),
+                on_written=_set_public_model_groups_links,
+            )
+            return {
+                "message": "Successfully updated useful links",
+                "useful_links": dict(stored_useful_links),
+                "updated_by": user_api_key_dict.user_id,
+            }
 
         # Load existing config first (this may overwrite in-memory litellm settings
         # from DB values via _update_config_from_db), so set the in-memory value AFTER

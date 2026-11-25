@@ -454,7 +454,17 @@ class AgentMakePublicResponse(LiteLLMBaseModel):
 
 
 class MakeAgentsPublicRequest(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
     agent_ids: list[str]
+    previous_agent_ids: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "The public agent list the caller started from. When set, only the agents added or removed relative to "
+            "it change, so agents another admin published or unpublished meanwhile keep that change. When omitted, "
+            "agent_ids replaces the stored list."
+        ),
+    )
 
 
 def normalize_a2a_jsonrpc_response(

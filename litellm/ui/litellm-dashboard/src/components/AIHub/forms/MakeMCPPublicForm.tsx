@@ -34,6 +34,7 @@ interface MakeMCPPublicFormProps {
 
 interface PublicationSelection {
   readonly catalog: MCPServerData[];
+  readonly previousServerIds: ReadonlySet<string>;
   readonly serverIds: Set<string>;
 }
 
@@ -49,6 +50,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
   const [selection, setSelection] = useState<PublicationSelection | null>(null);
   const [loading, setLoading] = useState(false);
   const selectedServers = selection?.serverIds ?? new Set<string>();
+  const previousServers: ReadonlySet<string> = selection?.previousServerIds ?? new Set<string>();
   const hasPublicationMetadata = mcpHubData.every((server) => typeof server.mcp_info?.is_public_explicit === "boolean");
   const canManagePublication = hasPublicationMetadata && selection?.catalog === mcpHubData;
   const publicationYaml = [
@@ -85,15 +87,15 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
     } else {
       newSelection.delete(serverId);
     }
-    setSelection({ catalog: mcpHubData, serverIds: newSelection });
+    setSelection({ catalog: mcpHubData, previousServerIds: previousServers, serverIds: newSelection });
   };
 
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
       const allServerIds = mcpHubData.map((server) => server.server_id);
-      setSelection({ catalog: mcpHubData, serverIds: new Set(allServerIds) });
+      setSelection({ catalog: mcpHubData, previousServerIds: previousServers, serverIds: new Set(allServerIds) });
     } else {
-      setSelection({ catalog: mcpHubData, serverIds: new Set() });
+      setSelection({ catalog: mcpHubData, previousServerIds: previousServers, serverIds: new Set() });
     }
   };
 
@@ -105,7 +107,11 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
     const publicServerIds = mcpHubData
       .filter((server) => server.mcp_info.is_public_explicit === true)
       .map((server) => server.server_id);
-    setSelection({ catalog: mcpHubData, serverIds: new Set(publicServerIds) });
+    setSelection({
+      catalog: mcpHubData,
+      previousServerIds: new Set(publicServerIds),
+      serverIds: new Set(publicServerIds),
+    });
     setCurrentStep(0);
   }, [visible, mcpHubData, hasPublicationMetadata]);
 
@@ -116,7 +122,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
       const serverIdsToMakePublic = Array.from(selectedServers);
 
       // Make batch API call for all servers
-      await makeMCPPublicCall(accessToken, serverIdsToMakePublic);
+      await makeMCPPublicCall(accessToken, serverIdsToMakePublic, Array.from(previousServers));
 
       toast.success(t("aiHub.makeMcpPublic.updated"));
       handleClose();

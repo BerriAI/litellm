@@ -24,6 +24,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.unit.proxy.fake_config_table import section_locked_transactions
+
 from .conftest import VOLATILE_KEYS, normalize
 
 
@@ -52,6 +54,7 @@ def _install_litellm_config(mock_prisma: MagicMock) -> MagicMock:
     table.delete = AsyncMock()
     mock_prisma.db.litellm_config = table
     mock_prisma.writer_db.litellm_config = table
+    mock_prisma.tx = section_locked_transactions(table)
     return table
 
 

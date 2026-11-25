@@ -1245,6 +1245,85 @@ describe("searchToolQueryCall", () => {
   });
 });
 
+describe("AI Hub publication calls", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it.each([
+    {
+      send: () => Networking.makeAgentsPublicCall("token", ["agent-1"], ["agent-2"]),
+      body: { agent_ids: ["agent-1"], previous_agent_ids: ["agent-2"] },
+    },
+    {
+      send: () => Networking.makeMCPPublicCall("token", ["server-1"], ["server-2"]),
+      body: { mcp_server_ids: ["server-1"], previous_mcp_server_ids: ["server-2"] },
+    },
+    {
+      send: () => Networking.makeModelGroupPublic("token", ["gpt-4"], ["gpt-3.5-turbo"]),
+      body: { model_groups: ["gpt-4"], previous_model_groups: ["gpt-3.5-turbo"] },
+    },
+  ])("sends the selected list with the list it started from: $body", async ({ send, body }) => {
+    const mockFetch = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    global.fetch = mockFetch;
+
+    await send();
+
+    expect(JSON.parse(String(mockFetch.mock.calls.at(-1)?.[1]?.body))).toEqual(body);
+  });
+
+  const missingModelGroups = JSON.stringify({ detail: [{ type: "missing", loc: ["body", "model_groups"] }] });
+  const notAdmin = JSON.stringify({ detail: { error: "Only proxy admins can update public model groups" } });
+
+  it.each([
+    { send: () => Networking.makeAgentsPublicCall("token", ["agent-1"], []), refusal: notAdmin, status: 403 },
+    { send: () => Networking.makeMCPPublicCall("token", ["server-1"], []), refusal: notAdmin, status: 403 },
+    { send: () => Networking.makeModelGroupPublic("token", ["gpt-4"], []), refusal: notAdmin, status: 403 },
+    { send: () => Networking.makeModelGroupPublic("token", ["gpt-4"], []), refusal: missingModelGroups, status: 422 },
+  ])("rejects without retrying when the proxy refuses the publish: $status", async ({ send, refusal, status }) => {
+    const mockFetch = vi.fn().mockImplementation(async () => new Response(refusal, { status }));
+    global.fetch = mockFetch;
+
+    await expect(send()).rejects.toThrow(refusal);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes model groups without the previous list when an older proxy forbids that field", async () => {
+    const olderProxyRefusal = JSON.stringify({
+      detail: [
+        { type: "extra_forbidden", loc: ["body", "previous_model_groups"], msg: "Extra inputs are not permitted" },
+      ],
+    });
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(olderProxyRefusal, { status: 422 }))
+      .mockResolvedValueOnce(Response.json({ message: "Successfully updated public model groups" }));
+    global.fetch = mockFetch;
+
+    await expect(Networking.makeModelGroupPublic("token", ["gpt-4"], ["gpt-3.5-turbo"])).resolves.toEqual({
+      message: "Successfully updated public model groups",
+    });
+    expect(mockFetch.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      { model_groups: ["gpt-4"], previous_model_groups: ["gpt-3.5-turbo"] },
+      { model_groups: ["gpt-4"] },
+    ]);
+  });
+
+  it("rejects when an older proxy also refuses the publish without the previous list", async () => {
+    const olderProxyRefusal = JSON.stringify({
+      detail: [{ type: "extra_forbidden", loc: ["body", "previous_model_groups"] }],
+    });
+    global.fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(olderProxyRefusal, { status: 422 }))
+      .mockResolvedValueOnce(new Response(notAdmin, { status: 403 }));
+
+    await expect(Networking.makeModelGroupPublic("token", ["gpt-4"], [])).rejects.toThrow(notAdmin);
+  });
+});
+
 describe("uploadClaudeCodeSkill", () => {
   afterEach(() => vi.unstubAllGlobals());
 

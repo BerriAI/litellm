@@ -48,6 +48,7 @@ from litellm.proxy.utils import ProxyLogging
 from litellm.rust_bridge._native import RustOrganizationRepository, RustTeamRepository, RustUserRepository
 from litellm.types.mcp import MCPAuth, MCPCredentials
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
+from tests.unit.proxy.fake_config_table import ConfigRows, ReplicaPrisma, RowsWithIds
 from tests.unit.proxy.rust_auth_stores import FakeUserStore, RustAuthStores
 
 
@@ -316,6 +317,226 @@ async def test_mcp_publication_updates_runtime_only_after_successful_save(
         save.assert_not_awaited()
     else:
         save.assert_awaited_once_with(new_config=expected_config)
+
+
+@pytest.mark.asyncio
+async def test_mcp_publication_from_the_modal_keeps_a_server_another_admin_published(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    manager: Final = MCPServerManager()
+    manager.config_mcp_servers = {
+        server_id: generate_mock_mcp_server_config_record(server_id=server_id)
+        for server_id in ("server-1", "server-2", "server-3")
+    }
+    rows: Final = ConfigRows({"litellm_settings": {"public_mcp_servers": ["server-1", "server-2"]}})
+    monkeypatch.setattr(litellm, "public_mcp_servers", [])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", ReplicaPrisma(rows))
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+    monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
+
+    response: Final = await mgmt_endpoints.make_mcp_servers_public(
+        MakeMCPServersPublicRequest(mcp_server_ids=["server-3"], previous_mcp_server_ids=["server-2"]),
+        generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response["public_mcp_servers"] == ["server-1", "server-3"]
+    assert rows.stored("litellm_settings")["public_mcp_servers"] == ["server-1", "server-3"]
+    assert litellm.public_mcp_servers == ["server-1", "server-3"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored, previous, requested, expected",
+    [
+        (["server-1", "server-gone"], ["server-1"], ["server-1", "server-3"], ["server-1", "server-3"]),
+        (["server-1", "server-gone"], ["server-gone"], ["server-gone", "server-3"], ["server-1", "server-3"]),
+        (["server-db-only"], [], ["server-3"], ["server-db-only", "server-3"]),
+        ([], [], ["server-db-only"], ["server-db-only"]),
+        (["server-1", "server-rejected"], ["server-1"], ["server-1"], ["server-1"]),
+        (["server-1", 7], ["server-1"], ["server-1", "server-3"], ["server-1", "server-3"]),
+    ],
+    ids=[
+        "drops-a-deleted-server-the-modal-never-showed",
+        "drops-a-deleted-server-a-stale-modal-still-ticked",
+        "keeps-a-server-this-worker-has-not-loaded",
+        "publishes-a-server-this-worker-has-not-loaded",
+        "drops-a-server-an-admin-rejected",
+        "drops-a-number-listed",
+    ],
+)
+async def test_mcp_publication_from_the_modal_drops_only_servers_that_no_longer_exist(
+    monkeypatch: pytest.MonkeyPatch, stored: list[str | int], previous: list[str], requested: list[str], expected: list[str]
+) -> None:
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    manager: Final = MCPServerManager()
+    manager.config_mcp_servers = {
+        server_id: generate_mock_mcp_server_config_record(server_id=server_id) for server_id in ("server-1", "server-3")
+    }
+    rows: Final = ConfigRows({"litellm_settings": {"public_mcp_servers": stored}})
+    tables: Final = {"litellm_mcpservertable": _mcp_server_rows()}
+    monkeypatch.setattr(litellm, "public_mcp_servers", list(stored))
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", ReplicaPrisma(rows, tables=tables))
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+    monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
+
+    response: Final = await mgmt_endpoints.make_mcp_servers_public(
+        MakeMCPServersPublicRequest(mcp_server_ids=requested, previous_mcp_server_ids=previous),
+        generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response["public_mcp_servers"] == expected
+    assert rows.stored("litellm_settings")["public_mcp_servers"] == expected
+
+
+def _mcp_server_rows() -> RowsWithIds:
+    return RowsWithIds(
+        "server_id",
+        ("server-db-only", "server-pending_review", "server-rejected"),
+        approval_statuses={"server-pending_review": "pending_review", "server-rejected": "rejected"},
+    )
+
+
+def _replica_with_public_server_1(monkeypatch: pytest.MonkeyPatch) -> ConfigRows:
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    manager: Final = MCPServerManager()
+    manager.config_mcp_servers = {"server-1": generate_mock_mcp_server_config_record(server_id="server-1")}
+    rows: Final = ConfigRows({"litellm_settings": {"public_mcp_servers": ["server-1"]}})
+    replica: Final = ReplicaPrisma(rows, tables={"litellm_mcpservertable": _mcp_server_rows()})
+    monkeypatch.setattr(litellm, "public_mcp_servers", ["server-1"])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", replica)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", ProxyConfig())
+    monkeypatch.setattr("litellm.proxy.mcp_server.mcp_server_manager.global_mcp_server_manager", manager)
+    return rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("server_id", ("server-pending_review", "server-rejected", "server-never-created"))
+async def test_mcp_publication_from_the_modal_rejects_a_newly_ticked_server_that_is_not_approved(
+    monkeypatch: pytest.MonkeyPatch, server_id: str
+) -> None:
+    rows: Final = _replica_with_public_server_1(monkeypatch)
+
+    with pytest.raises(HTTPException) as rejected:
+        await mgmt_endpoints.make_mcp_servers_public(
+            MakeMCPServersPublicRequest(mcp_server_ids=["server-1", server_id], previous_mcp_server_ids=["server-1"]),
+            generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert rejected.value.status_code == 404
+    assert rows.stored("litellm_settings")["public_mcp_servers"] == ["server-1"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_publication_without_a_previous_list_replaces_a_list_holding_a_number(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    _replica_with_public_server_1(monkeypatch)
+    monkeypatch.setattr(litellm, "public_mcp_servers", ["server-gone", 7])
+    saved_configs: Final = []
+    monkeypatch.setattr(
+        proxy_server.proxy_config, "get_config", AsyncMock(return_value={"litellm_settings": {"drop_params": True}})
+    )
+    monkeypatch.setattr(
+        proxy_server.proxy_config,
+        "save_config",
+        AsyncMock(side_effect=lambda new_config: saved_configs.append(new_config)),
+    )
+
+    response: Final = await mgmt_endpoints.make_mcp_servers_public(
+        MakeMCPServersPublicRequest(mcp_server_ids=["server-1"]),
+        generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response["public_mcp_servers"] == ["server-1"]
+    assert litellm.public_mcp_servers == ["server-1"]
+    assert saved_configs == [{"litellm_settings": {"drop_params": True, "public_mcp_servers": ["server-1"]}}]
+
+
+def _replica_publishing_servers(
+    monkeypatch: pytest.MonkeyPatch, *, config_file_public_mcp_servers: list[str] | None = None
+) -> ConfigRows:
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    rows: Final = ConfigRows({"litellm_settings": {"public_mcp_servers": ["server-1", "server-2"]}})
+    proxy_config: Final = ProxyConfig()
+    if config_file_public_mcp_servers is not None:
+        proxy_config._load_yaml_settings_stores(
+            {"litellm_settings": {"public_mcp_servers": config_file_public_mcp_servers}}
+        )
+    monkeypatch.setattr(litellm, "public_mcp_servers", ["server-1", "server-2"])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", ReplicaPrisma(rows))
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", proxy_config)
+    monkeypatch.setattr(
+        mgmt_endpoints,
+        "delete_mcp_server",
+        AsyncMock(return_value=generate_mock_mcp_server_db_record(server_id="server-1")),
+    )
+    monkeypatch.setattr(
+        mgmt_endpoints, "global_mcp_server_manager", MagicMock(reload_servers_from_database=AsyncMock())
+    )
+    return rows
+
+
+@pytest.mark.asyncio
+async def test_remove_mcp_server_unpublishes_it_so_a_new_server_reusing_its_id_starts_private(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows: Final = _replica_publishing_servers(monkeypatch)
+
+    response: Final = await mgmt_endpoints.remove_mcp_server(
+        server_id="server-1",
+        user_api_key_dict=generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        litellm_changed_by=None,
+    )
+
+    assert response.status_code == 202
+    assert rows.stored("litellm_settings")["public_mcp_servers"] == ["server-2"]
+    assert litellm.public_mcp_servers == ["server-2"]
+
+
+@pytest.mark.asyncio
+async def test_remove_mcp_server_keeps_it_public_when_no_server_was_deleted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows: Final = _replica_publishing_servers(monkeypatch)
+    monkeypatch.setattr(mgmt_endpoints, "delete_mcp_server", AsyncMock(return_value=None))
+
+    with pytest.raises(HTTPException) as not_found:
+        await mgmt_endpoints.remove_mcp_server(
+            server_id="server-1",
+            user_api_key_dict=generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN),
+            litellm_changed_by=None,
+        )
+
+    assert not_found.value.status_code == 404
+    assert rows.stored("litellm_settings")["public_mcp_servers"] == ["server-1", "server-2"]
+    assert litellm.public_mcp_servers == ["server-1", "server-2"]
+
+
+@pytest.mark.asyncio
+async def test_remove_mcp_server_still_deletes_when_the_config_file_owns_the_public_list(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rows: Final = _replica_publishing_servers(monkeypatch, config_file_public_mcp_servers=["server-1"])
+
+    response: Final = await mgmt_endpoints.remove_mcp_server(
+        server_id="server-1",
+        user_api_key_dict=generate_mock_user_api_key_auth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        litellm_changed_by=None,
+    )
+
+    assert response.status_code == 202
+    assert rows.stored("litellm_settings")["public_mcp_servers"] == ["server-1", "server-2"]
 
 
 class TestMCPCredentialsTokenExchangeProfile:

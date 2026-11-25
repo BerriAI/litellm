@@ -21,6 +21,18 @@ interface Link {
   index?: number;
 }
 
+type StoredUsefulLinks = Record<string, string | { url: string; index: number }>;
+
+const toLinkRows = (usefulLinks: StoredUsefulLinks): Link[] =>
+  Object.entries(usefulLinks)
+    .map(([displayName, value]) =>
+      typeof value === "object"
+        ? { displayName, url: value.url, index: value.index ?? 0 }
+        : { displayName, url: value, index: 0 },
+    )
+    .sort((a, b) => a.index - b.index)
+    .map((link, index) => ({ ...link, id: `${index}-${link.displayName}` }));
+
 const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessToken, userRole }) => {
   const { t } = useTranslation();
   const [links, setLinks] = useState<Link[]>([]);
@@ -29,6 +41,12 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
   const [isExpanded, setIsExpanded] = useState(true);
   const [isRearranging, setIsRearranging] = useState(false);
   const [originalLinksOrder, setOriginalLinksOrder] = useState<Link[]>([]);
+  const [savedLinks, setSavedLinks] = useState<StoredUsefulLinks>({});
+
+  const showStoredLinks = (usefulLinks: StoredUsefulLinks) => {
+    setSavedLinks(usefulLinks);
+    setLinks(toLinkRows(usefulLinks));
+  };
 
   const fetchUsefulLinks = async () => {
     if (!accessToken) return;
@@ -37,37 +55,7 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
       const response = await getPublicModelHubInfo();
 
       if (response && response.useful_links) {
-        const usefulLinks = response.useful_links || {};
-
-        // Convert object to array of links with ids
-        // Handle both old format (Dict[str, str]) and new format (Dict[str, {url, index}])
-        const linksArray = Object.entries(usefulLinks)
-          .map(([displayName, value]) => {
-            // Check if it's the new format with {url, index}
-            if (typeof value === "object" && value !== null && "url" in value) {
-              return {
-                id: `${(value as any).index ?? 0}-${displayName}`,
-                displayName,
-                url: (value as any).url as string,
-                index: (value as any).index ?? 0,
-              };
-            } else {
-              // Old format: just a string URL
-              return {
-                id: `0-${displayName}`,
-                displayName,
-                url: value as string,
-                index: 0,
-              };
-            }
-          })
-          .sort((a, b) => (a.index ?? 0) - (b.index ?? 0))
-          .map((link, index) => ({
-            ...link,
-            id: `${index}-${link.displayName}`,
-          }));
-
-        setLinks(linksArray);
+        showStoredLinks(response.useful_links);
       } else {
         setLinks([]);
       }
@@ -100,7 +88,8 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
         };
       });
 
-      await updateUsefulLinksCall(accessToken, linksObject);
+      const { useful_links } = await updateUsefulLinksCall(accessToken, linksObject, savedLinks);
+      showStoredLinks(useful_links);
 
       return true;
     } catch (error) {
@@ -136,7 +125,6 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     const updatedLinks = [...links, newLinkObj];
 
     if (await saveLinksToBackend(updatedLinks)) {
-      setLinks(updatedLinks);
       setNewLink({ url: "", displayName: "" });
       toast.success(t("aiHub.usefulLinks.added"));
     }
@@ -166,7 +154,6 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     const updatedLinks = links.map((link) => (link.id === editingLink.id ? editingLink : link));
 
     if (await saveLinksToBackend(updatedLinks)) {
-      setLinks(updatedLinks);
       setEditingLink(null);
       toast.success(t("aiHub.usefulLinks.updated"));
     }
@@ -180,7 +167,6 @@ const UsefulLinksManagement: React.FC<UsefulLinksManagementProps> = ({ accessTok
     const updatedLinks = links.filter((link) => link.id !== linkId);
 
     if (await saveLinksToBackend(updatedLinks)) {
-      setLinks(updatedLinks);
       toast.success(t("aiHub.usefulLinks.deleted"));
     }
   };

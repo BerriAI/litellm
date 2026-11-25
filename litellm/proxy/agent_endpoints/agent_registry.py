@@ -456,8 +456,9 @@ class AgentRegistry:
         return hashlib.sha256(json.dumps(agent_config, sort_keys=True).encode()).hexdigest()
 
     def ids_for_agent(self, agent_id: str) -> frozenset[str]:
+        stable_id: Final = self.stable_agent_id(agent_id)
         return frozenset(
-            {agent_id, *(legacy for legacy, stable in self.config_agent_legacy_ids.items() if stable == agent_id)}
+            {stable_id, *(legacy for legacy, stable in self.config_agent_legacy_ids.items() if stable == stable_id)}
         )
 
     def stable_agent_id(self, agent_id: str) -> str:
