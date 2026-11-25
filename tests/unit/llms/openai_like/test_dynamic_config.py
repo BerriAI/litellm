@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 
 from litellm.llms.openai_like import dynamic_config
@@ -139,3 +141,27 @@ class TestForceStoreFalse:
             headers={},
         )
         assert params["store"] is True
+
+
+class TestBackgroundRuns:
+    @pytest.mark.parametrize(
+        ("provider_flag", "model", "starts_runs"),
+        [
+            (False, "any-model", False),
+            (True, "any-model", True),
+            (True, "inline-model", False),
+            (True, "background_runs/inline-model", False),
+        ],
+    )
+    def test_only_a_flagged_provider_starts_runs_and_one_model_can_opt_out(
+        self, provider_flag: bool, model: str, starts_runs: bool
+    ) -> None:
+        config: Final = create_responses_config_class(
+            _provider(
+                "background_runs",
+                special_handling={"starts_background_runs": provider_flag},
+                model_special_handling={"inline-model": {"starts_background_runs": False}},
+            )
+        )()
+
+        assert config.starts_background_runs(model, None) is starts_runs

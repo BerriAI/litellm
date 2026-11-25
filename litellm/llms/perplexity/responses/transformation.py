@@ -40,6 +40,9 @@ class PerplexityResponsesConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.PERPLEXITY
 
+    def starts_background_runs(self, model: str, api_base: str | None) -> bool:
+        return True
+
     def validate_environment(self, headers: dict, model: str, litellm_params: GenericLiteLLMParams | None) -> dict:
         litellm_params = litellm_params or GenericLiteLLMParams()
         api_key: Final = (

@@ -73,6 +73,9 @@ class BedrockMantleResponsesAPIConfig(BedrockMantleAuthMixin, OpenAIResponsesAPI
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.BEDROCK_MANTLE
 
+    def starts_background_runs(self, model: str, api_base: str | None) -> bool:
+        return True
+
     def get_error_class(
         self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
     ) -> BaseLLMException:

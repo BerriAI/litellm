@@ -77,9 +77,6 @@ class VolcEngineResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.VOLCENGINE
 
-    def starts_background_runs(self, model: str) -> bool:
-        return "background" in self._SUPPORTED_OPTIONAL_PARAMS
-
     def get_supported_openai_params(self, model: str) -> list:
         """
         Volcengine Responses API: only documented parameters are supported.

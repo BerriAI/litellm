@@ -5420,25 +5420,6 @@ def _complete_databricks_agent(ctx: CompletionDispatchContext) -> _CompletionDis
     )
 
 
-def _responses_bridge_fakes_stream(
-    model: str,
-    custom_llm_provider: str,
-    optional_params: Mapping[str, object],
-    api_base: str | None,
-    deployment_model_info: Mapping[str, object] | None,
-) -> bool:
-    if optional_params.get("fake_stream") is True:
-        return True
-    from litellm.responses.main import dispatched_responses_api_config
-
-    responses_config: Final = dispatched_responses_api_config(
-        f"{custom_llm_provider}/{model}", custom_llm_provider, deployment_model_info, api_base
-    )
-    return responses_config is not None and responses_config.should_fake_stream(
-        model=model, stream=True, custom_llm_provider=custom_llm_provider
-    )
-
-
 def _bridge_params_without_unretrievable_background_run(
     optional_params: dict[str, object],  # mutable-ok: completion's optional_params, which the Responses bridge takes
     *,
@@ -5449,21 +5430,29 @@ def _bridge_params_without_unretrievable_background_run(
     api_base: str | None,
     deployment_model_info: Mapping[str, object] | None,
 ) -> dict[str, object]:  # mutable-ok: completion's optional_params, which the Responses bridge takes
-    from litellm.responses.main import starts_background_run_upstream
-
-    extra_body: Final = as_str_mapping(optional_params.get("extra_body")) or {}
-    if extra_body.get("stream", streams_upstream) is True and not _responses_bridge_fakes_stream(
-        model, custom_llm_provider, optional_params, api_base, deployment_model_info
-    ):
-        return optional_params
-    if not starts_background_run_upstream(
-        f"{custom_llm_provider}/{model}", custom_llm_provider, deployment_model_info, api_base
-    ):
-        return optional_params
-    from litellm.completion_extras.litellm_responses_transformation.transformation import without_background_run
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        requests_background_run,
+        unretrievable_background_run,
+        without_background,
+    )
     from litellm.litellm_core_utils.tool_fields import drop_policy
+    from litellm.responses.main import native_responses_dispatch
 
-    return without_background_run(optional_params, drop_policy(routing_kwargs), model, custom_llm_provider)
+    if not requests_background_run(optional_params):
+        return optional_params
+    dispatch: Final = native_responses_dispatch(
+        f"{custom_llm_provider}/{model}", custom_llm_provider, deployment_model_info, api_base
+    )
+    if dispatch is None:
+        return optional_params
+    extra_body: Final = as_str_mapping(optional_params.get("extra_body")) or {}
+    if extra_body.get("stream", streams_upstream) is True and not dispatch.fakes_stream():
+        return optional_params
+    if drop_policy(routing_kwargs).drops("background"):
+        return without_background(optional_params)
+    if dispatch.starts_background_runs():
+        raise unretrievable_background_run(model, custom_llm_provider)
+    return optional_params
 
 
 @tracer.wrap()

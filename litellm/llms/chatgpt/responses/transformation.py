@@ -37,21 +37,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 _CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
-_CHATGPT_REQUEST_KEYS: Final = frozenset(
-    {
-        "model",
-        "input",
-        "instructions",
-        "stream",
-        "store",
-        "include",
-        "tools",
-        "tool_choice",
-        "reasoning",
-        "previous_response_id",
-        "truncation",
-    }
-)
 
 
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
@@ -62,9 +47,6 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     @property
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.CHATGPT
-
-    def starts_background_runs(self, model: str) -> bool:
-        return "background" in _CHATGPT_REQUEST_KEYS
 
     def validate_environment(
         self,
@@ -115,7 +97,21 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             include.append("reasoning.encrypted_content")
         request["include"] = include
 
-        filtered: Final = {k: v for k, v in request.items() if k in _CHATGPT_REQUEST_KEYS}
+        allowed_keys: Final = {
+            "model",
+            "input",
+            "instructions",
+            "stream",
+            "store",
+            "include",
+            "tools",
+            "tool_choice",
+            "reasoning",
+            "previous_response_id",
+            "truncation",
+        }
+
+        filtered: Final = {k: v for k, v in request.items() if k in allowed_keys}
         service_tier: Final = _CHATGPT_SERVICE_TIERS.get(request.get("service_tier"))
         if service_tier is not None:
             filtered["service_tier"] = service_tier
