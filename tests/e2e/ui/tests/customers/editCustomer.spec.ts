@@ -10,20 +10,24 @@ type Customer = Readonly<{ id: string; budgetId: string }>;
 
 const headers = () => ({ Authorization: `Bearer ${masterKey()}` });
 
-async function createCustomer(request: APIRequestContext): Promise<Customer> {
-  const id = `e2e-edit-customer-${uniqueSuffix()}`;
-  const budgetId = `${id}-budget`;
-  const budget = await request.post("/budget/new", {
-    headers: headers(),
-    data: { budget_id: budgetId, max_budget: ORIGINAL_BUDGET },
-  });
-  expect(budget.ok(), await budget.text()).toBe(true);
+async function addCustomerToBudget(request: APIRequestContext, customer: Customer): Promise<void> {
   const created = await request.post("/customer/new", {
     headers: headers(),
-    data: { user_id: id, alias: ORIGINAL_ALIAS, budget_id: budgetId },
+    data: { user_id: customer.id, alias: ORIGINAL_ALIAS, budget_id: customer.budgetId },
   });
   expect(created.ok(), await created.text()).toBe(true);
-  return { id, budgetId };
+}
+
+async function createCustomer(request: APIRequestContext): Promise<Customer> {
+  const id = `e2e-edit-customer-${uniqueSuffix()}`;
+  const customer = { id, budgetId: `${id}-budget` };
+  const budget = await request.post("/budget/new", {
+    headers: headers(),
+    data: { budget_id: customer.budgetId, max_budget: ORIGINAL_BUDGET },
+  });
+  expect(budget.ok(), await budget.text()).toBe(true);
+  await addCustomerToBudget(request, customer);
+  return customer;
 }
 
 async function deleteCustomer(request: APIRequestContext, customer: Customer): Promise<void> {
@@ -55,10 +59,11 @@ async function openEditDialog(page: Page): Promise<Locator> {
   return dialog;
 }
 
-async function saveAndCapture(page: Page, dialog: Locator): Promise<Record<string, unknown>> {
+async function saveAndCapture(page: Page, dialog: Locator): Promise<{ body: unknown; status: number | undefined }> {
   const sent = page.waitForRequest(isCustomerUpdate);
   await saveButton(dialog).click();
-  return (await sent).postDataJSON();
+  const req = await sent;
+  return { body: req.postDataJSON(), status: (await req.response())?.status() };
 }
 
 test.describe("Edit customer dialog", () => {
@@ -82,10 +87,9 @@ test.describe("Edit customer dialog", () => {
 
     await aliasInput(dialog).fill("Renamed Alias");
     await budgetInput(dialog).fill("40");
-    const body = await saveAndCapture(page, dialog);
+    const saved = await saveAndCapture(page, dialog);
 
-    expect(body).toMatchObject({ user_id: customer.id, alias: "Renamed Alias", max_budget: 40 });
-    expect(body.blocked ?? false).toBe(false);
+    expect(saved.body).toEqual({ user_id: customer.id, alias: "Renamed Alias", blocked: false, max_budget: 40 });
     await expect(page.getByText("Customer updated")).toBeVisible();
     await expect(dialog).toBeHidden();
     await expect(page.getByRole("heading", { level: 1, name: "Renamed Alias" })).toBeVisible();
@@ -102,9 +106,9 @@ test.describe("Edit customer dialog", () => {
     await budgetInput(dialog).fill("");
     await budgetInput(dialog).pressSequentially("12a.5$");
     await expect(budgetInput(dialog)).toHaveValue("12.5");
-    const body = await saveAndCapture(page, dialog);
+    const saved = await saveAndCapture(page, dialog);
 
-    expect(body).toMatchObject({ user_id: customer.id, max_budget: 12.5 });
+    expect(saved.body).toEqual({ user_id: customer.id, alias: ORIGINAL_ALIAS, blocked: false, max_budget: 12.5 });
   });
 
   test("clearing the alias and budget sends null for both", async ({ page }) => {
@@ -113,28 +117,31 @@ test.describe("Edit customer dialog", () => {
 
     await aliasInput(dialog).fill("");
     await budgetInput(dialog).fill("");
-    const body = await saveAndCapture(page, dialog);
+    const saved = await saveAndCapture(page, dialog);
 
-    expect(body).toMatchObject({ user_id: customer.id, alias: null, max_budget: null });
+    expect(saved.body).toEqual({ user_id: customer.id, alias: null, blocked: false, max_budget: null });
   });
 
-  test("a rejected save shows the error, keeps the typed values, and the retry goes through", async ({ page }) => {
-    await page.route(
-      (url) => url.pathname.replace(/\/+$/, "").endsWith("/customer/update"),
-      (route) => route.fulfill({ status: 500, json: { error: { message: "Upstream database unavailable" } } }),
-      { times: 1 },
-    );
+  test("a save the server rejects shows its error, keeps the typed values, and the retry goes through", async ({
+    page,
+    request,
+  }) => {
     await openCustomer(page, customer, ORIGINAL_ALIAS);
     const dialog = await openEditDialog(page);
-
     await aliasInput(dialog).fill("Retry Alias");
-    await saveButton(dialog).click();
-    await expect(page.getByText("Failed to update customer: Upstream database unavailable")).toBeVisible();
+    const removed = await request.post("/customer/delete", { headers: headers(), data: { user_ids: [customer.id] } });
+    expect(removed.ok(), await removed.text()).toBe(true);
+    const expectedBody = { user_id: customer.id, alias: "Retry Alias", blocked: false, max_budget: ORIGINAL_BUDGET };
+
+    const rejected = await saveAndCapture(page, dialog);
+    expect(rejected).toEqual({ body: expectedBody, status: 404 });
+    await expect(page.getByText(/^Failed to update customer: .*does not exist/)).toContainText(customer.id);
     await expect(dialog).toBeVisible();
     await expect(aliasInput(dialog)).toHaveValue("Retry Alias");
 
-    const body = await saveAndCapture(page, dialog);
-    expect(body).toMatchObject({ user_id: customer.id, alias: "Retry Alias" });
+    await addCustomerToBudget(request, customer);
+    const retried = await saveAndCapture(page, dialog);
+    expect(retried).toEqual({ body: expectedBody, status: 200 });
     await expect(page.getByText("Customer updated")).toBeVisible();
     await expect(dialog).toBeHidden();
   });
