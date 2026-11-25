@@ -98,9 +98,15 @@ def test_opaque_controls_reject_restrictions_nested_in_lists_and_mappings(contro
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "scope,expected",
-    [("project", "model restrictions"), ("user", "model restrictions"), ("member", "model restrictions"),
-     ("missing-user", "owner"), ("missing-project", "inherited policies"), ("personal-key", "personal-key"),
-     ("member-model-budget", "model_max_budget")],
+    [
+        ("project", "model restrictions"),
+        ("user", "model restrictions"),
+        ("member", "model restrictions"),
+        ("missing-user", "owner"),
+        ("missing-project", "inherited policies"),
+        ("personal-key", "personal-key"),
+        ("member-model-budget", "model_max_budget"),
+    ],
 )
 async def test_cursor_opaque_admission_rejects_inherited_model_scopes(
     monkeypatch: pytest.MonkeyPatch, scope: str, expected: str
@@ -128,8 +134,10 @@ async def test_cursor_opaque_admission_rejects_inherited_model_scopes(
         else None
     )
     user: Final = LiteLLM_UserTable(
-        user_id="opaque-user", models=["scoped-model"] if scope == "user" else [],
-        teams=["restricted-owner-team"] if scope == "personal-key" else [], user_role=LitellmUserRoles.PROXY_ADMIN
+        user_id="opaque-user",
+        models=["scoped-model"] if scope == "user" else [],
+        teams=["restricted-owner-team"] if scope == "personal-key" else [],
+        user_role=LitellmUserRoles.PROXY_ADMIN,
     )
     identity: Final = UserAPIKeyAuth(
         user_id="opaque-user" if scope in {"member", "missing-user", "personal-key"} else None,
@@ -159,17 +167,27 @@ async def test_cursor_opaque_admission_rejects_inherited_model_scopes(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("scope", [
-    "owner-budget", "customer-model", "customer-tokens", "customer-budget",
-    "customer_org_id", "customer_team_id", "customer_member_id", "resolved-customer-model",
-])
+@pytest.mark.parametrize(
+    "scope",
+    [
+        "owner-budget",
+        "customer-model",
+        "customer-tokens",
+        "customer-budget",
+        "customer_org_id",
+        "customer_team_id",
+        "customer_member_id",
+        "resolved-customer-model",
+    ],
+)
 async def test_opaque_admission_checks_tuple_backed_inherited_controls(scope: str) -> None:
     from litellm.models.budget import BudgetLimit
     from litellm.models.team import BudgetLimitEntry
     from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth
 
     customer_scope: Final = CustomerScopeAuth(
-        key="customer_org", entity_id="restricted-customer",
+        key="customer_org",
+        entity_id="restricted-customer",
         allowed_models=("restricted-model",) if scope == "customer-model" else None,
         tpm_limit=1000 if scope == "customer-tokens" else None,
         budget_limits=(BudgetLimit(budget_duration="1mo", max_budget=10),) if scope == "customer-budget" else (),
@@ -179,15 +197,23 @@ async def test_opaque_admission_checks_tuple_backed_inherited_controls(scope: st
         metadata={scope: "bound-customer"} if scope.endswith("_id") else {},
     ).with_customer_model_scopes((("restricted-model",),) if scope == "resolved-customer-model" else ())
     user: Final = LiteLLM_UserTable(
-        user_id="restricted-owner", user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="restricted-owner",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
         budget_limits=(BudgetLimitEntry(budget_duration="1d", max_budget=10),) if scope == "owner-budget" else None,
     )
     route: Final = "/cursor-cli/agent.v1.AgentService/RunSSE"
     with pytest.raises(HTTPException) as denied:
         await common_checks(
-            request_body={}, team_object=None, user_object=user, end_user_object=None,
-            global_proxy_spend=None, general_settings={}, route=route, llm_router=None,
-            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()), valid_token=identity,
+            request_body={},
+            team_object=None,
+            user_object=user,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route=route,
+            llm_router=None,
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+            valid_token=identity,
             request=Request({"type": "http", "method": "POST", "path": route, "headers": [], "query_string": b""}),
             skip_budget_checks=True,
         )
@@ -2724,10 +2750,7 @@ async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_broad
     handle: Final = _GatedChannel()
     _install_channel(monkeypatch, handle)
     cache: Final = UserApiKeyCache(max_size_in_memory=2_000)
-    hashed_tokens: Final = tuple(
-        hashlib.sha256(f"token-{index}".encode()).hexdigest()
-        for index in range(600)
-    )
+    hashed_tokens: Final = tuple(hashlib.sha256(f"token-{index}".encode()).hexdigest() for index in range(600))
     for hashed_token in hashed_tokens:
         cache.set_local(AuthObject.virtual_key(hashed_token), {"token": hashed_token}, None)
     seeded: Final = tuple(
@@ -2738,9 +2761,7 @@ async def test_bulk_eviction_clears_this_worker_before_waiting_on_a_wedged_broad
         delete_cache_key_objects(hashed_tokens=hashed_tokens, user_api_key_cache=cache, proxy_logging_obj=None)
     )
     await asyncio.sleep(0.05)
-    still_cached: Final = tuple(
-        token for token in seeded if cache.get_local(AuthObject.virtual_key(token)) is not None
-    )
+    still_cached: Final = tuple(token for token in seeded if cache.get_local(AuthObject.virtual_key(token)) is not None)
     handle.release.set()
     await eviction
 
@@ -2783,10 +2804,7 @@ async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_
 ) -> None:
     handle: Final = _GatedChannel()
     _install_channel(monkeypatch, handle)
-    hashed_tokens: Final = tuple(
-        hashlib.sha256(f"token-{index}".encode()).hexdigest()
-        for index in range(600)
-    )
+    hashed_tokens: Final = tuple(hashlib.sha256(f"token-{index}".encode()).hexdigest() for index in range(600))
     cache, redis = shared_cache(FakeAuthCache(redis={token: {"token": token} for token in hashed_tokens}))
     for hashed_token in hashed_tokens:
         cache.set_local(AuthObject.virtual_key(hashed_token), {"token": hashed_token}, None)
@@ -2796,9 +2814,7 @@ async def test_bulk_eviction_clears_the_redis_copies_before_waiting_on_a_wedged_
     )
     await asyncio.sleep(0.05)
     refilled: Final = [
-        token
-        for token in hashed_tokens
-        if await cache.async_get_cache(key=AuthObject.virtual_key(token)) is not None
+        token for token in hashed_tokens if await cache.async_get_cache(key=AuthObject.virtual_key(token)) is not None
     ]
     handle.release.set()
     await eviction
@@ -2905,3 +2921,63 @@ async def test_common_checks_enforces_key_max_budget_for_custom_auth_keys(
         assert (exc_info.value.current_cost, exc_info.value.max_budget) == (spend, max_budget)
     else:
         assert await run() is True
+
+
+def _latest_alias_router() -> tuple[litellm.Router, str, str]:
+    from litellm.litellm_core_utils.model_latest_aliases import get_model_latest_aliases
+
+    alias, target = next(iter(get_model_latest_aliases()["openai"].items()))
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "latest", "litellm_params": {"model": f"openai/{alias}", "api_key": "test-api-key"}},
+            {
+                "model_name": "pinned",
+                "litellm_params": {"model": f"openai/{target}", "api_key": "test-api-key"},
+                "model_info": {"access_groups": ["pinned-group"]},
+            },
+            {
+                "model_name": "unrelated",
+                "litellm_params": {"model": "openai/unrelated-model", "api_key": "test-api-key"},
+            },
+        ]
+    )
+    return router, alias, target
+
+
+@pytest.mark.parametrize(
+    ("requested", "allowed_models", "allowed"),
+    [
+        ("latest", ["latest"], True),
+        ("latest", ["pinned"], True),
+        ("latest", ["pinned-group"], True),
+        ("latest", ["unrelated"], False),
+        ("pinned", ["latest"], False),
+        ("unrelated", ["pinned"], False),
+    ],
+)
+def test_a_latest_alias_is_callable_by_whoever_may_call_the_model_it_points_to(
+    requested: str, allowed_models: list[str], allowed: bool
+) -> None:
+    from litellm.proxy.auth.auth_checks import can_object_call_model
+
+    router, _, _ = _latest_alias_router()
+    if allowed:
+        assert can_object_call_model(model=requested, llm_router=router, models=allowed_models, object_type="key")
+    else:
+        with pytest.raises(ProxyException):
+            can_object_call_model(model=requested, llm_router=router, models=allowed_models, object_type="key")
+
+
+@pytest.mark.parametrize("with_router", [True, False])
+def test_a_latest_alias_requested_by_its_provider_name_passes_on_its_versioned_name(with_router: bool) -> None:
+    from litellm.proxy.auth.auth_checks import can_object_call_model
+
+    router, alias, target = _latest_alias_router()
+    llm_router: Final = router if with_router else None
+    assert can_object_call_model(
+        model=f"openai/{alias}", llm_router=llm_router, models=[f"openai/{target}"], object_type="key"
+    )
+    with pytest.raises(ProxyException):
+        can_object_call_model(
+            model=f"openai/{target}", llm_router=llm_router, models=[f"openai/{alias}"], object_type="key"
+        )

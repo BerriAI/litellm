@@ -124,6 +124,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     safe_get_request_headers,
     safe_get_request_query_params,
 )
+from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
 from litellm.proxy.common_utils.model_listing_utils import alias_map
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -5104,6 +5105,36 @@ def _owning_team_names_for_team_deployment(
     return (*((public_name,) if public_name else ()), *legacy_aliases)
 
 
+def _underlying_models(deployments: Iterable[Mapping[str, object]] | None) -> Iterator[tuple[str, str]]:
+    for deployment in deployments or ():
+        name, params = deployment.get("model_name"), deployment.get("litellm_params")
+        underlying = params.get("model") if isinstance(params, Mapping) else None
+        if isinstance(name, str) and isinstance(underlying, str):
+            yield name, underlying
+
+
+def _latest_alias_target_models(model: str, llm_router: RegistryReader | None, team_id: str | None) -> tuple[str, ...]:
+    """The versioned model the cost map points `model`'s latest alias at, and every model group that serves it."""
+    if llm_router is None:
+        return expand_model_latest_alias(model)[1:]
+    registry: Final = llm_router.registry()
+    requested: Final = (
+        model,
+        *(underlying for _, underlying in _underlying_models(registry.deployments(model, team_id=team_id))),
+    )
+    targets: Final = frozenset(target for name in requested for target in expand_model_latest_alias(name)[1:])
+    if not targets:
+        return ()
+    return tuple(
+        dict.fromkeys(
+            (
+                *sorted(targets),
+                *(name for name, underlying in _underlying_models(registry.deployments()) if underlying in targets),
+            )
+        )
+    )
+
+
 def _can_object_call_model(
     model: str | list[str],
     llm_router: RegistryReader | None,
@@ -5173,6 +5204,7 @@ def _can_object_call_model(
         else (
             *((model, compaction_parent) if compaction_parent is not None else (model,)),
             *((global_or_router_alias_target,) if global_or_router_alias_target else ()),
+            *_latest_alias_target_models(model, llm_router, team_id),
         )
     )
     owning_team_names: Final = (
