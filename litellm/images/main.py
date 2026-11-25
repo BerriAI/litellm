@@ -74,6 +74,14 @@ from litellm.utils import (
 
 _PROVIDER_ROUTING_HINTS: Final = TypeAdapter(ProviderRoutingHints)
 _PROVIDERS_RESOLVING_THEIR_OWN_IMAGE_BASE: Final = (LlmProviders.VOLCENGINE,)
+_MAX_RETRIES: Final = TypeAdapter(int)
+
+
+def _sdk_max_retries(max_retries: object, is_router_call: bool) -> int:
+    if is_router_call:
+        return 0
+    return openai.DEFAULT_MAX_RETRIES if max_retries is None else _MAX_RETRIES.validate_python(max_retries)
+
 
 # Cache for ImageEditRequestUtils to avoid repeated __getattr__ calls
 _ImageEditRequestUtils_cache: Optional["ImageEditRequestUtils"] = None
@@ -243,6 +251,12 @@ def image_generation(
         extra_headers: Final = kwargs.get("extra_headers", None)
         headers: Final[dict] = kwargs.get("headers", None) or {}
         base_model: Final = kwargs.get("base_model", None)
+        call_kwargs: Final = cast(Mapping[str, object], kwargs)  # cast-ok: image_generation's **kwargs is untyped
+        max_retries: Final = call_kwargs.get("max_retries")
+        is_router_call: Final = any(
+            isinstance(call_metadata := call_kwargs.get(k), Mapping) and "model_group" in call_metadata
+            for k in ("metadata", "litellm_metadata")
+        )
         if extra_headers is not None:
             headers.update(extra_headers)
         model_response: ImageResponse = litellm.utils.ImageResponse()
@@ -435,12 +449,22 @@ def image_generation(
                 model=model,
                 prompt=prompt,
                 image_generation_provider_config=image_generation_config,
-                image_generation_optional_request_params=optional_params,
+                image_generation_optional_request_params=(
+                    {**optional_params, "extra_headers": headers}
+                    if custom_llm_provider == litellm.LlmProviders.VOLCENGINE and headers
+                    else optional_params
+                ),
                 custom_llm_provider=custom_llm_provider,
                 litellm_params=litellm_params_dict,
                 logging_obj=litellm_logging_obj,
                 timeout=timeout,
                 client=client,
+                _is_async=aimg_generation is True and custom_llm_provider == litellm.LlmProviders.VOLCENGINE,
+                max_retries=(
+                    _sdk_max_retries(max_retries, is_router_call)
+                    if custom_llm_provider == litellm.LlmProviders.VOLCENGINE
+                    else 0
+                ),
             )
         elif custom_llm_provider == "black_forest_labs":
             # Route to BFL-specific handler (polling required)

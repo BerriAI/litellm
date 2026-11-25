@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.volcengine.image_edit.transformation import VolcEngineImageEditConfig
 from litellm.llms.volcengine.image_generation.transformation import VolcEngineImageGenerationConfig
 from litellm.utils import ProviderConfigManager
@@ -288,6 +288,132 @@ def test_a_caller_authorization_header_replaces_the_ark_key(monkeypatch: pytest.
     )
 
     assert captured["authorization"] == "Bearer header-key"
+
+
+def test_forwarded_client_headers_reach_ark_on_generation_and_edit() -> None:
+    generation: Final[dict[str, object]] = {}
+    edit: Final[dict[str, object]] = {}
+
+    litellm.image_generation(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        prompt="a cat",
+        api_key="sk-ark",
+        headers={"X-Custom": "forwarded"},
+        client=_capturing_client(generation),
+    )
+    litellm.image_edit(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        prompt="a cat",
+        image="https://ark.example/input.png",
+        api_key="sk-ark",
+        headers={"X-Custom": "forwarded"},
+        client=_capturing_client(edit),
+    )
+
+    assert generation["x-custom"] == "forwarded"
+    assert edit["x-custom"] == generation["x-custom"]
+    assert generation["authorization"] == "Bearer sk-ark"
+
+
+def test_the_global_litellm_api_key_authenticates_generation_and_edit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
+    monkeypatch.delenv("VOLCENGINE_API_KEY", raising=False)
+    monkeypatch.setattr(litellm, "api_key", "global-key")
+    generation: Final[dict[str, object]] = {}
+    edit: Final[dict[str, object]] = {}
+
+    litellm.image_generation(model=f"volcengine/{SEEDREAM_5_5}", prompt="a cat", client=_capturing_client(generation))
+    litellm.image_edit(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        prompt="a cat",
+        image="https://ark.example/input.png",
+        client=_capturing_client(edit),
+    )
+
+    assert generation["authorization"] == "Bearer global-key"
+    assert edit["authorization"] == generation["authorization"]
+
+
+def test_usage_reports_ark_output_tokens_as_completion_tokens() -> None:
+    usage: Final = ARK_RESPONSE["usage"]
+    assert isinstance(usage, dict)
+
+    generation: Final = litellm.image_generation(
+        model=f"volcengine/{SEEDREAM_5_5}", prompt="a cat", api_key="sk-ark", client=_capturing_client({})
+    )
+    edit: Final = litellm.image_edit(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        prompt="a cat",
+        image="https://ark.example/input.png",
+        api_key="sk-ark",
+        client=_capturing_client({}),
+    )
+
+    assert generation.usage is not None
+    assert generation.usage.completion_tokens == usage["output_tokens"]
+    assert edit.usage is not None
+    assert edit.usage.completion_tokens == generation.usage.completion_tokens
+
+
+ONE_IMAGE: Final = {**ARK_RESPONSE, "data": [{"url": "https://ark.example/one.png"}]}
+ARK_UNAVAILABLE: Final = {"error": {"code": "ServerOverloaded", "message": "try again"}}
+
+
+@pytest.mark.parametrize(
+    ("first_status", "retry_kwargs", "upstream_calls"),
+    [
+        (503, {}, 2),
+        (503, {"max_retries": 0}, 1),
+        (503, {"metadata": {"model_group": "seedream"}}, 1),
+        (400, {}, 1),
+    ],
+    ids=["sdk-default-retries", "retries-off", "router-retries-instead", "client-error-not-retried"],
+)
+def test_a_transient_ark_failure_is_retried_unless_retries_are_off(
+    first_status: int, retry_kwargs: dict[str, object], upstream_calls: int
+) -> None:
+    answers: Final = iter([httpx.Response(first_status, json=ARK_UNAVAILABLE), httpx.Response(200, json=ONE_IMAGE)])
+    calls: Final[list[str]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        return next(answers)
+
+    def generate() -> litellm.ImageResponse:
+        return litellm.image_generation(
+            model=f"volcengine/{SEEDREAM_5_5}",
+            prompt="a cat",
+            api_key="sk-ark",
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+            **retry_kwargs,
+        )
+
+    if upstream_calls == 1:
+        with pytest.raises((litellm.ServiceUnavailableError, litellm.BadRequestError)):
+            generate()
+    else:
+        assert len(generate().data) == 1
+    assert len(calls) == upstream_calls
+
+
+@pytest.mark.asyncio
+async def test_async_generation_runs_on_the_callers_async_client_and_retries_a_transient_failure() -> None:
+    answers: Final = iter([httpx.Response(503, json=ARK_UNAVAILABLE), httpx.Response(200, json=ONE_IMAGE)])
+    bodies: Final[list[dict[str, object]]] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return next(answers)
+
+    response: Final = await litellm.aimage_generation(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        prompt="a cat",
+        api_key="sk-ark",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+    )
+
+    assert len(bodies) == 2
+    assert len(response.data) == 1
 
 
 def test_generation_surfaces_the_ark_error_message() -> None:

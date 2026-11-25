@@ -2004,7 +2004,16 @@ class _ModelPricedImageCostCalculator(Protocol):
     def __call__(self, model: str, image_response: ImageResponse, model_info: ModelInfo | None = None) -> float: ...
 
 
-def _model_priced_image_cost_calculator(custom_llm_provider: str | None) -> _ModelPricedImageCostCalculator | None:
+def _deployment_prices_images_without_an_output_price(pricing: ModelInfo | None) -> bool:
+    return pricing is not None and (
+        "input_cost_per_pixel" in pricing
+        or ("input_cost_per_image" in pricing and "output_cost_per_image" not in pricing)
+    )
+
+
+def _model_priced_image_cost_calculator(
+    custom_llm_provider: str | None, pricing: ModelInfo | None
+) -> _ModelPricedImageCostCalculator | None:
     match custom_llm_provider:
         case litellm.LlmProviders.RECRAFT.value:
             from litellm.llms.recraft.cost_calculator import cost_calculator as recraft_image_cost_calculator
@@ -2025,6 +2034,8 @@ def _model_priced_image_cost_calculator(custom_llm_provider: str | None) -> _Mod
 
             return runwayml_image_cost_calculator
         case litellm.LlmProviders.VOLCENGINE.value:
+            if _deployment_prices_images_without_an_output_price(pricing):
+                return None
             from litellm.llms.volcengine.image_generation.cost_calculator import (
                 cost_calculator as volcengine_image_cost_calculator,
             )
@@ -2093,7 +2104,7 @@ class CostCalculatorUtils:
         )
         resolved_n: Final = n if n is not None else (len(completion_response.data) if completion_response.data else 0)
         pricing: Final = deployment_pricing(model_info)
-        model_priced_calculator: Final = _model_priced_image_cost_calculator(custom_llm_provider)
+        model_priced_calculator: Final = _model_priced_image_cost_calculator(custom_llm_provider, pricing)
 
         if model_priced_calculator is not None:
             return model_priced_calculator(model=model, image_response=completion_response, model_info=pricing)

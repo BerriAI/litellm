@@ -122,7 +122,7 @@ def ark_image_generation_url(api_base: str | None) -> str:
 
 def _ark_api_key(api_key: str | None, model: str) -> str:
     resolved_api_key: Final[str | None] = (
-        api_key or get_secret_str("VOLCENGINE_API_KEY") or get_secret_str("ARK_API_KEY")
+        api_key or litellm.api_key or get_secret_str("VOLCENGINE_API_KEY") or get_secret_str("ARK_API_KEY")
     )
     if not resolved_api_key:
         raise AuthenticationError(
@@ -280,6 +280,8 @@ def ark_image_response(raw_response: httpx.Response) -> ImageResponse:
                 "input_tokens": 0,
                 "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
                 "output_tokens": usage.output_tokens or 0,
+                "prompt_tokens": 0,
+                "completion_tokens": usage.output_tokens or 0,
                 "total_tokens": usage.total_tokens or 0,
                 "input_images": usage.input_images or 0,
                 "generated_images": usage.generated_images or 0,
