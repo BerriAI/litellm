@@ -129,6 +129,8 @@ pub struct CallState {
     pub stream_response: bool,
     /// The time the callbacks spent on the call's hooks so far.
     pub callback_time: Duration,
+    /// What the standard logging payload logs of the request.
+    pub logged_request: super::LoggedRequest,
 }
 
 /// `at` in seconds since the Unix epoch.
@@ -165,6 +167,7 @@ impl CallState {
             stream_timeout: false,
             stream_response: false,
             callback_time: Duration::ZERO,
+            logged_request: super::LoggedRequest::default(),
         }
     }
 

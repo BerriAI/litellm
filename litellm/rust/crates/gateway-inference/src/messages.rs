@@ -49,6 +49,9 @@ const TOOLS: &str = "tools";
 pub const REQUEST_SETTINGS: [&str; 2] = ["drop_params", "additional_drop_params"];
 
 pub async fn create<H: Host>(call: Call<H>, body: Result<JsonObject, Error>) -> Response {
+    if let Ok(JsonObject(body)) = &body {
+        record::write(|entries| entries.logged_request.sent(body));
+    }
     serve::run(&call, body.map(|JsonObject(body)| body), |body| {
         MessagesAttempt::new(&call, body)
     })
@@ -219,6 +222,13 @@ fn project(
         .chain(client_params)
         .chain(tools)
         .collect();
+    record::write(|entries| {
+        entries.logged_request.attempted(
+            &body,
+            &shaping.settings.additional_drop_params,
+            shaping.settings.reasoning_auto_summary,
+        );
+    });
     Ok(MessagesCall {
         body: messages_body(body)?,
         api_key: routing::api_key(deployment),

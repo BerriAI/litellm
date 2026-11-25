@@ -4390,6 +4390,7 @@ dependencies = [
  "litellm-router-types",
  "litellm-secret-value",
  "litellm-secrets",
+ "litellm-standard-logging",
  "parking_lot",
  "regex",
  "rstest",
@@ -5395,6 +5396,8 @@ dependencies = [
 name = "litellm-standard-logging"
 version = "0.1.0"
 dependencies = [
+ "litellm-python-compat",
+ "regex",
  "rstest",
  "serde",
  "serde_json",
