@@ -781,7 +781,67 @@ def test_relayed_provider_specific_fields_redact_any_credential_field_name(field
 
 
 @pytest.mark.parametrize(
-    "field", ["max_tokens", "prompt_tokens", "token_count", "request_id", "key_id", "keyword", "passed", "bypass"]
+    "field",
+    [
+        "api_key_used",
+        "password_max",
+        "secret_type",
+        "token_expires",
+        "token_count",
+        "subscription_key",
+        "license_key",
+        "connectionString",
+        "accountKey",
+        "sharedKey",
+        "masterKey",
+        "encryption_key",
+    ],
+)
+@pytest.mark.parametrize(
+    "nesting",
+    [
+        lambda fields: fields,
+        lambda fields: {"debug": fields},
+        lambda fields: {"debug": [fields]},
+    ],
+    ids=["top_level", "nested", "inside_a_list"],
+)
+def test_relayed_provider_specific_fields_redact_text_under_a_credential_name_that_also_reads_as_a_quantity_or_key(
+    field: str,
+    nesting: Callable[[dict[str, str]], dict[str, object]],
+) -> None:
+    rejected: Final = litellm.BadRequestError(
+        message="rejected",
+        model="qwen",
+        llm_provider="hosted_vllm",
+        body={"message": "rejected", "region": "eu", **nesting({field: "opaque-upstream-credential"})},
+    )
+
+    relayed: Final = relayed_provider_specific_fields(rejected)
+
+    assert relayed is not None
+    assert relayed["region"] == "eu"
+    assert "opaque-upstream-credential" not in json.dumps(relayed)
+
+
+@pytest.mark.parametrize(
+    "quantity",
+    [3, 2.5, True, None, {"prompt": 3, "completion": 4}, [3, 4]],
+    ids=["int", "float", "bool", "null", "object_of_counts", "list_of_counts"],
+)
+@pytest.mark.parametrize("field", ["token_count", "password_max", "api_key_used", "token_usage", "session_ttl"])
+def test_relayed_provider_specific_fields_keep_a_quantity_under_a_credential_sounding_name(
+    field: str, quantity: object
+) -> None:
+    rejected: Final = litellm.BadRequestError(
+        message="rejected", model="qwen", llm_provider="hosted_vllm", body={"message": "rejected", field: quantity}
+    )
+
+    assert relayed_provider_specific_fields(rejected) == {field: quantity}
+
+
+@pytest.mark.parametrize(
+    "field", ["max_tokens", "prompt_tokens", "request_id", "key_id", "keyword", "passed", "bypass", "cache_key"]
 )
 def test_relayed_provider_specific_fields_keep_a_plain_field_name(field: str) -> None:
     rejected: Final = litellm.BadRequestError(

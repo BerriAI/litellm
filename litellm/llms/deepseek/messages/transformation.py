@@ -212,7 +212,7 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
         self,
         model: str,
         messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        anthropic_messages_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict[str, str],
     ) -> dict[str, object]:

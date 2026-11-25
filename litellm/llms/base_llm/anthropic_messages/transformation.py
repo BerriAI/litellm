@@ -92,8 +92,8 @@ class BaseAnthropicMessagesConfig(ABC):
     def transform_anthropic_messages_request(
         self,
         model: str,
-        messages: list[dict],
-        anthropic_messages_optional_request_params: dict,
+        messages: list[dict[str, object]],
+        anthropic_messages_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:

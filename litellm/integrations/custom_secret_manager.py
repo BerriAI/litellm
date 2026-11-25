@@ -152,7 +152,7 @@ class CustomSecretManager(BaseSecretManager):
         description: str | None = None,
         optional_params: dict | None = None,
         timeout: float | httpx.Timeout | None = None,
-        tags: dict | list | None = None,
+        tags: dict[str, object] | list[object] | None = None,
     ) -> dict[str, object]:
         """
         Asynchronously write a secret to your custom secret manager.

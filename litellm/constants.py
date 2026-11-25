@@ -365,6 +365,7 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = get_env_int(
 # Provider-specific API base URLs
 XAI_API_BASE: Final = "https://api.x.ai/v1"
 PLACEHOLDER_API_KEY: Final = "fake-api-key"
+PLACEHOLDER_API_KEYS: Final = frozenset({PLACEHOLDER_API_KEY, "dummy-key"})
 OPEN_SANDBOX_API_BASE_ENV_VAR: Final = "OPEN_SANDBOX_API_BASE"
 OPEN_SANDBOX_API_KEY_ENV_VAR: Final = "OPEN_SANDBOX_API_KEY"
 OPEN_SANDBOX_DEFAULT_TEMPLATE: Final = "opensandbox/code-interpreter:v1.1.0"
@@ -807,6 +808,7 @@ ANTHROPIC_IMAGE_PIXELS_PER_TOKEN: Final = 750
 OPENAI_PDF_TEXT_PAGE_FRAMING_TOKENS: Final = 13
 OPENAI_CHAT_PDF_FILE_TOKENS: Final = 192
 PDF_DATA_URL_PREFIX: Final = "data:application/pdf;base64,"
+TRUNCATED_BASE64_MARKER: Final = "[base64_data truncated: "
 PDF_MAX_FORM_XOBJECT_DEPTH: Final = 32
 PDF_MAX_XOBJECT_DRAWS_PER_PAGE: Final = 10_000
 OPENAI_MODEL_NAME_MAX_DASHES: Final = 16
@@ -2324,12 +2326,17 @@ PROVIDER_ERROR_BODY_ATTRIBUTE: Final = "provider_error_body"
 CREDENTIAL_FIELD_NAME_FRAGMENTS: Final[tuple[str, ...]] = (
     "accesskey",
     "accesstoken",
+    "accountkey",
     "apikey",
     "authtoken",
     "bearer",
     "clientsecret",
+    "connectionstring",
     "credential",
+    "encryptionkey",
     "idtoken",
+    "licensekey",
+    "masterkey",
     "passphrase",
     "passwd",
     "password",
@@ -2337,7 +2344,9 @@ CREDENTIAL_FIELD_NAME_FRAGMENTS: Final[tuple[str, ...]] = (
     "refreshtoken",
     "secret",
     "sessiontoken",
+    "sharedkey",
     "signingkey",
+    "subscriptionkey",
 )
 CREDENTIAL_FIELD_NAME_WORDS: Final[frozenset[str]] = frozenset(
     {"auth", "authorization", "cookie", "pass", "pwd", "session", "sig", "signature", "token"}
