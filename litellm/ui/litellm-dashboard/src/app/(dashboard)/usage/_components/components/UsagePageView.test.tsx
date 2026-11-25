@@ -2,11 +2,12 @@ import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
+import { useUserInfo } from "@/app/(dashboard)/hooks/users/useUserInfo";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UrlUpdateEvent } from "nuqs/adapters/testing";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "@/../tests/test-utils";
 import { toast } from "@/lib/toast";
@@ -273,6 +274,10 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
   useCurrentUser: vi.fn(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/users/useUserInfo", () => ({
+  useUserInfo: vi.fn(() => ({ data: undefined })),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
@@ -1880,6 +1885,79 @@ describe("UsagePage", () => {
       rerender(<UsagePage {...defaultProps} teams={administeredTeams} teamsLoading={false} />);
       expect(await screen.findByRole("region", { name: "Client usage panel" })).toBeInTheDocument();
       expect(lastPanelProps()).toMatchObject({ userId: "alice", teamId: "engineering", scopeError: null });
+    });
+  });
+
+  describe("max budget hint", () => {
+    const mockUseUserInfo = vi.mocked(useUserInfo);
+    const budgetOf = { "user-001": 600, "user-002": null } as Record<string, number | null>;
+    const lookup = (id: string | null) =>
+      ({ data: id && id in budgetOf ? { user_id: id, max_budget: budgetOf[id] } : undefined }) as any;
+
+    beforeEach(() => {
+      mockUseCurrentUser.mockReturnValue({ data: { user_id: "user-123", max_budget: 3000 } } as any);
+      mockUseUserInfo.mockImplementation(lookup);
+    });
+
+    afterEach(() => {
+      mockUseUserInfo.mockReset();
+      mockUseUserInfo.mockReturnValue({ data: undefined } as any);
+    });
+
+    const renderAt = async (searchParams: string) => {
+      renderWithProviders(<UsagePage {...defaultProps} />, { searchParams });
+      await waitFor(() => expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled());
+    };
+
+    it("shows the selected user's budget, not the admin's", async () => {
+      await renderAt("?user=user-001");
+
+      expect(screen.getByText(/of \$600\.00 budget/)).toBeInTheDocument();
+      expect(screen.queryByText(/\$3,000\.00 budget/)).not.toBeInTheDocument();
+      expect(mockUseUserInfo).toHaveBeenCalledWith("user-001");
+    });
+
+    it("shows no budget for a selected user without a limit instead of the admin's", async () => {
+      await renderAt("?user=user-002");
+
+      expect(screen.getByText("No budget set")).toBeInTheDocument();
+      expect(screen.queryByText(/\$3,000\.00 budget/)).not.toBeInTheDocument();
+    });
+
+    it.each([
+      ["is loading", { data: undefined, isPending: true, isError: false }],
+      ["failed", { data: undefined, isPending: false, isError: true }],
+    ])("shows no budget claim while the selected user's lookup %s", async (_label, result) => {
+      mockUseUserInfo.mockReturnValue(result as any);
+
+      await renderAt("?user=user-001");
+
+      expect(screen.queryByText("No budget set")).not.toBeInTheDocument();
+      expect(screen.queryByText(/budget$/)).not.toBeInTheDocument();
+    });
+
+    it("looks up no one in the unfiltered global view and shows the admin's budget", async () => {
+      await renderAt("");
+
+      expect(mockUseUserInfo).toHaveBeenCalledWith(null);
+      expect(screen.getByText(/of \$3,000\.00 budget/)).toBeInTheDocument();
+    });
+
+    it("keeps the caller's own budget in My Usage even when another user is in the URL", async () => {
+      await renderAt("?view=my-usage&user=user-001");
+
+      expect(mockUseUserInfo).toHaveBeenCalledWith(null);
+      expect(screen.getByText(/of \$3,000\.00 budget/)).toBeInTheDocument();
+    });
+
+    it("keeps a non-admin's own budget from the current user without a second lookup", async () => {
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+      mockUseCurrentUser.mockReturnValue({ data: { user_id: nonAdminSession.userId, max_budget: 75 } } as any);
+
+      await renderAt("");
+
+      expect(mockUseUserInfo).toHaveBeenCalledWith(null);
+      expect(screen.getByText(/of \$75\.00 budget/)).toBeInTheDocument();
     });
   });
 

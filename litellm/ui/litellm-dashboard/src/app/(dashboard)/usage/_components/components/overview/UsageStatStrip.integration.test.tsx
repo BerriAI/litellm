@@ -69,6 +69,21 @@ describe("UsageStatStrip token breakdown", () => {
   });
 });
 
+describe("UsageStatStrip budget hint", () => {
+  it("shows the budget, or that none is set", () => {
+    const { rerender } = render(<UsageStatStrip {...defaultProps} budget={1500} />);
+    expect(screen.getByText(/of \$1,500\.00 budget/)).toBeInTheDocument();
+
+    rerender(<UsageStatStrip {...defaultProps} budget={null} />);
+    expect(screen.getByText("No budget set")).toBeInTheDocument();
+  });
+
+  it("hides the hint entirely when it is not showing", () => {
+    render(<UsageStatStrip {...defaultProps} budget={null} showBudgetHint={false} />);
+    expect(screen.queryByText("No budget set")).not.toBeInTheDocument();
+  });
+});
+
 describe("UsageStatStrip in another UI language", () => {
   afterEach(async () => {
     await i18n.changeLanguage("en");

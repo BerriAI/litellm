@@ -16,6 +16,7 @@ interface UsageOverviewProps {
   loading: boolean;
   requestCountsPending: boolean;
   budget: number | null;
+  budgetPending?: boolean;
   subscriptionCosts: ReactNode;
   topKeys: ReactNode;
   topUsers: ReactNode;
@@ -36,6 +37,7 @@ export default function UsageOverview({
   topAgents,
   providerBreakdown,
   budget,
+  budgetPending = false,
 }: UsageOverviewProps) {
   const { t } = useTranslation();
   return (
@@ -46,6 +48,7 @@ export default function UsageOverview({
         loading={loading}
         requestCountsPending={requestCountsPending}
         budget={budget}
+        showBudgetHint={!budgetPending}
         spendDetails={<SpendDisplayCurrency usdSpend={totals.spend} loading={loading} />}
       />
 
