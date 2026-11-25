@@ -566,21 +566,31 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
 
     @staticmethod
     def _assistant_block_group_key(indexed_block: tuple[int, Mapping[str, object]]) -> str:
-        """Group a run of thinking blocks, and an MCP tool use with its result; keep every other block alone."""
+        """Group a run of thinking blocks; keep every other block alone."""
         index, block = indexed_block
         match block.get("type"):
             case "thinking" | "redacted_thinking":
                 return "thinking"
-            case "mcp_tool_use":
-                return f"mcp:{block.get('id')}"
-            case "mcp_tool_result":
-                return f"mcp:{block.get('tool_use_id')}"
             case _:
                 return f"block:{index}"
 
     @classmethod
+    def _assistant_blocks_to_input_items(
+        cls, blocks: Sequence[Mapping[str, object]]
+    ) -> tuple[dict[str, object], ...]:  # mutable-ok: API message payload
+        mcp_results: Final = MappingProxyType(
+            {block.get("tool_use_id"): block for block in blocks if block.get("type") == "mcp_tool_result"}
+        )
+        return tuple(
+            chain.from_iterable(
+                cls._assistant_group_to_input_items(tuple(block for _, block in group), mcp_results)
+                for _, group in groupby(enumerate(blocks), key=cls._assistant_block_group_key)
+            )
+        )
+
+    @classmethod
     def _assistant_group_to_input_items(
-        cls, group: tuple[Mapping[str, object], ...]
+        cls, group: tuple[Mapping[str, object], ...], mcp_results: Mapping[object, Mapping[str, object]]
     ) -> tuple[dict[str, object], ...]:  # mutable-ok: API message payload
         first: Final = group[0]
         btype: Final = first.get("type")
@@ -597,8 +607,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                 },
             )
         if btype == "mcp_tool_use":
-            result: Final = next((block for block in group if block.get("type") == "mcp_tool_result"), None)
-            return (cls._mcp_call_item(first, result),)
+            return (cls._mcp_call_item(first, mcp_results.get(first.get("id"))),)
         return ()
 
     @staticmethod
@@ -785,11 +794,7 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                     )
                 elif isinstance(content, list):
                     blocks = tuple(block for block in content if isinstance(block, dict))
-                    input_items.extend(
-                        item
-                        for _, group in groupby(enumerate(blocks), key=self._assistant_block_group_key)
-                        for item in self._assistant_group_to_input_items(tuple(block for _, block in group))
-                    )
+                    input_items.extend(self._assistant_blocks_to_input_items(blocks))
                     asst_parts: list[dict[str, object]] = [  # mutable-ok: API message payload
                         {"type": "output_text", "text": block.get("text", "")}
                         for block in blocks

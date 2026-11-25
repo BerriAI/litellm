@@ -3292,3 +3292,47 @@ def test_a_returned_mcp_call_replays_on_the_next_turn_as_the_same_call(
     }
     assert items[2]["role"] == "assistant"
     assert sum(item.get("type") == "mcp_call" for item in items) == 1
+
+
+def _mcp_tool_use(call_id: str) -> dict[str, object]:
+    return {**WIKI_MCP_TOOL_USE, "id": call_id}
+
+
+def _mcp_tool_result(call_id: str, text: str) -> dict[str, object]:
+    return {"type": "mcp_tool_result", "tool_use_id": call_id, "content": [{"type": "text", "text": text}]}
+
+
+@pytest.mark.parametrize(
+    "assistant_content",
+    (
+        [
+            _mcp_tool_use("mcp_a"),
+            _mcp_tool_use("mcp_b"),
+            _mcp_tool_result("mcp_a", "result a"),
+            _mcp_tool_result("mcp_b", "result b"),
+        ],
+        [
+            _mcp_tool_use("mcp_a"),
+            {"type": "text", "text": "Checking the other repo too."},
+            _mcp_tool_use("mcp_b"),
+            _mcp_tool_result("mcp_b", "result b"),
+            _mcp_tool_result("mcp_a", "result a"),
+        ],
+    ),
+    ids=("results-after-both-uses", "text-between-use-and-result"),
+)
+def test_a_replayed_mcp_call_keeps_its_result_wherever_the_result_block_sits(
+    assistant_content: list[dict[str, object]],
+) -> None:
+    items: Final = _translate_messages(
+        [
+            {"role": "user", "content": "Read both wikis"},
+            {"role": "assistant", "content": assistant_content},
+            {"role": "user", "content": "Compare them"},
+        ]
+    )
+
+    assert {item["id"]: item.get("output") for item in items if item.get("type") == "mcp_call"} == {
+        "mcp_a": "result a",
+        "mcp_b": "result b",
+    }
