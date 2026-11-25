@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import override
 
 import litellm
+from litellm.constants import MAX_IMAGE_FAN_OUT_REQUESTS
 from litellm.exceptions import AuthenticationError, UnsupportedParamsError
 from litellm.images.fan_out import image_request_count
 from litellm.images.streaming import image_stream_requested
@@ -61,6 +62,7 @@ _JSON_PARAMS: Final = frozenset(
     }
 )
 _FORM_BOOLEANS: Final = {"true": True, "false": False}
+_REQUESTED_IMAGES: Final = TypeAdapter(int)
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 _JSON_VALUE: Final = TypeAdapter(object)
@@ -122,7 +124,7 @@ def ark_image_generation_url(api_base: str | None) -> str:
 
 def _ark_api_key(api_key: str | None, model: str) -> str:
     resolved_api_key: Final[str | None] = (
-        api_key or get_secret_str("VOLCENGINE_API_KEY") or get_secret_str("ARK_API_KEY")
+        api_key or litellm.api_key or get_secret_str("VOLCENGINE_API_KEY") or get_secret_str("ARK_API_KEY")
     )
     if not resolved_api_key:
         raise AuthenticationError(
@@ -169,13 +171,21 @@ def _safety_identifier(user: str) -> str:
     return hashlib.sha256(user.encode()).hexdigest()
 
 
+def _above_fan_out_cap(requested_images: object) -> bool:
+    return (
+        requested_images is not None
+        and _REQUESTED_IMAGES.validate_python(requested_images) > MAX_IMAGE_FAN_OUT_REQUESTS
+    )
+
+
 def ark_image_params(
     params: Mapping[str, object],
     model: str,
     drop_params: bool,
 ) -> Mapping[str, object]:
     _reject_stream(params.get("stream"), model, drop_params)
-    mapped: Final = {key: value for key, value in params.items() if key not in _UNSENT_PARAMS and value is not None}
+    unsent: Final = _UNSENT_PARAMS | {"n"} if drop_params and _above_fan_out_cap(params.get("n")) else _UNSENT_PARAMS
+    mapped: Final = {key: value for key, value in params.items() if key not in unsent and value is not None}
     user: Final = params.get("user")
     if isinstance(user, str) and user and "safety_identifier" not in mapped:
         return {**mapped, "safety_identifier": _safety_identifier(user)}
@@ -267,6 +277,8 @@ def ark_image_response(raw_response: httpx.Response) -> ImageResponse:
                 "input_tokens": 0,
                 "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
                 "output_tokens": usage.output_tokens or 0,
+                "prompt_tokens": 0,
+                "completion_tokens": usage.output_tokens or 0,
                 "total_tokens": usage.total_tokens or 0,
                 "input_images": usage.input_images or 0,
                 "generated_images": usage.generated_images or 0,

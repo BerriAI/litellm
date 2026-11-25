@@ -1506,6 +1506,8 @@ def _model_priced_image_cost_calculator(
 
             return tencent_image_cost_calculator if is_tokenhub_image_model(model) else None
         case litellm.LlmProviders.VOLCENGINE.value:
+            if _deployment_prices_images_without_an_output_price(pricing):
+                return None
             from litellm.llms.volcengine.image_generation.cost_calculator import (
                 cost_calculator as volcengine_image_cost_calculator,
             )

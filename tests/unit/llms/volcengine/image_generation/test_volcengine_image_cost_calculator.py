@@ -214,4 +214,23 @@ def test_the_volcengine_image_route_uses_the_provider_calculator() -> None:
         model_info=catalog["volcengine/doubao-seedream-5-5-261028"],
     )
 
-    assert cost > 0
+    assert cost == cost_calculator(model="doubao-seedream-5-5-261028", image_response=response)
+
+
+@pytest.mark.parametrize("model", ["ep-20261101-abc", "doubao-seedream-5-5-261028"])
+@pytest.mark.parametrize(
+    ("deployment_price", "expected_cost"),
+    [({"input_cost_per_pixel": 1e-8}, 1024 * 1024 * 1e-8), ({"input_cost_per_image": 0.03}, 0.03)],
+    ids=["per-pixel", "per-input-image"],
+)
+def test_a_deployment_priced_without_an_output_image_price_bills_its_own_price(
+    model: str, deployment_price: ModelInfo, expected_cost: float
+) -> None:
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model=model,
+        completion_response=_response(("1024x1024",)),
+        custom_llm_provider="volcengine",
+        model_info=deployment_price,
+    )
+
+    assert cost == pytest.approx(expected_cost)

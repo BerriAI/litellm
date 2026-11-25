@@ -156,6 +156,29 @@ def test_edit_with_stream_dropped_still_fans_out_n() -> None:
     assert len(response.data) == 3
 
 
+def test_edit_with_stream_in_extra_body_dropped_still_fans_out_n() -> None:
+    bodies: Final[list[dict[str, object]]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={**ARK_RESPONSE, "data": [{"url": "https://ark.example/one.png"}]})
+
+    response: Final = litellm.image_edit(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        image=PNG_BYTES,
+        prompt="make the lantern red",
+        api_key="sk-ark",
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(respond))),
+        n=2,
+        extra_body={"stream": True},
+        drop_params=True,
+    )
+
+    assert len(bodies) == 2
+    assert all("stream" not in body for body in bodies)
+    assert len(response.data) == 2
+
+
 def test_edit_with_a_multipart_stream_false_is_not_a_stream_request() -> None:
     bodies: Final[list[dict[str, object]]] = []
 
