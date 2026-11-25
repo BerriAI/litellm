@@ -7915,6 +7915,10 @@ export interface paths {
          *     To skip deployments that set ``model_info.disable_background_health_check: true``
          *     on ``GET /health`` as well as in the background loop, set
          *     ``general_settings.health_check_skip_disabled_background_models: true``.
+         *
+         *     With ``health_check_recent_success_window_seconds`` enabled, a cached healthy endpoint
+         *     may carry ``health_check_source: recent_traffic`` and ``last_success_at`` (Unix seconds).
+         *     Such entries describe successful upstream traffic. Probe history contains actual checks.
          */
         get: operations["health_endpoint_health_get"];
         put?: never;
@@ -33234,6 +33238,12 @@ export interface components {
              * @default 300
              */
             health_check_interval: number;
+            /**
+             * Health Check Recent Success Window Seconds
+             * @description Let a completed upstream request stand in for a background probe of the same deployment and API for this many seconds. Zero disables traffic observations. A later failure resumes active probing. Deployments marked unhealthy by a current active check are probed again to establish recovery. GET /health labels these results with health_check_source=recent_traffic and last_success_at.
+             * @default 0
+             */
+            health_check_recent_success_window_seconds: number;
             /**
              * Health Check Skip Blocked Background Models
              * @description When true, deployments with model_info.blocked set to true are skipped by background health checks. With background checks enabled, GET /health reads cached results and can return 503 for a skipped deployment because there is no healthy result. On-demand checks and Test Connection are unaffected.

@@ -239,7 +239,7 @@ class SharedHealthCheckManager:
             cached: Final = await self.get_cached_health_check_results()
             if cached is None or recent_traffic is None:
                 return cached
-            observations: Final = await recent_traffic.snapshot(model_list)
+            observations: Final = await recent_traffic.snapshot(model_list, router)
             return (
                 cached
                 if observations.accepts(cached.get("healthy_endpoints", []), cached.get("timestamp", 0))
@@ -248,7 +248,7 @@ class SharedHealthCheckManager:
 
         async def probe() -> HealthCheckResult:
             successes: Final = (
-                (await recent_traffic.snapshot(model_list)).successes if recent_traffic is not None else None
+                (await recent_traffic.snapshot(model_list, router)).successes if recent_traffic is not None else None
             )
             filters: Final[HealthCheckOptions] = {
                 "router": router,

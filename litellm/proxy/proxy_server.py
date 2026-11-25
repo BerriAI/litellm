@@ -4578,7 +4578,7 @@ async def _run_direct_health_check_with_instrumentation(
     need a new rung every time an argument is added.
     """
     recent_successes: Final = (
-        (await recent_traffic.snapshot(model_list)).successes if recent_traffic is not None else None
+        (await recent_traffic.snapshot(model_list, llm_router)).successes if recent_traffic is not None else None
     )
     optional: Final = MappingProxyType(
         {
@@ -4713,7 +4713,7 @@ def _get_endpoint_exception_status(endpoint: dict, exceptions: Mapping[str, obje
 def _write_health_state_to_router_cache(
     healthy_endpoints: list,
     unhealthy_endpoints: list,
-    exceptions_by_model_id: Mapping[str, object] | None = None,
+    exceptions_by_model_id: Mapping[str, Exception] | None = None,
 ) -> None:
     """
     Write deployment health states to the router's health state cache
@@ -4728,7 +4728,7 @@ def _write_health_state_to_router_cache(
     """
     from litellm.proxy.health_check import build_deployment_health_states
 
-    _exceptions: Final[Mapping[str, object]] = exceptions_by_model_id or {}
+    _exceptions: Final[Mapping[str, Exception]] = exceptions_by_model_id or {}
 
     try:
         if llm_router is None:

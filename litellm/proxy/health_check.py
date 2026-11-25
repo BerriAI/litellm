@@ -758,7 +758,7 @@ async def _run_health_checks_with_bounded_concurrency(models: list, concurrency_
 
 
 HealthCheckResult: TypeAlias = tuple[
-    Sequence[Mapping[str, object]], Sequence[Mapping[str, object]], Mapping[str, object]
+    Sequence[Mapping[str, object]], Sequence[Mapping[str, object]], Mapping[str, Exception]
 ]
 
 
@@ -807,7 +807,7 @@ async def _perform_health_check(
     # Exceptions keyed by model_id; returned separately so callers can use
     # them for cooldown integration without risking JSON-serialization errors
     # in the /health response.
-    exceptions_by_model_id: Final = dict[str, object]()
+    exceptions_by_model_id: Final = dict[str, Exception]()
 
     for is_healthy, model in zip(results, model_list):
         litellm_params = model["litellm_params"]

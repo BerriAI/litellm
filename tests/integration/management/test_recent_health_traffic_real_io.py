@@ -5,8 +5,11 @@ from unittest.mock import Mock
 
 import pytest
 from integration._support.redis_process import owned_redis
+from integration._support.wire import Reply, wire_server
 
+from litellm import Router
 from litellm.caching.redis_cache import RedisCache
+from litellm.proxy.health_check import build_deployment_health_states
 from litellm.proxy.health_check_utils.recent_traffic import RecentTrafficHealth
 from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
 
@@ -45,4 +48,50 @@ async def test_workers_share_business_outcomes_and_reject_a_cached_success_after
             assert not failed.successes
             assert not failed.accepts(cached["healthy_endpoints"], cached["timestamp"])
         finally:
+            await redis.disconnect()
+
+
+@pytest.mark.asyncio
+async def test_shared_recent_success_does_not_hide_an_outstanding_failed_probe(tmp_path: Path) -> None:
+    reply: Final = Reply(
+        body=b'{"id":"chatcmpl-probe","object":"chat.completion","created":1,"model":"gpt-4o-mini",'
+        b'"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],'
+        b'"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}'
+    )
+    finished: Final = datetime.fromtimestamp(100, tz=timezone.utc)
+    with owned_redis(tmp_path) as server, wire_server(lambda _: reply) as upstream:
+        redis: Final = RedisCache(host=server.host, port=server.port)
+        model: Final = {
+            "model_name": "backup",
+            "model_info": {"id": "served", "mode": "chat"},
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_base": f"{upstream.url}/v1", "api_key": "test"},
+        }
+        router: Final = Router(model_list=[model], enable_health_check_routing=True)
+        writer: Final = RecentTrafficHealth(60, lambda: redis, lambda: 100.0)
+        reader: Final = RecentTrafficHealth(60, lambda: redis, lambda: 100.0)
+        manager: Final = SharedHealthCheckManager(redis_cache=redis, traffic_aware=True)
+        try:
+            router.health().health_checks.set_deployment_health_states(
+                build_deployment_health_states([], [{"model_id": "served"}])
+            )
+            await writer.async_log_success_event(
+                {
+                    "standard_logging_object": {"model_id": "served", "call_type": "acompletion", "status": "success"},
+                    "current_attempt_api_call_start_time": finished,
+                    "response_headers": {"content-type": "application/json"},
+                },
+                {},
+                finished,
+                finished,
+            )
+            assert (await reader.snapshot([model])).successes == {"served": 100.0}
+            healthy, unhealthy, _ = await manager.perform_shared_health_check(
+                [model], router=router, recent_traffic=reader
+            )
+            assert not unhealthy
+            assert [endpoint["model_id"] for endpoint in healthy] == ["served"]
+            assert "health_check_source" not in healthy[0]
+            assert [req.target for req in upstream.drain()] == ["/v1/chat/completions"]
+        finally:
+            router.retire()
             await redis.disconnect()

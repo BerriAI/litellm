@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 import httpx
 
@@ -18,6 +18,9 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.proxy.health_check import resolve_health_check_mode
 from litellm.router_strategy.auto_router.auto_router_model_naming import classify_strategy_router_model
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 # These are completed inference operations. Submitting a video or batch job does not establish that it succeeded.
 _PROBE_MODES: Final = MappingProxyType(
@@ -209,7 +212,9 @@ class RecentTrafficHealth(CustomLogger):
             verbose_proxy_logger.debug("Could not read recent health traffic", exc_info=True)
             return ()
 
-    async def snapshot(self, deployments: Sequence[Mapping[str, object]]) -> TrafficSnapshot:
+    async def snapshot(
+        self, deployments: Sequence[Mapping[str, object]], router: Router | None = None
+    ) -> TrafficSnapshot:
         identities: Final = tuple(identity for d in deployments if (identity := _probe_identity(d)) is not None)
         keys: Final = list(chain.from_iterable((_key(i, True), _key(i, False)) for i in identities))
         values: Final = await self._read_times(keys)
@@ -220,4 +225,14 @@ class RecentTrafficHealth(CustomLogger):
             for identity, success, failure in zip(identities, values[::2], values[1::2])
             if success > max(cutoff * 1000, failure) and success <= now * 1000
         }
-        return TrafficSnapshot(successes, max(values[1::2], default=0) / 1000, cutoff)
+        failed_probes: Final = (
+            await router.health().health_checks.async_get_unhealthy_deployment_ids()
+            if successes and router is not None
+            else frozenset[str]()
+        )
+        eligible: Final = (
+            {ident: seen for ident, seen in successes.items() if ident not in failed_probes}
+            if failed_probes
+            else successes
+        )
+        return TrafficSnapshot(eligible, max(values[1::2], default=0) / 1000, cutoff)

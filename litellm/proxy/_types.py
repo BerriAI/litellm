@@ -2923,6 +2923,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description=(
             "Let a completed upstream request stand in for a background probe of the same deployment and API "
             "for this many seconds. Zero disables traffic observations. A later failure resumes active probing. "
+            "Deployments marked unhealthy by a current active check are probed again to establish recovery. "
             "GET /health labels these results with health_check_source=recent_traffic and last_success_at."
         ),
     )
