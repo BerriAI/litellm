@@ -145,8 +145,8 @@ def test_a_budget_rejection_outside_a_customer_carries_no_customer_budget_header
     assert not rejection.headers
 
 
-@pytest.mark.parametrize("stored_duration", ("1d ", "1d\n"))
-def test_whitespace_a_stored_duration_ends_with_stays_out_of_the_header_name(stored_duration: str) -> None:
+@pytest.mark.parametrize("stored_duration", ("1d ", "1d\n", "1d\t", "1d:", "1d\u00e9"))
+def test_characters_a_header_name_cannot_hold_stay_out_of_the_duration_suffix(stored_duration: str) -> None:
     hierarchy: Final = CustomerHierarchyAuth(
         scopes=(
             CustomerScopeAuth(

@@ -1,3 +1,4 @@
+import re
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from itertools import chain
@@ -5,6 +6,7 @@ from typing import Final
 
 from litellm.types.proxy.auth.customer_hierarchy import CustomerHierarchyAuth, CustomerScopeAuth, CustomerScopeKey
 
+_UNSAFE_IN_HEADER_NAME: Final = re.compile(r"[^A-Za-z0-9]+")
 _HEADER_SCOPES: Final[frozenset[CustomerScopeKey]] = frozenset(("app_customer_org", "app_customer_member"))
 
 
@@ -42,7 +44,11 @@ def _scope_headers(scope: CustomerScopeAuth) -> Mapping[str, str]:
                 ),
                 *(
                     _budget_headers(
-                        prefix, f"-{window.budget_duration.strip()}", window.spend, window.max_budget, window.reset_at
+                        prefix,
+                        f"-{_UNSAFE_IN_HEADER_NAME.sub('-', window.budget_duration).strip('-')}",
+                        window.spend,
+                        window.max_budget,
+                        window.reset_at,
                     )
                     for window in scope.budget_window_usage
                 ),
