@@ -80,14 +80,33 @@ pub struct Budget {
     pub spend: f64,
 }
 
+/// What a caller is known by: the id it names, and the alias only a stored row gives.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Label {
+    pub id: String,
+    pub alias: Option<String>,
+}
+
 /// A record that stands for something a caller names by id.
 pub trait Record {
     fn id(&self) -> &str;
+    fn alias(&self) -> Option<&str>;
+
+    fn label(&self) -> Label {
+        Label {
+            id: self.id().to_owned(),
+            alias: self.alias().map(str::to_owned),
+        }
+    }
 }
 
 impl Record for UserRecord {
     fn id(&self) -> &str {
         &self.user_id
+    }
+
+    fn alias(&self) -> Option<&str> {
+        self.user_alias.as_deref()
     }
 }
 
@@ -95,16 +114,28 @@ impl Record for TeamRecord {
     fn id(&self) -> &str {
         &self.team_id
     }
+
+    fn alias(&self) -> Option<&str> {
+        self.team_alias.as_deref()
+    }
 }
 
 impl Record for OrgRecord {
     fn id(&self) -> &str {
         &self.organization_id
     }
+
+    fn alias(&self) -> Option<&str> {
+        self.organization_alias.as_deref()
+    }
 }
 
 impl Record for ProjectRecord {
     fn id(&self) -> &str {
         &self.project_id
+    }
+
+    fn alias(&self) -> Option<&str> {
+        self.project_alias.as_deref()
     }
 }
