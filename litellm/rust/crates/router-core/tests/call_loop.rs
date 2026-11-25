@@ -2891,6 +2891,7 @@ fn a1_first() -> RouterConfig {
     .unwrap()
 }
 
+#[rstest]
 #[tokio::test]
 async fn a_stream_a_retry_opened_after_a_window_refusal_carries_the_refusal() {
     let host = Arc::new(ScriptedHost::failing("primary", vec![context_window()]));
