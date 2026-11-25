@@ -936,13 +936,19 @@ def anthropic_messages_handler(
     _refuse_deferred_tools(unknown_deferred_tools_refusal(deployment_model_info), drops_deferred_tools_setting)
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
+        request_tools: Final = cast("list[dict[str, object]] | None", tools)  # cast-ok: the handler takes untyped dicts
         _refuse_deferred_tools(
-            unusable_deferred_tools_refusal(deployment_model_info, custom_llm_provider), drops_deferred_tools_setting
+            unusable_deferred_tools_refusal(
+                deployment_model_info,
+                custom_llm_provider,
+                model,
+                {"tools": request_tools, "stop": stop_sequences or None, "top_k": top_k},
+            ),
+            drops_deferred_tools_setting,
         )
         deferred_tools: Final = usable_deferred_tools_mode(deployment_model_info, custom_llm_provider)
         native_deferred_tools: Final = deferred_tools == "native"
         request_messages: Final = cast("list[dict[str, object]]", messages)  # cast-ok: the handler takes untyped dicts
-        request_tools: Final = cast("list[dict[str, object]] | None", tools)  # cast-ok: the handler takes untyped dicts
         from ..deferred_tool_emulation import deferred_tool_emulation, deferred_tools_messages
 
         emulation: Final = deferred_tool_emulation(
