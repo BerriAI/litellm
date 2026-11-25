@@ -1681,7 +1681,7 @@
         "batches": false,
         "messages": true,
         "interactions": true,
-        "systemone": false,
+        "systemone": true,
         "a2a": true,
         "generateContent": true
       }
