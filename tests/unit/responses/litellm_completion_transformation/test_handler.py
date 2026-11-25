@@ -14,10 +14,11 @@ kwargs lack the flag and these tests fail.
 
 import inspect
 import json
+import sys
 import threading
 from collections.abc import Mapping, Sequence
 from itertools import chain
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
@@ -26,17 +27,26 @@ import pytest
 import respx
 
 import litellm
-from litellm.constants import PREVIOUS_RESPONSE_IDS_METADATA_KEY
+from litellm.constants import PREVIOUS_RESPONSE_IDS_METADATA_KEY, RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.tool_fields import BRIDGED_TOOL_NAMES_KWARG, BridgedToolNames, qualified_member_name
+from litellm.litellm_core_utils.tool_fields import (
+    BRIDGED_TOOL_NAMES_KWARG,
+    BridgedToolNames,
+    NamespaceMember,
+    full_names_by_sent_name,
+    qualified_member_name,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.responses.litellm_completion_transformation.compaction_trigger import SUMMARY_PROMPT
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_api import RoutingContext
+from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
+from litellm.types.router import RetryPolicy
 from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, ChatCompletionDeltaToolCall, ModelResponseStream
 
 
@@ -145,7 +155,6 @@ def test_bridged_turn_names_no_responses_field_the_caller_did_not_send(
     [
         pytest.param({"instructions": "Answer in one word"}, "messages.[0].content", "instructions", id="instructions"),
         pytest.param({"instructions": "Answer in one word"}, "messages.[1].role", "input", id="input_after_instructions"),
-        pytest.param({"previous_response_id": "resp_stored"}, "messages.[1].role", None, id="stored_turns_first"),
     ],
 )
 def test_bridged_turn_names_a_message_path_by_the_request_field_the_message_came_from(
@@ -168,6 +177,32 @@ def test_bridged_turn_names_a_message_path_by_the_request_field_the_message_came
 
     assert upstream.call_count == 1
     assert raised.value.param == relayed_param
+
+
+@pytest.mark.asyncio
+async def test_bridged_follow_up_names_no_request_field_for_a_message_path_inside_the_stored_turns(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    upstream: Final = _upstream_rejects(respx_mock, monkeypatch, "messages.[1].role")
+    bridged_turn: Final = LiteLLMCompletionTransformationHandler().response_api_handler(
+        model="gpt-5.6",
+        input="hi",
+        responses_api_request={"previous_response_id": "resp_stored"},
+        custom_llm_provider="openai",
+        _is_async=True,
+        api_key="sk-bridge-test",
+    )
+
+    stored_turns: Final = _StoredTurns((_stored_mcp_turn("resp_stored"),))
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=stored_turns)),
+        pytest.raises(litellm.BadRequestError) as raised,
+    ):
+        await bridged_turn
+
+    assert upstream.call_count == 1
+    assert raised.value.param is None
 
 
 class _StopForwarding(Exception):
@@ -372,15 +407,19 @@ async def test_bridged_follow_up_turn_keeps_the_addressed_response_id_off_the_pr
     client: Final = AsyncHTTPHandler()
     client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
 
-    response = await litellm.aresponses(
-        model="azure_ai/claude-sonnet-4-6",
-        api_base="https://fake-foundry-resource.services.ai.azure.com",
-        api_key="fake-api-key",
-        input="Double it",
-        previous_response_id="resp_turn_one",
-        client=client,
-        **{ADDRESSED_RESPONSE_ID_FIELD: "resp_turn_one"},
-    )
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        SimpleNamespace(db=_StoredTurns((_stored_mcp_turn("resp_turn_one"),))),
+    ):
+        response = await litellm.aresponses(
+            model="azure_ai/claude-sonnet-4-6",
+            api_base="https://fake-foundry-resource.services.ai.azure.com",
+            api_key="fake-api-key",
+            input="Double it",
+            previous_response_id="resp_turn_one",
+            client=client,
+            **{ADDRESSED_RESPONSE_ID_FIELD: "resp_turn_one"},
+        )
 
     assert provider.request_body is not None, "the bridged turn never reached the provider"
     assert ADDRESSED_RESPONSE_ID_FIELD not in provider.request_body, (
@@ -458,6 +497,382 @@ def _stored_mcp_turn(request_id: str) -> Mapping[str, object]:
             ],
         },
     }
+
+
+_TURN_ONE_ID: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+    custom_llm_provider="azure_ai", model_id="deployment-a", response_id="chatcmpl-turn-one"
+)
+
+
+def _turn_stored_without_prompts(request_id: str) -> Mapping[str, object]:
+    return {
+        "request_id": request_id,
+        "call_type": "aresponses",
+        "session_id": "turn-one-session",
+        "proxy_server_request": "{}",
+        "response": "{}",
+    }
+
+
+async def _bridged_follow_up(
+    asynchronous: bool,
+    provider: _RecordingAnthropicHandler,
+    proxy_fields: Mapping[str, object] = MappingProxyType({}),
+    follow_up_input: str | Sequence[Mapping[str, object]] = "Double it",
+    previous_response_id: object = _TURN_ONE_ID,
+) -> object:
+    request: Final = {
+        **proxy_fields,
+        "model": "azure_ai/claude-sonnet-4-6",
+        "api_base": "https://fake-foundry-resource.services.ai.azure.com",
+        "api_key": "fake-api-key",
+        "input": follow_up_input,
+        "previous_response_id": previous_response_id,
+    }
+    if not asynchronous:
+        sync_client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(provider)))
+        return litellm.responses(**request, client=sync_client)
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    return await litellm.aresponses(**request, client=client)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("asynchronous", "prisma_client"),
+    [
+        pytest.param(False, None, id="sync-no_database"),
+        pytest.param(True, None, id="async-no_database"),
+        pytest.param(True, SimpleNamespace(db=_StoredTurns(())), id="async-unknown_id"),
+        pytest.param(
+            True,
+            SimpleNamespace(db=_StoredTurns((_turn_stored_without_prompts(_TURN_ONE_ID),))),
+            id="async-prompts_not_stored",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "follow_up_input",
+    [
+        pytest.param("Double it", id="user_turn"),
+        pytest.param([{"type": "function_call_output", "call_id": "call_1", "output": "7"}], id="tool_output_only"),
+    ],
+)
+async def test_bridged_follow_up_without_a_replayable_previous_turn_is_refused_before_the_provider_call(
+    asynchronous: bool, prisma_client: SimpleNamespace | None, follow_up_input: str | Sequence[Mapping[str, object]]
+):
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma_client):
+        with pytest.raises(litellm.BadRequestError) as refused:
+            await _bridged_follow_up(asynchronous, provider, follow_up_input=follow_up_input)
+
+    assert provider.request_body is None, "the follow-up reached the provider with no conversation history"
+    assert (refused.value.status_code, refused.value.param, refused.value.code) == (
+        400,
+        "previous_response_id",
+        "previous_response_not_found",
+    )
+    assert f"Previous response with id '{_TURN_ONE_ID}' not found." in refused.value.message
+    assert "`store_prompts_in_spend_logs: true`" in refused.value.message
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize("previous_response_id", [123, [_TURN_ONE_ID]], ids=["int", "list"])
+async def test_a_non_string_previous_response_id_is_a_400_before_the_provider_call(
+    asynchronous: bool, previous_response_id: object
+):
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+
+    with pytest.raises(litellm.BadRequestError) as refused:
+        await _bridged_follow_up(asynchronous, provider, previous_response_id=previous_response_id)
+
+    assert provider.request_body is None, "the follow-up reached the provider with an id it cannot look up"
+    assert (refused.value.status_code, refused.value.param) == (400, "previous_response_id")
+
+@pytest.mark.asyncio
+async def test_refused_follow_ups_do_not_count_toward_the_deployments_failure_rate():
+    litellm_params: Final = {
+        "model": "azure_ai/claude-sonnet-4-6",
+        "api_base": "https://fake-foundry-resource.services.ai.azure.com",
+        "api_key": "fake-api-key",
+    }
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": "bridged", "litellm_params": litellm_params, "model_info": {"id": "d1"}},
+            {"model_name": "bridged", "litellm_params": litellm_params, "model_info": {"id": "d2"}},
+        ]
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        for _ in range(6):
+            with pytest.raises(litellm.BadRequestError, match="not found"):
+                await router.aresponses(model="d1", input="Double it", previous_response_id=_TURN_ONE_ID)
+
+    assert _should_cooldown_deployment(RoutingContext(router), "d1", 500, Exception("Test")) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fallback_settings",
+    [
+        pytest.param({"fallbacks": [{"bridged": ["native"]}]}, id="fallbacks"),
+        pytest.param({"default_fallbacks": ["native"]}, id="default_fallbacks"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("previous_response_id", "refusal"),
+    [
+        pytest.param(_TURN_ONE_ID, "not found", id="unresolvable_id"),
+        pytest.param(123, "expected a string, got int", id="non_string_id"),
+    ],
+)
+async def test_a_refused_follow_up_is_neither_retried_nor_sent_to_a_fallback(
+    fallback_settings: Mapping[str, object], previous_response_id: object, refusal: str
+):
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bridged",
+                "litellm_params": {
+                    "model": "azure_ai/claude-sonnet-4-6",
+                    "api_base": "https://fake-foundry-resource.services.ai.azure.com",
+                    "api_key": "fake-api-key",
+                },
+                "model_info": {"id": "d1"},
+            },
+            {
+                "model_name": "native",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake-api-key",
+                    "mock_response": "answered by the fallback without the history",
+                },
+                "model_info": {"id": "n1"},
+            },
+        ],
+        num_retries=3,
+        retry_policy=RetryPolicy(BadRequestErrorRetries=2),
+        **fallback_settings,
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        with pytest.raises(litellm.BadRequestError, match=refusal) as refused:
+            await router.aresponses(model="bridged", input="Double it", previous_response_id=previous_response_id)
+
+    assert not getattr(refused.value, "num_retries", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "client_id_fields",
+    [
+        pytest.param({}, id="previous_response_id_only"),
+        pytest.param({ADDRESSED_RESPONSE_ID_FIELD: "resp_the_client_held"}, id="with_the_id_the_client_sent"),
+    ],
+)
+async def test_a_follow_up_to_a_native_turn_the_bridged_group_cannot_rebuild_goes_to_its_fallback(
+    client_id_fields: Mapping[str, str],
+):
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bridged",
+                "litellm_params": {
+                    "model": "azure_ai/claude-sonnet-4-6",
+                    "api_base": "https://fake-foundry-resource.services.ai.azure.com",
+                    "api_key": "fake-api-key",
+                },
+                "model_info": {"id": "d1"},
+            },
+            {
+                "model_name": "native",
+                "litellm_params": {
+                    "model": "openai/gpt-5.4-mini",
+                    "api_key": "fake-api-key",
+                    "mock_response": "answered by the native fallback",
+                },
+                "model_info": {"id": "n1"},
+            },
+        ],
+        fallbacks=[{"bridged": ["native"]}],
+    )
+    native_turn_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai", model_id="native-elsewhere", response_id="resp_turn_one"
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client", None):
+        response: Final = await router.aresponses(
+            model="bridged", input="Double it", previous_response_id=native_turn_id, **client_id_fields
+        )
+
+    assert response._hidden_params["model_id"] == "n1"
+
+
+class _CountedLookups:
+    def __init__(self) -> None:
+        self.lookups = 0
+
+    async def query_raw(self, query: str, request_ids: Sequence[str]) -> list[dict[str, object]]:
+        self.lookups += 1
+        return []
+
+
+@pytest.mark.asyncio
+async def test_a_refused_sdk_follow_up_is_not_rerun_for_num_retries():
+    spend_logs: Final = _CountedLookups()
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=spend_logs)):
+        with pytest.raises(litellm.BadRequestError, match="not found"):
+            await _bridged_follow_up(
+                True, _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD), proxy_fields={"num_retries": 2}
+            )
+
+    assert spend_logs.lookups == RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+async def test_an_sdk_install_without_the_proxy_extras_gets_the_400_for_a_follow_up(
+    asynchronous: bool, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delitem(sys.modules, "litellm.proxy.proxy_server", raising=False)
+    monkeypatch.setitem(sys.modules, "fastapi", None)
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+
+    with pytest.raises(litellm.BadRequestError) as refused:
+        await _bridged_follow_up(asynchronous, provider)
+
+    assert provider.request_body is None, "the follow-up reached the provider with no conversation history"
+    assert (refused.value.status_code, refused.value.param) == (400, "previous_response_id")
+    assert "send the earlier turns in `input`" in refused.value.message
+    assert "general_settings" not in refused.value.message
+
+
+@pytest.mark.asyncio
+async def test_a_refused_proxy_follow_up_names_the_id_the_client_sent():
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_StoredTurns(()))):
+        with pytest.raises(litellm.BadRequestError) as refused:
+            await _bridged_follow_up(
+                True,
+                _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD),
+                {ADDRESSED_RESPONSE_ID_FIELD: "resp_the_client_held"},
+            )
+
+    assert "Previous response with id 'resp_the_client_held' not found." in refused.value.message
+
+
+class _DatabaseOnTheProxyLoop:
+    async def query_raw(self, query: str, request_ids: Sequence[str]) -> list[dict[str, object]]:
+        raise AssertionError("a synchronous call queried the proxy's database off the proxy's event loop")
+
+
+@pytest.mark.asyncio
+async def test_a_sync_follow_up_beside_the_proxy_database_asks_for_aresponses_without_querying_it():
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_DatabaseOnTheProxyLoop())):
+        with pytest.raises(litellm.BadRequestError) as refused:
+            await _bridged_follow_up(False, provider, {ADDRESSED_RESPONSE_ID_FIELD: "resp_the_client_held"})
+
+    assert provider.request_body is None, "the follow-up reached the provider with no conversation history"
+    assert (refused.value.status_code, refused.value.param) == (400, "previous_response_id")
+    assert "'resp_the_client_held'" in refused.value.message
+    assert "litellm.aresponses()" in refused.value.message
+
+
+@pytest.mark.asyncio
+async def test_a_sync_follow_up_carrying_a_compaction_summary_beside_the_proxy_database_reaches_the_provider():
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    summarized_input: Final = [
+        {
+            "type": "compaction",
+            "id": "cmp_1",
+            "encrypted_content": json.dumps({"type": "compaction", "content": "The number is 7."}),
+        },
+        {"role": "user", "content": "Double it"},
+    ]
+
+    with patch("litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_DatabaseOnTheProxyLoop())):
+        response = await _bridged_follow_up(False, provider, follow_up_input=summarized_input)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert provider.request_body is not None, "the summarized follow-up never reached the provider"
+    sent_messages: Final = json.dumps(provider.request_body["messages"])
+    assert "The number is 7." in sent_messages and "Double it" in sent_messages
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("follow_up_input", "earlier_reply"),
+    [
+        pytest.param(
+            [
+                {"role": "user", "content": "My favorite number is 7."},
+                {"role": "assistant", "content": "Noted."},
+                {"role": "user", "content": "Double it"},
+            ],
+            "Noted.",
+            id="assistant_message",
+        ),
+        pytest.param(
+            [
+                {"role": "user", "content": "Look up my favorite number."},
+                {"type": "function_call", "call_id": "call_1", "name": "lookup_number", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "7"},
+            ],
+            "lookup_number",
+            id="function_call",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("asynchronous", "prisma_client"),
+    [
+        pytest.param(False, None, id="sync-no_database"),
+        pytest.param(False, SimpleNamespace(db=_DatabaseOnTheProxyLoop()), id="sync-proxy_database"),
+        pytest.param(True, None, id="async-no_database"),
+        pytest.param(True, SimpleNamespace(db=_StoredTurns(())), id="async-unknown_id"),
+        pytest.param(
+            True,
+            SimpleNamespace(db=_StoredTurns((_turn_stored_without_prompts(_TURN_ONE_ID),))),
+            id="async-prompts_not_stored",
+        ),
+    ],
+)
+async def test_a_follow_up_carrying_its_earlier_reply_in_input_reaches_the_provider_when_the_id_does_not_resolve(
+    asynchronous: bool,
+    prisma_client: SimpleNamespace | None,
+    follow_up_input: Sequence[Mapping[str, object]],
+    earlier_reply: str,
+):
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma_client):
+        response = await _bridged_follow_up(asynchronous, provider, follow_up_input=follow_up_input)
+
+    assert isinstance(response, ResponsesAPIResponse)
+    assert provider.request_body is not None, "the follow-up that carried its history never reached the provider"
+    assert earlier_reply in json.dumps(provider.request_body["messages"])
+
+
+@pytest.mark.asyncio
+async def test_bridged_follow_up_replays_the_stored_previous_turn():
+    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client", SimpleNamespace(db=_StoredTurns((_stored_mcp_turn(_TURN_ONE_ID),)))
+    ):
+        await _bridged_follow_up(True, provider)
+
+    assert provider.request_body is not None, "the bridged turn never reached the provider"
+    assert [(message["role"], json.dumps(message["content"])) for message in provider.request_body["messages"]] == [
+        ("user", json.dumps([{"type": "text", "text": "My favorite number is 7."}])),
+        ("assistant", json.dumps([{"type": "text", "text": "Noted."}])),
+        ("user", json.dumps([{"type": "text", "text": "Double it"}])),
+    ]
 
 
 @pytest.mark.asyncio
@@ -619,7 +1034,111 @@ async def test_bridged_turn_logs_the_full_name_of_a_namespace_member_sent_under_
     logged: Final = logging_obj.model_call_details.get(BRIDGED_TOOL_NAMES_KWARG)
     assert full_name not in sent_names
     assert isinstance(logged, BridgedToolNames)
-    assert logged.as_mapping() == {sent_name: full_name for sent_name in sent_names}
+    assert full_names_by_sent_name(logged.tools()) == {
+        sent_name: full_name for sent_name in (*sent_names, _LONG_MEMBER)
+    }
+
+
+@pytest.mark.asyncio
+async def test_bridged_turn_logs_a_shortened_name_known_only_from_an_earlier_call_in_history():
+    """Codex can resume before it lists its MCP tools again, so the earlier call is the only trace of the tool."""
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="gemini/gemini-flash-latest",
+        messages=[],
+        stream=False,
+        call_type="responses",
+        start_time=1.0,
+        litellm_call_id="history-tool-names",
+        function_id="test",
+    )
+
+    def fake_completion(**kwargs: object) -> None:
+        raise _StopForwarding()
+
+    history: Final = [
+        {"type": "message", "role": "user", "content": "Read the document tool schemas"},
+        {
+            "type": "function_call",
+            "call_id": "call_earlier",
+            "name": _LONG_MEMBER,
+            "namespace": _LONG_NAMESPACE,
+            "arguments": "{}",
+        },
+        {"type": "function_call_output", "call_id": "call_earlier", "output": "schemas"},
+    ]
+
+    with (
+        patch("litellm.completion", fake_completion),  # test-quality-ok: no DI seam; the file stubs this same boundary
+        pytest.raises(_StopForwarding),
+    ):
+        LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="gemini/gemini-flash-latest",
+            input=history,
+            responses_api_request={"tools": []},
+            custom_llm_provider="gemini",
+            _is_async=False,
+            litellm_logging_obj=logging_obj,
+        )
+
+    logged: Final = logging_obj.model_call_details.get(BRIDGED_TOOL_NAMES_KWARG)
+    assert isinstance(logged, BridgedToolNames)
+    assert list(logged.tools().values()) == [NamespaceMember(_LONG_NAMESPACE, _LONG_MEMBER)]
+    assert all(len(sent_name) <= 64 for sent_name in logged.tools())
+
+
+@pytest.mark.parametrize(
+    ("returned_name", "logged_name"),
+    [("run", "exec__run"), ("exec__run", "exec__run"), ("read", "read"), ("shell", "shell")],
+    ids=["bare namespace member", "joined namespace member", "deferred top-level tool", "plain function"],
+)
+def test_spend_logs_name_a_bridged_call_by_the_tool_the_caller_gets_back(returned_name: str, logged_name: str):
+    from litellm.proxy.db.spend_log_tool_index import logged_full_tool_names, response_tool_call_names
+
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[],
+        stream=False,
+        call_type="responses",
+        start_time=1.0,
+        litellm_call_id="spend-log-tool-names",
+        function_id="test",
+    )
+
+    def fake_completion(**kwargs: object) -> None:
+        raise _StopForwarding()
+
+    tools: Final = [
+        {"type": "namespace", "name": "exec", "description": "", "tools": [{"type": "function", "name": "run"}]},
+        {"type": "function", "name": "read", "defer_loading": True, "parameters": {"type": "object"}},
+        {"type": "function", "name": "shell", "parameters": {"type": "object"}},
+    ]
+    with (
+        patch("litellm.completion", fake_completion),  # test-quality-ok: no DI seam; the file stubs this same boundary
+        pytest.raises(_StopForwarding),
+    ):
+        LiteLLMCompletionTransformationHandler().response_api_handler(
+            model="anthropic/claude-sonnet-5-5",
+            input="go",
+            responses_api_request={"tools": tools},
+            custom_llm_provider="anthropic",
+            _is_async=False,
+            litellm_logging_obj=logging_obj,
+        )
+
+    response: Final = litellm.ModelResponse(
+        choices=[
+            {
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": returned_name, "arguments": "{}"}}
+                    ],
+                }
+            }
+        ]
+    )
+    logged_names: Final = response_tool_call_names(response, logged_full_tool_names(logging_obj.model_call_details))
+    assert logged_names == (logged_name,)
 
 
 def _anthropic_streams_a_call_to_the_first_tool(request: httpx.Request) -> httpx.Response:

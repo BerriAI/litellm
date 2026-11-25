@@ -201,7 +201,9 @@ from litellm.litellm_core_utils.served_output_texts import (
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.litellm_core_utils.tool_fields import (
     BRIDGED_TOOL_NAMES_KWARG,
+    BridgedTool,
     BridgedToolNames,
+    full_names_by_sent_name,
     with_renamed_tool_calls,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
@@ -247,6 +249,7 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     DynamicPromptManagementParamLiteral,
     EmbeddingResponse,
+    FailureLoggedCost,
     GuardrailStatus,
     ImageResponse,
     LiteLLMBatch,
@@ -1244,7 +1247,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.client_facing_stream_model: str | None = None
         self.client_facing_response_id: str | None = None
         self.bridged_chat_request: BridgedChatRequest | None = None
-        self.bridged_tool_names: Mapping[str, str] = {}
+        self.bridged_tools: Mapping[str, BridgedTool] = {}
         self.zero_cost_warned: bool = False
         self.llm_caching_handler: LLMCachingHandler | None = None
 
@@ -1303,11 +1306,15 @@ class Logging(LiteLLMLoggingBaseClass):
         self._sync_success_scheduled: bool = False
         self.on_detached_stream_failure: Callable[[Logging, Exception], Awaitable[None]] | None = None
         self._stream_failure_claimed: bool = False
+        self._stream_success_refused: bool = False
+        self._stream_success_claimed: bool = False
         self._holding_stream_failure: bool = False
         self._held_stream_failure: Exception | None = None
         self._stash_owed_on_success: bool = False
+        self._stash_failure_logged: bool = False
         self._stash_billed_by_continuation: bool = False
         self._failed_attempts_owed_on_success: tuple[ServedRound, ...] = ()
+        self._failure_logged_cost_owed_on_success: float = 0.0
         self.failed_attempts_billed_on_success: tuple[ServedRound, ...] = ()
         self.shadow_eval_request_snapshot: GuardrailRequestSnapshot | None = None
 
@@ -1569,7 +1576,7 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         return next((provider for provider in candidates if isinstance(provider, str) and provider), None)
 
-    def _routed_deployment_model(self) -> str | None:
+    def routed_deployment_model(self) -> str | None:
         litellm_params: Final = self._model_call_details_view.get("litellm_params")
         metadata: Final = (
             StandardLoggingPayloadSetup.merge_litellm_metadata(_LITELLM_PARAMS.validate_python(litellm_params))
@@ -2075,7 +2082,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return custom_logger
         return None
 
-    def _get_raw_request_body(self, data: dict[str, object] | str | None) -> dict:
+    def _get_raw_request_body(self, data: dict[str, object] | str | None) -> dict[str, object]:
         if data is None:
             return {"error": "Received empty dictionary for raw request body"}
         if isinstance(data, str):
@@ -3347,10 +3354,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self._telemetry_failure_logged_attempt = marker
         callbacks: Final = tuple(
             callback
-            for callback in self.get_combined_callback_list(
-                dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
-                global_callbacks=litellm._async_failure_callback,  # pyright: ignore[reportPrivateUsage]  # Existing registry has no public accessor
-            )
+            for callback in self._async_failure_callbacks()
             if isinstance(callback, CustomLogger) and callback.logs_every_failed_attempt
         )
         if not callbacks:
@@ -3439,6 +3443,8 @@ class Logging(LiteLLMLoggingBaseClass):
     def carry_failed_attempt_usage(self) -> None:
         """Move what a failed earlier attempt stashed off the retry sharing this logging object, so the retry logs its
         own usage while the request's failure log still bills every attempt."""
+        failure_logged: Final = self._stash_failure_logged
+        self._stash_failure_logged = False
         if self._carry_parked_success():
             return
         usage: Final = self._model_call_details_view.get("combined_usage_object")
@@ -3462,6 +3468,8 @@ class Logging(LiteLLMLoggingBaseClass):
         if not owed_on_success or billed_by_continuation:
             return
         self._failed_attempts_owed_on_success = (*self._failed_attempts_owed_on_success, attempt)
+        if failure_logged:
+            self._failure_logged_cost_owed_on_success = self._failure_logged_cost_owed_on_success + attempt[1]
 
     def _carry_parked_success(self) -> bool:
         """A billed response the router discards after its success log was parked (a safeguard refusal it falls
@@ -3508,6 +3516,7 @@ class Logging(LiteLLMLoggingBaseClass):
         if not isinstance(own_cost, (int, float)):
             return combined_usage
         self.model_call_details["response_cost"] = own_cost + partial_cost
+        self.model_call_details["failure_logged_cost_billed_on_success"] = FailureLoggedCost(partial_cost)
         if self.cost_breakdown is not None:
             self.cost_breakdown = self.cost_breakdown | CostBreakdown(
                 total_cost=own_cost + partial_cost,
@@ -3533,6 +3542,11 @@ class Logging(LiteLLMLoggingBaseClass):
             usage_objects=[own_usage, *(usage for usage, _ in failed_attempts)]
         )
         self.model_call_details["response_cost"] = own_cost + failed_attempts_cost
+        continued_partial_logged: Final = self.model_call_details.get("failure_logged_cost_billed_on_success")
+        self.model_call_details["failure_logged_cost_billed_on_success"] = FailureLoggedCost(
+            self._failure_logged_cost_owed_on_success
+            + (continued_partial_logged.cost if isinstance(continued_partial_logged, FailureLoggedCost) else 0.0)
+        )
         if self.cost_breakdown is not None:
             self.cost_breakdown = _with_failed_attempts_cost(self.cost_breakdown, own_cost, failed_attempts_cost)
 
@@ -3565,6 +3579,35 @@ class Logging(LiteLLMLoggingBaseClass):
             return False
         self._stream_failure_claimed = True
         return True
+
+    def refuse_stream_success(self) -> None:
+        """A post-call hook refused this stream, so its failure log is its only spend row and a success log the
+        stream bills later, at teardown, is dropped."""
+        self._stream_success_refused = True
+
+    @property
+    def stream_success_refused(self) -> bool:
+        return self._stream_success_refused
+
+    async def mask_refused_stream_failure_log(self) -> None:
+        if should_redact_message_logging(self.model_call_details):
+            return
+        prepared: Final = _LogHookRun(details=self.model_call_details, result=None)
+        for callback in self._async_failure_callbacks():
+            if isinstance(callback, CustomGuardrail):
+                await self._async_logging_hook(prepared, callback)
+
+    def claim_stream_success(self) -> bool:
+        """The stream's success log is about to run, so a later refusal keeps it instead of billing a second row.
+        Returns False when a post-call hook already refused the stream."""
+        if self._stream_success_refused:
+            return False
+        self._stream_success_claimed = True
+        return True
+
+    @property
+    def stream_success_claimed(self) -> bool:
+        return self._stream_success_claimed
 
     def served_round(self, response: object) -> ServedRound | None:
         usage: Final = get_usage_object(completion_response=response)
@@ -3783,7 +3826,7 @@ class Logging(LiteLLMLoggingBaseClass):
         elif self.call_type == CallTypes.aresponses_websocket.value and isinstance(result, list):  # pyright: ignore[reportUnknownMemberType]  # Logging.call_type is untyped
             logging_result = ResponsesWebSocketTokenUsageProcessor.create_logging_object(
                 results=result,  # pyright: ignore[reportUnknownArgumentType]  # raw event dicts from the WS stream
-                litellm_model_name=self._routed_deployment_model(),
+                litellm_model_name=self.routed_deployment_model(),
             )
 
         elif self.relays_llm_passthrough and isinstance(result, Response):
@@ -4051,7 +4094,7 @@ class Logging(LiteLLMLoggingBaseClass):
     def _with_full_tool_names(self, response: _LoggedResponse) -> _LoggedResponse | ModelResponse | ModelResponseStream:
         if not isinstance(response, ModelResponse | ModelResponseStream):
             return response
-        return with_renamed_tool_calls(response, self.bridged_tool_names)
+        return with_renamed_tool_calls(response, full_names_by_sent_name(self.bridged_tools))
 
     def _as_served_chat_response(
         self, response: _LoggedResponse
@@ -6008,11 +6051,9 @@ class Logging(LiteLLMLoggingBaseClass):
             self.model_call_details[FAILED_PROMPT_TOKEN_ESTIMATE_KEY] = await self._offloaded_prompt_token_estimate()
         if self._on_failure_payload_built is not None:
             self._on_failure_payload_built()
-        callbacks: Final = self.get_combined_callback_list(
-            dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
-            global_callbacks=litellm._async_failure_callback,
-        )
+        callbacks: Final = self._async_failure_callbacks()
 
+        self._stash_failure_logged = True
         self.mark_logging_complete(event_type="async_failure")
         await _run_callbacks(
             Hook.attempt_ended,
@@ -6248,6 +6289,14 @@ class Logging(LiteLLMLoggingBaseClass):
             )
         )
 
+    def _async_failure_callbacks(self) -> tuple[str | Callable[..., object] | CustomLogger, ...]:
+        return tuple(
+            self.get_combined_callback_list(
+                dynamic_success_callbacks=self.dynamic_async_failure_callbacks,
+                global_callbacks=litellm._async_failure_callback,
+            )
+        )
+
     def get_combined_callback_list(
         self,
         dynamic_success_callbacks: list[str | Callable[..., object] | CustomLogger] | None,
@@ -6430,15 +6479,15 @@ class Logging(LiteLLMLoggingBaseClass):
             MappingProxyType(dict(optional_params)), MappingProxyType(dict(litellm_params))
         )
 
-    def record_bridged_tool_names(self, full_names_by_sent_name: Mapping[str, str]) -> None:
-        self.bridged_tool_names = dict(full_names_by_sent_name)
+    def record_bridged_tool_names(self, tools_by_sent_name: Mapping[str, BridgedTool]) -> None:
+        self.bridged_tools = dict(tools_by_sent_name)
         self._log_bridged_tool_names()
 
     def _log_bridged_tool_names(self) -> None:
-        if not self.bridged_tool_names:
+        if not self.bridged_tools:
             self.model_call_details.pop(BRIDGED_TOOL_NAMES_KWARG, None)
             return
-        self.model_call_details[BRIDGED_TOOL_NAMES_KWARG] = BridgedToolNames(tuple(self.bridged_tool_names.items()))
+        self.model_call_details[BRIDGED_TOOL_NAMES_KWARG] = BridgedToolNames(tuple(self.bridged_tools.items()))
 
     def record_bridged_responses_api_response(self, response: ResponsesAPIResponse) -> None:
         self.record_bridged_model_response(self._translate_responses_api_response_to_model_response(response))
@@ -7350,6 +7399,14 @@ def build_custom_logger_compatible_class(
         _in_memory_loggers.append(_signoz_logger)
         return _signoz_logger
 
+    elif logging_integration == "mixpanel":
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        if not is_otel_v2_enabled():
+            raise ValueError("The 'mixpanel' callback requires OpenTelemetry v2 (set LITELLM_OTEL_V2=true)")
+
+        return _maybe_construct_otel_v2("mixpanel", _in_memory_loggers)
+
     elif logging_integration == "mlflow":
         for callback in _in_memory_loggers:
             if isinstance(callback, MlflowLogger):
@@ -7970,6 +8027,12 @@ def get_custom_logger_compatible_class(
                 if isinstance(callback, OpenTelemetryV2) and callback.callback_name == "newrelic":
                     return callback
                 if isinstance(callback, NewRelicLogger):
+                    return callback
+        elif logging_integration == "mixpanel":
+            from litellm.integrations.otel.logger import OpenTelemetryV2
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpenTelemetryV2) and callback.callback_name == "mixpanel":
                     return callback
         return None
 
@@ -9154,6 +9217,8 @@ def get_standard_logging_object_payload(
         clean_hidden_params: Final = StandardLoggingPayloadSetup.get_hidden_params(hidden_params)
         if cache_hit is True or (clean_hidden_params["response_cost"] is None and raw_response_cost is not None):
             clean_hidden_params["response_cost"] = llm_response_cost
+        if clean_hidden_params["litellm_model_name"] is None:
+            clean_hidden_params["litellm_model_name"] = logging_obj.routed_deployment_model()
         if clean_hidden_params["litellm_overhead_time_ms"] is None and status == "success":
             # /v1/messages dict results and the bridge stream wrappers keep it on the logging object;
             # failure payloads stay None like every response type that carries its own _hidden_params

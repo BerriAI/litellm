@@ -2,10 +2,10 @@
 //! each deployment's context window, and this module is the only place that decides how a prompt
 //! is counted.
 //!
-//! It is an estimate on purpose. The proxy's own count (`_count_pre_call_check_tokens` over
-//! `litellm.token_counter`) is not the provider's either, since it counts a Claude prompt on
-//! `cl100k_base`. So this aims at the same size, not the same number, and no request goes to
-//! Python over how its prompt is counted. A prompt that sits within the difference of a window
+//! It is an estimate on purpose. The proxy's own count (`litellm/router_rust/steps/precall.py` over
+//! `litellm.token_counter`) is not the provider's either, since it counts a Claude prompt on the
+//! `o200k_base` stand-in. So this aims at the same size, not the same number, and no request goes
+//! to Python over how its prompt is counted. A prompt that sits within the difference of a window
 //! can be kept here and dropped by the proxy, or the other way around.
 //!
 //! Counted as the proxy counts it, through `litellm-token-counter`: the `system` block as a
@@ -19,8 +19,8 @@
 //! - Media carried as bytes or by reference is [`MEDIA_TOKENS`] each, since no tokenizer reads
 //!   it. The proxy sizes an image by its dimensions and a PDF by its pages
 //! - Tools the counter does not read are counted as the text of their JSON
-//! - The encoding is always [`ENCODING`]. The proxy counts a group that serves only OpenAI
-//!   models on their own encoding
+//! - The encoding is always [`ENCODING`]. The proxy counts an OpenAI deployment on its own
+//!   encoding
 //!
 //! A body with no list of messages, or one the counter cannot read at all, has no estimate. The
 //! pre-call checks then hold it to no window, as the proxy does when its own count fails.
@@ -34,9 +34,8 @@ use litellm_token_counter::{ContentItem, CountableRequest, TokenCounter};
 use serde::{Deserialize, de::value::MapDeserializer};
 use serde_json::{Map, Value, json};
 
-/// The encoding `litellm.token_counter` counts with for a group that does not serve only OpenAI
-/// models.
-const ENCODING: &str = "cl100k_base";
+/// The stand-in encoding the proxy's pre-call checks count a deployment that is not OpenAI's with.
+const ENCODING: &str = "o200k_base";
 
 /// What one media source counts as: the proxy's `DEFAULT_IMAGE_TOKEN_COUNT`, its own count of an
 /// image it cannot size.
@@ -309,7 +308,7 @@ mod tests {
             estimate(document(&"word ".repeat(100)))
                 .zip(estimate(document("")))
                 .map(|(long, empty)| long - empty),
-            Some(101)
+            Some(100)
         );
     }
 

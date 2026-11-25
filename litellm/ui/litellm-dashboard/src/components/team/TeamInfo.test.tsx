@@ -252,7 +252,6 @@ vi.mock("../key_team_helpers/filter_helpers", () => ({
     userIds: [],
   }),
   fetchAllKeyAliases: vi.fn().mockResolvedValue([]),
-  fetchAllOrganizations: vi.fn().mockResolvedValue([]),
 }));
 
 import { useAllProxyModels, useModelAccessGroupNames } from "@/app/(dashboard)/hooks/models/useModels";

@@ -22,9 +22,9 @@ mod value;
 
 pub use caller::{Caller, NotACaller, StoredKey};
 pub use error::{
-    AgentIdentityFailure, AssertionRejection, BudgetExceeded, ClaimDenial, Error, JwtDenial,
-    KeyDenial, KeyError, KeyFailure, ModelAccessDenied, PremiumRequired, RbacDenial, Searched,
-    TeamDenial, TokenError, VerifyDenial,
+    AgentIdentityFailure, AssertionRejection, AuthzDenial, BudgetExceeded, ClaimDenial, DeniedList,
+    Error, JwtDenial, KeyDenial, KeyError, KeyFailure, ModelAccessDenied, PremiumRequired,
+    RbacDenial, Searched, TeamDenial, TokenError, VerifyDenial,
 };
 pub use host::{
     AgentRow, AuthHost, EndUserRow, KeyRow, MembershipRow, ObjectPermissionRow, OperatorHooks,

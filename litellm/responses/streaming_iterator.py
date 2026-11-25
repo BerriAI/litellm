@@ -2374,7 +2374,11 @@ async def _admit_frame_turn(
 
 
 def responses_ws_error_frame(
-    status: int, error_type: str, message: str, provider_specific_fields: Mapping[str, object] | None = None
+    status: int,
+    error_type: str,
+    message: str,
+    provider_specific_fields: Mapping[str, object] | None = None,
+    openai_fields: Mapping[str, str] = MappingProxyType({}),
 ) -> str:
     return json.dumps(
         {
@@ -2383,6 +2387,7 @@ def responses_ws_error_frame(
             "error": {
                 "type": error_type,
                 "message": message,
+                **openai_fields,
                 **({"provider_specific_fields": dict(provider_specific_fields)} if provider_specific_fields else {}),
             },
         },
@@ -2398,6 +2403,19 @@ def responses_ws_error_type(status: int) -> str:
             return "invalid_request_error"
         case _:
             return "server_error"
+
+
+def _openai_error_fields(failure: Exception) -> Mapping[str, str]:
+    return MappingProxyType(
+        {name: value for name in ("code", "param") if isinstance(value := attribute_or_none(failure, name), str)}
+    )
+
+
+def _turn_failure_frame(failure: Exception) -> str:
+    status: Final = error_status_code(failure, 500)
+    return responses_ws_error_frame(
+        status, responses_ws_error_type(status), str(failure), openai_fields=_openai_error_fields(failure)
+    )
 
 
 def turn_refusal_frame(refusal: RateLimitError) -> str:
@@ -3894,7 +3912,7 @@ class ManagedResponsesWebSocketHandler:
             terminal_event: Final = await self._stream_and_forward(model, call_kwargs)
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: error processing response.create: %s", exc)
-            await self._send_error(error_status_code(exc, 500), str(exc))
+            await self._send_frame(_turn_failure_frame(exc))
             return
 
         self._save_turn_history(terminal_event, prior_history, current_messages)

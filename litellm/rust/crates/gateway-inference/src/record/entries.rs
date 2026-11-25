@@ -49,10 +49,29 @@ pub enum Ended {
     Failed,
 }
 
+/// Who a call is charged to, as Python's `UserAPIKeyAuth` names its caller.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Charged {
+    /// The hash the key's row is stored under, or Python's alias for the master key.
+    pub key_hash: Option<String>,
+    pub key_alias: Option<String>,
+    pub user_id: Option<String>,
+}
+
 /// One call as it stands.
-pub struct Entries {
+pub struct CallState {
     call_type: Option<CallType>,
-    start: f64,
+    call_id: Option<String>,
+    /// Python's `litellm_trace_id`, which groups the call's spend log row as its session.
+    trace_id: String,
+    charged: Charged,
+    start: SystemTime,
+    /// When the pre-call hook handed the body back for routing, Python's `api_call_start_time`.
+    api_call_start: Option<SystemTime>,
+    end: Option<SystemTime>,
+    /// When the served stream's first event arrived, as a stream held before it was answered
+    /// read it.
+    first_event: Option<SystemTime>,
     request: Request,
     rate_limit_statuses: Option<Value>,
     response_headers: Map<String, Value>,
@@ -60,17 +79,23 @@ pub struct Entries {
     ended: Option<Ended>,
 }
 
-fn unix_now() -> f64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+/// `at` in seconds since the Unix epoch.
+pub fn unix(at: SystemTime) -> f64 {
+    at.duration_since(UNIX_EPOCH)
         .map_or(0.0, |elapsed| elapsed.as_secs_f64())
 }
 
-impl Entries {
-    pub(super) fn new() -> Self {
+impl CallState {
+    pub(super) fn new(trace_id: String) -> Self {
         Self {
             call_type: None,
-            start: unix_now(),
+            call_id: None,
+            trace_id,
+            charged: Charged::default(),
+            start: SystemTime::now(),
+            api_call_start: None,
+            end: None,
+            first_event: None,
             request: Request::Named {
                 model: None,
                 stream: false,
@@ -91,9 +116,41 @@ impl Entries {
         self.call_type
     }
 
-    /// When the call began, in seconds since the Unix epoch.
-    pub fn start(&self) -> f64 {
+    /// The request's `x-litellm-call-id`, which the route names once it runs.
+    pub fn name_call(&mut self, call_id: String) {
+        self.call_id = Some(call_id);
+    }
+
+    pub fn call_id(&self) -> Option<&str> {
+        self.call_id.as_deref()
+    }
+
+    pub fn trace_id(&self) -> &str {
+        &self.trace_id
+    }
+
+    /// Who the call is charged to, which the callbacks name once they begin.
+    pub fn charge_to(&mut self, charged: Charged) {
+        self.charged = charged;
+    }
+
+    pub fn charged(&self) -> &Charged {
+        &self.charged
+    }
+
+    /// When the call began.
+    pub fn start(&self) -> SystemTime {
         self.start
+    }
+
+    /// When the route took the body back to call the provider with it.
+    pub fn api_call_start(&self) -> Option<SystemTime> {
+        self.api_call_start
+    }
+
+    /// When the call was served or failed.
+    pub fn end(&self) -> Option<SystemTime> {
+        self.end
     }
 
     /// Takes the route's `body` for the pre-call hook.
@@ -101,13 +158,30 @@ impl Entries {
         self.request = Request::Held(body);
     }
 
-    /// The body as the pre-call hook left it, back to the route.
+    /// The body as the pre-call hook left it, back to the route, which calls the provider with it
+    /// next.
     pub fn release(&mut self) -> Map<String, Value> {
         let named = self.request.named();
         match std::mem::replace(&mut self.request, named) {
             Request::Held(body) => body,
             Request::Named { .. } => Map::new(),
         }
+    }
+
+    /// The pre-call hook let the call on to the provider.
+    pub fn call_provider(&mut self) {
+        self.api_call_start = Some(SystemTime::now());
+    }
+
+    /// A held stream's first event arrived `at`.
+    pub fn see_first_event(&mut self, at: SystemTime) {
+        self.first_event = Some(at);
+    }
+
+    /// When the served stream's first event arrived, when the stream was held before it was
+    /// answered.
+    pub fn first_event(&self) -> Option<SystemTime> {
+        self.first_event
     }
 
     /// The request body while it is held, `None` once the route has it back.
@@ -151,11 +225,13 @@ impl Entries {
     }
 
     pub fn serve(&mut self, served: ServedCall) {
+        self.end = Some(SystemTime::now());
         self.served = Some(served);
         self.ended = Some(Ended::Served);
     }
 
     pub fn fail(&mut self) {
+        self.end = Some(SystemTime::now());
         self.ended = Some(Ended::Failed);
     }
 
@@ -186,7 +262,7 @@ mod tests {
     #[case::held(false)]
     #[case::released(true)]
     fn the_model_and_the_stream_flag_outlast_the_body(#[case] released: bool) {
-        let mut entries = Entries::new();
+        let mut entries = CallState::new("trace-1".to_owned());
         entries.hold(body(true));
         entries
             .body_mut()

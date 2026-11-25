@@ -2145,6 +2145,55 @@ class TestBackgroundStreamingTerminalEvents:
         assert final_call.kwargs["error"] == expected_error
 
     @pytest.mark.asyncio
+    async def test_a_request_refused_before_streaming_polls_failed_with_its_reason(self):
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+        from litellm.responses.litellm_completion_transformation.transformation import (
+            previous_response_not_found,
+        )
+
+        refusal: Final = previous_response_not_found(("resp_unknown",), "claude-sonnet-4-6", "anthropic")
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_refused", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(side_effect=refusal)
+            await background_streaming_task(**kwargs)
+
+        final_call: Final = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "failed"
+        assert final_call.kwargs["error"]["code"] == "previous_response_not_found"
+        assert final_call.kwargs["error"]["message"].startswith("Previous response with id 'resp_unknown' not found.")
+
+    @pytest.mark.asyncio
+    async def test_any_other_failure_before_streaming_keeps_its_background_error_shape(self):
+        from litellm.exceptions import RateLimitError
+        from litellm.proxy.response_polling.background_streaming import (
+            background_streaming_task,
+        )
+
+        failure: Final = RateLimitError(message="slow down", llm_provider="openai", model="gpt-5.4-mini")
+        handler: Final = AsyncMock(spec=ResponsePollingHandler)
+        kwargs: Final = _make_background_streaming_kwargs("poll_rate_limited", handler)
+
+        with patch(  # test-quality-ok: the processor is built inside the task, same idiom as the sibling tests
+            "litellm.proxy.response_polling.background_streaming.ProxyBaseLLMRequestProcessing"
+        ) as MockProcessor:
+            MockProcessor.return_value.base_process_llm_request = AsyncMock(side_effect=failure)
+            await background_streaming_task(**kwargs)
+
+        final_call: Final = handler.update_state.call_args_list[-1]
+        assert final_call.kwargs["status"] == "failed"
+        assert final_call.kwargs["error"] == {
+            "type": "internal_error",
+            "message": str(failure),
+            "code": "background_streaming_error",
+        }
+
+    @pytest.mark.asyncio
     async def test_a_non_streamed_success_response_still_polls_completed(self):
         from fastapi.responses import JSONResponse
 

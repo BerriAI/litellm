@@ -56,6 +56,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     atomic_check_and_increment_by_n,
     current_time,
     enforce_mcp_server_rate_limits,
+    estimate_input_and_output_tokens,
     estimate_precise_input_tokens,
     get_or_create_request_stash,
     increment_reservation_aware_tokens,
@@ -156,7 +157,8 @@ def _capture_token_increments(fakes: FakeRateLimits) -> list[dict[str, object]]:
     async def token_increment(keys: list[str], args: list[float]) -> list[float]:
         amounts: Final = args[::2]
         captured.extend(
-            {"key": key, "increment_value": amount, "ttl": ttl} for key, amount, ttl in zip(keys, amounts, args[1::2])
+            {"key": key, "increment_value": amount, "ttl": ttl}
+            for key, amount, ttl in zip(keys[1::2], amounts, args[1::2])
         )
         return amounts
 
@@ -848,6 +850,52 @@ def test_llm_tpm_estimation_still_counts_messages_with_mcp_metadata() -> None:
         "mcp_arguments": {},
     }
     assert estimate_tokens_for_request(handler, data, call_type="acompletion") == 101
+
+
+@pytest.mark.parametrize(
+    ("instructions", "call_type"),
+    [
+        pytest.param({"system": "x" * 400}, "anthropic_messages", id="messages-system-string"),
+        pytest.param(
+            {"system": [{"type": "text", "text": "x" * 300}, {"type": "text", "text": "x" * 100}]},
+            "anthropic_messages",
+            id="messages-system-blocks",
+        ),
+        pytest.param({"instructions": "x" * 400}, "aresponses", id="responses-instructions"),
+    ],
+)
+def test_tpm_reservation_counts_instruction_text_outside_the_messages(
+    instructions: dict[str, object], call_type: str
+) -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache()))
+    conversation: Final[dict[str, object]] = (
+        {"input": "x" * 40, "max_output_tokens": 16}
+        if call_type == "aresponses"
+        else {"messages": [{"role": "user", "content": "x" * 40}], "max_tokens": 16}
+    )
+    without: Final = estimate_tokens_for_request(handler, conversation, call_type=call_type)
+    reserved: Final = estimate_tokens_for_request(handler, {**conversation, **instructions}, call_type=call_type)
+    assert (without, reserved) == (10 + 16, 110 + 16), "400 characters of instructions are 100 more tokens"
+    python_estimate: Final = estimate_input_and_output_tokens({**conversation, **instructions}, call_type=call_type)
+    assert python_estimate == (110, 16), "the estimator that serves media requests counts the same text"
+
+
+def test_itpm_reservation_counts_the_system_prompt_of_a_messages_request() -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), counted_models_resolver=lambda model, team_id: (model,)
+    )
+    system: Final = "Always answer in one short word. " * 50
+    messages: Final = [{"role": "user", "content": "Say ok."}]
+    as_messages_request: Final = estimate_precise_input_tokens(
+        handler, {"system": system, "messages": messages}, "gpt-4o", "anthropic_messages"
+    )
+    as_chat_request: Final = estimate_precise_input_tokens(
+        handler, {"messages": [{"role": "system", "content": system}, *messages]}, "gpt-4o", "acompletion"
+    )
+    assert as_messages_request == as_chat_request
+    assert as_messages_request > estimate_precise_input_tokens(
+        handler, {"messages": messages}, "gpt-4o", "anthropic_messages"
+    )
 
 
 @pytest.mark.asyncio
@@ -1592,6 +1640,30 @@ async def test_multiple_rate_limits_per_descriptor():
     assert exc_info.value.headers.get("rate_limit_type") == "max_parallel_requests"
     assert "retry-after" in exc_info.value.headers
     assert "reset_at" in exc_info.value.headers
+
+
+@pytest.mark.asyncio
+async def test_tokens_charged_before_any_admission_count_against_the_next_request():
+    api_key: Final = hash_token("sk-relay-first")
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+
+    await handler.async_log_success_event(
+        {"standard_logging_object": {"metadata": {"user_api_key_hash": api_key}}},
+        ModelResponse(usage=Usage(prompt_tokens=1092, completion_tokens=0, total_tokens=1092)),
+        None,
+        None,
+    )
+
+    with pytest.raises(HTTPException) as refused:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key=api_key, tpm_limit=1000),
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "hi"}]},
+            call_type="completion",
+        )
+    assert refused.value.status_code == 429
+    assert refused.value.headers.get("rate_limit_type") == "tokens"
 
 
 @pytest.mark.asyncio
@@ -3123,9 +3195,13 @@ async def test_a_realtime_response_is_refused_once_its_session_turns_used_the_ag
             },
             call_type=CallTypes.arealtime.value,
         )
-        await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, _realtime_turn_usage(_SOCKET_TURN_TPM_LIMIT // 2))
+        await handler.charge_realtime_turn_usage(
+            auth, _REALTIME_MODEL, _realtime_turn_usage(_SOCKET_TURN_TPM_LIMIT // 2)
+        )
         await check()
-        await handler.charge_realtime_turn_usage(auth, _REALTIME_MODEL, _realtime_turn_usage(_SOCKET_TURN_TPM_LIMIT // 2))
+        await handler.charge_realtime_turn_usage(
+            auth, _REALTIME_MODEL, _realtime_turn_usage(_SOCKET_TURN_TPM_LIMIT // 2)
+        )
 
         with pytest.raises(ProxyRateLimitError) as exc_info:
             await check()
@@ -3168,6 +3244,36 @@ async def test_a_realtime_response_is_refused_once_its_session_turns_used_the_pr
 
     assert exc_info.value.status_code == 429
     assert _tokens_counted(handler, window, project_window) - tokens_at_open == 2 * turn_tokens
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("counts_cached_tokens", "turn_tokens"), [(False, 950), (True, 1050)], ids=["off", "on"])
+async def test_a_realtime_turn_counts_cached_tokens_against_the_team_model_limit_only_when_the_team_opts_in(
+    counts_cached_tokens: bool, turn_tokens: int
+) -> None:
+    local_cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-realtime-team-cached"),
+        team_id="team-rt-cached",
+        team_metadata={
+            "model_tpm_limit": {_REALTIME_MODEL: 10**9},
+            "model_tpm_limit_counts_cached_tokens": {_REALTIME_MODEL: counts_cached_tokens},
+        },
+    )
+    team_window: Final = f"team-rt-cached:{_REALTIME_MODEL}"
+    await _open_realtime_session(handler, local_cache, auth)
+    tokens_at_open: Final = _tokens_counted(handler, "model_per_team", team_window)
+
+    await handler.charge_realtime_turn_usage(
+        auth,
+        _REALTIME_MODEL,
+        Usage(
+            prompt_tokens=600, completion_tokens=450, total_tokens=1050, prompt_tokens_details={"cached_tokens": 100}
+        ),
+    )
+
+    assert _tokens_counted(handler, "model_per_team", team_window) - tokens_at_open == turn_tokens
 
 
 @pytest.mark.asyncio
@@ -6306,6 +6412,14 @@ async def test_fail_closed_read_from_the_bound_settings_store_rejects_a_limited_
     limited: Final = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-store"), rpm_limit=50, tpm_limit=100000)
     unlimited: Final = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-store-plain"))
 
+    rejection: Final = (
+        "fail_closed_rate_limit_enforcement: rejecting request, batch_rate_limiter_script could not verify the "
+        "counters against Redis"
+    )
+
+    def rejections() -> list[str]:
+        return [record.getMessage() for record in caplog.records if rejection in record.getMessage()]
+
     with _redis_that_breaks_the_pipe() as port:
         handler: Final = PROXY_MaxParallelRequestsHandler_v3(
             internal_usage_cache=InternalUsageCache(DualCache(redis_cache=RedisCache(host="127.0.0.1", port=port)))
@@ -6315,14 +6429,15 @@ async def test_fail_closed_read_from_the_bound_settings_store_rejects_a_limited_
             with pytest.raises(HTTPException) as exc:
                 await _admit(handler, limited)
             await _admit(handler, unlimited)
+            # The Rust limiter's record reaches Python's logging from a background queue, after the call returned
+            for _ in range(500):
+                if rejections():
+                    break
+                await asyncio.sleep(0.01)
 
     assert exc.value.status_code == 503
     assert exc.value.detail == {"error": RATE_LIMIT_UNVERIFIABLE_MESSAGE}
-    assert any(
-        "fail_closed_rate_limit_enforcement: rejecting request, batch_rate_limiter_script could not verify the "
-        "counters against Redis" in record.getMessage()
-        for record in caplog.records
-    )
+    assert len(rejections()) == 1, [record.getMessage() for record in caplog.records]
 
 
 def test_default_hash_tag_grouping_resolver_uses_litellm_setting(monkeypatch: pytest.MonkeyPatch):
@@ -6587,6 +6702,51 @@ async def test_key_model_rpm_override_takes_precedence_over_team_model_rpm_limit
         await request()
     assert exc.value.status_code == 429
     assert "model_per_key" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("counts_cached_tokens", "team_model_tokens"),
+    [(None, 250), ({"test-model": False}, 250), ({"test-model": True}, 1050), ({"other-model": True}, 250)],
+    ids=["unset", "off", "on", "on_for_another_model"],
+)
+@pytest.mark.parametrize("event", ("success", "partial"))
+async def test_team_model_tpm_limit_counts_cached_tokens_only_for_models_the_team_opts_in(
+    counts_cached_tokens: dict[str, bool] | None, team_model_tokens: int, event: str
+) -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
+    team_metadata: Final = {
+        "model_tpm_limit": {"test-model": 100000},
+        **({} if counts_cached_tokens is None else {"model_tpm_limit_counts_cached_tokens": counts_cached_tokens}),
+    }
+    auth: Final = UserAPIKeyAuth(
+        api_key=hash_token("sk-cached"), team_id="cached-team", tpm_limit=100000, team_metadata=team_metadata
+    )
+    await handler.async_pre_call_hook(
+        auth,
+        cache,
+        {"model": "test-model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 64},
+        "acompletion",
+    )
+    usage: Final = Usage(
+        prompt_tokens=1000, completion_tokens=50, total_tokens=1050, prompt_tokens_details={"cached_tokens": 800}
+    )
+    kwargs: Final = {
+        "standard_logging_object": {
+            "model_group": "test-model",
+            "metadata": {"user_api_key_hash": auth.api_key, "user_api_key_team_id": auth.team_id},
+        },
+        "litellm_params": {"metadata": {"model_group": "test-model", "user_api_key_team_metadata": team_metadata}},
+        **({"combined_usage_object": usage} if event == "partial" else {}),
+    }
+    if event == "success":
+        await handler.async_log_success_event(kwargs, ModelResponse(model="test-model", usage=usage), None, None)
+    else:
+        await handler.async_log_failure_event(kwargs, None, None, None)
+
+    assert await handler.rate_limits.get(_counter("model_per_team", "cached-team:test-model")) == team_model_tokens
+    assert await handler.rate_limits.get(_counter("api_key", auth.api_key)) == 250
 
 
 @pytest.mark.parametrize(

@@ -100,7 +100,7 @@ def uses_provider_oauth(params: Mapping[str, object]) -> bool:
     return credential is not None and credential.credential_values.get("oauth_client_credentials") is True
 
 
-def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: Mapping[str, object]) -> dict:
+def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: Mapping[str, object]) -> dict[str, object]:
     """
     Generate a unique model_id for the deployment.
 

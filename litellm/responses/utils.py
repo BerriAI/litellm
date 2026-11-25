@@ -1419,6 +1419,33 @@ class ResponsesAPIRequestUtils:
         )
 
 
+_CHAT_COMPLETION_ID_PREFIX: Final = "chatcmpl-"
+
+
+def answered_by_the_chat_bridge(response_id: object) -> bool:
+    return isinstance(
+        response_id, str
+    ) and ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(response_id).startswith(
+        _CHAT_COMPLETION_ID_PREFIX
+    )
+
+
+_RESPONSES_API_ID_PREFIX: Final = "resp_"
+
+
+def held_by_a_provider(response_id: str) -> bool:
+    from litellm.utils import ProviderConfigManager
+
+    decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id)
+    original: Final = decoded.get("response_id", response_id)
+    provider: Final = decoded.get("custom_llm_provider")
+    return original.startswith(_RESPONSES_API_ID_PREFIX) or (
+        provider is not None
+        and not original.startswith(_CHAT_COMPLETION_ID_PREFIX)
+        and ProviderConfigManager.get_provider_responses_api_config(provider=provider) is not None
+    )
+
+
 class ResponseAPILoggingUtils:
     @staticmethod
     def is_response_api_usage(usage: Mapping[str, object] | ResponseAPIUsage) -> bool:

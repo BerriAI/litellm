@@ -141,6 +141,7 @@ from litellm.proxy.common_utils.cache_invalidation_pubsub import (
 )
 from litellm.proxy.common_utils.callback_config_validation import (
     InvalidLoggingMetadata,
+    mixpanel_logging_metadata_error,
     normalize_logging_entries,
     string_keyed,
 )
@@ -1813,6 +1814,7 @@ async def new_team(
     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"extra_info": "some info"}
     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit for this team - applied across all keys for this team.
     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit for this team - applied across all keys for this team.
+    - model_tpm_limit_counts_cached_tokens: Optional[Dict[str, bool]] - Models whose cached input tokens count against this team's `model_tpm_limit`. Cached input tokens are left out by default. Set a model to true when the provider counts them against its own quota, as OpenAI does. Example: {"gpt-4": true}
     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
     - default_estimated_output_tokens_per_model: Optional[Dict[str, int]] - Per-model override of the above. Example: {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
@@ -1887,6 +1889,9 @@ async def new_team(
     ```
     """
     try:
+        _raise_on_unsendable_mixpanel_callback(
+            data.metadata  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        )
         from litellm.proxy.management_helpers.audit_logs import (
             get_audit_log_changed_by,
             is_audit_logging_enabled,
@@ -2349,6 +2354,12 @@ async def _create_team_update_audit_log(
     )
 
 
+def _raise_on_unsendable_mixpanel_callback(metadata: Mapping[str, object] | None) -> None:
+    error: Final = mixpanel_logging_metadata_error(metadata)
+    if error is not None:
+        raise HTTPException(status_code=400, detail={"error": error})
+
+
 async def _update_model_table(
     data: UpdateTeamRequest,
     model_id: int | None,
@@ -2666,6 +2677,7 @@ async def update_team(
     - denied_passthrough_routes: Optional[List[str]] - List of pass through routes the team's keys may not call, even if allowed. Applies together with each key's `denied_passthrough_routes`.
     - model_rpm_limit: Optional[Dict[str, int]] - The RPM (Requests Per Minute) limit per model for this team. Example: {"gpt-4": 100, "gpt-3.5-turbo": 200}
     - model_tpm_limit: Optional[Dict[str, int]] - The TPM (Tokens Per Minute) limit per model for this team. Example: {"gpt-4": 10000, "gpt-3.5-turbo": 20000}
+    - model_tpm_limit_counts_cached_tokens: Optional[Dict[str, bool]] - Models whose cached input tokens count against this team's `model_tpm_limit`. Cached input tokens are left out by default. Set a model to true when the provider counts them against its own quota, as OpenAI does. Example: {"gpt-4": true}
     - default_estimated_output_tokens: Optional[int] - Expected output tokens reserved for TPM limiting when a request omits max_tokens, for keys on this team that do not set their own. Positive integer.
     - default_estimated_output_tokens_per_model: Optional[Dict[str, int]] - Per-model override of the above. Example: {"gpt-4": 4096, "gpt-3.5-turbo": 1024}
     - mcp_rpm_limit: Optional[Dict[str, int]] - Per-MCP-server RPM limit for this team, keyed by MCP server name (alias if set, else the configured name). Example: {"github": 100, "slack": 200}. Applied across all keys for this team.
@@ -2701,6 +2713,9 @@ async def update_team(
     ```
     """
     try:
+        _raise_on_unsendable_mixpanel_callback(
+            data.metadata  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        )
         from litellm.proxy.management_helpers.audit_logs import is_audit_logging_enabled
         from litellm.proxy.proxy_server import (
             litellm_proxy_admin_name,

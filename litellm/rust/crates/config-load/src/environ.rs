@@ -15,10 +15,14 @@ const ENVIRONMENT_VARIABLES: &str = "environment_variables";
 
 /// Every `os.environ/` reference in `document`, read the way `ProxyConfig._check_for_os_environ_vars`
 /// reads it. `environment_variables` is resolved first, against `secrets` alone, and then sits
-/// in front of the environment `secrets` reads for the rest of the document.
-pub(crate) async fn resolve(document: Value, secrets: SecretResolver) -> Result<Value, Error> {
+/// in front of the environment `secrets` reads for the rest of the document. Also returns that
+/// layered resolver, which reads a reference the way the rest of the document was read.
+pub(crate) async fn resolve(
+    document: Value,
+    secrets: SecretResolver,
+) -> Result<(Value, SecretResolver), Error> {
     let Value::Mapping(mut document) = document else {
-        return Ok(document);
+        return Ok((document, secrets));
     };
     let key = Value::String(ENVIRONMENT_VARIABLES.into());
     let section = match document.remove(&key) {
@@ -37,7 +41,7 @@ pub(crate) async fn resolve(document: Value, secrets: SecretResolver) -> Result<
     if let Some(section) = section {
         document.insert(key, section);
     }
-    Ok(Value::Mapping(document))
+    Ok((Value::Mapping(document), layered))
 }
 
 fn resolve_mapping<'a>(
@@ -93,7 +97,8 @@ async fn resolve_value(
     }
 }
 
-async fn read(reference: &str, secrets: &SecretResolver) -> Result<Value, Error> {
+/// One `os.environ/` reference, `reference` holding the prefix, read as the walk reads it.
+pub(crate) async fn read(reference: &str, secrets: &SecretResolver) -> Result<Value, Error> {
     let name = &reference[PREFIX.len()..];
     let secret = secrets
         .get_secret(name, None)
@@ -192,7 +197,7 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(
-            resolve(yaml(input), environment).await.unwrap(),
+            resolve(yaml(input), environment).await.unwrap().0,
             yaml(expected)
         );
     }
@@ -206,7 +211,7 @@ mod tests {
         #[case] depth: usize,
         #[case] expected: &str,
     ) {
-        let resolved = resolve(nested(depth), environment).await.unwrap();
+        let resolved = resolve(nested(depth), environment).await.unwrap().0;
         assert_eq!(leaf(&resolved), &Value::String(expected.into()));
     }
 
@@ -230,7 +235,7 @@ mod tests {
         let document = yaml(&format!(
             "environment_variables: {{CFG_ONLY: from-config, CFG_REF: os.environ/PROBE_SET, CFG_BOOL: 'TRUE', PROBE_SET: from-config, CFG_UNSET: os.environ/PROBE_UNSET}}\nmodel_list: [{{litellm_params: {{api_key: os.environ/{name}}}}}]"
         ));
-        let resolved = resolve(document, environment).await.unwrap();
+        let resolved = resolve(document, environment).await.unwrap().0;
         assert_eq!(
             resolved["model_list"][0]["litellm_params"]["api_key"],
             yaml(expected)
@@ -242,7 +247,8 @@ mod tests {
     async fn rejects_a_nested_environment_variable(environment: SecretResolver) {
         let error = resolve(yaml("environment_variables: {NESTED: {a: b}}"), environment)
             .await
-            .unwrap_err();
+            .err()
+            .expect("a nested variable is rejected");
         assert!(matches!(error, Error::Environment { name } if name == "NESTED"));
     }
 }

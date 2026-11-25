@@ -26,6 +26,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+    DROP_UNSUPPORTED_PARAMS_HINT,
 )
 from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.core_helpers import (
@@ -461,8 +462,9 @@ def tools_marked_for_a_tool_config_point(tools: object, points: object) -> tuple
     """Put the ``tool_config`` point's breakpoint on the last tool Anthropic caches.
 
     Anthropic caches tools as one prefix ending at the marked tool, so the last one carries
-    the mark, skipping tool-search tools whose transform drops cache markers. A client that
-    already marked a tool keeps its own breakpoint. Returns ``None`` when nothing is marked.
+    the mark, skipping tool-search tools whose transform drops cache markers and deferred tools,
+    which Anthropic refuses to mark. A client that already marked a tool keeps its own breakpoint.
+    Returns ``None`` when nothing is marked.
     """
     control: Final = _tool_config_point_control(points)
     tool_list: Final = validated_object_list(tools) or ()
@@ -472,7 +474,9 @@ def tools_marked_for_a_tool_config_point(tools: object, points: object) -> tuple
     cacheable: Final = tuple(
         (position, fields)
         for position, fields in enumerate(tool_fields)
-        if fields is not None and fields.get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+        if fields is not None
+        and fields.get("type") not in ANTHROPIC_TOOL_SEARCH_TOOL_TYPES
+        and fields.get("defer_loading") is not True
     )
     if not cacheable:
         return None
@@ -1087,10 +1091,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         elif not (litellm.drop_params or drop_params):
             supported_hint: Final = "Only temperature=1 is supported. " if param == "temperature" else ""
             raise litellm.utils.UnsupportedParamsError(
-                message=(
-                    f"{model} does not support {param}={value}. {supported_hint}"
-                    "To drop unsupported params, set `litellm.drop_params = True`."
-                ),
+                message=(f"{model} does not support {param}={value}. {supported_hint}{DROP_UNSUPPORTED_PARAMS_HINT}"),
                 status_code=400,
             )
 
@@ -2464,8 +2465,11 @@ def _strip_empty_content_blocks_from_message(message: object) -> object:
     if not isinstance(message, dict) or not isinstance(message.get("content"), list):
         return message
     content: Final = message["content"]
+    from_user: Final = message.get("role") in ("user",)
     filtered: Final = [
-        block for block in content if not _is_empty_text_block(block) and not is_empty_unsigned_thinking_block(block)
+        block
+        for block in content
+        if not _is_empty_text_block(block, from_user) and not is_empty_unsigned_thinking_block(block)
     ]
     if len(filtered) == len(content):
         return message
@@ -2513,11 +2517,16 @@ def strip_empty_content_blocks_from_anthropic_messages(
     ]
 
 
-def _is_empty_text_block(block: object) -> bool:
-    if not isinstance(block, dict) or block.get("type") != "text":
-        return False
-    text: Final = block.get("text")
-    return not isinstance(text, str) or not text.strip()
+def _is_empty_text_block(block: object, from_user: bool) -> bool:
+    match block:
+        case {"type": "text", "text": str() as text}:
+            return not text.strip()
+        case {"type": "text", "text": object()}:
+            return not from_user
+        case {"type": "text"}:
+            return True
+        case _:
+            return False
 
 
 def is_empty_thinking_block(block: object) -> bool:
@@ -3159,9 +3168,14 @@ def process_anthropic_headers(headers: httpx.Headers | Mapping[str, str]) -> dic
 
 
 def _anthropic_model_entry(
-    model: ModelInfoResponse, created_at: str, display_names: Mapping[str, str], listed_ids: Mapping[str, str]
+    model: ModelInfoResponse,
+    created_at: str,
+    display_names: Mapping[str, str],
+    listed_ids: Mapping[str, str],
+    descriptions: Mapping[str, str],
 ) -> Mapping[str, object]:
     listed_id: Final = listed_ids.get(model["id"])
+    description: Final = descriptions.get(model["id"])
     source: Final[Mapping[str, object]] = (
         MappingProxyType({"source_model": model["id"]}) if listed_id is not None else MappingProxyType({})
     )
@@ -3170,6 +3184,7 @@ def _anthropic_model_entry(
         "id": listed_id or model["id"],
         **source,
         "display_name": display_names.get(model["id"], model["id"]),
+        **({"description": description} if description is not None else {}),
         "created_at": created_at,
         "max_input_tokens": model.get("max_input_tokens"),
         "max_tokens": model.get("max_output_tokens"),
@@ -3180,6 +3195,8 @@ def create_anthropic_model_list_response(
     models: Sequence[ModelInfoResponse],
     display_names: Mapping[str, str] = MappingProxyType({}),
     listed_ids: Mapping[str, str] = MappingProxyType({}),
+    *,
+    descriptions: Mapping[str, str] = MappingProxyType({}),
 ) -> Mapping[str, object]:
     """Build the Anthropic-native /v1/models envelope.
 
@@ -3196,7 +3213,9 @@ def create_anthropic_model_list_response(
     created_at: Final = (
         datetime.fromtimestamp(DEFAULT_MODEL_CREATED_AT_TIME, tz=timezone.utc).isoformat().replace("+00:00", "Z")
     )
-    data: Final = [_anthropic_model_entry(model, created_at, display_names, listed_ids) for model in models]
+    data: Final = [
+        _anthropic_model_entry(model, created_at, display_names, listed_ids, descriptions) for model in models
+    ]
     return {
         "data": data,
         "has_more": False,

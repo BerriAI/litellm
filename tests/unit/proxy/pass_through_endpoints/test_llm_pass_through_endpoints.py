@@ -79,7 +79,6 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     openai_proxy_route,
     openrouter_proxy_route,
     relay_nvidia_nim_request,
-    typesafe_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
     vllm_proxy_route,
@@ -10974,78 +10973,21 @@ class TestVertexPassthroughAuthenticatesOncePerRequest:
         assert not google.called
 
 
-class TestTypeSafePassthroughRoute:
-    @staticmethod
-    def _request(body: object, query_params: Mapping[str, str] | None = None) -> MagicMock:
-        request = MagicMock(spec=Request)
-        request.method = "POST"
-        request.query_params = query_params or {}
-        request.json = AsyncMock(return_value=body)
-        return request
-
+class TestDecisionPassthroughTokenLimits:
     @pytest.fixture
     def client(self, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
         from litellm.proxy.proxy_server import app
 
-        monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
-        monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.example/base")
         monkeypatch.delenv("SERVER_ROOT_PATH", raising=False)
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
         litellm.in_memory_llm_clients_cache.flush_cache()
         monkeypatch.setitem(app.dependency_overrides, user_api_key_auth, lambda: UserAPIKeyAuth(api_key="sk-virtual"))
         yield TestClient(app)
-
-    @pytest.mark.parametrize(
-        "method, body",
-        [
-            ("GET", None),
-            ("POST", {"state": "x"}),
-            ("PUT", {"state": "x"}),
-            ("DELETE", None),
-            ("PATCH", {"state": "x"}),
-        ],
-    )
-    def test_forwards_every_method_and_body_upstream(
-        self, client: TestClient, method: str, body: dict[str, str] | None
-    ) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.request(method, "https://typesafe.example/base/v1/systemone").mock(
-                return_value=httpx.Response(200, json={"id": "upstream_123"})
-            )
-            response = client.request(method, "/typesafe/v1/systemone", json=body)
-
-            assert (response.status_code, response.json()) == (200, {"id": "upstream_123"})
-            sent: Final = route.calls.last.request
-            assert sent.headers["authorization"] == "Bearer typesafe-test-key"
-            assert json.loads(sent.content or b"{}") == (body or {})
-
-    def test_forwards_only_the_typesafe_danger_zone_headers_upstream(self, client: TestClient) -> None:
-        with respx.mock(assert_all_called=True) as upstream:
-            route = upstream.post("https://typesafe.example/base/v1/systemone").mock(
-                return_value=httpx.Response(200, json={"id": "upstream_123"})
-            )
-            client.post(
-                "/typesafe/v1/systemone",
-                json={"state": "x"},
-                headers={"TypeSafe-Danger-Zone-Images": "true", "X-Unrelated": "1"},
-            )
-
-            sent: Final = route.calls.last.request.headers
-            assert (sent.get("typesafe-danger-zone-images"), sent.get("x-unrelated")) == ("true", None)
-
     @pytest.mark.parametrize(
         "provider, endpoint, is_decision_request",
         (
-            ("typesafe", "systemone", True),
             ("laya", "systemone", True),
             ("bespoke", "systemone", True),
-            ("typesafe", "systemone/", True),
-            ("typesafe", "systemone?trace=1", True),
-            ("typesafe", "systemone/?trace=1", True),
-            ("typesafe", "systemone/other", False),
-            ("typesafe", "systemone/other/", False),
-            ("typesafe", "systemone-other", False),
-            ("typesafe", "chat/completions?next=/typesafe/v1/systemone", False),
             ("openrouter", "systemone", False),
             ("openrouter", "systemone/", False),
             ("openrouter", "chat/completions", False),
@@ -11057,7 +10999,7 @@ class TestTypeSafePassthroughRoute:
         self,
         client: TestClient,
         monkeypatch: pytest.MonkeyPatch,
-        provider: Literal["typesafe", "openrouter", "laya", "bespoke"],
+        provider: Literal["openrouter", "laya", "bespoke"],
         endpoint: str,
         is_decision_request: bool,
         quota_scope: Literal["key", "project_output"],
@@ -11077,9 +11019,7 @@ class TestTypeSafePassthroughRoute:
         monkeypatch.setenv("OPENROUTER_API_BASE", "https://typesafe.example/base")
         monkeypatch.setenv("LAYA_API_BASE", "https://typesafe.example/base")
         monkeypatch.setenv("BESPOKE_API_BASE", "https://typesafe.example/base")
-        model: Final = {"typesafe": "jev-latest", "laya": "english", "bespoke": "nimble-latest"}.get(
-            provider, "test-generative-model"
-        )
+        model: Final = {"laya": "english", "bespoke": "nimble-latest"}.get(provider, "test-generative-model")
         permission_model: Final = f"{provider}/{model}" if provider in ("laya", "bespoke") else model
         auth: Final = UserAPIKeyAuth(
             api_key="sk-limited",
@@ -11117,43 +11057,6 @@ class TestTypeSafePassthroughRoute:
         assert response.status_code == (429 if token_limit == 0 else 200), response.text
         assert route.call_count == (0 if token_limit == 0 else 1)
 
-    @pytest.mark.asyncio
-    async def test_forwards_target_auth_headers_provider_and_query(self, monkeypatch):
-        monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-test-key")
-        monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.example/base")
-
-        async def fake_upstream(request, *_args):
-            target: Final = create_route.call_args.kwargs["target"]
-            upstream_url: Final = httpx.URL(target).copy_merge_params(request.query_params)
-            return {"upstream_query": parse_qs(upstream_url.query.decode())}
-
-        endpoint_func = AsyncMock(side_effect=fake_upstream)
-        create_route = Mock(return_value=endpoint_func)
-        monkeypatch.setattr(
-            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
-            create_route,
-        )
-
-        request = self._request({"state": "x"}, {"trace": "yes"})
-        result = await typesafe_proxy_route(
-            endpoint="v1/systemone",
-            request=request,
-            fastapi_response=MagicMock(spec=Response),
-            user_api_key_dict=UserAPIKeyAuth(api_key="virtual-key"),
-        )
-
-        assert result == {"upstream_query": {"trace": ["yes"]}}
-        endpoint_func.assert_awaited_once()
-        create_route.assert_called_once_with(
-            endpoint="v1/systemone",
-            target="https://typesafe.example/base/v1/systemone",
-            custom_headers={
-                "Authorization": "Bearer typesafe-test-key",
-                "Content-Type": "application/json",
-            },
-            custom_llm_provider="typesafe",
-            is_streaming_request=False,
-        )
 
 
 class _RecordsPreCallModel(CustomLogger):

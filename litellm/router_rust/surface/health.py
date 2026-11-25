@@ -388,7 +388,8 @@ class RustHealthCallbacks:
     ) -> "RouterCall[_FailureReportSteps] | None":
         """The Rust call recording a failed hop, or None past the exits of
         ``_trigger_cooldown_for_failed_deployment``: another list than ``failure_exits``, checked per
-        failed hop. The selection tag is not on it; a stream stall and a generic call's 404 are."""
+        failed hop. The selection tag is not on it; a stream stall, a refused ``previous_response_id``
+        and a generic call's 404 are."""
         from litellm.litellm_core_utils.batch_utils import is_batch_api_call_type
         from litellm.router_rust.core import attempt_failure
         from litellm.router_utils.cooldown_handlers import (
@@ -397,6 +398,7 @@ class RustHealthCallbacks:
             is_advisor_orchestration_failure,
             is_caller_scoped_auth_failure,
             is_caller_timeout_408,
+            is_previous_response_rejected,
             is_stream_stall,
         )
         from litellm.router_utils.fallback_event_handlers import (
@@ -407,6 +409,7 @@ class RustHealthCallbacks:
         exception_status: Final[object] = getattr(exception, "status_code", "")
         if (
             is_advisor_orchestration_failure(exception)
+            or is_previous_response_rejected(exception)
             or is_stream_stall(exception)
             or (generic and cast_exception_status_to_int(exception_status) in _REQUEST_SCOPED_STATUS_CODES)  # pyright: ignore[reportArgumentType]  # the status as raised
             or is_caller_timeout_408(model_call_details, exception_status, ended=datetime.now())  # pyright: ignore[reportArgumentType]  # noqa: DTZ005  # see logged_call

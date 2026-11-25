@@ -467,6 +467,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_image_token: float | None
     output_cost_per_image_token_batches: ReadOnly[float | None]
     output_cost_per_image_token_priority: ReadOnly[float | None]
+    output_cost_per_image_token_flex: ReadOnly[float | None]
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
     output_cost_per_reasoning_token: float | None
@@ -4214,6 +4215,9 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     signoz_ingestion_endpoint: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
     signoz_ingestion_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
 
+    mixpanel_project_token: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
+    mixpanel_region: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
+
     # Logging settings
     turn_off_message_logging: bool | None  # when true will not log messages
     litellm_disabled_callbacks: list[str] | None
@@ -4366,6 +4370,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_image_token: float | None = None
     output_cost_per_image_token_batches: float | None = None
     output_cost_per_image_token_priority: float | None = None
+    output_cost_per_image_token_flex: float | None = None
     output_cost_per_video_token: float | None = None
     output_cost_per_reasoning_token: float | None = None
     output_cost_per_reasoning_token_flex: float | None = None
@@ -4954,6 +4959,7 @@ class LlmProviders(str, Enum):
     REKA = "reka"
     STREAMLAKE = "streamlake"
     WALLY = "wally"
+    HUAWEI_MAAS = "huawei_maas"
     SARVAM = "sarvam"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
@@ -5043,6 +5049,11 @@ class LiteLLMLoggingBaseClass:
 
 
 TokenCountMessagesFormat: TypeAlias = Literal["openai", "anthropic"]
+
+
+@dataclass(frozen=True, slots=True)
+class FailureLoggedCost:
+    cost: float
 
 
 @dataclass(frozen=True, slots=True)
