@@ -12,6 +12,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Mutabl
 from contextlib import ExitStack, asynccontextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, replace
+from datetime import datetime
 from functools import partial, wraps
 from itertools import chain
 from types import MappingProxyType
@@ -62,6 +63,12 @@ class CatalogSnapshot:
     routing: MutableMapping[str, str]
 
 
+@dataclass(frozen=True, slots=True)
+class _StagedServers:
+    registry: dict[str, MCPServer]  # mutable-ok: assign_unique_short_prefix requires a dict registry
+    row_fingerprints: Mapping[str, str]
+
+
 def _configuration_identity(server: MCPServer) -> str:
     return json.dumps(
         server.model_dump(
@@ -81,6 +88,10 @@ def _configuration_identity(server: MCPServer) -> str:
         ),
         sort_keys=True,
     )
+
+
+def _row_fingerprint(row: BaseModel) -> str:
+    return hashlib.sha256(json.dumps(row.model_dump(mode="json"), sort_keys=True, default=str).encode()).hexdigest()
 
 
 def _check_oauth_revision(selected: MCPServer, candidate: MCPServer | None) -> None:
@@ -121,6 +132,7 @@ class CatalogSnapshots:
         self._shared_snapshot: CatalogSnapshot | None = None
         self._applied_revision: int | None = None
         self._refresh_complete = False
+        self._staged_row_fingerprints: Mapping[str, tuple[str, str]] = MappingProxyType({})
         self._warned_shadowed_config_server_ids: frozenset[str] = frozenset()
         self._warned_capturing_config_server_ids: frozenset[str] = frozenset()
         self._operation: ContextVar[tuple[CatalogSnapshot, asyncio.Event] | None] = ContextVar(
@@ -418,18 +430,45 @@ class CatalogSnapshots:
             closed.set()
             self._staged_routing.reset(routing_token)
 
-    async def _stage_servers(
-        self, rows: Sequence[BaseModel], *, reuse_unchanged: bool
-    ) -> dict[str, MCPServer]:  # mutable-ok: assign_unique_short_prefix requires a dict registry
+    def _can_reuse_staged_server(
+        self,
+        existing_server: MCPServer | None,
+        server_updated_at: datetime | None,
+        row_fingerprint: str,
+        *,
+        reuse_unchanged: bool,
+    ) -> bool:
+        from litellm.proxy.mcp_server.mcp_server_manager import oauth_endpoints_unresolved
+
+        if existing_server is None:
+            return False
+        if not reuse_unchanged and existing_server.spec_path:
+            return False
+        if self.manager.oauth_discovery_slot(existing_server.server_id) is None and oauth_endpoints_unresolved(
+            existing_server
+        ):
+            return False
+        if existing_server.updated_at is not None and server_updated_at is not None:
+            return existing_server.updated_at == server_updated_at
+        if existing_server.updated_at is not None or server_updated_at is not None:
+            return False
+        # Rows imported or seeded with updated_at=NULL fall back to matching both
+        # the serialized DB row and the live server's config identity.
+        staged_entry: Final = self._staged_row_fingerprints.get(existing_server.server_id)
+        if staged_entry is None:
+            return False
+        return staged_entry[1] == row_fingerprint and staged_entry[0] == _configuration_identity(existing_server)
+
+    async def _stage_servers(self, rows: Sequence[BaseModel], *, reuse_unchanged: bool) -> _StagedServers:
         from litellm.proxy.mcp_server.db import LiteLLM_MCPServerTable
         from litellm.proxy.mcp_server.mcp_server_manager import (
             carry_forward_resolved_oauth_endpoints,
-            oauth_endpoints_unresolved,
             warn_on_server_name_fields,
         )
 
         previous_registry: Final = self.manager.registry
         new_registry: Final[dict[str, MCPServer]] = {}
+        row_fingerprints: Final = dict[str, str]()
 
         # Stage one: build every server.  Stage two assigns short prefixes
         # against the *full* set so dedup is deterministic regardless of
@@ -437,22 +476,20 @@ class CatalogSnapshots:
         for row in rows:
             try:
                 server = LiteLLM_MCPServerTable.model_validate(row.model_dump())
+                row_fingerprint = _row_fingerprint(row)
                 existing_server = previous_registry.get(server.server_id)
 
-                if (
-                    existing_server is not None
-                    and (reuse_unchanged or not existing_server.spec_path)
-                    and existing_server.updated_at is not None
-                    and server.updated_at is not None
-                    and existing_server.updated_at == server.updated_at
-                    and (
-                        self.manager.oauth_discovery_slot(server.server_id) is not None
-                        or not oauth_endpoints_unresolved(existing_server)
-                    )
+                if self._can_reuse_staged_server(
+                    existing_server,
+                    server.updated_at,
+                    row_fingerprint,
+                    reuse_unchanged=reuse_unchanged,
                 ):
                     # Re-use existing server instance to avoid re-running build_mcp_server_from_table()
                     # which can perform network discovery for OAuth2 servers.
+                    assert existing_server is not None
                     new_registry[server.server_id] = existing_server
+                    row_fingerprints[server.server_id] = row_fingerprint
                     continue
 
                 warn_on_server_name_fields(
@@ -475,6 +512,7 @@ class CatalogSnapshots:
                     new_server.short_prefix = existing_server.short_prefix
                 carry_forward_resolved_oauth_endpoints(new_server=new_server, previous_server=existing_server)
                 new_registry[server.server_id] = new_server
+                row_fingerprints[server.server_id] = row_fingerprint
             except Exception as e:
                 verbose_logger.exception(
                     "Skipping MCP server %s (%s) during DB reload: %s",
@@ -483,7 +521,7 @@ class CatalogSnapshots:
                     e,
                 )
 
-        return new_registry
+        return _StagedServers(new_registry, MappingProxyType(row_fingerprints))
 
     async def _reload(self, *, reuse_unchanged: bool) -> bool:
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
@@ -510,7 +548,9 @@ class CatalogSnapshots:
         verbose_logger.info("Found %s MCP servers in database", len(raw_rows))
 
         previous_registry: Final = self.manager.registry
-        new_registry: Final = await self._stage_servers(raw_rows, reuse_unchanged=reuse_unchanged)
+        staged: Final = await self._stage_servers(raw_rows, reuse_unchanged=reuse_unchanged)
+        new_registry: Final = staged.registry
+        row_fingerprints: Final = staged.row_fingerprints
 
         # Assign short prefixes against the full candidate set without
         # publishing the staged registry to concurrent callers.
@@ -547,6 +587,13 @@ class CatalogSnapshots:
                 self.manager.invalidate_oauth_discovery_state(server_id)
         self._database_identity = database_identity
         self.manager.registry = registered_registry
+        self._staged_row_fingerprints = MappingProxyType(
+            {
+                server_id: (_configuration_identity(registered_server), row_fingerprints[server_id])
+                for server_id, registered_server in registered_registry.items()
+                if server_id in row_fingerprints
+            }
+        )
         if not reuse_unchanged:
             self.manager.clear_initialize_instructions()
         warn_on_shared_identifier_prefixes(registered_registry.values())

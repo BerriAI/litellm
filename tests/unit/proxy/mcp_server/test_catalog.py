@@ -1071,3 +1071,208 @@ async def test_the_challenge_names_the_url_the_client_addressed(request_path: st
     assert dict(start["headers"])[b"www-authenticate"].decode() == (
         f'Bearer resource_metadata="https://gateway.example/.well-known/oauth-protected-resource/{resource}"'
     )
+
+
+def _setup_null_ts_reload(
+    monkeypatch: pytest.MonkeyPatch,
+    rows_provider: object,
+) -> tuple[MCPServerManager, MagicMock, list[str]]:
+    from litellm.proxy._types import LiteLLM_MCPServerTable
+    from litellm.proxy.management_endpoints import mcp_management_endpoints
+    from litellm.proxy.mcp_server import db as mcp_db
+
+    manager: Final = MCPServerManager()
+    fake_prisma: Final = MagicMock()
+    monkeypatch.setattr(mcp_management_endpoints, "get_prisma_client_or_throw", lambda _msg="": fake_prisma)
+    monkeypatch.setattr(mcp_db, "get_runtime_mcp_server_rows", AsyncMock(side_effect=rows_provider))
+
+    build_calls: list[str] = []
+    real_build: Final = manager.build_mcp_server_from_table
+
+    async def spy_build(
+        mcp_server: LiteLLM_MCPServerTable,
+        *,
+        credentials_are_encrypted: bool = True,
+        env_vars_are_encrypted: bool | None = None,
+        register_oauth_discovery: bool = True,
+    ) -> MCPServer:
+        build_calls.append(f"{mcp_server.server_id}:{mcp_server.url}:{mcp_server.updated_at}")
+        return await real_build(
+            mcp_server,
+            credentials_are_encrypted=credentials_are_encrypted,
+            env_vars_are_encrypted=env_vars_are_encrypted,
+            register_oauth_discovery=register_oauth_discovery,
+        )
+
+    monkeypatch.setattr(manager, "build_mcp_server_from_table", spy_build)
+    return manager, fake_prisma, build_calls
+
+
+@pytest.mark.asyncio
+async def test_reload_reuses_unchanged_stdio_server_when_updated_at_is_null(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import LiteLLM_MCPServerTable
+
+    monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", "true")
+    row: Final = LiteLLM_MCPServerTable(
+        server_id="stdio-null-ts",
+        server_name="gitlab",
+        transport="stdio",
+        command="npx",
+        args=["-y", "@modelcontextprotocol/server-gitlab"],
+        auth_type="none",
+        updated_at=None,
+        approval_status="active",
+    )
+    manager, _fake_prisma, build_calls = _setup_null_ts_reload(monkeypatch, lambda _client: [row])
+
+    await manager.reload_servers_from_database()
+    first_instance: Final = manager.registry["stdio-null-ts"]
+    manager.tool_name_to_mcp_server_name_mapping["gitlab-list_issues"] = first_instance.name
+
+    await manager.reload_servers_from_database()
+    await manager.reload_servers_from_database()
+
+    assert len(build_calls) == 1
+    assert manager.registry["stdio-null-ts"] is first_instance
+    assert manager.tool_name_to_mcp_server_name_mapping["gitlab-list_issues"] == first_instance.name
+
+
+@pytest.mark.asyncio
+async def test_reload_null_updated_at_reuses_http_and_rebuilds_on_row_or_timestamp_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import datetime, timezone
+
+    from litellm.proxy._types import LiteLLM_MCPServerTable
+
+    current_rows: list[LiteLLM_MCPServerTable] = [
+        LiteLLM_MCPServerTable(
+            server_id="http-null-ts",
+            server_name="remote",
+            transport="http",
+            url="https://mcp.example.com/v1",
+            auth_type="none",
+            updated_at=None,
+            approval_status="active",
+        )
+    ]
+    manager, _fake_prisma, build_calls = _setup_null_ts_reload(monkeypatch, lambda _client: list(current_rows))
+
+    await manager.reload_servers_from_database()
+    first_http: Final = manager.registry["http-null-ts"]
+    await manager.reload_servers_from_database()
+    assert manager.registry["http-null-ts"] is first_http
+    assert len(build_calls) == 1
+
+    # Editing the DB row while updated_at stays NULL must trigger a rebuild, then reuse again.
+    current_rows[0] = current_rows[0].model_copy(update={"url": "https://mcp.example.com/v2"})
+    await manager.reload_servers_from_database()
+    second_http: Final = manager.registry["http-null-ts"]
+    assert second_http is not first_http
+    assert second_http.url == "https://mcp.example.com/v2"
+    await manager.reload_servers_from_database()
+    assert manager.registry["http-null-ts"] is second_http
+    assert len(build_calls) == 2
+
+    # Transitioning from NULL to a concrete timestamp rebuilds once, then reuses via timestamp.
+    ts: Final = datetime(2026, 11, 25, 12, 0, tzinfo=timezone.utc)
+    current_rows[0] = current_rows[0].model_copy(update={"updated_at": ts})
+    await manager.reload_servers_from_database()
+    third_http: Final = manager.registry["http-null-ts"]
+    assert third_http is not second_http
+    await manager.reload_servers_from_database()
+    assert manager.registry["http-null-ts"] is third_http
+    assert len(build_calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_reload_null_updated_at_oauth2_preserves_resolved_and_retries_unresolved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy._types import LiteLLM_MCPServerTable
+
+    row: Final = LiteLLM_MCPServerTable(
+        server_id="oauth-null-ts",
+        server_name="oauth_srv",
+        transport="http",
+        url="https://oauth.example.com/mcp",
+        auth_type="oauth2",
+        oauth2_flow="authorization_code",
+        updated_at=None,
+        approval_status="active",
+    )
+    manager, _fake_prisma, build_calls = _setup_null_ts_reload(monkeypatch, lambda _client: [row])
+    monkeypatch.setattr(manager, "prime_oauth_metadata_discovery_for_servers", lambda _servers: None)
+
+    # Initial build leaves OAuth endpoints unresolved and registers a deferred discovery slot.
+    await manager.reload_servers_from_database()
+    slot: Final = manager.oauth_discovery_slot("oauth-null-ts")
+    assert slot is not None
+    assert len(build_calls) == 1
+
+    # While discovery fails and drops the slot without resolving endpoints, reload must retry.
+    manager._remove_oauth_discovery_slot("oauth-null-ts")
+    await manager.reload_servers_from_database()
+    assert len(build_calls) == 2
+
+    # Once discovery resolves endpoints and publishes the copy, reload reuses it instead of wiping them.
+    second_slot: Final = manager.oauth_discovery_slot("oauth-null-ts")
+    assert second_slot is not None
+    resolved: Final = manager.registry["oauth-null-ts"].model_copy(
+        update={
+            "authorization_url": "https://auth.example.com/authorize",
+            "token_url": "https://auth.example.com/token",
+            "registration_url": "https://auth.example.com/register",
+        }
+    )
+    published: Final = manager._publish_resolved_oauth_server(resolved, second_slot.generation)
+    assert published is resolved
+    await manager.reload_servers_from_database()
+    assert len(build_calls) == 2
+    assert manager.registry["oauth-null-ts"] is resolved
+
+
+@pytest.mark.asyncio
+async def test_reload_null_updated_at_respects_openapi_spec_path_and_registry_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_MCPServerTable
+    from litellm.proxy.mcp_server import db as mcp_db
+
+    row: Final = LiteLLM_MCPServerTable(
+        server_id="openapi-null-ts",
+        server_name="openapi_srv",
+        transport="http",
+        url="https://api.example.com",
+        spec_path="/tmp/spec.yaml",
+        auth_type="none",
+        updated_at=None,
+        approval_status="active",
+    )
+    manager, fake_prisma, build_calls = _setup_null_ts_reload(monkeypatch, lambda _client: [row])
+    monkeypatch.setattr(proxy_server, "prisma_client", fake_prisma)
+    monkeypatch.setattr(proxy_server, "should_load_db_object", lambda _name: True)
+    monkeypatch.setattr(mcp_db, "get_mcp_catalog_revision", AsyncMock(return_value=None))
+    monkeypatch.setattr(manager, "maybe_register_openapi_tools", AsyncMock())
+
+    # OpenAPI spec_path servers still rebuild on explicit reload(reuse_unchanged=False).
+    await manager.reload_servers_from_database()
+    first_openapi: Final = manager.registry["openapi-null-ts"]
+    await manager.reload_servers_from_database()
+    second_openapi: Final = manager.registry["openapi-null-ts"]
+    assert second_openapi is not first_openapi
+    assert len(build_calls) == 2
+
+    # Request-time snapshot refresh passes reuse_unchanged=True and reuses the unchanged OpenAPI server.
+    await manager.catalog._fresh_snapshot()
+    assert manager.registry["openapi-null-ts"] is second_openapi
+    assert len(build_calls) == 2
+
+    # Out-of-band in-memory registry drift invalidates the identity check and triggers a rebuild.
+    manager.registry["openapi-null-ts"] = second_openapi.model_copy(update={"url": "https://stale.example.com"})
+    await manager.catalog._fresh_snapshot()
+    assert len(build_calls) == 3
+    assert manager.registry["openapi-null-ts"].url == "https://api.example.com"
