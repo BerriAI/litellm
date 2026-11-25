@@ -238,7 +238,6 @@ def _tools_the_model_accepts(
 
 
 _OUTPUT_CONFIG_BLOCK: Final = TypeAdapter(OutputConfigBlock)
-_TOOL_BLOCK: Final = TypeAdapter(ToolBlock)
 _DEEPSEEK_THINKING_REASON: Final = "DeepSeek on Bedrock reasons natively and takes no thinking field."
 BEDROCK_SERVICE_TIERS: Final = ("default", "flex", "priority", "reserved")
 _BEDROCK_SERVICE_TIER_ALIASES: Final = types.MappingProxyType({"standard": "default", "standard_only": "default"})
@@ -301,13 +300,6 @@ def _tools_field(value: object) -> list[Mapping[str, object]]:
         return list(_TOOLS_AS_SENT.validate_python(value))
     except ValidationError:
         raise _bad_request(f"tools must be a list of JSON objects, got {type(value).__name__}") from None
-
-
-def _bedrock_tool_block(tool: Mapping[str, object]) -> ToolBlock:
-    try:
-        return _TOOL_BLOCK.validate_python(tool)
-    except ValidationError:
-        raise _bad_request(f"tools entry {dict(tool)!r} is not a valid Bedrock tool block") from None
 
 
 def bedrock_service_tier_name(requested_tier: str) -> str:
@@ -2417,7 +2409,7 @@ class AmazonConverseConfig(BaseConfig):
             for tool in original_tools:
                 # Already-formatted Bedrock tools (e.g. systemTool for Nova grounding)
                 if "systemTool" in tool:
-                    pre_formatted_tools.append(_bedrock_tool_block(tool))
+                    pre_formatted_tools.append(tool)  # pyright: ignore[reportArgumentType]  # already in Bedrock shape
                     continue
                 tool_type = tool.get("type", "")
                 if tool_type in (

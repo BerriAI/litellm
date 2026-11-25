@@ -651,7 +651,6 @@ def test_bedrock_converse_rejects_a_non_object_extra_body_without_drop_params() 
         ({"extra_body": {"tools": {}}}, "tools must be a list of JSON objects, got dict"),
         ({"extra_body": {"tools": False}}, "tools must be a list of JSON objects, got bool"),
         ({"extra_body": {"tools": "get_weather"}}, "tools must be a list of JSON objects, got str"),
-        ({"extra_body": {"tools": [{"systemTool": "nova_grounding"}]}}, "is not a valid Bedrock tool block"),
         ({"extra_body": {"performanceConfig": "optimized"}}, "performanceConfig must be a JSON object, got str"),
         ({"extra_body": {"guardrailConfig": "my-guardrail"}}, "guardrailConfig must be a JSON object, got str"),
         ({"performanceConfig": "optimized"}, "performanceConfig must be a JSON object, got str"),
@@ -660,7 +659,6 @@ def test_bedrock_converse_rejects_a_non_object_extra_body_without_drop_params() 
         "tools_dict",
         "tools_false",
         "tools_string",
-        "system_tool_string",
         "performance_string",
         "guardrail_string",
         "top_level_string",
@@ -1771,7 +1769,7 @@ async def test_transform_request_replays_redacted_thinking_only_to_claude(
 
 def test_transform_request_drops_lookaround_regex_around_pre_formatted_tool_blocks():
     """Blocks that arrive already in Bedrock shape, like Nova's grounding ``systemTool``, pass through as sent."""
-    grounding: Final = {"systemTool": {"name": "nova_grounding"}}
+    grounding: Final = {"systemTool": {"name": "nova_grounding", "maxResults": 3}}
 
     tools = _converse_tools("global.moonshotai.kimi-k3", [_ARTIFACT_DATA_OPENAI_TOOL, grounding])
 
