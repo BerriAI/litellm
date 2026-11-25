@@ -571,22 +571,28 @@ async def test_a_threaded_request_gets_the_message_start_of_the_retry_that_answe
 
 
 @pytest.mark.parametrize(
-    ("router_arguments", "live", "held"),
+    ("router_arguments", "request_kwargs", "live", "held"),
     [
-        ({"num_retries": 2}, MESSAGE_START + PING, THINKING_START),
-        ({"fallbacks": [{"a": ["b"]}], "num_retries": 2}, PING, MESSAGE_START + THINKING_START),
+        ({"num_retries": 2}, {}, MESSAGE_START + PING, THINKING_START),
+        ({"fallbacks": [{"a": ["b"]}], "num_retries": 2}, {}, b"", MESSAGE_START + THINKING_START + PING),
+        ({"num_retries": 2}, {"thread": {"type": "create"}}, b"", MESSAGE_START + THINKING_START + PING),
     ],
-    ids=["retry-only", "with-a-fallback"],
+    ids=["retry-only", "with-a-fallback", "threaded"],
 )
-async def test_a_ping_sharing_a_chunk_with_held_frames_reaches_the_client_before_content(
-    make_core: MakeCore, host: ScriptedHost, router_arguments: dict[str, object], live: bytes, held: bytes
+async def test_a_ping_sharing_a_chunk_with_message_start_goes_out_before_content_only_with_message_start(
+    make_core: MakeCore,
+    host: ScriptedHost,
+    router_arguments: dict[str, object],
+    request_kwargs: dict[str, object],
+    live: bytes,
+    held: bytes,
 ) -> None:
     received: list[bytes] = []
     reads: list[tuple[bytes, ...]] = []
     frames: Final = (MESSAGE_START + THINKING_START + PING, SIGNATURE_DELTA, BLOCK_STOP, MESSAGE_STOP)
     host.answer("openai/a", recording_stream(received, reads, *frames))
     core = make_core(model_list=GROUPS_AB, **router_arguments)
-    await read_into(await open_stream(core), received)
+    await read_into(await open_stream(core, **request_kwargs), received)
     assert b"".join(reads[frames.index(SIGNATURE_DELTA)]) == live
     assert b"".join(received) == live + held + SIGNATURE_DELTA + BLOCK_STOP + MESSAGE_STOP
 
