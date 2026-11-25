@@ -152,6 +152,8 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 \
     PRISMA_OFFLINE_MODE=true
 
+ENV PGREQUIREAUTH="!md5"
+
 COPY --from=builder /app/.venv /app/.venv
 COPY --from=builder /app/litellm/deploy/docker/docker-entrypoint.sh /app/docker-entrypoint.sh
 COPY --from=builder /app/litellm/schema.prisma /app/litellm/schema.prisma
