@@ -1685,6 +1685,7 @@ mod tests {
                     },
                     drop_params: true,
                     drops_unsupported_params: false,
+                    drops_rejected_safeguards: false,
                     global_drop_params: false,
                     claude_base_model: false,
                     keeps_unsigned_thinking: false,

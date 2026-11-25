@@ -425,6 +425,7 @@ fn secret_lookup<'a>(
 fn transform_context(shaping: &MessagesShaping) -> MessagesTransformContext {
     MessagesTransformContext {
         drops_unsupported_params: shaping.settings.drops_unsupported_params,
+        drops_rejected_safeguards: shaping.settings.drops_rejected_safeguards,
         global_drop_params: shaping.settings.global_drop_params,
         claude_base_model: shaping
             .settings

@@ -116,6 +116,7 @@ def test_settings_project_caller_configuration_without_resolving_a_model(monkeyp
         "additional_drop_params": ("metadata.user_id",),
         "request_timeout": 1800.0,
         "drops_unsupported_params": True,
+        "drops_rejected_safeguards": True,
         "model": None,
         "mock_response": None,
         "stream_cost_model": None,
@@ -1976,7 +1977,9 @@ _BEDROCK_PROFILE_ARN: Final = "arn:aws:bedrock:us-east-1:000000000000:applicatio
             False,
             id="sonnet_4_5_drop_params",
         ),
-        pytest.param({"model": f"bedrock/invoke/{_OPUS_4_1_ON_BEDROCK}"}, False, id="opus_4_1_no_drop_params"),
+        pytest.param(
+            {"model": f"bedrock/invoke/{_OPUS_4_1_ON_BEDROCK}"}, True, id="opus_4_1_classifier_without_drop_params"
+        ),
         pytest.param(
             {
                 "model": f"bedrock/mantle/{_BEDROCK_PROFILE_ARN}",
@@ -2004,6 +2007,40 @@ async def test_safeguards_classify_exactly_what_the_bedrock_route_drops(
     )
 
     assert (classifier is not None and await classifier.open_stream()) is classifies
+
+
+@pytest.mark.parametrize(
+    ("general_settings", "deployment", "drops"),
+    (
+        pytest.param(_CLASSIFIER_SETTINGS, {}, True, id="classifier_without_drop_params"),
+        pytest.param({}, {"drop_params": True}, True, id="drop_params_without_classifier"),
+        pytest.param({}, {}, False, id="neither"),
+    ),
+)
+def test_settings_let_bedrock_drop_rejected_safeguards_under_drop_params_or_the_proxy_classifier(
+    monkeypatch: pytest.MonkeyPatch,
+    general_settings: Mapping[str, object],
+    deployment: Mapping[str, object],
+    drops: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+    monkeypatch.setattr(litellm, "drop_params", False)
+
+    projected: Final = messages_host.settings(
+        deployment,
+        {
+            **_CALL,
+            "model": f"bedrock/invoke/{_OPUS_4_1_ON_BEDROCK}",
+            "safeguards": _DANGEROUS_TOOL_USE,
+            **deployment,
+            **_AWS,
+        },
+        asynchronous=True,
+    )
+
+    assert projected["drops_rejected_safeguards"] is drops
 
 
 @pytest.mark.asyncio

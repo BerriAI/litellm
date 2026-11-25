@@ -988,7 +988,10 @@ mod tests {
     #[rstest]
     #[case::bedrock_mantle("bedrock_mantle/anthropic.claude-sonnet-5", true)]
     #[case::amazon_mantle("bedrock/mantle/anthropic.claude-mythos-preview", true)]
-    #[case::amazon_mantle_old_claude("bedrock/mantle/anthropic.claude-opus-4-1-20250805-v1:0", false)]
+    #[case::amazon_mantle_old_claude(
+        "bedrock/mantle/anthropic.claude-opus-4-1-20250805-v1:0",
+        false
+    )]
     fn mantle_routes_read_safeguards_off_the_bedrock_row_as_python_does(
         bundled: Catalog,
         #[case] model: &str,

@@ -2340,7 +2340,7 @@ _BEDROCK_SAFEGUARDS_DROPS: Final = (
         False,
         id="sonnet_4_5_drop_params",
     ),
-    pytest.param(f"bedrock/invoke/{_OPUS_4_1_ON_BEDROCK}", {}, False, id="opus_4_1_no_drop_params"),
+    pytest.param(f"bedrock/invoke/{_OPUS_4_1_ON_BEDROCK}", {}, True, id="opus_4_1_classifier_without_drop_params"),
     pytest.param(
         f"bedrock/mantle/{_BEDROCK_PROFILE_ARN}",
         {"drop_params": True, "base_model": f"bedrock/{_OPUS_4_1_ON_BEDROCK}"},

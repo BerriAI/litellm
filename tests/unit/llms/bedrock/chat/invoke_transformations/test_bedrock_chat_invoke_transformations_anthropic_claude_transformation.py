@@ -2558,6 +2558,36 @@ def test_bedrock_chat_invoke_drops_safeguards_and_beta_under_drop_params_when_be
     assert result["messages"] == [{"role": "user", "content": [{"type": "text", "text": "hi"}]}]
 
 
+@pytest.mark.usefixtures("local_model_cost_map", "local_beta_headers_config")
+@pytest.mark.parametrize(
+    ("model", "forwarded"),
+    [
+        pytest.param(_SONNET_4_5, True, id="flagged_model_keeps_both"),
+        pytest.param(_OPUS_4_1, False, id="old_model_drops_both"),
+    ],
+)
+def test_bedrock_chat_invoke_reads_the_dangerous_tool_use_beta_from_the_anthropic_beta_param(
+    monkeypatch: pytest.MonkeyPatch, model: str, forwarded: bool
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    safeguards: Final = [{"type": "dangerous_tool_use"}]
+    result: Final = AmazonAnthropicClaudeConfig().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={
+            "max_tokens": 64,
+            "safeguards": safeguards,
+            "anthropic_beta": [_DANGEROUS_TOOL_USE_BETA, "context-1m-2025-08-07"],
+        },
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert result.get("safeguards") == (safeguards if forwarded else None)
+    assert (_DANGEROUS_TOOL_USE_BETA in result.get("anthropic_beta", [])) is forwarded
+    assert "context-1m-2025-08-07" in result["anthropic_beta"]
+
+
 def _bedrock_invoke_claude_with_extra_body(
     extra_body: Mapping[str, object] | str, drop_params: bool, model: str = "us.anthropic.claude-sonnet-5"
 ) -> tuple[httpx.Request, ...]:

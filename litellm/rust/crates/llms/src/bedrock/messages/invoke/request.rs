@@ -518,13 +518,13 @@ fn without_safeguards_bedrock_rejects(
     context: &MessagesTransformContext,
 ) -> MessagesRequest {
     if request.params.safeguards.is_none()
-        || !context.drops_unsupported_params
+        || !context.drops_rejected_safeguards
         || context.thinking.capabilities.bedrock.supports_safeguards
     {
         return request;
     }
     tracing::warn!(
-        "Dropped safeguards and the dangerous-tool-use-2026-09-03 beta for model={} provider={BEDROCK_INVOKE_LOG_PROVIDER} because drop_params is on and the model map does not flag supports_safeguards for the model. A deployment forwards them with model_info supports_safeguards true.",
+        "Dropped safeguards and the dangerous-tool-use-2026-09-03 beta for model={} provider={BEDROCK_INVOKE_LOG_PROVIDER} because drop_params is on or the proxy's safeguards classifier answers them, and the model map does not flag supports_safeguards for the model. A deployment forwards them with model_info supports_safeguards true.",
         request.model
     );
     MessagesRequest {
@@ -1211,7 +1211,10 @@ mod tests {
         assert_eq!((wire.get("model"), wire.get("stream")), (None, None));
     }
 
-    fn sent_safeguards(supports_safeguards: bool, drop_params: bool) -> (Option<Value>, Value) {
+    fn sent_safeguards(
+        supports_safeguards: bool,
+        drops_rejected_safeguards: bool,
+    ) -> (Option<Value>, Value) {
         let capabilities = with_bedrock(
             MessagesModelCapabilities::default(),
             BedrockCapabilities {
@@ -1224,7 +1227,10 @@ mod tests {
                 "anthropic.claude-opus-4-1-20250805-v1:0",
                 json!({"safeguards": [{"type": "dangerous_tool_use"}]}),
             ),
-            &context(capabilities, drop_params),
+            &MessagesTransformContext {
+                drops_rejected_safeguards,
+                ..context(capabilities, false)
+            },
             vec![(
                 "anthropic-beta".into(),
                 "dangerous-tool-use-2026-09-03,context-1m-2025-08-07".into(),
@@ -1239,14 +1245,14 @@ mod tests {
 
     #[rstest]
     #[case::model_with_support(true, true)]
-    #[case::without_drop_params(false, false)]
-    fn drop_params_drops_safeguards_and_their_beta_only_where_bedrock_rejects_them(
+    #[case::without_drop_params_or_a_classifier(false, false)]
+    fn a_route_dropping_rejected_safeguards_drops_them_and_their_beta_only_where_bedrock_rejects_them(
         #[case] supports_safeguards: bool,
-        #[case] drop_params: bool,
+        #[case] drops_rejected_safeguards: bool,
     ) {
         assert_eq!(
             (
-                sent_safeguards(supports_safeguards, drop_params),
+                sent_safeguards(supports_safeguards, drops_rejected_safeguards),
                 sent_safeguards(false, true),
             ),
             (
