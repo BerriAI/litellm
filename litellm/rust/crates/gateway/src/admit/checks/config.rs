@@ -178,7 +178,8 @@ fn variables(environment: &Environment) -> impl Iterator<Item = Box<str>> + use<
 /// honored, since boot layers the stored config in, and [`settings`] checks what it could not
 /// load. `encryption_algorithm` only picks the format Python writes a secret in, and the at-rest
 /// crate reads either format. The JWT settings shape only a caller whose token is a JWT, and the public routes only one
-/// who sends no key.
+/// who sends no key. `use_x_forwarded_for` only picks the address `allowed_ips` reads, which
+/// still sends every request to Python.
 fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
     let GeneralSettings {
         master_key: _,
@@ -208,6 +209,7 @@ fn general(config: &Config) -> impl Iterator<Item = Box<str>> + '_ {
         token_rate_limit_type: _,
         user_api_key_cache_ttl: _,
         user_api_key_cache_max_size: _,
+        use_x_forwarded_for: _,
         completion_model,
         max_in_flight_requests_per_worker,
         max_queued_requests_per_worker,
