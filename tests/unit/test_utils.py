@@ -8609,6 +8609,55 @@ async def test_oidc_google_api_key_fails_closed_when_the_metadata_server_fails_a
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("done_status", ["exception", "result"])
+async def test_google_token_fetch_start_or_join_when_in_flight_is_done_starts_new_fetch(
+    monkeypatch: pytest.MonkeyPatch, done_status: str
+) -> None:
+    loop = asyncio.get_running_loop()
+    mock_resolve = mock.Mock(return_value="fresh-token")
+    monkeypatch.setattr("litellm.utils.resolve_api_key_oidc_reference", mock_resolve)
+
+    fetcher = litellm.utils._GoogleTokenFetch(reference="oidc/google/https://example.com")
+
+    # Set up a completed in_flight future (simulating a stale completed fetch)
+    completed_future: asyncio.Future[str] = loop.create_future()
+    if done_status == "exception":
+        completed_future.set_exception(RuntimeError("metadata server failure"))
+    else:
+        completed_future.set_result("stale-token")
+
+    fetcher.in_flight = completed_future
+    assert fetcher.in_flight.done()
+
+    # start_or_join must NOT reuse completed_future; it should start a new fetch
+    new_future = fetcher.start_or_join()
+    assert new_future is not completed_future
+    assert not new_future.done()
+    assert fetcher.in_flight is new_future
+
+    result = await new_future
+    assert result == "fresh-token"
+    mock_resolve.assert_called_once_with("oidc/google/https://example.com")
+
+
+@pytest.mark.asyncio
+async def test_google_token_fetch_start_or_join_when_in_flight_is_pending_joins_existing() -> None:
+    loop = asyncio.get_running_loop()
+    fetcher = litellm.utils._GoogleTokenFetch(reference="oidc/google/https://example.com")
+
+    pending_future: asyncio.Future[str] = loop.create_future()
+    fetcher.in_flight = pending_future
+    assert not fetcher.in_flight.done()
+
+    joined_future = fetcher.start_or_join()
+    assert joined_future is pending_future
+    assert fetcher.in_flight is pending_future
+
+    pending_future.set_result("joined-token")
+    assert await joined_future == "joined-token"
+
+
+@pytest.mark.asyncio
 async def test_an_oidc_google_api_key_token_cached_when_the_call_starts_is_sent_though_it_expires_mid_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

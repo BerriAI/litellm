@@ -944,7 +944,7 @@ class _GoogleTokenFetch:
     in_flight: asyncio.Future[str | UnresolvableSecretReference] | None = None
 
     def start_or_join(self) -> asyncio.Future[str | UnresolvableSecretReference]:
-        if self.in_flight is not None:
+        if self.in_flight is not None and not self.in_flight.done():
             return self.in_flight
         caller_context: Final = contextvars.copy_context()
         fetch: Final = asyncio.get_running_loop().run_in_executor(
