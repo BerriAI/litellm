@@ -27,7 +27,12 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.llms.openai.openai import AllMessageValues
 from litellm.utils import is_prompt_caching_valid_prompt
 
-from ..common_utils import GEMINI_FILES_API_URI_PREFIX, VertexAIError, get_supports_system_message, get_vertex_base_url
+from ..common_utils import (
+    GEMINI_FILES_API_URI_PREFIXES,
+    VertexAIError,
+    get_supports_system_message,
+    get_vertex_base_url,
+)
 from ..gemini.transformation import reject_system_message_videos, should_inline_remote_media
 from ..vertex_llm_base import VertexBase
 from .transformation import (
@@ -120,7 +125,7 @@ def _cached_turns_link_web_media(
     turns_start: Final = _conversation_turns_start(cached_messages, model, custom_llm_provider)
     if not has_remote_media(
         cached_messages[turns_start:],
-        lambda media: not should_inline(media) and not media.url.startswith(GEMINI_FILES_API_URI_PREFIX),
+        lambda media: not should_inline(media) and not media.url.startswith(GEMINI_FILES_API_URI_PREFIXES),
     ):
         return False
     verbose_logger.debug(
