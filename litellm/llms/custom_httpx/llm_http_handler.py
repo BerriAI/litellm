@@ -1459,7 +1459,7 @@ class BaseLLMHTTPHandler:
         fake_stream: bool = False,
         client: HTTPHandler | None = None,
         json_mode: bool = False,
-    ) -> tuple[object, dict]:
+    ) -> tuple[object, dict[str, object]]:
         if client is None or not isinstance(client, HTTPHandler):
             sync_httpx_client = get_httpx_client(
                 {

@@ -3626,8 +3626,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         grounding_metadata: Final[list[dict[str, object]]] = []
         url_context_metadata: Final[list[dict[str, object]]] = []
-        safety_ratings: Final[list] = []
-        citation_metadata: Final[list] = []
+        safety_ratings: Final[list[object]] = []
+        citation_metadata: Final[list[object]] = []
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate and "finishReason" not in candidate:

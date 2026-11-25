@@ -2172,7 +2172,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if value is None or value["type"] in ignore_response_format_types:  # value is a no-op
             return None
 
-        json_schema: Final[dict | None] = self._extract_json_schema_from_response_format(value)
+        json_schema: Final[dict[str, object] | None] = self._extract_json_schema_from_response_format(value)
         if json_schema is None:
             return None
         """

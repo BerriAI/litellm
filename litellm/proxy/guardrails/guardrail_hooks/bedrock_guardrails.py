@@ -2478,7 +2478,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         matched term where available, so the client can render a precise
         explanation of the violation.
         """
-        blocked: Final[list[dict]] = []
+        blocked: Final[list[dict[str, object]]] = []
         assessments: Final = response.get("assessments", []) or []
 
         for assessment in assessments:
@@ -2845,7 +2845,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         cache: DualCache,
         data: dict[str, object],  # mutable-ok: the hook writes the guarded messages back into the request
         call_type: CallTypesLiteral,
-    ) -> Exception | str | dict | None:
+    ) -> Exception | str | dict[str, object] | None:
         verbose_proxy_logger.debug("Inside Bedrock Pre-Call Hook for call_type: %s", call_type)
 
         from litellm.proxy.common_utils.callback_utils import (

@@ -1386,7 +1386,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         create_file_data: CreateFileRequest,
         optional_params: dict[str, object],
         litellm_params: dict[str, object],
-    ) -> bytes | str | dict:
+    ) -> bytes | str | dict[str, object]:
         """
         Transform file request and return a pre-signed request for S3.
         This keeps the HTTP handler clean by doing all the signing here.
