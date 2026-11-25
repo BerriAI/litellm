@@ -1406,13 +1406,15 @@ _PROVIDER_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 
 
 def set_provider_response_headers_in_hidden_params(
-    response: _CarriesHiddenParams, headers: httpx.Headers | Mapping[str, str]
+    response: _CarriesHiddenParams,
+    headers: httpx.Headers | Mapping[str, str],
+    process_headers: Callable[[Mapping[str, str]], Mapping[str, object]] = process_response_headers,
 ) -> None:
     hidden_params: Final = response.hidden_params
     existing_additional_headers: Final[object] = hidden_params.get("additional_headers")
     raw_headers: Final[dict[str, str]] = dict(headers)  # mutable-ok: stored as the plain-dict hidden param
     additional_headers: Final[dict[str, object]] = {  # mutable-ok: assigned into the plain-dict hidden params
-        **process_response_headers(raw_headers),
+        **process_headers(raw_headers),
         **(existing_additional_headers if isinstance(existing_additional_headers, Mapping) else _NO_HEADERS),
     }
     hidden_params["headers"] = raw_headers

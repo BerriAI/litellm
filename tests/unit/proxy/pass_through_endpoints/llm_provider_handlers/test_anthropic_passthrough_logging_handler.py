@@ -3240,6 +3240,131 @@ def test_streamed_messages_from_other_providers_ignore_a_zero_usage_cost_field()
     assert result["kwargs"].get("response_cost") != 0.0
 
 
+class _SuccessKwargsRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.success_kwargs: list = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.success_kwargs.append(kwargs)
+
+
+@pytest.mark.parametrize(
+    ("response_headers", "remaining_tokens", "remaining_requests"),
+    [
+        pytest.param(
+            {"anthropic-ratelimit-tokens-remaining": "11999000", "anthropic-ratelimit-requests-remaining": "12999"},
+            11999000,
+            12999,
+            id="anthropic",
+        ),
+        pytest.param(
+            {"x-ratelimit-remaining-tokens": "49900", "x-ratelimit-remaining-requests": "49"},
+            49900,
+            49,
+            id="azure-ai-foundry",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_streamed_messages_call_logs_the_rate_limit_the_provider_reported(
+    all_chunks: list[str], response_headers: dict[str, str], remaining_tokens: int, remaining_requests: int
+):
+    recorder: Final = _SuccessKwargsRecorder()
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="claude-sonnet-4-5-20250929",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="anthropic_messages",
+        start_time=datetime(2025, 1, 1),
+        litellm_call_id="stream-rate-limit",
+        function_id="stream-rate-limit",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="claude-sonnet-4-5-20250929",
+        user="",
+        optional_params={},
+        litellm_params={"custom_llm_provider": "anthropic"},
+        custom_llm_provider="anthropic",
+    )
+    logging_obj.model_call_details["response_headers"] = {**response_headers, "request-id": "req_stream"}
+
+    handled: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-4-5-20250929", "stream": True},
+        endpoint_type="messages",
+        start_time=datetime(2025, 1, 1),
+        all_chunks=all_chunks,
+        end_time=datetime(2025, 1, 1, 0, 0, 1),
+    )
+    await logging_obj.dispatch_success_handlers(
+        result=handled["result"],
+        start_time=datetime(2025, 1, 1),
+        end_time=datetime(2025, 1, 1, 0, 0, 1),
+        cache_hit=False,
+        prefer_async_handlers=True,
+        **handled["kwargs"],
+    )
+    for _ in range(300):
+        if recorder.success_kwargs:
+            break
+        await asyncio.sleep(0.01)
+
+    assert len(recorder.success_kwargs) == 1
+    logged_headers: Final = recorder.success_kwargs[0]["standard_logging_object"]["hidden_params"][
+        "additional_headers"
+    ]
+    assert logged_headers["x_ratelimit_remaining_tokens"] == remaining_tokens
+    assert logged_headers["x_ratelimit_remaining_requests"] == remaining_requests
+    assert logged_headers["llm_provider-request-id"] == "req_stream"
+
+
+def test_a_streamed_messages_call_keeps_the_reported_cost_beside_the_provider_rate_limit():
+    logging_obj: Final = _go_logging_obj()
+    logging_obj.model_call_details["response_headers"] = {"x-ratelimit-remaining-tokens": "49900"}
+
+    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "opencode_go/claude-haiku-5-5", "stream": True},
+        endpoint_type="messages",
+        start_time=datetime(2025, 1, 1),
+        all_chunks=_go_stream_chunks(),
+        end_time=datetime(2025, 1, 1, 0, 0, 1),
+    )
+
+    headers: Final = result["result"]._hidden_params["additional_headers"]
+    assert headers["x-ratelimit-remaining-tokens"] == "49900"
+    assert headers["llm_provider-x-litellm-response-cost"] == 0.00412
+
+
+@pytest.mark.parametrize("response_headers", [None, {"x-ratelimit-remaining-tokens": 49900}], ids=["absent", "non-str"])
+def test_a_streamed_messages_call_without_usable_provider_headers_logs_none(
+    all_chunks: list[str], response_headers: object
+):
+    logging_obj: Final = _go_logging_obj()
+    logging_obj.model_call_details["custom_llm_provider"] = "anthropic"
+    logging_obj.model_call_details["response_headers"] = response_headers
+
+    result: Final = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(
+        litellm_logging_obj=logging_obj,
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/v1/messages",
+        request_body={"model": "claude-sonnet-4-5-20250929", "stream": True},
+        endpoint_type="messages",
+        start_time=datetime(2025, 1, 1),
+        all_chunks=all_chunks,
+        end_time=datetime(2025, 1, 1, 0, 0, 1),
+    )
+
+    assert isinstance(result["result"], litellm.ModelResponse)
+    assert "x-ratelimit-remaining-tokens" not in (result["result"]._hidden_params.get("additional_headers") or {})
+
+
 _BEDROCK_TRACE_PRICING: Final = {
     "bedrock/guardrails": {
         "litellm_provider": "bedrock",
