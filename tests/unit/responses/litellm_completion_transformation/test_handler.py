@@ -12,6 +12,7 @@ capture the forwarded kwargs; if the flag-setting line is removed the captured
 kwargs lack the flag and these tests fail.
 """
 
+import asyncio
 import inspect
 import json
 import sys
@@ -27,9 +28,12 @@ import pytest
 import respx
 
 import litellm
+from litellm.caching.caching import Cache
+from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.constants import PREVIOUS_RESPONSE_IDS_METADATA_KEY, RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.tool_fields import (
     BRIDGED_TOOL_NAMES_KWARG,
     BridgedToolNames,
@@ -45,6 +49,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.router_api import RoutingContext
 from litellm.router_utils.cooldown_handlers import _should_cooldown_deployment
+from litellm.types.caching import CachingSupportedCallTypes, LiteLLMCacheType
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 from litellm.types.router import RetryPolicy
 from litellm.types.utils import ADDRESSED_RESPONSE_ID_FIELD, ChatCompletionDeltaToolCall, ModelResponseStream
@@ -1384,3 +1389,161 @@ async def test_a_compaction_trigger_after_a_stored_turn_asks_for_the_summary_aft
     assert [(item.type, item.encrypted_content) for item in response.output] == [
         ("compaction", '{"type":"compaction","content":"The number is 7."}')
     ]
+
+
+_USER_ASKS_FOR_TWO_CALLS: Final = MappingProxyType({"role": "user", "content": "weather in a and b"})
+
+
+def _function_call(call_id: str) -> Mapping[str, str]:
+    return MappingProxyType({"type": "function_call", "call_id": call_id, "name": "get_weather", "arguments": "{}"})
+
+
+def _function_call_output(call_id: str) -> Mapping[str, str]:
+    return MappingProxyType({"type": "function_call_output", "call_id": call_id, "output": "sunny"})
+
+
+_GROUPED_TOOL_ITEMS: Final = (
+    _USER_ASKS_FOR_TWO_CALLS,
+    _function_call("call_1"),
+    _function_call("call_2"),
+    _function_call_output("call_1"),
+    _function_call_output("call_2"),
+)
+_INTERLEAVED_TOOL_ITEMS: Final = (
+    _USER_ASKS_FOR_TWO_CALLS,
+    _function_call("call_1"),
+    _function_call_output("call_1"),
+    _function_call("call_2"),
+    _function_call_output("call_2"),
+)
+_FIVE_ITEM_INPUTS: Final = (
+    pytest.param(_GROUPED_TOOL_ITEMS, id="grouped-calls-merge-into-one-chat-message"),
+    pytest.param(_INTERLEAVED_TOOL_ITEMS, id="interleaved-calls-stay-separate-chat-messages"),
+)
+
+
+@pytest.fixture
+def anthropic_messages_route(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, fake_provider_credentials: None
+) -> respx.Route:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    return respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=_ANTHROPIC_MESSAGE_PAYLOAD)
+    )
+
+
+def _five_items(items: Sequence[Mapping[str, str]]) -> list[dict[str, str]]:
+    return [dict(item) for item in items]
+
+
+@pytest.mark.parametrize("items", _FIVE_ITEM_INPUTS)
+def test_sync_bridged_responses_past_max_messages_neither_read_nor_write_the_cache(
+    monkeypatch: pytest.MonkeyPatch, anthropic_messages_route: respx.Route, items: Sequence[Mapping[str, str]]
+) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+
+    litellm.responses(model="anthropic/claude-sonnet-5-5", input=_five_items(items))
+    repeat: Final = litellm.responses(model="anthropic/claude-sonnet-5-5", input=_five_items(items))
+    cache.max_messages = None
+    litellm.responses(model="anthropic/claude-sonnet-5-5", input=_five_items(items))
+
+    assert repeat._hidden_params.get("cache_hit") is not True
+    assert anthropic_messages_route.call_count == 3, "a request past max_messages used the cache"
+
+
+_SETTLE_TIMEOUT_SECONDS: Final = 10
+_COMPLETION_ONLY_CALL_TYPES: Final[tuple[CachingSupportedCallTypes, ...]] = ("completion", "acompletion")
+
+
+async def _await_cache_writes() -> None:
+    await asyncio.wait_for(asyncio.gather(*tuple(_PENDING_CACHE_WRITES)), timeout=_SETTLE_TIMEOUT_SECONDS)
+
+
+async def _settle_post_response_work() -> None:
+    await _await_cache_writes()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=_SETTLE_TIMEOUT_SECONDS)
+    await _await_cache_writes()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("items", _FIVE_ITEM_INPUTS)
+async def test_async_bridged_responses_past_max_messages_neither_read_nor_write_the_cache(
+    monkeypatch: pytest.MonkeyPatch, anthropic_messages_route: respx.Route, items: Sequence[Mapping[str, str]]
+) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+
+    try:
+        await litellm.aresponses(model="anthropic/claude-sonnet-5-5", input=_five_items(items))
+        await _settle_post_response_work()
+        repeat: Final = await litellm.aresponses(model="anthropic/claude-sonnet-5-5", input=_five_items(items))
+        await _settle_post_response_work()
+        cache.max_messages = None
+        await litellm.aresponses(model="anthropic/claude-sonnet-5-5", input=_five_items(items))
+
+        assert repeat._hidden_params.get("cache_hit") is not True
+        assert anthropic_messages_route.call_count == 3, "a request past max_messages used the cache"
+    finally:
+        await _settle_post_response_work()
+
+
+_STRING_INPUT_CASES: Final = (
+    pytest.param(0, None, 2, id="a-zero-limit-skips-the-one-chat-message"),
+    pytest.param(0, "Answer in one word", 2, id="a-zero-limit-skips-the-chat-messages-with-instructions"),
+    pytest.param(1, None, 1, id="a-limit-of-one-caches-the-one-chat-message"),
+)
+
+
+@pytest.mark.parametrize(("max_messages", "instructions", "provider_calls"), _STRING_INPUT_CASES)
+def test_sync_bridged_string_input_keeps_the_chat_message_count_on_the_inner_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    anthropic_messages_route: respx.Route,
+    max_messages: int,
+    instructions: str | None,
+    provider_calls: int,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "cache",
+        Cache(
+            type=LiteLLMCacheType.LOCAL,
+            max_messages=max_messages,
+            supported_call_types=list(_COMPLETION_ONLY_CALL_TYPES),
+        ),
+    )
+
+    for _ in range(2):
+        litellm.responses(model="anthropic/claude-sonnet-5-5", input="hi", instructions=instructions)
+
+    assert anthropic_messages_route.call_count == provider_calls
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("max_messages", "instructions", "provider_calls"), _STRING_INPUT_CASES)
+async def test_async_bridged_string_input_keeps_the_chat_message_count_on_the_inner_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    anthropic_messages_route: respx.Route,
+    max_messages: int,
+    instructions: str | None,
+    provider_calls: int,
+) -> None:
+    monkeypatch.setattr(
+        litellm,
+        "cache",
+        Cache(
+            type=LiteLLMCacheType.LOCAL,
+            max_messages=max_messages,
+            supported_call_types=list(_COMPLETION_ONLY_CALL_TYPES),
+        ),
+    )
+
+    try:
+        for _ in range(2):
+            await litellm.aresponses(model="anthropic/claude-sonnet-5-5", input="hi", instructions=instructions)
+            await _settle_post_response_work()
+
+        assert anthropic_messages_route.call_count == provider_calls
+    finally:
+        await _settle_post_response_work()
