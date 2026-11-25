@@ -312,7 +312,9 @@ class PassThroughStreamingHandler:
     ) -> None:
         response_headers: Final = as_str_mapping(attribute_or_none(response, "headers"))
         details: Final = logging_obj.model_call_details
-        if endpoint_type == EndpointType.ANTHROPIC and response_headers is not None:
+        if endpoint_type != EndpointType.ANTHROPIC or response_headers is None:
+            return
+        if details.get("response_headers") is None:
             details["response_headers"] = dict(rate_limit_headers(response_headers))
 
     @staticmethod
