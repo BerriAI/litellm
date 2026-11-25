@@ -44,7 +44,7 @@ def _to_oauth_token(payload: Mapping[str, object]) -> OAuthToken | None:
     access_token: Final = payload.get("access_token")
     if not isinstance(access_token, str):
         return None
-    refresh_token: Final = payload.get("refresh_token")
+    refresh_token: Final = None if payload.get("refresh_refused") is True else payload.get("refresh_token")
     expires_at: Final = payload.get("expires_at")
     binding_proof: Final = payload.get("identity_binding_proof")
     cimd_client_id: Final = payload.get("cimd_client_id")

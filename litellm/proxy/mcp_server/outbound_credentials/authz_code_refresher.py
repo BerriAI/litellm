@@ -11,12 +11,14 @@ across replicas - is the wrapping store's distributed single-flight, not this re
 from __future__ import annotations
 
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import TYPE_CHECKING, Final, Protocol
 
+import httpx
 from fastapi import HTTPException
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import loads_json_object, single_log_line
 from litellm.proxy.mcp_server.auth.token_endpoint_auth import (
     TokenEndpointAuthConfigError,
 )
@@ -35,6 +37,29 @@ if TYPE_CHECKING:
 
 ServerLookup = Callable[[str], "MCPServer | None"]
 TokenEndpointPost = Callable[[str, dict[str, str], dict[str, str]], Awaitable["dict[str, object] | None"]]
+_NOT_A_REFUSAL: Final = frozenset(
+    {"invalid_client", "unauthorized_client", "unsupported_grant_type", "server_error", "temporarily_unavailable"}
+)
+
+
+def refusal_body(response: httpx.Response) -> Mapping[str, object] | None:
+    if response.status_code not in (400, 401):
+        return None
+    body: Final = loads_json_object(response.content) or {}
+    error: Final = body.get("error")
+    return body if isinstance(error, str) and error else {**body, "error": f"HTTP {response.status_code}"}
+
+
+async def _ignore_refusal(user_id: str, server_id: str, refused_refresh_token: str) -> None:
+    return None
+
+
+def refused_refresh_error(body: Mapping[str, object]) -> str | None:
+    access_token: Final = body.get("access_token")
+    if isinstance(access_token, str) and access_token:
+        return None
+    error: Final = body.get("error")
+    return error if isinstance(error, str) and error and error not in _NOT_A_REFUSAL else None
 
 
 class CredentialPersist(Protocol):
@@ -87,12 +112,14 @@ class AuthorizationCodeRefresher:
         token_endpoint: TokenEndpointPost,
         persist: CredentialPersist,
         *,
+        record_refusal: Callable[[str, str, str], Awaitable[None]] = _ignore_refusal,
         clock: Callable[[], float] = time.time,
         identity_validator: BindingValidator = enforce_oauth_identity_binding,
     ) -> None:
         self._server_lookup = server_lookup
         self._token_endpoint = token_endpoint
         self._persist = persist
+        self._record_refusal = record_refusal
         self._clock = clock
         self._identity_validator = identity_validator
 
@@ -142,6 +169,11 @@ class AuthorizationCodeRefresher:
         }
         body: Final = await self._token_endpoint(token_url, form, token_request.headers)
         if body is None:
+            return None
+        refused: Final = refused_refresh_error(body)
+        if refused is not None:
+            verbose_logger.warning("MCP OAuth refresh refused for server %s: %s", server_id, single_log_line(refused))
+            await self._record_refusal(user_id, server_id, token.refresh_token)
             return None
         access_token: Final = body.get("access_token")
         if not isinstance(access_token, str) or not access_token:

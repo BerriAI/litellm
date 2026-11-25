@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from types import TracebackType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
 
+import httpx
 from fastapi import HTTPException
 from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -14,7 +15,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, single_log_line
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -45,6 +46,7 @@ from litellm.proxy.mcp_server.oauth_identity_binding import (
 from litellm.proxy.mcp_server.oauth_utils import (
     build_upstream_oauth2_token_request,
 )
+from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import refusal_body, refused_refresh_error
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     InProcessRefreshCoordinator,
     OAuthToken,
@@ -266,6 +268,7 @@ class OAuthCredentialPayload(_OAuthCredentialAccessToken, total=False):
     scopes: list[str]
     server_id: str
     needs_scopes: ReadOnly[Sequence[str]]
+    refresh_refused: ReadOnly[bool]
 
 
 _OAUTH_CREDENTIAL_PAYLOAD_ADAPTER: Final[TypeAdapter[OAuthCredentialPayload]] = TypeAdapter(OAuthCredentialPayload)
@@ -1988,7 +1991,7 @@ def oauth_grant_state(cred: OAuthCredentialPayload | None) -> OAuthGrantState:
         return "absent"
     if not is_oauth_credential_expired(cred, buffer_seconds=MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS):
         return "valid"
-    return "refreshable" if cred.get("refresh_token") else "absent"
+    return "refreshable" if cred.get("refresh_token") and cred.get("refresh_refused") is not True else "absent"
 
 
 async def get_user_oauth_credential(
@@ -2014,6 +2017,60 @@ async def record_oauth_scope_refusal(prisma_client: PrismaClient, user_id: str, 
     back to the provider. The next sign-in drops the note; a grant saved since the read is left alone."""
     row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
     await _record_oauth_scope_refusal(prisma_client, row, scope)
+
+
+async def record_oauth_refresh_refusal(
+    prisma_client: PrismaClient, user_id: str, server_id: str, refused_refresh_token: str
+) -> None:
+    row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
+    await _record_oauth_refresh_refusal(prisma_client, row, refused_refresh_token)
+
+
+async def _record_oauth_refresh_refusal(
+    prisma_client: PrismaClient,
+    row: "prisma_db_models.LiteLLM_MCPUserCredentials | None",
+    refused_refresh_token: str,
+) -> None:
+    grant: Final = None if row is None else decode_oauth_payload(row.credential_b64)
+    if row is None or grant is None or grant.get("refresh_token") != refused_refresh_token:
+        return
+    if grant.get("refresh_refused") is True:
+        return
+    written: Final = await _user_credential_actions(prisma_client).update_many(
+        where={"user_id": row.user_id, "server_id": row.server_id, "credential_b64": row.credential_b64},
+        data={
+            "credential_b64": encrypt_value_helper(json.dumps({**grant, "refresh_refused": True})),
+            "updated_at": row.updated_at,
+        },
+    )
+    if written > 0:
+        return
+    latest: Final = await _db_find_user_credential_row(prisma_client, row.user_id, row.server_id, use_writer=True)
+    if latest is None or latest.credential_b64 == row.credential_b64:
+        return
+    await _record_oauth_refresh_refusal(prisma_client, latest, refused_refresh_token)
+
+
+async def _note_refused_refresh(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+    refresh_token: str,
+    body: Mapping[str, object] | None,
+) -> None:
+    refused: Final = None if body is None else refused_refresh_error(body)
+    if refused is None:
+        return
+    verbose_proxy_logger.warning(
+        "refresh_user_oauth_token: provider refused the refresh token for user=%s server=%s: %s",
+        user_id,
+        server_id,
+        single_log_line(refused),
+    )
+    try:
+        await record_oauth_refresh_refusal(prisma_client, user_id, server_id, refresh_token)
+    except Exception as exc:  # noqa: BLE001  # a failed mark must not turn the sign-in challenge into a 500
+        verbose_proxy_logger.warning("MCP OAuth refresh refusal for server %s was not recorded: %s", server_id, exc)
 
 
 async def _record_oauth_scope_refusal(
@@ -2264,6 +2321,15 @@ async def refresh_user_oauth_token(
         )
         response.raise_for_status()
         body: Final[_OAuthTokenRefreshResponse] = response.json()
+    except httpx.HTTPStatusError as exc:
+        verbose_proxy_logger.warning(
+            "refresh_user_oauth_token: refresh request failed for user=%s server=%s: %s",
+            user_id,
+            server_id,
+            exc,
+        )
+        await _note_refused_refresh(prisma_client, user_id, server_id, refresh_token, refusal_body(exc.response))
+        return None
     except Exception as exc:
         verbose_proxy_logger.warning(
             "refresh_user_oauth_token: refresh request failed for user=%s server=%s: %s",
@@ -2293,6 +2359,7 @@ async def refresh_user_oauth_token(
             user_id,
             server_id,
         )
+        await _note_refused_refresh(prisma_client, user_id, server_id, refresh_token, as_str_mapping(body))
         return None
 
     expires_in: int | None = None

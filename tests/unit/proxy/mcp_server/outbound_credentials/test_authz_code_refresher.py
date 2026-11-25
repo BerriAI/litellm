@@ -1,9 +1,18 @@
 """Tests for the authorization_code refresher: the refresh_token grant, parsing, and persist."""
 
+import logging
+from collections.abc import Mapping
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, call
+
+import httpx
 import pytest
 
+from litellm._logging import verbose_logger
 from litellm.proxy.mcp_server.outbound_credentials.authz_code_refresher import (
     AuthorizationCodeRefresher,
+    refusal_body,
+    refused_refresh_error,
 )
 from litellm.proxy.mcp_server.outbound_credentials.oauth_token_store import (
     OAuthToken,
@@ -414,3 +423,106 @@ async def test_saved_cimd_identity_refreshes_without_discovery(monkeypatch):
     assert refreshed.access_token == "new"
     assert refreshed.refresh_token == "rotated"
     assert refreshed.cimd_client_id == identity
+
+
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        ({"error": "invalid_grant", "error_description": "refresh token revoked"}, "invalid_grant"),
+        pytest.param(
+            {"error": "bad_refresh_token"},
+            "bad_refresh_token",
+            id="github-http-200-per-refreshing-user-access-tokens-docs-2026-11",
+        ),
+        pytest.param(
+            {"ok": False, "error": "invalid_refresh_token"},
+            "invalid_refresh_token",
+            id="slack-http-200-per-oauth-v2-access-errors-docs-2026-11",
+        ),
+        ({"error": "invalid_token"}, "invalid_token"),
+        ({"error": "invalid_client"}, None),
+        ({"error": "temporarily_unavailable"}, None),
+        ({"error": "server_error"}, None),
+        ({"error": "HTTP 401"}, "HTTP 401"),
+        ({"access_token": "new", "error": "invalid_grant"}, None),
+        ({"access_token": "", "error": "invalid_grant"}, "invalid_grant"),
+        ({"error": ""}, None),
+        ({"error": ["invalid_grant"]}, None),
+        ({}, None),
+    ],
+)
+def test_any_named_refusal_except_a_client_or_provider_fault_is_classified(
+    body: Mapping[str, object], expected: str | None
+) -> None:
+    assert refused_refresh_error(body) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body, refused",
+    [
+        ({"error": "invalid_grant"}, True),
+        ({"error": "bad_refresh_token"}, True),
+        ({"error": "invalid_client"}, False),
+        ({"error": "unauthorized_client"}, False),
+        ({"error": "unsupported_grant_type"}, False),
+        ({"error": "invalid_scope"}, True),
+        (None, False),
+    ],
+)
+async def test_a_refusal_records_the_presented_refresh_token(
+    body: Mapping[str, object] | None, refused: bool
+) -> None:
+    persist: Final = AsyncMock()
+    record_refusal: Final = AsyncMock()
+    refresher: Final = AuthorizationCodeRefresher(
+        _lookup(_Server()), _endpoint(body), persist, record_refusal=record_refusal
+    )
+    token: Final = await refresher.refresh("alice", "srv", OAuthToken(access_token="old", refresh_token="dead-rt"))
+
+    assert token is None
+    persist.assert_not_awaited()
+    assert record_refusal.await_args_list == ([call("alice", "srv", "dead-rt")] if refused else []), (
+        "a refusal marks the grant; a failed request does not"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_refusal_is_logged_on_one_line_whatever_the_provider_sends() -> None:
+    capture: Final = MagicMock(spec=logging.Handler, level=logging.WARNING)
+    verbose_logger.addHandler(capture)
+    try:
+        refusing: Final = _endpoint({"error": "invalid_grant\nforged log line"})
+        refresher: Final = AuthorizationCodeRefresher(_lookup(_Server()), refusing, AsyncMock())
+        await refresher.refresh("alice", "srv", OAuthToken(access_token="old", refresh_token="dead-rt"))
+    finally:
+        verbose_logger.removeHandler(capture)
+
+    messages: Final = [handled.args[0].getMessage() for handled in capture.handle.call_args_list]
+    assert messages and all("\n" not in message for message in messages), "a provider cannot add log lines"
+
+
+@pytest.mark.asyncio
+async def test_a_refresher_without_a_recorder_still_challenges_on_a_refusal() -> None:
+    refused: Final = _endpoint({"error": "invalid_grant"})
+    refresher: Final = AuthorizationCodeRefresher(_lookup(_Server()), refused, AsyncMock())
+    assert await refresher.refresh("alice", "srv", OAuthToken(access_token="old", refresh_token="dead-rt")) is None
+
+
+@pytest.mark.parametrize(
+    "status, content, expected",
+    [
+        (400, b'{"error": "invalid_grant"}', {"error": "invalid_grant"}),
+        (401, b'{"error": "invalid_grant"}', {"error": "invalid_grant"}),
+        (400, b"not json", {"error": "HTTP 400"}),
+        (401, b"", {"error": "HTTP 401"}),
+        (400, b'["invalid_grant"]', {"error": "HTTP 400"}),
+        (400, b'{"error_description": "expired"}', {"error_description": "expired", "error": "HTTP 400"}),
+        (429, b'{"error": "invalid_grant"}', None),
+        (503, b'{"error": "invalid_grant"}', None),
+    ],
+)
+def test_every_400_or_401_from_the_token_endpoint_is_read_as_a_refusal(
+    status: int, content: bytes, expected: Mapping[str, object] | None
+) -> None:
+    assert refusal_body(httpx.Response(status, content=content)) == expected
