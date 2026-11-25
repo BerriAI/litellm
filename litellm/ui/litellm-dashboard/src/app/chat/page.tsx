@@ -26,12 +26,14 @@ const LOCALSTORAGE_MODEL_KEY = "litellm_chat_selected_model";
 
 type ReplayMessage = Pick<ChatMessage, "role" | "content" | "attachments" | "generatedImages" | "mcpEvents">;
 
-function getPreviousMessages(
+function requestHistories(
   override: ReplayMessage[] | undefined,
   previousResponseId: string | null,
   conversation: { messages: ReplayMessage[] } | undefined | null,
-): ReplayMessage[] {
-  return override ?? (previousResponseId ? [] : conversation?.messages ?? []);
+  userMessage: ReplayMessage,
+): { fullHistory: ReplayMessage[]; history: ReplayMessage[] } {
+  const fullHistory = [...(override ?? conversation?.messages ?? []), userMessage];
+  return { fullHistory, history: previousResponseId ? [userMessage] : fullHistory };
 }
 
 function hasMessageContent(text: string, images: ChatAttachment[], mode: ChatMode): boolean {
@@ -112,6 +114,7 @@ export default function ChatConversationPage() {
   const [isLoadingModels, setIsLoadingModels] = useState(true);
 
   const [responsesSessionId, setResponsesSessionId] = useState<string | null>(null);
+  const [resendsHistory, setResendsHistory] = useState(false);
   const responsesSessionGenerationRef = useRef(0);
   const previousResponsesConversationRef = useRef(activeConversationId);
   const [prevConversationIdForSessionReset, setPrevConversationIdForSessionReset] = useState(activeConversationId);
@@ -203,6 +206,7 @@ export default function ChatConversationPage() {
   if (activeConversationId !== prevConversationIdForSessionReset) {
     setPrevConversationIdForSessionReset(activeConversationId);
     setResponsesSessionId(null);
+    setResendsHistory(false);
     setAttachments([]);
     setAttachmentError(null);
     setInputText("");
@@ -226,6 +230,7 @@ export default function ChatConversationPage() {
       setSelectedModel(model.model_group);
       setMode(modelChatMode(model));
       setResponsesSessionId(null);
+      setResendsHistory(false);
       setAttachmentError(null);
       try {
         localStorage.setItem(LOCALSTORAGE_MODEL_KEY, model.model_group);
@@ -305,6 +310,7 @@ export default function ChatConversationPage() {
       if (!convId) {
         convId = createConversation(model);
         setResponsesSessionId(null); // new conversation starts a fresh session
+        setResendsHistory(false);
         setConversationIdInUrl(convId);
       }
 
@@ -341,12 +347,14 @@ export default function ChatConversationPage() {
       // user message (sending the full history would double-count it).
       //
       // On the very first turn (no session yet), we send the full history.
-      const previousResponseId = historyOverride ? null : responsesSessionId;
+      const previousResponseId = historyOverride || resendsHistory ? null : responsesSessionId;
 
-      const history: ReplayMessage[] = [
-        ...getPreviousMessages(historyOverride, previousResponseId, activeConversation),
+      const { fullHistory, history } = requestHistories(
+        historyOverride,
+        previousResponseId,
+        activeConversation,
         userMessage,
-      ];
+      );
       const requestController = abortControllerRef.current;
 
       const request = {
@@ -357,6 +365,10 @@ export default function ChatConversationPage() {
         signal: requestController.signal,
         messages: history,
         previousResponseId,
+        resendHistory: () => {
+          setResendsHistory(true);
+          return fullHistory;
+        },
         background: requestMode === "chat" && useBackground,
         research: doResearch,
         mcpServers: selectedMCPServers,
@@ -390,6 +402,7 @@ export default function ChatConversationPage() {
       updateLastAssistantMessage,
       isStreaming,
       responsesSessionId,
+      resendsHistory,
       useBackground,
       setConversationIdInUrl,
       t,

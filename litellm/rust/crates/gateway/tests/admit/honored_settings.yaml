@@ -1,0 +1,51 @@
+# Settings the native app reads as Python does, so a plain request stays native.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+        api_base: https://api.anthropic.com
+        rpm: 300
+        tpd: 1000000
+        rpd: 10000
+        daily_reset_time: "09:00"
+        weight: 2
+        timeout: 30
+      model_info:
+        id: claude-a
+        max_input_tokens: 200000
+  router_settings:
+    routing_strategy: simple-shuffle
+    enable_pre_call_checks: true
+    num_retries: 1
+    enable_cross_model_group_collision_check: true
+    optional_pre_call_checks: [enforce_model_rate_limits]
+    redis_host: localhost
+    redis_port: 6379
+    redis_password: redis-key
+    redis_db: 1
+    cache_kwargs: {socket_timeout: 1}
+    fallbacks:
+      - claude-down: [claude]
+  litellm_settings:
+    drop_params: true
+  general_settings:
+    master_key: gateway-key
+    max_request_size_mb: 1
+    enable_jwt_auth: true
+    store_model_in_db: false
+    supported_db_objects: [models]
+    token_rate_limit_type: output
+  environment_variables:
+    SOME_KEY: value
+  credential_list:
+    - credential_name: unused
+      credential_values: {api_key: other-key}
+      credential_info: {}
+
+requests:
+  - name: plain
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust

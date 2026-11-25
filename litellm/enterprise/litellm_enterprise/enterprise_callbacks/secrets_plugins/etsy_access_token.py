@@ -15,7 +15,7 @@ class EtsyAccessTokenDetector(RegexBasedDetector):
         return "Etsy Access Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Etsy Access Token
             re.compile(

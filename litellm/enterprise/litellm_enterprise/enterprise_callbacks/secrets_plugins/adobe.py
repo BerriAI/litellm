@@ -15,7 +15,7 @@ class AdobeSecretDetector(RegexBasedDetector):
         return "Adobe Client Keys"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Adobe Client ID (OAuth Web)
             re.compile(

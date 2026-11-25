@@ -23,37 +23,41 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Final, Literal, cast
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
+from pydantic import BaseModel
 
 import litellm
 import litellm.proxy.proxy_server as ps
+from litellm.proxy.spend_tracking import legacy_spend_counters
 from litellm._internal_context import current_service_target
-from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import GLOBAL_PROXY_SPEND_CACHE_KEY
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.tag import LiteLLM_TagTable
 from litellm.models.team import LiteLLM_TeamTable, LiteLLM_TeamTableCachedObj
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_local
-from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, end_user_cache_key, tag_cache_key
+from litellm.proxy.common_utils.cache_invalidation_pubsub import evict_local
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec, CacheValue
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.team_endpoints import refresh_cached_team
 from litellm.redis.stores.spend_counters import user_window_counter
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
-from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
-
-from .conftest import normalize
+from litellm.proxy.utils import hash_token
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.rust_bridge._native import NativeRedisStoreError
+from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
 from tests.unit.redis.stores.auth_cache_double import FakeAuthCache, shared_cache
 from tests.unit.redis.stores.spend_counters_double import FakeSpendCounters
 from tests.unit.proxy.spend_tracking.native_budgets_replica import native_reservation
 from litellm.redis.stores.connection import connect
 from litellm.redis.stores.spend_counters import SpendCounterStore
+
+from .conftest import normalize
 
 
 def _spend_counters(monkeypatch: pytest.MonkeyPatch, **fake: object) -> FakeSpendCounters:
@@ -487,7 +491,7 @@ async def test_user_spend_increments_both_windows(monkeypatch: pytest.MonkeyPatc
     )
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key="u",
+        key=AuthObject.user("u"),
         value=LiteLLM_UserTable.model_validate(
             {
                 "user_id": "u",
@@ -793,7 +797,7 @@ async def test_a_charge_outside_the_committed_scope_keeps_no_twin_and_reads_no_s
     spend: Final = _spend_counters(monkeypatch, redis=None, memory={"spend:key:hashed": 10.0})
     prisma: Final = _prisma_with_key_spend(10.0)
     key_cache: Final = UserApiKeyCache()
-    key_cache.set_cache(key="hashed", value=UserAPIKeyAuth(token="hashed"))
+    key_cache.set_cache(key=AuthObject.virtual_key("hashed"), value=UserAPIKeyAuth(token="hashed"))
     monkeypatch.setattr(ps, "user_api_key_cache", key_cache)
     monkeypatch.setattr(ps, "prisma_client", prisma)
 
@@ -907,7 +911,7 @@ async def test_increment_spend_counters_pipeline_failure_invalidates_all_counter
 
 @pytest.mark.asyncio
 async def test_reconcile_budget_reservation_for_counter_update_returns_empty_set_when_none():
-    result = await ps._reconcile_budget_reservation_for_counter_update(budget_reservation=None, response_cost=1.0)
+    result = await legacy_spend_counters._reconcile_budget_reservation_for_counter_update(budget_reservation=None, response_cost=1.0)
     assert result.reserved_counter_keys == frozenset()
     assert result.pending == ()
 
@@ -934,7 +938,7 @@ async def test_reconcile_budget_reservation_for_counter_update_failure_invalidat
     fake_invalidate = AsyncMock()
     monkeypatch.setattr(br, "invalidate_budget_reservation_counters", fake_invalidate)
 
-    result = await ps._reconcile_budget_reservation_for_counter_update(
+    result = await legacy_spend_counters._reconcile_budget_reservation_for_counter_update(
         budget_reservation={"foo": "bar"}, response_cost=1.0
     )
 
@@ -955,7 +959,7 @@ async def test_reconcile_budget_reservation_for_counter_update_finalized_reserva
     fake_reconcile = AsyncMock()
     monkeypatch.setattr(br, "reconcile_budget_reservation", fake_reconcile)
 
-    result = await ps._reconcile_budget_reservation_for_counter_update(
+    result = await legacy_spend_counters._reconcile_budget_reservation_for_counter_update(
         budget_reservation={
             "finalized": True,
             "entries": [{"counter_key": "spend:key:abc"}],
@@ -983,7 +987,7 @@ async def test_prepare_end_user_and_tag_spend_increments_returns_each_unique_tag
     monkeypatch.setattr(ps, "prisma_client", None)
     monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
 
-    pending = await ps._prepare_end_user_and_tag_spend_increments(
+    pending = await legacy_spend_counters._prepare_end_user_and_tag_spend_increments(
         end_user_id="eu1",
         tags=["a", "b", "a", "", None],
         response_cost=3.0,
@@ -1004,7 +1008,7 @@ async def test_prepare_end_user_and_tag_spend_increments_no_end_user_no_tags_inv
 ):
     spend = _spend_counters(monkeypatch)
 
-    pending = await ps._prepare_end_user_and_tag_spend_increments(
+    pending = await legacy_spend_counters._prepare_end_user_and_tag_spend_increments(
         end_user_id=None,
         tags=None,
         response_cost=1.0,
@@ -1028,7 +1032,7 @@ async def test_prepare_org_spend_increment_returns_pending_when_org_present(monk
     monkeypatch.setattr(ps, "prisma_client", None)
     monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", AsyncMock(return_value=None))
 
-    pending = await ps._prepare_org_spend_increment(
+    pending = await legacy_spend_counters._prepare_org_spend_increment(
         org_id="org-1",
         response_cost=10.0,
         reserved_counter_keys=set(),
@@ -1043,7 +1047,7 @@ async def test_prepare_org_spend_increment_returns_pending_when_org_present(monk
 async def test_prepare_org_spend_increment_no_org_is_noop_invalid_id(monkeypatch):
     spend = _spend_counters(monkeypatch)
 
-    pending = await ps._prepare_org_spend_increment(
+    pending = await legacy_spend_counters._prepare_org_spend_increment(
         org_id=None,
         response_cost=1.0,
         reserved_counter_keys=set(),
@@ -1064,9 +1068,9 @@ async def test_prepare_unreserved_spend_counter_increment_skips_reserved_keys(
 ):
     spend = _spend_counters(monkeypatch)
 
-    pending = await ps._prepare_unreserved_spend_counter_increment(
+    pending = await legacy_spend_counters._prepare_unreserved_spend_counter_increment(
         counter_key="spend:tag:x",
-        source_cache_key="tag:x",
+        source_cache_key=AuthObject.tag("x"),
         increment=1.0,
         reserved_counter_keys={"spend:tag:x"},
     )
@@ -1085,9 +1089,9 @@ async def test_prepare_unreserved_spend_counter_increment_proceeds_when_not_rese
     reseed = AsyncMock(return_value=None)
     monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", reseed)
 
-    pending = await ps._prepare_unreserved_spend_counter_increment(
+    pending = await legacy_spend_counters._prepare_unreserved_spend_counter_increment(
         counter_key="spend:tag:y",
-        source_cache_key="tag:y",
+        source_cache_key=AuthObject.tag("y"),
         increment=2.0,
         reserved_counter_keys=set(),
     )
@@ -1112,9 +1116,9 @@ async def test_prepare_spend_counter_increment_warm_cache_skips_reseed(monkeypat
     reseed = AsyncMock(return_value=None)
     monkeypatch.setattr(ps.SpendCounterReseed, "coalesced", reseed)
 
-    pending = await ps._prepare_spend_counter_increment(
+    pending = await legacy_spend_counters._prepare_spend_counter_increment(
         counter_key="spend:key:k",
-        source_cache_key="k",
+        source_cache_key=AuthObject.virtual_key("k"),
         increment=3.0,
     )
 
@@ -1142,7 +1146,7 @@ async def test_prepare_window_spend_counter_increment_returns_pending_when_initi
         AsyncMock(return_value=0.0),
     )
 
-    pending = await ps._prepare_window_spend_counter_increment(
+    pending = await legacy_spend_counters._prepare_window_spend_counter_increment(
         counter_key="spend:key:k:window:1d",
         entity_type="Key",
         entity_id="k",
@@ -1162,7 +1166,7 @@ async def test_prepare_window_spend_counter_increment_missing_window_start_inval
 ):
     spend = _spend_counters(monkeypatch)
 
-    pending = await ps._prepare_window_spend_counter_increment(
+    pending = await legacy_spend_counters._prepare_window_spend_counter_increment(
         counter_key="spend:key:k:window:1d",
         entity_type="Key",
         entity_id="k",
@@ -1246,7 +1250,7 @@ async def test_ensure_spend_counter_initialized_warm_skips_reseed_and_source(
 
     await ps._ensure_spend_counter_initialized(
         counter_key="spend:user:u",
-        source_cache_key="u",
+        source_cache_key=AuthObject.user("u"),
     )
 
     assert spend.commands == ["GET spend:user:u"]
@@ -1266,12 +1270,143 @@ async def test_ensure_spend_counter_initialized_cold_seeds_from_source_cache(
 
     await ps._ensure_spend_counter_initialized(
         counter_key="spend:user:u",
-        source_cache_key="u",
+        source_cache_key=AuthObject.user("u"),
     )
 
     assert fake_user_cache.async_get_cache.called is True
-    assert spend.commands == ["GET spend:user:u", "INCRBYFLOAT spend:user:u 7.0"]
+    assert spend.commands == ["GET spend:user:u", "SETMAX spend:user:u 7.0", "INCRBYFLOAT spend:user:u 0.0"]
     assert spend.redis == {"spend:user:u": 7.0}
+
+
+class _SharedAuthRoundTrip(FakeAuthCache):
+    """The shared auth cache's Redis with a ``GET`` whose reply takes a round trip; ``in_flight`` runs before it lands."""
+
+    def __init__(self, redis: dict[str, object], in_flight: Callable[[], Awaitable[object]] | None = None) -> None:
+        super().__init__(redis=redis)
+        self._in_flight: Final = in_flight
+
+    async def get(self, key: str, request: object) -> object:
+        await (asyncio.sleep(0) if self._in_flight is None else self._in_flight())
+        return await super().get(key, request)
+
+
+def _cache_end_user_spend(
+    monkeypatch: pytest.MonkeyPatch,
+    end_user_id: str,
+    spend: float,
+    in_flight: Callable[[], Awaitable[object]] | None = None,
+) -> None:
+    cache, _ = shared_cache(_SharedAuthRoundTrip({f"end_user_id:{end_user_id}": {"spend": spend}}, in_flight))
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redis", [{}, None], ids=["redis", "memory_only"])
+async def test_ensure_spend_counter_initialized_overlapping_cold_seeds_hold_the_cached_spend_once(
+    monkeypatch: pytest.MonkeyPatch, redis: dict[str, float] | None
+) -> None:
+    spend: Final = _spend_counters(monkeypatch, redis=redis)
+    end_user_id: Final = f"overlapping-{'memory' if redis is None else 'redis'}"
+    # The ledger twin runs this test again on its own event loop, and a reseed lock belongs to the loop that made it.
+    monkeypatch.setattr(ps.SpendCounterReseed, "_locks", type(ps.SpendCounterReseed._locks)())
+    _cache_end_user_spend(monkeypatch, end_user_id, 6.0)
+    monkeypatch.setattr(ps, "prisma_client", _make_prisma_with_end_user_row(spend=5.5))
+
+    await asyncio.gather(
+        *(
+            ps._ensure_spend_counter_initialized(
+                counter_key=f"spend:end_user:{end_user_id}", source_cache_key=AuthObject.end_user(end_user_id)
+            )
+            for _ in range(5)
+        )
+    )
+
+    assert (spend.memory if redis is None else spend.redis) == {f"spend:end_user:{end_user_id}": 6.0}
+
+
+@pytest.mark.asyncio
+async def test_ensure_spend_counter_initialized_cold_seed_keeps_the_cached_spend_when_a_charge_landed_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spend: Final = _spend_counters(monkeypatch)
+
+    async def _charge_lands() -> None:
+        await ps._increment_spend_counter_cache(counter_key="spend:end_user:charged-first", increment=0.25)
+
+    _cache_end_user_spend(monkeypatch, "charged-first", 6.0, in_flight=_charge_lands)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    await ps._ensure_spend_counter_initialized(
+        counter_key="spend:end_user:charged-first", source_cache_key=AuthObject.end_user("charged-first")
+    )
+
+    assert spend.redis == {"spend:end_user:charged-first": 6.0}
+
+
+@pytest.mark.asyncio
+async def test_ensure_spend_counter_initialized_cold_seed_raises_when_redis_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spend: Final = _spend_counters(monkeypatch, fail=True)
+    _cache_end_user_spend(monkeypatch, "redis-down", 6.0)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    with pytest.raises(NativeRedisStoreError, match="transport"):
+        await ps._ensure_spend_counter_initialized(
+            counter_key="spend:end_user:redis-down", source_cache_key=AuthObject.end_user("redis-down")
+        )
+
+    assert spend.redis == {}
+    assert spend.memory == {}
+
+
+@pytest.mark.asyncio
+async def test_ensure_spend_counter_initialized_cold_seed_increments_when_redis_refuses_the_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spend: Final = _spend_counters(monkeypatch, failing=frozenset({"set_max"}), failure="rejected")
+    _cache_end_user_spend(monkeypatch, "no-lua", 6.0)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    await ps._ensure_spend_counter_initialized(
+        counter_key="spend:end_user:no-lua", source_cache_key=AuthObject.end_user("no-lua")
+    )
+
+    assert spend.redis == {"spend:end_user:no-lua": 6.0}
+
+
+@pytest.mark.asyncio
+async def test_ensure_spend_counter_initialized_cold_seed_does_not_increment_when_the_script_may_have_applied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spend: Final = _spend_counters(monkeypatch, failing=frozenset({"set_max"}), failure="timeout")
+    _cache_end_user_spend(monkeypatch, "slow-redis", 6.0)
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    with pytest.raises(NativeRedisStoreError, match="timeout"):
+        await ps._ensure_spend_counter_initialized(
+            counter_key="spend:end_user:slow-redis", source_cache_key=AuthObject.end_user("slow-redis")
+        )
+
+    assert spend.redis == {}
+
+
+@pytest.mark.asyncio
+async def test_get_current_spend_cold_end_user_counter_keeps_the_cached_spend_over_a_lagging_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spend: Final = _spend_counters(monkeypatch)
+    monkeypatch.setattr(ps, "prisma_client", _make_prisma_with_end_user_row(spend=9.5))
+
+    result: Final = await ps.get_current_spend(
+        counter_key="spend:end_user:customer-42",
+        fallback_spend=10.2,
+        max_budget=10.0,
+        fallback_authoritative=True,
+    )
+
+    assert result == 10.2
+    assert spend.redis == {}
 
 
 # ---------------------------------------------------------------------------
@@ -1284,9 +1419,9 @@ async def test_get_source_cache_base_spend_reads_first_hit_from_list(monkeypatch
     fake_user_cache = MagicMock()
 
     async def _get(key, **kwargs):
-        if key == "miss":
+        if key == AuthObject.user("miss"):
             return None
-        if key == "hit-obj":
+        if key == AuthObject.user("hit-obj"):
             obj = MagicMock()
             obj.spend = 12.0
             return obj
@@ -1295,7 +1430,9 @@ async def test_get_source_cache_base_spend_reads_first_hit_from_list(monkeypatch
     fake_user_cache.async_get_cache = AsyncMock(side_effect=_get)
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
 
-    result = await ps._get_source_cache_base_spend(source_cache_key=["miss", "hit-obj", "miss2"])
+    result = await ps._get_source_cache_base_spend(
+        source_cache_key=[AuthObject.user("miss"), AuthObject.user("hit-obj"), AuthObject.user("miss2")]
+    )
 
     observed = {
         "result": result,
@@ -1315,7 +1452,7 @@ async def test_get_source_cache_base_spend_no_hits_returns_zero_fallback(monkeyp
     fake_user_cache = _make_user_api_key_cache(get_value=None)
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
 
-    result = await ps._get_source_cache_base_spend(source_cache_key="missing-key")
+    result = await ps._get_source_cache_base_spend(source_cache_key=AuthObject.user("missing-key"))
     assert result == 0.0
 
 
@@ -1455,19 +1592,18 @@ async def test_invalidate_spend_counter_swallows_redis_failure_no_raise(monkeypa
 async def test_update_cache_user_cache_failure_invalid_state_is_swallowed(monkeypatch):
     """An inner _update_user_cache raising must not propagate — update_cache
     catches and logs, the public coroutine still completes normally."""
-    fake_user_cache = MagicMock()
-    fake_user_cache.async_batch_get_cache = AsyncMock(side_effect=RuntimeError("cache down"))
-    fake_user_cache.async_set_cache_pipeline = AsyncMock()
-    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+    cache, _ = shared_cache(FakeAuthCache(fail=NativeRedisStoreError("transport", "cache down")))
+    monkeypatch.setattr(litellm, "max_budget", 100.0)
 
     result = await ps.update_cache(
-        token=None,
+        token="sk-u1",
         user_id="u1",
         end_user_id=None,
         team_id=None,
         response_cost=1.0,
         parent_otel_span=None,
         tags=None,
+        cache=cache,
     )
 
     assert result is None
@@ -1492,17 +1628,19 @@ async def _update_team_spend(team_id: str, response_cost: float) -> None:
 @pytest.mark.asyncio
 async def test_update_cache_adds_spend_to_the_cached_team_only(monkeypatch: pytest.MonkeyPatch) -> None:
     cache: Final = UserApiKeyCache()
-    cache.set_cache(key="team_id:warm", value=LiteLLM_TeamTableCachedObj(team_id="warm", spend=5.0, blocked=True))
+    cache.set_cache(
+        key=AuthObject.team("warm"), value=LiteLLM_TeamTableCachedObj(team_id="warm", spend=5.0, blocked=True)
+    )
     monkeypatch.setattr(ps, "user_api_key_cache", cache)
 
     await _update_team_spend(team_id="warm", response_cost=2.5)
     await _update_team_spend(team_id="cold", response_cost=2.5)
     await _drain_spend_cache_writes()
 
-    warm: Final = cache.get_cache(key="team_id:warm", model_type=LiteLLM_TeamTableCachedObj)
+    warm: Final = cache.get_cache(key=AuthObject.team("warm"), model_type=LiteLLM_TeamTableCachedObj)
     assert warm is not None
     assert (warm.spend, warm.blocked) == (7.5, True)
-    assert cache.get_cache(key="team_id:cold") is None
+    assert cache.get_cache(key=AuthObject.team("cold")) is None
 
 
 async def _block_on_this_worker(cache: UserApiKeyCache, team_id: str) -> None:
@@ -1514,7 +1652,7 @@ async def _block_on_this_worker(cache: UserApiKeyCache, team_id: str) -> None:
 
 
 async def _invalidated_by_a_peer(cache: UserApiKeyCache, team_id: str) -> None:
-    evict_local(cache_keys=(f"team_id:{team_id}",), user_api_key_cache=cache)
+    evict_local(cache_keys=(AuthObject.team(team_id).key,), user_api_key_cache=cache)
 
 
 @pytest.mark.asyncio
@@ -1529,14 +1667,14 @@ async def test_update_cache_never_restores_a_team_a_management_write_replaced(
 ) -> None:
     team_id: Final = "kill-switch"
     cache: Final = UserApiKeyCache()
-    cache.set_cache(key=f"team_id:{team_id}", value=LiteLLM_TeamTableCachedObj(team_id=team_id, blocked=False))
+    cache.set_cache(key=AuthObject.team(team_id), value=LiteLLM_TeamTableCachedObj(team_id=team_id, blocked=False))
     monkeypatch.setattr(ps, "user_api_key_cache", cache)
 
     await _update_team_spend(team_id=team_id, response_cost=1.0)
     await management_write(cache, team_id)
     await _drain_spend_cache_writes()
 
-    seen_by_auth: Final = cache.get_cache(key=f"team_id:{team_id}", model_type=LiteLLM_TeamTableCachedObj)
+    seen_by_auth: Final = cache.get_cache(key=AuthObject.team(team_id), model_type=LiteLLM_TeamTableCachedObj)
     assert (seen_by_auth.blocked if seen_by_auth is not None else None) == expected_blocked
 
 
@@ -1545,32 +1683,37 @@ _CachedSpendObject = LiteLLM_UserTable | LiteLLM_EndUserTable | LiteLLM_TeamTabl
 
 def _cached_spend_object(
     kind: Literal["user", "end_user", "team", "tag"], models: list[str]
-) -> tuple[str, _CachedSpendObject]:
+) -> tuple[AuthObject, _CachedSpendObject]:
     match kind:
         case "user":
-            return "race-user", LiteLLM_UserTable(user_id="race-user", models=models)
+            return AuthObject.user("race-user"), LiteLLM_UserTable(user_id="race-user", models=models)
         case "end_user":
-            return end_user_cache_key("race-end-user"), LiteLLM_EndUserTable(
+            return AuthObject.end_user("race-end-user"), LiteLLM_EndUserTable(
                 user_id="race-end-user", blocked=False, models=models
             )
         case "team":
-            return "team_id:race-team", LiteLLM_TeamTableCachedObj(team_id="race-team", models=models)
+            return AuthObject.team("race-team"), LiteLLM_TeamTableCachedObj(team_id="race-team", models=models)
         case "tag":
-            return tag_cache_key("race-tag"), LiteLLM_TagTable(tag_name="race-tag", models=models)
+            return AuthObject.tag("race-tag"), LiteLLM_TagTable(tag_name="race-tag", models=models)
 
 
-class _RunsOnKeyRead(InMemoryCache):
-    def __init__(self, on_read: Callable[[], Awaitable[None]]) -> None:
-        super().__init__()
-        self._on_read: Final = on_read
+@dataclass
+class _RunsOnKeyRead(FakeAuthCache):
+    """Runs ``on_read`` before each read of ``watched``, so a write lands between a read and what follows it."""
 
-    async def async_get_cache(self, key: str, **kwargs: object) -> object:
-        await self._on_read()
-        return await super().async_get_cache(key, **kwargs)
+    watched: AuthObject | None = None
+    on_read: Callable[[], Awaitable[None]] | None = None
+
+    async def get(self, key: AuthObject, request: object) -> object:
+        if key == self.watched and self.on_read is not None:
+            await self.on_read()
+        return await super().get(key, request)
 
 
-def _cache_that_runs_on_key_read(on_read: Callable[[], Awaitable[None]]) -> UserApiKeyCache:
-    return UserApiKeyCache(in_memory_cache=InMemoryCache(), key_object_in_memory_cache=_RunsOnKeyRead(on_read))
+def _cache_that_runs_on_key_read(token: str, on_read: Callable[[], Awaitable[None]]) -> UserApiKeyCache:
+    return UserApiKeyCache(
+        auth_cache=_RunsOnKeyRead(watched=AuthObject.virtual_key(hash_token(token)), on_read=on_read).store
+    )
 
 
 @pytest.fixture
@@ -1595,11 +1738,11 @@ async def test_update_cache_adds_spend_to_the_entry_a_management_write_left_mid_
     async def _write() -> None:
         if management_write == "none":
             return
-        evict_local(cache_keys=(key,), user_api_key_cache=cache)
+        evict_local(cache_keys=(key.key,), user_api_key_cache=cache)
         if management_write == "refresh":
             cache.set_cache(key=key, value=refreshed, local_only=True)
 
-    cache: Final = _cache_that_runs_on_key_read(on_read=_write)
+    cache: Final = _cache_that_runs_on_key_read("sk-race", on_read=_write)
     cache.set_cache(key=key, value=seeded, local_only=True)
 
     await ps.update_cache(
@@ -1625,9 +1768,9 @@ async def test_update_cache_adds_spend_to_the_global_proxy_spend_for_every_reque
     user: Literal["cached_on_this_worker", "not_cached_on_this_worker", "none"],
 ) -> None:
     cache: Final = UserApiKeyCache()
-    cache.set_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=10.0)
+    cache.set_cache(key=AuthObject.global_proxy_spend(), value=10.0)
     if user == "cached_on_this_worker":
-        cache.set_cache(key="spender", value=LiteLLM_UserTable(user_id="spender", spend=1.0))
+        cache.set_cache(key=AuthObject.user("spender"), value=LiteLLM_UserTable(user_id="spender", spend=1.0))
 
     await ps.update_cache(
         token=None,
@@ -1640,7 +1783,7 @@ async def test_update_cache_adds_spend_to_the_global_proxy_spend_for_every_reque
     )
     await _drain_spend_cache_writes()
 
-    assert cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY) == 10.25
+    assert cache.get_cache(key=AuthObject.global_proxy_spend()) == 10.25
 
 
 @pytest.mark.asyncio
@@ -1649,8 +1792,8 @@ async def test_update_cache_never_brings_back_a_global_proxy_spend_a_budget_rese
     async def _budget_reset() -> None:
         await cache.async_delete_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY)
 
-    cache: Final = _cache_that_runs_on_key_read(on_read=_budget_reset)
-    cache.set_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=10.0)
+    cache: Final = _cache_that_runs_on_key_read("sk-spender", on_read=_budget_reset)
+    cache.set_cache(key=AuthObject.global_proxy_spend(), value=10.0)
 
     await ps.update_cache(
         token="sk-spender",
@@ -1663,7 +1806,7 @@ async def test_update_cache_never_brings_back_a_global_proxy_spend_a_budget_rese
     )
     await _drain_spend_cache_writes()
 
-    assert cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY) is None
+    assert cache.get_cache(key=AuthObject.global_proxy_spend()) is None
 
 
 class _SharedSpend(FakeAuthCache):
@@ -1684,7 +1827,7 @@ class _SharedSpend(FakeAuthCache):
         self._applied: Final = applied
         self._released: Final = released
 
-    async def increment_if_present(self, key: str, amount: float) -> float | None:
+    async def increment_if_present(self, key: AuthObject, amount: float) -> float | None:
         total: Final = await super().increment_if_present(key, amount)
         self._after_increment()
         if amount == self._held and self._applied is not None and self._released is not None:
@@ -1718,7 +1861,7 @@ async def test_update_cache_moves_this_workers_global_proxy_spend_to_the_shared_
     if outcome == "redis_down":
         redis.fail = ConnectionError("redis down")
     cache, _ = shared_cache(redis)
-    cache.set_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=10.0, local_only=True)
+    cache.set_cache(key=AuthObject.global_proxy_spend(), value=10.0, local_only=True)
 
     await ps.update_cache(
         token=None,
@@ -1730,7 +1873,7 @@ async def test_update_cache_moves_this_workers_global_proxy_spend_to_the_shared_
         cache=cache,
     )
 
-    assert cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True) == expected
+    assert cache.get_cache(key=AuthObject.global_proxy_spend(), local_only=True) == expected
 
 
 @pytest.mark.asyncio
@@ -1738,10 +1881,8 @@ async def test_update_cache_moves_this_workers_global_proxy_spend_to_the_shared_
 async def test_update_cache_keeps_the_newest_global_proxy_spend_when_redis_replies_out_of_order() -> None:
     held_increment_applied: Final = asyncio.Event()
     held_reply_released: Final = asyncio.Event()
-    cache, _ = shared_cache(
-        _SharedSpend(10.0, held=0.25, applied=held_increment_applied, released=held_reply_released)
-    )
-    cache.set_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=10.0, local_only=True)
+    cache, _ = shared_cache(_SharedSpend(10.0, held=0.25, applied=held_increment_applied, released=held_reply_released))
+    cache.set_cache(key=AuthObject.global_proxy_spend(), value=10.0, local_only=True)
 
     async def _request(response_cost: float) -> None:
         await ps.update_cache(
@@ -1760,7 +1901,7 @@ async def test_update_cache_keeps_the_newest_global_proxy_spend_when_redis_repli
     held_reply_released.set()
     await earlier
 
-    assert cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, local_only=True) == 10.75
+    assert cache.get_cache(key=AuthObject.global_proxy_spend(), local_only=True) == 10.75
 
 
 @pytest.mark.asyncio
@@ -1786,26 +1927,37 @@ async def test_update_cache_adds_the_global_spend_scalar_in_redis_as_spend_count
 
 
 class _UnwritableKeyUserApiKeyCache(UserApiKeyCache):
-    def __init__(self, unwritable_key: str) -> None:
-        super().__init__(in_memory_cache=InMemoryCache())
+    def __init__(self, unwritable_key: AuthObject) -> None:
+        super().__init__()
         self._unwritable_key: Final = unwritable_key
 
-    def set_cache(self, key: str | None, value: object, local_only: bool = False, **kwargs: object):
+    def set_cache(
+        self,
+        key: AuthObject,
+        value: CacheValue,
+        *,
+        ttl: float | None = None,
+        local_only: bool = False,
+        model_type: type[BaseModel] | None = None,
+    ) -> None:
         if key == self._unwritable_key:
             raise RuntimeError("cache write failed")
-        return super().set_cache(key, value, local_only=local_only, **kwargs)
+        super().set_cache(key, value, ttl=ttl, local_only=local_only, model_type=model_type)
 
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("proxy_max_budget")
 async def test_update_cache_still_adds_spend_to_the_others_when_one_cached_object_fails() -> None:
-    cache: Final = _UnwritableKeyUserApiKeyCache(unwritable_key="broken-user")
-    cache.in_memory_cache.set_cache(
-        key="broken-user",
-        value=CacheCodec.serialize(LiteLLM_UserTable(user_id="broken-user", spend=1.0), model_type=LiteLLM_UserTable),
+    cache: Final = _UnwritableKeyUserApiKeyCache(unwritable_key=AuthObject.user("broken-user"))
+    cache.set_local(
+        AuthObject.user("broken-user"),
+        CacheCodec.serialize(LiteLLM_UserTable(user_id="broken-user", spend=1.0), model_type=LiteLLM_UserTable),
+        None,
     )
-    cache.set_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY, value=10.0)
-    cache.set_cache(key="team_id:still-billed", value=LiteLLM_TeamTableCachedObj(team_id="still-billed", spend=1.0))
+    cache.set_cache(key=AuthObject.global_proxy_spend(), value=10.0)
+    cache.set_cache(
+        key=AuthObject.team("still-billed"), value=LiteLLM_TeamTableCachedObj(team_id="still-billed", spend=1.0)
+    )
 
     await ps.update_cache(
         token=None,
@@ -1818,8 +1970,8 @@ async def test_update_cache_still_adds_spend_to_the_others_when_one_cached_objec
     )
     await _drain_spend_cache_writes()
 
-    team: Final = cache.get_cache(key="team_id:still-billed", model_type=LiteLLM_TeamTableCachedObj)
-    assert (team.spend if team is not None else None, cache.get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY)) == (
+    team: Final = cache.get_cache(key=AuthObject.team("still-billed"), model_type=LiteLLM_TeamTableCachedObj)
+    assert (team.spend if team is not None else None, cache.get_cache(key=AuthObject.global_proxy_spend())) == (
         1.25,
         10.25,
     )

@@ -1193,6 +1193,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "output_cost_per_billable_unit": {"type": "number"},
             "output_cost_per_image_token": {"type": "number"},
             "output_cost_per_image_token_batches": {"type": "number"},
+            "output_cost_per_image_token_flex": {"type": "number"},
             "output_cost_per_image_token_priority": {"type": "number"},
             "output_cost_per_video_token": {"type": "number"},
             "output_cost_per_pixel": {"type": "number"},
@@ -1248,7 +1249,10 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "supports_nova_canvas_image_edit": {"type": "boolean"},
             "supports_parallel_function_calling": {"type": "boolean"},
             "supports_parallel_tool_use_config": {"type": "boolean"},
+            "supports_tool_schema_defs": {"type": "boolean"},
             "supports_pdf_input": {"type": "boolean"},
+            "supports_part_media_resolution": {"type": "boolean"},
+            "supports_media_in_tool_response": {"type": "boolean"},
             "prompt_cache_min_tokens": {"type": "number"},
             "supports_prompt_cache_breakpoint": {"type": "boolean"},
             "supports_bedrock_converse_cache_point": {"type": "boolean"},
@@ -1305,6 +1309,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             "thinking_on_by_default": {"type": "boolean"},
             "supports_mid_conversation_system": {"type": "boolean"},
             "supports_sampling_params": {"type": "boolean"},
+            "supports_search_tools_with_functions": {"type": "boolean"},
             "supports_output_config": {"type": "boolean"},
             "supports_speed": {"type": "boolean"},
             "supports_fast_mode": {"type": "boolean"},
@@ -1325,6 +1330,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
             },
             "bedrock_converse_supports_strict_tools": {"type": "boolean"},
             "supports_regex_lookaround": {"type": "boolean"},
+            "supports_all_json_schema_keywords": {"type": "boolean"},
             "tpm": {"type": "number"},
             "supported_endpoints": {
                 "type": "array",
@@ -1342,6 +1348,7 @@ _COST_MAP_ROW_SCHEMA: Final = {
                         "/v1/realtime/translations",
                         "/v1/realtime/translations/client_secrets",
                         "/v1/realtime/translations/calls",
+                        "/v1/live/sessions",
                         "/v1/images/variations",
                         "/v1/images/edits",
                         "/v1/batch",
@@ -1522,6 +1529,7 @@ def test_cost_map_schema_accepts_vertex_modality_and_context_tiers() -> None:
         "input_cost_per_audio_token_above_200k_tokens_batches": 8e-6,
         "output_cost_per_image_token_priority": 9e-6,
         "output_cost_per_image_token_batches": 10e-6,
+        "output_cost_per_image_token_flex": 11e-6,
     }
 
     assert Draft7Validator(_COST_MAP_ROW_SCHEMA).is_valid({"synthetic-vertex-tier-model": row})
@@ -3730,6 +3738,106 @@ class TestAdditionalDropParamsForNonOpenAIProviders:
         # All params should be present when additional_drop_params is empty
         assert result.get("prompt_cache_key") == "test_key"
         assert result.get("custom_param") == "value"
+
+
+@pytest.mark.parametrize("provider", ("anthropic", "openai", "azure", "azure_ai", "hosted_vllm", "litellm_proxy"))
+def test_provider_specific_params_withhold_vector_store_routing_keys(provider: str) -> None:
+    from litellm.utils import add_provider_specific_params_to_optional_params
+
+    routing_params: Final = {"vector_store_id": "vs-single", "vector_store_ids": ["vs-first", "vs-second"]}
+    provider_params: Final = {"provider_option": True, "tools": [{"type": "file_search", "vector_store_ids": ["vs"]}]}
+
+    result: Final[Mapping[str, object]] = add_provider_specific_params_to_optional_params(
+        optional_params={},
+        passed_params={**routing_params, **provider_params},
+        custom_llm_provider=provider,
+        openai_params=[],
+    )
+
+    forwarded: Final = {**routing_params, **provider_params} if provider == "litellm_proxy" else provider_params
+    assert result == (forwarded if provider == "anthropic" else {"extra_body": forwarded})
+
+
+@pytest.mark.parametrize("provider", ("openai", "hosted_vllm"))
+def test_explicit_extra_body_vector_store_keys_reach_the_provider_as_sent(provider: str) -> None:
+    from litellm.utils import add_provider_specific_params_to_optional_params
+
+    extra_body: Final = {"vector_store_ids": ["vs-first"], "provider_option": True}
+
+    result: Final[Mapping[str, object]] = add_provider_specific_params_to_optional_params(
+        optional_params={},
+        passed_params={"extra_body": extra_body},
+        custom_llm_provider=provider,
+        openai_params=[],
+    )
+
+    assert result == {"extra_body": extra_body}
+
+
+def test_custom_handler_still_receives_vector_store_routing_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.utils import add_provider_specific_params_to_optional_params
+
+    monkeypatch.setattr(
+        litellm, "custom_provider_map", [{"provider": "my-rag-llm", "custom_handler": litellm.CustomLLM()}]
+    )
+    routing_params: Final = {"vector_store_id": "vs-single", "vector_store_ids": ["vs-first"]}
+
+    result: Final[Mapping[str, object]] = add_provider_specific_params_to_optional_params(
+        optional_params={},
+        passed_params=dict(routing_params),
+        custom_llm_provider="my-rag-llm",
+        openai_params=[],
+    )
+
+    assert result == routing_params
+
+
+@pytest.mark.parametrize(
+    ("provider", "model", "url"),
+    (
+        ("anthropic", "claude-sonnet-5-5", "https://api.anthropic.com/v1/messages"),
+        ("openai", "gpt-6.1-sol", "https://api.openai.com/v1/chat/completions"),
+    ),
+)
+def test_completion_keeps_vector_store_routing_keys_out_of_provider_requests(
+    provider: str, model: str, url: str, respx_mock: respx.MockRouter
+) -> None:
+    reply: Final = (
+        {
+            "id": "msg-vector-routing",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        }
+        if provider == "anthropic"
+        else {
+            "id": "chatcmpl-vector-routing",
+            "object": "chat.completion",
+            "created": 0,
+            "model": model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+    )
+    upstream: Final = respx_mock.post(url).respond(200, json=reply)
+    response: Final = litellm.completion(
+        model=f"{provider}/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=32,
+        api_key="test-key",
+        vector_store_id="vs-single",
+        vector_store_ids=["vs-first", "vs-second"],
+    )
+    request_body: Final[Mapping[str, object]] = json.loads(upstream.calls.last.request.content)
+
+    assert response.choices[0].message.content == "ok"
+    assert request_body["model"] == model
+    assert "vector_store_id" not in request_body
+    assert "vector_store_ids" not in request_body
 
 
 class TestExtraBodyCannotOverrideModel:
@@ -6077,6 +6185,258 @@ async def test_success_deployment_hook_raising_keeps_earlier_hook_rewrite(monkey
     assert result is not original
     assert result.choices[0].message.content == "rewritten by deployment hook"
     assert trailing_hook.seen_responses == (result,)
+
+
+_VLLM_PARIS_TOKEN_IDS: Final = [785, 6722, 315, 9625, 374, 12095, 13]
+
+
+def _mock_vllm_chat_answer(monkeypatch: pytest.MonkeyPatch, answer: str) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx.post("http://vllm.invalid/v1/chat/completions").respond(
+        json={
+            "id": "chatcmpl-vllm",
+            "object": "chat.completion",
+            "created": 1,
+            "model": "Qwen/Qwen3-0.6B",
+            "choices": [
+                {
+                    "index": 0,
+                    "finish_reason": "stop",
+                    "token_ids": _VLLM_PARIS_TOKEN_IDS,
+                    "message": {"role": "assistant", "content": answer},
+                    "logprobs": {"content": [{"token": answer, "logprob": -0.1, "bytes": None, "top_logprobs": []}]},
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("answer", "served_answer", "served_token_ids"),
+    [
+        ("The capital of France is Paris.", "The capital of France is [KEYWORD_REDACTED].", None),
+        ("The capital of France is Lyon.", "The capital of France is Lyon.", _VLLM_PARIS_TOKEN_IDS),
+    ],
+    ids=["masked", "untouched"],
+)
+@respx.mock
+async def test_model_level_masking_guardrail_drops_vllm_token_data_of_the_answer_it_rewrote(
+    monkeypatch: pytest.MonkeyPatch, answer: str, served_answer: str, served_token_ids: object
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
+
+    mask_paris: Final = ContentFilterGuardrail(
+        guardrail_name="mask-paris",
+        blocked_words=[BlockedWord(keyword="Paris", action=ContentFilterAction.MASK)],
+        event_hook=GuardrailEventHooks.post_call,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [mask_paris])
+    _mock_vllm_chat_answer(monkeypatch, answer)
+
+    response: Final = await litellm.acompletion(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        api_base="http://vllm.invalid/v1",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        return_token_ids=True,
+        guardrails=["mask-paris"],
+        num_retries=0,
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == served_answer
+    assert response.choices[0].provider_specific_fields["token_ids"] == served_token_ids
+    assert (getattr(response.choices[0], "logprobs", None) is None) is (served_token_ids is None)
+    assert mask_paris.post_call_already_checked({}, response) is True
+
+
+class _SearchResultsDeploymentHook(CustomLogger):
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: object, call_type: CallTypes | None
+    ) -> ModelResponse | None:
+        if not isinstance(response, ModelResponse):
+            return None
+        choice: Final = response.choices[0]
+        if not isinstance(choice, Choices):
+            return None
+        cited_message: Final = choice.message.model_copy(
+            update={
+                "provider_specific_fields": {
+                    **(choice.message.provider_specific_fields or {}),
+                    "search_results": [{"object": "vector_store.search_results.page", "data": []}],
+                }
+            }
+        )
+        return response.model_copy(update={"choices": [choice.model_copy(update={"message": cited_message})]})
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_deployment_hook_that_only_attaches_search_results_keeps_vllm_token_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_SearchResultsDeploymentHook()])
+    _mock_vllm_chat_answer(monkeypatch, "The capital of France is Paris.")
+
+    response: Final = await litellm.acompletion(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        api_base="http://vllm.invalid/v1",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        return_token_ids=True,
+        num_retries=0,
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.provider_specific_fields["search_results"][0]["data"] == []
+    assert response.choices[0].provider_specific_fields["token_ids"] == _VLLM_PARIS_TOKEN_IDS
+    assert getattr(response.choices[0], "logprobs", None) is not None
+
+
+_VLLM_ROME_TOKEN_IDS: Final = [785, 6722, 315, 15344, 374, 21718, 13]
+
+
+class _ReaskingDeploymentHook(CustomLogger):
+    async def async_post_call_success_deployment_hook(
+        self, request_data: dict[str, object], response: object, call_type: CallTypes | None
+    ) -> ModelResponse | None:
+        if not isinstance(response, ModelResponse):
+            return None
+        choice: Final = response.choices[0]
+        if not isinstance(choice, Choices):
+            return None
+        rome: Final = choice.model_copy(
+            update={
+                "message": choice.message.model_copy(update={"content": "The capital of Italy is Rome."}),
+                "token_ids": _VLLM_ROME_TOKEN_IDS,
+                "provider_specific_fields": {"token_ids": _VLLM_ROME_TOKEN_IDS},
+                "logprobs": None,
+            }
+        )
+        return response.model_copy(update={"choices": [rome]})
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_model_level_masking_guardrail_drops_token_data_of_a_new_answer_an_earlier_hook_returned(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
+
+    mask_rome: Final = ContentFilterGuardrail(
+        guardrail_name="mask-rome",
+        blocked_words=[BlockedWord(keyword="Rome", action=ContentFilterAction.MASK)],
+        event_hook=GuardrailEventHooks.post_call,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [_ReaskingDeploymentHook(), mask_rome])
+    _mock_vllm_chat_answer(monkeypatch, "The capital of France is Paris.")
+
+    response: Final = await litellm.acompletion(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        api_base="http://vllm.invalid/v1",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        return_token_ids=True,
+        guardrails=["mask-rome"],
+        num_retries=0,
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "The capital of Italy is [KEYWORD_REDACTED]."
+    assert response.choices[0].provider_specific_fields["token_ids"] is None
+
+
+def _masking_patch(view: object, word: str) -> Patch | None:
+    response: Final = getattr(view, "response")  # noqa: B009  # the view's declared field
+    if not isinstance(response, ModelResponse):
+        return None
+    masked: Final = response.model_copy(deep=True)
+    choice: Final = masked.choices[0]
+    if not isinstance(choice, Choices) or choice.message.content is None:
+        return None
+    choice.message.content = choice.message.content.replace(word, "[MASKED]")
+    return Patch().set(Field.response, masked)
+
+
+class _ParisMaskingDeploymentV2(CustomLoggerV2):
+    @on(Hook.post_deployment_success, reads={Field.response}, writes={Field.response})
+    async def post_success(self, view: object, ctx: CallContext[object]) -> Patch | None:
+        return _masking_patch(view, "Paris")
+
+
+class _RomeMaskingDeploymentV2(CustomLoggerV2):
+    @on(Hook.post_deployment_success, reads={Field.response}, writes={Field.response})
+    async def post_success(self, view: object, ctx: CallContext[object]) -> Patch | None:
+        return _masking_patch(view, "Rome")
+
+
+class _RomeReaskingDeploymentV2(CustomLoggerV2):
+    @on(Hook.post_deployment_success, reads={Field.response}, writes={Field.response})
+    async def post_success(self, view: object, ctx: CallContext[object]) -> Patch | None:
+        rome: Final = await _ReaskingDeploymentHook().async_post_call_success_deployment_hook(
+            {}, getattr(view, "response"), None  # noqa: B009  # the view's declared field
+        )
+        return None if rome is None else Patch().set(Field.response, rome)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_v2_deployment_callback_that_masks_the_answer_drops_vllm_token_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ParisMaskingDeploymentV2()])
+    _mock_vllm_chat_answer(monkeypatch, "The capital of France is Paris.")
+
+    response: Final = await litellm.acompletion(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        api_base="http://vllm.invalid/v1",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        return_token_ids=True,
+        num_retries=0,
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "The capital of France is [MASKED]."
+    assert response.choices[0].provider_specific_fields["token_ids"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("callbacks", "served_answer", "served_token_ids"),
+    [
+        (
+            [_RomeReaskingDeploymentV2(), _RomeMaskingDeploymentV2()],
+            "The capital of Italy is [MASKED].",
+            None,
+        ),
+        ([_RomeReaskingDeploymentV2()], "The capital of Italy is Rome.", _VLLM_ROME_TOKEN_IDS),
+    ],
+    ids=["masked-by-a-later-v2-callback", "left-alone"],
+)
+@respx.mock
+async def test_v2_deployment_callbacks_check_token_data_of_a_new_answer_after_each_callback(
+    monkeypatch: pytest.MonkeyPatch, callbacks: list[CustomLoggerV2], served_answer: str, served_token_ids: object
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", callbacks)
+    _mock_vllm_chat_answer(monkeypatch, "The capital of France is Paris.")
+
+    response: Final = await litellm.acompletion(
+        model="hosted_vllm/Qwen/Qwen3-0.6B",
+        api_base="http://vllm.invalid/v1",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        return_token_ids=True,
+        num_retries=0,
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == served_answer
+    assert response.choices[0].provider_specific_fields["token_ids"] == served_token_ids
 
 
 class _GuardrailBlocked(Exception):
@@ -8981,7 +9341,7 @@ def test_completion_finishes_response_metadata_before_handing_the_response_to_th
 
 def test_get_model_info_gemini(monkeypatch):
     """
-    Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
+    Check rate-limit metadata for supported non-video Gemini model families.
     """
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     litellm.model_cost = litellm.get_model_cost_map(url="")
@@ -8990,6 +9350,7 @@ def test_get_model_info_gemini(monkeypatch):
     for model, info in model_map.items():
         if (
             model.startswith("gemini/")
+            and "video" not in info.get("supported_output_modalities", [])
             and "gemma" not in model
             and "learnlm" not in model
             and "imagen" not in model
@@ -8999,6 +9360,7 @@ def test_get_model_info_gemini(monkeypatch):
             and "omni" not in model
             and "3.8-flash-tts" not in model
             and "3.8-flash-lite-tts" not in model
+            and "genie" not in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
@@ -11497,6 +11859,19 @@ def test_get_valid_models_from_provider():
     assert "gpt-5-mini" in valid_models
 
 
+def test_get_valid_models_lists_a_json_provider_set_up_through_its_declared_key_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.utils import get_valid_models
+
+    monkeypatch.delenv("PERPLEXITYORCHESTRATOR_API_KEY", raising=False)
+    monkeypatch.delenv("PERPLEXITY_ORCHESTRATOR_API_KEY", raising=False)
+    monkeypatch.delenv("PERPLEXITYAI_API_KEY", raising=False)
+    monkeypatch.setenv("PERPLEXITY_API_KEY", "pplx-test-key")
+
+    assert "perplexity_orchestrator/anthropic/claude-haiku-5-5" in get_valid_models()
+
+
 @pytest.mark.parametrize(
     ("provider", "api_base", "api_key", "model_id"),
     [
@@ -12890,3 +13265,18 @@ async def test_post_deployment_failure_reaches_the_legacy_hook_and_keeps_the_rea
     assert type(recorder.failures[0]) is type(raised.value)
     assert recorder.failures[0] is not raised.value
     assert seen == (["v2", "legacy"] if with_v2 else ["legacy"])
+
+
+def test_changing_a_keyed_get_model_info_result_leaves_later_lookups_alone() -> None:
+    litellm.get_model_info.cache_clear()
+    try:
+        shared_before: Final = litellm.get_model_info("gpt-4o", custom_llm_provider="openai")["max_input_tokens"]
+        keyed: Final = cast(
+            dict[str, object], litellm.get_model_info("gpt-4o", custom_llm_provider="openai", api_key="caller-key")
+        )
+        keyed["max_input_tokens"] = -1
+        shared_after: Final = litellm.get_model_info("gpt-4o", custom_llm_provider="openai")["max_input_tokens"]
+    finally:
+        litellm.get_model_info.cache_clear()
+
+    assert shared_after == shared_before

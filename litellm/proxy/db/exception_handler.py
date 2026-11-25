@@ -628,7 +628,7 @@ def _coerce_timeout(value: object, fallback: float) -> float:
     return fallback
 
 
-_ReadResultT: Final = TypeVar("_ReadResultT")
+_ReadResultT = TypeVar("_ReadResultT")
 
 
 class _DBReconnectClient(Protocol):
@@ -767,9 +767,6 @@ async def call_with_db_reconnect_retry(
         return await coro_factory()
 
 
-_DATA_REJECTED_SQLSTATE_CLASSES: Final = frozenset({"22", "23"})
-
-
 def db_write_failure_is_requeue_safe(e: Exception) -> bool:
     """Whether a failed write provably never applied, so its rows can be sent again without double counting."""
     if isinstance(e, NativeDatabaseFailure):
@@ -777,7 +774,7 @@ def db_write_failure_is_requeue_safe(e: Exception) -> bool:
     if isinstance(e, DB_CONNECTION_ERROR_TYPES):
         return isinstance(e, DB_RETRY_SAFE_ERROR_TYPES)
     sqlstate: Final = PrismaDBExceptionHandler.postgres_sqlstate(e)
-    return sqlstate is None or sqlstate[:2] not in _DATA_REJECTED_SQLSTATE_CLASSES
+    return sqlstate is None or sqlstate[:2] not in _REJECTED_ROW_SQLSTATE_CLASSES
 
 
 def db_write_never_sent(e: Exception) -> bool:

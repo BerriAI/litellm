@@ -32,7 +32,7 @@ def _driver_params(provider_model: str, env_var: str) -> LiteLLMParamsBody:
 
 
 DRIVER_MODELS: tuple[tuple[str, str, str], ...] = (
-    ("gemini-2.5-flash", "gemini/gemini-2.5-flash", "GEMINI_API_KEY"),
+    ("gemini-3.8-flash", "gemini/gemini-3.8-flash", "GEMINI_API_KEY"),
     ("claude-haiku-4-5", "anthropic/claude-haiku-4-5", "ANTHROPIC_API_KEY"),
     ("openai-text-embedding-3-small", "openai/text-embedding-3-small", "OPENAI_API_KEY"),
     ("openai-responses-codex", "openai/gpt-5.3-codex", "OPENAI_API_KEY"),

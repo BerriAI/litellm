@@ -1,7 +1,7 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use litellm_redis_client::CallTag;
-use litellm_redis_store::{RequestRedis, Send};
+use litellm_redis_store::{PostCallDrain, RequestRedis, Send};
 use pyo3::prelude::*;
 
 use super::{call, duration};
@@ -17,6 +17,8 @@ fn deadline_flush_tag() -> Option<CallTag> {
         .map(RedisCall::tag)
 }
 
+static POST_CALL_DRAIN: LazyLock<PostCallDrain> = LazyLock::new(PostCallDrain::default);
+
 /// One request's native Redis batches. Python builds one per request scope and passes it to each
 /// request-aware store call.
 #[pyclass(frozen, name = "NativeRequestRedis")]
@@ -29,7 +31,12 @@ impl NativeRequestRedis {
         let runtime = litellm_host_python::runtime_handle()?;
         let deadline = duration(post_call_deadline_seconds)?;
         Ok(Self(crate::logger::capture(py).scope(|| {
-            RequestRedis::with_deadline_tag(runtime, deadline, Arc::new(deadline_flush_tag))
+            RequestRedis::hosted(
+                runtime,
+                deadline,
+                Arc::new(deadline_flush_tag),
+                POST_CALL_DRAIN.clone(),
+            )
         })))
     }
 
@@ -50,6 +57,24 @@ impl NativeRequestRedis {
             Ok(())
         })
     }
+
+    /// Whether the post-call writes a later reader waits on, such as its committed spend charge,
+    /// have all landed; `false` while none was declared.
+    #[getter]
+    fn tracked_writes_settled(&self) -> bool {
+        self.0.tracked_writes_settled()
+    }
+}
+
+/// Sends every request's post-call batch still waiting on its callbacks or deadline; for the
+/// shutdown path.
+#[pyfunction]
+pub(crate) fn drain_post_call_redis_batches(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    let scope = call(py, "post_call_redis_batch")?;
+    run_async_value(py, async move {
+        scope.scope(POST_CALL_DRAIN.drain()).await;
+        Ok(())
+    })
 }
 
 /// The Python face of `Send`: which batch a store op rides. Each variant carries exactly what it

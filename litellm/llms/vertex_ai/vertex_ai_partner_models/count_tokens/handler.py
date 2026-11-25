@@ -7,23 +7,33 @@ their respective publisher-specific count-tokens endpoints.
 """
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.anthropic_beta_headers_manager import aload_beta_headers_config, filter_and_transform_beta_headers
-from litellm.litellm_core_utils.core_helpers import decoded_json_object, drops_unsupported_params
+from litellm.litellm_core_utils.core_helpers import (
+    decoded_json_object,
+    drops_unsupported_params,
+    json_contains,
+    require_attributes,
+    subscript,
+)
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import (
     OBJECT_LIST_ADAPTER,
     AnthropicModelInfo,
+    anthropic_message_objects,
     context_management_betas,
     count_tokens_feature_betas,
     is_claude_model_target,
+    json_message_without_provider_specific_fields,
+    strip_unsigned_thinking_from_anthropic_messages,
     tools_without_custom_field,
 )
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.responses.transformation import is_vertex_muse_model
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 _COUNT_TOKENS_PUBLISHERS: Final = (
@@ -34,6 +44,7 @@ _COUNT_TOKENS_PUBLISHERS: Final = (
 
 
 _REQUEST_MESSAGES: Final = TypeAdapter(Sequence[object])
+_JSON_LIST: Final = TypeAdapter(list[JsonValue])
 _CONTEXT_MANAGEMENT: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _DECODED_JSON: Final = TypeAdapter(object)
 
@@ -41,20 +52,53 @@ _DECODED_JSON: Final = TypeAdapter(object)
 def count_tokens_request_body(
     request_data: Mapping[str, object], model: str, drop_params: object
 ) -> Mapping[str, object]:
+    claude: Final = is_claude_model_target("vertex_ai", model)
+    messages: Final = request_data.get("messages")
+    claude_messages: Final = (
+        anthropic_message_objects(_JSON_LIST.validate_python(messages))
+        if claude and isinstance(messages, list)
+        else None
+    )
     tools: Final = request_data.get("tools")
-    if not isinstance(tools, list):
-        return request_data
     return {
         **request_data,
-        "tools": tools_without_custom_field(
-            OBJECT_LIST_ADAPTER.validate_python(tools),
-            hoist_defer_loading=is_claude_model_target("vertex_ai", model),
-            drop_custom=drops_unsupported_params(drop_params),
+        **(
+            {}
+            if claude_messages is None
+            else {
+                "messages": [
+                    json_message_without_provider_specific_fields(message)
+                    for message in strip_unsigned_thinking_from_anthropic_messages(claude_messages)
+                ]
+            }
+        ),
+        **(
+            {
+                "tools": tools_without_custom_field(
+                    OBJECT_LIST_ADAPTER.validate_python(tools),
+                    hoist_defer_loading=claude,
+                    drop_custom=drops_unsupported_params(drop_params),
+                )
+            }
+            if isinstance(tools, list)
+            else {}
         ),
     }
 
 
+class _SplitsOnSeparator(Protocol):
+    def split(self, sep: str, /) -> object: ...
+
+
+def _model_without_version_suffix(model: object) -> object:
+    if not json_contains(model, "@"):
+        return model
+    return subscript(require_attributes(model, _SplitsOnSeparator, "split").split("@"), 0)
+
+
 def count_tokens_publisher(model: str) -> str | None:
+    if is_vertex_muse_model(model):
+        return None
     return next((publisher for marker, publisher in _COUNT_TOKENS_PUBLISHERS if marker in model), None)
 
 
@@ -139,9 +183,9 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
     async def handle_count_tokens_request(
         self,
         model: str,
-        request_data: dict[str, Any],
+        request_data: Mapping[str, object],
         litellm_params: dict[str, Any],
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Handle token counting request for a Vertex AI partner model.
 
@@ -160,9 +204,14 @@ class VertexAIPartnerModelsTokenCounter(VertexBase):
         # count-tokens endpoint does not accept versioned model names.
         model = self._strip_version_suffix(model)
         if "model" in request_data:
+            requested_model: Final = request_data["model"]
             request_data = {
                 **request_data,
-                "model": self._strip_version_suffix(request_data["model"]),
+                "model": (
+                    self._strip_version_suffix(requested_model)
+                    if isinstance(requested_model, str)
+                    else _model_without_version_suffix(requested_model)
+                ),
             }
 
         # Validate request

@@ -11,7 +11,7 @@ describe("concise app budget usage", () => {
     render(<AppBudgetLimits budget={{ tpm_limit: 50000, rpm_limit: 0 }} />);
     expect(screen.getByText("50,000 TPM")).toBeInTheDocument();
     expect(screen.getByText("0 RPM")).toBeInTheDocument();
-    expect(screen.getByText("No spend limit")).toBeInTheDocument();
+    expect(screen.getByText("No max budget")).toBeInTheDocument();
     expect(screen.queryByText("Unlimited")).not.toBeInTheDocument();
   });
 

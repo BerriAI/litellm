@@ -61,23 +61,17 @@ async def test_azure_transcribe_model_mapping():
     class MockTranscriptionResponse(PydanticBaseModel):
         text: str
 
-    mock_transcription_response = MockTranscriptionResponse(
-        text="This is a test transcription"
-    )
+    mock_transcription_response = MockTranscriptionResponse(text="This is a test transcription")
 
     mock_raw_response = MagicMock()
     mock_raw_response.headers = {"content-type": "application/json"}
     mock_raw_response.parse = MagicMock(return_value=mock_transcription_response)
 
     mock_azure_client = MagicMock(spec=AsyncAzureOpenAI)
-    mock_azure_client.audio.transcriptions.with_raw_response.create = AsyncMock(
-        return_value=mock_raw_response
-    )
+    mock_azure_client.audio.transcriptions.with_raw_response.create = AsyncMock(return_value=mock_raw_response)
     mock_azure_client.api_key = "test-api-key"
     mock_azure_client._base_url = MagicMock()
-    mock_azure_client._base_url._uri_reference = (
-        "https://my-endpoint-europe-berri-992.openai.azure.com/"
-    )
+    mock_azure_client._base_url._uri_reference = "https://my-endpoint-europe-berri-992.openai.azure.com/"
 
     with patch(
         "litellm.llms.azure.audio_transcriptions.AzureAudioTranscription.get_azure_openai_client",
@@ -95,13 +89,9 @@ async def test_azure_transcribe_model_mapping():
 
         mock_azure_client.audio.transcriptions.with_raw_response.create.assert_called_once()
 
-        call_kwargs = (
-            mock_azure_client.audio.transcriptions.with_raw_response.create.call_args.kwargs
-        )
+        call_kwargs = mock_azure_client.audio.transcriptions.with_raw_response.create.call_args.kwargs
 
-        assert (
-            call_kwargs["model"] == "whisper-1"
-        ), f"Expected model 'whisper-1', got {call_kwargs['model']}"
+        assert call_kwargs["model"] == "whisper-1", f"Expected model 'whisper-1', got {call_kwargs['model']}"
         assert "file" in call_kwargs
         assert call_kwargs["response_format"] == "json"
 
@@ -282,3 +272,45 @@ async def test_azure_router_transcription_api_version_precedence(
 
     assert route.calls.last.request.url.params.get("api-version") == expected_api_version
     assert response.text == "hello"
+
+
+@pytest.mark.parametrize("use_async", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    ("response_format", "body", "content_type"),
+    [
+        ("text", b"Four score\n", "text/plain"),
+        ("srt", b"1\n00:00:00,000 --> 00:00:02,000\nFour score\n", "text/plain"),
+        ("json", b'{"text":"Four score"}', "application/json"),
+        ("verbose_json", b'{"text":"Four score","duration":17.5}', "application/json"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_azure_transcription_reports_the_clip_duration_when_the_provider_sends_no_usage(
+    use_async: bool, response_format: str, body: bytes, content_type: str
+) -> None:
+    transport: Final = httpx.MockTransport(
+        lambda request: httpx.Response(200, content=body, headers={"content-type": content_type})
+    )
+    client_kwargs: Final = {
+        "api_key": "test-key",
+        "api_version": "2024-06-01",
+        "azure_endpoint": "https://example.cognitiveservices.azure.com",
+    }
+    call_kwargs: Final = {
+        "model": "azure/whisper-1",
+        "file": _audio_file(),
+        "api_base": "https://example.openai.azure.com",
+        "api_key": "test-key",
+        "api_version": "2024-06-01",
+        "response_format": response_format,
+    }
+    if use_async:
+        async with AsyncAzureOpenAI(**client_kwargs, http_client=httpx.AsyncClient(transport=transport)) as client:
+            response = await litellm.atranscription(**call_kwargs, client=client)
+    else:
+        with AzureOpenAI(**client_kwargs, http_client=httpx.Client(transport=transport)) as client:
+            response = litellm.transcription(**call_kwargs, client=client)
+
+    expected_seconds: Final = 17.5 if response_format == "verbose_json" else calculate_request_duration(_audio_file())
+    assert response.usage.type == "duration"
+    assert response.usage.seconds == pytest.approx(expected_seconds)

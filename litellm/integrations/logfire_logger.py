@@ -3,7 +3,7 @@
 
 import os
 import traceback
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from enum import Enum
 from typing import Final, NamedTuple
 
@@ -39,7 +39,7 @@ class LogfireLogger:
             print_verbose(f"Got exception on init logfire client {e}")
             raise e
 
-    def _get_span_config(self, payload) -> SpanConfig:
+    def _get_span_config(self, payload: Mapping[str, object]) -> SpanConfig:
         if payload["call_type"] == "completion" or payload["call_type"] == "acompletion":
             return SpanConfig(
                 message_template="Chat Completion with {request_data[model]!r}",
@@ -63,11 +63,11 @@ class LogfireLogger:
 
     async def _async_log_event(
         self,
-        kwargs,
-        response_obj,
-        start_time,
-        end_time,
-        print_verbose,
+        kwargs: object,
+        response_obj: object,
+        start_time: object,
+        end_time: object,
+        print_verbose: Callable[[str], object],
         level: LogfireLevel,
     ):
         self.log_event(
@@ -84,7 +84,7 @@ class LogfireLogger:
         kwargs,
         start_time,
         end_time,
-        print_verbose,
+        print_verbose: Callable[[str], object],
         level: LogfireLevel,
         response_obj,
     ):

@@ -132,7 +132,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
     and the response contains edited images in the message's images array.
     """
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         return ["size", "quality", "n"]
 
     def map_openai_params(
@@ -140,7 +140,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         image_edit_optional_params: ImageEditOptionalRequestParams,
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
         mapped_params: Final[dict[str, object]] = {}
         image_config: Final[dict[str, str]] = {}
@@ -164,12 +164,12 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         api_key: str | None = None,
-        litellm_params: dict | None = None,
+        litellm_params: dict[str, object] | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         api_key = api_key or litellm.api_key or get_secret_str("OPENROUTER_API_KEY")
         if not api_key:
             raise ValueError("OPENROUTER_API_KEY is not set")
@@ -188,7 +188,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         base_url: Final = api_base or get_secret_str("OPENROUTER_API_BASE") or "https://openrouter.ai/api/v1"
         return ensure_api_route(base_url, "chat/completions")
@@ -197,11 +197,11 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         prompt: str | None,
-        image: FileTypes | None,
-        image_edit_optional_request_params: dict,
+        image: FileTypes | Sequence[FileTypes | None] | None,
+        image_edit_optional_request_params: Mapping[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> tuple[dict, RequestFiles]:
+        headers: dict[str, object],
+    ) -> tuple[dict[str, object], RequestFiles]:
         content_parts: Final[list[dict[str, object]]] = []
 
         # Add source image(s) as base64 data URLs
@@ -305,7 +305,9 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         self._set_usage_and_cost(model_response, payload, model)
         return model_response
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         return OpenRouterException(
             message=error_message,
             status_code=status_code,
@@ -399,7 +401,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
 
         model_response.hidden_params["model"] = payload.get("model", model)
 
-    def _read_image_bytes(self, image: FileTypes) -> bytes:
+    def _read_image_bytes(self, image: object) -> bytes:
         """Read raw bytes from various image input types."""
         if isinstance(image, bytes):
             return image

@@ -63,6 +63,7 @@ from integration.providers._tool_search_support import (
     question,
     replay_messages,
     request_messages,
+    request_tool_names,
     response_id,
     scripted_peer,
     search_result,
@@ -135,6 +136,7 @@ def test_tool_search_result_round_trips_on_every_anthropic_wire_provider(
 ) -> None:
     assistant, first, second, received, model = _round_trip(gateway, provider, stream)
     assert [target_path(request) for request in received] == [target(provider, stream)] * 2, received
+    assert [SEARCH_TOOL in request_tool_names(request) for request in received] == [True, True], received
     assert kept_results(assistant) == [SEARCH_RESULT], assistant
     assert "code_interpreter_results" not in provider_fields(assistant), assistant
     assert server_tool_call_ids(assistant) == [SEARCH_ID], assistant
