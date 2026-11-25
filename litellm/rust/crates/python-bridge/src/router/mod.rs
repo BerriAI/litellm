@@ -1607,6 +1607,16 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
                 dict.set_item("model", model)?;
                 cause_items(&dict, cause)?;
             }
+            RouterEvent::ContextWindowRaised {
+                level,
+                deployment_id,
+                stream_origin,
+            } => {
+                dict.set_item("kind", "context_window_raised")?;
+                dict.set_item("level", level)?;
+                dict.set_item("deployment_id", deployment_id)?;
+                dict.set_item("stream_origin", stream_origin)?;
+            }
             RouterEvent::RetryCountRaised {
                 level,
                 model,
@@ -1759,8 +1769,12 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
             max_retries,
             model_group_size,
             shape,
+            refused_ids,
+            provider_refused_window,
         } => {
             dict.set_item("shape", AttemptShape::from(shape))?;
+            dict.set_item("refused_ids", PyList::new(py, refused_ids)?)?;
+            dict.set_item("provider_refused_window", provider_refused_window)?;
             dict.set_item("routed", routed)?;
             dict.set_item("scope", scope)?;
             dict.set_item("max_retries", max_retries)?;
