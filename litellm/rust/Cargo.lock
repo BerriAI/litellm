@@ -3912,6 +3912,8 @@ dependencies = [
  "litellm-python-compat",
  "litellm-redis-client",
  "litellm-redis-store",
+ "litellm-redis-testing",
+ "litellm-secret-value",
  "rstest",
  "serde",
  "serde_json",

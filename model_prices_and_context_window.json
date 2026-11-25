@@ -126880,7 +126880,6 @@
         "litellm_provider": "huawei_maas",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
-        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
         "source": "https://support.huaweicloud.com/intl/en-us/price-maas/price-maas-0002.html",
@@ -126896,7 +126895,6 @@
         "litellm_provider": "huawei_maas",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
-        "max_tokens": 128000,
         "mode": "chat",
         "off_peak_pricing": {
             "cache_read_input_token_cost": 1.82e-07,
@@ -126916,7 +126914,6 @@
         "litellm_provider": "huawei_maas",
         "max_input_tokens": 1000000,
         "max_output_tokens": 384000,
-        "max_tokens": 384000,
         "mode": "chat",
         "off_peak_pricing": {
             "cache_read_input_token_cost": 3e-09,
@@ -126940,7 +126937,6 @@
         "litellm_provider": "huawei_maas",
         "max_input_tokens": 1000000,
         "max_output_tokens": 384000,
-        "max_tokens": 384000,
         "mode": "chat",
         "off_peak_pricing": {
             "cache_read_input_token_cost": 1.5e-08,
