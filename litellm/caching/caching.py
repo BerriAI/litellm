@@ -544,7 +544,7 @@ class Cache:
     # Params whose values carry prompt content. Excluded from semantic-cache
     # scope keys so differently worded prompts share a bucket and match via
     # vector similarity rather than being split into per-wording buckets.
-    _SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS: frozenset = frozenset({"messages", "prompt", "input"})
+    _SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS: frozenset[str] = frozenset({"messages", "prompt", "input"})
 
     # Server-set identity (from proxy auth) used to isolate semantic-cache
     # buckets per tenant. Required once the prompt is out of the scope key, so a
@@ -610,7 +610,9 @@ class Cache:
 
     def _keyed_param_values(self, kwargs: dict[str, object], is_semantic_cache: bool) -> Iterator[tuple[str, object]]:
         combined_kwargs: Final = ModelParamHelper.get_all_llm_api_params()
-        scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
+        scope_excluded_params: Final[frozenset[str]] = (
+            self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
+        )
         for param in kwargs:
             if param in scope_excluded_params:
                 continue

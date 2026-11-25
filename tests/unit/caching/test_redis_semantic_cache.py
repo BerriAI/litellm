@@ -2,6 +2,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from importlib import import_module
 import logging
+from pathlib import Path
 import sys
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -291,18 +292,49 @@ def test_redis_semantic_cache_reraises_unexpected_index_error():
         )
 
 
-def test_redis_semantic_cache_names_the_redisvl_requirement_when_redisvl_is_too_old(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+def test_redis_semantic_cache_builds_from_the_old_redisvl_paths_when_redisvl_predates_them(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
+    legacy_semantic_cache: Final = MagicMock()
+    legacy_vectorizer: Final = MagicMock()
     monkeypatch.setitem(sys.modules, "redisvl.extensions.cache.llm", None)
+    monkeypatch.setitem(sys.modules, "redisvl.extensions.llmcache", MagicMock(SemanticCache=legacy_semantic_cache))
+    monkeypatch.setitem(sys.modules, "redisvl.utils.vectorize", MagicMock(CustomTextVectorizer=legacy_vectorizer))
     redis_semantic_cache: Final = RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=0.8)
 
-    with caplog.at_level(logging.ERROR, logger="LiteLLM"), pytest.raises(ImportError):
+    assert redis_semantic_cache.llmcache is legacy_semantic_cache.return_value
+    assert legacy_semantic_cache.call_args.kwargs["vectorizer"] is legacy_vectorizer.return_value
+
+
+@pytest.mark.parametrize(
+    ("installed_redisvl", "warns"),
+    [("0.4.1", True), ("0.25.1", True), ("0.26.0", False), ("0.33.0", False), ("1.0.0", True)],
+)
+def test_redis_semantic_cache_warns_when_the_installed_redisvl_is_outside_the_supported_range(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    installed_redisvl: str,
+    warns: bool,
+) -> None:
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    dist_info: Final = tmp_path / f"redisvl-{installed_redisvl}.dist-info"
+    dist_info.mkdir()
+    _ = (dist_info / "METADATA").write_text(f"Metadata-Version: 2.1\nName: redisvl\nVersion: {installed_redisvl}\n")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    redis_semantic_cache: Final = RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=0.8)
+
+    with _fake_redisvl_modules(MagicMock(), MagicMock()), caplog.at_level(logging.WARNING, logger="LiteLLM"):
         _ = redis_semantic_cache.llmcache
 
-    assert any("redisvl>=0.26.0,<1.0" in record.getMessage() for record in caplog.records)
+    warned: Final = any(
+        f"found {installed_redisvl}, install one with `pip install 'redisvl>=0.26.0,<1.0'`" in record.getMessage()
+        for record in caplog.records
+    )
+    assert warned is warns
 
 
 def test_redis_semantic_cache_matches_bytes_cache_key():

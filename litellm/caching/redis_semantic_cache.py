@@ -14,8 +14,10 @@ import asyncio
 import json
 import os
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Final, cast
+from importlib.metadata import version
+from typing import TYPE_CHECKING, Final, NamedTuple, cast
 
+from packaging.specifiers import SpecifierSet
 from pydantic import ConfigDict, TypeAdapter
 
 import litellm
@@ -38,6 +40,23 @@ from .base_cache import BaseCache
 
 if TYPE_CHECKING:
     from litellm.router import Router
+
+SUPPORTED_REDISVL_VERSIONS: Final = ">=0.26.0,<1.0"
+
+
+class _RedisvlCacheClasses(NamedTuple):
+    semantic_cache: Callable[..., object]
+    vectorizer: Callable[..., object]
+
+
+def _redisvl_cache_classes() -> _RedisvlCacheClasses:
+    try:
+        from redisvl.extensions.cache.llm import SemanticCache
+        from redisvl.utils.vectorize import CustomVectorizer
+    except ImportError:
+        from redisvl.extensions.llmcache import SemanticCache
+        from redisvl.utils.vectorize import CustomTextVectorizer as CustomVectorizer
+    return _RedisvlCacheClasses(semantic_cache=SemanticCache, vectorizer=CustomVectorizer)
 
 
 _CACHE_RESPONSE_ADAPTER: Final[TypeAdapter[str | bytes | None]] = TypeAdapter(
@@ -157,21 +176,20 @@ class RedisSemanticCache(BaseCache):
         # CustomVectorizer probes its embedding dimension at construction by
         # embedding "dimension test", so the first cache request issues one extra
         # billable embedding on top of the request's own.
-        try:
-            from redisvl.extensions.cache.llm import SemanticCache
-            from redisvl.utils.vectorize import CustomVectorizer
-        except ImportError as e:
-            verbose_logger.error(
-                "Redis semantic cache needs redisvl>=0.26.0,<1.0, install it with "
-                "`pip install 'redisvl>=0.26.0,<1.0'`: %s",
-                e,
+        redisvl_classes: Final = _redisvl_cache_classes()
+        redisvl_version: Final = version("redisvl")
+        if redisvl_version not in SpecifierSet(SUPPORTED_REDISVL_VERSIONS):
+            verbose_logger.warning(
+                "Redis semantic cache supports redisvl%s but found %s, install one with `pip install 'redisvl%s'`",
+                SUPPORTED_REDISVL_VERSIONS,
+                redisvl_version,
+                SUPPORTED_REDISVL_VERSIONS,
             )
-            raise
 
         try:
-            cache_vectorizer: Final = CustomVectorizer(self._get_embedding)
+            cache_vectorizer: Final = redisvl_classes.vectorizer(self._get_embedding)
             return self._init_semantic_cache(
-                semantic_cache_cls=SemanticCache,
+                semantic_cache_cls=redisvl_classes.semantic_cache,
                 index_name=self._index_name,
                 redis_url=self._redis_url,
                 cache_vectorizer=cache_vectorizer,
