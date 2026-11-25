@@ -20,7 +20,7 @@ from fastapi import HTTPException
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
-from litellm.constants import LITELLM_PROXY_ADMIN_NAME, LITELLM_UI_SESSION_DURATION
+from litellm.constants import LITELLM_PROXY_ADMIN_NAME, LITELLM_UI_SESSION_DURATION, LOGIN_THROTTLE_UNKNOWN_SOURCE
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
@@ -60,6 +60,7 @@ INVALID_UI_CREDENTIALS_MESSAGE: Final = (
     "Invalid credentials used to access UI. Check 'UI_USERNAME' and 'UI_PASSWORD', or the password set for your user"
 )
 INVALID_USER_PASSWORD_MESSAGE: Final = "Invalid credentials used to access UI. Check the password set for your user"
+MAX_AUDIT_LOGIN_USERNAME_LENGTH: Final = 255
 
 if TYPE_CHECKING:
     from prisma import types as prisma_types
@@ -233,9 +234,25 @@ class LoginResult:
 def _schedule_login_audit(
     route: str,
     user_id: str | None = None,
-    reason: str | None = None,
+    *,
+    failed_attempt: LoginAttempt | None = None,
 ) -> None:
     async def write() -> None:
+        failure_metadata: Final = (
+            {
+                "reason": "invalid_credentials",
+                "attempted_username": "".join(
+                    char for char in failed_attempt.username[:MAX_AUDIT_LOGIN_USERNAME_LENGTH] if char.isprintable()
+                ),
+                "source_ip": (
+                    None
+                    if failed_attempt.throttle.client_ip == LOGIN_THROTTLE_UNKNOWN_SOURCE
+                    else failed_attempt.throttle.client_ip
+                ),
+            }
+            if failed_attempt is not None
+            else {}
+        )
         await create_audit_log_for_update(
             LiteLLM_AuditLogs(
                 id=str(uuid.uuid4()),
@@ -243,8 +260,8 @@ def _schedule_login_audit(
                 changed_by=user_id,
                 table_name=LitellmTableNames.USER_TABLE_NAME,
                 object_id=user_id or "",
-                action="login" if reason is None else "login_failed",
-                updated_values=json.dumps({"route": route, **({"reason": reason} if reason is not None else {})}),
+                action="login" if failed_attempt is None else "login_failed",
+                updated_values=json.dumps({"route": route, **failure_metadata}),
             )
         )
 
@@ -324,7 +341,7 @@ async def authenticate_user(
         result: Final = await _sign_in(username, password, master_key, prisma_client, attempt, general_settings)
     except ProxyException as exc:
         if audit_route is not None and exc.type == ProxyErrorTypes.auth_error and exc.code == "401":
-            _schedule_login_audit(audit_route, reason="invalid_credentials")
+            _schedule_login_audit(audit_route, failed_attempt=attempt)
         raise
 
     if audit_route is not None and result.user_role == LitellmUserRoles.PROXY_ADMIN:

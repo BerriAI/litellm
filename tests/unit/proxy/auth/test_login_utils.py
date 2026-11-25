@@ -273,10 +273,11 @@ async def test_credential_rejections_export_only_safe_audit_fields_and_throttle_
     monkeypatch.setattr("litellm.audit_log_callbacks", [sink])
 
     throttle: Final = replace(_unlimited_throttle(), user_limit=1)
+    username: Final = "unverified\n\x00-admin-" + "x" * 300
     for expected_status in ("401", "401", "429"):
         with pytest.raises(ProxyException) as error:
             await authenticate_user(
-                username="unverified-admin",
+                username=username,
                 password="rejected-password",
                 master_key=MASTER_KEY,
                 prisma_client=None,
@@ -293,7 +294,12 @@ async def test_credential_rejections_export_only_safe_audit_fields_and_throttle_
         "",
         "",
         None,
-        {"route": "/v2/login", "reason": "invalid_credentials"},
+        {
+            "route": "/v2/login",
+            "reason": "invalid_credentials",
+            "attempted_username": "unverified-admin-" + "x" * 236,
+            "source_ip": throttle.client_ip,
+        },
     )
     observed = tuple(
         (
