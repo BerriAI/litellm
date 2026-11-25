@@ -42,6 +42,10 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
         credit: Final = self.active_rollover_credit()
         return effective if credit is None or effective is None else effective + credit
 
+    def budget_reset_at(self) -> datetime | None:
+        budget: Final = self.litellm_budget_table
+        return budget.budget_reset_at if isinstance(budget, LiteLLM_BudgetTableFull) else None
+
     def rollover_usage(self, now: datetime) -> Mapping[str, float | None]:
         credit: Final = self.active_rollover_credit()
         return MappingProxyType(
