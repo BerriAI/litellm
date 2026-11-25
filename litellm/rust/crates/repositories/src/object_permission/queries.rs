@@ -11,9 +11,10 @@ use crate::RawJson;
 #[derive(serde::Serialize)]
 pub struct ObjectPermission {
     pub object_permission_id: String,
-    pub mcp_servers: Vec<String>,
+    pub mcp_servers: Option<Vec<String>>,
     pub mcp_access_groups: Vec<String>,
     pub mcp_tool_permissions: Option<RawJson>,
+    pub mcp_event_permissions: Option<RawJson>,
     pub vector_stores: Vec<String>,
     pub agents: Vec<String>,
     pub agent_access_groups: Vec<String>,
@@ -63,11 +64,11 @@ mod tests {
         sqlx::query(
             r#"
             INSERT INTO "LiteLLM_ObjectPermissionTable"
-                (object_permission_id, mcp_servers, mcp_access_groups, mcp_tool_permissions, vector_stores,
-                 agents, agent_access_groups, models, blocked_tools, mcp_toolsets, search_tools,
-                 mcp_tool_search_enabled, skills)
-            VALUES ('perm-full', '{s1,s2}', '{g1}', '{"s1": ["t1"]}', '{v1}', '{a1}', '{ag1}', '{m1}', '{bt}',
-                    '{ts}', '{st}', true, '{sk}')
+                (object_permission_id, mcp_servers, mcp_access_groups, mcp_tool_permissions,
+                 mcp_event_permissions, vector_stores, agents, agent_access_groups, models, blocked_tools,
+                 mcp_toolsets, search_tools, mcp_tool_search_enabled, skills)
+            VALUES ('perm-full', '{s1,s2}', '{g1}', '{"s1": ["t1"]}', '{"s1": ["build.*"]}', '{v1}', '{a1}',
+                    '{ag1}', '{m1}', '{bt}', '{ts}', '{st}', true, '{sk}')
             "#,
         )
         .execute(&mut *tx)
@@ -84,6 +85,7 @@ mod tests {
                 "mcp_servers": ["s1", "s2"],
                 "mcp_access_groups": ["g1"],
                 "mcp_tool_permissions": {"s1": ["t1"]},
+                "mcp_event_permissions": {"s1": ["build.*"]},
                 "vector_stores": ["v1"],
                 "agents": ["a1"],
                 "agent_access_groups": ["ag1"],
@@ -125,8 +127,36 @@ mod tests {
 
         assert_eq!(
             (found.mcp_servers, found.models, found.skills),
-            (vec![], vec![], vec![])
+            (Some(vec![]), vec![], vec![])
         );
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::inherited(true, None)]
+    #[case::explicit(false, Some(vec![]))]
+    #[tokio::test]
+    #[ignore = "requires DATABASE_URL pointing to a Prisma-migrated PostgreSQL database"]
+    async fn event_only_server_scope(
+        #[future(awt)] database_pool: Result<PgPool, Box<dyn StdError>>,
+        #[case] inherited: bool,
+        #[case] expected: Option<Vec<String>>,
+    ) -> Result<(), Box<dyn StdError>> {
+        let pool = database_pool?;
+        let mut tx = pool.begin().await?;
+        #[expect(clippy::disallowed_methods, reason = "Fixture insert")]
+        sqlx::query(
+            r#"INSERT INTO "LiteLLM_ObjectPermissionTable"
+            (object_permission_id, mcp_event_permissions, mcp_event_scope_inherited)
+            VALUES ('event-scope', '{}', $1)"#,
+        )
+        .bind(inherited)
+        .execute(&mut *tx)
+        .await?;
+        let found = find_object_permission(&mut *tx, "event-scope")
+            .await?
+            .ok_or("row missing")?;
+        assert_eq!(found.mcp_servers, expected);
         Ok(())
     }
 

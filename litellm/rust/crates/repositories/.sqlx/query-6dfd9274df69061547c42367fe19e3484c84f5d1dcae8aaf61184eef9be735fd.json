@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT object_permission_id,\n       COALESCE(mcp_servers, '{}') AS \"mcp_servers!\",\n       COALESCE(mcp_access_groups, '{}') AS \"mcp_access_groups!\",\n       mcp_tool_permissions AS \"mcp_tool_permissions: RawJson\",\n       COALESCE(vector_stores, '{}') AS \"vector_stores!\",\n       COALESCE(agents, '{}') AS \"agents!\",\n       COALESCE(agent_access_groups, '{}') AS \"agent_access_groups!\",\n       COALESCE(models, '{}') AS \"models!\",\n       COALESCE(blocked_tools, '{}') AS \"blocked_tools!\",\n       COALESCE(mcp_toolsets, '{}') AS \"mcp_toolsets!\",\n       COALESCE(search_tools, '{}') AS \"search_tools!\",\n       mcp_tool_search_enabled,\n       COALESCE(skills, '{}') AS \"skills!\"\nFROM \"LiteLLM_ObjectPermissionTable\"\nWHERE object_permission_id = $1\n",
+  "query": "SELECT object_permission_id,\n       CASE WHEN mcp_event_scope_inherited AND cardinality(mcp_servers) = 0 THEN NULL\n            ELSE COALESCE(mcp_servers, '{}') END AS \"mcp_servers?\",\n       COALESCE(mcp_access_groups, '{}') AS \"mcp_access_groups!\",\n       mcp_tool_permissions AS \"mcp_tool_permissions: RawJson\",\n       mcp_event_permissions AS \"mcp_event_permissions: RawJson\",\n       COALESCE(vector_stores, '{}') AS \"vector_stores!\",\n       COALESCE(agents, '{}') AS \"agents!\",\n       COALESCE(agent_access_groups, '{}') AS \"agent_access_groups!\",\n       COALESCE(models, '{}') AS \"models!\",\n       COALESCE(blocked_tools, '{}') AS \"blocked_tools!\",\n       COALESCE(mcp_toolsets, '{}') AS \"mcp_toolsets!\",\n       COALESCE(search_tools, '{}') AS \"search_tools!\",\n       mcp_tool_search_enabled,\n       COALESCE(skills, '{}') AS \"skills!\"\nFROM \"LiteLLM_ObjectPermissionTable\"\nWHERE object_permission_id = $1\n",
   "describe": {
     "columns": [
       {
@@ -16,7 +16,7 @@
       },
       {
         "ordinal": 1,
-        "name": "mcp_servers!",
+        "name": "mcp_servers?",
         "type_info": "TextArray",
         "origin": "Expression"
       },
@@ -39,48 +39,59 @@
       },
       {
         "ordinal": 4,
+        "name": "mcp_event_permissions: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ObjectPermissionTable\"",
+            "name": "mcp_event_permissions"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
         "name": "vector_stores!",
         "type_info": "TextArray",
         "origin": "Expression"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "agents!",
         "type_info": "TextArray",
         "origin": "Expression"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "agent_access_groups!",
         "type_info": "TextArray",
         "origin": "Expression"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "models!",
         "type_info": "TextArray",
         "origin": "Expression"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "blocked_tools!",
         "type_info": "TextArray",
         "origin": "Expression"
       },
       {
-        "ordinal": 9,
+        "ordinal": 10,
         "name": "mcp_toolsets!",
         "type_info": "TextArray",
         "origin": "Expression"
       },
       {
-        "ordinal": 10,
+        "ordinal": 11,
         "name": "search_tools!",
         "type_info": "TextArray",
         "origin": "Expression"
       },
       {
-        "ordinal": 11,
+        "ordinal": 12,
         "name": "mcp_tool_search_enabled",
         "type_info": "Bool",
         "origin": {
@@ -91,7 +102,7 @@
         }
       },
       {
-        "ordinal": 12,
+        "ordinal": 13,
         "name": "skills!",
         "type_info": "TextArray",
         "origin": "Expression"
@@ -107,6 +118,7 @@
       null,
       null,
       true,
+      true,
       null,
       null,
       null,
@@ -118,5 +130,5 @@
       null
     ]
   },
-  "hash": "54a371b59c857669d4e65af698ecac0e52a4461021bed314e687b7ce08dad51d"
+  "hash": "6dfd9274df69061547c42367fe19e3484c84f5d1dcae8aaf61184eef9be735fd"
 }

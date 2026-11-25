@@ -174,6 +174,7 @@ async def _virtual_key(host: PythonAuthHost, token: UserAPIKeyAuth, context: Rus
     )
     valid_token_dict: Final = {
         **dumped,
+        **({"object_permission": token.object_permission} if token.object_permission is not None else {}),
         **({} if token.budget_throttle_pct is None else {"budget_throttle_pct": token.budget_throttle_pct}),
         **end_user_params,
         **({} if end_user is None else {"end_user_object_permission": end_user.object_permission}),

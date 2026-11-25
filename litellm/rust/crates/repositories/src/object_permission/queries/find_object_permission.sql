@@ -1,7 +1,9 @@
 SELECT object_permission_id,
-       COALESCE(mcp_servers, '{}') AS "mcp_servers!",
+       CASE WHEN mcp_event_scope_inherited AND cardinality(mcp_servers) = 0 THEN NULL
+            ELSE COALESCE(mcp_servers, '{}') END AS "mcp_servers?",
        COALESCE(mcp_access_groups, '{}') AS "mcp_access_groups!",
        mcp_tool_permissions AS "mcp_tool_permissions: RawJson",
+       mcp_event_permissions AS "mcp_event_permissions: RawJson",
        COALESCE(vector_stores, '{}') AS "vector_stores!",
        COALESCE(agents, '{}') AS "agents!",
        COALESCE(agent_access_groups, '{}') AS "agent_access_groups!",

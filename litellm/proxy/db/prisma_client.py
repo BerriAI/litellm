@@ -1305,6 +1305,7 @@ class PrismaManager:
                         stdout=None,
                         stderr=None,
                     )
+                    ProxyExtrasDBManager.add_mcp_scope_trigger()  # pyright: ignore[reportUnknownMemberType]  # no stubs
                     PrismaManager._apply_environment_variables_revision_trigger()
                     PrismaManager._apply_replica_identity_full_if_requested()
                     return True

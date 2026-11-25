@@ -38837,6 +38837,10 @@ export interface components {
              * @default []
              */
             mcp_access_groups: string[] | null;
+            /** Mcp Event Permissions */
+            mcp_event_permissions?: {
+                [key: string]: string[];
+            } | null;
             /**
              * Mcp Servers
              * @default []

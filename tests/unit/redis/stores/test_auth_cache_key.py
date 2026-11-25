@@ -111,7 +111,7 @@ TEAM_ENTRY: Final = (
     r' "updated_at": "2026-11-19T10:00:00Z", "updated_by": null, "settings_updated_at": null,'
     r' "last_active": null, "object_permission_id": "kv-permission",'
     r' "object_permission": {"object_permission_id": "kv-permission", "mcp_servers": ["server-a"],'
-    r' "mcp_access_groups": [], "mcp_tool_permissions": {"server-a": ["search"]},'
+    r' "mcp_access_groups": [], "mcp_tool_permissions": {"server-a": ["search"]}, "mcp_event_permissions": null,'
     r' "vector_stores": ["store-a"], "agents": [], "agent_access_groups": [], "models": [],'
     r' "mcp_toolsets": [], "blocked_tools": [], "search_tools": [], "mcp_tool_search_enabled": null,'
     r' "skills": [], "apps": null}, "access_group_ids": [], "rotation_count": 0, "auto_rotate": false,'
@@ -143,7 +143,8 @@ PERMISSION_ROW: Final = (
 )
 PERMISSION_ENTRY: Final = (
     r'{"object_permission_id": "kv-permission", "mcp_servers": ["server-a"], "mcp_access_groups": [],'
-    r' "mcp_tool_permissions": {"server-a": ["search"]}, "vector_stores": ["store-a"], "agents": [],'
+    r' "mcp_tool_permissions": {"server-a": ["search"]}, "mcp_event_permissions": null,'
+    r' "vector_stores": ["store-a"], "agents": [],'
     r' "agent_access_groups": [], "models": [], "mcp_toolsets": [], "blocked_tools": [],'
     r' "search_tools": [], "mcp_tool_search_enabled": null, "skills": [], "apps": null}'
 )
@@ -195,6 +196,7 @@ FULL_ENTRY: Final = (
     r' "object_permission_id": "full-key-permission",'
     r' "object_permission": {"object_permission_id": "full-key-permission", "mcp_servers": ["server"],'
     r' "mcp_access_groups": ["mcp-group"], "mcp_tool_permissions": {"server": ["tool"]},'
+    r' "mcp_event_permissions": {"server": ["build.*"]},'
     r' "vector_stores": ["store"], "agents": ["agent"], "agent_access_groups": ["agent-group"],'
     r' "models": ["p-model"], "mcp_toolsets": ["toolset"], "blocked_tools": ["blocked-tool"],'
     r' "search_tools": ["search-tool"], "mcp_tool_search_enabled": true, "skills": ["skill"],'
@@ -225,6 +227,7 @@ FULL_ENTRY: Final = (
 FULL_PERMISSION_ROW: Final = (
     r'{"object_permission_id":"full-key-permission","mcp_servers":["server"],'
     r'"mcp_access_groups":["mcp-group"],"mcp_tool_permissions":{"server": ["tool"]},'
+    r'"mcp_event_permissions":{"server": ["build.*"]},'
     r'"vector_stores":["store"],"agents":["agent"],"agent_access_groups":["agent-group"],'
     r'"models":["p-model"],"blocked_tools":["blocked-tool"],"mcp_toolsets":["toolset"],'
     r'"search_tools":["search-tool"],"mcp_tool_search_enabled":true,"skills":["skill"]}'
@@ -232,6 +235,7 @@ FULL_PERMISSION_ROW: Final = (
 FULL_PERMISSION_ENTRY: Final = (
     r'{"object_permission_id": "full-key-permission", "mcp_servers": ["server"],'
     r' "mcp_access_groups": ["mcp-group"], "mcp_tool_permissions": {"server": ["tool"]},'
+    r' "mcp_event_permissions": {"server": ["build.*"]},'
     r' "vector_stores": ["store"], "agents": ["agent"], "agent_access_groups": ["agent-group"],'
     r' "models": ["p-model"], "mcp_toolsets": ["toolset"], "blocked_tools": ["blocked-tool"],'
     r' "search_tools": ["search-tool"], "mcp_tool_search_enabled": true, "skills": ["skill"],'

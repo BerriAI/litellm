@@ -76,7 +76,20 @@ async def attach_object_permission_to_dict(
             except Exception:
                 object_permission = object_permission.dict()  # pyright: ignore[reportDeprecated]  # pydantic v1 fallback
             data_dict["object_permission"] = object_permission
-    return data_dict
+    return {**data_dict, **stored_key_scope_fields(data_dict)}
+
+
+_INHERITED_SCOPE: Final = "mcp_event_scope_inherited"
+
+
+def stored_key_scope_fields(row: Mapping[str, object]) -> Mapping[str, object]:
+    permission: Final = as_str_mapping(row.get("object_permission"))
+    if permission is not None and _INHERITED_SCOPE in permission:
+        fields: Final = dict(permission)
+        if fields.pop(_INHERITED_SCOPE) and fields.get("mcp_servers") == []:
+            fields["mcp_servers"] = None
+        return {"object_permission": fields}
+    return {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,15 +105,8 @@ async def prepare_object_permission_upsert(
     can_grant_apps: bool = False,
 ) -> ObjectPermissionUpsert:
     """
-    Read-and-merge half of an object permission upsert; performs no writes.
-
-    Merges the sent grants over the existing row (looked up by
-    ``existing_object_permission_id``, or a fresh uuid when the entity has none) and
-    returns the id plus the full record to upsert. The id is pinned inside the record
-    because the column has ``@default(uuid())``, so a create without it would mint a
-    different id than the one the caller links. ``mcp_tool_permissions`` is serialized
-    to a JSON string to avoid GraphQL parsing issues (e.g. server IDs starting with
-    "3e64" being interpreted as floats).
+    Validate the supplied grants before any dependent writes. The update includes only supplied fields
+    so it cannot restore another writer's changes to omitted grants.
 
     Keeping this separate from the write lets callers run the upsert inside the same
     transaction as the row that links ``object_permission_id``, so a rolled-back
@@ -121,22 +127,13 @@ async def prepare_object_permission_upsert(
         existing_mcp_tool_permissions=existing_fields.get("mcp_tool_permissions"),
         prisma_client=prisma_client,
     )
-    merged: Final[dict[str, object]] = {
-        key: value
-        for key, value in (
-            *existing_fields.items(),
-            *new_object_permission.items(),
-            ("object_permission_id", object_permission_id),
-        )
-        if can_grant_apps or key != "apps"
-    }
     record: Final[dict[str, object]] = {
-        **merged,
-        **(
-            {"mcp_tool_permissions": safe_dumps(merged["mcp_tool_permissions"])}
-            if "mcp_tool_permissions" in merged
-            else {}
-        ),
+        **{
+            key: safe_dumps(value) if key in ("mcp_event_permissions", "mcp_tool_permissions") else value
+            for key, value in new_object_permission.items()
+            if key != _INHERITED_SCOPE and (can_grant_apps or key != "apps")
+        },
+        "object_permission_id": object_permission_id,
     }
     return ObjectPermissionUpsert(object_permission_id=object_permission_id, record=record)
 

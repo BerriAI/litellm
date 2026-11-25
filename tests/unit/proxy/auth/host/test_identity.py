@@ -71,6 +71,18 @@ async def test_virtual_key_is_marked_and_named_by_its_hash(
     assert host.call().request.state.requires_key_model_check is True
 
 
+@pytest.mark.parametrize("servers", [None, [], ["ci"]], ids=["inherited", "empty", "restricted"])
+@pytest.mark.asyncio
+async def test_virtual_key_preserves_server_scope(
+    servers: list[str] | None,
+    project_outcome: Callable[[RustIdentity], Awaitable[UserAPIKeyAuth]],
+) -> None:
+    permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="op", mcp_servers=servers)
+    key: Final = UserAPIKeyAuth(token="hashed", object_permission=permission)
+    token: Final = await project_outcome(RustIdentity.VirtualKey(context=_context(key)))
+    assert token.object_permission == permission
+
+
 @pytest.mark.asyncio
 async def test_keyless_team_permission_never_reaches_a_key_without_a_team(
     project_outcome: Callable[[RustIdentity], Awaitable[UserAPIKeyAuth]],
