@@ -442,8 +442,9 @@ def test_a_hand_built_due_retry_index_is_adopted_in_its_own_schema_and_a_rerun_b
 
 @pytest.mark.parametrize("plan_cache_mode", ["force_generic_plan", "force_custom_plan"])
 @pytest.mark.parametrize("delivery_database", ["public", "ledger_tenant"], indirect=True)
+@pytest.mark.parametrize("due_retries", [0, 2])
 def test_a_retry_claim_reads_only_due_retries_behind_a_large_fresh_backlog(
-    delivery_database: psycopg.Connection[tuple[object, ...]], plan_cache_mode: str
+    delivery_database: psycopg.Connection[tuple[object, ...]], plan_cache_mode: str, due_retries: int
 ) -> None:
     from litellm.repositories.accounting_delivery_repository import _CLAIM_RETRY
 
@@ -461,18 +462,17 @@ def test_a_retry_claim_reads_only_due_retries_behind_a_large_fresh_backlog(
     delivery_database.execute(f"SET plan_cache_mode = {plan_cache_mode}")
     delivery_database.execute(f"PREPARE retry_claim(integer) AS {_CLAIM_RETRY}")
 
-    for due_retries in (0, 2):
-        delivery_database.execute(
-            'UPDATE "LiteLLM_SpendLogDelivery" SET attempts = 1 WHERE delivery_id = ANY(%s::text[])',
-            ([f"fresh-{n}" for n in range(1, due_retries + 1)],),
-        )
-        explained = delivery_database.execute(
-            "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) EXECUTE retry_claim(1)"
-        ).fetchone()
-        assert explained is not None
-        plan = explained[0][0]["Plan"]
-        assert plan["Actual Rows"] == min(due_retries, 1), plan
-        assert plan["Shared Hit Blocks"] + plan["Shared Read Blocks"] < table_pages[0] / 20, plan
+    delivery_database.execute(
+        'UPDATE "LiteLLM_SpendLogDelivery" SET attempts = 1 WHERE delivery_id = ANY(%s::text[])',
+        ([f"fresh-{n}" for n in range(1, due_retries + 1)],),
+    )
+    explained: Final = delivery_database.execute(
+        "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) EXECUTE retry_claim(1)"
+    ).fetchone()
+    assert explained is not None
+    plan: Final = explained[0][0]["Plan"]
+    assert plan["Actual Rows"] == min(due_retries, 1), plan
+    assert plan["Shared Hit Blocks"] + plan["Shared Read Blocks"] < table_pages[0] / 20, plan
 
 
 @pytest.mark.asyncio
