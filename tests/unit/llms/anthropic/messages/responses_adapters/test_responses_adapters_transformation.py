@@ -329,9 +329,9 @@ class TestOutputConfigStructuredOutput:
         ("schema", "expected_schema"),
         [
             pytest.param(
-                {"$ref": "#/$defs/Answer", "$defs": {"Answer": _ANSWER}, "description": "The answer"},
-                {"$ref": "#/$defs/Answer", "$defs": {"Answer": _CLOSED_ANSWER}, "description": "The answer"},
-                id="root-ref-keeps-defs-and-siblings",
+                {"$ref": "#/$defs/Answer", "$defs": {"Answer": _ANSWER}},
+                {"$ref": "#/$defs/Answer", "$defs": {"Answer": _CLOSED_ANSWER}},
+                id="root-ref-keeps-defs",
             ),
         ],
     )
@@ -470,6 +470,54 @@ class TestOutputConfigStructuredOutput:
         request: Final = _make_request(output_format={"type": "json_schema", "schema": schema, "strict": False})
 
         assert _ADAPTER.translate_request(request)["text"]["format"]["schema"] == schema
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            pytest.param({"type": "string", "format": "uri", "minLength": 1, "maxLength": 2083}, id="url-format"),
+            pytest.param({"allOf": [{"$ref": "#/$defs/Answer"}], "description": "The answer"}, id="all-of-ref"),
+            pytest.param({"$ref": "#/$defs/Answer", "description": "The answer"}, id="ref-with-description"),
+            pytest.param({"const": "done"}, id="const-without-type"),
+            pytest.param({"oneOf": [{"type": "string"}, {"type": "integer"}]}, id="one-of"),
+            pytest.param({"type": "array", "items": {"type": "string"}, "uniqueItems": True}, id="unique-items"),
+            pytest.param({"type": "array", "items": {}}, id="untyped-items"),
+            pytest.param({"type": "array"}, id="array-without-items"),
+        ],
+    )
+    def test_schema_that_openai_strict_mode_rejects_goes_up_as_is(self, field: Dict[str, object]) -> None:
+        schema: Final = {"type": "object", "properties": {"field": field}, "$defs": {"Answer": self._ANSWER}}
+        request: Final = _make_request(output_format={"type": "json_schema", "schema": schema})
+
+        assert _ADAPTER.translate_request(request)["text"]["format"] == {
+            "type": "json_schema",
+            "name": "structured_output",
+            "schema": schema,
+            "strict": False,
+        }
+
+    def test_schema_within_openai_strict_mode_goes_up_strict(self) -> None:
+        fields: Final = {
+            "when": {"type": "string", "format": "date-time", "title": "When", "examples": ["2026-01-01T00:00:00Z"]},
+            "size": {"enum": ["s", "m"], "description": "Shirt size"},
+            "code": {"type": "string", "pattern": "^[a-z]+$", "minLength": 1, "maxLength": 9},
+            "count": {"type": "integer", "minimum": 0, "maximum": 9, "multipleOf": 1, "default": 1},
+            "tags": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 3},
+            "answer": {"anyOf": [{"$ref": "#/$defs/Answer"}, {"type": "null"}]},
+        }
+        schema: Final = {"type": "object", "properties": fields, "$defs": {"Answer": self._ANSWER}}
+        request: Final = _make_request(output_format={"type": "json_schema", "schema": schema})
+
+        assert _ADAPTER.translate_request(request)["text"]["format"] == {
+            "type": "json_schema",
+            "name": "structured_output",
+            "schema": {
+                **schema,
+                "$defs": {"Answer": self._CLOSED_ANSWER},
+                "required": list(fields),
+                "additionalProperties": False,
+            },
+            "strict": True,
+        }
 
 
 # ---------------------------------------------------------------------------
