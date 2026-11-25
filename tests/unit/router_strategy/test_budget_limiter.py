@@ -189,6 +189,28 @@ async def test_a_retry_counts_the_follow_up_its_failure_already_billed_once(disa
 
 
 @pytest.mark.asyncio
+async def test_a_retry_counts_a_follow_up_whose_failure_the_budget_never_saw(disable_budget_sync: None):
+    limiter: Final = RouterBudgetLimiting(
+        dual_cache=DualCache(), provider_budget_config={"openai": {"budget_limit": 10.0, "time_period": "1d"}}
+    )
+    logging_obj: Final = _openai_attempt(limiter, stream=False, call_id="twice-failed-follow-up")
+    second_attempt: Final = (Usage(prompt_tokens=400, completion_tokens=200, total_tokens=600), 0.2)
+    now: Final = datetime.now()
+
+    for attempt in (_EARLIER_ATTEMPT, second_attempt):
+        logging_obj.record_served_rounds_for_failure((attempt,))
+        await logging_obj.async_failure_handler(Exception("the agentic follow-up failed"), "", now, now)
+        logging_obj.carry_failed_attempt_usage()
+    after_failures: Final = await _provider_spend(limiter)
+    await logging_obj.async_success_handler(_SERVED, now, now)
+
+    assert after_failures == pytest.approx(_EARLIER_ATTEMPT[1])
+    assert await _provider_spend(limiter) == pytest.approx(
+        _EARLIER_ATTEMPT[1] + second_attempt[1] + litellm.completion_cost(_SERVED, model="gpt-4o-mini")
+    )
+
+
+@pytest.mark.asyncio
 async def test_a_continuation_counts_the_cut_streams_billed_partial_once(disable_budget_sync: None):
     limiter: Final = RouterBudgetLimiting(
         dual_cache=DualCache(), provider_budget_config={"openai": {"budget_limit": 10.0, "time_period": "1d"}}
