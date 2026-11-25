@@ -1518,7 +1518,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Masks the input and output before logging to langfuse, datadog, etc.
         """
         if call_type == "completion" or call_type == "acompletion":  # /chat/completions requests
-            messages: Final[list[object] | None] = kwargs.get("messages", None)
+            messages: Final[list | None] = kwargs.get("messages", None)
             tasks: Final = []
             task_mappings: list[tuple[int, int | None]] = []  # Track (message_index, content_index) for each task
 
