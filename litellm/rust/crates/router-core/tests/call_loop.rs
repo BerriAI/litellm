@@ -56,6 +56,7 @@ struct ScriptedHost {
     params_sent: Mutex<Vec<Option<Value>>>,
     /// What every pre-call check is answered with.
     pre_call_facts: PreCallFacts,
+    callback_filter_runs: Mutex<usize>,
 }
 
 impl ScriptedHost {
@@ -305,6 +306,7 @@ impl RouterHost for ScriptedHost {
         ctx: &RoutingContext<'_>,
         candidates: Vec<Arc<Deployment>>,
     ) -> Result<CallbackFiltered, Error> {
+        *self.callback_filter_runs.lock() += 1;
         let kept = match self.pinned {
             Some(pin) if !ctx.skipped_ids.iter().any(|id| id == pin) => {
                 candidates.into_iter().filter(|d| d.id == pin).collect()
@@ -1934,6 +1936,19 @@ async fn a_context_window_error_is_not_retried_without_pre_call_checks(config: R
         matches!(refused, Err(Error::Attempt { failure, .. }) if failure.kind == FailureKind::ContextWindowExceeded)
     );
     assert_eq!((host.retries(), host.selected().len()), (0, 1));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_context_window_error_without_pre_call_checks_runs_the_callback_filters_only_for_its_pick(
+    mut config: RouterConfig,
+) {
+    config.callback_filters = true;
+    let host = Arc::new(ScriptedHost::failing("primary", vec![context_window()]));
+    let router = router(config, json!({"num_retries": 2}), host.clone());
+    let refused = router.call(Op::from("acompletion"), request()).await;
+    assert!(refused.is_err());
+    assert_eq!((host.selected().len(), *host.callback_filter_runs.lock()), (1, 1));
 }
 
 #[rstest]

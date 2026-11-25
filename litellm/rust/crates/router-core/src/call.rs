@@ -1196,8 +1196,11 @@ impl<H: RouterHost> Call<'_, H> {
             request,
             ..
         } = level;
+        if !snapshot.settings.enable_pre_call_checks {
+            return 0;
+        }
         let candidates = match self.candidates(snapshot, op, request, group, inputs).await {
-            Ok(c) if snapshot.settings.enable_pre_call_checks && !c.kind.is_single() => c,
+            Ok(c) if !c.kind.is_single() => c,
             _ => return 0,
         };
         let serving: Vec<String> =

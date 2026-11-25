@@ -322,6 +322,11 @@ class PreCallFacts:
     def _record(self, id: str) -> Mapping[str, object]:  # a deployment id
         return self._records(id)
 
+    def _window(self, deployment_id: str) -> int | None:
+        if deployment_id in self._windows:
+            return self._windows[deployment_id]
+        return _max_input_tokens(self._registry, self._model, self._record(deployment_id))
+
     def _needs_count(self) -> bool:
         return self._has_input and any(limit is not None for limit in self._windows.values())
 
@@ -427,7 +432,7 @@ class PreCallFacts:
         for id in dict.fromkeys([*self._candidates, *self._pool]):
             record = self._record(id)
             deployments[id] = {
-                "max_input_tokens": self._windows.get(id),
+                "max_input_tokens": self._window(id),
                 "lacks_params": bool(params) and id in self._candidates and _lacks_params(record, self._model, params),
                 "rejects_params": bool(params) and _rejects_params(record, self._model, params, request),
             }

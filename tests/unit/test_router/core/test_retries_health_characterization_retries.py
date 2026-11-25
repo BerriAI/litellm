@@ -203,6 +203,29 @@ async def test_a_context_window_error_retries_a_copy_of_the_model_that_declares_
 
 
 @pytest.mark.asyncio
+async def test_a_context_window_error_retries_a_larger_copy_once_the_refused_deployment_cooled_down(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    base_model: Final = {"base_model": "openai/cw-cooled-window-base"}
+    cools_on_a_bad_request: Final = {**base_model, "allowed_fails_policy": {"BadRequestErrorAllowedFails": 0}}
+    core: Final = make_core(
+        model_list=[
+            windowed("g", "small", 1_000, weight=1, model_info=cools_on_a_bad_request),
+            windowed("g", "large", 1_000_000, weight=0, model_info=base_model),
+        ],
+        num_retries=1,
+        enable_pre_call_checks=True,
+    )
+    host.answer("*", fresh(context_window), None)
+
+    response: Final = await attempt(core)
+
+    assert not isinstance(response, Exception)
+    assert host.deployments_called("acompletion") == ["small", "large"]
+    assert list(cooled_down(core, ["small", "large"])) == ["small"]
+
+
+@pytest.mark.asyncio
 async def test_a_context_window_error_is_not_retried_without_pre_call_checks(
     make_core: MakeCore, host: ScriptedHost
 ) -> None:
