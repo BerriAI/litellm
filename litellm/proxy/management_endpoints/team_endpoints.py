@@ -45,7 +45,7 @@ from litellm._uuid import uuid
 from litellm.caching.redis_batch import active_request_redis_batches
 from litellm.constants import TEAM_DELETE_TRANSACTION_TIMEOUT_SECONDS
 from litellm.integrations.prometheus import PrometheusLogger
-from litellm.litellm_core_utils.core_helpers import attribute_or_none, subscript
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_or_none
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.models.budget import active_rollover_credit
 from litellm.models.team import BudgetLimitEntry
@@ -180,6 +180,8 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
     _update_metadata_fields,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    check_allowed_passthrough_routes_caller_permission,
+    check_denied_passthrough_routes_caller_permission,
     check_disable_global_guardrails_caller_permission,
     check_passthrough_routes_caller_permission,
     check_require_trace_id_caller_permission,
@@ -208,6 +210,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS,
     TEAM_MEMBER_DEFAULT_FIELDS,
     TeamMemberDefaults,
+    merge_team_metadata,
     resolve_team_admin_editable_fields,
     stored_team_member_budget_id,
     team_admin_edit_verdict,
@@ -330,6 +333,7 @@ def _as_object(value: object) -> object:
 
 
 _TEAM_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
+_TEAM_JSON_METADATA_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
 
 
 def _team_metadata_value(metadata: object, key: str) -> object:
@@ -2646,7 +2650,7 @@ async def update_team(
     - team_id: str - The team id of the user. Required param.
     - team_alias: Optional[str] - User defined team alias
     - team_member_permissions: Optional[List[str]] - A list of routes that non-admin team members can access. example: ["/key/generate", "/key/update", "/key/delete"]
-    - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
+    - metadata: Optional[dict] - Shallow updates to team metadata. Omitted keys stay unchanged, a key set to null is deleted, and other values replace the stored value for that key. System-managed keys cannot be edited.
     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
     - tpd_limit: Optional[int] - The TPD (Tokens Per Day) limit for this team. Batch submissions are charged against it instead of tpm_limit/rpm_limit
@@ -2809,68 +2813,82 @@ async def update_team(
             llm_router=llm_router,
         )
 
-        _existing_team_metadata: Final[object] = getattr(existing_team_row, "metadata", None)
-        requested_metadata: Final = attribute_or_none(data, "metadata")
-        if "metadata" in data.model_fields_set and semantic_cache_metadata_changed(
-            requested_metadata, _existing_team_metadata
-        ):
-            validate_semantic_cache_metadata(requested_metadata, _existing_team_metadata)
-        validate_required_customer_headers_metadata(
-            _TEAM_METADATA_ADAPTER.validate_python(getattr(data, "metadata", None) or {})
+        stored_metadata: Final = as_str_mapping(getattr(existing_team_row, "metadata", None))
+        requested_metadata: Final = as_str_mapping(attribute_or_none(data, "metadata"))
+        system_managed_metadata: Final = {
+            key: value
+            for key, value in (stored_metadata or {}).items()
+            if key in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS
+        }
+        effective_metadata: Final = (
+            dict(
+                merge_team_metadata(
+                    stored_metadata or {},
+                    {
+                        key: value
+                        for key, value in requested_metadata.items()
+                        if key not in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS
+                    },
+                )
+            )
+            if requested_metadata is not None
+            else None
         )
+        data_for_metadata_guards: Final = (
+            data.model_copy(update={"metadata": effective_metadata}) if requested_metadata is not None else data
+        )
+        if "metadata" in data.model_fields_set and semantic_cache_metadata_changed(effective_metadata, stored_metadata):
+            validate_semantic_cache_metadata(effective_metadata, stored_metadata)
+        validate_required_customer_headers_metadata(requested_metadata)
         enforce_output_token_estimates_are_admin_only(
-            data=data,
-            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
+            data=data_for_metadata_guards,
+            existing_metadata=stored_metadata,
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
         enforce_batch_limits_are_admin_only(
-            data=data,
-            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
+            data=data_for_metadata_guards,
+            existing_metadata=stored_metadata,
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
         enforce_vector_store_index_grants_are_admin_only(
-            data=data,
+            data=data_for_metadata_guards,
             top_level_grants=data.allowed_vector_store_indexes,
-            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # stored metadata is a bare dict
+            existing_metadata=stored_metadata,
             user_api_key_dict=user_api_key_dict,
             entity="team",
         )
 
-        check_passthrough_routes_caller_permission(
-            data,
-            user_api_key_dict,
-            entity="team",
-            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,
+        check_allowed_passthrough_routes_caller_permission(data, user_api_key_dict, entity="team")
+        check_denied_passthrough_routes_caller_permission(
+            data_for_metadata_guards, user_api_key_dict, entity="team", existing_metadata=stored_metadata
         )
         check_disable_global_guardrails_caller_permission(
             data.disable_global_guardrails,
-            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            requested_metadata,
             user_api_key_dict,
             entity="team",
-            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
+            existing_metadata=stored_metadata,
         )
         check_require_trace_id_caller_permission(
             data.require_trace_id,
-            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+            effective_metadata,
             user_api_key_dict,
             metadata_sent="metadata" in data.model_fields_set,
-            existing_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
+            existing_metadata=stored_metadata,
         )
         await validate_guardrail_names(
             data.guardrails,
-            data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
-            _existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
+            requested_metadata,
+            stored_metadata,
             prisma_client,
             license_first=True,
         )
 
         _reject_invalid_team_budget_alert_emails(
-            metadata=_as_object(getattr(data, "metadata", None))  # pyright: ignore[reportUnknownArgumentType]  # stored Prisma metadata is a bare dict
-            if "metadata" in data.model_fields_set
-            else _existing_team_metadata,
-            stored_metadata=_existing_team_metadata if isinstance(_existing_team_metadata, dict) else None,  # pyright: ignore[reportUnknownArgumentType]  # existing_team_row.metadata is a bare dict
+            metadata=effective_metadata if "metadata" in data.model_fields_set else stored_metadata,
+            stored_metadata=stored_metadata,
             max_budget=data.max_budget if "max_budget" in data.model_fields_set else existing_team_row.max_budget,
             stored_max_budget=existing_team_row.max_budget,
         )
@@ -2988,29 +3006,18 @@ async def update_team(
         if "model_max_budget" in updated_kv and updated_kv["model_max_budget"] is None:
             updated_kv["model_max_budget"] = {}
 
-        # Drop server-owned metadata keys from caller input so they can only
-        # be written by the same code path that creates the underlying rows.
-        if isinstance(metadata_update := updated_kv.get("metadata"), dict):
-            TeamMemberBudgetHandler.strip_system_managed_metadata_keys(metadata_update)
-
         if "metadata" in updated_kv:
-            raise_on_invalid_team_logging_shape(updated_kv.get("metadata"))
-            stored_metadata: Final[Mapping[str, JsonValue] | None] = (
-                {
-                    key: value
-                    for key, value in existing_team_row.metadata.items()
-                    if key not in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS
-                }
-                if isinstance(existing_team_row.metadata, dict)
-                else None
-            )
+            raise_on_invalid_team_logging_shape(requested_metadata)
             await validate_team_metadata_if_configured(
                 operation="update",
-                metadata=updated_kv.get("metadata"),
-                existing_metadata=stored_metadata,
+                metadata=_team_metadata_for_validator(effective_metadata),
+                existing_metadata=_team_metadata_for_validator(stored_metadata),
                 team_id=data.team_id,
                 team_alias=data.team_alias if data.team_alias is not None else existing_team_row.team_alias,
                 user_api_key_dict=user_api_key_dict,
+            )
+            updated_kv["metadata"] = (
+                effective_metadata if effective_metadata is not None else system_managed_metadata or None
             )
 
         # Check budget_duration and budget_reset_at
@@ -3036,18 +3043,9 @@ async def update_team(
                 *LiteLLM_ManagementEndpoint_MetadataFields_Premium,
             )
         )
-        if isinstance(existing_team_row.metadata, dict):
-            if "metadata" not in updated_kv and (_team_member_fields_in_request or _writes_metadata_backed_field):
-                updated_kv["metadata"] = copy.deepcopy(existing_team_row.metadata)
-            elif isinstance(updated_kv.get("metadata"), dict):
-                updated_kv["metadata"] = {
-                    **updated_kv["metadata"],
-                    **{
-                        key: existing_team_row.metadata[key]
-                        for key in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS
-                        if key in existing_team_row.metadata
-                    },
-                }
+        _needs_stored_metadata: Final = bool(_team_member_fields_in_request or _writes_metadata_backed_field)
+        if stored_metadata is not None and "metadata" not in updated_kv and _needs_stored_metadata:
+            updated_kv["metadata"] = copy.deepcopy(dict(stored_metadata))
 
         _current_member_budget_id: Final = (existing_team_row.metadata or {}).get("team_member_budget_id")
         if "team_member_budget_duration" in _team_member_fields_in_request:
@@ -3269,8 +3267,12 @@ async def patch_team(
                     status_code=404,
                     detail={"error": f"Team not found, passed team_id={team_id}"},
                 )
-            existing_metadata = existing_team_row.metadata if isinstance(existing_team_row.metadata, dict) else {}
-            patch_fields["metadata"] = apply_json_merge_patch(existing_metadata, subscript(patch_fields, "metadata"))
+            metadata_patch: Final = as_str_mapping(patch_fields["metadata"])
+            if metadata_patch is not None:
+                merged: Final = _TEAM_METADATA_ADAPTER.validate_python(
+                    apply_json_merge_patch(attribute_or_none(existing_team_row, "metadata"), metadata_patch)
+                )
+                patch_fields["metadata"] = {key: merged.get(key) for key in metadata_patch}
 
         update_request: Final = UpdateTeamRequest.model_validate({"team_id": team_id, **patch_fields})
 
@@ -3325,6 +3327,18 @@ async def handle_update_object_permission(
         verbose_proxy_logger.debug("updated object_permission_id: %s", object_permission_id)
 
     return data_json
+
+
+def _team_metadata_for_validator(metadata: Mapping[str, object] | None) -> Mapping[str, JsonValue] | None:
+    if metadata is None:
+        return None
+    return _TEAM_JSON_METADATA_ADAPTER.validate_python(
+        {
+            key: value
+            for key, value in metadata.items()
+            if key not in TeamMemberBudgetHandler.SYSTEM_MANAGED_METADATA_KEYS
+        }
+    )
 
 
 def _check_team_member_admin_add(

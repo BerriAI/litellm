@@ -320,12 +320,27 @@ def _stored_metadata(existing: Mapping[str, object]) -> Mapping[str, object]:
     return _as_object(existing.get("metadata"))
 
 
+def merge_team_metadata(stored: Mapping[str, object], patch: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            **{key: value for key, value in stored.items() if key not in patch},
+            **{key: value for key, value in patch.items() if value is not None},
+        }
+    )
+
+
 def _submitted_metadata(
     data: UpdateTeamRequest | UpdateKeyRequest, submitted: Mapping[str, object], existing: Mapping[str, object]
 ) -> Mapping[str, object]:
-    """Metadata as it would be stored: the caller's dict (or the stored one) with top-level folded fields laid over."""
+    """Metadata after applying the request, including fields folded in from the top level."""
+    stored: Final = _stored_metadata(existing)
+    sent: Final = submitted.get("metadata")
     base: Final = (
-        _as_object(submitted.get("metadata")) if "metadata" in data.model_fields_set else _stored_metadata(existing)
+        merge_team_metadata(stored, _as_object(sent))
+        if isinstance(data, UpdateTeamRequest) and isinstance(sent, dict)
+        else _as_object(sent)
+        if "metadata" in data.model_fields_set
+        else stored
     )
     folded: Final = data.model_fields_set & _METADATA_FOLDED_FIELDS
     return MappingProxyType({key: submitted[key] if key in folded else base[key] for key in base.keys() | folded})
@@ -340,6 +355,7 @@ def _metadata_changes(
         key if key in _METADATA_FOLDED_FIELDS else "metadata"
         for key in (merged.keys() | stored.keys()) - _SYSTEM_MANAGED_METADATA_KEYS
         if merged.get(key) != stored.get(key)
+        or (isinstance(data, UpdateTeamRequest) and (key in merged) != (key in stored))
     )
 
 
@@ -443,23 +459,16 @@ def _is_blank(value: object) -> bool:
 
 
 def changed_team_metadata(data: UpdateTeamRequest, existing_row: LiteLLM_TeamTable) -> Mapping[str, object]:
-    """Metadata keys the request would change, mapped to the value each would be left with (None when removed).
-
-    A system-managed key left out of a metadata dict is not a change, since update_team restores it then.
-    """
+    """Metadata keys the request would change, mapped to their resulting values (None when removed)."""
     submitted: Final = _JSON_OBJECT.validate_json(data.model_dump_json(exclude_unset=True))
     existing: Final = _JSON_OBJECT.validate_json(existing_row.model_dump_json())
     merged: Final = _submitted_metadata(data, submitted, existing)
     stored: Final = _stored_metadata(existing)
-    sent: Final = submitted.get("metadata")
-    sent_metadata: Final = _as_object(sent)
-    restored: Final = (
-        _SYSTEM_MANAGED_METADATA_KEYS - sent_metadata.keys() if isinstance(sent, dict) else frozenset[str]()
-    )
+    preserved: Final = _SYSTEM_MANAGED_METADATA_KEYS if submitted.get("metadata") is None else frozenset[str]()
     return MappingProxyType(
         {
             key: merged.get(key)
-            for key in (merged.keys() | stored.keys()) - restored
+            for key in (merged.keys() | stored.keys()) - preserved
             if (key in merged) != (key in stored) or _metadata_value_changed(merged.get(key), stored.get(key))
         }
     )

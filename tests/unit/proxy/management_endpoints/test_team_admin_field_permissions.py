@@ -127,8 +127,8 @@ class TestChangedTeamFields:
         )
         assert changed_team_fields(UpdateTeamRequest(team_id="team-1", require_trace_id=True), existing) == frozenset()
 
-    def test_metadata_replacement_cannot_drop_stored_require_trace_id(self):
-        data: Final = UpdateTeamRequest(team_id="team-1", metadata={})
+    def test_null_cannot_drop_stored_require_trace_id(self):
+        data: Final = UpdateTeamRequest(team_id="team-1", metadata={"require_trace_id": None})
         existing: Final = _team(metadata={"require_trace_id": True})
 
         assert changed_team_fields(data, existing) == frozenset({"require_trace_id"})
@@ -151,10 +151,10 @@ class TestChangedTeamFields:
         existing = _team(metadata={"guardrails": ["a"], "cost_center": "a"})
         assert changed_team_fields(data, existing) == frozenset({"guardrails"})
 
-    def test_dropping_a_stored_key_from_submitted_metadata_is_a_change(self):
+    def test_omitting_a_stored_metadata_key_is_not_a_change(self):
         data = UpdateTeamRequest(team_id="team-1", metadata={"cost_center": "a"})
         existing = _team(metadata={"cost_center": "a", "tags": ["x"], "logging": [{"callback": "langfuse"}]})
-        assert changed_team_fields(data, existing) == frozenset({"tags", "logging"})
+        assert changed_team_fields(data, existing) == frozenset()
 
     def test_server_managed_metadata_key_is_ignored(self):
         data = UpdateTeamRequest(team_id="team-1", metadata={"cost_center": "a"})
@@ -384,7 +384,7 @@ class TestTeamMetadataEdits:
         [
             pytest.param({**_STORED_METADATA, "project": "x"}, id="add"),
             pytest.param({**_STORED_METADATA, "cost_center": "sales"}, id="edit"),
-            pytest.param({"region": "eu", "priority": "high", "guardrails": ["pii"]}, id="delete"),
+            pytest.param({"cost_center": None, "region": "eu", "priority": "high", "guardrails": ["pii"]}, id="delete"),
         ],
     )
     def test_ordinary_key_add_edit_and_delete_are_allowed(self, sent: dict[str, object]):
@@ -403,7 +403,7 @@ class TestTeamMetadataEdits:
     def test_changing_or_removing_a_stored_proxy_controlled_key_names_it(self, key: str):
         stored: Final = {**_STORED_METADATA, key: ["stored"]}
         changed: Final = _metadata_verdict(stored, {**stored, key: ["changed"]})
-        removed: Final = _metadata_verdict(stored, {name: value for name, value in stored.items() if name != key})
+        removed: Final = _metadata_verdict(stored, {**stored, key: None})
         assert changed == TeamAdminMetadataKeyProxyControlled(key=key)
         assert removed == TeamAdminMetadataKeyProxyControlled(key=key)
 
@@ -442,7 +442,6 @@ class TestTeamMetadataEdits:
     @pytest.mark.parametrize(
         "sent",
         [
-            pytest.param({"region": "eu", "priority": "high", "guardrails": ["pii"]}, id="removed"),
             pytest.param({**_STORED_METADATA, "cost_center": None}, id="null"),
             pytest.param({**_STORED_METADATA, "cost_center": ""}, id="empty"),
             pytest.param({**_STORED_METADATA, "cost_center": "   "}, id="blank"),
@@ -455,6 +454,12 @@ class TestTeamMetadataEdits:
     def test_declared_key_never_set_is_not_a_removal_when_absent(self):
         verdict: Final = _metadata_verdict(
             _STORED_METADATA, {**_STORED_METADATA, "project": "x"}, frozenset({"department"})
+        )
+        assert isinstance(verdict, TeamAdminEditAllowed)
+
+    def test_omitting_a_stored_declared_key_is_not_a_removal(self):
+        verdict: Final = _metadata_verdict(
+            _STORED_METADATA, {"region": "us", "priority": "high", "guardrails": ["pii"]}, frozenset({"cost_center"})
         )
         assert isinstance(verdict, TeamAdminEditAllowed)
 
@@ -477,14 +482,18 @@ class TestTeamMetadataEdits:
     @pytest.mark.parametrize(
         "stored,sent",
         [
-            pytest.param({"a": 1}, {"a": 2, "callback_settings": None}, id="add-as-null"),
-            pytest.param({"a": 1, "callback_settings": None}, {"a": 2}, id="remove-stored-null"),
+            pytest.param({"a": 1}, {"a": 2, "callback_settings": None}, id="delete-absent-key"),
+            pytest.param({"a": 1, "callback_settings": None}, {"a": 2}, id="preserve-stored-null"),
         ],
     )
-    def test_a_null_valued_proxy_controlled_key_appearing_or_disappearing_names_it(
+    def test_a_null_valued_proxy_controlled_key_that_does_not_change_is_allowed(
         self, stored: dict[str, object], sent: dict[str, object]
     ):
-        assert _metadata_verdict(stored, sent) == TeamAdminMetadataKeyProxyControlled(key="callback_settings")
+        assert isinstance(_metadata_verdict(stored, sent), TeamAdminEditAllowed)
+
+    def test_removing_a_stored_null_proxy_controlled_key_names_it(self):
+        verdict: Final = _metadata_verdict({"callback_settings": None}, {"callback_settings": None})
+        assert verdict == TeamAdminMetadataKeyProxyControlled(key="callback_settings")
 
     @pytest.mark.parametrize(
         "stored,sent",
@@ -498,13 +507,15 @@ class TestTeamMetadataEdits:
         verdict: Final = _metadata_verdict({"priority": stored, "a": 1}, {"priority": sent, "a": 2})
         assert isinstance(verdict, TeamAdminEditAllowed)
 
-    def test_null_metadata_on_a_team_with_member_defaults_names_the_system_key(self):
+    def test_null_metadata_can_clear_custom_keys_on_a_team_with_member_defaults(self):
         verdict: Final = team_admin_edit_verdict(
             UpdateTeamRequest(team_id="team-1", metadata=None),
             _team(metadata={"region": "eu", "team_member_budget_id": "budget-1"}),
             _permitted("metadata"),
         )
-        assert verdict == TeamAdminMetadataKeyProxyControlled(key="team_member_budget_id")
+        assert isinstance(verdict, TeamAdminEditAllowed)
+        assert "metadata" in verdict.request.model_fields_set
+        assert verdict.request.metadata is None
 
     def test_proxy_controlled_rule_wins_over_declared(self):
         verdict: Final = _metadata_verdict(

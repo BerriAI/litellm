@@ -11310,7 +11310,9 @@ async def test_update_team_rejects_new_alerts_sent_with_an_explicit_null_max_bud
 async def test_update_team_clears_alerts_together_with_the_max_budget(
     disable_audit_logging_for_mocked_team: None,
 ) -> None:
-    call: Final = await _update_team_for_alert_validation(STORED_ALERTS, 100.0, max_budget=None, metadata={"cost_center": "eng"})
+    call: Final = await _update_team_for_alert_validation(
+        STORED_ALERTS, 100.0, max_budget=None, metadata={"cost_center": "eng", "max_budget_alert_emails": None}
+    )
 
     written: Final = call.kwargs["data"]
     assert written["max_budget"] is None
@@ -14311,24 +14313,24 @@ _METADATA_MAPPING = [
         _ABSENT,  # PATCH: metadata column left untouched
     ),
     (
-        "add-key-POST-wipes-others-PATCH-preserves",
+        "update-one-key-preserves-others",
         {"cost_center": "1234", "foo": "bar"},
         {"metadata": {"foo": "baz"}},
-        {"foo": "baz"},  # POST replaces wholesale -> cost_center wiped
+        {"cost_center": "1234", "foo": "baz"},
         {"cost_center": "1234", "foo": "baz"},  # PATCH merges -> cost_center kept
     ),
     (
         "overwrite-plus-null-delete-plus-add",
         {"cost_center": "1234", "foo": "bar"},
         {"metadata": {"cost_center": "9999", "foo": None, "new": "x"}},
-        {"cost_center": "9999", "foo": None, "new": "x"},  # POST stores the literal null
+        {"cost_center": "9999", "new": "x"},
         {"cost_center": "9999", "new": "x"},  # PATCH deletes foo via null
     ),
     (
         "null-delete-one-key",
         {"a": 1, "b": 2},
         {"metadata": {"b": None}},
-        {"b": None},  # POST wholesale replace -> only b:null survives
+        {"a": 1},
         {"a": 1},  # PATCH deletes b, preserves a
     ),
     (
@@ -14346,10 +14348,10 @@ _METADATA_MAPPING = [
         {"settings": {"y": 2}},  # PATCH deletes nested key, keeps sibling
     ),
     (
-        "empty-object-POST-clears-PATCH-noops",
+        "empty-object-preserves-in-both",
         {"a": 1},
         {"metadata": {}},
-        {},  # POST replaces with an empty object
+        {"a": 1},
         {"a": 1},  # PATCH: an empty patch is a no-op
     ),
     (
@@ -14368,10 +14370,8 @@ _METADATA_MAPPING = [
     _METADATA_MAPPING,
     ids=[row[0] for row in _METADATA_MAPPING],
 )
-async def test_post_vs_patch_metadata_write_mapping(
-    label, existing_metadata, body, expected_post, expected_patch
-):
-    """Exhaustive map: POST replaces metadata wholesale, PATCH merges per RFC 7386."""
+async def test_post_vs_patch_metadata_write_mapping(label, existing_metadata, body, expected_post, expected_patch):
+    """POST merges top-level keys, PATCH merges recursively per RFC 7386."""
     post_meta = await _written_metadata("post", existing_metadata, body)
     patch_meta = await _written_metadata("patch", existing_metadata, body)
 
@@ -14380,18 +14380,18 @@ async def test_post_vs_patch_metadata_write_mapping(
 
 
 @pytest.mark.asyncio
-async def test_patch_preserves_required_metadata_key_that_post_would_wipe():
-    """The reason PATCH exists: editing one metadata key must not silently drop
-    the others, which POST /team/update does because it replaces wholesale."""
-    existing = {"cost_center": "FINOPS-1", "team_notes": "keep me"}
-    body = {"metadata": {"team_notes": "edited"}}
-
-    post_meta = await _written_metadata("post", existing, body)
-    patch_meta = await _written_metadata("patch", existing, body)
-
-    assert post_meta == {"team_notes": "edited"}
-    assert "cost_center" not in post_meta  # wiped by POST
-    assert patch_meta == {"cost_center": "FINOPS-1", "team_notes": "edited"}  # preserved by PATCH
+async def test_post_team_update_preserves_omitted_message_logging_setting():
+    logging = [
+        {
+            "callback_name": "s3_v2",
+            "callback_type": "success_and_failure",
+            "callback_vars": {"turn_off_message_logging": "true"},
+        }
+    ]
+    written = await _written_metadata(
+        "post", {"logging": logging, "cost_center": "1234"}, {"metadata": {"cost_center": "5678"}}
+    )
+    assert written == {"logging": logging, "cost_center": "5678"}
 
 
 _STORED_METADATA_WITH_BUDGET: Final = {
@@ -14446,9 +14446,10 @@ async def test_team_member_key_duration_only_update_preserves_stored_metadata(ki
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["post", "patch"])
-async def test_explicit_null_metadata_with_budget_field_still_clears_metadata(kind):
+@pytest.mark.parametrize("budget_update", [{}, {"team_member_budget": 7.0}])
+async def test_explicit_null_metadata_preserves_only_the_budget_link(kind, budget_update):
     """``metadata: null`` is an explicit clear, so only the server-owned budget link survives."""
-    written = await _written_metadata_with_budget(kind, {"metadata": None, "team_member_budget": 7.0})
+    written = await _written_metadata_with_budget(kind, {"metadata": None, **budget_update})
 
     assert written == {"team_member_budget_id": "budget-existing-123"}
 
@@ -14462,7 +14463,7 @@ async def test_metadata_only_update_keeps_team_member_budget_link():
     post_meta = await _written_metadata_with_budget("post", body)
     patch_meta = await _written_metadata_with_budget("patch", body)
 
-    assert post_meta == {"cost_center": "cc-9999", "team_member_budget_id": "budget-existing-123"}
+    assert post_meta == {**_STORED_METADATA_WITH_BUDGET, "cost_center": "cc-9999"}
     assert patch_meta == {**_STORED_METADATA_WITH_BUDGET, "cost_center": "cc-9999"}
 
 
@@ -14492,11 +14493,12 @@ async def test_top_level_fields_identical_post_and_patch(body, field, expected):
 
 
 @pytest.mark.asyncio
-async def test_patch_strips_system_managed_metadata_key_like_post():
+@pytest.mark.parametrize("submitted_budget_id", ["HACKED", None])
+async def test_patch_strips_system_managed_metadata_key_like_post(submitted_budget_id):
     """A caller cannot inject/overwrite server-owned keys via PATCH any more than
     via POST: the stored team_member_budget_id wins over the caller's value in both."""
     existing = {"team_member_budget_id": "budget-123", "cost_center": "1234"}
-    body = {"metadata": {"team_member_budget_id": "HACKED", "cost_center": "9999"}}
+    body = {"metadata": {"team_member_budget_id": submitted_budget_id, "cost_center": "9999"}}
 
     post_meta = await _written_metadata("post", existing, body)
     patch_meta = await _written_metadata("patch", existing, body)
@@ -14642,9 +14644,7 @@ def _recording_validator(recorded, valid=True, error_message=None):
 
 
 @pytest.mark.asyncio
-async def test_update_validator_sees_replacement_on_post_and_merged_on_patch():
-    """POST hands the validator the wholesale replacement; PATCH hands it the
-    RFC 7386 merged result including preserved keys."""
+async def test_update_validator_sees_merged_metadata_on_post_and_patch():
     existing = {"cost_center": "OLD", "keep": 1}
     body = {"metadata": {"cost_center": "NEW"}}
 
@@ -14658,7 +14658,7 @@ async def test_update_validator_sees_replacement_on_post_and_merged_on_patch():
 
     assert len(recorded_post) == 1
     assert recorded_post[0].operation == "update"
-    assert recorded_post[0].metadata == {"cost_center": "NEW"}
+    assert recorded_post[0].metadata == {"cost_center": "NEW", "keep": 1}
     assert recorded_post[0].existing_metadata == existing
 
     assert len(recorded_patch) == 1
@@ -14668,14 +14668,15 @@ async def test_update_validator_sees_replacement_on_post_and_merged_on_patch():
 
 
 @pytest.mark.asyncio
-async def test_patch_null_delete_removes_key_from_validated_metadata():
-    """Deleting a key via PATCH null must be visible to the validator as the
+@pytest.mark.parametrize("kind", ["post", "patch"])
+async def test_null_delete_removes_key_from_validated_metadata(kind):
+    """Deleting a key via null must be visible to the validator as the
     key's absence in the resulting metadata, so a required key cannot be
     silently dropped."""
     recorded = []
     with _configured_team_metadata_validator(_recording_validator(recorded)):
         await _drive_team_write(
-            "patch",
+            kind,
             existing_metadata={"cost_center": "OLD", "keep": 1},
             payload={"metadata": {"cost_center": None}},
         )
@@ -18956,7 +18957,7 @@ async def test_update_team_team_admin_cannot_clear_a_declared_metadata_key():
             stack.enter_context(_team_admin_may_edit("metadata"))
             with pytest.raises(ProxyException) as exc:
                 await update_team(
-                    data=UpdateTeamRequest(team_id="test_team_id", metadata={"region": "us"}),
+                    data=UpdateTeamRequest(team_id="test_team_id", metadata={"region": "us", "cost_center": None}),
                     http_request=_update_request_stub(),
                     user_api_key_dict=_TEAM_ADMIN_CALLER,
                 )

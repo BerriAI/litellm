@@ -1487,6 +1487,48 @@ describe("TeamInfoView", () => {
       expect(updateArg.metadata).not.toHaveProperty("default_estimated_output_tokens_per_model");
     });
 
+    it("sends null for cleared metadata, the last logging entry, and optional settings", async () => {
+      const user = userEvent.setup({ delay: null });
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(
+        createMockTeamData({
+          metadata: {
+            department: "research",
+            logging: [{ callback_name: "langfuse", callback_type: "success", callback_vars: {} }],
+            secret_manager_settings: { provider: "aws" },
+            default_estimated_output_tokens: 512,
+            default_estimated_output_tokens_per_model: { "gpt-4": 4096 },
+          },
+          models: ["gpt-4"],
+        }),
+      );
+      vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
+
+      renderWithProviders(<TeamInfoView {...defaultProps} premiumUser />);
+      await openSettingsEditor(user);
+
+      await user.click(screen.getByRole("button", { name: "Remove key-value pair" }));
+      await user.click(screen.getByRole("button", { name: "Remove" }));
+      fireEvent.change(screen.getByLabelText("Secret Manager Settings"), { target: { value: "" } });
+      fireEvent.change(screen.getByLabelText("Estimated Output Tokens"), { target: { value: "" } });
+      fireEvent.change(screen.getByLabelText("Estimated Output Tokens Per Model"), { target: { value: "" } });
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() =>
+        expect(networking.teamUpdateCall).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.objectContaining({
+            metadata: expect.objectContaining({
+              department: null,
+              logging: null,
+              secret_manager_settings: null,
+              default_estimated_output_tokens: null,
+              default_estimated_output_tokens_per_model: null,
+            }),
+          }),
+        ),
+      );
+    });
+
     it.each(["Internal User", "Admin Viewer", "org_admin"])(
       "leaves both estimate controls read-only for %s and still resubmits the stored values",
       async (userRole) => {
@@ -2088,7 +2130,7 @@ describe("TeamInfoView", () => {
       expect(screen.getByRole("button", { name: /save changes/i })).toBeDisabled();
     });
 
-    it("saves a team admin's metadata edit with the proxy's own keys carried over", async () => {
+    it("saves a team admin's metadata edit without sending proxy-controlled keys", async () => {
       const user = userEvent.setup({ delay: null });
       vi.mocked(useTeamMetadataSchema).mockReturnValue({
         data: [{ key: "cost_center", label: "Cost Center" }],
@@ -2120,7 +2162,7 @@ describe("TeamInfoView", () => {
 
       await waitFor(() => expect(networking.teamUpdateCall).toHaveBeenCalled());
       expect(vi.mocked(networking.teamUpdateCall).mock.calls[0][1]).toMatchObject({
-        metadata: { cost_center: "sales", priority: "high" },
+        metadata: { cost_center: "sales" },
       });
     });
 
@@ -2748,7 +2790,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
 
     const payload = await save(user);
 
-    expect(memberBudgetAlertEmails(payload)).toBeUndefined();
+    expect(memberBudgetAlertEmails(payload)).toBeNull();
   });
 
   it("blocks the save when a team member budget alert threshold is above 100", async () => {
@@ -2857,7 +2899,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     await user.click(screen.getByRole("button", { name: "Remove team budget alert threshold" }));
     const metadata = teamBudgetAlertMetadata(await save(user));
 
-    expect(metadata).not.toHaveProperty("max_budget_alert_emails");
+    expect(metadata.max_budget_alert_emails).toBeNull();
     expect(metadata.cost_center).toBe("eng");
   });
 
@@ -2871,7 +2913,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
 
       const metadata = teamBudgetAlertMetadata(await save(user));
 
-      expect(metadata).not.toHaveProperty("max_budget_alert_emails");
+      expect(metadata.max_budget_alert_emails).toBeNull();
       expect(metadata.cost_center).toBe("eng");
     },
   );

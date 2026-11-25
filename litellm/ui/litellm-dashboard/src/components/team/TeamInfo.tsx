@@ -1110,8 +1110,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       ...(memberAlertMetadata !== undefined || storedAlertEmails !== undefined
         ? {
             metadata: {
-              ...info.metadata,
-              [TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY]: memberAlertMetadata,
+              [TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY]: memberAlertMetadata ?? null,
             },
           }
         : {}),
@@ -1203,8 +1202,23 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           ? { [TEAM_MEMBER_MAX_BUDGET_ALERT_EMAILS_KEY]: memberBudgetAlertEmails }
           : {};
       const maxBudgetAlertEmails = budgetAlertEmailsFromRows(values.max_budget_alert_emails ?? []);
-      const maxBudgetAlertEmailsMetadata =
-        Object.keys(maxBudgetAlertEmails).length > 0 ? { [KEY_MAX_BUDGET_ALERT_EMAILS_KEY]: maxBudgetAlertEmails } : {};
+      const optionalMetadata = {
+        logging: values.logging_settings?.length ? values.logging_settings : undefined,
+        secret_manager_settings: secretManagerSettings,
+        default_estimated_output_tokens: estimatedOutputTokens ?? undefined,
+        default_estimated_output_tokens_per_model: estimatedOutputTokensPerModel,
+        [KEY_MAX_BUDGET_ALERT_EMAILS_KEY]: Object.keys(maxBudgetAlertEmails).length ? maxBudgetAlertEmails : undefined,
+      };
+      const optionalMetadataUpdate = Object.fromEntries(
+        Object.entries(optionalMetadata)
+          .filter(([key, value]) => value !== undefined || Object.hasOwn(info.metadata ?? {}, key))
+          .map(([key, value]) => [key, value ?? null]),
+      );
+      const removedCustomMetadata = Object.fromEntries(
+        Object.keys(info.metadata ?? {})
+          .filter((key) => key !== "" && !UI_MANAGED_METADATA_KEYS.has(key) && !Object.hasOwn(parsedMetadata, key))
+          .map((key) => [key, null]),
+      );
       const storedRequireTraceIdMetadata =
         info.metadata && Object.prototype.hasOwnProperty.call(info.metadata, "require_trace_id")
           ? { require_trace_id: info.metadata.require_trace_id }
@@ -1227,18 +1241,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         soft_budget: numberOrNull(values.soft_budget),
         budget_duration: values.budget_duration ?? null,
         metadata: {
+          ...removedCustomMetadata,
           ...parsedMetadata,
           ...(storedTeamPolicies !== undefined ? { policies: storedTeamPolicies } : {}),
           ...passthroughRoutesMetadata,
           guardrails: (values.guardrails || []).filter((n: string) => !globalGuardrailNames.has(n)),
           opted_out_global_guardrails: optedOutGlobalGuardrails,
-          ...(values.logging_settings?.length > 0 ? { logging: values.logging_settings } : {}),
+          ...optionalMetadataUpdate,
           disable_global_guardrails: killSwitchOnAtSave,
           ...requireTraceIdMetadata,
-          ...(estimatedOutputTokens !== null ? { default_estimated_output_tokens: estimatedOutputTokens } : {}),
-          ...(estimatedOutputTokensPerModel !== undefined
-            ? { default_estimated_output_tokens_per_model: estimatedOutputTokensPerModel }
-            : {}),
           soft_budget_alerting_emails:
             typeof values.soft_budget_alerting_emails === "string"
               ? values.soft_budget_alerting_emails
@@ -1246,8 +1257,6 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   .map((email: string) => email.trim())
                   .filter((email: string) => email.length > 0)
               : values.soft_budget_alerting_emails || [],
-          ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
-          ...maxBudgetAlertEmailsMetadata,
           ...memberBudgetAlertEmailsMetadata,
         },
         ...(values.policies !== undefined && form.getFieldState("policies").isDirty

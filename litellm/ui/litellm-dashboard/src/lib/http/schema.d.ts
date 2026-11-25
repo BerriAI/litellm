@@ -19320,7 +19320,7 @@ export interface paths {
          *     - team_id: str - The team id of the user. Required param.
          *     - team_alias: Optional[str] - User defined team alias
          *     - team_member_permissions: Optional[List[str]] - A list of routes that non-admin team members can access. example: ["/key/generate", "/key/update", "/key/delete"]
-         *     - metadata: Optional[dict] - Metadata for team, store information for team. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
+         *     - metadata: Optional[dict] - Shallow updates to team metadata. Omitted keys stay unchanged, a key set to null is deleted, and other values replace the stored value for that key. System-managed keys cannot be edited.
          *     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
          *     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
          *     - tpd_limit: Optional[int] - The TPD (Tokens Per Day) limit for this team. Batch submissions are charged against it instead of tpm_limit/rpm_limit

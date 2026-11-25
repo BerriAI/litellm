@@ -283,21 +283,15 @@ describe("teamAdminMetadataChange", () => {
     expect(teamAdminMetadataChange(storedPairs, context)).toStrictEqual({});
   });
 
-  it("sends the full metadata with the proxy settings carried over when a key is added", () => {
+  it("sends only the new key when a key is added", () => {
     expect(teamAdminMetadataChange([...storedPairs, { key: "project", value: "atlas" }], context)).toStrictEqual({
-      metadata: {
-        cost_center: "eng",
-        region: "eu",
-        project: "atlas",
-        priority: "high",
-        team_member_budget_id: "budget-1",
-      },
+      metadata: { project: "atlas" },
     });
   });
 
-  it("sends the full metadata without a deleted key", () => {
+  it("sends null for a removed editable key", () => {
     expect(teamAdminMetadataChange([{ key: "cost_center", value: "eng" }], context)).toStrictEqual({
-      metadata: { cost_center: "eng", priority: "high", team_member_budget_id: "budget-1" },
+      metadata: { region: null },
     });
   });
 

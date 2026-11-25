@@ -219,7 +219,7 @@ describe("TeamAdminSettingsForm", () => {
       expect(screen.getAllByRole("button", { name: "Remove key-value pair" })).toHaveLength(1);
     });
 
-    it("saves a new key with the proxy's own keys carried over", async () => {
+    it("saves a new key without sending the proxy's own keys", async () => {
       const user = userEvent.setup();
       const { onSave } = renderForm(new Set(["metadata"]), { metadata });
 
@@ -232,9 +232,19 @@ describe("TeamAdminSettingsForm", () => {
 
       await waitFor(() =>
         expect(onSave).toHaveBeenCalledWith({
-          metadata: { cost_center: "eng", region: "eu", project: "atlas", priority: "high" },
+          metadata: { project: "atlas" },
         }),
       );
+    });
+
+    it("sends null when an editable metadata row is removed", async () => {
+      const user = userEvent.setup();
+      const { onSave } = renderForm(new Set(["metadata"]), { metadata });
+
+      await user.click(screen.getByRole("button", { name: "Remove key-value pair" }));
+      await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => expect(onSave).toHaveBeenCalledWith({ metadata: { region: null } }));
     });
 
     it("refuses to save a key the proxy keeps for proxy admins", async () => {

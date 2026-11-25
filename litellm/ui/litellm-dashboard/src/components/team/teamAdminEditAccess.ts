@@ -204,11 +204,14 @@ export const teamAdminMetadataChange = (
   context: TeamAdminMetadataContext,
 ): { readonly metadata?: Record<string, unknown> } => {
   const edited = metadataPairsToObject((pairs ?? []).filter((pair) => !isUnsetDeclaredPair(pair, context)));
-  const proxyControlled = Object.entries(context.storedMetadata).filter(([key]) =>
-    context.proxyControlledKeys.has(key),
+  const removed = Object.keys(context.storedMetadata).filter(
+    (key) => key !== "" && !context.proxyControlledKeys.has(key) && !Object.hasOwn(edited, key),
   );
-  const metadata = { ...Object.fromEntries(proxyControlled), ...edited };
-  return canonicalJson(metadata) === canonicalJson(context.storedMetadata) ? {} : { metadata };
+  const changed = Object.entries(edited).filter(
+    ([key, value]) => canonicalJson(value) !== canonicalJson(context.storedMetadata[key]),
+  );
+  const metadata = Object.fromEntries([...changed, ...removed.map((key) => [key, null] as const)]);
+  return Object.keys(metadata).length === 0 ? {} : { metadata };
 };
 
 export interface TeamAdminMetadataPairIssue {
