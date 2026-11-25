@@ -25,6 +25,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
 CONVERSATION_ATTEMPTS: Final = 3
 SHARE_OF_DIRECT_CACHE: Final = 0.9
+SHARE_OF_FIRST_PROMPT: Final = 0.9
 RULES: Final = 160
 QUESTIONS: Final = (
     "In one short sentence, what does rule 3 ask for?",
@@ -103,6 +104,7 @@ def _backends(surface: Surface, mode: Mode) -> tuple[ParameterSet, ...]:
 @dataclass(frozen=True, slots=True)
 class Turn:
     text: str
+    input_tokens: int
     cached_tokens: int
 
 
@@ -197,7 +199,11 @@ def _chat_turn(client: OpenAI, model: str, store: bool | None, messages: list[Ch
         store=omit if store is None else store,
         extra_body=dict(NO_PROXY_CACHE),
     )
-    return Turn(text=completion.choices[0].message.content or "", cached_tokens=_chat_cached_tokens(completion.usage))
+    return Turn(
+        text=completion.choices[0].message.content or "",
+        input_tokens=completion.usage.prompt_tokens if completion.usage is not None else 0,
+        cached_tokens=_chat_cached_tokens(completion.usage),
+    )
 
 
 def _streamed_chat_turn(
@@ -218,9 +224,11 @@ def _streamed_chat_turn(
     )
     choices: Final = itertools.chain.from_iterable(chunk.choices for chunk in chunks)
     usages: Final = tuple(chunk.usage for chunk in chunks if chunk.usage is not None)
+    usage: Final = usages[-1] if usages else None
     return Turn(
         text="".join(choice.delta.content or "" for choice in choices),
-        cached_tokens=_chat_cached_tokens(usages[-1] if usages else None),
+        input_tokens=usage.prompt_tokens if usage is not None else 0,
+        cached_tokens=_chat_cached_tokens(usage),
     )
 
 
@@ -269,9 +277,12 @@ def _messages_sender(sdk: SdkClients, key: str, model: str, store: bool | None, 
 
     def send(prompt: str, answers: tuple[str, ...]) -> Turn:
         message: Final = reply(client, model, extra_body, prompt, _messages_history(answers))
+        usage: Final = message.usage
+        cached: Final = usage.cache_read_input_tokens or 0
         return Turn(
             text="".join(block.text for block in message.content if block.type == "text"),
-            cached_tokens=message.usage.cache_read_input_tokens or 0,
+            input_tokens=usage.input_tokens + (usage.cache_creation_input_tokens or 0) + cached,
+            cached_tokens=cached,
         )
 
     return send
@@ -295,6 +306,7 @@ def _direct_sender(sdk: SdkClients, key: str, backend: Backend, model: str, stor
         usage: Final = response.usage
         return Turn(
             text=response.output_text,
+            input_tokens=usage.input_tokens if usage is not None else 0,
             cached_tokens=usage.input_tokens_details.cached_tokens if usage is not None else 0,
         )
 
@@ -318,8 +330,9 @@ def _continued(turns: tuple[Turn, ...]) -> tuple[Turn, ...]:
     return turns[1:]
 
 
-def _direct_caches_every_continued_turn(turns: tuple[Turn, ...]) -> bool:
-    return all(turn.cached_tokens > 0 for turn in _continued(turns))
+def _direct_caches_the_first_prompt_on_every_continued_turn(turns: tuple[Turn, ...]) -> bool:
+    floor: Final = SHARE_OF_FIRST_PROMPT * turns[0].input_tokens
+    return all(turn.cached_tokens >= floor for turn in _continued(turns))
 
 
 def _matches_direct(direct: tuple[Turn, ...]) -> Callable[[tuple[Turn, ...]], bool]:
@@ -343,10 +356,13 @@ def _assert_bridged_conversation_caches_like_direct(
     sdk: SdkClients, key: str, backend: Backend, model: str, store: bool | None, bridged: TurnSender
 ) -> None:
     direct: Final = _converse_until(
-        _direct_sender(sdk, key, backend, model, store), _direct_caches_every_continued_turn, CONVERSATION_ATTEMPTS
+        _direct_sender(sdk, key, backend, model, store),
+        _direct_caches_the_first_prompt_on_every_continued_turn,
+        CONVERSATION_ATTEMPTS,
     )
-    assert _direct_caches_every_continued_turn(direct), (
-        f"{backend.id} cached nothing on a continued turn of the conversation sent as Responses input, "
+    assert _direct_caches_the_first_prompt_on_every_continued_turn(direct), (
+        f"{backend.id} cached less than {SHARE_OF_FIRST_PROMPT:.0%} of the first turn's "
+        f"{direct[0].input_tokens} input tokens on a continued turn of the conversation sent as Responses input, "
         f"so it is no yardstick: {direct}"
     )
 

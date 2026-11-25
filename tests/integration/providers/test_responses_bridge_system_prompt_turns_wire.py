@@ -38,6 +38,7 @@ _MESSAGES_TOOLS: Final[list[JsonValue]] = [
 ]
 
 Endpoint: TypeAlias = Literal["chat", "messages"]
+SystemShape: TypeAlias = Literal["text", "cached_blocks"]
 
 _PATHS: Final[Mapping[Endpoint, str]] = {"chat": "/v1/chat/completions", "messages": "/v1/messages"}
 
@@ -82,6 +83,7 @@ class _Conversation:
     marker: str
     store: bool | None = None
     stream: bool = False
+    system_shape: SystemShape = "text"
     truncation: str | None = None
     previous_response_id: str | None = None
 
@@ -123,10 +125,17 @@ class _Conversation:
     def _messages_fields(self, turn: int) -> dict[str, JsonValue]:
         return {
             "max_tokens": 256,
-            "system": self.system_prompt,
+            "system": self._messages_system,
             "messages": self._history(turn, _messages_text),
             "tools": _MESSAGES_TOOLS,
         }
+
+
+    @property
+    def _messages_system(self) -> JsonValue:
+        if self.system_shape == "text":
+            return self.system_prompt
+        return [{"type": "text", "text": self.system_prompt, "cache_control": {"type": "ephemeral"}}]
 
 
 def _user(text: str) -> JsonValue:
@@ -206,6 +215,23 @@ def test_system_prompt_leads_the_input_on_every_turn_of_a_bridged_conversation(
     gateway: Gateway, deployment: _Deployment, endpoint: Endpoint, store: bool | None, stream: bool
 ) -> None:
     conversation: Final = _Conversation(endpoint=endpoint, marker=uuid.uuid4().hex, store=store, stream=stream)
+    prompt: Final = conversation.system_prompt
+
+    upstream: Final = _converse(gateway, deployment, conversation)
+
+    for sent in upstream:
+        _assert_system_prompt_leads_the_input(sent, prompt)
+    _assert_each_turn_extends_the_last(upstream)
+
+
+@pytest.mark.parametrize("stream", _STREAMS)
+@pytest.mark.parametrize("deployment", _DEPLOYMENTS)
+def test_system_prompt_sent_as_cached_blocks_leads_the_input_on_every_turn_of_a_bridged_messages_conversation(
+    gateway: Gateway, deployment: _Deployment, stream: bool
+) -> None:
+    conversation: Final = _Conversation(
+        endpoint="messages", marker=uuid.uuid4().hex, stream=stream, system_shape="cached_blocks"
+    )
     prompt: Final = conversation.system_prompt
 
     upstream: Final = _converse(gateway, deployment, conversation)
