@@ -322,8 +322,8 @@ def _openai_error_object(original_exception: object) -> Mapping[str, object] | N
         return None
 
 
-def _reply_error_object(response: httpx.Response | None) -> Mapping[str, object] | None:
-    if response is None:
+def _reply_error_object(response: object) -> Mapping[str, object] | None:
+    if not isinstance(response, httpx.Response):
         return None
     try:
         body: Final = _ERROR_BODY_ADAPTER.validate_json(response.content)
@@ -338,6 +338,8 @@ def _openai_cyber_policy_body(original_exception: object) -> Mapping[str, object
 
 
 def _openai_moderation_blocked(original_exception: object, response: httpx.Response | None) -> bool:
+    if getattr(original_exception, "status_code", None) != 400:
+        return False
     error: Final = _openai_error_object(original_exception) or _reply_error_object(response)
     return error is not None and error.get("code") == "moderation_blocked"
 

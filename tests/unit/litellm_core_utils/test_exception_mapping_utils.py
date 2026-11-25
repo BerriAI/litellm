@@ -119,6 +119,33 @@ def test_moderation_blocked_in_message_text_without_the_structured_code_keeps_it
     assert caught.value.status_code == status_code
 
 
+@pytest.mark.parametrize(
+    ("status_code", "expected"), [(429, litellm.RateLimitError), (500, litellm.InternalServerError)]
+)
+def test_moderation_blocked_code_outside_a_400_keeps_its_status_mapping(
+    status_code: int, expected: type[Exception]
+) -> None:
+    body: Final = {"code": "moderation_blocked", "message": "Upstream hiccup", "type": "server_error"}
+    request: Final = httpx.Request("POST", "https://provider.example/v1/images/generations")
+    original: Final = OpenAIError(
+        status_code=status_code,
+        message=json.dumps({"error": body}),
+        request=request,
+        response=httpx.Response(status_code, request=request, json={"error": body}),
+        body=body,
+    )
+    with pytest.raises(expected) as caught:
+        exception_type(
+            model="gpt-image-1",
+            original_exception=original,
+            custom_llm_provider="openai",
+            completion_kwargs={},
+            extra_kwargs={},
+        )
+    assert not isinstance(caught.value, litellm.ContentPolicyViolationError)
+    assert caught.value.status_code == status_code
+
+
 @pytest.mark.parametrize("shape", ["sdk", "http"])
 @pytest.mark.parametrize("code", ["cyber_policy", "invalid_prompt"])
 def test_openai_cyber_policy_uses_the_structured_error_code(shape: str, code: str) -> None:
