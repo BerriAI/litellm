@@ -696,4 +696,47 @@ describe("MCPAppsPanel saved OAuth logins the gateway rejects", () => {
     expect(await screen.findByRole("button", { name: "Connect" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByLabelText("selected servers")).toHaveTextContent(/^$/));
   });
+
+  it("shows the server as signed in again when a later tool list for it succeeds", async () => {
+    vi.mocked(listMCPTools).mockResolvedValueOnce(refused).mockResolvedValue({ tools: [] });
+
+    render(<ChatSelection initial={["oauth_srv"]} />);
+    await screen.findByText("Connect", { exact: true });
+    expect(screen.getByLabelText("selected servers")).toHaveTextContent(/^$/);
+
+    fireEvent.click(screen.getByText("oauth_srv", { selector: "div" }));
+
+    await waitForElementToBeRemoved(() => screen.queryByRole("button", { name: "Connect" }));
+    expect(await screen.findByRole("button", { name: "Disconnect" })).toBeInTheDocument();
+    expect(screen.getByLabelText("selected servers")).toHaveTextContent("oauth_srv");
+  });
+
+  it("keeps a server that signs in while another server is refused in the same render", async () => {
+    oauthReturn.serverId = "s-beta";
+    vi.mocked(fetchMCPServers).mockResolvedValue([
+      { ...oauthServer, server_id: "s-alpha", server_name: "alpha_srv" },
+      { ...oauthServer, server_id: "s-beta", server_name: "beta_srv" },
+    ]);
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockImplementation(async (_token, serverId) => ({
+      ...savedLogin,
+      server_id: serverId,
+      has_credential: serverId === "s-alpha",
+    }));
+    let refuseAlpha: () => void = () => {};
+    vi.mocked(listMCPTools).mockImplementation((_token, serverId) =>
+      serverId === "s-alpha"
+        ? new Promise((resolve) => (refuseAlpha = () => resolve(refused)))
+        : Promise.resolve({ tools: [] }),
+    );
+
+    render(<ChatSelection initial={[]} />);
+    await screen.findByText("alpha_srv", { selector: "output" });
+
+    await act(async () => {
+      oauthReturn.onSuccess();
+      refuseAlpha();
+    });
+
+    expect(screen.getByLabelText("selected servers")).toHaveTextContent(/^beta_srv$/);
+  });
 });

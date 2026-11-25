@@ -195,16 +195,23 @@ const MCPAppsPanel: React.FC<Props> = ({
     [oauthConnected, oauthRejected],
   );
   const requestClock = useRef(0);
-  const signedInAt = useRef(new Map<string, number>());
-  const markSignedIn = useCallback((serverId: string) => {
-    signedInAt.current.set(serverId, ++requestClock.current);
-    setOauthConnected((prev) => new Set(prev).add(serverId));
+  const loginSettledAt = useRef(new Map<string, number>());
+  const clearRejection = useCallback((serverId: string) => {
     setOauthRejected((prev) => {
+      if (!prev.has(serverId)) return prev;
       const next = new Set(prev);
       next.delete(serverId);
       return next;
     });
   }, []);
+  const markSignedIn = useCallback(
+    (serverId: string) => {
+      loginSettledAt.current.set(serverId, ++requestClock.current);
+      setOauthConnected((prev) => new Set(prev).add(serverId));
+      clearRejection(serverId);
+    },
+    [clearRejection],
+  );
 
   const serversRef = useRef<MCPServer[]>([]);
   const commitServers = useCallback((next: MCPServer[]) => {
@@ -248,13 +255,18 @@ const MCPAppsPanel: React.FC<Props> = ({
     onSuccess: useCallback(() => markSignedIn(returningServerId), [markSignedIn, returningServerId]),
   });
 
-  const rejectIfUnauthorized = useCallback(
-    (server: MCPServer, toolsData: { status?: number } | undefined, startedAt: number) => {
-      if (toolsData?.status !== 401 || getMcpOAuthMode(server) !== "authorization_code") return;
-      if (startedAt < (signedInAt.current.get(server.server_id) ?? 0)) return;
-      setOauthRejected((prev) => new Set(prev).add(server.server_id));
+  const syncLoginWithToolList = useCallback(
+    (server: MCPServer, toolsData: { status?: number; error?: unknown } | undefined, startedAt: number) => {
+      if (getMcpOAuthMode(server) !== "authorization_code") return;
+      if (startedAt < (loginSettledAt.current.get(server.server_id) ?? 0)) return;
+      if (toolsData?.status === 401) {
+        loginSettledAt.current.set(server.server_id, startedAt);
+        setOauthRejected((prev) => new Set(prev).add(server.server_id));
+      } else if (toolsData && !toolsData.error) {
+        clearRejection(server.server_id);
+      }
     },
-    [],
+    [clearRejection],
   );
 
   const fetchToolCount = useCallback(
@@ -263,14 +275,14 @@ const MCPAppsPanel: React.FC<Props> = ({
       try {
         const toolsData = await listMCPTools(accessToken, server.server_id);
         if (!isCurrentLoad()) return;
-        rejectIfUnauthorized(server, toolsData, startedAt);
+        syncLoginWithToolList(server, toolsData, startedAt);
         const tools: MCPTool[] = Array.isArray(toolsData?.tools) ? toolsData.tools : [];
         setToolCounts((prev) => ({ ...prev, [nameOf(server)]: tools.length }));
       } catch {
         // ignore
       }
     },
-    [accessToken, rejectIfUnauthorized],
+    [accessToken, syncLoginWithToolList],
   );
 
   const checkOauthCredential = useCallback(
@@ -336,25 +348,15 @@ const MCPAppsPanel: React.FC<Props> = ({
   }, [accessToken, connectMode, commitServers, fetchToolCount, checkOauthCredential]);
 
   useEffect(() => {
-    if (signedIn.size === 0) return;
-    const namesToAdd = serversRef.current
-      .filter(
-        (s) =>
-          signedIn.has(s.server_id) &&
-          !selectedServersRef.current.includes(nameOf(s)) &&
-          connectUnavailabilityLabel(s) === null,
-      )
-      .map(nameOf);
-    if (namesToAdd.length > 0) {
-      onChangeRef.current([...selectedServersRef.current, ...namesToAdd]);
-    }
-  }, [signedIn, connectUnavailabilityLabel]);
-
-  useEffect(() => {
     const rejectedNames = serversRef.current.filter((s) => oauthRejected.has(s.server_id)).map(nameOf);
     const kept = selectedServersRef.current.filter((name) => !rejectedNames.includes(name));
-    if (kept.length < selectedServersRef.current.length) onChangeRef.current(kept);
-  }, [oauthRejected]);
+    const namesToAdd = serversRef.current
+      .filter((s) => signedIn.has(s.server_id) && !kept.includes(nameOf(s)) && connectUnavailabilityLabel(s) === null)
+      .map(nameOf);
+    if (kept.length < selectedServersRef.current.length || namesToAdd.length > 0) {
+      onChangeRef.current([...kept, ...namesToAdd]);
+    }
+  }, [signedIn, oauthRejected, connectUnavailabilityLabel]);
 
   const handleToggle = async (server: MCPServer, checked: boolean) => {
     const serverName = nameOf(server);
@@ -470,7 +472,7 @@ const MCPAppsPanel: React.FC<Props> = ({
     queryFn: async () => {
       const startedAt = ++requestClock.current;
       const toolsData = await listMCPTools(accessToken, detailServer!.server_id);
-      rejectIfUnauthorized(detailServer!, toolsData, startedAt);
+      syncLoginWithToolList(detailServer!, toolsData, startedAt);
       return toolsData;
     },
     enabled: !!detailServer,
