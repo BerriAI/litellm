@@ -3735,9 +3735,14 @@ async def test_a_rerouted_latest_alias_request_counts_against_the_rpm_of_the_lat
     admitted: Final = first["metadata"]["latest_alias_requested_deployment"]
     assert admitted["id"] == "latest-id"
     assert admitted["model"] != f"openai/{target}"
-    with pytest.raises(litellm.RateLimitError):
-        for _ in range(3):
-            await _serve_latest_alias_from_versioned_model_group({"model": "latest", "metadata": {}}, router)
+    refused: Final = await asyncio.gather(
+        *(
+            _serve_latest_alias_from_versioned_model_group({"model": "latest", "metadata": {}}, router)
+            for _ in range(3)
+        ),
+        return_exceptions=True,
+    )
+    assert any(isinstance(outcome, litellm.RateLimitError) for outcome in refused)
     direct: Final = {"model": "pinned", "metadata": {}}
     await _serve_latest_alias_from_versioned_model_group(direct, router)
     assert direct == {"model": "pinned", "metadata": {}}
