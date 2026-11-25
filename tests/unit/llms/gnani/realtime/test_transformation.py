@@ -275,8 +275,14 @@ def test_realtime_url_preserves_a_deployment_prefix_without_duplicating_the_stre
         config.get_complete_url("https://example.test/proxy", "prisma-v3.0") == "wss://example.test/proxy/stt/v3/stream"
     )
     assert (
-        config.get_complete_url("ws://example.test/stt/v3/stream", "prisma-v3.0") == "ws://example.test/stt/v3/stream"
+        config.get_complete_url("wss://example.test/stt/v3/stream", "prisma-v3.0") == "wss://example.test/stt/v3/stream"
     )
+
+
+@pytest.mark.parametrize("api_base", ["http://example.test", "ws://example.test/stt/v3/stream"])
+def test_realtime_url_refuses_a_plaintext_base_that_would_send_the_key_unencrypted(api_base: str) -> None:
+    with pytest.raises(ValueError, match="https:// or wss://"):
+        GnaniRealtimeConfig().get_complete_url(api_base, "prisma-v3.0")
 
 
 def _events(config: GnaniRealtimeConfig, payload: Mapping[str, object]) -> tuple[OpenAIRealtimeEvents, ...]:

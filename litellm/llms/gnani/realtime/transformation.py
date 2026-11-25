@@ -123,10 +123,10 @@ class GnaniRealtimeConfig(BaseRealtimeConfig):
 
     def get_complete_url(self, api_base: str | None, model: str, api_key: str | None = None) -> str:
         base: Final = urlsplit(api_base or get_secret_str("GNANI_API_BASE") or "https://api.vachana.ai")
-        if base.scheme not in ("http", "https", "ws", "wss"):
-            raise ValueError("Gnani realtime requires an HTTP or WebSocket URL")
+        if base.scheme not in ("https", "wss"):
+            raise ValueError("Gnani realtime api_base must be an https:// or wss:// URL")
         path: Final = ensure_api_route(base.path, "stt/v3/stream")
-        return urlunsplit(("wss" if base.scheme in ("https", "wss") else "ws", base.netloc, path, base.query, ""))
+        return urlunsplit(("wss", base.netloc, path, base.query, ""))
 
     def requires_session_configuration(self) -> bool:
         return True
