@@ -125,7 +125,7 @@ features:
     # `context-1m-2025-08-07` beta header. Just-above the standard
     # 200k context window so the request can only succeed when the
     # beta header makes it all the way through the proxy to the
-    # upstream. Haiku 4.5 is intentionally omitted from this row's
-    # model list (its window is 200k); Sonnet 4.6 and Opus 4.7 are
-    # the only tiers exercised. Costs roughly $4/cell/run --
+    # upstream. Haiku is intentionally omitted from this row's
+    # model list; Sonnet 5.5, Opus 5.5 and Fable 5.2 are the tiers
+    # exercised (no Fable on Vertex). Costs roughly $4/cell/run --
     # tighten the prompt-token target if pricing changes meaningfully.

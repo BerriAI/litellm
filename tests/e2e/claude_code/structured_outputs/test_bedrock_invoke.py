@@ -64,9 +64,10 @@ from claude_code.cli_driver import (
 
 
 BEDROCK_INVOKE_MODELS = [
-    "claude-haiku-4-5-bedrock-invoke",
-    "claude-sonnet-4-5-bedrock-invoke",
-    "claude-opus-4-7-bedrock-invoke",
+    "claude-haiku-5-5-bedrock-invoke",
+    "claude-sonnet-5-5-bedrock-invoke",
+    "claude-opus-5-5-bedrock-invoke",
+    "claude-fable-5-2-bedrock-invoke",
 ]
 
 # Minimal schema with one required integer field. Kept intentionally

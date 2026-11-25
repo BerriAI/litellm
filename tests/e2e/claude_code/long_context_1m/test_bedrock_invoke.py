@@ -28,8 +28,8 @@ this on third-party gateways). Anything longer is wasted spend.
 Per-cell cost at 210k input tokens: ~$0.63 Sonnet, ~$3.15 Opus.
 Daily cost across all five providers (this row only): ~$19.
 
-Haiku 4.5 is intentionally omitted: it does not support 1M context
-(its window is 200k). Reporting `not_applicable` for Haiku would
+Haiku is intentionally omitted: this row was built when Haiku 4.5
+had a 200k window, and Haiku 5.5 has not been added to it yet. Reporting `not_applicable` for Haiku would
 flip the entire cell to `not_applicable`, hiding genuine 1M
 regressions on Sonnet/Opus; instead we exclude Haiku from the model
 list entirely and let the matrix's per-cell aggregator green the
@@ -67,12 +67,12 @@ from claude_code.cli_driver import (
 )
 
 
-# Haiku 4.5 is excluded -- only Sonnet 4.6 and Opus 4.7 support the
-# 1M-context beta. See module docstring for the per-cell-aggregator
-# rationale.
+# Haiku is excluded from this row. See module docstring for the
+# per-cell-aggregator rationale.
 BEDROCK_INVOKE_MODELS: Sequence[str] = (
-    "claude-sonnet-4-5-bedrock-invoke",
-    "claude-opus-4-7-bedrock-invoke",
+    "claude-sonnet-5-5-bedrock-invoke",
+    "claude-opus-5-5-bedrock-invoke",
+    "claude-fable-5-2-bedrock-invoke",
 )
 
 # Beta header that opts an Anthropic-shape model into the 1M context
@@ -93,7 +93,7 @@ TARGET_INPUT_TOKENS = 210_000
 # Anthropic's English tokenizer averages ~4 chars/token. We cycle
 # through several benign pangrams + filler so the padding looks like a
 # real document, not a repeating monolith. Identical-line padding +
-# "ignore everything above" trips Opus 4.7's safety filter as a
+# "ignore everything above" trips Opus's safety filter as a
 # suspected prompt-injection attempt -- we hit that during smoke
 # testing and the cell flipped red for the wrong reason. Varied prose
 # with a natural document-style framing keeps the filter quiet.

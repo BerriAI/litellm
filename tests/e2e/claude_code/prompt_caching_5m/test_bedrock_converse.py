@@ -30,9 +30,10 @@ from claude_code.cli_driver import (
 
 
 BEDROCK_CONVERSE_MODELS = [
-    "claude-haiku-4-5-bedrock-converse",
-    "claude-sonnet-4-5-bedrock-converse",
-    "claude-opus-4-7-bedrock-converse",
+    "claude-haiku-5-5-bedrock-converse",
+    "claude-sonnet-5-5-bedrock-converse",
+    "claude-opus-5-5-bedrock-converse",
+    "claude-fable-5-2-bedrock-converse",
 ]
 
 
