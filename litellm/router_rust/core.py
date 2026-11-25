@@ -118,6 +118,7 @@ from litellm.router_rust.invoke.endpoints import (
     pinned_request_deployment,
     pinned_video_deployment,
     plan_for,
+    python_handler_name,
     reports_own_success,
     scoped_fallback_fields,
     selection_endpoint,
@@ -542,6 +543,14 @@ _NUMBER_SETTINGS: Final = frozenset(
 )
 # The settings `_core_update_settings` casts with `int(value)`.
 _UPDATE_INT_SETTINGS: Final = frozenset({"timeout", "num_retries", "retry_after", "allowed_fails", "cooldown_time"})
+_LONGEST_CONTEXT_CHAIN: Final = 32
+
+
+def _context_chain(error: BaseException, links_left: int = _LONGEST_CONTEXT_CHAIN) -> tuple[BaseException, ...]:
+    following: Final = error.__context__
+    if following is None or links_left == 0:
+        return (error,)
+    return (error, *_context_chain(following, links_left - 1))
 
 
 def _raised_before_provider(error: BaseException) -> bool:
@@ -4747,6 +4756,7 @@ class _Driver:
         # The primary level reached the end of `async_function_with_fallbacks_common_utils`, the
         # only place the outcome message is appended: not its early raises, nor its order path.
         self._explains_failure: bool = False
+        self._fallback_ran: bool = False
 
     def clear_errors(self) -> None:
         self._last_error = None
@@ -4963,6 +4973,7 @@ class _Driver:
             self._level_errors[at] = last_hop
         if at == self._base_level:
             self._explains_failure = False
+            self._fallback_ran = True
 
     def _logged_off_the_loop(self) -> bool:
         """Whether litellm logged the attempt's failure on a thread with no running loop. An async
@@ -5027,6 +5038,11 @@ class _Driver:
                 return
             self._explain_no_fallback_group(own, at)
         raised: Final = self._level_errors.get(at + 1, own) if event.get("last_hop") is True else own
+        if raised is not None and raised is not own and self._is_create_that_may_already_exist(raised):
+            self._level_errors[at] = raised
+            if at == self._base_level:
+                self._explains_failure = False
+                self._fallback_ran = True
         self.outcomes.failed_fallbacks(
             RoutingContext(self._core),  # pyright: ignore[reportArgumentType]  # the read uses registry() and health()
             truncate_fallback_error_detail(redact_string(str(raised))),
@@ -5334,6 +5350,19 @@ class _Driver:
             caller_key_origin=self._caller_key_origin,
         )
 
+    def _is_create_that_may_already_exist(self, error: BaseException) -> bool:
+        from litellm.router_utils.fallback_event_handlers import is_create_that_may_already_exist
+
+        return is_create_that_may_already_exist(python_handler_name(self._plan), error)
+
+    def _create_may_exist(self, error: BaseException, model_group: str) -> bool:
+        from litellm.router_utils.fallback_event_handlers import log_create_not_resent
+
+        if not self._is_create_that_may_already_exist(error):
+            return False
+        log_create_not_resent(model_group)
+        return True
+
     def _failed(
         self,
         step: Mapping[str, object],
@@ -5371,6 +5400,7 @@ class _Driver:
         return {
             **attempt_failure(error),
             "detail": detail,
+            "create_may_exist": self._create_may_exist(error, str(step.get("model"))),
             **exits,
             **({"outside_deployment": True} if request_scoped or _raised_before_provider(error) else {}),
             # `async_deployment_callback_on_failure` does not run for a sync call, and skips a batch retrieve.
@@ -5403,10 +5433,14 @@ class _Driver:
 
     def _chain_to_hop_first(self, error: BaseException, level: int) -> None:
         """A retry's failure is raised while the hop's first failure is handled (the retry loop
-        runs in its ``except`` block), so it chains to it."""
+        runs in its ``except`` block), so the end of its own chain links to it."""
         first: Final = self._hop_first.get(level)
-        if first is not None and first is not error:
-            error.__context__ = first  # rebind-ok: chained as the retry loop's raise chains it
+        if first is None:
+            return
+        chain: Final = _context_chain(error)
+        if any(link is first for link in chain) or chain[-1].__context__ is not None:
+            return
+        chain[-1].__context__ = first
 
     def _succeeded(
         self, call: "AttemptCall", response: object, host_op: str, stream: "StreamAttempt | None" = None
@@ -6032,7 +6066,7 @@ class _Driver:
             )
         if (
             self._base_level == 0
-            and self._explains_failure
+            and (self._explains_failure or (not self._fallback_ran and self._is_create_that_may_already_exist(primary)))
             and self._core._host.dynamic().expose_router_debug_in_errors  # pyright: ignore[reportPrivateUsage]  # see above
             and hasattr(primary, "message")
         ):
@@ -6109,6 +6143,8 @@ class _Driver:
             get_fallback_model_group_for_lookup_groups,
         )
 
+        if self._is_create_that_may_already_exist(primary):
+            return format_fallback_outcome_message(model, None, "")
         walked: Final = self._core._walked_fallbacks  # pyright: ignore[reportPrivateUsage]  # the driver serves its own core
         request: Final = self._request
         # The request's own lists replace the router's (`kwargs.get("fallbacks", router)`).

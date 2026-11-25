@@ -450,6 +450,10 @@ fn ends_call(error: &Error) -> bool {
         || retried_failure(error).is_some_and(|failure| failure.queue_rejected())
 }
 
+fn may_have_created(error: &Error) -> bool {
+    retried_failure(error).is_some_and(|failure| failure.create_may_exist)
+}
+
 impl<H: RouterHost> Call<'_, H> {
     pub(crate) async fn call(
         &self,
@@ -578,7 +582,9 @@ impl<H: RouterHost> Call<'_, H> {
             match self.run_fallbacks(&mut level, vec![failover]).await {
                 Ok(response) => return Ok(response),
                 Err(Some(raised)) if ends_call(&raised) => return Err(raised),
-                Err(raised) if defers_to_regular_fallbacks(raised.as_ref().unwrap_or(&error)) => {}
+                Err(raised)
+                    if !raised.as_ref().is_some_and(may_have_created)
+                        && defers_to_regular_fallbacks(raised.as_ref().unwrap_or(&error)) => {}
                 // Outside the `try` around the regular fallbacks: the level raises it as it is.
                 Err(raised) => {
                     self.host.observe(&RouterEvent::OrderChainFailed {
@@ -618,7 +624,7 @@ impl<H: RouterHost> Call<'_, H> {
                 chain: true,
                 last_hop: last_hop_error.is_some(),
             });
-            return Err(error);
+            return Err(last_hop_error.filter(may_have_created).unwrap_or(error));
         }
         // The order path's `raise`, outside the `try` that re-raises the original error: only a
         // context window or content policy error stays the one the caller sees.
@@ -823,7 +829,9 @@ impl<H: RouterHost> Call<'_, H> {
                         response.attempted_fallbacks = hop;
                         return Ok(response);
                     }
-                    Err(raised) if ends_call(&raised) => return Err(Some(raised)),
+                    Err(raised) if ends_call(&raised) || may_have_created(&raised) => {
+                        return Err(Some(raised));
+                    }
                     Err(raised) => last_hop_error = Some(raised),
                 }
             }
@@ -921,6 +929,7 @@ impl<H: RouterHost> Call<'_, H> {
         // pick raises (no Python exception stands behind it) has no fallback.
         retried_failure(error).is_none_or(|failure| {
             failure.kind == FailureKind::GuardrailIntervention
+                || failure.create_may_exist
                 || failure.queue_rejected()
                 || (!snapshot.settings.fallback_on_unsupported_params
                     && is_bad_request_without_fallback(&failure))
@@ -1083,12 +1092,15 @@ impl<H: RouterHost> Call<'_, H> {
         };
         level.chain.provider_refused_window |= refused_by_provider(&failed.error);
         self.pick_failed(level, &failed.error);
-        // A guardrail's block and a failure no retry can clear are re-raised as they are, before
-        // anything else looks at them (`async_function_with_retries`).
+        // A guardrail's block, a failure no retry can clear and a create the provider may already
+        // hold are re-raised as they are, before anything else looks at them
+        // (`async_function_with_retries`).
         if matches!(
             &*failed.error,
             Error::Attempt { failure, .. }
-                if failure.kind == FailureKind::GuardrailIntervention || failure.ends_retries()
+                if failure.kind == FailureKind::GuardrailIntervention
+                    || failure.ends_retries()
+                    || failure.create_may_exist
         ) {
             return Err(failed);
         }
@@ -1228,6 +1240,9 @@ impl<H: RouterHost> Call<'_, H> {
                 Ok(mut response) => {
                     response.max_retries = Some(num_retries);
                     return Ok(response);
+                }
+                Err(next) if next.error.attempt().is_some_and(|f| f.create_may_exist) => {
+                    return Err(next);
                 }
                 Err(next) if next.error.attempt().is_some_and(AttemptError::ends_retries) => {
                     return Err(refused_or(refusal, next));
