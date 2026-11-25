@@ -140,6 +140,7 @@ from litellm.exceptions import (
     GuardrailRaisedException,
     RejectedRequestError,
     SensitiveDataRouteException,
+    UnresolvablePreviousResponseError,
 )
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -571,6 +572,8 @@ class _StreamIteratorHook(Protocol[_T]):
 
 
 def _is_client_error_exception(exc: Exception) -> bool:
+    if isinstance(exc, UnresolvablePreviousResponseError):
+        return True
     if isinstance(exc, HTTPException):
         return exc.status_code < 500
     if isinstance(exc, ProxyException):

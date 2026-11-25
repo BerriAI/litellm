@@ -66,6 +66,10 @@ pub enum AnthropicBeta {
     AdvisorTool20260301,
     #[strum(serialize = "per-turn-control-2026-07-01")]
     PerTurnControl20260701,
+    #[strum(serialize = "server-side-fallback-2026-06-01")]
+    ServerSideFallback20260601,
+    #[strum(serialize = "server-side-fallback-2026-07-01")]
+    ServerSideFallback20260701,
     #[strum(serialize = "dangerous-tool-use-2026-09-03")]
     DangerousToolUse20260903,
     #[strum(serialize = "bash_20241022")]
@@ -129,7 +133,7 @@ pub enum AnthropicBeta {
 }
 
 impl AnthropicBeta {
-    pub const KNOWN: [Self; 40] = [
+    pub const KNOWN: [Self; 42] = [
         Self::Oauth20250420,
         Self::WebFetch20250910,
         Self::WebSearch20250305,
@@ -141,6 +145,8 @@ impl AnthropicBeta {
         Self::FastMode20260201,
         Self::AdvisorTool20260301,
         Self::PerTurnControl20260701,
+        Self::ServerSideFallback20260601,
+        Self::ServerSideFallback20260701,
         Self::DangerousToolUse20260903,
         Self::Bash20241022,
         Self::Bash20250124,
@@ -209,6 +215,7 @@ impl AnthropicBeta {
             Self::Bash20241022
             | Self::Bash20250124
             | Self::McpServers20251204
+            | Self::ServerSideFallback20260701
             | Self::StructuredOutput20240301
             | Self::TextEditor20241022
             | Self::TextEditor20250124 => BetaProvider::VARIANTS,
@@ -269,6 +276,12 @@ impl AnthropicBeta {
                 BetaProvider::BedrockConverse,
                 BetaProvider::Bedrock,
                 BetaProvider::Databricks,
+            ],
+            Self::ServerSideFallback20260601 => &[
+                BetaProvider::Anthropic,
+                BetaProvider::AzureAi,
+                BetaProvider::BedrockConverse,
+                BetaProvider::VertexAi,
             ],
             Self::StructuredOutputs20251113 => &[BetaProvider::Bedrock, BetaProvider::VertexAi],
             Self::ThinkingBindingControls20260801 => &[BetaProvider::AzureAi],
@@ -410,6 +423,8 @@ mod tests {
             AnthropicBeta::FastMode20260201,
             AnthropicBeta::AdvisorTool20260301,
             AnthropicBeta::PerTurnControl20260701,
+            AnthropicBeta::ServerSideFallback20260601,
+            AnthropicBeta::ServerSideFallback20260701,
             AnthropicBeta::DangerousToolUse20260903,
             AnthropicBeta::Bash20241022,
             AnthropicBeta::Bash20250124,
