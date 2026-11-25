@@ -126945,6 +126945,438 @@
         "supports_reasoning": true,
         "supports_vision": true
     },
+    "hiapi/claude-opus-5-5": {
+        "cache_creation_input_token_cost": 2.54403e-06,
+        "cache_creation_input_token_cost_above_1hr": 4.07045e-06,
+        "cache_read_input_token_cost": 1.0176e-07,
+        "input_cost_per_token": 2.03523e-06,
+        "litellm_provider": "hiapi",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.017613e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+        ],
+        "source": "https://hiapi.ai/en/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "hiapi/claude-opus-5-5@aws": {
+        "cache_creation_input_token_cost": 3.81605e-06,
+        "cache_creation_input_token_cost_above_1hr": 6.10568e-06,
+        "cache_read_input_token_cost": 1.5264e-07,
+        "input_cost_per_token": 3.05284e-06,
+        "litellm_provider": "hiapi",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.526419e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+        ],
+        "source": "https://hiapi.ai/en/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "hiapi/deepseek-v4-flash-vision-exp": {
+        "cache_read_input_token_cost": 8.918e-08,
+        "input_cost_per_token": 2.86e-07,
+        "litellm_provider": "hiapi",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 8.58e-07,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://hiapi.ai/en/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "hiapi/deepseek-v4-flash": {
+        "cache_read_input_token_cost": 3.5e-08,
+        "input_cost_per_token": 1.4e-07,
+        "litellm_provider": "hiapi",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 2.8e-07,
+        "reasoning_effort_levels": [
+            "high",
+            "max"
+        ],
+        "source": "https://hiapi.ai/en/pricing",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "hiapi/deepseek-v4-pro": {
+        "cache_read_input_token_cost": 5e-08,
+        "input_cost_per_token": 1.5e-06,
+        "litellm_provider": "hiapi",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 4.5e-06,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://hiapi.ai/en/pricing",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "hiapi/deepseek-v4.1-flash": {
+        "cache_read_input_token_cost": 1.4e-08,
+        "input_cost_per_token": 4.4e-07,
+        "litellm_provider": "hiapi",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 1.32e-06,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://hiapi.ai/en/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "hiapi/glm-5.3": {
+        "input_cost_per_token": 8.5479e-07,
+        "litellm_provider": "hiapi",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.99178e-06,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://hiapi.ai/en/pricing",
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true
+    },
+    "hiapi/gpt-6-astra": {
+        "cache_read_input_token_cost": 2.5e-07,
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "hiapi",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.25e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high"
+        ],
+        "source": "https://hiapi.ai/en/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "hiapi/gpt-6.1-sol": {
+        "cache_read_input_token_cost": 2.5e-08,
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "hiapi",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-06,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+        ],
+        "source": "https://hiapi.ai/en/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "hiapi/gpt-6.1-terra": {
+        "cache_read_input_token_cost": 1.25e-08,
+        "input_cost_per_token": 2.5e-07,
+        "litellm_provider": "hiapi",
+        "max_input_tokens": 922000,
+        "max_output_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.25e-06,
+        "reasoning_effort_levels": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+        ],
+        "source": "https://hiapi.ai/en/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "hiapi/grok-4.6": {
+        "cache_read_input_token_cost": 2.1e-07,
+        "input_cost_per_token": 8.4e-07,
+        "litellm_provider": "hiapi",
+        "max_input_tokens": 500000,
+        "max_output_tokens": 500000,
+        "mode": "chat",
+        "output_cost_per_token": 2.52e-06,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+        ],
+        "source": "https://hiapi.ai/en/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "hiapi/grok-4.7": {
+        "cache_read_input_token_cost": 2.1e-07,
+        "input_cost_per_token": 8.4e-07,
+        "litellm_provider": "hiapi",
+        "max_input_tokens": 500000,
+        "max_output_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 2.52e-06,
+        "reasoning_effort_levels": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+        ],
+        "source": "https://hiapi.ai/en/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "hiapi/kimi-k3.1-pro-highspeed": {
+        "cache_read_input_token_cost": 2.156e-07,
+        "input_cost_per_token": 4.3096e-06,
+        "litellm_provider": "hiapi",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 2.25426e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://hiapi.ai/en/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "hiapi/kimi-k3.1-pro": {
+        "cache_read_input_token_cost": 2.156e-07,
+        "input_cost_per_token": 2.1548e-06,
+        "litellm_provider": "hiapi",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.12714e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://hiapi.ai/en/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "hiapi/kimi-k3": {
+        "cache_read_input_token_cost": 2.32e-07,
+        "input_cost_per_token": 2.32e-06,
+        "litellm_provider": "hiapi",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 1.16e-05,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://hiapi.ai/en/pricing",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "us-gov.openai.gpt-5.6-cyber": {
         "cache_creation_input_token_cost": 2.109375e-05,
         "cache_read_input_token_cost": 1.6875e-06,

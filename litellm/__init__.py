@@ -714,6 +714,7 @@ streamlake_models: Final[Set[str]] = set()
 resetdata_models: Final[set[str]] = set()  # mutable-ok: populated when the shared model catalog loads
 wally_models: Final[Set[str]] = set()
 huawei_maas_models: Final[Set[str]] = set()
+hiapi_models: Final[Set[str]] = set()
 zerogpu_models: Final[Set[str]] = set()
 v0_models: Set[str] = set()
 vispark_models: Final[Set[str]] = set()
@@ -1023,6 +1024,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             wally_models.add(key)
         elif value.get("litellm_provider") == "huawei_maas":
             huawei_maas_models.add(key)
+        elif value.get("litellm_provider") == "hiapi":
+            hiapi_models.add(key)
         elif value.get("litellm_provider") == "zerogpu":
             zerogpu_models.add(key)
         elif value.get("litellm_provider") == "v0":
@@ -1215,6 +1218,7 @@ model_list = list(
     | resetdata_models
     | wally_models
     | huawei_maas_models
+    | hiapi_models
     | zerogpu_models
     | v0_models
     | vispark_models
@@ -1354,6 +1358,7 @@ def _build_models_by_provider() -> dict[str, Collection[str]]:
         "resetdata": resetdata_models,
         "wally": wally_models,
         "huawei_maas": huawei_maas_models,
+        "hiapi": hiapi_models,
         "zerogpu": zerogpu_models,
         "v0": v0_models,
         "vispark": vispark_models,
