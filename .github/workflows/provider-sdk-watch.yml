@@ -1,0 +1,318 @@
+name: Provider SDK watch
+
+on:
+  schedule:
+    - cron: "23 14 * * *"
+  pull_request:
+    paths:
+      - .github/workflows/provider-sdk-watch.yml
+      - litellm/scripts/sdk_watch/**
+  workflow_dispatch:
+    inputs:
+      day:
+        description: "Release day to check (YYYY-MM-DD). Empty means yesterday in UTC"
+        required: false
+        default: ""
+      sdk:
+        description: "Check one release instead of a day: openai, anthropic or google-genai"
+        required: false
+        default: ""
+      version:
+        description: "The release of that SDK to check, e.g. 0.105.0"
+        required: false
+        default: ""
+      max_implementations:
+        description: "Most changes the agent implements in this run"
+        required: false
+        default: "2"
+
+permissions: {}
+
+concurrency:
+  group: provider-sdk-watch-${{ github.event_name == 'pull_request' && github.ref || 'scheduled' }}
+  cancel-in-progress: false
+
+env:
+  LITELLM_LOCAL_MODEL_COST_MAP: "True"
+
+jobs:
+  test:
+    name: test
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: litellm/scripts/sdk_watch
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Install the agent
+        run: uv sync --frozen --group dev
+
+      - name: Run the agent's tests
+        run: uv run --no-sync pytest -q -p no:cacheprovider
+
+  watch:
+    name: watch
+    needs: test
+    if: github.event_name != 'pull_request' && github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: read
+    outputs:
+      drafts: ${{ steps.agent.outputs.drafts }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Set up the Rust bridge
+        uses: ./.github/actions/rust-bridge
+
+      - name: Install LiteLLM with its unit test dependencies
+        run: >-
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev
+          --extra google --extra proxy --extra semantic-router --extra switchyard --extra saml
+          --extra extra_proxy --extra proxy-runtime --extra utils
+
+      - name: Cache Prisma binaries
+        uses: ./.github/actions/cache-prisma-binaries
+
+      - name: Generate the Prisma client
+        run: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Install the agent
+        working-directory: litellm/scripts/sdk_watch
+        run: uv sync --frozen
+
+      - name: Start the LiteLLM proxy the agent calls its models through
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY}" ]; then
+            echo "::error::The ANTHROPIC_API_KEY repository secret is not set, so the agent has no model to call"
+            exit 1
+          fi
+          master_key="sk-$(openssl rand -hex 32)"
+          echo "::add-mask::${master_key}"
+          echo "LITELLM_PROXY_KEY=${master_key}" >> "${GITHUB_ENV}"
+          LITELLM_MASTER_KEY="${master_key}" PYTHONDONTWRITEBYTECODE=1 sudo \
+            --preserve-env=ANTHROPIC_API_KEY,LITELLM_MASTER_KEY,LITELLM_LOCAL_MODEL_COST_MAP,PYTHONDONTWRITEBYTECODE \
+            "${GITHUB_WORKSPACE}/.venv/bin/python" litellm/proxy/proxy_cli.py \
+            --config litellm/scripts/sdk_watch/proxy_config.yaml --port 4000 \
+            > "${RUNNER_TEMP}/proxy.log" 2>&1 &
+          for _ in $(seq 1 90); do
+            if curl -sf http://127.0.0.1:4000/health/liveliness > /dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          tail -50 "${RUNNER_TEMP}/proxy.log"
+          echo "::error::The LiteLLM proxy did not come up"
+          exit 1
+
+      - name: Lock the runner user out of the proxy's environment
+        run: |
+          if [ -S /var/run/docker.sock ]; then
+            sudo chmod 600 /var/run/docker.sock
+          fi
+          sudo rm -f /etc/sudoers.d/runner
+          if sudo -n true 2> /dev/null; then
+            echo "::error::The runner user can still use sudo, so code the agent writes could read the provider key"
+            exit 1
+          fi
+
+      - name: Run the agent
+        id: agent
+        working-directory: litellm/scripts/sdk_watch
+        env:
+          LITELLM_PROXY_URL: http://127.0.0.1:4000
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_DAY: ${{ inputs.day }}
+          INPUT_SDK: ${{ inputs.sdk }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_MAX_IMPLEMENTATIONS: ${{ inputs.max_implementations || '2' }}
+        run: |
+          args=(--repo "${GITHUB_WORKSPACE}" --out "${RUNNER_TEMP}/sdk-watch" --max-implementations "${INPUT_MAX_IMPLEMENTATIONS}")
+          if [ -n "${INPUT_DAY}" ]; then
+            args+=(--day "${INPUT_DAY}")
+          fi
+          if [ -n "${INPUT_SDK}" ]; then
+            args+=(--sdk "${INPUT_SDK}" --version "${INPUT_VERSION}")
+          fi
+          uv run --no-sync python -m sdk_watch watch "${args[@]}"
+          cat "${RUNNER_TEMP}/sdk-watch/summary.md" >> "${GITHUB_STEP_SUMMARY}"
+          drafts="$(find "${RUNNER_TEMP}/sdk-watch" -mindepth 2 -name pr.json -printf '%h\n' | xargs -r -n1 basename | jq -Rnc '[inputs]')"
+          echo "drafts=${drafts}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload the PR drafts
+        if: steps.agent.outputs.drafts != '[]'
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: sdk-watch-drafts
+          path: ${{ runner.temp }}/sdk-watch
+          if-no-files-found: error
+          retention-days: 14
+
+  verify:
+    name: verify
+    needs: watch
+    if: needs.watch.outputs.drafts != '[]' && needs.watch.outputs.drafts != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Set up the Rust bridge
+        uses: ./.github/actions/rust-bridge
+
+      - name: Install LiteLLM with its unit test dependencies
+        run: >-
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev
+          --extra google --extra proxy --extra semantic-router --extra switchyard --extra saml
+          --extra extra_proxy --extra proxy-runtime --extra utils
+
+      - name: Cache Prisma binaries
+        uses: ./.github/actions/cache-prisma-binaries
+
+      - name: Generate the Prisma client
+        run: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Install the agent and its recorder
+        working-directory: litellm/scripts/sdk_watch
+        run: uv sync --frozen --group demo
+
+      - name: Install agg
+        env:
+          AGG_URL: https://github.com/asciinema/agg/releases/download/v1.9.0/agg-x86_64-unknown-linux-gnu
+          AGG_SHA256: f111e315cd71056b116302342553dd765b7297579ed511f111d0cedb442aeda6
+        run: |
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/agg" "${AGG_URL}"
+          echo "${AGG_SHA256}  ${RUNNER_TEMP}/agg" | sha256sum --check
+          chmod +x "${RUNNER_TEMP}/agg"
+
+      - name: Download the PR drafts
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: sdk-watch-drafts
+          path: ${{ runner.temp }}/sdk-watch
+
+      - name: Record each change's tests failing on main and passing with the fix
+        working-directory: litellm/scripts/sdk_watch
+        run: |
+          mkdir -p "${RUNNER_TEMP}/sdk-watch-videos"
+          for change in "${RUNNER_TEMP}"/sdk-watch/*/; do
+            name="$(basename "${change}")"
+            out="${RUNNER_TEMP}/sdk-watch-videos/${name}"
+            mkdir -p "${out}"
+            demo="$(printf '%q ' uv run --no-sync python -m sdk_watch demo --repo "${GITHUB_WORKSPACE}" \
+              --change "${change}" --python "${GITHUB_WORKSPACE}/.venv/bin/python" --verdict "${out}/verdict.json")"
+            uv run --no-sync asciinema rec --quiet --overwrite --cols 110 --rows 36 -c "${demo}" "${out}/demo.cast" < /dev/null
+            "${RUNNER_TEMP}/agg" --speed 1.5 "${out}/demo.cast" "${out}/demo.gif" 2> /dev/null
+          done
+
+      - name: Upload the recordings
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: sdk-watch-videos
+          path: ${{ runner.temp }}/sdk-watch-videos
+          if-no-files-found: error
+          retention-days: 14
+
+  open-pr:
+    name: open-pr
+    needs: verify
+    if: needs.verify.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Install the agent
+        working-directory: litellm/scripts/sdk_watch
+        run: uv sync --frozen
+
+      - name: Download the PR drafts
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: sdk-watch-drafts
+          path: ${{ runner.temp }}/sdk-watch
+
+      - name: Download the recordings
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e
+        with:
+          name: sdk-watch-videos
+          path: ${{ runner.temp }}/sdk-watch-videos
+
+      - name: Open a PR for each verified change and ping the team
+        working-directory: litellm/scripts/sdk_watch
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SDK_WATCH_SLACK_WEBHOOK_URL: ${{ secrets.SDK_WATCH_SLACK_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BASE_SHA: ${{ github.sha }}
+        run: |
+          for change in "${RUNNER_TEMP}"/sdk-watch/*/; do
+            video="${RUNNER_TEMP}/sdk-watch-videos/$(basename "${change}")"
+            uv run --no-sync python -m sdk_watch ship --repo "${GITHUB_WORKSPACE}" --change "${change}" \
+              --verdict "${video}/verdict.json" --gif "${video}/demo.gif" --base-sha "${BASE_SHA}" \
+              | tee -a "${GITHUB_STEP_SUMMARY}"
+          done

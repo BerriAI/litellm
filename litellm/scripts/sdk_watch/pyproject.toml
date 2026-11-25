@@ -1,0 +1,24 @@
+[project]
+name = "litellm-sdk-watch"
+version = "0.1.0"
+description = "Agent that reads new provider SDK releases and opens LiteLLM PRs for the changes LiteLLM needs"
+requires-python = ">=3.12"
+dependencies = [
+    "deepagents==0.7.41",
+    "httpx==0.28.1",
+    "langchain==1.5.2",
+    "langchain-anthropic==1.7.12",
+    "langchain-core==1.8.4",
+    "langgraph==1.2.24",
+    "pydantic==2.14.4",
+]
+
+[dependency-groups]
+dev = ["pytest==9.0.3", "pytest-socket==0.7.0"]
+demo = ["asciinema==2.4.0"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
