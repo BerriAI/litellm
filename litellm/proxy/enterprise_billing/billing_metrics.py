@@ -84,10 +84,8 @@ def resource_attributes(config: BillingMetricsConfig) -> dict[str, AttributeValu
         "litellm.version": config.litellm_version,
     }
     license_attr: dict[str, AttributeValue] = {"litellm.license.id": config.license_id} if config.license_id else {}
-    deployment_attr: dict[str, AttributeValue] = (
-        {"litellm.deployment.id": config.deployment_id} if config.deployment_id else {}
-    )
-    return {**base, **license_attr, **deployment_attr}
+    deployment_id: Final = config.deployment_id
+    return {**base, **license_attr, **({"litellm.deployment.id": deployment_id} if deployment_id else {})}
 
 
 def billable_attributes(
