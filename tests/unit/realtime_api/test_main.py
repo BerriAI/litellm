@@ -1,5 +1,8 @@
 import asyncio
 import json
+import os
+import subprocess
+import sys
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
@@ -29,6 +32,18 @@ def local_model_cost_map(monkeypatch):
     litellm.get_model_info.cache_clear()
     yield
     litellm.get_model_info.cache_clear()
+
+
+def test_litellm_imports_without_the_websockets_package():
+    result: Final = subprocess.run(
+        [sys.executable, "-I", "-c", "import sys; sys.modules['websockets'] = None; import litellm"],
+        env={**os.environ, "LITELLM_LOCAL_MODEL_COST_MAP": "True"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 class FakeLogging:
@@ -1176,3 +1191,34 @@ async def test_openai_realtime_health_check_sends_the_federated_bearer_for_a_key
             model_params={"model": "openai/gpt-realtime", **federated_deployment},
         )
     assert connect.kwargs["additional_headers"] == {"Authorization": "Bearer federated-bearer"}
+
+
+@pytest.mark.parametrize(
+    ("api_base", "model_params", "message"),
+    [
+        pytest.param(
+            None,
+            {"model": "elevenlabs/scribe_v2_realtime", "vad_threshold": -1},
+            "Invalid ElevenLabs realtime options",
+            id="options",
+        ),
+        pytest.param(
+            "ws://127.0.0.1:1",
+            {"model": "elevenlabs/scribe_v2_realtime"},
+            "ElevenLabs api_base must be an absolute wss://",
+            id="api_base",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_elevenlabs_realtime_health_check_passes_the_deployment_settings_to_the_probe_before_connecting(
+    api_base: str | None, model_params: dict[str, object], message: str
+):
+    with pytest.raises(ValueError, match=message):
+        await realtime_main.realtime_health_check(
+            model="scribe_v2_realtime",
+            custom_llm_provider="elevenlabs",
+            api_key="elevenlabs-key",
+            api_base=api_base,
+            model_params=model_params,
+        )

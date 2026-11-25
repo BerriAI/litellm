@@ -49,6 +49,7 @@ from litellm.llms.anthropic.wif import (
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER,
     ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER,
@@ -80,6 +81,11 @@ DROP_DISABLED_THINKING_WARNING: Final = (
     "Dropping `thinking={'type': 'disabled'}` for model=%s: thinking is always on for this model and cannot be "
     "disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain "
     "thinking blocks, and those thinking tokens are billed as output tokens."
+)
+DROP_SERVER_SIDE_FALLBACK_BETA_WARNING: Final = (
+    "Dropping the %s beta for model=%s (drop_params=True): neither its model_info nor the model cost map lists "
+    "server-side fallback support for it. Set model_info.supports_server_side_fallback: true on a deployment whose "
+    "model supports it."
 )
 DROP_UNPAIRED_ADVISOR_BLOCKS_WARNING: Final = (
     "Dropping %d advisor blocks from the message history (drop_params=True): their id is not a non-empty string "
@@ -449,6 +455,33 @@ def merge_anthropic_beta_headers(existing: str | Sequence[str] | None, new_beta:
     joined: Final = ",".join(_beta_header_values(existing) + _beta_header_values(new_beta))
     betas: Final = frozenset(b.strip() for b in joined.split(",") if b.strip())
     return ",".join(sorted(betas))
+
+
+def supports_server_side_fallback(
+    model: str, custom_llm_provider: str, model_info: Mapping[str, object] | None
+) -> bool:
+    declared: Final = None if model_info is None else model_info.get("supports_server_side_fallback")
+    if isinstance(declared, bool):
+        return declared
+    return AnthropicModelInfo.supports_model_capability(model, "supports_server_side_fallback", custom_llm_provider)
+
+
+def without_unsupported_server_side_fallback_beta(
+    betas: Sequence[str],
+    model: str,
+    custom_llm_provider: str,
+    model_info: Mapping[str, object] | None,
+    drop_params: object,
+) -> tuple[str, ...]:
+    fallback_beta: Final = ANTHROPIC_BETA_HEADER_VALUES.SERVER_SIDE_FALLBACK_2026_06_01.value
+    if (
+        fallback_beta not in betas
+        or not drops_unsupported_params(drop_params)
+        or supports_server_side_fallback(model, custom_llm_provider, model_info)
+    ):
+        return tuple(betas)
+    litellm.verbose_logger.warning(DROP_SERVER_SIDE_FALLBACK_BETA_WARNING, fallback_beta, model)
+    return tuple(beta for beta in betas if beta != fallback_beta)
 
 
 def optionally_handle_anthropic_oauth(headers: dict, api_key: str | None) -> tuple[dict, str | None]:
@@ -2086,6 +2119,25 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
     data.pop("thinking", None)
 
 
+_DROP_ANTHROPIC_MESSAGE: Final = object()
+
+
+def _strip_empty_content_blocks_from_message(message: object) -> object:
+    mapping: Final = as_str_mapping(message)
+    content: Final = None if mapping is None else as_object_list(mapping.get("content"))
+    if mapping is None or content is None:
+        return message
+    from_user: Final = mapping.get("role") == "user"
+    filtered: Final = [
+        block
+        for block in content
+        if not _is_empty_text_block(block, from_user) and not is_empty_unsigned_thinking_block(block)
+    ]
+    if len(filtered) == len(content):
+        return message
+    return {**mapping, "content": filtered} if filtered else _DROP_ANTHROPIC_MESSAGE
+
+
 def strip_empty_content_blocks_from_anthropic_messages(
     messages: Sequence[object],
 ) -> list[Any]:
@@ -2120,25 +2172,23 @@ def strip_empty_content_blocks_from_anthropic_messages(
     The caller's list and its content blocks are never mutated; modified
     messages are returned as shallow copies with a fresh content list.
     """
-    out: Final[list[Any]] = []
-    for m in messages:
-        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
-            out.append(m)
-            continue
-        content = m["content"]
-        filtered = [b for b in content if not _is_empty_text_block(b) and not is_empty_unsigned_thinking_block(b)]
-        if len(filtered) == len(content):
-            out.append(m)
-        elif filtered:
-            out.append({**m, "content": filtered})
-    return out
+    return [
+        stripped_message
+        for message in messages
+        if (stripped_message := _strip_empty_content_blocks_from_message(message)) is not _DROP_ANTHROPIC_MESSAGE
+    ]
 
 
-def _is_empty_text_block(block: object) -> bool:
-    if not isinstance(block, dict) or block.get("type") != "text":
-        return False
-    text: Final = block.get("text")
-    return not isinstance(text, str) or not text.strip()
+def _is_empty_text_block(block: object, from_user: bool) -> bool:
+    match block:
+        case {"type": "text", "text": str() as text}:
+            return not text.strip()
+        case {"type": "text", "text": object()}:
+            return not from_user
+        case {"type": "text"}:
+            return True
+        case _:
+            return False
 
 
 def is_empty_thinking_block(block: object) -> bool:

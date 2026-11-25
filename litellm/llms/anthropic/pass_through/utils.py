@@ -32,6 +32,7 @@ _EFFORT_DEGRADATION_CHAIN: Final[Mapping[str, tuple[str, ...]]] = MappingProxyTy
 REASONING_EFFORT_OFF: Final = "none"
 KNOWN_REASONING_EFFORTS: Final = frozenset(get_args(REASONING_EFFORT))
 RESPONSES_API_PROVIDERS: Final = frozenset({"openai"})
+_PROVIDERS_ROUNDING_REASONING_EFFORT: Final = frozenset({"zai"})
 _LOWEST_REASONING_TIERS: Final = ("minimal", "low")
 _UNCONFIRMED_MINIMAL_LOWEST_TIERS: Final = ("low",)
 
@@ -386,12 +387,22 @@ def maps_bare_output_effort(model: str, custom_llm_provider: str | None, *, depl
     )
 
 
+def _provider_rounds_reasoning_effort(model: str, custom_llm_provider: str | None) -> bool:
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    except litellm.exceptions.BadRequestError:
+        return False
+    return provider in _PROVIDERS_ROUNDING_REASONING_EFFORT
+
+
 def normalize_reasoning_effort_value(
     effort: str,
     model: str,
     custom_llm_provider: str | None = None,
 ) -> str:
     """Lower a tier the deployment does not accept to the nearest one it does, leaving others alone.
+
+    A provider whose chat config rounds the tier onto its models' levels itself, like zai, keeps the tier as sent.
 
     The accepted set is resolved by the same owner that answers ``/model_group/info``, so a level
     the proxy advertises is a level this path forwards.
@@ -404,7 +415,7 @@ def normalize_reasoning_effort_value(
     chain's floor, which is what every deployment degraded to before there was anything to ask.
     """
     chain: Final = _EFFORT_DEGRADATION_CHAIN.get(effort)
-    if chain is None:
+    if chain is None or _provider_rounds_reasoning_effort(model, custom_llm_provider):
         return effort
 
     supported: Final = model_reasoning_efforts(model, custom_llm_provider)

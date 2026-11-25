@@ -11,6 +11,7 @@ import httpx
 
 import litellm
 from litellm._logging import verbose_router_logger
+from litellm.exceptions import UnknownPreviousResponseError, UnresolvablePreviousResponseError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
 from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
@@ -23,9 +24,9 @@ from litellm.router_utils.batch_utils import get_router_metadata_variable_name
 from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper, used across router_utils
     cast_exception_status_to_int,
-    is_advisor_orchestration_failure,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
+    is_failure_outside_selected_deployment,
     set_cooldown_deployments,
 )
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
@@ -66,10 +67,9 @@ def _trigger_cooldown_for_failed_deployment(
     fallback deployment is evaluated for cooldown regardless.
     """
     try:
-        if is_advisor_orchestration_failure(exception):
+        if is_failure_outside_selected_deployment(exception):
             verbose_router_logger.debug(
-                "Not triggering cooldown for fallback deployment: failure originated "
-                "from advisor orchestration, not the selected deployment."
+                "Not triggering cooldown for fallback deployment: failure did not come from the selected deployment."
             )
             return
 
@@ -249,7 +249,10 @@ def is_bad_request_without_fallback(exception: Exception, fallback_on_unsupporte
         return False
     if isinstance(exception, litellm.UnsupportedParamsError):
         return True
-    if isinstance(exception, (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError)):
+    if isinstance(
+        exception,
+        (litellm.ContextWindowExceededError, litellm.ContentPolicyViolationError, UnresolvablePreviousResponseError),
+    ):
         return False
     return exception.status_code == 400 and bool(getattr(exception, "llm_provider", ""))
 
@@ -847,6 +850,8 @@ async def run_async_fallback(
                 original_exception=original_exception,
             )
             return response
+        except UnknownPreviousResponseError:
+            raise
         except Exception as e:
             error_from_fallbacks = e
             fallback_errors = fallback_errors + (get_fallback_error_info(e),)

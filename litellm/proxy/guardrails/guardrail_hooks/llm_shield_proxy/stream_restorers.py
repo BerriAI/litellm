@@ -174,7 +174,7 @@ class AnthropicSSERestorer:
         line: Final = lines[data_lines[0]]
         try:
             parsed: Final[object] = json.loads(line[len("data:") :])
-        except ValueError:
+        except (ValueError, RecursionError):
             return block
         event: Final = as_object(parsed)
         if event is None:

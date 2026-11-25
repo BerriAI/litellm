@@ -4,6 +4,7 @@ import logging
 import threading
 import time
 from collections import OrderedDict, defaultdict
+from collections.abc import Mapping, Sequence
 from itertools import chain
 from types import MappingProxyType
 from typing import Callable, Final, Iterator, Literal, NoReturn, Optional, cast
@@ -4435,6 +4436,218 @@ async def test_azure_streaming_role_preserved_with_include_usage(sync_mode: bool
         "Chunk deltas: "
         + str([c.choices[0].delta if c.choices else "no choices" for c in chunks])
     )
+
+
+def _wire_dump(chunk: ModelResponseStream) -> dict[str, object]:
+    return chunk.model_dump(exclude_none=True, exclude_unset=True)
+
+
+def _usage_test_logging(caller_stream_options: dict[str, bool] | None, stream_usage_stripped: bool) -> Logging:
+    logging_obj: Final = Logging(
+        model="azure/gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="12345",
+        function_id="1245",
+        kwargs={"_litellm_strip_stream_usage": True} if stream_usage_stripped else {},
+    )
+    logging_obj.update_environment_variables(
+        litellm_params={}, optional_params={}, model="azure/gpt-4o", stream_options=caller_stream_options
+    )
+    return logging_obj
+
+
+_AZURE_PROMPT_FILTER_RESULTS: Final = [
+    {"prompt_index": 0, "content_filter_results": {"hate": {"filtered": False, "severity": "safe"}}}
+]
+_AZURE_FINISH_FILTER_RESULTS: Final = {"protected_material_text": {"detected": False, "filtered": False}}
+
+
+def _azure_stream_chunks() -> tuple[ChatCompletionChunk, ...]:
+    def chunk(choices: list[dict[str, object]], **extras: object) -> ChatCompletionChunk:
+        return ChatCompletionChunk.model_validate(
+            {
+                "id": "c1",
+                "created": 1,
+                "model": "gpt-4o",
+                "object": "chat.completion.chunk",
+                "choices": choices,
+                **extras,
+            }
+        )
+
+    return (
+        chunk([], prompt_filter_results=_AZURE_PROMPT_FILTER_RESULTS, obfuscation="held"),
+        chunk(
+            [{"index": 0, "delta": {"role": "assistant", "content": ""}, "content_filter_results": {}}],
+            obfuscation="own",
+        ),
+        chunk([{"index": 0, "delta": {"content": "Red"}, "content_filter_results": {}}]),
+        chunk(
+            [{"index": 0, "delta": {}, "finish_reason": "stop", "content_filter_results": _AZURE_FINISH_FILTER_RESULTS}]
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("caller_stream_options", "stream_usage_stripped", "wrapper_stream_options", "prompt_filter_frame"),
+    [
+        (None, False, None, 0),
+        ({"include_usage": True}, False, {"include_usage": True}, 0),
+        (None, False, {"include_usage": True}, 1),
+        ({"include_usage": True}, True, {"include_usage": True}, 1),
+    ],
+    ids=["no-usage", "caller-asked", "provider-handler-injected", "proxy-injected"],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_azure_stream_passes_on_prompt_filter_results_and_finish_content_filter_results(
+    sync_mode: bool,
+    caller_stream_options: dict[str, bool] | None,
+    stream_usage_stripped: bool,
+    wrapper_stream_options: dict[str, bool] | None,
+    prompt_filter_frame: int,
+) -> None:
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(_azure_stream_chunks()),
+        model="gpt-4o",
+        custom_llm_provider="azure",
+        logging_obj=_usage_test_logging(caller_stream_options, stream_usage_stripped),
+        stream_options=wrapper_stream_options,
+    )
+
+    chunks: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
+    frames: Final = [_wire_dump(chunk) for chunk in chunks]
+    first_choice_frame: Final = next(frame for frame in frames if frame["choices"])
+    finish_frame: Final = next(
+        frame for frame in frames if frame["choices"] and frame["choices"][0].get("finish_reason")
+    )
+
+    assert [index for index, frame in enumerate(frames) if "prompt_filter_results" in frame] == [prompt_filter_frame]
+    assert frames[prompt_filter_frame]["prompt_filter_results"] == _AZURE_PROMPT_FILTER_RESULTS
+    assert first_choice_frame["obfuscation"] == "own"
+    assert finish_frame["choices"][0]["content_filter_results"] == _AZURE_FINISH_FILTER_RESULTS
+
+
+def _openai_sdk_stream_choices(
+    logging_obj: Logging, upstream_choices: Sequence[Mapping[str, object]]
+) -> tuple[dict[str, object], ...]:
+    chunks: Final = tuple(
+        ChatCompletionChunk.model_validate(
+            {"id": "c1", "created": 1, "model": "m", "object": "chat.completion.chunk", "choices": [choice]}
+        )
+        for choice in upstream_choices
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks), model="m", custom_llm_provider="openai", logging_obj=logging_obj
+    )
+    return tuple(chunk.choices[0].model_dump() for chunk in wrapper)
+
+
+def test_openai_sdk_stream_with_two_choices_keeps_choice_extras_on_their_own_choice(logging_obj: Logging) -> None:
+    emitted: Final = _openai_sdk_stream_choices(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 1, "delta": {"role": "assistant", "content": ""}, "finish_reason": None},
+            {"index": 0, "delta": {"content": "1"}, "finish_reason": None},
+            {"index": 1, "delta": {"content": "1"}, "finish_reason": None},
+            {"index": 1, "delta": {}, "finish_reason": "stop", "content_filter_results": {"choice": 1}},
+            {"index": 0, "delta": {}, "finish_reason": "stop", "content_filter_results": {"choice": 0}},
+        ),
+    )
+
+    assert [
+        (choice["index"], choice.get("content_filter_results"))
+        for choice in emitted
+        if choice.get("content_filter_results") not in (None, {"choice": choice["index"]})
+    ] == []
+
+
+@pytest.mark.parametrize(
+    "dropped_extras",
+    [
+        pytest.param({"token_ids": None}, id="null-token-ids"),
+        pytest.param({"content_filter_results": None}, id="null-content-filter-results"),
+        pytest.param({"message": {"role": "assistant", "content": "1"}}, id="message"),
+    ],
+)
+def test_openai_sdk_stream_sends_the_same_finish_frame_without_choice_extras_it_drops(
+    logging_obj: Logging, dropped_extras: Mapping[str, object]
+) -> None:
+    def finish_frame(finish_extras: Mapping[str, object]) -> dict[str, object]:
+        emitted: Final = _openai_sdk_stream_choices(
+            logging_obj,
+            (
+                {"index": 0, "delta": {"role": "assistant", "content": "1"}, "finish_reason": None},
+                {"index": 0, "delta": {}, "finish_reason": "stop", **finish_extras},
+            ),
+        )
+        return emitted[-1]
+
+    assert finish_frame(dropped_extras) == finish_frame({})
+
+
+def test_openai_sdk_stream_does_not_move_a_later_choiceless_chunks_fields_onto_the_next_frame(
+    logging_obj: Logging,
+) -> None:
+    chunks: Final = tuple(
+        ChatCompletionChunk.model_validate(
+            {"id": "c1", "created": 1, "model": "m", "object": "chat.completion.chunk", **fields}
+        )
+        for fields in (
+            {"choices": [{"index": 0, "delta": {"role": "assistant", "content": "1"}}]},
+            {"choices": [], "prompt_filter_results": _AZURE_PROMPT_FILTER_RESULTS},
+            {"choices": [{"index": 0, "delta": {"content": "2"}}]},
+        )
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks), model="m", custom_llm_provider="openai", logging_obj=logging_obj
+    )
+
+    assert not any("prompt_filter_results" in _wire_dump(chunk) for chunk in wrapper)
+
+
+def test_openai_sdk_stream_keeps_token_ids_on_their_own_frame(logging_obj: Logging) -> None:
+    emitted: Final = _openai_sdk_stream_choices(
+        logging_obj,
+        (
+            {"index": 0, "delta": {"role": "assistant", "content": "1"}, "finish_reason": None, "token_ids": [16]},
+            {"index": 0, "delta": {}, "finish_reason": "stop", "token_ids": [20]},
+        ),
+    )
+
+    assert [(choice.get("finish_reason"), choice.get("token_ids")) for choice in emitted] == [
+        (None, [16]),
+        ("stop", [20]),
+    ]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_azure_ai_stream_keeps_finish_content_filter_results(sync_mode: bool, logging_obj: Logging) -> None:
+    parser: Final = OpenAIChatCompletionStreamingHandler(streaming_response=iter(()), sync_stream=sync_mode)
+    chunks: Final = tuple(
+        parser.chunk_parser(
+            {"id": "c1", "created": 1, "model": "gpt-4o", "object": "chat.completion.chunk", "choices": [choice]}
+        )
+        for choice in (
+            {"index": 0, "delta": {"role": "assistant", "content": "Red"}, "content_filter_results": {}},
+            {"index": 0, "delta": {}, "finish_reason": "stop", "content_filter_results": _AZURE_FINISH_FILTER_RESULTS},
+        )
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter(chunks), model="gpt-4o", custom_llm_provider="azure_ai", logging_obj=logging_obj
+    )
+    emitted: Final = list(wrapper) if sync_mode else [chunk async for chunk in wrapper]
+    finish_choices: Final = [
+        choice for frame in map(_wire_dump, emitted) for choice in frame["choices"] if choice.get("finish_reason")
+    ]
+    assert [(choice["finish_reason"], choice["content_filter_results"]) for choice in finish_choices] == [
+        ("stop", _AZURE_FINISH_FILTER_RESULTS)
+    ]
 
 
 def test_gemini_legacy_vertex_stop_finish_reason_normalised():

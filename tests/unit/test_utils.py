@@ -1213,6 +1213,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 },
                 "bedrock_converse_supports_strict_tools": {"type": "boolean"},
                 "supports_regex_lookaround": {"type": "boolean"},
+                "supports_all_json_schema_keywords": {"type": "boolean"},
                 "tpm": {"type": "number"},
                 "supported_endpoints": {
                     "type": "array",

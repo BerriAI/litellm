@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, Final, Literal
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.utils import FileTypes
 
@@ -15,6 +15,7 @@ class ImageEditOptionalRequestParams(TypedDict, total=False):
 
     background: Literal["transparent", "opaque", "auto"] | None
     input_fidelity: Literal["high", "low"] | None
+    markup: ReadOnly[FileTypes | list[FileTypes] | None]  # mutable-ok: a tuple is one upload, a list is several
     mask: str | None
     n: int | None
     quality: Literal["high", "medium", "low", "standard", "auto"] | None

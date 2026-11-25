@@ -5559,6 +5559,98 @@ def test_streaming_final_chunk_carries_provider_metadata():
     assert all("service_tier" not in chunk for chunk in chunks[:-1])
 
 
+_RESPONSES_BODY_METADATA: Final = {
+    "access_programs": {"cyber": "daybreak_blue"},
+    "prompt_cache_options": {"mode": "implicit", "ttl": "30m"},
+    "prompt_cache_diagnostics": {"type": "cache_hit"},
+}
+_HIDDEN_RESPONSES_FIELDS: Final = {
+    "metadata": {"trace": "abc"},
+    "background": False,
+    "completed_at": 1760144905,
+    "conversation": {"id": "conv_metadata"},
+    "max_tool_calls": 3,
+    "prompt": {"id": "pmpt_metadata"},
+    "prompt_cache_key": "cache-key",
+    "prompt_cache_retention": "24h",
+    "safety_identifier": "user-hash",
+    "top_logprobs": 0,
+}
+
+
+def test_non_stream_response_keeps_provider_metadata_and_hides_responses_fields() -> None:
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.utils import ModelResponse
+
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    output_message: Final = ResponseOutputMessage(
+        id="msg_metadata",
+        content=[ResponseOutputText(annotations=[], text="hi", type="output_text", logprobs=[])],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+    raw_response: Final = ResponsesAPIResponse(
+        id="resp_metadata",
+        created_at=1760144904,
+        model="gpt-5.6-sol",
+        object="response",
+        output=[output_message],
+        status="completed",
+        parallel_tool_calls=True,
+        tool_choice="auto",
+        tools=[],
+        **_RESPONSES_BODY_METADATA,
+        **_HIDDEN_RESPONSES_FIELDS,
+    )
+
+    result: Final = handler.transform_response(
+        model="gpt-5.6-sol",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=Mock(),
+        request_data={"model": "gpt-5.6-sol"},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={"acompletion": False, "api_key": None},
+        encoding=Mock(),
+        api_key=None,
+        json_mode=None,
+    )
+
+    dumped: Final = result.model_dump()
+    assert {key: dumped.get(key) for key in _RESPONSES_BODY_METADATA} == _RESPONSES_BODY_METADATA
+    assert not set(_HIDDEN_RESPONSES_FIELDS) & set(dumped)
+
+
+def test_streaming_final_chunk_keeps_provider_metadata_and_hides_responses_fields() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    iterator.chunk_parser({"type": "response.created", "response": {"id": "resp_metadata", "output": []}})
+
+    final_chunk: Final = iterator.chunk_parser(
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_metadata",
+                "output": [{"type": "message"}],
+                "usage": {"input_tokens": 3, "output_tokens": 1, "total_tokens": 4},
+                **_RESPONSES_BODY_METADATA,
+                **_HIDDEN_RESPONSES_FIELDS,
+            },
+        }
+    )
+
+    provider_fields: Final = final_chunk.provider_specific_fields or {}
+    assert {key: provider_fields.get(key) for key in _RESPONSES_BODY_METADATA} == _RESPONSES_BODY_METADATA
+    assert not set(_HIDDEN_RESPONSES_FIELDS) & set(provider_fields)
+
+
 def _system_input_item(text: str) -> dict[str, object]:
     return {"type": "message", "role": "system", "content": [{"type": "input_text", "text": text}]}
 
@@ -7324,3 +7416,33 @@ def test_stream_structured_output_drops_text_after_first_message_item(
     content: Final = "".join(chunk.choices[0].delta.content or "" for chunk in chunks)
     assert content == expected_content
     assert chunks[-1].choices[0].finish_reason == "stop"
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "forwards"),
+    [
+        ("meta/muse-ember-1.0", "vertex_ai", True),
+        ("gemini-4-argon", "vertex_ai", False),
+        ("muse-ember-1.0", "openai", False),
+    ],
+)
+def test_transform_request_forwards_vertex_credentials_only_for_vertex_muse_models(
+    model: str, custom_llm_provider: str, forwards: bool
+) -> None:
+    credentials: Final = {
+        "vertex_project": "unit-project",
+        "vertex_location": "europe-west4",
+        "vertex_credentials": "{}",
+    }
+    request: Final = LiteLLMResponsesTransformationHandler().transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params=dict(credentials),
+        litellm_params={"custom_llm_provider": custom_llm_provider},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert {key: request.get(key) for key in credentials} == (
+        credentials if forwards else dict.fromkeys(credentials)
+    )

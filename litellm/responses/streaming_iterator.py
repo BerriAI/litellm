@@ -28,7 +28,7 @@ from litellm.constants import (
 )
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, process_response_headers
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -2898,6 +2898,22 @@ _MANAGED_WS_SKIP_KWARGS: Final[frozenset[str]] = frozenset(
 _WARMUP_RESPONSE_ID_PREFIX: Final = "resp_warmup_"
 
 
+def _turn_failure_type(failure: Exception) -> str:
+    match attribute_or_none(failure, "status_code"):
+        case 429:
+            return "rate_limit_exceeded"
+        case int(status) if 400 <= status < 500:
+            return "invalid_request_error"
+        case _:
+            return "server_error"
+
+
+def _openai_error_fields(failure: Exception) -> Mapping[str, str]:
+    return MappingProxyType(
+        {name: value for name in ("code", "param") if isinstance(value := attribute_or_none(failure, name), str)}
+    )
+
+
 class ManagedResponsesWebSocketHandler:
     """
     Handles Responses API WebSocket mode for providers that do not expose a
@@ -2976,10 +2992,12 @@ class ManagedResponsesWebSocketHandler:
             verbose_logger.debug("ManagedResponsesWS: failed to serialize chunk: %s", exc)
             return None
 
-    async def _send_error(self, message: str, error_type: str = "server_error") -> None:
+    async def _send_error(
+        self, message: str, error_type: str = "server_error", openai_fields: Mapping[str, str] = MappingProxyType({})
+    ) -> None:
         try:
             await self.websocket.send_text(
-                json.dumps({"type": "error", "error": {"type": error_type, "message": message}})
+                json.dumps({"type": "error", "error": {"type": error_type, "message": message, **openai_fields}})
             )
         except Exception:
             pass
@@ -3404,7 +3422,7 @@ class ManagedResponsesWebSocketHandler:
             terminal_event: Final = await self._stream_and_forward(model, call_kwargs)
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: error processing response.create: %s", exc)
-            await self._send_error(str(exc))
+            await self._send_error(str(exc), _turn_failure_type(exc), _openai_error_fields(exc))
             return
 
         self._save_turn_history(terminal_event, prior_history, current_messages)

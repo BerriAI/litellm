@@ -132,6 +132,35 @@ async def test_openai_image_edit_accepts_mixed_bytes_and_bytesio(
     assert _multipart_image_parts(route.calls[0].request) == (_FIRST_IMAGE, _SECOND_IMAGE)
 
 
+@pytest.mark.parametrize(
+    ("model", "api_base", "provider", "field"),
+    (
+        ("azure/CUSTOM_AZURE_DEPLOYMENT_NAME", "https://fake.openai.azure.com", "azure", "mask"),
+        ("litellm_proxy/gpt-image-1", "https://fake-litellm-proxy.example.com", "litellm_proxy", "mask"),
+        ("litellm_proxy/gpt-image-1", "https://fake-litellm-proxy.example.com", "litellm_proxy", "markup"),
+    ),
+)
+def test_image_edit_json_image_reference_error_names_the_resolved_provider(
+    respx_mock: respx.MockRouter, httpx_transport: None, model: str, api_base: str, provider: str, field: str
+) -> None:
+    route: Final = respx_mock.post(url__startswith=api_base).mock(return_value=httpx.Response(200, json=_EDIT_RESPONSE))
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.image_edit(
+            prompt="edit the marked area",
+            model=model,
+            image=_FIRST_IMAGE,
+            api_key="fake-key",
+            api_base=api_base,
+            api_version="2025-04-01-preview",
+            **{field: {"image_url": "https://example.com/reference.png"}},
+        )
+
+    assert exc_info.value.llm_provider == provider
+    assert field in str(exc_info.value)
+    assert route.call_count == 0
+
+
 @pytest.mark.asyncio
 async def test_azure_image_edit_logs_deployment_model_and_positive_cost(
     respx_mock: respx.MockRouter, httpx_transport: None, monkeypatch: pytest.MonkeyPatch
