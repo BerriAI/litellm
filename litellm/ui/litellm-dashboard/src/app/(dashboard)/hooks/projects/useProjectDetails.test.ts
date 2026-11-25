@@ -87,11 +87,13 @@ describe("useProjectDetails", () => {
   });
 
   it("should ask /project/info for the spend by model breakdown", async () => {
-    (global.fetch as any).mockResolvedValue({ ok: true, json: async () => mockProject });
+    vi.mocked(global.fetch).mockResolvedValue(
+      new Response(JSON.stringify(mockProject), { status: 200, headers: { "Content-Type": "application/json" } }),
+    );
     renderHook(() => useProjectDetails("proj-1"), { wrapper: makeWrapper(queryClient) });
     await waitFor(() => expect(global.fetch).toHaveBeenCalled());
-    const [url] = (global.fetch as any).mock.calls[0];
-    expect(new URL(url, "http://proxy.test").searchParams.get("include_model_spend")).toBe("true");
+    const [url] = vi.mocked(global.fetch).mock.calls[0];
+    expect(new URL(String(url), "http://proxy.test").searchParams.get("include_model_spend")).toBe("true");
   });
 
   it("should not fetch when projectId is missing", () => {

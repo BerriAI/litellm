@@ -35,6 +35,7 @@ from litellm.proxy.utils import ProxyLogging
 
 from litellm.redis.stores.auth_cache import AuthObject
 from litellm.proxy._types import (
+    LiteLLM_BudgetTable,
     LiteLLM_ProjectTable,
     NewProjectRequest,
     UpdateProjectRequest,
@@ -1991,16 +1992,23 @@ async def test_project_info_missing_project_is_404_even_for_org_admins(project_a
 _PROJECT_CREATED_AT: Final = datetime(2026, 3, 1, 9, 30, tzinfo=timezone(timedelta(hours=2)))
 
 
-def _stored_project(project_id: str, team_id: str, model_spend: dict[str, float] | None) -> LiteLLM_ProjectTable:
+def _stored_project(
+    project_id: str,
+    team_id: str,
+    model_spend: dict[str, float] | None,
+    created_at: datetime = _PROJECT_CREATED_AT,
+) -> LiteLLM_ProjectTable:
     return LiteLLM_ProjectTable(
         project_id=project_id,
         team_id=team_id,
+        budget_id="budget-p",
         spend=7.5,
         model_spend=model_spend,
         metadata={"owner": "qa"},
         created_by="admin",
         updated_by="admin",
-        created_at=_PROJECT_CREATED_AT,
+        created_at=created_at,
+        litellm_budget_table=LiteLLM_BudgetTable(budget_id="budget-p", max_budget=500.0, budget_duration="30d"),
     )
 
 
@@ -2070,10 +2078,15 @@ async def test_project_info_without_opt_in_returns_the_stored_project_and_reads_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stored_model_spend", [{}, None], ids=["empty", "null"])
+@pytest.mark.parametrize(
+    "created_at",
+    [_PROJECT_CREATED_AT, datetime(2026, 3, 1, 7, 30)],
+    ids=["aware_plus_two_hours", "naive_utc"],
+)
 async def test_project_info_opted_in_fills_empty_model_spend_from_the_projects_spend_logs(
-    monkeypatch, stored_model_spend
+    monkeypatch, stored_model_spend, created_at
 ):
-    stored = _stored_project("p-a1", "team-a1", model_spend=stored_model_spend)
+    stored = _stored_project("p-a1", "team-a1", model_spend=stored_model_spend, created_at=created_at)
     read_db = _SpendLogsReadDb(
         rows=(
             {"model": "claude-haiku", "spend": 1.25},
@@ -2088,6 +2101,12 @@ async def test_project_info_opted_in_fills_empty_model_spend_from_the_projects_s
     assert project.model_spend == {"claude-haiku": 1.25, "gpt-5-mini": 0.0, "refunded-model": -0.5}
     assert read_db.queries == [("p-a1", "2026-03-01T07:30:00")], "read this project's logs since its UTC creation"
     assert project.model_dump(exclude={"model_spend"}) == stored.model_dump(exclude={"model_spend"})
+    assert project.litellm_budget_table is not None
+    assert (project.spend, project.litellm_budget_table.max_budget, project.litellm_budget_table.budget_duration) == (
+        7.5,
+        500.0,
+        "30d",
+    )
     assert stored.model_spend == stored_model_spend, "the stored project must not be mutated"
 
 
