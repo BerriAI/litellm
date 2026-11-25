@@ -157,8 +157,16 @@ class RedisSemanticCache(BaseCache):
         # CustomVectorizer probes its embedding dimension at construction by
         # embedding "dimension test", so the first cache request issues one extra
         # billable embedding on top of the request's own.
-        from redisvl.extensions.cache.llm import SemanticCache
-        from redisvl.utils.vectorize import CustomVectorizer
+        try:
+            from redisvl.extensions.cache.llm import SemanticCache
+            from redisvl.utils.vectorize import CustomVectorizer
+        except ImportError as e:
+            verbose_logger.error(
+                "Redis semantic cache needs redisvl>=0.26.0,<1.0, install it with "
+                "`pip install 'redisvl>=0.26.0,<1.0'`: %s",
+                e,
+            )
+            raise
 
         try:
             cache_vectorizer: Final = CustomVectorizer(self._get_embedding)

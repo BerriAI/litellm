@@ -40,6 +40,8 @@ def _reply(command: _Command) -> bytes:
         return b"-NOPERM User readwrite has no permissions to run the '" + refused + b"' command\r\n"
     if name == b"FT._LIST":
         return b"*0\r\n"
+    if name == b"FT.SEARCH":
+        return b"*1\r\n:0\r\n"
     return b"+OK\r\n"
 
 
@@ -80,10 +82,11 @@ def _embed(request: Request) -> Reply:
     )
 
 
-def test_semantic_cache_builds_its_index_for_a_redis_user_without_dangerous_commands(
+async def test_semantic_cache_stores_and_looks_up_for_a_redis_user_without_dangerous_commands(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     index: Final = "litellm_semantic_cache_read_write_role"
+    messages: Final = [{"role": "user", "content": "What is the capital of France?"}]
     with wire_server(_embed) as embeddings, _read_write_role_redis() as (redis_url, received):
         monkeypatch.setenv("OPENAI_API_KEY", "scripted-embedding-key")
         monkeypatch.setenv("OPENAI_BASE_URL", embeddings.url + "/v1")
@@ -94,9 +97,16 @@ def test_semantic_cache_builds_its_index_for_a_redis_user_without_dangerous_comm
             index_name=index,
         )
 
-        assert cache.llmcache is not None
+        await cache.async_set_cache("cache-key", "Paris", messages=messages)
+        assert await cache.async_get_cache("cache-key", messages=messages) is None
         commands: Final = tuple(received.get_nowait() for _ in range(received.qsize()))
 
     assert any(command[:2] == (b"FT.CREATE", index.encode()) for command in commands), (
         "the semantic-cache index was never created"
+    )
+    assert any(command[0] == b"HSET" and command[1].startswith(index.encode() + b":") for command in commands), (
+        "the cache entry was never stored"
+    )
+    assert any(command[:2] == (b"FT.SEARCH", index.encode()) for command in commands), (
+        "the cache was never searched"
     )

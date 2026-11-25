@@ -1,6 +1,7 @@
 from collections.abc import Iterator
 from contextlib import contextmanager
 from importlib import import_module
+import logging
 import sys
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -288,6 +289,18 @@ def test_redis_semantic_cache_reraises_unexpected_index_error():
             redis_url="redis://localhost:6379",
             cache_vectorizer=MagicMock(),
         )
+
+
+def test_redis_semantic_cache_names_the_redisvl_requirement_when_redisvl_is_too_old(monkeypatch, caplog):
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    monkeypatch.setitem(sys.modules, "redisvl.extensions.cache.llm", None)
+    redis_semantic_cache: Final = RedisSemanticCache(redis_url="redis://localhost:6379", similarity_threshold=0.8)
+
+    with caplog.at_level(logging.ERROR, logger="LiteLLM"), pytest.raises(ImportError):
+        _ = redis_semantic_cache.llmcache
+
+    assert any("redisvl>=0.26.0,<1.0" in record.getMessage() for record in caplog.records)
 
 
 def test_redis_semantic_cache_matches_bytes_cache_key():
