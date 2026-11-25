@@ -144,7 +144,7 @@ const DynamicParamsFields: React.FC<DynamicParamsFieldsProps> = ({ params, callb
                 render={({ field }) => (
                   <Switch
                     id={fieldId}
-                    checked={/^(true|1)$/i.test(String(field.value ?? ""))}
+                    checked={/^(true|1)$/i.test(String(field.value ?? paramConfig.default ?? ""))}
                     onCheckedChange={(checked: boolean) => field.onChange(String(checked))}
                     onBlur={field.onBlur}
                   />
@@ -380,7 +380,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       const normalized = Object.fromEntries(
         Object.entries(selectedEditCallback.variables || {}).flatMap(([key, value]) => {
           const fieldName = fieldNameFor(key);
-          if (value == null && callbackConfig?.dynamic_params?.[fieldName]?.type === "select") {
+          const paramConfig = callbackConfig?.dynamic_params?.[fieldName];
+          if (value == null && (paramConfig?.type === "select" || paramConfig?.default !== undefined)) {
             return [];
           }
           return [[fieldName, value ?? ""]];

@@ -263,6 +263,12 @@ describe("Settings", () => {
             options: ["http/protobuf", "http/json"],
             required: false,
           },
+          LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS: {
+            type: "boolean",
+            ui_name: "Emit Background Service Spans",
+            default: "true",
+            required: false,
+          },
         },
       },
     ]);
@@ -275,6 +281,24 @@ describe("Settings", () => {
     await user.click(await screen.findByTestId("callback-action-edit"));
     return user;
   };
+
+  it("shows the background service span toggle on by default and saves it off", async () => {
+    const envVar = "LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS";
+    mockOtelCallback({ OTEL_ENDPOINT: "http://collector:4318", [envVar]: null });
+    const user = await openOtelEditModal();
+
+    const toggle = await screen.findByRole("switch", { name: "Emit Background Service Spans" });
+    expect(toggle).toBeChecked();
+    await user.click(toggle);
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Save Changes" }));
+
+    await waitFor(() => {
+      expect(vi.mocked(setCallbacksCall)).toHaveBeenCalledWith(
+        "token",
+        expect.objectContaining({ environment_variables: expect.objectContaining({ [envVar]: "false" }) }),
+      );
+    });
+  });
 
   it("should post the chosen export protocol when a select dynamic param is saved", async () => {
     mockOtelCallback({ OTEL_ENDPOINT: "http://collector:4318" });

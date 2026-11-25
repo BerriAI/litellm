@@ -381,6 +381,13 @@
         "description": "OTLP wire format for trace exports. Use http/json for collectors that cannot decode protobuf",
         "options": ["http/protobuf", "http/json"],
         "required": false
+      },
+      "LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS": {
+        "type": "boolean",
+        "ui_name": "Emit Background Service Spans",
+        "description": "Export service spans without a request parent (OTel v2 only)",
+        "default": "true",
+        "required": false
       }
     },
     "description": "OpenTelemetry Logging Integration"
