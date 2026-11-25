@@ -464,6 +464,14 @@ def _json_field(value: object, key: str) -> object:
     return cast(Mapping[str, object], value).get(key) if isinstance(value, dict) else None  # cast-ok: untyped JSON
 
 
+def _refusal_text(refusal: object) -> str | None:
+    return refusal if isinstance(refusal, str) and refusal else None
+
+
+def _raw_refusal_text(part: object) -> str | None:
+    return _refusal_text(_json_field(part, "refusal")) if _json_field(part, "type") == "refusal" else None
+
+
 def _tool_search_replay_item(item: object) -> Mapping[str, object] | None:
     raw: Final[object] = item.model_dump(exclude_unset=True) if isinstance(item, BaseModel) else item
     if not isinstance(raw, dict):
@@ -1208,6 +1216,18 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             index=index,
                         )
                         return choice, index + 1
+            refusal: Final = next(
+                (text for part in iter_items(content_list) if (text := _raw_refusal_text(part)) is not None), None
+            )
+            if refusal is not None:
+                return (
+                    Choices(
+                        message={"role": item.get("role", "assistant"), "content": refusal},
+                        finish_reason="stop",
+                        index=index,
+                    ),
+                    index + 1,
+                )
 
         # function_call / custom_tool_call dicts are intercepted and accumulated by
         # _convert_response_output_to_choices before this callback is reached
@@ -1659,6 +1679,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         from openai.types.responses import (
             ResponseFunctionToolCall,
             ResponseOutputMessage,
+            ResponseOutputRefusal,
             ResponseReasoningItem,
         )
 
@@ -1699,7 +1720,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
-                    response_text = getattr(content, "text", "")
+                    response_text = (
+                        _refusal_text(attribute_or_none(content, "refusal"))
+                        if isinstance(content, ResponseOutputRefusal)
+                        else None
+                    ) or getattr(content, "text", "")
                     # Extract annotations from content if present
                     raw_annotations = getattr(content, "annotations", None)
                     annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
