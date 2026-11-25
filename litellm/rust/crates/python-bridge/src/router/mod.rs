@@ -1768,8 +1768,12 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
             max_retries,
             model_group_size,
             shape,
+            refused_ids,
+            provider_refused_window,
         } => {
             dict.set_item("shape", AttemptShape::from(shape))?;
+            dict.set_item("refused_ids", PyList::new(py, refused_ids)?)?;
+            dict.set_item("provider_refused_window", provider_refused_window)?;
             dict.set_item("routed", routed)?;
             dict.set_item("scope", scope)?;
             dict.set_item("max_retries", max_retries)?;

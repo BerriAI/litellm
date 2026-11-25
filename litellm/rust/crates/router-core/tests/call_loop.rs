@@ -2793,6 +2793,48 @@ async fn a_stream_context_window_error_retries_on_another_deployment(config: Rou
 }
 
 #[rstest]
+#[case::a_deployment_an_earlier_attempt_refused(json!({"refused_ids": ["a1"]}), PreCallFacts::default(), &["a2"])]
+#[case::nothing_refused(json!({}), PreCallFacts::default(), &["a1"])]
+#[case::stand_in_overflows_once_the_provider_refused_the_window(
+    json!({"provider_refused_window": true}),
+    stand_in_overflows(&["a1", "a2"]),
+    &[]
+)]
+#[case::stand_in_overflows_no_provider_refused(json!({}), stand_in_overflows(&["a1", "a2"]), &["a1"])]
+#[tokio::test]
+async fn a_stream_retry_skips_what_the_request_refused_before_the_stream_opened(
+    #[case] carried: Value,
+    #[case] pre_call_facts: PreCallFacts,
+    #[case] picked: &[&str],
+) {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "openai/a", "weight": 1}, "model_info": {"id": "a1"}},
+            {"model_name": "primary", "litellm_params": {"model": "openai/b", "weight": 0}, "model_info": {"id": "a2"}},
+        ]
+    }))
+    .unwrap();
+    let host = Arc::new(ScriptedHost {
+        pre_call_facts,
+        ..ScriptedHost::default()
+    });
+    let router = router(pre_call_checked(config), json!({}), host.clone());
+    let Value::Object(carried) = carried else {
+        panic!("the carried state is an object");
+    };
+    let named = [("deployment_id".to_owned(), json!("a2"))];
+    let _ = router
+        .retry_stream(
+            Op::from("acompletion"),
+            stream_request(),
+            origin(Value::Object(named.into_iter().chain(carried).collect())),
+            server_error(),
+        )
+        .await;
+    assert_eq!(host.selected(), picked);
+}
+
+#[rstest]
 #[tokio::test]
 async fn a_stream_context_window_error_is_not_retried_without_pre_call_checks(
     config: RouterConfig,

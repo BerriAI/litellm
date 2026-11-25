@@ -328,6 +328,8 @@ pub struct Attempt {
     pub max_retries: u32,
     /// How many deployments `get_model_list` lists for the level's group (`model_group_size`).
     pub model_group_size: usize,
+    pub refused_ids: Vec<String>,
+    pub provider_refused_window: bool,
 }
 
 /// What a successful attempt returns: the host's own response, which the core hands back

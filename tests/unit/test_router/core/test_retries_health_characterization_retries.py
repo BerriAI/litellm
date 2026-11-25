@@ -46,7 +46,15 @@ from tests.unit.test_router.core.scripted_host import (
     server_error,
     timeout,
 )
-from tests.unit.test_router.core.streaming_helpers import request_logging
+from tests.unit.test_router.core.streaming_helpers import (
+    MESSAGE_START,
+    MESSAGE_STOP,
+    MESSAGES,
+    anthropic_stream,
+    collect_bytes,
+    request_logging,
+    text_delta,
+)
 
 
 def group(
@@ -223,6 +231,27 @@ async def test_a_context_window_error_retries_a_larger_copy_once_the_refused_dep
     assert not isinstance(response, Exception)
     assert host.deployments_called("acompletion") == ["small", "large"]
     assert list(cooled_down(core, ["small", "large"])) == ["small"]
+
+
+@pytest.mark.asyncio
+async def test_a_stream_that_breaks_before_content_never_retries_the_deployment_that_refused_the_prompt(
+    make_core: MakeCore, host: ScriptedHost
+) -> None:
+    answer: Final = (MESSAGE_START, text_delta("ok"), MESSAGE_STOP)
+    core: Final = make_core(
+        model_list=[deployment("g", "a", weight=1), deployment("g", "b", weight=0)],
+        num_retries=2,
+        enable_pre_call_checks=True,
+    )
+    host.answer("openai/a", fresh(context_window))
+    host.answer("openai/b", anthropic_stream(MESSAGE_START, error=server_error()), anthropic_stream(*answer))
+
+    stream: Final = await core.aanthropic_messages(  # pyright: ignore[reportAttributeAccessIssue]  # endpoint method
+        model="g", messages=MESSAGES, max_tokens=5, stream=True
+    )
+
+    assert await collect_bytes(stream) == list(answer)
+    assert host.deployments_called() == ["a", "b", "b"]
 
 
 @pytest.mark.asyncio

@@ -5327,6 +5327,8 @@ class _Driver:
             deployment_id=deployment_id if isinstance(deployment_id, str) else None,
             attempted_retries=number("retry"),
             routed=routed if isinstance(routed, str) else None,
+            refused_ids=_strings(step.get("refused_ids")),
+            provider_refused_window=step.get("provider_refused_window") is True,
             slot=slot,
             explain_failure=self._hop_failure_explainer(step),
             caller_key_origin=self._caller_key_origin,

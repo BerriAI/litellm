@@ -260,6 +260,8 @@ pub(crate) enum HostCall {
         max_retries: u32,
         model_group_size: usize,
         shape: AttemptShape,
+        refused_ids: Vec<String>,
+        provider_refused_window: bool,
     },
     Sleep {
         seconds: f64,
@@ -892,6 +894,8 @@ impl RouterHost for PythonRouterHost {
             max_retries: attempt.max_retries,
             model_group_size: attempt.model_group_size,
             shape: AttemptShape::of(attempt),
+            refused_ids: attempt.refused_ids.clone(),
+            provider_refused_window: attempt.provider_refused_window,
         };
         let (result, blocked, deferred, tracks_usage) = match call_host(call).await {
             HostCallResponse::Attempt(result) => (result, None, false, None),

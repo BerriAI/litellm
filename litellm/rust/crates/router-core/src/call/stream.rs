@@ -19,7 +19,7 @@ use crate::{
     error::{AttemptError, Error, FailureKind},
     fallback::FallbackTarget,
     health::should_retry_status,
-    host::{CallError, RouterEvent, RouterHost, RouterRequest, UncountedRetries},
+    host::{Attempt, CallError, RouterEvent, RouterHost, RouterRequest, UncountedRetries},
     retry::RetryStep,
     select::{SelectInputs, skips_batch_only},
 };
@@ -40,6 +40,8 @@ pub struct StreamOrigin {
     attempted_retries: u32,
     /// The budget the first stream retry committed to (`committed_retry_budget_for_request`).
     committed_budget: Option<u32>,
+    refused_ids: Vec<String>,
+    provider_refused_window: bool,
 }
 
 /// A [`StreamOrigin`] as the Python host hands it back. It names the level without the params
@@ -58,6 +60,8 @@ struct Document {
     committed_budget: Option<u32>,
     /// The group a pre-routing hook selected for `group`, which the fallback lookup keys on first.
     routed: Option<String>,
+    refused_ids: Vec<String>,
+    provider_refused_window: bool,
 }
 
 impl From<Document> for StreamOrigin {
@@ -74,6 +78,8 @@ impl From<Document> for StreamOrigin {
             deployment_id: document.deployment_id,
             attempted_retries: document.attempted_retries,
             committed_budget: document.committed_budget,
+            refused_ids: document.refused_ids,
+            provider_refused_window: document.provider_refused_window,
         }
     }
 }
@@ -118,20 +124,17 @@ pub struct Unanswered<F> {
 }
 
 impl StreamOrigin {
-    /// The origin of the response an attempt of `target` at `at` returned.
-    pub(super) fn of(
-        target: Target,
-        at: FallbackHop,
-        deployment_id: Option<String>,
-        retry: u32,
-    ) -> Self {
+    /// The origin of the response `attempt` of `target` returned.
+    pub(super) fn of(target: Target, deployment_id: Option<String>, attempt: &Attempt) -> Self {
         Self {
             target,
-            depth: at.depth,
-            level: at.level,
+            depth: attempt.fallback_depth,
+            level: attempt.fallback_level,
             deployment_id,
-            attempted_retries: retry,
+            attempted_retries: attempt.retry,
             committed_budget: None,
+            refused_ids: attempt.refused_ids.clone(),
+            provider_refused_window: attempt.provider_refused_window,
         }
     }
 
@@ -343,7 +346,9 @@ impl<H: RouterHost> Call<'_, H> {
         provider_refused_window: bool,
     ) -> Result<super::RouterResponse<H::Response>, Error> {
         let mut chain = FallbackChain {
-            provider_refused_window: provider_refused_window || refused_by_provider(&failed.error),
+            provider_refused_window: provider_refused_window
+                || origin.provider_refused_window
+                || refused_by_provider(&failed.error),
             ..FallbackChain::default()
         };
         if request.model != origin.target.group {
@@ -375,7 +380,8 @@ impl<H: RouterHost> Call<'_, H> {
     ) -> Result<super::RouterResponse<H::Response>, Spent> {
         // A stream's retries start from a chain that has tried nothing.
         let mut chain = FallbackChain {
-            provider_refused_window: failure.is_a("ContextWindowExceededError"),
+            provider_refused_window: origin.provider_refused_window
+                || failure.is_a("ContextWindowExceededError"),
             ..FallbackChain::default()
         };
         let level = Level {
@@ -402,6 +408,7 @@ impl<H: RouterHost> Call<'_, H> {
             requested: Some(target.group.clone()),
             fallback_hop: level.at.level > 0,
             failed_ids: origin.deployment_id.iter().cloned().collect(),
+            refused_ids: origin.refused_ids.clone(),
             refuse_uncertain: level.refuses_uncertain(),
             ..SelectInputs::default()
         };

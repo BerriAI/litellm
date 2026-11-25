@@ -1462,6 +1462,8 @@ impl<H: RouterHost> Call<'_, H> {
             scope: at.scope,
             max_retries,
             model_group_size: snapshot.registry.model_list_len(&target.group),
+            refused_ids: inputs.refused_ids.clone(),
+            provider_refused_window: level.chain.provider_refused_window,
         };
         // Every attempt runs through the host; the core records its outcome itself, as far as the
         // request's `OutcomeCallbacks` reach, except a deferred stream's: its request counts now
@@ -1562,9 +1564,8 @@ impl<H: RouterHost> Call<'_, H> {
                             routed,
                             ..target.clone()
                         },
-                        at,
                         Some(deployment.id.clone()),
-                        retry,
+                        &attempt,
                     ),
                 })
             }
@@ -1727,6 +1728,8 @@ impl<H: RouterHost> Call<'_, H> {
             scope: at.scope,
             max_retries,
             model_group_size: snapshot.registry.model_list_len(&target.group),
+            refused_ids: Vec::new(),
+            provider_refused_window: level.chain.provider_refused_window,
         };
         match self.host.attempt(&attempt).await {
             Ok(output) => Ok(RouterResponse {
@@ -1742,9 +1745,8 @@ impl<H: RouterHost> Call<'_, H> {
                         routed: None,
                         ..target.clone()
                     },
-                    at,
                     None,
-                    retry,
+                    &attempt,
                 ),
             }),
             Err(failure) => Err(self.failed(failure, None).into()),
