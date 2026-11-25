@@ -1088,7 +1088,7 @@ class _RetryOverlap:
 
 
 @pytest.mark.asyncio
-async def test_retries_of_concurrent_audit_writes_use_one_database_connection_at_a_time(
+async def test_retries_of_concurrent_audit_writes_take_turns_and_those_waiting_count_a_failed_turn_as_their_own(
     audit_log_store: FakeAuditLogStore,
     audit_failure_metric: _RecordedFailureMetric,
 ) -> None:
@@ -1102,8 +1102,47 @@ async def test_retries_of_concurrent_audit_writes_use_one_database_connection_at
     await _wait_for_audit_retries()
 
     assert overlap.most_running == 1
-    assert audit_log_store.attempts == 9
+    assert audit_log_store.attempts == 3 + 2
     assert audit_failure_metric.callback_names == ["audit_log_database"] * 3
+
+
+@pytest.mark.asyncio
+async def test_retries_that_waited_behind_a_failed_turn_each_try_again_once_the_database_is_back(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+) -> None:
+    overlap: Final = _RetryOverlap(first_attempts=3)
+    audit_log_store.during_attempt = overlap.during_attempt
+    audit_log_store.next_errors.extend(_database_failure(unavailable=True) for _ in range(3 + 1))
+    writes: Final = tuple(
+        _audit_log(datetime.now(timezone.utc), {"n": n}).model_copy(update={"id": f"audit-{n}"}) for n in range(3)
+    )
+
+    await asyncio.gather(*(create_audit_log_for_update(write) for write in writes))
+    await _wait_for_audit_retries()
+
+    assert sorted(row["id"] for row in audit_log_store.rows) == ["audit-0", "audit-1", "audit-2"]
+    assert audit_log_store.attempts == 3 + 1 + 3
+    assert audit_failure_metric.callback_names == []
+
+
+@pytest.mark.asyncio
+async def test_a_shutdown_during_a_slow_failure_counts_every_queued_retry_once_one_last_attempt_fails(
+    audit_log_store: FakeAuditLogStore,
+    audit_failure_metric: _RecordedFailureMetric,
+) -> None:
+    overlap: Final = _RetryOverlap(first_attempts=5, hold_seconds=0.2)
+    audit_log_store.during_attempt = overlap.during_attempt
+    audit_log_store.error = _database_failure(unavailable=True)
+
+    with patch("litellm.proxy.management_helpers.audit_logs._AUDIT_WRITE_RETRY_DELAYS_SECONDS", (10.0, 10.0)):
+        await asyncio.gather(
+            *(create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"n": n})) for n in range(5))
+        )
+        await asyncio.wait_for(drain_audit_tasks(timeout=0.5), timeout=2.0)
+
+    assert audit_log_store.attempts == 5 + 1
+    assert audit_failure_metric.callback_names == ["audit_log_database"] * 5
 
 
 @pytest.mark.asyncio
@@ -1155,26 +1194,39 @@ def test_a_retry_still_running_when_its_time_budget_ends_is_counted_and_left_to_
     audit_log_store.during_attempt = stalled.during_attempt
     audit_log_store.next_errors.append(_database_failure(unavailable=True))
     loop: Final = _SkippableClockLoop()
+    recorder: Final = _WarningRecorder()
 
-    async def outlast_the_budget_then_release() -> tuple[list[str], int]:
+    async def outlast_the_budget_then_release() -> tuple[list[str], int, list[str]]:
         await create_audit_log_for_update(_audit_log(datetime.now(timezone.utc), {"members": ["u1"]}))
         await stalled.reached.wait()
         loop.skipped += _AUDIT_WRITE_RETRY_BUDGET_SECONDS
         await _wait_for_audit_retries()
-        at_the_limit: Final = (list(audit_failure_metric.callback_names), len(audit_log_store.rows))
+        at_the_limit: Final = (
+            list(audit_failure_metric.callback_names),
+            len(audit_log_store.rows),
+            list(recorder.messages),
+        )
         stalled.released.set()
         await drain_audit_tasks()
         return at_the_limit
 
+    verbose_proxy_logger.addHandler(recorder)
     try:
-        counted_at_the_limit, stored_at_the_limit = loop.run_until_complete(outlast_the_budget_then_release())
+        counted_at_the_limit, stored_at_the_limit, warned_at_the_limit = loop.run_until_complete(
+            outlast_the_budget_then_release()
+        )
     finally:
+        verbose_proxy_logger.removeHandler(recorder)
         loop.close()
 
     assert counted_at_the_limit == ["audit_log_database"]
     assert stored_at_the_limit == 0
     assert [row["id"] for row in audit_log_store.rows] == ["audit-1"]
     assert audit_log_store.attempts == 2
+    assert recorder.messages[len(warned_at_the_limit) :] == [
+        "Audit log for updated LiteLLM_TeamTable team-a was stored after its retry limit, "
+        "so it was counted as lost but is saved"
+    ]
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ Functions to create audit logs for LiteLLM Proxy
 
 import asyncio
 import contextlib
+import functools
 import json
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -179,15 +180,28 @@ _T = TypeVar("_T")
 
 
 class AuditTaskRegistry:
-    __slots__ = ("_drain_signals", "_pending_tasks", "_retry_locks")
+    __slots__ = ("_drain_signals", "_pending_tasks", "_retry_failures", "_retry_locks")
 
     def __init__(self) -> None:
         self._pending_tasks: Final[set[asyncio.Task[object]]] = set()  # mutable-ok: background task tracking
         self._retry_locks: Final[WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Lock]] = WeakKeyDictionary()
         self._drain_signals: Final[WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Event]] = WeakKeyDictionary()
+        self._retry_failures: Final[WeakKeyDictionary[asyncio.AbstractEventLoop, float]] = WeakKeyDictionary()
 
     def retry_lock(self) -> asyncio.Lock:
         return self._retry_locks.setdefault(asyncio.get_running_loop(), asyncio.Lock())
+
+    def retry_failed_since(self, moment: float) -> bool:
+        failed_at: Final = self._retry_failures.get(asyncio.get_running_loop())
+        return failed_at is not None and failed_at >= moment
+
+    def end_retry_attempt(self, attempt: asyncio.Task[Exception | None]) -> None:
+        self.retry_lock().release()
+        failure: Final = None if attempt.cancelled() else attempt.result()
+        if failure is None or not _is_retryable_audit_failure(failure):
+            return
+        loop: Final = asyncio.get_running_loop()
+        self._retry_failures[loop] = loop.time()
 
     def _drain_signal(self) -> asyncio.Event:
         return self._drain_signals.setdefault(asyncio.get_running_loop(), asyncio.Event())
@@ -370,22 +384,34 @@ def _seconds_left(deadline: float) -> float:
     return deadline - asyncio.get_running_loop().time()
 
 
+def _report_audit_write_stored_late(write: _AuditWrite, attempt: asyncio.Task[Exception | None]) -> None:
+    if attempt.cancelled() or attempt.result() is not None:
+        return
+    for row in write.rows:
+        verbose_proxy_logger.warning(
+            "Audit log for %s was stored after its retry limit, so it was counted as lost but is saved",
+            _audit_row_label(row),
+        )
+
+
 async def _attempt_audit_retry(write: _AuditWrite, failure: Exception, deadline: float) -> Exception | None:
+    queued_at: Final = asyncio.get_running_loop().time()
     lock: Final = _audit_task_registry.retry_lock()
     try:
         await asyncio.wait_for(lock.acquire(), timeout=max(_seconds_left(deadline), 0.0))
     except asyncio.TimeoutError:
         return failure
-    if _seconds_left(deadline) <= 0:
+    if _seconds_left(deadline) <= 0 or _audit_task_registry.retry_failed_since(queued_at):
         lock.release()
         return failure
     attempt: Final = track_audit_task(
         asyncio.create_task(_attempt_audit_write(write), name=f"attempt of {_audit_write_label(write)} to the database")
     )
-    attempt.add_done_callback(lambda _: lock.release())
+    attempt.add_done_callback(_audit_task_registry.end_retry_attempt)
     try:
         return await asyncio.wait_for(asyncio.shield(attempt), timeout=_seconds_left(deadline))
     except asyncio.TimeoutError:
+        attempt.add_done_callback(functools.partial(_report_audit_write_stored_late, write))
         return failure
 
 
