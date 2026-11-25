@@ -10,7 +10,7 @@ from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import StrictInt, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -47,7 +47,11 @@ from litellm.proxy.hooks.batch_enqueued_tokens import (
     resolve_batch_enqueued_token_scopes,
     resolve_project_model_batch_enqueued_token_scopes,
 )
-from litellm.proxy.hooks.parallel_request_limiter_v3 import ITPM_DESCRIPTOR_KEYS, OTPM_DESCRIPTOR_KEYS
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    ITPM_DESCRIPTOR_KEYS,
+    OTPM_DESCRIPTOR_KEYS,
+    PROJECT_ITPM_DESCRIPTOR_KEY,
+)
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.rust_bridge.execution import drive
 from litellm.types.integrations.custom_logger_v2 import Record
@@ -87,7 +91,7 @@ _RESERVATION: Final = TypeAdapter(BatchEnqueuedTokenReservation)
 _OVER_LIMIT: Final = TypeAdapter(BatchEnqueuedTokenOverLimit)
 _OUTCOME: Final = TypeAdapter(dict[str, object])
 _PTU_FIELDS: Final = TypeAdapter(dict[str, str | int | float])
-_MODEL_LIMITS: Final = TypeAdapter(dict[str, int])
+_IO_LIMIT: Final[TypeAdapter[int | None]] = TypeAdapter(StrictInt | None)
 _READS: Final = frozenset(
     {
         Field.key_identity,
@@ -626,15 +630,36 @@ def _metadata_member(metadata: object, name: str) -> object:
     return entries.get(name) if entries else None
 
 
-def _io_limits(auth: UserAPIKeyAuth, scope: str, name: str) -> Mapping[str, int] | None:
-    limits: Final = _metadata_member(_member(auth, scope), name)
-    if limits is None:
-        return None
+def _valid_io_limit(value: object) -> int | None:
     try:
-        return _MODEL_LIMITS.validate_python(limits)
+        return _IO_LIMIT.validate_python(value)
     except ValidationError:
-        verbose_proxy_logger.warning("Ignoring %s.%s: expected a mapping of model group to integer", scope, name)
         return None
+
+
+def io_limit_values(metadata: object, name: str) -> tuple[int, ...]:
+    return tuple(
+        limit
+        for limit in map(_valid_io_limit, (_entries(_metadata_member(metadata, name)) or {}).values())
+        if limit is not None
+    )
+
+
+def _io_limit(source: str, model: object, value: object) -> int | None:
+    limit: Final = _valid_io_limit(value)
+    if limit is None and value is not None:
+        verbose_proxy_logger.warning("Ignoring %s[%s]: expected an integer", source, model)
+    return limit
+
+
+def _io_limits(auth: UserAPIKeyAuth, scope: str, name: str) -> Mapping[str, int | None] | None:
+    limits: Final = _metadata_member(_member(auth, scope), name)
+    entries: Final = _entries(limits)
+    if entries is None:
+        if limits is not None:
+            verbose_proxy_logger.warning("Ignoring %s.%s: expected a mapping of model group to integer", scope, name)
+        return None
+    return {str(model): _io_limit(f"{scope}.{name}", model, value) for model, value in entries.items()}
 
 
 def _auth_metadata(auth: UserAPIKeyAuth | None) -> Mapping[str, object]:
@@ -873,22 +898,30 @@ async def _prepared_batch(
                 if not project_covers_batch or descriptor["key"].endswith(BATCH_TPD_DESCRIPTOR_SUFFIX)
             )
         )
-        io_descriptors, io_increments = (
-            await batch._create_project_io_descriptors_for_models(  # pyright: ignore[reportPrivateUsage]  # the batch limiter's own descriptors
-                user_api_key_dict=auth, per_model_usage=usage.per_model_usage
+        io_charges: Final = (
+            ()
+            if uncharged
+            else tuple(
+                (descriptor, increment)
+                for descriptor, increment in zip(
+                    *await batch._create_project_io_descriptors_for_models(  # pyright: ignore[reportPrivateUsage]  # the batch limiter's own descriptors
+                        user_api_key_dict=auth, per_model_usage=usage.per_model_usage
+                    ),
+                    strict=True,
+                )
+                if not project_covers_batch
+                or descriptor["key"] not in (PROJECT_ITPM_DESCRIPTOR_KEY, PROJECT_OTPM_DESCRIPTOR_KEY)
             )
-            if not (enqueued_scopes and key_and_team_scopes) and not project_covers_batch
-            else ([], [])
         )
     except HTTPException as error:
         return Abort(status=error.status_code, message=str(error.detail), exception=error)
     except Exception:  # noqa: BLE001  # the Python batch limiter lets the request through when its preparation fails
         return None
     return {
-        "descriptors": [dict(descriptor) for descriptor in (*charged, *io_descriptors)],
+        "descriptors": [dict(descriptor) for descriptor in (*charged, *(descriptor for descriptor, _ in io_charges))],
         "increments": [
             *((usage.request_count, usage.total_tokens) for _ in charged),
-            *((increment["requests"], increment["tokens"]) for increment in io_increments),
+            *((increment["requests"], increment["tokens"]) for _, increment in io_charges),
         ],
         "request_count": usage.request_count,
         "total_tokens": usage.total_tokens,
@@ -900,7 +933,7 @@ async def _prepared_batch(
         "enqueued_scopes": [dataclasses.asdict(scope) for scope in enqueued_scopes],
         "counters_after_reservation": bool(enqueued_scopes)
         and not key_and_team_scopes
-        and (bool(charged) or not project_covers_batch),
+        and (bool(charged or io_charges) or not project_covers_batch),
     }
 
 

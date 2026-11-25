@@ -1047,6 +1047,54 @@ async def test_key_output_limit_still_refuses_a_batch_the_project_enqueued_token
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("malformed", ["abc", {_BATCH_ALIAS: None}], ids=["text", "unset limit"])
+async def test_malformed_team_output_limit_metadata_leaves_the_key_token_limit_enforced(
+    alias_routed_batch: respx.MockRouter, malformed: object
+):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS),))
+    )
+    _, _, batch_limiter = _make_limiters()
+
+    with pytest.raises(HTTPException) as refused:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key=hash_token("sk-batch"),
+                models=[_BATCH_ALIAS],
+                tpm_limit=1,
+                team_id="team-1",
+                team_metadata={"model_otpm_limit": malformed},
+            ),
+            cache=DualCache(),
+            data=dict(_alias_routing("body")),
+            call_type="acreate_batch",
+        )
+
+    assert refused.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_project_input_limit_without_a_value_still_counts_the_batch(alias_routed_batch: respx.MockRouter):
+    alias_routed_batch.get(_ROUTED_FILE_URL).mock(
+        side_effect=_serve_file_to_the_deployment_key((_row_naming(_BATCH_ALIAS),))
+    )
+    _, _, batch_limiter = _make_limiters()
+
+    counted: Final = await batch_limiter.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=hash_token("sk-batch"),
+            project_id="project-1",
+            project_metadata={"model_itpm_limit": {_BATCH_ALIAS: None}},
+        ),
+        cache=DualCache(),
+        data=dict(_alias_routing("body")),
+        call_type="acreate_batch",
+    )
+
+    assert counted["_batch_token_count"] > 0
+
+
+@pytest.mark.asyncio
 async def test_alias_routed_row_is_charged_once_when_the_alias_and_deployment_model_share_a_quota_group(
     openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):

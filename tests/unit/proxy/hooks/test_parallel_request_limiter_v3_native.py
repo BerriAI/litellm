@@ -1015,8 +1015,8 @@ async def test_a_key_without_a_team_gets_no_team_io_counter_from_its_own_metadat
 @pytest.mark.parametrize("scope", ["metadata", "team_metadata"], ids=["key", "team"])
 @pytest.mark.parametrize(
     "malformed",
-    ["abc", ["x"], {"gpt-4o": "abc"}, {"gpt-4o": ["x"]}],
-    ids=["text", "list", "text limit", "list limit"],
+    ["abc", ["x"], {"gpt-4o": "abc"}, {"gpt-4o": ["x"]}, {"gpt-4o": True}],
+    ids=["text", "list", "text limit", "list limit", "boolean limit"],
 )
 async def test_malformed_key_or_team_io_limit_metadata_is_ignored_and_the_request_is_admitted(
     backend: int | None, scope: str, malformed: object
@@ -1030,6 +1030,23 @@ async def test_malformed_key_or_team_io_limit_metadata_is_ignored_and_the_reques
     assert await _run(side, 0, _admit, request) is None
 
     assert _io_tokens(side) == [None, None, None, None]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("scope", "counter"), [("metadata", 1), ("team_metadata", 3)], ids=["key", "team"])
+@pytest.mark.parametrize("other", [None, "abc"], ids=["unset", "text"])
+async def test_a_malformed_io_limit_for_another_model_leaves_the_valid_limit_enforced(
+    backend: int | None, scope: str, counter: int, other: object
+) -> None:
+    side: Final = _side(_clock(backend), port=backend)
+    request: Final = Request(
+        _auth(team_id="t1", **{scope: {"model_otpm_limit": {"gpt-4o": 20, "other": other}}}),
+        {**_CHAT, "max_tokens": 20},
+    )
+
+    assert await _run(side, 0, _admit, request) is None
+
+    assert _io_tokens(side)[counter] == 20
 
 
 @pytest.mark.asyncio
@@ -1324,6 +1341,25 @@ async def test_a_batch_is_charged_and_refused_like_python(
     )
     assert observed[0] is None
     assert observed[2] is not None or end == "proxy_failure"
+
+
+@pytest.mark.asyncio
+async def test_key_output_limit_still_refuses_a_batch_the_project_enqueued_token_limit_covers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _batch_usage(monkeypatch, total_tokens=600, request_count=6)
+    auth: Final = _auth(
+        metadata={"model_otpm_limit": {"gpt-4o": 150}},
+        project_id="proj",
+        project_metadata={"model_batch_enqueued_token_limit": {"gpt-4o": 1000000}},
+    )
+
+    outcomes: Final = await _admitted(
+        _side(Clock()), [Request(auth, _BATCH, call_type="acreate_batch") for _ in range(2)]
+    )
+
+    assert outcomes[0] is None
+    assert outcomes[1] is not None and "model_per_key_otpm" in str(outcomes[1])
 
 
 def _batch_object(batch_id: str, status: str) -> SimpleNamespace:
