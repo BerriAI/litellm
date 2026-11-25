@@ -329,7 +329,7 @@ async def test_native_count_matches_python_budget_counter(
 async def test_tiktoken_counts_long_text_exactly_where_python_chunks(
     model: str, tokenizer: bridge.RustTokenizer
 ) -> None:
-    """Python encodes tiktoken text in fixed-size chunks (drift of up to one token per chunk boundary); Rust does not."""
+    """Python cuts whitespace-free tiktoken text at the chunk size (up to one extra token per chunk); Rust does not."""
     text: Final = "tokenization," * 4_000
     body: Final = {"model": model, "messages": [{"role": "user", "content": text}]}
     encoding: Final = Tokenizer.from_tiktoken(tokenizer)
