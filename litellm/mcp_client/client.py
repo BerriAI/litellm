@@ -1370,18 +1370,20 @@ class MCPClient:
                 pages.append((page, time.monotonic()))
                 items.extend(items_of(page))
                 if not page.next_cursor:
-                    now: Final = time.monotonic()
-                    freshness: Final = aggregate_freshness(
-                        tuple(age_freshness(value, now - received) for value, received in pages)
-                    )
-                    if preserve_ttl_omission and all("ttl_ms" not in value.model_fields_set for value, _ in pages):
-                        return items, CacheableResult(cache_scope=freshness.cache_scope)
-                    return items, freshness
+                    break
                 if page.next_cursor in cursors:
                     raise RuntimeError("MCP list pagination repeated a cursor")
                 cursors.add(page.next_cursor)
                 cursor = page.next_cursor
-        raise RuntimeError(f"MCP list pagination exceeded {MCP_TOOL_LISTING_MAX_PAGES} pages")
+            else:
+                raise RuntimeError(f"MCP list pagination exceeded {MCP_TOOL_LISTING_MAX_PAGES} pages")
+            now: Final = time.monotonic()
+            freshness: Final = aggregate_freshness(
+                tuple(age_freshness(value, now - received) for value, received in pages)
+            )
+            if preserve_ttl_omission and all("ttl_ms" not in value.model_fields_set for value, _ in pages):
+                return items, CacheableResult(cache_scope=freshness.cache_scope)
+            return items, freshness
 
     async def list_prompts(self, *, raise_on_error: bool = False) -> list[Prompt]:
         return (await self.list_prompts_result(raise_on_error=raise_on_error)).prompts
