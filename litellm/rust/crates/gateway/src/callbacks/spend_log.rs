@@ -81,6 +81,8 @@ pub struct SpendLog {
     logs: Arc<SpendLogs>,
     callback: Arc<dyn ErasedCallback>,
     host: Arc<RustSpendLogHost>,
+    /// The database rows a budget reservation's counters are seeded and floored from.
+    rows: Arc<Rows>,
     /// The spend counters the callback charges, which a budget reservation holds against.
     budgets: Arc<Budgets>,
 }
@@ -108,10 +110,12 @@ impl SpendLog {
             budgets: budgets.clone(),
             tokens: Arc::new(TokenRedactor::new(0, Vec::new())),
         });
+        let rows = Arc::new(Rows::new(database.clone()));
         Self {
             logs,
             callback: Arc::new(callback),
-            host: Arc::new(RustSpendLogHost::new(Some(Rows::new(database.clone())))),
+            host: Arc::new(RustSpendLogHost::new(Some(rows.clone()))),
+            rows,
             budgets,
         }
     }
@@ -119,7 +123,7 @@ impl SpendLog {
     /// The budget reservation over the counters this callback charges, so what it holds is what
     /// the callback settles, with a cold counter started from its row's spend.
     pub(crate) fn reserver(&self) -> Arc<Reserver> {
-        Reserver::new(self.budgets.clone(), self.host.clone())
+        Reserver::new(self.budgets.clone(), self.rows.clone())
     }
 
     /// The spend counters the callback charges and a reservation holds against, which a spend

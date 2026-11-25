@@ -3,13 +3,17 @@
 //! The counter is read from Redis first, since every pod charges it there, and from this process's
 //! memory only when Redis cannot answer, as memory holds only this pod's charges. A clean Redis miss
 //! is a cold counter, seeded once from its row under the counter's seed lock (`SET NX`, so one pod
-//! wins), or from the spend the caller's plan read when the row has none, as
-//! `ensure_spend_counter_initialized` seeds it before a reservation reads it.
+//! wins). A cold counter with no row answers the spend the caller's plan read and writes nothing,
+//! as `get_current_spend` writes nothing there and only `ensure_spend_counter_initialized` seeds it.
 //!
 //! A counter Redis reloaded from an older snapshot reads below the spend its caller already knows
 //! of, so a read under the budget that is below that spend is held to its row's spend as a floor,
 //! and the counter is raised to it with `set_max`, never lowered. The floor is kept in memory for
 //! [`FLOOR_TTL`], so a counter that stays stale costs one row read per window.
+//!
+//! Unlike Python, a kept floor never raises a counter that reads below it. Only a reset lowers a
+//! counter once its floor was kept, and Python's budget reset job zeroes the row and deletes the
+//! counter without announcing a floor, so a kept floor above the counter is reread from the row.
 //!
 //! As in Python, an end user's counter is never seeded from its row, only floored by it.
 
@@ -27,7 +31,8 @@ pub trait RowSpend: Send + Sync {
 }
 
 /// Reads a counter's current spend from the store a budget reservation holds against, seeding and
-/// repairing it from its row.
+/// repairing it from its row. `rows` is the proxy's database, since without one a counter can be
+/// neither seeded nor floored.
 pub struct SpendReader {
     store: Arc<SpendCounters>,
     rows: Arc<dyn RowSpend>,
@@ -53,7 +58,7 @@ impl SpendReader {
         if max_budget.is_none_or(|max_budget| current >= max_budget) || fallback_spend <= current {
             return current;
         }
-        match self.floor(counter).await {
+        match self.floor(counter, current).await {
             Some(floor) if floor > current => {
                 self.repair(counter, floor).await;
                 floor
@@ -85,23 +90,23 @@ impl SpendReader {
                 .seed(counter, Number::Float(spend), LostSeed::Answer)
                 .await
                 .map_or(spend, Number::as_f64),
-            None if fallback_spend > 0.0 => self
-                .store
-                .set_max(counter, Number::Float(fallback_spend))
-                .await
-                .ok()
-                .flatten()
-                .map_or(fallback_spend, Number::as_f64),
             None => fallback_spend,
         }
     }
 
-    /// `_authoritative_floor_spend`: the row's spend, read at most once per [`FLOOR_TTL`]. A reset
-    /// announced while the row was read wins over what the read found.
-    async fn floor(&self, counter: &SpendCounter) -> Option<f64> {
+    /// `_authoritative_floor_spend`: the row's spend, read at most once per [`FLOOR_TTL`] while the
+    /// counter reads at or above it. A reset announced while the row was read wins over what the
+    /// read found.
+    async fn floor(&self, counter: &SpendCounter, current: f64) -> Option<f64> {
         let kept = || self.store.floor(counter).ok().flatten().map(Number::as_f64);
-        if let Some(floor) = kept() {
-            return Some(floor);
+        match kept() {
+            Some(floor) if floor <= current => return Some(floor),
+            Some(_) => {
+                if let Err(error) = self.store.delete_floor(counter) {
+                    tracing::debug!(%error, "dropping a spend counter's kept floor failed");
+                }
+            }
+            None => {}
         }
         let spend = self.rows.stored(counter).await?;
         if let Some(floor) = kept() {
@@ -128,7 +133,10 @@ impl SpendReader {
 mod tests {
     use std::{
         collections::HashMap,
-        sync::atomic::{AtomicUsize, Ordering},
+        sync::{
+            Mutex,
+            atomic::{AtomicUsize, Ordering},
+        },
         time::Duration,
     };
 
@@ -145,19 +153,26 @@ mod tests {
     /// The spend each counter's row holds, by key, counting the reads.
     #[derive(Default)]
     struct Rows {
-        spend: HashMap<String, f64>,
+        spend: Mutex<HashMap<String, f64>>,
         reads: AtomicUsize,
     }
 
     impl Rows {
         fn holding(counter: &SpendCounter, spend: Option<f64>) -> Arc<Self> {
             Arc::new(Self {
-                spend: spend
-                    .map(|spend| (counter.key(), spend))
-                    .into_iter()
-                    .collect(),
+                spend: Mutex::new(
+                    spend
+                        .map(|spend| (counter.key(), spend))
+                        .into_iter()
+                        .collect(),
+                ),
                 reads: AtomicUsize::new(0),
             })
+        }
+
+        /// What a budget reset leaves in the row: its spend zeroed.
+        fn reset(&self, counter: &SpendCounter) {
+            self.spend.lock().unwrap().insert(counter.key(), 0.0);
         }
 
         fn reads(&self) -> usize {
@@ -170,7 +185,7 @@ mod tests {
             Box::pin(async move {
                 self.reads.fetch_add(1, Ordering::SeqCst);
                 tokio::time::sleep(Duration::from_millis(20)).await;
-                self.spend.get(&counter.key()).copied()
+                self.spend.lock().unwrap().get(&counter.key()).copied()
             })
         }
     }
@@ -249,31 +264,43 @@ mod tests {
     }
 
     #[rstest]
-    #[case::from_its_row(team(), Some(4.0), 1.0, 4.0, Some(4.0))]
-    #[case::from_the_plan_without_a_row(team(), None, 3.0, 3.0, Some(3.0))]
-    #[case::not_at_all_with_nothing_spent(team(), None, 0.0, 0.0, None)]
-    #[case::an_end_user_from_the_plan_whatever_its_row_holds(
-        end_user(),
-        Some(4.0),
-        1.0,
-        1.0,
-        Some(1.0)
-    )]
     #[tokio::test]
-    async fn a_cold_counter_is_seeded_for_every_pod(
+    async fn a_cold_counter_is_seeded_from_its_row_for_every_pod(#[future] server: RedisServer) {
+        let server = server.await;
+        let reader = SpendReader::new(store(&server), Rows::holding(&team(), Some(4.0)));
+
+        let read = reader.current(&team(), 1.0, None).await;
+
+        assert_eq!((read, in_redis(&server, &team()).await), (4.0, Some(4.0)));
+    }
+
+    /// `get_current_spend` answers the caller's spend for a counter with no row and writes
+    /// nothing, as only `ensure_spend_counter_initialized` seeds a counter from it.
+    #[rstest]
+    #[case::a_team_without_a_row(team(), None, 3.0)]
+    #[case::a_team_with_nothing_spent(team(), None, 0.0)]
+    #[case::an_end_user_whatever_its_row_holds(end_user(), Some(4.0), 1.0)]
+    #[tokio::test]
+    async fn a_cold_counter_without_a_row_answers_the_plans_spend_and_writes_nothing(
         #[future] server: RedisServer,
         #[case] counter: SpendCounter,
         #[case] row: Option<f64>,
         #[case] fallback_spend: f64,
-        #[case] current: f64,
-        #[case] seeded: Option<f64>,
     ) {
         let server = server.await;
-        let reader = SpendReader::new(store(&server), Rows::holding(&counter, row));
+        let store = store(&server);
+        let reader = SpendReader::new(store.clone(), Rows::holding(&counter, row));
 
         let read = reader.current(&counter, fallback_spend, None).await;
 
-        assert_eq!((read, in_redis(&server, &counter).await), (current, seeded));
+        assert_eq!(
+            (
+                read,
+                in_redis(&server, &counter).await,
+                store.get_local(&counter).unwrap()
+            ),
+            (fallback_spend, None, None)
+        );
     }
 
     #[rstest]
@@ -353,6 +380,38 @@ mod tests {
         let read = reader.current(&team(), 3.0, Some(10.0)).await;
 
         assert_eq!((read, in_redis(&server, &team()).await), (0.0, Some(0.0)));
+    }
+
+    /// Python's budget reset job zeroes the row and deletes the counter without announcing a
+    /// floor, and another pod may reseed the counter from the zeroed row before this one reads
+    /// it. The caller's plan still carries the spend from before the reset, so the floor this
+    /// process kept from before it must not raise the counter back.
+    #[rstest]
+    #[case::deleted(None)]
+    #[case::reseeded_by_another_pod(Some(0.0))]
+    #[tokio::test]
+    async fn a_budget_reset_is_not_undone_by_the_floor_kept_from_before_it(
+        #[future] server: RedisServer,
+        #[case] after_reset: Option<f64>,
+    ) {
+        let server = server.await;
+        let store = store(&server);
+        held(&store, &team(), 1.0).await;
+        let rows = Rows::holding(&team(), Some(5.0));
+        let reader = SpendReader::new(store.clone(), rows.clone());
+        let before = reader.current(&team(), 5.0, Some(10.0)).await;
+        rows.reset(&team());
+        store.delete(std::slice::from_ref(&team())).await.unwrap();
+        if let Some(spend) = after_reset {
+            held(&store, &team(), spend).await;
+        }
+
+        let after = reader.current(&team(), 5.0, Some(10.0)).await;
+
+        assert_eq!(
+            (before, after, in_redis(&server, &team()).await),
+            (5.0, 0.0, Some(0.0))
+        );
     }
 
     #[rstest]

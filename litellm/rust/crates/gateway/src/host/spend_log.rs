@@ -9,6 +9,8 @@
 //! written or charged, its alerts and the logging payload's cost have no counterpart here yet and
 //! are answered with nothing.
 
+use std::sync::Arc;
+
 use futures_util::future::{BoxFuture, join_all};
 use litellm_callbacks::{HostCall, HostFault, HostReply};
 use litellm_callbacks_budgets::RowSpend;
@@ -156,11 +158,11 @@ impl Rows {
 /// Answers the spend log callback's host calls from the gateway's database, `None` when no
 /// database is configured.
 pub struct RustSpendLogHost {
-    rows: Option<Rows>,
+    rows: Option<Arc<Rows>>,
 }
 
 impl RustSpendLogHost {
-    pub fn new(rows: Option<Rows>) -> Self {
+    pub fn new(rows: Option<Arc<Rows>>) -> Self {
         Self { rows }
     }
 
@@ -168,12 +170,10 @@ impl RustSpendLogHost {
         let StoredCounter::Entity { counter_key } = counter else {
             return None;
         };
-        self.stored_spend(&SpendCounter::parse(&counter_key).ok()?)
+        self.rows
+            .as_ref()?
+            .spend(&SpendCounter::parse(&counter_key).ok()?)
             .await
-    }
-
-    async fn stored_spend(&self, counter: &SpendCounter) -> Option<f64> {
-        self.rows.as_ref()?.spend(counter).await
     }
 
     async fn reply(&self, call: &'static str, request: Value) -> HostReply {
@@ -234,16 +234,14 @@ impl Answers for RustSpendLogHost {
     }
 }
 
-impl RowSpend for RustSpendLogHost {
+impl RowSpend for Rows {
     fn stored<'a>(&'a self, counter: &'a SpendCounter) -> BoxFuture<'a, Option<f64>> {
-        Box::pin(self.stored_spend(counter))
+        Box::pin(self.spend(counter))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use litellm_callbacks::{ErasedCallback, Field, FieldSet, FieldValues, Hook, HookInput};
     use litellm_callbacks_budgets::Budgets;
     use litellm_callbacks_spend_logger::{SpendLogCallback, SpendLogParts};
@@ -423,7 +421,8 @@ mod tests {
     async fn a_lifetime_counter_starts_from_the_spend_its_row_holds() {
         let held = Held::holding(TOKEN, json!({"spend": 1.5})).await;
         held.execute(ROWS).await;
-        let host = RustSpendLogHost::new(Some(Rows::new(held.repositories())));
+        let rows = Arc::new(Rows::new(held.repositories()));
+        let host = RustSpendLogHost::new(Some(rows.clone()));
         let key = Token::new(TOKEN).hash().as_str().to_owned();
         let counters = [
             format!("spend:key:{key}"),
@@ -447,7 +446,7 @@ mod tests {
         assert_eq!(
             (
                 host.reply(STORED_SPEND, request).await.unwrap(),
-                RowSpend::stored(&host, &member).await,
+                rows.stored(&member).await,
             ),
             (
                 json!([1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, null, null, null, null]),
