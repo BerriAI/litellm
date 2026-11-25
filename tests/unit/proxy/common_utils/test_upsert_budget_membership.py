@@ -267,7 +267,9 @@ async def test_create_from_temp_pair_never_snapshots_team_default(mock_tx, fake_
 
 
 @pytest.mark.asyncio
-async def test_temp_pair_on_shared_default_member_clones_default_with_its_reset_schedule(mock_tx, fake_user):
+async def test_temp_pair_on_shared_default_member_keeps_the_default_reset_schedule_and_leaves_the_cap_inherited(
+    mock_tx, fake_user
+):
     expiry = datetime(2100, 1, 1, tzinfo=timezone.utc)
     default_reset_at = datetime(2026, 11, 1, tzinfo=timezone.utc)
     mock_tx.litellm_budgettable.find_unique = AsyncMock(
@@ -293,7 +295,6 @@ async def test_temp_pair_on_shared_default_member_clones_default_with_its_reset_
     mock_tx.litellm_teammembership.update.assert_not_called()
     assert stored_budget_row(mock_tx) == {
         "model_max_budget": "{}",
-        "max_budget": 0.4,
         "rpm_limit": 10,
         "budget_duration": "30d",
         "budget_reset_at": default_reset_at,
