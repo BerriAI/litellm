@@ -709,7 +709,7 @@ mod tests {
         "Budget has been exceeded! Key=key Current cost: 10.0, Max budget: 10.0";
 
     #[rstest]
-    #[case::under_its_budget_it_is_held(budget(MAX, 9.0), false, None, Some(HELD))]
+    #[case::under_its_budget_it_is_held(budget(MAX, 9.0), false, None, Some(9.0 + HELD))]
     #[case::at_its_budget_the_check_refuses_before_any_hold(
         budget(MAX, MAX),
         false,
