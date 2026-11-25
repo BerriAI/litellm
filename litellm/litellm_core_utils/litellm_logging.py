@@ -7200,10 +7200,17 @@ def build_custom_logger_compatible_class(
 
         if is_otel_v2_enabled():
             from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger
-            from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+            from litellm.integrations.otel.model.config import (
+                OpenTelemetryV2Config,
+                background_service_spans_from_yaml,
+            )
 
+            yaml_setting: Final = background_service_spans_from_yaml((litellm.callback_settings or {}).get("otel"))
             for callback in _in_memory_loggers:
                 if isinstance(callback, OpenTelemetryV2):
+                    if yaml_setting is not None:
+                        callback.config.emit_background_service_spans = yaml_setting
+                        callback.background_service_spans_db_override = None
                     return callback
             otel_settings: Final = _get_custom_logger_settings_from_proxy_server(callback_name=logging_integration)
             otel_logger_v2: Final = build_otel_v2_logger(
