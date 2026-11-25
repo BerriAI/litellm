@@ -8,10 +8,7 @@ use std::{
     time::SystemTime,
 };
 
-use axum::{
-    http::{HeaderMap, StatusCode},
-    response::{IntoResponse, Response},
-};
+use axum::{http::StatusCode, response::Response};
 use futures_util::{StreamExt, stream};
 use litellm_framer::sse::SseBlock;
 use litellm_gateway_auth::Authenticated;
@@ -109,8 +106,8 @@ pub trait CallHooks: Send + Sync + 'static {
 
     fn post_call_success(&self) -> impl Future<Output = Result<(), HookError>> + Send;
 
-    /// The headers the callbacks add to the answer.
-    fn response_headers(&self) -> impl Future<Output = HeaderMap> + Send;
+    /// The callbacks add headers to the response, which they write to the call's record.
+    fn response_headers(&self) -> impl Future<Output = ()> + Send;
 
     fn succeeded(&self, served: ServedCall) -> impl Future<Output = ()> + Send;
 
@@ -124,18 +121,17 @@ pub(crate) struct HookResponse {
     success_log: Option<ServedCall>,
 }
 
-/// What the post-call hooks leave for a served call's response: the headers the callbacks add,
-/// and the success log of a complete answer.
+/// What the post-call hooks leave for a served call's response: the success log of a complete
+/// response. The headers they add are in the call's record, which
+/// `headers::render_response_headers` writes into the response's head.
 pub(crate) struct PostCall {
-    headers: HeaderMap,
     success_log: Option<ServedCall>,
 }
 
 impl PostCall {
-    /// `response` with the headers the callbacks add.
-    pub(crate) fn answer(self, response: impl IntoResponse) -> HookResponse {
+    pub(crate) fn answer(self, response: Response) -> HookResponse {
         HookResponse {
-            response: (self.headers, response).into_response(),
+            response,
             success_log: self.success_log,
         }
     }
@@ -220,8 +216,8 @@ pub(crate) async fn post_call<E: Endpoint, K: CallHooks>(
     } = served;
     let Some((chunks, read)) = E::held(outcome) else {
         hooks.post_call_success().await?;
+        hooks.response_headers().await;
         return Ok(PostCall {
-            headers: hooks.response_headers().await,
             success_log: Some(ServedCall {
                 model_group,
                 deployment,
@@ -231,10 +227,8 @@ pub(crate) async fn post_call<E: Endpoint, K: CallHooks>(
             }),
         });
     };
-    let post_call = PostCall {
-        headers: hooks.response_headers().await,
-        success_log: None,
-    };
+    hooks.response_headers().await;
+    let post_call = PostCall { success_log: None };
     let hooks = hooks.clone();
     let usage: fn(Counts) -> Option<ChatCompletionsUsage> = E::usage;
     let response_id: fn(&str) -> Option<String> = E::stream_response_id;

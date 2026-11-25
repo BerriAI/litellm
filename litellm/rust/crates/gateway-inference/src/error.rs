@@ -1,6 +1,6 @@
 use axum::http::{HeaderName, HeaderValue, StatusCode, header::RETRY_AFTER};
 use axum::{
-    Extension, Json,
+    Json,
     response::{AppendHeaders, IntoResponse, Response},
 };
 use litellm_gateway_auth_core::AuthzDenial;
@@ -120,13 +120,6 @@ pub struct Ended {
     pub routing: Option<Routing>,
 }
 
-impl Ended {
-    /// What the routing headers layer reads off the response.
-    pub(crate) fn routing(&self) -> Option<Extension<Routing>> {
-        self.routing.clone().map(Extension)
-    }
-}
-
 impl<E: Into<Error>> From<E> for Ended {
     fn from(error: E) -> Self {
         Self {
@@ -146,10 +139,9 @@ pub(crate) enum ErrorFormat {
 impl Ended {
     pub(crate) fn response(self, format: ErrorFormat, request_id: Option<&str>) -> Response {
         match format {
-            ErrorFormat::OpenAi => (self.routing(), *self.error).into_response(),
+            ErrorFormat::OpenAi => (*self.error).into_response(),
             ErrorFormat::Anthropic => (
                 self.error.status(),
-                self.routing(),
                 AppendHeaders(self.error.retry_after()),
                 Json(self.error.body(request_id)),
             )

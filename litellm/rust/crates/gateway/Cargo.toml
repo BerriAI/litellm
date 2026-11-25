@@ -74,6 +74,7 @@ uuid.workspace = true
 [dev-dependencies]
 chrono.workspace = true
 litellm-gateway = { workspace = true, features = ["test-support"] }
+litellm-gateway-inference = { workspace = true, features = ["test-support"] }
 litellm-redis-testing.workspace = true
 litellm-db-testing.workspace = true
 sqlx.workspace = true

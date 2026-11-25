@@ -14,7 +14,7 @@ mod spend_log_input;
 
 use std::sync::Arc;
 
-use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
+use axum::http::StatusCode;
 use litellm_callbacks::{
     Abort, Callback, CallbackError, ErasedCallback, Hook, ManifestError, RequestState,
     Subscription, Verdict, Violation,
@@ -219,14 +219,6 @@ fn refusal(abort: Abort) -> Refusal {
     }
 }
 
-fn header(name: &str, value: &Value) -> Option<(HeaderName, HeaderValue)> {
-    let value = match value {
-        Value::String(text) => HeaderValue::try_from(text.as_str()),
-        other => HeaderValue::try_from(other.to_string()),
-    };
-    Some((HeaderName::try_from(name).ok()?, value.ok()?))
-}
-
 impl Call {
     /// Runs the hook of `point` over the callbacks subscribed to it, in order. On a hook that
     /// decides, the first to abort or fail ends it and the call.
@@ -322,16 +314,8 @@ impl CallHooks for Call {
         self.run(Point::PostCallSuccess).await
     }
 
-    async fn response_headers(&self) -> HeaderMap {
+    async fn response_headers(&self) {
         let _ = self.run(Point::ResponseHeaders).await;
-        record::read(|entries| {
-            entries
-                .response_headers()
-                .iter()
-                .filter_map(|(name, value)| header(name, value))
-                .collect()
-        })
-        .unwrap_or_default()
     }
 
     async fn succeeded(&self, served: ServedCall) {
@@ -691,22 +675,6 @@ mod tests {
                 name: "wrong".to_owned(),
                 hook: Hook::PostCallFailure
             })
-        );
-    }
-
-    #[rstest]
-    #[case::text("x-a", json!("one"), Some("one"))]
-    #[case::a_number_as_python_formats_it("x-a", json!(7), Some("7"))]
-    #[case::a_name_no_header_can_have("x a", json!("one"), None)]
-    fn a_header_a_callback_adds_goes_out_as_text(
-        #[case] name: &str,
-        #[case] value: Value,
-        #[case] sent: Option<&str>,
-    ) {
-        let header = header(name, &value);
-        assert_eq!(
-            header.as_ref().and_then(|(_, value)| value.to_str().ok()),
-            sent
         );
     }
 }
