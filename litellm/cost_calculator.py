@@ -1077,7 +1077,9 @@ def select_model_name_for_cost_calc(
 
     elif priced_base_model is not None or bedrock_pricing_model is not None or provider_response_model is not None:
         return_model = (
-            priced_base_model if priced_base_model is not None else bedrock_pricing_model or provider_response_model
+            _base_model_without_nested_provider(priced_base_model, custom_llm_provider)
+            if priced_base_model is not None
+            else bedrock_pricing_model or provider_response_model
         )
 
     elif completion_response_model is None and hidden_params is not None:
@@ -1104,6 +1106,24 @@ def select_model_name_for_cost_calc(
 
 
 _select_model_name_for_cost_calc = select_model_name_for_cost_calc
+
+
+def _resolves_to_rates(model: str, custom_llm_provider: str | None) -> bool:
+    return _declares_rates(_cost_map_model_info(model, custom_llm_provider))
+
+
+def _base_model_without_nested_provider(base_model: str, custom_llm_provider: str | None) -> str:
+    provider, _, rest = base_model.partition("/")
+    nested_provider, _, name = rest.partition("/")
+    if (
+        provider not in LlmProvidersSet
+        or nested_provider not in LlmProvidersSet
+        or not name
+        or _resolves_to_rates(base_model, custom_llm_provider)
+    ):
+        return base_model
+    unnested: Final = f"{provider}/{name}"
+    return unnested if _resolves_to_rates(unnested, custom_llm_provider) else base_model
 
 
 def _strip_unregistered_leading_segments(model: str, region_name: str | None) -> str:

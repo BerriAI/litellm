@@ -64,6 +64,7 @@ from litellm.types.llms.openai import (
 from litellm.types.llms.vertex_ai import *
 from litellm.types.llms.vertex_ai import (
     VERTEX_CREDENTIALS_TYPES,
+    GeminiFileInspectionMetadata,
     GenerationConfig,
     PartType,
     RequestBody,
@@ -77,6 +78,7 @@ from litellm.types.utils import GenericImageParsingChunk, LlmProviders
 from ..common_utils import (
     check_text_in_content,
     gemini_fetches_url_itself,
+    gemini_media_capability,
     gemini_video_metadata_from_openai,
     get_supports_response_schema,
     get_supports_system_message,
@@ -168,6 +170,18 @@ def _get_highest_media_resolution(current: str | None, new_detail: str | None) -
     return current
 
 
+def gemini_part_media_resolution(
+    model: str | None, detail: str | None, *, custom_llm_provider: str | None = None
+) -> Mapping[str, str] | None:
+    if (
+        model is None
+        or detail is None
+        or not gemini_media_capability(model, "supports_part_media_resolution", custom_llm_provider=custom_llm_provider)
+    ):
+        return None
+    return _convert_detail_to_media_resolution_enum(detail)
+
+
 def _extract_max_media_resolution_from_messages(
     messages: list[AllMessageValues],
 ) -> str | None:
@@ -198,7 +212,7 @@ def _extract_max_media_resolution_from_messages(
                 elif item.get("type") == "file":
                     file_obj = item.get("file")
                     if isinstance(file_obj, dict):
-                        detail = file_obj.get("detail")
+                        detail = file_obj.get("resolution") or file_obj.get("detail")
                 if detail:
                     max_resolution = _get_highest_media_resolution(max_resolution, detail)
     return max_resolution
@@ -209,6 +223,7 @@ def _apply_gemini_metadata(
     model: str | None,
     media_resolution_enum: dict[str, str] | None,
     video_metadata: Mapping[str, object] | None,
+    custom_llm_provider: str | None,
 ) -> PartType:
     """
     Apply media_resolution and video_metadata parameters to a Gemini part.
@@ -219,11 +234,11 @@ def _apply_gemini_metadata(
     if model is None:
         return part
 
-    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-
     part_dict: Final = dict(part)
 
-    if media_resolution_enum is not None and VertexGeminiConfig.is_gemini_3_or_newer(model):
+    if media_resolution_enum is not None and gemini_media_capability(
+        model, "supports_part_media_resolution", custom_llm_provider=custom_llm_provider
+    ):
         part_dict["media_resolution"] = media_resolution_enum
 
     if video_metadata is not None:
@@ -510,7 +525,7 @@ def _normalize_and_validate_gemini_mime_type(mime_type: str, model: str | None) 
     return get_file_mime_type_for_file_type(file_type)
 
 
-def _process_gemini_media(
+def process_gemini_media(
     image_url: str,
     format: str | None = None,
     media_resolution_enum: dict[str, str] | None = None,
@@ -519,6 +534,8 @@ def _process_gemini_media(
     vertex_project: str | None = None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None = None,
     max_download_bytes: int | None = None,
+    *,
+    custom_llm_provider: str | None = None,
 ) -> PartType:
     """
     Given a media URL (image, audio, or video), return the appropriate PartType for Gemini
@@ -594,7 +611,7 @@ def _process_gemini_media(
                 )
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
-            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata, custom_llm_provider)
         elif gemini_fetches_url_itself(image_url):
             # Gemini fetches Files API URIs and YouTube links itself. Fetching them here
             # gets a 403 (Files API) or a YouTube HTML page, so pass the URI through.
@@ -606,19 +623,22 @@ def _process_gemini_media(
                 # Gemini Files API references can be passed through as URI-only.
                 file_data = cast(FileDataType, {"file_uri": image_url})
             part = {"file_data": file_data}
-            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata, custom_llm_provider)
         elif "https://" in image_url and (image_type := format or get_image_mime_type_from_url(image_url)) is not None:
             file_data = FileDataType(mime_type=image_type, file_uri=image_url)
             part = {"file_data": file_data}
-            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata, custom_llm_provider)
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
             image: Final = convert_to_anthropic_image_obj(image_url, format=format, max_bytes=max_download_bytes)
             _blob: Final[BlobType] = {"data": image["data"], "mime_type": image["media_type"]}
             part = {"inline_data": cast(BlobType, _blob)}
-            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata)
+            return _apply_gemini_metadata(part, model, media_resolution_enum, video_metadata, custom_llm_provider)
         raise Exception(f"Invalid image received - {image_url}")
     except Exception as e:
         raise e
+
+
+_process_gemini_media: Final = process_gemini_media
 
 
 def _str_field(fields: Mapping[str, object], *keys: str) -> str | None:
@@ -655,6 +675,7 @@ def _process_gemini_video_url(
             vertex_project=vertex_project,
             vertex_credentials=vertex_credentials,
             max_download_bytes=MAX_VIDEO_DOWNLOAD_BYTES,
+            custom_llm_provider=custom_llm_provider,
         )
     except litellm.ImageFetchError:
         return skip_unfetched_video(
@@ -688,6 +709,35 @@ def snake_to_camel(snake_str: str) -> str:
 
 
 _snake_to_camel = snake_to_camel
+
+
+def encode_gemini_file_inspection_metadata(
+    file: Mapping[str, object], *, model: str | None = None, custom_llm_provider: str | None = None
+) -> GeminiFileInspectionMetadata:
+    document_metadata: Final = as_str_mapping(file.get("document_metadata"))
+    spreadsheet_metadata: Final = as_str_mapping(file.get("spreadsheet_metadata"))
+    document: Final = (
+        GeminiFileInspectionMetadata(
+            document_metadata={snake_to_camel(key): value for key, value in document_metadata.items()}
+        )
+        if document_metadata is not None
+        else GeminiFileInspectionMetadata()
+    )
+    selection: Final[GeminiFileInspectionMetadata] = (
+        {
+            **document,
+            "spreadsheet_metadata": {snake_to_camel(key): value for key, value in spreadsheet_metadata.items()},
+        }
+        if spreadsheet_metadata is not None
+        else document
+    )
+    detail: Final = file.get("resolution") or file.get("detail")
+    resolution: Final = gemini_part_media_resolution(
+        model, detail if isinstance(detail, str) else None, custom_llm_provider=custom_llm_provider
+    )
+    if resolution is None:
+        return selection
+    return {**selection, "media_resolution": resolution}
 
 
 def camel_to_snake(camel_str: str) -> str:
@@ -947,7 +997,7 @@ def _signed_assistant_images(
 def _assistant_image_part(
     source: _AssistantImageSource,
     thought_signature: str | None,
-    model: str | None,
+    target: _TargetModel,
     vertex_project: str | None,
     vertex_credentials: VERTEX_CREDENTIALS_TYPES | None,
 ) -> PartType:
@@ -955,9 +1005,10 @@ def _assistant_image_part(
         image_url=source.url,
         format=source.format,
         media_resolution_enum=_convert_detail_to_media_resolution_enum(source.detail),
-        model=model,
+        model=target.model,
         vertex_project=vertex_project,
         vertex_credentials=vertex_credentials,
+        custom_llm_provider=target.custom_llm_provider,
     )
     return part if thought_signature is None else {**part, "thoughtSignature": thought_signature}
 
@@ -996,7 +1047,7 @@ def _signed_text_and_image_parts(
         else tuple((source, None) for source, _ in sourced_images)
     )
     image_parts: Final = tuple(
-        _assistant_image_part(source, signature, target.model, vertex_project, vertex_credentials)
+        _assistant_image_part(source, signature, target, vertex_project, vertex_credentials)
         for source, signature in signed_images
     )
     if not isinstance(content, str):
@@ -1121,6 +1172,7 @@ def gemini_convert_messages_with_history(
                                 model=model,
                                 vertex_project=vertex_project,
                                 vertex_credentials=vertex_credentials,
+                                custom_llm_provider=custom_llm_provider,
                             )
                             _parts.append(_part)
                         elif element["type"] == "video_url":
@@ -1168,7 +1220,7 @@ def gemini_convert_messages_with_history(
                                 file_dict.get("format") or file_dict.get("mime_type") or file_dict.get("content_type")
                             )
                             file_data = file_dict.get("file_data")
-                            detail = file_dict.get("detail")
+                            detail = file_dict.get("resolution") or file_dict.get("detail")
                             video_metadata = file_dict.get("video_metadata")
                             passed_file = file_id or file_data
                             if passed_file is None:
@@ -1186,8 +1238,9 @@ def gemini_convert_messages_with_history(
                                     video_metadata=video_metadata,
                                     vertex_project=vertex_project,
                                     vertex_credentials=vertex_credentials,
+                                    custom_llm_provider=custom_llm_provider,
                                 )
-                                _parts.append(_part)
+                                _parts.append({**_part, **encode_gemini_file_inspection_metadata(file_dict)})
                             except litellm.BadRequestError:
                                 raise
                             except Exception as e:
@@ -1337,6 +1390,11 @@ def gemini_convert_messages_with_history(
                     messages[msg_i],
                     last_message_with_tool_calls,
                     forward_function_call_id=forward_function_call_id,
+                    allow_gemini_file_references=custom_llm_provider == "gemini",
+                    supports_media_in_tool_response=model is None
+                    or gemini_media_capability(
+                        model, "supports_media_in_tool_response", custom_llm_provider=custom_llm_provider
+                    ),
                     drop_params=drop_params,
                     model=model,
                     custom_llm_provider=custom_llm_provider,
@@ -1589,7 +1647,9 @@ def transform_request_body(
         # For Gemini 2.x models, also add media_resolution to generation_config (global)
         # as a fallback, since some 2.x versions may not support per-part media_resolution.
         # Gemini 1.x does not support mediaResolution at all.
-        if "gemini-2" in model:
+        if "gemini-2" in model and not gemini_media_capability(
+            model, "supports_part_media_resolution", custom_llm_provider=custom_llm_provider
+        ):
             max_media_resolution: Final = _extract_max_media_resolution_from_messages(messages)
             if max_media_resolution:
                 media_resolution_value: Final = _convert_detail_to_media_resolution_enum(max_media_resolution)
