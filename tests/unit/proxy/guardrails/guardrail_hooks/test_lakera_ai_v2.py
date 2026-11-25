@@ -2495,9 +2495,17 @@ def _anthropic_reply(*texts: str) -> dict[str, object]:
     return {"type": "message", "role": "assistant", "content": [{"type": "text", "text": text} for text in texts]}
 
 
+def _responses_body_reply(*texts: str) -> dict[str, object]:
+    content: Final = [{"type": "output_text", "text": text, "annotations": []} for text in texts]
+    message: Final = {"type": "message", "id": "msg_1", "role": "assistant", "status": "completed", "content": content}
+    return {"id": "resp_1", "object": "response", "created_at": 1, "status": "completed", "output": [message]}
+
+
 def _served_texts(response: object) -> tuple[object, ...]:
     if isinstance(response, ResponsesAPIResponse):
         return tuple(block.text for block in response.output[0].content)
+    if isinstance(response, dict) and response.get("object") == "response":
+        return tuple(block["text"] for block in response["output"][0]["content"])
     return tuple(block["text"] for block in response["content"])
 
 
@@ -2515,6 +2523,7 @@ async def _post_call(
 
 _NATIVE_SHAPES: Final = [
     pytest.param({"model": "m", "input": "Which card?"}, _responses_reply, id="responses"),
+    pytest.param({"model": "m", "input": "Which card?"}, _responses_body_reply, id="responses-passthrough-body"),
     pytest.param(
         {"model": "m", "messages": [{"role": "user", "content": "Which card?"}]}, _anthropic_reply, id="messages"
     ),

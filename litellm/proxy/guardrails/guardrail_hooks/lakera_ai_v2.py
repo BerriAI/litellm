@@ -250,7 +250,7 @@ def _text_blocks(container: object, text_type: str) -> tuple[tuple[object, str],
 
 
 def _native_output_text_blocks(response: object) -> tuple[tuple[object, str], ...] | None:
-    if isinstance(response, ResponsesAPIResponse):
+    if isinstance(response, ResponsesAPIResponse) or stream_item_field(response, "object") == "response":
         output: Final = stream_item_items(response, "output")
         return tuple(chain.from_iterable(_text_blocks(item, "output_text") for item in output))
     if stream_item_field(response, "type") == "message":
