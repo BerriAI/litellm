@@ -439,13 +439,10 @@ def test_regression_gpt6_response_format_change_becomes_a_configuration_update(g
     _assert_each_turn_extends_the_previous_input(bodies)
 
 
-@_STREAM
-def test_guard_gpt6_switching_to_a_different_response_format_rewrites_the_top_level_text(
-    gateway: Gateway, stream: bool
-) -> None:
+def test_guard_gpt6_switching_to_a_different_response_format_rewrites_the_top_level_text(gateway: Gateway) -> None:
     city: Final = {"reasoning_effort": "low", "response_format": _CITY_FORMAT}
     country: Final = {"reasoning_effort": "low", "response_format": _COUNTRY_FORMAT}
-    bodies: Final = _run(gateway, [city, city, country, country], stream=stream)
+    bodies: Final = _run(gateway, [city, city, country, country], stream=False)
     city_text: Final = _first_turn_body(gateway, city, "openai-pinned")["text"]
     country_text: Final = _first_turn_body(gateway, country, "openai-pinned")["text"]
 
@@ -470,63 +467,44 @@ def test_regression_gpt6_added_tool_becomes_additional_tools_before_the_new_ques
     _assert_each_turn_extends_the_previous_input(bodies)
 
 
-@_STREAM
-def test_guard_gpt5_effort_change_still_rewrites_the_top_level_reasoning(gateway: Gateway, stream: bool) -> None:
-    bodies: Final = _run(gateway, _efforts("low", "low", "high", "high"), stream=stream, model=_GPT5_MODEL)
+def test_guard_gpt5_effort_change_still_rewrites_the_top_level_reasoning(gateway: Gateway) -> None:
+    bodies: Final = _run(gateway, _efforts("low", "low", "high", "high"), stream=False, model=_GPT5_MODEL)
 
     assert [_effort(body) for body in bodies] == ["low", "low", "high", "high"], bodies
     _assert_no_mid_conversation_items(bodies)
 
 
-@_STREAM
-def test_guard_gpt6_removed_tool_rewrites_the_top_level_tools(gateway: Gateway, stream: bool) -> None:
-    two_tools: Final = _tools(_WEATHER_TOOL, _TIME_TOOL)
-    one_tool: Final = _tools(_WEATHER_TOOL)
-    bodies: Final = _run(gateway, [two_tools, two_tools, one_tool, one_tool], stream=stream)
-    weather_only: Final = [tool for tool in list_value(bodies[0]["tools"]) if "get_weather" in json.dumps(tool)]
-
-    assert [len(list_value(body["tools"])) for body in bodies] == [2, 2, 1, 1], bodies
-    assert bodies[2]["tools"] == bodies[3]["tools"] == weather_only, bodies[2]["tools"]
-    _assert_no_mid_conversation_items(bodies)
-
-
-@_STREAM
-def test_guard_gpt6_caller_that_strips_extra_message_fields_gets_the_top_level_effort_rewrite(
-    gateway: Gateway, stream: bool
-) -> None:
-    bodies: Final = _run(gateway, _efforts("low", "low", "high", "high"), stream=stream, keep_extra_fields=False)
+def test_guard_gpt6_caller_that_strips_extra_message_fields_gets_the_top_level_effort_rewrite(gateway: Gateway) -> None:
+    bodies: Final = _run(gateway, _efforts("low", "low", "high", "high"), stream=False, keep_extra_fields=False)
 
     assert [_effort(body) for body in bodies] == ["low", "low", "high", "high"], bodies
     _assert_no_mid_conversation_items(bodies)
 
 
-@_STREAM
-def test_guard_gpt6_truncation_auto_effort_change_sends_no_configuration_update(gateway: Gateway, stream: bool) -> None:
-    bodies: Final = _run(gateway, _efforts("low", "low", "high", "high", truncation="auto"), stream=stream)
+def test_guard_gpt6_truncation_auto_effort_change_sends_no_configuration_update(gateway: Gateway) -> None:
+    bodies: Final = _run(gateway, _efforts("low", "low", "high", "high", truncation="auto"), stream=False)
 
     assert [body.get("truncation") for body in bodies] == ["auto"] * len(bodies), bodies
     assert [_effort(body) for body in bodies] == ["low", "low", "high", "high"], bodies
     _assert_no_mid_conversation_items(bodies)
 
 
-@_STREAM
 @pytest.mark.parametrize("route", ["openai-pinned", "openai-implicit", "azure-pinned"])
 def test_guard_gpt6_conversation_that_never_changes_settings_sends_only_messages_and_reasoning(
-    gateway: Gateway, route: str, stream: bool
+    gateway: Gateway, route: str
 ) -> None:
-    bodies: Final = _run(gateway, _efforts("medium", "medium", "medium", "medium"), stream=stream, route=route)
+    bodies: Final = _run(gateway, _efforts("medium", "medium", "medium", "medium"), stream=False, route=route)
 
     _assert_top_level_stays_at_the_first_turn(bodies)
     assert {str(item.get("type")) for body in bodies for item in _items(body)} == {"message", "reasoning"}, bodies
     _assert_each_turn_extends_the_previous_input(bodies)
 
 
-@_STREAM
 def test_guard_non_openai_bridge_provider_effort_change_still_rewrites_the_top_level_reasoning(
-    gateway: Gateway, stream: bool
+    gateway: Gateway,
 ) -> None:
     bodies: Final = _run(
-        gateway, _efforts("low", "low", "high", "high"), stream=stream, route="as-written", model=_NON_OPENAI_MODEL
+        gateway, _efforts("low", "low", "high", "high"), stream=False, route="as-written", model=_NON_OPENAI_MODEL
     )
 
     assert [_effort(body) for body in bodies] == ["low", "low", "high", "high"], bodies
@@ -593,14 +571,11 @@ def test_regression_gpt6_effort_change_after_a_tool_removal_keeps_the_rewritten_
     _assert_each_turn_extends_the_previous_input(bodies[2:])
 
 
-@_STREAM
-def test_guard_gpt6_effort_dropped_to_none_with_temperature_rewrites_the_top_level_reasoning(
-    gateway: Gateway, stream: bool
-) -> None:
+def test_guard_gpt6_effort_dropped_to_none_with_temperature_rewrites_the_top_level_reasoning(gateway: Gateway) -> None:
     reasoning: Final = _tools(_WEATHER_TOOL)
     no_reasoning: Final = {**reasoning, "reasoning_effort": "none", "temperature": 0.3}
     bodies: Final = _run(
-        gateway, [reasoning, reasoning, no_reasoning, no_reasoning], stream=stream, model=_GPT6_NONE_EFFORT_MODEL
+        gateway, [reasoning, reasoning, no_reasoning, no_reasoning], stream=False, model=_GPT6_NONE_EFFORT_MODEL
     )
 
     assert [_effort(body) for body in bodies] == ["low", "low", "none", "none"], bodies

@@ -5,7 +5,9 @@ The caller resends the full history every turn and appends each assistant messag
 as the OpenAI SDK returned it. On GPT-6 that change must reach OpenAI as a mid-conversation
 input item instead of a rewritten top-level setting, so the turn that changes settings still
 reads the conversation so far from OpenAI's prompt cache. GPT-5 has no such item, so the
-same conversation there must keep working with the new setting applied directly.
+same conversation there must keep working with the new setting applied directly. The GPT-6
+deployment declares supports_configuration_update_input_item in its model_info, so the test
+holds whichever pricing file the proxy loaded.
 """
 
 from __future__ import annotations
@@ -19,10 +21,11 @@ from e2e_config import unique_marker
 from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from llm_translation.sdk_clients import NO_PROXY_CACHE, SdkClients
-from models import LiteLLMParamsBody
+from models import LiteLLMParamsBody, ModelInfoBody, ModelNewBody
 from openai import OpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionMessageParam, ChatCompletionToolParam
 from proxy_client import ProxyClient
+from pydantic import ConfigDict
 
 pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
@@ -33,6 +36,19 @@ TOOL_ROUNDS: Final = 3
 TOOL_RESULT: Final = "Sunny, 21C, local time 14:05."
 
 Effort: TypeAlias = Literal["low", "high"]
+
+
+class ConfigurationUpdateModelInfo(ModelInfoBody):
+    model_config = ConfigDict(frozen=True)
+    supports_configuration_update_input_item: bool
+
+
+class ConfigurationUpdateModelNewBody(ModelNewBody):
+    model_config = ConfigDict(frozen=True, protected_namespaces=())
+    model_info: ConfigurationUpdateModelInfo | ModelInfoBody
+
+
+GPT6_MODEL_INFO: Final = ConfigurationUpdateModelInfo(supports_configuration_update_input_item=True)
 
 
 def _function_tool(name: str, description: str) -> ChatCompletionToolParam:
@@ -138,17 +154,24 @@ def _converse(conversation: Conversation, turns: Sequence[Turn], first: Reply) -
     return (first, *_converse(conversation, turns[1:], conversation.ask(first.history, turns[0])))
 
 
-def _register(proxy: ProxyClient, resources: ResourceManager, backend: str) -> str:
+def _register(proxy: ProxyClient, resources: ResourceManager, backend: str, model_info: ModelInfoBody) -> str:
     deployment: Final = f"e2e-chat-config-update-{unique_marker()}"
-    deployment_id: Final = proxy.create_model(
-        deployment, LiteLLMParamsBody(model=backend, api_key="os.environ/OPENAI_API_KEY"), provider_live=True
+    deployment_id: Final = proxy.register_model(
+        ConfigurationUpdateModelNewBody(
+            model_name=deployment,
+            litellm_params=LiteLLMParamsBody(model=backend, api_key="os.environ/OPENAI_API_KEY"),
+            model_info=model_info,
+        ),
+        provider_live=True,
     )
     resources.defer(lambda: proxy.delete_model(deployment_id))
     return deployment
 
 
-def _conversation(proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: str) -> Conversation:
-    deployment: Final = _register(proxy, resources, backend)
+def _conversation(
+    proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: str, model_info: ModelInfoBody
+) -> Conversation:
+    deployment: Final = _register(proxy, resources, backend, model_info)
     return Conversation(sdk.openai(resources.key(models=[deployment])), deployment, unique_marker())
 
 
@@ -179,7 +202,7 @@ class TestChatResponsesBridgeConfigurationUpdate:
     def test_gpt6_effort_change_and_added_tool_keep_reading_the_conversation_from_the_prompt_cache(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        replies: Final = _run(_conversation(proxy, resources, sdk, GPT6_MODEL), primed=True)
+        replies: Final = _run(_conversation(proxy, resources, sdk, GPT6_MODEL, GPT6_MODEL_INFO), primed=True)
         _, second, changed, after = replies
 
         assert second.cached_tokens > 0, f"turn 2 read nothing from the prompt cache: {_token_counts(replies)}"
@@ -207,6 +230,6 @@ class TestChatResponsesBridgeConfigurationUpdate:
     def test_gpt5_effort_change_and_added_tool_mid_conversation_still_answer(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        replies: Final = _run(_conversation(proxy, resources, sdk, GPT5_MODEL), primed=False)
+        replies: Final = _run(_conversation(proxy, resources, sdk, GPT5_MODEL, ModelInfoBody()), primed=False)
 
         assert len(replies) == len(_turns()), _token_counts(replies)

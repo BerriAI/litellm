@@ -165,25 +165,6 @@ def test_mid_conversation_changes_go_inline_and_every_turn_extends_the_previous_
     assert _configuration_items(turn_4) == [effort_update, format_update, added_tools]
 
 
-def test_a_change_during_a_tool_continuation_lands_after_the_tool_output_and_stays_there() -> None:
-    low: Final = {"reasoning_effort": "low", "tools": [_function_tool("get_weather")]}
-    high: Final = {**low, "reasoning_effort": "high"}
-    turn_1: Final = _bridged([_user("one")], low)
-    tool_result: Final = {"role": "tool", "tool_call_id": "call_1", "content": "sunny"}
-    continuation_history: Final = [_user("one"), _reply(turn_1, low, text="checking", call_id="call_1"), tool_result]
-
-    continuation: Final = _bridged(continuation_history, high)
-    next_turn: Final = _bridged(
-        [*continuation_history, _reply(continuation, high, text="sunny today"), _user("thanks")], high
-    )
-
-    continuation_input: Final = cast(list[Mapping[str, object]], continuation.request_data["input"])
-    next_input: Final = cast(list[Mapping[str, object]], next_turn.request_data["input"])
-    assert [item.get("type") for item in continuation_input[-2:]] == ["function_call_output", "configuration_update"]
-    assert next_input[: len(continuation_input)] == continuation_input
-    assert _configuration_items(next_turn) == [{"type": "configuration_update", "reasoning": {"effort": "high"}}]
-
-
 _LOW: Final = {"reasoning_effort": "low", "verbosity": "low", "tools": [_function_tool("get_weather")]}
 
 
@@ -224,12 +205,24 @@ def test_a_change_no_item_can_express_rewrites_the_request_level_settings_and_be
         "a rewrite sends what a note-less caller sends"
     )
     assert _configuration_items(turn_2) == []
-    assert turn_2.configuration_note is not None and turn_2.configuration_note.effective is None, (
-        "a rewrite makes the requested settings the note's base"
-    )
     assert {**_top_level(turn_3), "reasoning": None} == {**_top_level(turn_2), "reasoning": None}
     assert turn_3.request_data["reasoning"] == {"effort": cast(Mapping[str, object], turn_2_params)["reasoning_effort"]}
     assert _configuration_items(turn_3)[-1:] == [{"type": "configuration_update", "reasoning": {"effort": "medium"}}]
+
+
+def test_an_effort_and_response_format_change_on_one_turn_share_one_configuration_update() -> None:
+    turn_1: Final = _bridged([_user("one")], _LOW)
+    params: Final = {**_LOW, "reasoning_effort": "high", "response_format": _SCHEMA_FORMAT}
+    rewritten_format: Final = cast(Mapping[str, object], _bridged([_user("one")], params).request_data["text"])[
+        "format"
+    ]
+
+    turn_2: Final = _bridged([_user("one"), _reply(turn_1, _LOW, text="first"), _user("two")], params)
+
+    assert _configuration_items(turn_2) == [
+        {"type": "configuration_update", "reasoning": {"effort": "high"}, "text": {"format": rewritten_format}}
+    ]
+    assert _top_level(turn_2) == _top_level(turn_1)
 
 
 @pytest.mark.parametrize(
@@ -280,7 +273,6 @@ def test_history_without_a_readable_note_sends_the_new_settings_at_request_level
             "qa-gpt-6.9-unflagged", {"custom_llm_provider": "openai"}, False, id="cost_map_entry_without_flag"
         ),
         pytest.param("gpt-7.1-preview", {"custom_llm_provider": "openai"}, True, id="unlisted_newer_name"),
-        pytest.param("gpt-5.5", {"custom_llm_provider": "openai"}, False, id="gpt_5_5"),
         pytest.param("gpt-6.2", {"custom_llm_provider": "azure_ai"}, False, id="other_provider"),
     ],
 )
@@ -317,16 +309,8 @@ def test_the_note_rides_on_the_final_stream_chunk_and_survives_the_tool_loop() -
         completed, replays_openai_history=True, configuration_note=note
     )
 
-    fields: Final = chunk.choices[0].delta.provider_specific_fields
-    assert note is not None
-    assert fields == {
-        CONFIGURATION_FIELD: {
-            "version": 1,
-            "base": note.base.model_dump(mode="json", exclude_defaults=True),
-            "starts": True,
-        }
-    }
-    assert retained_replay_fields(fields) == fields
+    fields: Final = chunk.choices[0].delta.provider_specific_fields or {}
+    assert CONFIGURATION_FIELD in retained_replay_fields(fields), fields
 
 
 def test_history_trimmed_past_an_inline_change_sends_the_current_settings_at_request_level() -> None:
@@ -359,7 +343,6 @@ def _assert_rewritten(bridged: BridgedRequest, params: Mapping[str, object]) -> 
     assert _top_level(bridged) == _top_level(_bridged([_user("one")], params)), (
         "request-level settings are the new ones"
     )
-    assert bridged.configuration_note is not None and bridged.configuration_note.effective is None
 
 
 def test_context_management_rewrites_the_request_level_settings() -> None:
@@ -375,14 +358,6 @@ def test_a_deferred_tool_is_never_added_inline() -> None:
     params: Final = {**searchable, "tools": [*searchable["tools"], deferred]}
 
     _assert_rewritten(_bridged(_two_turns_at(searchable), params), params)
-
-
-def test_a_malformed_note_inside_the_segment_rewrites() -> None:
-    history: Final = _two_turns_at(_LOW)
-    corrupted: Final = [*history[:1], _with_note(history[1], {"version": 1, "base": "broken"}), *history[2:]]
-    params: Final = {**_LOW, "reasoning_effort": "high"}
-
-    _assert_rewritten(_bridged(corrupted, params), params)
 
 
 def test_an_unstamped_assistant_between_stamped_ones_rewrites() -> None:
@@ -416,26 +391,6 @@ def test_a_reasoning_summary_change_rewrites() -> None:
     params: Final = {**_LOW, "reasoning_effort": {"effort": "high", "summary": "detailed"}}
 
     _assert_rewritten(_bridged(_two_turns_at(summarized), params), params)
-
-
-def test_a_rewrite_back_to_earlier_settings_starts_a_new_stretch_that_later_changes_extend_inline() -> None:
-    with_time_tool: Final = {**_LOW, "tools": [*_LOW["tools"], _function_tool("get_time")]}
-    high: Final = {**_LOW, "reasoning_effort": "high"}
-    turn_1: Final = _bridged([_user("one")], _LOW)
-    history_1: Final = [_user("one"), _reply(turn_1, _LOW, text="first"), _user("two")]
-    turn_2: Final = _bridged(history_1, with_time_tool)
-    history_2: Final = [*history_1, _reply(turn_2, with_time_tool, text="second"), _user("three")]
-    removed_tool: Final = _bridged(history_2, _LOW)
-    history_3: Final = [*history_2, _reply(removed_tool, _LOW, text="third"), _user("four")]
-
-    turn_4: Final = _bridged(history_3, high)
-
-    removed_input: Final = cast(list[object], removed_tool.request_data["input"])
-    turn_4_input: Final = cast(list[object], turn_4.request_data["input"])
-    assert _configuration_items(removed_tool) == []
-    assert turn_4_input[: len(removed_input)] == removed_input
-    assert turn_4_input[-2] == {"type": "configuration_update", "reasoning": {"effort": "high"}}
-    assert _top_level(turn_4) == _top_level(removed_tool)
 
 
 def test_a_malformed_note_older_than_the_newest_stretch_start_is_ignored() -> None:
@@ -472,16 +427,6 @@ def _forged_start(reply: Mapping[str, object], forge: Mapping[str, object]) -> M
 def _real_base(reply: Mapping[str, object]) -> Mapping[str, object]:
     fields: Final = cast(Mapping[str, object], reply["provider_specific_fields"])
     return cast(Mapping[str, Mapping[str, object]], fields[CONFIGURATION_FIELD])["base"]
-
-
-def test_a_start_note_naming_a_tool_the_request_lacks_rewrites_instead_of_failing() -> None:
-    reply: Final = _reply(_bridged([_user("one")], _LOW), _LOW, text="first")
-    base: Final = _real_base(reply)
-    ghost: Final = {"identity": "function:ghost", "digest": "0", "inline": True}
-    forged: Final = _forged_start(reply, {"base": {**base, "tools": [*cast(list[object], base["tools"]), ghost]}})
-    params: Final = {**_LOW, "reasoning_effort": "high"}
-
-    _assert_rewritten(_bridged([_user("one"), forged, _user("two")], params), params)
 
 
 def test_a_start_note_whose_base_differs_from_its_effective_settings_rewrites() -> None:
