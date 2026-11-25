@@ -503,10 +503,10 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         self,
         model: str,
         healthy_deployments: list,
-        request_kwargs: dict | None = None,
+        request_kwargs: Mapping[str, object] | None = None,
         parent_otel_span: Span | None = None,
         resource_id_key: str = "resource_id",
-    ) -> list[dict]:
+    ) -> list[dict[str, object]]:
         """
         Filter deployments based on model mappings for a resource.
 

@@ -95,6 +95,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot as UserBudgetSnapshot,  # noqa: PLC0414  # public re-export
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.ldap_sync import LDAPSyncSettings
 from litellm.types.proxy.request_tag_mappings import RequestTagMapping
 from litellm.types.proxy.skill_scanning import SkillScannerConfig
 from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
@@ -435,7 +436,6 @@ class LiteLLMRoutes(enum.Enum):
         "/tinyfish",
         "/vllm",
         "/mistral",
-        "/typesafe",
         "/laya",
         "/bespoke",
         "/openrouter",
@@ -2068,6 +2068,7 @@ class NewTeamRequest(TeamBase):
     )
 
     model_tpm_limit: dict[str, int] | None = None
+    model_tpm_limit_counts_cached_tokens: Mapping[str, bool] | None = None
     default_estimated_output_tokens: PositiveInt | None = None
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
@@ -2148,6 +2149,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     prompts: list[str] | None = None
     model_rpm_limit: dict[str, int] | None = None
     model_tpm_limit: dict[str, int] | None = None
+    model_tpm_limit_counts_cached_tokens: Mapping[str, bool] | None = None
     default_estimated_output_tokens: PositiveInt | None = None
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
@@ -2633,6 +2635,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     Documents all the fields supported by `general_settings` in config.yaml
     """
 
+    ldap_sync: LDAPSyncSettings | None = Field(
+        None,
+        description="Periodically synchronize LDAP groups to teams and existing users' memberships. Requires Redis.",
+    )
+
     access_group_rules: tuple[AccessGroupRule, ...] | None = None
 
     @field_validator("access_group_rules", mode="before")
@@ -2887,6 +2894,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description=(
             "When true, deployments with model_info.disable_background_health_check "
             "are skipped for on-demand GET /health as well as the background health loop."
+        ),
+    )
+    health_check_skip_blocked_background_models: bool = Field(
+        False,
+        description=(
+            "When true, deployments with model_info.blocked set to true are skipped by background health checks. "
+            "With background checks enabled, GET /health reads cached results and can return 503 for a skipped "
+            "deployment because there is no healthy result. On-demand checks and Test Connection are unaffected."
         ),
     )
     background_health_check_model_groups: tuple[str, ...] | None = Field(
@@ -4483,7 +4498,7 @@ class MemberAddRequest(LiteLLMPydanticObjectBase):
         description="Member object or list of member objects to add. Each member must include either user_id or user_email, and a role"
     )
 
-    def __init__(self, **data):
+    def __init__(self, **data: object):
         member_data: Final = data.get("member")
         if isinstance(member_data, list):
             # If member is a list of dictionaries, convert each dictionary to a Member object
@@ -4502,7 +4517,7 @@ class MemberAddRequest(LiteLLMPydanticObjectBase):
 class OrgMemberAddRequest(LiteLLMPydanticObjectBase):
     member: list[OrgMember] | OrgMember
 
-    def __init__(self, **data):
+    def __init__(self, **data: object):
         member_data: Final = data.get("member")
         if isinstance(member_data, list):
             # If member is a list of dictionaries, convert each dictionary to a Member object
@@ -4920,6 +4935,7 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "model_tpm_limit_counts_cached_tokens",
     "model_itpm_limit",
     "model_otpm_limit",
     "default_estimated_output_tokens",

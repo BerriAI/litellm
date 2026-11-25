@@ -7,8 +7,10 @@ repository.workspace = true
 
 [features]
 test-support = []
+fips = ["rustls/fips", "litellm-http/fips", "litellm-at-rest/fips"]
 
 [dependencies]
+litellm-at-rest.workspace = true
 litellm-python-compat.workspace = true
 litellm-env.workspace = true
 litellm-secret-value.workspace = true
@@ -25,6 +27,7 @@ litellm-gateway-auth-core.workspace = true
 jiff.workspace = true
 litellm-callbacks.workspace = true
 parking_lot.workspace = true
+arc-swap.workspace = true
 rand.workspace = true
 litellm-config.workspace = true
 litellm-config-load.workspace = true
@@ -49,6 +52,7 @@ litellm-license.workspace = true
 litellm-llms.workspace = true
 litellm-llms-types.workspace = true
 litellm-model-catalog.workspace = true
+litellm-token-counter = { path = "../token-counter", default-features = false, features = ["tiktoken"] }
 litellm-router-core.workspace = true
 litellm-secrets.workspace = true
 litellm-tracing.workspace = true
@@ -62,6 +66,7 @@ tower-http = { version = "0.6.11", features = ["catch-panic", "cors", "decompres
 uuid.workspace = true
 
 [dev-dependencies]
+chrono.workspace = true
 litellm-gateway = { workspace = true, features = ["test-support"] }
 litellm-redis-testing.workspace = true
 litellm-db-testing.workspace = true

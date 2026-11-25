@@ -2253,6 +2253,19 @@ class RustKeyRepository:
     def find(self, token: str, *, use_writer: bool = False) -> Future[object]: ...
 
 @final
+class RustKeyOwnersRepository:
+    def __new__(cls, database: NativeDatabase) -> RustKeyOwnersRepository: ...
+    def find(
+        self,
+        *,
+        user_id: str | None,
+        team_id: str | None,
+        membership_user_id: str | None,
+        organization_id: str | None,
+        project_id: str | None,
+    ) -> Future[str]: ...
+
+@final
 class RustJwtKeyMappingRepository:
     def __new__(cls, database: NativeDatabase) -> RustJwtKeyMappingRepository: ...
     def mapped_token(
@@ -2551,6 +2564,15 @@ class NativeModelCapacity:
         facts: Mapping[str, object],
         request: NativeRequestRedis | None = None,
     ) -> Future[dict[str, object]]: ...
+    def charge_turn(
+        self,
+        connection: NativeModelCapacityState | None,
+        key: Mapping[str, object],
+        model: str,
+        usage: tuple[int, int, int, int],
+        facts: Mapping[str, object],
+        request: NativeRequestRedis | None = None,
+    ) -> Future[dict[str, object]]: ...
 
 @final
 class ResponsesWebSocketConnection:
@@ -2760,6 +2782,7 @@ __all__ = [
     "RustJwtKeyMappingRepository",
     "RustJwtMapping",
     "RustKeyContext",
+    "RustKeyOwnersRepository",
     "RustKeyRepository",
     "RustMappedClaims",
     "RustModelAccessGroupRepository",

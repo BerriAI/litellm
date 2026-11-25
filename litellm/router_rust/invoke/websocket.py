@@ -32,8 +32,8 @@ if TYPE_CHECKING:
 
 def turn_admission(
     core: "EndpointCore", model_group: str, deployment: Mapping[str, object], kwargs: Mapping[str, object]
-) -> Callable[[], object]:
-    """The ``turn_admission`` the handler calls before each later turn."""
+) -> Callable[[Mapping[str, object]], Awaitable[Mapping[str, object]]]:
+    """The ``turn_admission`` the handler calls with each later turn's request params."""
     return partial(admit_deployment_turn, core, model_group, deployment, kwargs)
 
 
@@ -149,7 +149,11 @@ def _budget_limiter(core: "EndpointCore") -> object:
 
 
 async def admit_deployment_turn(
-    core: "EndpointCore", model_group: str, opened_on: Mapping[str, object], request_kwargs: Mapping[str, object]
+    core: "EndpointCore",
+    model_group: str,
+    opened_on: Mapping[str, object],
+    request_kwargs: Mapping[str, object],
+    turn_params: Mapping[str, object],
 ) -> Mapping[str, object]:
     """`async_admit_deployment_turn`."""
     from litellm import exceptions as litellm_exceptions
@@ -168,7 +172,7 @@ async def admit_deployment_turn(
     io_token_admission: Final[Mapping[str, object]] = (
         MappingProxyType({})
         if rate_limit_check is None
-        else await async_admit_io_token_turn(rate_limit_check.usage, deployment, get_utc_datetime())  # pyright: ignore[reportArgumentType]  # the configured deployment dict
+        else await async_admit_io_token_turn(rate_limit_check.usage, deployment, get_utc_datetime(), turn_params)  # pyright: ignore[reportArgumentType]  # the configured deployment dict
     )
     budget_limiter: Final[object] = _budget_limiter(core)
     if budget_limiter is not None:

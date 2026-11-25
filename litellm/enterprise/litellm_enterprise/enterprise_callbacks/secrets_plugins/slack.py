@@ -15,7 +15,7 @@ class SlackDetector(RegexBasedDetector):
         return "Slack Secret"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
+    def denylist(self) -> list[re.Pattern[str]]:
         return [
             # Slack App-level token
             re.compile(r"""(?i)(xapp-\d-[A-Z0-9]+-\d+-[a-z0-9]+)"""),

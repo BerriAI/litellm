@@ -79,7 +79,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
     ) -> dict:
@@ -115,7 +115,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         api_key: str | None,
         model: str,
         optional_params: Mapping[str, object],
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         """
@@ -188,7 +188,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         self,
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: Mapping[str, object],
         headers: Mapping[str, object],
     ) -> dict[str, object]:
@@ -234,11 +234,11 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:
@@ -368,7 +368,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: Mapping[str, object],
         messages: Sequence[object],
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
@@ -429,7 +429,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: Mapping[str, object],
         messages: Sequence[object],
         client: Optional["AsyncHTTPHandler"] = None,

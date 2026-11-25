@@ -842,6 +842,69 @@ def test_encrypted_reasoning_is_kept_when_the_request_tools_route_it_to_response
 
 
 @pytest.mark.parametrize(
+    ("deployment_model_info", "kept"),
+    [
+        pytest.param({"base_model": "azure_ai/gpt-5.6-terra"}, True, id="gpt_5_6_base_model_bridges_to_responses"),
+        pytest.param({"base_model": "azure_ai/gpt-5.5"}, False, id="gpt_5_5_base_model_stays_on_chat"),
+        pytest.param({}, False, id="no_base_model_stays_on_chat"),
+    ],
+)
+def test_encrypted_reasoning_is_kept_when_a_custom_foundry_name_base_model_routes_it_to_responses(
+    deployment_model_info: dict[str, object], kept: bool
+) -> None:
+    request: Final = AnthropicMessagesRequest(
+        **{**_replayed_reasoning_request([{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}]),
+           "model": "azure_ai/qa-prod-reasoner", "thinking": {"type": "enabled", "budget_tokens": 2048}}
+    )
+    openai_request, _mapping = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        request,
+        custom_llm_provider="azure_ai",
+        api_base="https://myproject.services.ai.azure.com",
+        deployment_model_info=deployment_model_info,
+    )
+
+    assistant: Final = openai_request["messages"][1]
+    assert bool(assistant.get("thinking_blocks")) is kept
+
+
+@pytest.mark.parametrize(
+    "base_model_source",
+    [
+        {"model_info": {"base_model": "azure_ai/gpt-5.6-terra"}},
+        {"base_model": "azure_ai/gpt-5.6-terra"},
+        {"model_info": {"base_model": "azure_ai/Phi-4"}, "base_model": "azure_ai/gpt-5.6-terra"},
+        {"model_info": {"base_model": "azure_ai/gpt-5.6-terra"}, "base_model": ""},
+    ],
+    ids=["model_info", "litellm_params", "litellm_params_over_model_info", "empty_litellm_params"],
+)
+def test_a_custom_foundry_name_keeps_replayed_reasoning_and_its_summary_wherever_its_base_model_is_set(
+    base_model_source: Mapping[str, object],
+) -> None:
+    from litellm.llms.anthropic.messages.adapters.handler import (
+        LiteLLMMessagesToCompletionTransformationHandler,
+    )
+
+    tools: Final = [{"name": "get_weather", "input_schema": {"type": "object", "properties": {}}}]
+    request: Final = _replayed_reasoning_request(tools)
+    completion_kwargs, _mapping = LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
+        max_tokens=64,
+        messages=cast(list[dict[str, object]], request["messages"]),
+        model="azure_ai/qa-prod-reasoner",
+        thinking={"type": "enabled", "budget_tokens": 2048, "summary": "auto"},
+        tools=tools,
+        extra_kwargs={
+            "custom_llm_provider": "azure_ai",
+            "api_base": "https://myproject.services.ai.azure.com",
+            **base_model_source,
+        },
+    )
+
+    assistant: Final = cast(list[Mapping[str, object]], completion_kwargs["messages"])[1]
+    assert assistant.get("thinking_blocks")
+    assert cast(Mapping[str, object], completion_kwargs["reasoning_effort"]).get("summary") == "auto"
+
+
+@pytest.mark.parametrize(
     ("deployment_params", "kept"),
     [
         pytest.param({"reasoning_summary": "auto"}, True, id="deployment_summary_bridges_to_responses"),
@@ -5884,6 +5947,88 @@ async def test_chat_bridge_tool_result_text_block_without_text_reaches_the_model
     ]
 
 
+def _user_text_beside(text_block: Mapping[str, object]) -> list[dict[str, object]]:
+    return [{"role": "user", "content": [{"type": "text", "text": "run the build"}, dict(text_block)]}]
+
+
+_CLEAN_USER_TURN: Final[list[dict[str, object]]] = [
+    {"role": "user", "content": [{"type": "text", "text": "run the build"}]}
+]
+
+
+def _sent_chat_messages(route: respx.Route) -> list[object]:
+    return json.loads(route.calls.last.request.read())["messages"]
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("stream", [False, True], ids=["non_streaming", "streaming"])
+@pytest.mark.parametrize("text", _MALFORMED_TOOL_RESULT_TEXTS)
+def test_chat_bridge_sync_non_string_user_text_answers_400_before_any_provider_call(
+    respx_mock: respx.MockRouter, text: object, stream: bool
+) -> None:
+    route: Final = _chat_bridge_route(respx_mock)
+
+    with pytest.raises(litellm.BadRequestError) as rejected:
+        litellm.anthropic.messages.create(
+            model=_CHAT_BRIDGE_MODEL,
+            api_base=_CHAT_BRIDGE_API_BASE,
+            api_key="fake-key",
+            max_tokens=64,
+            stream=stream,
+            messages=_user_text_beside({"type": "text", "text": text}),
+        )
+
+    assert rejected.value.status_code == 400
+    assert (
+        rejected.value.message == "litellm.BadRequestError: messages.0.content.1.text: Input should be a valid string"
+    )
+    assert route.call_count == 0
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("drop_params_source", ["request", "global"])
+@pytest.mark.parametrize("text", _MALFORMED_TOOL_RESULT_TEXTS)
+def test_chat_bridge_sync_drop_params_drops_a_non_string_user_text(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, text: object, drop_params_source: str
+) -> None:
+    route: Final = _chat_bridge_route(respx_mock)
+    if drop_params_source == "global":
+        monkeypatch.setattr(litellm, "drop_params", True)
+
+    def sent_for(messages: list[dict[str, object]]) -> list[object]:
+        litellm.anthropic.messages.create(
+            model=_CHAT_BRIDGE_MODEL,
+            api_base=_CHAT_BRIDGE_API_BASE,
+            api_key="fake-key",
+            max_tokens=64,
+            messages=messages,
+            **({"drop_params": True} if drop_params_source == "request" else {}),
+        )
+        return _sent_chat_messages(route)
+
+    assert sent_for(_user_text_beside({"type": "text", "text": text})) == sent_for(_CLEAN_USER_TURN)
+
+
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("text_block", [{"type": "text"}, {"type": "text", "text": " "}], ids=["missing", "blank"])
+def test_chat_bridge_sync_strips_a_missing_or_blank_user_text_without_drop_params(
+    respx_mock: respx.MockRouter, text_block: Mapping[str, object]
+) -> None:
+    route: Final = _chat_bridge_route(respx_mock)
+
+    def sent_for(messages: list[dict[str, object]]) -> list[object]:
+        litellm.anthropic.messages.create(
+            model=_CHAT_BRIDGE_MODEL,
+            api_base=_CHAT_BRIDGE_API_BASE,
+            api_key="fake-key",
+            max_tokens=64,
+            messages=messages,
+        )
+        return _sent_chat_messages(route)
+
+    assert sent_for(_user_text_beside(text_block)) == sent_for(_CLEAN_USER_TURN)
+
+
 _GEMINI_MODEL: Final = "gemini/gemini-3.8-flash"
 _GEMINI_URL: Final = (
     r"https://generativelanguage\.googleapis\.com/[^/]+/models/gemini-3\.8-flash:generateContent.*"
@@ -5939,6 +6084,24 @@ async def test_an_empty_trailing_user_message_reaches_gemini_as_a_user_turn(
         {"role": "model", "parts": [{"text": "Hello!"}]},
         {"role": "user", "parts": [{"text": " "}]},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("blank_text", ("", " "), ids=("empty", "blank"))
+async def test_a_request_with_only_blank_user_text_reaches_gemini_as_a_user_turn(
+    respx_mock: respx.MockRouter, blank_text: str
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+
+    await litellm.anthropic.messages.acreate(
+        model=_GEMINI_MODEL,
+        api_key="test-key",
+        max_tokens=64,
+        messages=[{"role": "user", "content": [{"type": "text", "text": blank_text}]}],
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [{"role": "user", "parts": [{"text": " "}]}]
 
 
 @pytest.mark.asyncio

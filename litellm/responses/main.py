@@ -284,20 +284,17 @@ def _request_trace_id(request_kwargs: Mapping[str, object]) -> str | None:
 
 
 def _langfuse_request_trace_id(request_kwargs: Mapping[str, object], standard_trace_id: str | None) -> str | None:
-    from litellm.integrations.langfuse.langfuse import langfuse_trace_id, langfuse_trace_metadata
+    from litellm.integrations.langfuse.langfuse import request_langfuse_trace_id
 
     logging_obj: Final = request_kwargs.get("litellm_logging_obj")
     if not isinstance(logging_obj, LiteLLMLoggingObj):
         return None
-    litellm_params: Final = _request_logging_params(logging_obj, request_kwargs)
-    trace_id: Final = langfuse_trace_id(
-        metadata=langfuse_trace_metadata(litellm_params.get("metadata"), litellm_params.get("proxy_server_request")),
+    return request_langfuse_trace_id(
+        _request_logging_params(logging_obj, request_kwargs),
         standard_trace_id=standard_trace_id,
         litellm_trace_id=logging_obj.litellm_trace_id,
         litellm_call_id=logging_obj.litellm_call_id,
-        proxy_server_request=litellm_params.get("proxy_server_request"),
     )
-    return trace_id if isinstance(trace_id, str) else None
 
 
 def _listing_trace_id(request_kwargs: Mapping[str, object], *, bridged_first_turn: bool) -> str | None:
@@ -3029,7 +3026,7 @@ def compact_responses(
 # ---------------------------------------------------------------------------
 
 
-def _build_litellm_metadata_for_ws(kwargs: dict) -> dict:
+def _build_litellm_metadata_for_ws(kwargs: dict) -> dict[str, object]:
     metadata: Final[dict] = {**(kwargs.get("litellm_metadata") or {})}
     guardrails: Final = (kwargs.get("metadata") or {}).get("guardrails") or kwargs.get("guardrails") or []
     if guardrails:
@@ -3051,7 +3048,7 @@ def _deployment_reasoning_default(kwargs: Mapping[str, object]) -> Reasoning | d
     return LiteLLMResponsesTransformationHandler().map_reasoning_effort(reasoning_effort)
 
 
-_RESPONSES_WS_ROUTING_HINT_KEYS: Final = frozenset({"input", "previous_response_id"})
+_RESPONSES_WS_ROUTING_HINT_KEYS: Final = frozenset({"generate", "input", "previous_response_id"})
 
 
 def _first_ws_frame_with_routed_input(first_message: str, routed_input: object) -> str:

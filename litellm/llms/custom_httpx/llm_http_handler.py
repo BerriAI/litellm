@@ -616,12 +616,12 @@ class _AsyncFilesEnvironmentValidator(Protocol):
         self,
         headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
         model: str,
-        messages: list,  # mutable-ok: mirrors the sync validate_environment contract this overrides
-        optional_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
-        litellm_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        messages: list[AllMessageValues],  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        optional_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
+        litellm_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict: ...  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    ) -> dict[str, object]: ...  # mutable-ok: mirrors the sync validate_environment contract this overrides
 
 
 async def _avalidate_files_environment(
@@ -629,9 +629,9 @@ async def _avalidate_files_environment(
     *,
     headers: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
     model: str,
-    messages: list,  # mutable-ok: mirrors the sync validate_environment contract this overrides
-    optional_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
-    litellm_params: dict,  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    messages: list[AllMessageValues],  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    optional_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
+    litellm_params: dict[str, object],  # mutable-ok: mirrors the sync validate_environment contract this overrides
     api_key: str | None,
 ) -> dict:  # mutable-ok: mirrors the sync validate_environment contract this overrides
     """Await the provider's async credential hook when it has one (e.g. Anthropic's workload
@@ -854,7 +854,7 @@ def _bridged_chat_request_fields(data: Mapping[str, object], logging_obj: LiteLL
     return bounded_call_id_fields(data)
 
 
-def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> bytes | str | dict:
+def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> bytes | str | dict[str, object]:
     """A pre-signed request carries its auth inside its own ``headers`` key, which
     logging treats as request body (only the top-level headers channel gets masked),
     so mask it here before the request is handed to ``pre_call``."""
@@ -1111,15 +1111,15 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         data: dict,
         timeout: float | httpx.Timeout,
         model: str,
         model_response: ModelResponse,
         logging_obj: LiteLLMLoggingObj,
         messages: list,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         client: AsyncHTTPHandler | None = None,
@@ -1190,7 +1190,7 @@ class BaseLLMHTTPHandler:
         logging_obj: LiteLLMLoggingObj,
         optional_params: dict,
         timeout: float | httpx.Timeout,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         acompletion: bool,
         stream: bool | None = False,
         fake_stream: bool = False,
@@ -1446,15 +1446,15 @@ class BaseLLMHTTPHandler:
         self,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
-        data: dict,
+        headers: dict[str, object],
+        data: dict[str, object],
         signed_json_body: bytes | None,
-        original_data: dict,
+        original_data: dict[str, object],
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         timeout: float | httpx.Timeout,
         fake_stream: bool = False,
         client: HTTPHandler | None = None,
@@ -1524,16 +1524,16 @@ class BaseLLMHTTPHandler:
     async def acompletion_stream_function(
         self,
         model: str,
-        messages: list,
+        messages: list[AllMessageValues],
         api_base: str,
         custom_llm_provider: str,
-        headers: dict,
+        headers: dict[str, object],
         provider_config: BaseConfig,
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
         data: dict,
-        litellm_params: dict,
-        optional_params: dict,
+        litellm_params: dict[str, object],
+        optional_params: dict[str, object],
         fake_stream: bool = False,
         client: AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
@@ -1587,13 +1587,13 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         provider_config: BaseConfig,
         api_base: str,
-        headers: dict,
-        data: dict,
-        messages: list,
+        headers: dict[str, object],
+        data: dict[str, object],
+        messages: list[AllMessageValues],
         logging_obj: LiteLLMLoggingObj,
         timeout: float | httpx.Timeout,
-        litellm_params: dict,
-        optional_params: dict,
+        litellm_params: dict[str, object],
+        optional_params: dict[str, object],
         fake_stream: bool = False,
         client: AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
@@ -1811,16 +1811,16 @@ class BaseLLMHTTPHandler:
 
     async def aembedding(
         self,
-        request_data: dict,
+        request_data: dict[str, object],
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         custom_llm_provider: str,
         provider_config: BaseEmbeddingConfig,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -1869,7 +1869,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str,
         logging_obj: LiteLLMLoggingObj,
         provider_config: BaseRerankConfig,
-        optional_rerank_params: dict,
+        optional_rerank_params: dict[str, object],
         timeout: float | httpx.Timeout | None,
         model_response: RerankResponse,
         _is_async: bool = False,
@@ -1957,13 +1957,13 @@ class BaseLLMHTTPHandler:
     async def arerank(
         self,
         model: str,
-        request_data: dict,
+        request_data: dict[str, object],
         custom_llm_provider: str,
         provider_config: BaseRerankConfig,
         logging_obj: LiteLLMLoggingObj,
         model_response: RerankResponse,
         api_base: str,
-        headers: dict,
+        headers: dict[str, object],
         api_key: str | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -2393,8 +2393,8 @@ class BaseLLMHTTPHandler:
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         model_response: TranscriptionResponse,
         timeout: float,
         max_retries: int,
@@ -2479,8 +2479,8 @@ class BaseLLMHTTPHandler:
         self,
         model: str,
         audio_file: FileTypes,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         model_response: TranscriptionResponse,
         timeout: float,
         max_retries: int,
@@ -2550,7 +2550,7 @@ class BaseLLMHTTPHandler:
     def search(
         self,
         query: str | list[str],
-        optional_params: dict,
+        optional_params: dict[str, object],
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
@@ -2659,7 +2659,7 @@ class BaseLLMHTTPHandler:
     async def async_search(
         self,
         query: str | list[str],
-        optional_params: dict,
+        optional_params: dict[str, object],
         timeout: float | httpx.Timeout,
         logging_obj: LiteLLMLoggingObj,
         api_key: str | None,
@@ -2876,9 +2876,9 @@ class BaseLLMHTTPHandler:
     async def async_anthropic_messages_handler(
         self,
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
-        anthropic_messages_optional_request_params: dict,
+        anthropic_messages_optional_request_params: dict[str, object],
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
@@ -2995,7 +2995,7 @@ class BaseLLMHTTPHandler:
         request_body: Final = anthropic_messages_provider_config.transform_anthropic_messages_request(
             model=model,
             messages=messages,
-            anthropic_messages_optional_request_params=request_params,
+            anthropic_messages_optional_request_params=dict(request_params),
             litellm_params=litellm_params,
             headers=headers,
         )
@@ -3179,9 +3179,9 @@ class BaseLLMHTTPHandler:
     def anthropic_messages_handler(
         self,
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         anthropic_messages_provider_config: BaseAnthropicMessagesConfig,
-        anthropic_messages_optional_request_params: dict,
+        anthropic_messages_optional_request_params: dict[str, object],
         custom_llm_provider: str,
         _is_async: bool,
         litellm_params: GenericLiteLLMParams,
@@ -4128,7 +4128,7 @@ class BaseLLMHTTPHandler:
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         _is_async: bool = False,
         shared_session: Optional["ClientSession"] = None,
-    ) -> dict | Coroutine[object, object, dict]:
+    ) -> dict[str, object] | Coroutine[object, object, dict[str, object]]:
         if _is_async:
             return self.async_list_responses_input_items(
                 response_id=response_id,
@@ -4210,7 +4210,7 @@ class BaseLLMHTTPHandler:
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         shared_session: Optional["ClientSession"] = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         if client is None or not isinstance(client, AsyncHTTPHandler):
             verbose_logger.debug(
                 "Creating HTTP client for list_input_items with shared_session: %s",
@@ -4302,7 +4302,7 @@ class BaseLLMHTTPHandler:
     def create_file(
         self,
         create_file_data: CreateFileRequest,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         provider_config: BaseFilesConfig,
         headers: dict,
         api_base: str | None,
@@ -4479,7 +4479,7 @@ class BaseLLMHTTPHandler:
         self,
         *,
         create_file_data: CreateFileRequest,
-        litellm_params: dict,  # mutable-ok: mirrors the create_file contract this dispatches for
+        litellm_params: dict[str, object],  # mutable-ok: mirrors the create_file contract this dispatches for
         provider_config: BaseFilesConfig,
         headers: dict,  # mutable-ok: mirrors the create_file contract this dispatches for
         api_base: str | None,
@@ -4530,7 +4530,7 @@ class BaseLLMHTTPHandler:
     async def async_create_file(
         self,
         transformed_request: Union[bytes, str, dict, "TwoStepFileUploadConfig"],
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         provider_config: BaseFilesConfig,
         headers: dict,
         api_base: str,
@@ -4750,7 +4750,7 @@ class BaseLLMHTTPHandler:
     def create_batch(
         self,
         create_batch_data: "CreateBatchRequest",
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         provider_config: "BaseBatchesConfig",
         headers: dict,
         api_base: str | None,
@@ -4858,7 +4858,7 @@ class BaseLLMHTTPHandler:
     def retrieve_batch(
         self,
         batch_id: str,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         provider_config: "BaseBatchesConfig",
         headers: dict,
         api_base: str | None,
@@ -4936,7 +4936,7 @@ class BaseLLMHTTPHandler:
         self,
         *,
         create_batch_data: "CreateBatchRequest",
-        litellm_params: dict,  # mutable-ok: mirrors the create_batch contract this dispatches for
+        litellm_params: dict[str, object],  # mutable-ok: mirrors the create_batch contract this dispatches for
         provider_config: "BaseBatchesConfig",
         headers: dict,  # mutable-ok: mirrors the create_batch contract this dispatches for
         api_base: str | None,
@@ -5063,7 +5063,7 @@ class BaseLLMHTTPHandler:
     async def async_retrieve_batch(
         self,
         transformed_request: bytes | str | dict,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         provider_config: "BaseBatchesConfig",
         headers: dict,
         api_base: str | None,
@@ -5377,7 +5377,7 @@ class BaseLLMHTTPHandler:
         model: str,
         input: Union[str, "ResponseInputParam"],
         responses_api_provider_config: BaseResponsesAPIConfig,
-        response_api_optional_request_params: dict,
+        response_api_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None,
@@ -5855,7 +5855,7 @@ class BaseLLMHTTPHandler:
         first_page: httpx.Response,
         provider_config: BaseFilesConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
+        litellm_params: dict[str, object],  # mutable-ok: handed to the files contract, which types it as a dict
         headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
         client: HTTPHandler,
         timeout: float | httpx.Timeout | None,
@@ -5883,7 +5883,7 @@ class BaseLLMHTTPHandler:
         first_page: httpx.Response,
         provider_config: BaseFilesConfig,
         logging_obj: LiteLLMLoggingObj,
-        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
+        litellm_params: dict[str, object],  # mutable-ok: handed to the files contract, which types it as a dict
         headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
         client: AsyncHTTPHandler,
         timeout: float | httpx.Timeout | None,
@@ -5913,7 +5913,7 @@ class BaseLLMHTTPHandler:
         provider_config: BaseFilesConfig,
         headers: dict,  # mutable-ok: handed to validate_environment, which types it as a dict
         litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
-    ) -> dict:  # mutable-ok: validate_environment returns the header dict the files contract types
+    ) -> dict[str, object]:  # mutable-ok: validate_environment returns the header dict the files contract types
         return provider_config.validate_environment(
             api_key=litellm_params.get("api_key"),
             headers=headers,
@@ -5927,7 +5927,7 @@ class BaseLLMHTTPHandler:
         self,
         latest_page: httpx.Response,
         provider_config: BaseFilesConfig,
-        litellm_params: dict,  # mutable-ok: handed to the files contract, which types it as a dict
+        litellm_params: dict[str, object],  # mutable-ok: handed to the files contract, which types it as a dict
         listed_count: int,
     ) -> tuple[str, dict[str, str]] | None:  # mutable-ok: the base files contract returns the query as a dict
         if listed_count >= MAX_FILE_LIST_LIMIT:
@@ -5940,7 +5940,7 @@ class BaseLLMHTTPHandler:
         self,
         file_content_request: "FileContentRequest",
         provider_config: BaseFilesConfig,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         headers: dict,
         logging_obj: LiteLLMLoggingObj,
         _is_async: bool = False,
@@ -5991,7 +5991,7 @@ class BaseLLMHTTPHandler:
         self,
         file_content_request: "FileContentRequest",
         provider_config: BaseFilesConfig,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         headers: dict,
         logging_obj: LiteLLMLoggingObj,
         client: HTTPHandler | AsyncHTTPHandler | None = None,
@@ -6032,7 +6032,7 @@ class BaseLLMHTTPHandler:
         self,
         file_content_request: "FileContentRequest",
         provider_config: BaseFilesConfig,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
         headers: dict,
         logging_obj: LiteLLMLoggingObj,
         chunk_size: int,
@@ -6214,6 +6214,7 @@ class BaseLLMHTTPHandler:
         depth: int,
         max_loops: int,
         model: str,
+        answered_at_cap: bool = False,
     ) -> str:
         """
         Evaluate agentic-loop safety guards (fingerprint cycle / max depth).
@@ -6228,7 +6229,7 @@ class BaseLLMHTTPHandler:
         fingerprint: Final = BaseLLMHTTPHandler._fingerprint_agentic_tools(tool_calls)
         if fingerprint in fingerprints:
             raise AgenticLoopSafetyError("Agentic loop detected repeated tool-call fingerprint; aborting rerun")
-        if depth >= max_loops:
+        if depth > max_loops or (depth == max_loops and not answered_at_cap):
             raise AgenticLoopLimitError(f"Exceeded max_agentic_loops={max_loops} for model={model}")
         return fingerprint
 
@@ -6533,13 +6534,13 @@ class BaseLLMHTTPHandler:
         self,
         response: object,
         model: str,
-        messages: list[dict],
+        messages: list[dict[str, object]],
         anthropic_messages_provider_config: "BaseAnthropicMessagesConfig",
         anthropic_messages_optional_request_params: dict,
         logging_obj: "LiteLLMLoggingObj",
         stream: bool,
         custom_llm_provider: str,
-        kwargs: dict,
+        kwargs: dict[str, object],
         api_surface: str = "anthropic_messages",
         skip_chat_completion_loops: bool = False,
     ) -> Any | None:
@@ -6615,6 +6616,7 @@ class BaseLLMHTTPHandler:
                     depth=depth,
                     max_loops=max_loops,
                     model=model,
+                    answered_at_cap=callback.answers_tool_calls_at_agentic_loop_cap(custom_llm_provider),
                 )
             except AgenticLoopSafetyError as e:
                 if not self._can_replace_turn_with_terminal_response(stream, api_surface):
@@ -7691,7 +7693,7 @@ class BaseLLMHTTPHandler:
             model,
             image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
         )
-        multipart: Final = image_edit_provider_config.use_multipart_form_data()
+        json_body: Final = image_edit_provider_config.uses_json_body(image, image_edit_optional_request_params)
         stream_body: Final = _ascii_image_edit_stream_body(data, files)
 
         def send(stream: bool = False) -> httpx.Response:
@@ -7703,19 +7705,19 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                     stream=stream,
                 )
-            if multipart:
+            if json_body:
                 return sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=data,
-                    files=files,
+                    json=data,
                     timeout=timeout,
                     stream=stream,
                 )
             return sync_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                json=data,
+                data=data,
+                files=files,
                 timeout=timeout,
                 stream=stream,
             )
@@ -7829,7 +7831,7 @@ class BaseLLMHTTPHandler:
             model,
             image_edit_optional_request_params,  # pyright: ignore[reportUnknownArgumentType]  # legacy handler params are untyped dicts
         )
-        multipart: Final = image_edit_provider_config.use_multipart_form_data()
+        json_body: Final = image_edit_provider_config.uses_json_body(image, image_edit_optional_request_params)
         stream_body: Final = _ascii_image_edit_stream_body(data, files)
 
         async def send(stream: bool = False) -> httpx.Response:
@@ -7841,19 +7843,19 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                     stream=stream,
                 )
-            if multipart:
+            if json_body:
                 return await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    data=data,
-                    files=files,
+                    json=data,
                     timeout=timeout,
                     stream=stream,
                 )
             return await async_httpx_client.post(
                 url=api_base,
                 headers=headers,
-                json=data,
+                data=data,
+                files=files,
                 timeout=timeout,
                 stream=stream,
             )
@@ -9810,7 +9812,7 @@ class BaseLLMHTTPHandler:
     def container_create_handler(
         self,
         name: str,
-        container_create_request_params: dict,
+        container_create_request_params: dict[str, object],
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
@@ -9900,7 +9902,7 @@ class BaseLLMHTTPHandler:
     async def async_container_create_handler(
         self,
         name: str,
-        container_create_request_params: dict,
+        container_create_request_params: dict[str, object],
         container_provider_config: "BaseContainerConfig",
         litellm_params: GenericLiteLLMParams,
         logging_obj: "LiteLLMLoggingObj",
@@ -12777,7 +12779,7 @@ class BaseLLMHTTPHandler:
         model: str,
         contents: object,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
-        generate_content_config_dict: dict,
+        generate_content_config_dict: dict[str, object],
         tools: object,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -12901,7 +12903,7 @@ class BaseLLMHTTPHandler:
         model: str,
         contents: object,
         generate_content_provider_config: BaseGoogleGenAIGenerateContentConfig,
-        generate_content_config_dict: dict,
+        generate_content_config_dict: dict[str, object],
         tools: object,
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -13135,7 +13137,7 @@ class BaseLLMHTTPHandler:
         input: str,
         voice: str | None,
         text_to_speech_provider_config: BaseTextToSpeechConfig,
-        text_to_speech_optional_params: dict,
+        text_to_speech_optional_params: dict[str, object],
         custom_llm_provider: str,
         litellm_params: dict,
         logging_obj: LiteLLMLoggingObj,
@@ -13243,7 +13245,7 @@ class BaseLLMHTTPHandler:
         self,
         request_body: dict,
         headers: dict[str, object],
-    ) -> tuple[dict | None, list | None]:
+    ) -> tuple[dict[str, object] | None, list | None]:
         """
         Helper to prepare multipart/form-data request for skills API.
 
@@ -13273,7 +13275,7 @@ class BaseLLMHTTPHandler:
     def create_skill_handler(
         self,
         url: str,
-        request_body: dict,
+        request_body: dict[str, object],
         skills_api_provider_config: "BaseSkillsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -13339,7 +13341,7 @@ class BaseLLMHTTPHandler:
     async def async_create_skill_handler(
         self,
         url: str,
-        request_body: dict,
+        request_body: dict[str, object],
         skills_api_provider_config: "BaseSkillsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -13395,7 +13397,7 @@ class BaseLLMHTTPHandler:
     def list_skills_handler(
         self,
         url: str,
-        query_params: dict,
+        query_params: dict[str, object],
         skills_api_provider_config: "BaseSkillsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -13455,7 +13457,7 @@ class BaseLLMHTTPHandler:
     async def async_list_skills_handler(
         self,
         url: str,
-        query_params: dict,
+        query_params: dict[str, object],
         skills_api_provider_config: "BaseSkillsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -13711,7 +13713,7 @@ class BaseLLMHTTPHandler:
     def create_eval_handler(
         self,
         url: str,
-        request_body: dict,
+        request_body: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -13770,7 +13772,7 @@ class BaseLLMHTTPHandler:
     async def async_create_eval_handler(
         self,
         url: str,
-        request_body: dict,
+        request_body: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -13817,7 +13819,7 @@ class BaseLLMHTTPHandler:
     def list_evals_handler(
         self,
         url: str,
-        query_params: dict,
+        query_params: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -13877,7 +13879,7 @@ class BaseLLMHTTPHandler:
     async def async_list_evals_handler(
         self,
         url: str,
-        query_params: dict,
+        query_params: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -14028,7 +14030,7 @@ class BaseLLMHTTPHandler:
     def update_eval_handler(
         self,
         url: str,
-        request_body: dict,
+        request_body: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -14087,7 +14089,7 @@ class BaseLLMHTTPHandler:
     async def async_update_eval_handler(
         self,
         url: str,
-        request_body: dict,
+        request_body: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -14340,7 +14342,7 @@ class BaseLLMHTTPHandler:
     def create_run_handler(
         self,
         url: str,
-        request_body: dict,
+        request_body: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -14399,7 +14401,7 @@ class BaseLLMHTTPHandler:
     async def async_create_run_handler(
         self,
         url: str,
-        request_body: dict,
+        request_body: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -14446,7 +14448,7 @@ class BaseLLMHTTPHandler:
     def list_runs_handler(
         self,
         url: str,
-        query_params: dict,
+        query_params: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,
@@ -14506,7 +14508,7 @@ class BaseLLMHTTPHandler:
     async def async_list_runs_handler(
         self,
         url: str,
-        query_params: dict,
+        query_params: dict[str, object],
         evals_api_provider_config: "BaseEvalsAPIConfig",
         custom_llm_provider: str,
         litellm_params: GenericLiteLLMParams,

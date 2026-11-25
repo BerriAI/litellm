@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n  (\n    SELECT to_jsonb(u) || jsonb_build_object(\n      'teams', COALESCE(to_jsonb(u.teams), '[]'::jsonb),\n      'models', COALESCE(to_jsonb(u.models), '[]'::jsonb),\n      'allowed_cache_controls', COALESCE(to_jsonb(u.allowed_cache_controls), '[]'::jsonb),\n      'policies', COALESCE(to_jsonb(u.policies), '[]'::jsonb),\n      'organization_memberships', COALESCE((\n        SELECT jsonb_agg(to_jsonb(om)) FROM \"LiteLLM_OrganizationMembership\" om WHERE om.user_id = u.user_id\n      ), '[]'::jsonb)\n    )\n    FROM \"LiteLLM_UserTable\" u WHERE u.user_id = $1\n  ) AS \"user_row: RawJson\",\n  (\n    SELECT to_jsonb(t) || jsonb_build_object(\n      'admins', COALESCE(to_jsonb(t.admins), '[]'::jsonb),\n      'members', COALESCE(to_jsonb(t.members), '[]'::jsonb),\n      'models', COALESCE(to_jsonb(t.models), '[]'::jsonb),\n      'team_member_permissions', COALESCE(to_jsonb(t.team_member_permissions), '[]'::jsonb),\n      'access_group_ids', COALESCE(to_jsonb(t.access_group_ids), '[]'::jsonb),\n      'policies', COALESCE(to_jsonb(t.policies), '[]'::jsonb),\n      'default_team_member_models', COALESCE(to_jsonb(t.default_team_member_models), '[]'::jsonb),\n      'litellm_model_table', (\n        SELECT (to_jsonb(m) - 'aliases') || jsonb_build_object('model_aliases', m.aliases)\n        FROM \"LiteLLM_ModelTable\" m WHERE m.id = t.model_id\n      ),\n      'object_permission', (\n        SELECT to_jsonb(op) || jsonb_build_object(\n          'mcp_servers', COALESCE(to_jsonb(op.mcp_servers), '[]'::jsonb),\n          'mcp_access_groups', COALESCE(to_jsonb(op.mcp_access_groups), '[]'::jsonb),\n          'mcp_toolsets', COALESCE(to_jsonb(op.mcp_toolsets), '[]'::jsonb),\n          'blocked_tools', COALESCE(to_jsonb(op.blocked_tools), '[]'::jsonb),\n          'vector_stores', COALESCE(to_jsonb(op.vector_stores), '[]'::jsonb),\n          'agents', COALESCE(to_jsonb(op.agents), '[]'::jsonb),\n          'agent_access_groups', COALESCE(to_jsonb(op.agent_access_groups), '[]'::jsonb),\n          'models', COALESCE(to_jsonb(op.models), '[]'::jsonb),\n          'search_tools', COALESCE(to_jsonb(op.search_tools), '[]'::jsonb),\n          'skills', COALESCE(to_jsonb(op.skills), '[]'::jsonb)\n        )\n        FROM \"LiteLLM_ObjectPermissionTable\" op WHERE op.object_permission_id = t.object_permission_id\n      )\n    )\n    FROM \"LiteLLM_TeamTable\" t WHERE t.team_id = $2\n  ) AS \"team_row: RawJson\",\n  (\n    SELECT to_jsonb(tm) || jsonb_build_object(\n      'litellm_budget_table', (\n        SELECT to_jsonb(b) || jsonb_build_object('allowed_models', COALESCE(to_jsonb(b.allowed_models), '[]'::jsonb))\n        FROM \"LiteLLM_BudgetTable\" b WHERE b.budget_id = tm.budget_id\n      )\n    )\n    FROM \"LiteLLM_TeamMembership\" tm WHERE tm.user_id = $3 AND tm.team_id = $2\n  ) AS \"membership_row: RawJson\",\n  (\n    SELECT to_jsonb(o) || jsonb_build_object(\n      'models', COALESCE(to_jsonb(o.models), '[]'::jsonb),\n      'litellm_budget_table', (\n        SELECT to_jsonb(b) || jsonb_build_object('allowed_models', COALESCE(to_jsonb(b.allowed_models), '[]'::jsonb))\n        FROM \"LiteLLM_BudgetTable\" b WHERE b.budget_id = o.budget_id\n      ),\n      'object_permission', (\n        SELECT to_jsonb(op) || jsonb_build_object(\n          'mcp_servers', COALESCE(to_jsonb(op.mcp_servers), '[]'::jsonb),\n          'mcp_access_groups', COALESCE(to_jsonb(op.mcp_access_groups), '[]'::jsonb),\n          'mcp_toolsets', COALESCE(to_jsonb(op.mcp_toolsets), '[]'::jsonb),\n          'blocked_tools', COALESCE(to_jsonb(op.blocked_tools), '[]'::jsonb),\n          'vector_stores', COALESCE(to_jsonb(op.vector_stores), '[]'::jsonb),\n          'agents', COALESCE(to_jsonb(op.agents), '[]'::jsonb),\n          'agent_access_groups', COALESCE(to_jsonb(op.agent_access_groups), '[]'::jsonb),\n          'models', COALESCE(to_jsonb(op.models), '[]'::jsonb),\n          'search_tools', COALESCE(to_jsonb(op.search_tools), '[]'::jsonb),\n          'skills', COALESCE(to_jsonb(op.skills), '[]'::jsonb)\n        )\n        FROM \"LiteLLM_ObjectPermissionTable\" op WHERE op.object_permission_id = o.object_permission_id\n      )\n    )\n    FROM \"LiteLLM_OrganizationTable\" o WHERE o.organization_id = $4\n  ) AS \"organization_row: RawJson\",\n  (\n    SELECT to_jsonb(p) || jsonb_build_object(\n      'models', COALESCE(to_jsonb(p.models), '[]'::jsonb),\n      'litellm_budget_table', (\n        SELECT to_jsonb(b) || jsonb_build_object('allowed_models', COALESCE(to_jsonb(b.allowed_models), '[]'::jsonb))\n        FROM \"LiteLLM_BudgetTable\" b WHERE b.budget_id = p.budget_id\n      ),\n      'object_permission', (\n        SELECT to_jsonb(op) || jsonb_build_object(\n          'mcp_servers', COALESCE(to_jsonb(op.mcp_servers), '[]'::jsonb),\n          'mcp_access_groups', COALESCE(to_jsonb(op.mcp_access_groups), '[]'::jsonb),\n          'mcp_toolsets', COALESCE(to_jsonb(op.mcp_toolsets), '[]'::jsonb),\n          'blocked_tools', COALESCE(to_jsonb(op.blocked_tools), '[]'::jsonb),\n          'vector_stores', COALESCE(to_jsonb(op.vector_stores), '[]'::jsonb),\n          'agents', COALESCE(to_jsonb(op.agents), '[]'::jsonb),\n          'agent_access_groups', COALESCE(to_jsonb(op.agent_access_groups), '[]'::jsonb),\n          'models', COALESCE(to_jsonb(op.models), '[]'::jsonb),\n          'search_tools', COALESCE(to_jsonb(op.search_tools), '[]'::jsonb),\n          'skills', COALESCE(to_jsonb(op.skills), '[]'::jsonb)\n        )\n        FROM \"LiteLLM_ObjectPermissionTable\" op WHERE op.object_permission_id = p.object_permission_id\n      )\n    )\n    FROM \"LiteLLM_ProjectTable\" p WHERE p.project_id = $5\n  ) AS \"project_row: RawJson\"\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "user_row: RawJson",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 1,
+        "name": "team_row: RawJson",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 2,
+        "name": "membership_row: RawJson",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 3,
+        "name": "organization_row: RawJson",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      },
+      {
+        "ordinal": 4,
+        "name": "project_row: RawJson",
+        "type_info": "Jsonb",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Text",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "e3abb1724b97fda9562790f1fc39fbf1491028a7f7dbfcadbfa8bf7deccb7537"
+}
