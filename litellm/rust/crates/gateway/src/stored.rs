@@ -240,8 +240,9 @@ async fn with_ui_settings(
 }
 
 /// `file` alone, for a proxy that reads no stored config but whose UI settings could not be read
-/// or layered in. One of their flags may change how the proxy answers, so Python answers every request. Nothing
-/// reads the stored config again for it, as the proxy reloads only with `store_model_in_db` on.
+/// or layered in. One of their flags may change how the proxy answers, so Python answers every
+/// request. Nothing reads the stored config again for it, as the proxy reloads only with
+/// `store_model_in_db` on.
 fn ui_settings_unread(file: Config) -> Loaded {
     Loaded {
         config: file,
