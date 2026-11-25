@@ -2943,7 +2943,7 @@ PER_QUERY_RERANK_MODEL: Final = "cohere/rerank-v3.5"
 
 
 def _rerank_router_deployment(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
     deployment_id: str,
     extra_litellm_params: Mapping[str, object],
     registered_provider: str | None = None,
