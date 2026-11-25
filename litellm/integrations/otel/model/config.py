@@ -45,6 +45,7 @@ class ExporterOwner(str, Enum):
     AGENTOPS = "agentops"
     NEWRELIC = "newrelic"
     SIGNOZ = "signoz"
+    WILDEDGE = "wildedge"
 
 
 class _OTelV2Flag(BaseSettings):

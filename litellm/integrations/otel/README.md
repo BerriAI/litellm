@@ -4,6 +4,28 @@ This package produces OpenTelemetry traces for LiteLLM. It is enabled by the
 `LITELLM_OTEL_V2` environment variable (`is_otel_v2_enabled()` in
 [`config.py`](./model/config.py)); when unset, nothing in this package runs.
 
+## Send traces to WildEdge
+
+Add the callback to your proxy configuration alongside your model list.
+
+```yaml
+litellm_settings:
+  callbacks: ["wildedge"]
+```
+
+Set `LITELLM_OTEL_V2=true` and supply `WILDEDGE_PROJECT_SECRET` through your
+deployment's secret manager. WildEdge Cloud uses
+`https://ingest.wildedge.dev/api/otlp` by default. For a self-hosted
+installation, also set `WILDEDGE_INGEST_URL` to the OTLP base URL, for example
+`https://monitoring.example.org/api/otlp`. LiteLLM sends traces over
+HTTP/protobuf to the trace path with the secret in the `X-Project-Secret` header.
+
+Restart the proxy, send a chat completion to a configured model, and find the
+request in WildEdge Events. Check the model, token usage, duration, and cost
+when available. A missing project secret produces a configuration error.
+If the collector returns 401 or 403, check the project's secret. For a 404,
+check that the base URL serves `/v1/traces` under the configured path.
+
 ## What gets traced
 
 A traced proxy request produces one trace with two kinds of spans:

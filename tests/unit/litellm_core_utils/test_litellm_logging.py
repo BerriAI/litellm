@@ -18144,3 +18144,31 @@ async def test_a_provider_set_after_setup_reaches_callbacks_in_both_fields(
 
     assert await provider_logs.next_providers() == ("cohere", "cohere")
     assert request_params == {"metadata": {}}
+
+
+@pytest.mark.parametrize(
+    ("enabled", "secret", "setting"),
+    (
+        ("false", "private-test-key", "LITELLM_OTEL_V2"),
+        ("true", None, "WILDEDGE_PROJECT_SECRET"),
+        ("true", "  ", "WILDEDGE_PROJECT_SECRET"),
+    ),
+)
+def test_wildedge_configuration_error(
+    monkeypatch: pytest.MonkeyPatch, enabled: str, secret: str | None, setting: str
+) -> None:
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled
+    from litellm.litellm_core_utils.litellm_logging import build_custom_logger_compatible_class
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", enabled)
+    if secret is None:
+        monkeypatch.delenv("WILDEDGE_PROJECT_SECRET", raising=False)
+    else:
+        monkeypatch.setenv("WILDEDGE_PROJECT_SECRET", secret)
+    is_otel_v2_enabled.cache_clear()
+    try:
+        with pytest.raises(ValueError, match=setting) as exc:
+            build_custom_logger_compatible_class("wildedge", None, None)
+        assert "private-test-key" not in str(exc.value)
+    finally:
+        is_otel_v2_enabled.cache_clear()

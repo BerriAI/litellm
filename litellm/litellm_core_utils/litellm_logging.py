@@ -7320,6 +7320,8 @@ def build_custom_logger_compatible_class(
         _in_memory_loggers.append(_otel_logger)
         return _otel_logger
 
+    elif logging_integration == "wildedge":
+        return _maybe_construct_otel_v2("wildedge", _in_memory_loggers, require_v2=True)
     elif logging_integration == "signoz":
         from litellm.integrations.otel.presets.signoz import (
             SIGNOZ_INGESTION_ENDPOINT_ENV,
@@ -7598,7 +7600,9 @@ def init_custom_logger_compatible_class_at_startup(
 init_custom_logger_compatible_class: Final = _init_custom_logger_compatible_class
 
 
-def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[CustomLogger]) -> "OpenTelemetryV2 | None":
+def _maybe_construct_otel_v2(
+    callback_name: str, _in_memory_loggers: list[CustomLogger], *, require_v2: bool = False
+) -> "OpenTelemetryV2 | None":
     """If ``LITELLM_OTEL_V2`` is on, build (or reuse) a single ``OpenTelemetryV2``
     instance configured via the preset for ``callback_name``.
 
@@ -7627,6 +7631,8 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
 
     if not is_otel_v2_enabled():
+        if require_v2:
+            raise ValueError(f"Set LITELLM_OTEL_V2=true to enable the {callback_name} callback.")
         return None
     from litellm.integrations.otel.logger import OpenTelemetryV2, build_otel_v2_logger
     from litellm.integrations.otel.plumbing.context import destination_backends
@@ -7651,6 +7657,8 @@ def _maybe_construct_otel_v2(callback_name: str, _in_memory_loggers: list[Custom
     try:
         built: Final = preset_fn(allow_missing_credentials=carried)
     except Exception:
+        if require_v2:
+            raise
         # If env vars are missing or the preset raises, defer to the legacy path
         # so customers get the same error story they had before V2 landed.
         return None

@@ -3,6 +3,7 @@ event loop: the preset does no network I/O, and a custom exporter mints the JWT
 lazily on its first export (in the BatchSpanProcessor worker thread)."""
 
 import json
+from typing import Final
 
 import httpx
 import pytest
@@ -278,3 +279,24 @@ def test_signoz_preset_accepts_the_factory_call_shape(monkeypatch):
 
     cfg = PRESET_BY_CALLBACK["signoz"](allow_missing_credentials=True)
     assert any(e.owner == ExporterOwner.SIGNOZ for e in cfg.exporters)
+
+
+def test_wildedge_cloud_requires_only_the_project_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
+
+    monkeypatch.delenv("WILDEDGE_INGEST_URL", raising=False)
+    monkeypatch.setenv("WILDEDGE_PROJECT_SECRET", "cloud-project-key")
+    config: Final = PRESET_BY_CALLBACK["wildedge"]()
+    (exporter,) = (exporter for exporter in config.exporters if exporter.owner == "wildedge")
+    # Cloud endpoint requested 2026-11-18: https://github.com/BerriAI/litellm/issues/52290#issuecomment-6983160742
+    assert exporter.endpoint == "https://ingest.wildedge.dev/api/otlp"
+    assert providers.parse_headers(exporter.headers) == {"x-project-secret": "cloud-project-key"}
+
+
+def test_wildedge_empty_self_hosted_url_is_a_configuration_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.otel.presets import PRESET_BY_CALLBACK
+
+    monkeypatch.setenv("WILDEDGE_INGEST_URL", " ")
+    monkeypatch.setenv("WILDEDGE_PROJECT_SECRET", "self-hosted-secret")
+    with pytest.raises(ValueError, match="WILDEDGE_INGEST_URL"):
+        PRESET_BY_CALLBACK["wildedge"]()

@@ -36,6 +36,7 @@ from litellm.integrations.otel.presets.signoz import (
     signoz_preset,
 )
 from litellm.integrations.otel.presets.weave import weave_dynamic_headers, weave_preset
+from litellm.integrations.otel.presets.wildedge import wildedge_preset
 from litellm.types.utils import StandardCallbackDynamicParams
 
 #: Callback name → preset. The ``Preset`` annotation makes mypy verify every
@@ -51,6 +52,7 @@ PRESET_BY_CALLBACK: Final[Mapping[str, Preset]] = MappingProxyType(
         "newrelic": newrelic_preset,
         "signoz": signoz_preset,
         "weave_otel": weave_preset,
+        "wildedge": wildedge_preset,
     }
 )
 
@@ -163,4 +165,5 @@ __all__ = [
     "project_routing_headers",
     "signoz_preset",
     "weave_preset",
+    "wildedge_preset",
 ]
