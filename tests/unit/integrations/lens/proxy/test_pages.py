@@ -225,6 +225,19 @@ def test_stale_storage_uses_only_a_live_browser_cookie(
     assert session_client.cookies.get("token") == current
 
 
+@pytest.mark.parametrize("stored_is_newer", (False, True), ids=("older-storage", "newer-storage"))
+def test_live_login_keeps_whichever_token_expires_later(session_client: TestClient, stored_is_newer: bool) -> None:
+    older: Final = _dashboard_token(exp=int((SESSION_EXPIRY - timedelta(minutes=30)).timestamp()))
+    newer: Final = _dashboard_token()
+    session_client.cookies.set("token", older if stored_is_newer else newer)
+    response: Final = session_client.post(
+        "/lens/session", json={"token": newer if stored_is_newer else older}, headers={"sec-fetch-site": "same-origin"}
+    )
+    assert response.status_code == 204, response.text
+    kept: Final = SimpleCookie(response.headers.get("set-cookie", "")).get("token")
+    assert (kept.value if kept else None) == (newer if stored_is_newer else None)
+
+
 @pytest.mark.parametrize("header", ("authorization", "x-litellm-api-key", "x-dashboard-key"))
 def test_another_bearer_cannot_substitute_for_the_dashboard_session_key(
     session_client: TestClient, monkeypatch: pytest.MonkeyPatch, header: str

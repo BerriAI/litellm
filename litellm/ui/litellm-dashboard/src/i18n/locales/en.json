@@ -21805,6 +21805,11 @@
       "title": "Could not connect to Lens",
       "body": "We could not verify the Lens connection. If Lens is already configured, check that the service is running and that the gateway has its connection credentials, then try again."
     },
+    "accountChanged": {
+      "title": "Reload to open Lens",
+      "body": "You signed in to LiteLLM with a different account in another tab. Reload this page to open Lens with that account.",
+      "reload": "Reload page"
+    },
     "retry": "Check connection",
     "docs": "Lens documentation",
     "introduction": {

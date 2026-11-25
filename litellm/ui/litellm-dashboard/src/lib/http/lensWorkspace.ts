@@ -2,7 +2,7 @@ import { backgroundFetchClient } from "./api";
 import { getCookie } from "@/utils/cookieUtils";
 
 export type LensWorkspaceAvailability =
-  | { state: "served" | "unconfigured" | "unavailable" }
+  | { state: "served" | "unconfigured" | "unavailable" | "accountChanged" }
   | { state: "unsupported"; browserUrl: string };
 
 export const lensWorkspaceAvailability = async (
@@ -26,7 +26,8 @@ export const lensWorkspaceAvailability = async (
         credentials: "include",
         redirect: "error",
       };
-      const session = await fetch(new URL("../session", url), options);
+      const session = await fetch(new URL("../session", new URL(url, window.location.href)), options);
+      if (session.status === 409) return { state: "accountChanged" };
       if (!session.ok) return { state: "unavailable" };
     }
     const response = await fetch(url, { signal, headers: { Accept: "application/json" } });

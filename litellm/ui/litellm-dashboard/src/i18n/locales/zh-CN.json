@@ -21468,6 +21468,11 @@
       "title": "无法连接到 Lens",
       "body": "无法验证 Lens 连接。如果已配置 Lens，请检查服务是否正在运行以及网关是否具有连接凭据，然后重试。"
     },
+    "accountChanged": {
+      "title": "重新加载以打开 Lens",
+      "body": "你已在另一个标签页中使用其他账户登录 LiteLLM。请重新加载此页面，以使用该账户打开 Lens。",
+      "reload": "重新加载页面"
+    },
     "retry": "检查连接",
     "docs": "Lens 文档",
     "introduction": {
