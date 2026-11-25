@@ -36,6 +36,7 @@ async function openSettings(page: PlaywrightPage, expectedLoops: string) {
     await expect(panel.getByRole("spinbutton", { name: "Max Agentic Loops" })).toHaveValue(expectedLoops, {
       timeout: 2000,
     });
+    await expect(panel.getByText("Amazon Bedrock", { exact: true })).toBeVisible({ timeout: 2000 });
   }).toPass({ timeout: 20000 });
   return panel;
 }
