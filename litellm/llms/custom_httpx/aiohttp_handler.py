@@ -23,6 +23,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_ssl_configuration,
 )
 from litellm.llms.custom_httpx.sse_lines import iter_sse_lines
+from litellm.llms.custom_httpx.upstream_proxy import current_upstream_proxy
 from litellm.types.llms.openai import FileTypes
 from litellm.types.utils import HttpHandlerRequestFields, ImageResponse, LlmProviders
 from litellm.utils import CustomStreamWrapper, ModelResponse, ProviderConfigManager
@@ -183,6 +184,7 @@ class BaseLLMAIOHTTPHandler:
                     headers=headers,
                     json=data,
                     data=form_data,
+                    proxy=current_upstream_proxy(),
                 )
                 if not response.ok:
                     response.raise_for_status()

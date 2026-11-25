@@ -95,9 +95,9 @@ def _complete(api_base: str, **params: object) -> None:
     )
 
 
-async def _acomplete(api_base: str, **params: object) -> None:
+async def _acomplete(api_base: str, model: str = "openai/gpt-test", **params: object) -> None:
     await litellm.acompletion(
-        model="openai/gpt-test",
+        model=model,
         api_base=f"{api_base}/v1",
         api_key="sk-test",
         messages=[{"role": "user", "content": "hi"}],
@@ -115,6 +115,22 @@ async def test_model_upstream_proxy_replaces_the_environment_proxy_for_that_call
         monkeypatch.setenv("HTTPS_PROXY", environment_proxy)
 
         await _acomplete("http://upstream.invalid", upstream_proxy=model_proxy)
+
+    assert [request["path"] for request in model_hits.requests] == ["http://upstream.invalid/v1/chat/completions"]
+    assert environment_hits.requests == []
+
+
+@pytest.mark.asyncio
+async def test_a_provider_with_its_own_aiohttp_send_path_uses_the_deployment_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """aiohttp_openai posts from its own ClientSession instead of the aiohttp transport,
+    so the transport-level hook never sees the request."""
+    with _serving() as (environment_proxy, environment_hits), _serving() as (model_proxy, model_hits):
+        monkeypatch.setenv("HTTP_PROXY", environment_proxy)
+        monkeypatch.setenv("HTTPS_PROXY", environment_proxy)
+
+        await _acomplete("http://upstream.invalid", model="aiohttp_openai/gpt-test", upstream_proxy=model_proxy)
 
     assert [request["path"] for request in model_hits.requests] == ["http://upstream.invalid/v1/chat/completions"]
     assert environment_hits.requests == []
