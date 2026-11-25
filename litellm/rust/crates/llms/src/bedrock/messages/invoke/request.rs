@@ -516,6 +516,7 @@ fn pop_output_config_under_global_drop(
 fn without_safeguards_bedrock_rejects(
     request: MessagesRequest,
     context: &MessagesTransformContext,
+    settings: &InvokeRequestSettings,
 ) -> MessagesRequest {
     if request.params.safeguards.is_none()
         || !context.drops_rejected_safeguards
@@ -524,8 +525,9 @@ fn without_safeguards_bedrock_rejects(
         return request;
     }
     tracing::warn!(
-        "Dropped safeguards and the dangerous-tool-use-2026-09-03 beta for model={} provider={BEDROCK_INVOKE_LOG_PROVIDER} because drop_params is on or the proxy's safeguards classifier answers them, and the model map does not flag supports_safeguards for the model. A deployment forwards them with model_info supports_safeguards true.",
-        request.model
+        "Dropped safeguards for model={} provider={} because drop_params is on or the proxy's safeguards classifier answers them, and the model map does not flag supports_safeguards for the model. A deployment keeps them with model_info supports_safeguards true.",
+        request.model,
+        settings.beta_headers_provider
     );
     MessagesRequest {
         params: MessagesOptionalParams {
@@ -560,7 +562,7 @@ pub(crate) fn transform_anthropic_messages_request(
     headers: Headers,
     settings: &InvokeRequestSettings,
 ) -> Result<(MessagesRequest, Headers), Error> {
-    let request = without_safeguards_bedrock_rejects(request, context);
+    let request = without_safeguards_bedrock_rejects(request, context, settings);
     let model = request.model.clone();
     let stream = request.params.stream.clone();
     let capabilities = &context.thinking.capabilities;

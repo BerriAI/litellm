@@ -1546,6 +1546,55 @@ def test_bedrock_messages_drops_safeguards_bedrock_rejects_when_the_proxy_classi
     assert ("dangerous-tool-use-2026-09-03" in result.get("anthropic_beta", [])) is forwarded
 
 
+@pytest.mark.parametrize(
+    ("config_path", "provider"),
+    [
+        (
+            "litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation."
+            "AmazonAnthropicClaudeMessagesConfig",
+            "bedrock",
+        ),
+        ("litellm.llms.bedrock.messages.mantle_transformation.AmazonMantleMessagesConfig", "bedrock_mantle"),
+        ("litellm.llms.bedrock_mantle.messages.transformation.BedrockMantleAnthropicMessagesConfig", "bedrock_mantle"),
+    ],
+    ids=["invoke", "bedrock_mantle_route", "mantle_provider"],
+)
+def test_bedrock_messages_safeguards_drop_warning_names_the_route_and_claims_no_beta_drop(
+    local_model_cost_map: None,
+    local_beta_headers_config: None,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    config_path: str,
+    provider: str,
+) -> None:
+    import importlib
+    import logging
+
+    from litellm._logging import verbose_logger
+    from litellm.types.router import GenericLiteLLMParams
+
+    module_name, class_name = config_path.rsplit(".", 1)
+    config: Final = getattr(importlib.import_module(module_name), class_name)()
+    monkeypatch.setattr(litellm, "drop_params", False)
+    caplog.set_level(logging.WARNING, logger=verbose_logger.name)
+
+    result: Final = config.transform_anthropic_messages_request(
+        model=_OPUS_4_1,
+        messages=[{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+        anthropic_messages_optional_request_params={"max_tokens": 64, "safeguards": [{"type": "dangerous_tool_use"}]},
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={"anthropic-beta": "dangerous-tool-use-2026-09-03"},
+    )
+
+    drop_warnings: Final = [
+        record.getMessage() for record in caplog.records if record.getMessage().startswith("Dropped safeguards")
+    ]
+    assert "safeguards" not in result
+    assert len(drop_warnings) == 1
+    assert f"provider={provider} " in drop_warnings[0]
+    assert "Dropped safeguards and the" not in drop_warnings[0]
+
+
 _NAME_SCHEMA: Final = {
     "type": "object",
     "properties": {"name": {"type": "string"}},

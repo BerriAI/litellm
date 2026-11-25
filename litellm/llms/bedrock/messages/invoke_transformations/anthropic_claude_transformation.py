@@ -739,7 +739,7 @@ class AmazonAnthropicClaudeMessagesConfig(
                 bedrock_capability_model(model, getattr(litellm_params, "base_model", None)),
                 _MODEL_INFO.validate_python(getattr(litellm_params, "model_info", None)),
                 _safeguards_drop_params(getattr(litellm_params, "drop_params", None), params.get(SAFEGUARDS)),
-                "bedrock_invoke",
+                self.beta_headers_provider,
                 sends_beta=True,
             )
             else params
