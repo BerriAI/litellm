@@ -5124,6 +5124,30 @@ class ProxyLogging:
         await asyncio.wait((stopping,))
         await fail_request()
 
+    @staticmethod
+    async def shield_refused_stream_failure_report(
+        reporting: Awaitable[HTTPException | None], logging_obj: object
+    ) -> HTTPException | None:
+        """Await the ``post_call_failure_hook`` of an error that ended a stream. A refused stream's failure log is its
+        only spend row, so a client disconnect does not cancel it."""
+        if not isinstance(logging_obj, Logging) or not logging_obj.stream_success_refused:
+            return await reporting
+        reported: Final = asyncio.ensure_future(reporting)
+        try:
+            return await asyncio.shield(reported)
+        except asyncio.CancelledError:
+            from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+            GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
+                async_coroutine=ProxyLogging._finish_detached_failure_report(reported)
+            )
+            raise
+
+    @staticmethod
+    async def _finish_detached_failure_report(reported: "asyncio.Future[HTTPException | None]") -> None:
+        await asyncio.wait((reported,))
+        reported.result()
+
     async def arelease_max_parallel_requests_on_disconnect(
         self,
         user_api_key_dict: UserAPIKeyAuth,

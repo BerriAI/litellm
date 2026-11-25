@@ -4570,10 +4570,13 @@ class ProxyBaseLLMRequestProcessing:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.async_data_generator(): Exception occured - %s", e
             )
-            transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
-                user_api_key_dict=user_api_key_dict,
-                original_exception=e,
-                request_data=request_data,
+            transformed_exception: Final = await proxy_logging_obj.shield_refused_stream_failure_report(
+                proxy_logging_obj.post_call_failure_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    original_exception=e,
+                    request_data=request_data,
+                ),
+                request_data.get("litellm_logging_obj"),
             )
             if transformed_exception is not None:
                 e = transformed_exception

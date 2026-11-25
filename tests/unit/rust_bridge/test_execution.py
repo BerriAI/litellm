@@ -165,6 +165,23 @@ def test_closing_a_stream_tells_the_execution_once_and_closes_it(asynchronous: b
     assert execution.closed
 
 
+def test_a_close_racing_a_suspended_close_does_not_tell_the_execution_again() -> None:
+    async def close_twice_at_once() -> list[tuple[str, object]]:
+        released: Final = asyncio.Event()
+        execution: Final = ScriptedExecution([StreamChunk("first"), Await(released.wait()), Complete(None)])
+        stream: Final = AsyncStream(execution, {})
+        await anext(stream)
+        first_close: Final = asyncio.ensure_future(stream.aclose())
+        await asyncio.sleep(0)
+        await stream.aclose()
+        released.set()
+        await first_close
+        assert execution.closed
+        return execution.resumed
+
+    assert asyncio.run(close_twice_at_once()) == [("value", None), ("error", StreamClosed), ("value", True)]
+
+
 @pytest.mark.parametrize("asynchronous", (False, True))
 def test_stream_read_failure_closes_the_execution_and_ends_the_stream(asynchronous: bool) -> None:
     failure: Final = ValueError("read failed")

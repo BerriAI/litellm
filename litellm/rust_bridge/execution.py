@@ -141,10 +141,11 @@ class AsyncStream(AsyncIterator[object]):
     async def aclose(self) -> None:
         if self._done:
             return
+        self._done = True
         try:
             await _settle(self._execution, self._execution.throw(StreamClosed()))
         finally:
-            self._finish()
+            self._execution.close()
 
     def _finish(self) -> None:
         self._done = True
