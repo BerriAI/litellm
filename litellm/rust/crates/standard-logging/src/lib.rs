@@ -1,3 +1,4 @@
+mod additional_headers;
 mod caller;
 mod error_information;
 mod failure;
@@ -13,6 +14,7 @@ mod served;
 mod status;
 mod wire;
 
+pub use additional_headers::{additional_headers, anthropic_response_headers, httpx_items};
 pub use caller::{App, Budget, Caller, Customer, Key, Named, Team, User};
 pub use error_information::{
     ClientDisconnected, CooldownDeployment, ErrorInformation, LoggedErrorInformation,

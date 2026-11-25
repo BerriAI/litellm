@@ -42,6 +42,9 @@ pub enum CallFailure {
         exception: LoggedException,
         /// `str()` of the exception, which Python's failure handler passes as `error_str`.
         error_str: String,
+        /// The response headers the exception carries (`_get_response_headers`): a provider's
+        /// answer's, or the ones a refusal is sent with.
+        headers: Vec<(String, String)>,
     },
     /// The client left before the call ended, which Python logs in place of any exception
     /// (`_CLIENT_DISCONNECTED_ERROR_INFORMATION`, 499).
@@ -58,12 +61,17 @@ impl CallFailure {
         let error_str = raised
             .error_str
             .unwrap_or_else(|| raised.exception.message.clone());
+        let headers = match error {
+            Error::Refused(refusal) => refusal.headers.clone(),
+            other => other.provider_headers(),
+        };
         Self::Raised {
             exception: LoggedException {
                 traceback,
                 ..raised.exception
             },
             error_str,
+            headers,
         }
     }
 
@@ -395,6 +403,7 @@ mod tests {
             CallFailure::Raised {
                 exception,
                 error_str,
+                ..
             } => (exception, error_str),
             CallFailure::ClientDisconnected => unreachable!(),
         }

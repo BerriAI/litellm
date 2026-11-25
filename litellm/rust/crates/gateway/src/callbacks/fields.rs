@@ -23,6 +23,7 @@ use serde_json::{Map, Value};
 use super::{
     parallel_request_limiter::{MASTER_KEY_ALIAS, PROXY_ADMIN_NAME},
     spend_log_input::{self, Served},
+    standard_logging::deployment_provider,
 };
 use crate::host::NativeRows;
 
@@ -80,7 +81,7 @@ fn isoformat(at: IsoDateTime) -> String {
 }
 
 /// The route a call came in on, as Python's `user_api_key_request_route` names it.
-fn route(call_type: CallType) -> &'static str {
+pub(super) fn route(call_type: CallType) -> &'static str {
     match call_type {
         CallType::AnthropicMessages => "/v1/messages",
         CallType::Aocr => "/v1/ocr",
@@ -142,18 +143,7 @@ fn deployment(entries: &CallState) -> Option<&litellm_router_core::Deployment> {
 /// The provider the served deployment was called through, as Python's `custom_llm_provider`
 /// names it.
 fn provider(entries: &CallState) -> Option<String> {
-    let deployment = deployment(entries)?;
-    deployment
-        .resolved_provider
-        .clone()
-        .or_else(|| deployment.params.custom_llm_provider.clone())
-        .or_else(|| {
-            deployment
-                .params
-                .model
-                .split_once('/')
-                .map(|(provider, _)| provider.to_owned())
-        })
+    deployment(entries).and_then(deployment_provider)
 }
 
 fn key_identity(charged: &Charged) -> KeyIdentity {
