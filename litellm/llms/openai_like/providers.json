@@ -392,5 +392,19 @@
       "/v1/chat/completions",
       "/v1/completions"
     ]
+  },
+  "c0mpute": {
+    "base_url": "https://c0mpute.com/v1",
+    "api_key_env": "C0MPUTE_API_KEY",
+    "api_base_env": "C0MPUTE_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "special_handling": {
+      "convert_text_content_list_to_string": true
+    },
+    "supported_endpoints": [
+      "/v1/chat/completions"
+    ]
   }
 }
