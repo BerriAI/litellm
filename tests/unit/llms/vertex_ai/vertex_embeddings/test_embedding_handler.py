@@ -337,8 +337,12 @@ def test_vertex_embedding_call_sends_extra_body_fields_as_predict_parameters(
 
 @pytest.mark.parametrize(
     ("model", "prediction", "content_field"),
-    [(GECKO, _gecko_prediction([0.1, 2], 3), "content"), (BGE, [0.1, 2], "prompt")],
-    ids=["gecko", "bge"],
+    [
+        (GECKO, _gecko_prediction([0.1, 2], 3), "content"),
+        (FINE_TUNED_ENDPOINT, [[0.1, 2]], "inputs"),
+        (BGE, [0.1, 2], "prompt"),
+    ],
+    ids=["gecko", "fine_tuned", "bge"],
 )
 def test_vertex_embedding_call_sends_a_request_shaped_extra_body_at_the_request_level(
     predict_endpoint: respx.Route, model: str, prediction: object, content_field: str
