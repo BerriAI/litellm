@@ -667,13 +667,6 @@ impl<H: RouterHost> Call<'_, H> {
             healthy = crate::routing_plugins::narrow(healthy, plugin_models.as_deref())?;
         }
 
-        healthy = crate::precall::settle(
-            &resolution.group,
-            healthy,
-            &uncertain,
-            inputs.refuse_uncertain,
-        )?;
-
         // `_without_declared_text_only_deployments`: an image request skips the deployments that
         // declare no vision, unless that leaves nothing.
         if request.has_image && !resolution.kind.is_single() && !healthy.is_empty() {
@@ -723,6 +716,13 @@ impl<H: RouterHost> Call<'_, H> {
                 healthy = taking;
             }
         }
+
+        healthy = crate::precall::settle(
+            &resolution.group,
+            healthy,
+            &uncertain,
+            inputs.refuse_uncertain,
+        )?;
 
         // `deployments_admitting_embedding_batch`: an embedding pick keeps the deployments whose
         // input limit admits the batch; when none does, the host keeps what the pick waits for or

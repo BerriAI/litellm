@@ -56,6 +56,7 @@ struct ScriptedHost {
     params_sent: Mutex<Vec<Option<Value>>>,
     /// What every pre-call check is answered with.
     pre_call_facts: PreCallFacts,
+    text_only_ids: &'static [&'static str],
 }
 
 impl ScriptedHost {
@@ -282,10 +283,16 @@ impl RouterHost for ScriptedHost {
 
     async fn select(
         &self,
-        _stage: &SelectStage,
+        stage: &SelectStage,
         _ctx: &RoutingContext<'_>,
         candidates: Vec<Arc<Deployment>>,
     ) -> Result<Vec<Arc<Deployment>>, Error> {
+        if matches!(stage, SelectStage::TextOnly) {
+            return Ok(candidates
+                .into_iter()
+                .filter(|deployment| self.text_only_ids.contains(&deployment.id.as_str()))
+                .collect());
+        }
         match self.pick_failures.lock().pop_front() {
             Some(failure) => Err(failure.into()),
             None => Ok(candidates),
@@ -2090,6 +2097,104 @@ async fn a_stream_retry_resends_a_stand_in_overflow_only_without_a_window_refusa
         )
         .await;
     assert_eq!(host.selected().len(), resent);
+}
+
+#[rstest]
+#[case::the_vision_deployment_may_fit(stand_in_overflows(&["a2"]), "a2")]
+#[case::the_vision_deployment_fits(stand_in_overflows(&[]), "a2")]
+#[tokio::test]
+async fn an_image_request_goes_to_the_vision_deployment_over_a_fitting_text_only_one(
+    config: RouterConfig,
+    #[case] pre_call_facts: PreCallFacts,
+    #[case] picked: &str,
+) {
+    let host = Arc::new(ScriptedHost {
+        pre_call_facts,
+        text_only_ids: &["a1"],
+        ..ScriptedHost::default()
+    });
+    let router = router(
+        RouterConfig {
+            enable_pre_call_checks: true,
+            ..config
+        },
+        json!({}),
+        host.clone(),
+    );
+    let request = RouterRequest {
+        has_image: true,
+        ..request()
+    };
+    let chosen = router
+        .select(&Op::from("acompletion"), &request)
+        .await
+        .unwrap();
+    assert_eq!(chosen.id, picked);
+}
+
+#[rstest]
+#[case::the_provider_refused_the_window(context_window(), 0)]
+#[case::another_failure(server_error(), 1)]
+#[tokio::test]
+async fn a_stream_fallback_sends_a_stand_in_overflow_only_when_no_provider_refused_the_window(
+    config: RouterConfig,
+    #[case] stream_failure: AttemptError,
+    #[case] sent: usize,
+) {
+    let host = Arc::new(ScriptedHost {
+        pre_call_facts: stand_in_overflows(&["b1"]),
+        ..ScriptedHost::default()
+    });
+    let hosted = router(
+        RouterConfig {
+            enable_pre_call_checks: true,
+            ..config
+        },
+        json!({"fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let _ = hosted
+        .router
+        .fallback_stream(
+            &*host,
+            Op::from("acompletion"),
+            stream_request(),
+            origin(json!({"deployment_id": "a1"})),
+            stream_failure,
+        )
+        .await;
+    assert_eq!(host.selected().len(), sent);
+}
+
+#[rstest]
+#[case::a_retry_got_a_window_refusal(context_window(), false)]
+#[case::a_retry_got_another_refusal(failure(FailureKind::BadRequest, 400), true)]
+#[tokio::test]
+async fn a_stream_take_over_falls_back_to_a_stand_in_overflow_only_when_no_retry_was_refused_the_window(
+    config: RouterConfig,
+    #[case] retry_failure: AttemptError,
+    #[case] sent_to_backup: bool,
+) {
+    let host = Arc::new(ScriptedHost {
+        pre_call_facts: stand_in_overflows(&["b1"]),
+        ..ScriptedHost::failing("primary", vec![retry_failure])
+    });
+    let hosted = router(
+        RouterConfig {
+            enable_pre_call_checks: true,
+            ..config
+        },
+        json!({"fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let _ = hosted
+        .take_over(
+            stream_request(),
+            origin(json!({"deployment_id": "a1"})),
+            server_error(),
+        )
+        .await;
+    assert_eq!(host.selected().contains(&"b1".to_owned()), sent_to_backup);
 }
 
 #[rstest]

@@ -11,7 +11,7 @@ use serde::Deserialize;
 
 use super::{
     Failed, FallbackChain, FallbackHop, Level, Lists, Target, Tried, counted, counting, ends_call,
-    group_members,
+    group_members, refused_by_provider,
 };
 use crate::{
     Call, Router, RouterStateSnapshot,
@@ -107,6 +107,7 @@ pub struct TakeOver<'a> {
 struct Spent {
     failed: Failed,
     committed_budget: Option<u32>,
+    provider_refused_window: bool,
 }
 
 /// A take-over whose attempts served nothing. `raised` is the host's error of the attempt the
@@ -279,7 +280,7 @@ impl Router {
         let call = Call::new(&self.core, host);
         let snapshot = self.core.snapshot.load_full();
         let failed = origin.failed(failure);
-        call.fall_back_from(&snapshot, &op, &Arc::new(request), origin, failed)
+        call.fall_back_from(&snapshot, &op, &Arc::new(request), origin, failed, false)
             .await
             .map_err(|error| call.ended(error))
     }
@@ -339,8 +340,12 @@ impl<H: RouterHost> Call<'_, H> {
         request: &Arc<RouterRequest>,
         origin: StreamOrigin,
         failed: Failed,
+        provider_refused_window: bool,
     ) -> Result<super::RouterResponse<H::Response>, Error> {
-        let mut chain = FallbackChain::default();
+        let mut chain = FallbackChain {
+            provider_refused_window: provider_refused_window || refused_by_provider(&failed.error),
+            ..FallbackChain::default()
+        };
         if request.model != origin.target.group {
             chain
                 .attempted
@@ -369,7 +374,10 @@ impl<H: RouterHost> Call<'_, H> {
         failure: AttemptError,
     ) -> Result<super::RouterResponse<H::Response>, Spent> {
         // A stream's retries start from a chain that has tried nothing.
-        let mut chain = FallbackChain::default();
+        let mut chain = FallbackChain {
+            provider_refused_window: failure.is_a("ContextWindowExceededError"),
+            ..FallbackChain::default()
+        };
         let level = Level {
             snapshot,
             op,
@@ -390,8 +398,7 @@ impl<H: RouterHost> Call<'_, H> {
             requested: Some(target.group.clone()),
             fallback_hop: level.at.level > 0,
             failed_ids: origin.deployment_id.iter().cloned().collect(),
-            refuse_uncertain: failure.is_a("ContextWindowExceededError")
-                || level.refuses_uncertain(),
+            refuse_uncertain: level.refuses_uncertain(),
             ..SelectInputs::default()
         };
         let (budget, policy_applies) = stream_retry_budget(snapshot, request, origin, failure.kind);
@@ -430,12 +437,15 @@ impl<H: RouterHost> Call<'_, H> {
                 return Err(Spent {
                     failed,
                     committed_budget,
+                    provider_refused_window: level.chain.provider_refused_window,
                 });
             }
             // No deployment could be picked: the fallbacks start from the newest attempt.
             let Error::Attempt { failure, .. } = &*failed.error else {
                 break;
             };
+            level.chain.provider_refused_window |= refused_by_provider(&failed.error);
+            inputs.refuse_uncertain |= level.chain.provider_refused_window;
             if let Some(id) = failure
                 .failed_deployment_id
                 .as_ref()
@@ -455,6 +465,7 @@ impl<H: RouterHost> Call<'_, H> {
         Err(Spent {
             failed: newest,
             committed_budget,
+            provider_refused_window: level.chain.provider_refused_window,
         })
     }
 }
@@ -481,6 +492,7 @@ impl TakeOver<'_> {
         let Spent {
             failed,
             committed_budget,
+            provider_refused_window,
         } = match call
             .retry_in_group(&snapshot, &op, &request, &origin, failure)
             .await
@@ -488,15 +500,22 @@ impl TakeOver<'_> {
             Ok(answer) => return Ok(answer),
             Err(spent) => spent,
         };
-        call.fall_back_from(&snapshot, &op, &request, origin, failed)
-            .await
-            .map(|answer| super::RouterResponse {
-                max_retries: answer.max_retries.or(committed_budget),
-                ..answer
-            })
-            .map_err(|error| Unanswered {
-                raised: call.ended(error).raised.map(|raised| raised.failure),
-            })
+        call.fall_back_from(
+            &snapshot,
+            &op,
+            &request,
+            origin,
+            failed,
+            provider_refused_window,
+        )
+        .await
+        .map(|answer| super::RouterResponse {
+            max_retries: answer.max_retries.or(committed_budget),
+            ..answer
+        })
+        .map_err(|error| Unanswered {
+            raised: call.ended(error).raised.map(|raised| raised.failure),
+        })
     }
 }
 
