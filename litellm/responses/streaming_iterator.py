@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Protocol, cast,
 
 import httpx
 from openai._streaming import SSEDecoder
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic_core import to_jsonable_python
 from typing_extensions import TypeIs
 
 import litellm
@@ -27,7 +28,8 @@ from litellm.constants import (
 )
 from litellm.exceptions import MidStreamFallbackError, RateLimitError
 from litellm.litellm_core_utils.asyncify import run_async_function
-from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.core_helpers import attribute_or_none, process_response_headers
+from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_params
 from litellm.litellm_core_utils.internal_call_metadata import without_budget_reservation
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.llm_response_utils.get_api_base import get_api_base
@@ -45,6 +47,7 @@ from litellm.responses.utils import ResponseAPILoggingUtils, ResponsesAPIRequest
 from litellm.types.integrations.custom_logger import converted_stream_requested
 from litellm.types.llms.openai import (
     PART_UNION_TYPES,
+    ErrorEventError,
     ResponseAPIUsage,
     ResponseIncompleteEvent,
     ResponsesAPIResponse,
@@ -52,7 +55,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIStreamingResponse,
 )
 from litellm.types.responses.main import GenericResponseOutputItem, OutputText
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, CostBreakdown
 from litellm.utils import async_post_call_success_deployment_hook
 
 if TYPE_CHECKING:
@@ -270,6 +273,12 @@ def stream_error_status_and_message(error_obj: object) -> tuple[int, str]:
     return _status_code_for_error_fields(error_type, error_code), message
 
 
+def _provider_error_fields(error_obj: object) -> Mapping[str, object]:
+    if isinstance(error_obj, ErrorEventError):
+        return error_obj.model_dump(exclude_none=True)
+    return error_obj if _is_json_object(error_obj) else {}
+
+
 def _map_stream_error_to_exception(
     error_obj: object, model: str, custom_llm_provider: str, headers: httpx.Headers | None = None
 ) -> Exception:
@@ -277,11 +286,11 @@ def _map_stream_error_to_exception(
 
     error_message, error_type, error_code = _error_event_fields(error_obj)
     status_code: Final = _status_code_for_error_fields(error_type, error_code)
-    error_body: Final = {"message": error_message, "type": error_type, "code": error_code}
+    error_fields: Final = {"message": error_message, "type": error_type, "code": error_code}
     provider_exception: Final = BaseLLMException(
         status_code=status_code,
-        message=f"Error code: {status_code} - {{'error': {error_body}}}",
-        body=error_body,
+        message=f"Error code: {status_code} - {{'error': {error_fields}}}",
+        body={**_provider_error_fields(error_obj), **error_fields},
         headers=headers,
     )
     try:
@@ -308,7 +317,11 @@ def _error_event_error_object(event: object) -> object:
     nested_error: Final = _event_field(event, "error")
     if nested_error is not None:
         return nested_error
-    return {field: value for field in ("message", "code") if _is_error_field_value(value := _event_field(event, field))}
+    return {
+        field: value
+        for field in ("message", "code", "param")
+        if _is_error_field_value(value := _event_field(event, field))
+    }
 
 
 def _mid_stream_fallback_eligible(mapped_exception: Exception) -> bool:
@@ -1002,6 +1015,9 @@ class BaseResponsesAPIStreamingIterator:
         if pending:
             await asyncio.wait(pending)
 
+    def record_relayed_tool_arguments(self, arguments: str) -> None:
+        self._generated_tool_arguments += arguments
+
     def partial_response_on_disconnect(self) -> ResponseIncompleteEvent | None:
         """
         The response.incomplete event to bill when the client went away mid-stream,
@@ -1300,7 +1316,14 @@ class MockResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             request_data=request_data,
             call_type=call_type,
         )
-        self._set_events_from_response(transformed=transformed, logging_obj=logging_obj)
+        self._set_events_from_response(
+            transformed=ResponsesAPIRequestUtils.update_responses_api_response_id_with_model_id(
+                responses_api_response=transformed,
+                custom_llm_provider=custom_llm_provider,
+                litellm_metadata=litellm_metadata,
+            ),
+            logging_obj=logging_obj,
+        )
 
     def _set_events_from_response(
         self,
@@ -1575,6 +1598,132 @@ def partial_responses_incomplete_event_on_disconnect(stream: object) -> Response
     return partial if isinstance(partial, ResponseIncompleteEvent) else None
 
 
+_STR_KEYED: Final = TypeAdapter(Mapping[str, object])
+_PER_REQUEST_COST_KEYS: Final = frozenset({"discount_percent", "margin_percent", "margin_fixed_amount"})
+_TOTALS_WITH_FIXED_MARGIN: Final = ("total_cost", "margin_total_amount")
+_COST_BREAKDOWN: Final = TypeAdapter(CostBreakdown)
+
+
+def _summed_count(primary: object, fallback: object) -> object:
+    if isinstance(primary, Mapping) and isinstance(fallback, Mapping):
+        return _summed_counts(_STR_KEYED.validate_python(primary), _STR_KEYED.validate_python(fallback))
+    if isinstance(primary, (int, float)) and isinstance(fallback, (int, float)):
+        return primary + fallback
+    return primary if fallback is None else fallback
+
+
+def _summed_counts(primary: Mapping[str, object], fallback: Mapping[str, object]) -> Mapping[str, object]:
+    keys: Final = (*primary, *(key for key in fallback if key not in primary))
+    return MappingProxyType({key: _summed_count(primary.get(key), fallback.get(key)) for key in keys})
+
+
+def _usage_of_both_deployments(
+    primary: ResponseAPIUsage | None, fallback: ResponseAPIUsage | None
+) -> ResponseAPIUsage | None:
+    if primary is None or fallback is None:
+        return fallback if primary is None else primary
+    return ResponseAPIUsage.model_validate(
+        to_jsonable_python(_summed_counts(primary.model_dump(), fallback.model_dump()), fallback=dict)
+    )
+
+
+def _response_cost(response: ResponsesAPIResponse) -> object:
+    hidden_cost: Final = (get_hidden_params(response) or {}).get("response_cost")
+    return getattr(response.usage, "cost", None) if hidden_cost is None else hidden_cost
+
+
+def stream_logging(stream: object) -> LiteLLMLoggingObj | None:
+    logging_obj: Final = getattr(stream, "logging_obj", getattr(stream, "litellm_logging_obj", None))
+    return logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None
+
+
+def stream_cost_breakdown(stream: object) -> CostBreakdown | None:
+    logging_obj: Final = stream_logging(stream)
+    return None if logging_obj is None else logging_obj.cost_breakdown
+
+
+@dataclass(frozen=True, slots=True)
+class PricedPartial:
+    event: ResponseIncompleteEvent
+    breakdown: CostBreakdown | None
+
+    @property
+    def priced(self) -> bool:
+        return isinstance(_response_cost(self.event.response), (int, float))
+
+    @property
+    def cost(self) -> float:
+        cost: Final = _response_cost(self.event.response)
+        return float(cost) if isinstance(cost, (int, float)) else 0.0
+
+
+def priced_partial_on_disconnect(stream: object) -> PricedPartial | None:
+    event: Final = partial_responses_incomplete_event_on_disconnect(stream)
+    if event is None:
+        return None
+    priced: Final = isinstance(_response_cost(event.response), (int, float))
+    return PricedPartial(event, stream_cost_breakdown(stream) if priced else None)
+
+
+def held_partial_on_disconnect(stream: object) -> PricedPartial | None:
+    logging_obj: Final = stream_logging(stream)
+    if logging_obj is None:
+        return priced_partial_on_disconnect(stream)
+    with logging_obj.pricing_left_unrecorded():
+        return priced_partial_on_disconnect(stream)
+
+
+def _primary_fixed_margin(primary: PricedPartial, fallback: PricedPartial) -> float:
+    if primary.breakdown is None or fallback.breakdown is None or primary.breakdown is fallback.breakdown:
+        return 0.0
+    return primary.breakdown.get("margin_fixed_amount", 0.0)
+
+
+def _summed_cost_entry(key: str, primary: Mapping[str, object], fallback: Mapping[str, object]) -> object:
+    if key in _PER_REQUEST_COST_KEYS:
+        return fallback[key] if key in fallback else primary[key]
+    return _summed_count(primary.get(key), fallback.get(key))
+
+
+def _cost_breakdown_of_both_deployments(primary: PricedPartial, fallback: PricedPartial) -> CostBreakdown | None:
+    if not primary.priced:
+        return fallback.breakdown
+    if not fallback.priced:
+        return primary.breakdown
+    if primary.breakdown is None or fallback.breakdown is None or primary.breakdown is fallback.breakdown:
+        return None
+    first: Final = _STR_KEYED.validate_python(primary.breakdown)
+    final: Final = _STR_KEYED.validate_python(fallback.breakdown)
+    keys: Final = (*first, *(key for key in final if key not in first))
+    summed: Final = MappingProxyType({key: _summed_cost_entry(key, first, final) for key in keys})
+    primary_fee: Final = _primary_fixed_margin(primary, fallback)
+    charged_once: Final = MappingProxyType(
+        {key: total - primary_fee for key in _TOTALS_WITH_FIXED_MARGIN if isinstance(total := summed.get(key), float)}
+    )
+    return _COST_BREAKDOWN.validate_python({**summed, **charged_once})
+
+
+def _billed_at(event: ResponseIncompleteEvent, usage: ResponseAPIUsage | None, cost: float) -> ResponseIncompleteEvent:
+    billed: Final = event.response.model_copy(
+        update={"usage": None if usage is None else usage.model_copy(update={"cost": cost})}
+    )
+    set_hidden_params(billed, {**(get_hidden_params(event.response) or {}), "response_cost": cost})
+    return event.model_copy(update={"response": billed})
+
+
+def partial_billed_for_both_deployments(primary: PricedPartial, fallback: PricedPartial | None) -> PricedPartial:
+    if fallback is None:
+        return PricedPartial(_billed_at(primary.event, primary.event.response.usage, primary.cost), primary.breakdown)
+    return PricedPartial(
+        _billed_at(
+            fallback.event,
+            _usage_of_both_deployments(primary.event.response.usage, fallback.event.response.usage),
+            primary.cost + fallback.cost - _primary_fixed_margin(primary, fallback),
+        ),
+        _cost_breakdown_of_both_deployments(primary, fallback),
+    )
+
+
 def _partial_output_items(generated_text: str) -> Sequence[GenericResponseOutputItem]:
     if not generated_text:
         return []
@@ -1643,6 +1792,54 @@ def _usage_as_model(usage: object) -> ResponseAPIUsage | None:
         return ResponseAPIUsage.model_validate(usage)
     except ValidationError:
         return None
+
+
+_CLIENT_RUN_TOOL_CALL_ITEM_TYPES: Final = frozenset(
+    {
+        "function_call",
+        "custom_tool_call",
+        "mcp_approval_request",
+        "computer_call",
+        "local_shell_call",
+        "shell_call",
+        "apply_patch_call",
+    }
+)
+
+
+def _answered_approval_ids(items: Iterable[Mapping[str, object]]) -> frozenset[str]:
+    approval_ids: Final = (
+        item.get("approval_request_id") for item in items if item.get("type") == "mcp_approval_response"
+    )
+    return frozenset(approval_id for approval_id in approval_ids if isinstance(approval_id, str))
+
+
+def _call_ids(items: Iterable[Mapping[str, object]]) -> frozenset[str]:
+    return frozenset(call_id for call_id in (item.get("call_id") for item in items) if isinstance(call_id, str))
+
+
+def _unanswered_call_ids(items: Sequence[Mapping[str, object]]) -> frozenset[str]:
+    call_ids: Final = tuple(call_id for call_id in (item.get("call_id") for item in items) if isinstance(call_id, str))
+    return frozenset(call_id for call_id in call_ids if call_ids.count(call_id) == 1)
+
+
+def _has_call_id_in(item: Mapping[str, object], call_ids: frozenset[str]) -> bool:
+    call_id: Final = item.get("call_id")
+    return isinstance(call_id, str) and call_id in call_ids
+
+
+def _is_replayed_call_item(item: Mapping[str, object], answered_approval_ids: frozenset[str]) -> bool:
+    item_type: Final = item.get("type")
+    if (isinstance(item_type, str) and item_type in _CLIENT_RUN_TOOL_CALL_ITEM_TYPES) or isinstance(
+        item.get("call_id"), str
+    ):
+        return True
+    approval_request_id: Final = item.get("approval_request_id")
+    return (
+        item_type == "mcp_call"
+        and isinstance(approval_request_id, str)
+        and approval_request_id in answered_approval_ids
+    )
 
 
 _TOOL_ARGUMENTS_DELTA_EVENTS: Final = frozenset(
@@ -2701,6 +2898,22 @@ _MANAGED_WS_SKIP_KWARGS: Final[frozenset[str]] = frozenset(
 _WARMUP_RESPONSE_ID_PREFIX: Final = "resp_warmup_"
 
 
+def _turn_failure_type(failure: Exception) -> str:
+    match attribute_or_none(failure, "status_code"):
+        case 429:
+            return "rate_limit_exceeded"
+        case int(status) if 400 <= status < 500:
+            return "invalid_request_error"
+        case _:
+            return "server_error"
+
+
+def _openai_error_fields(failure: Exception) -> Mapping[str, str]:
+    return MappingProxyType(
+        {name: value for name in ("code", "param") if isinstance(value := attribute_or_none(failure, name), str)}
+    )
+
+
 class ManagedResponsesWebSocketHandler:
     """
     Handles Responses API WebSocket mode for providers that do not expose a
@@ -2758,6 +2971,7 @@ class ManagedResponsesWebSocketHandler:
         # This avoids the async DB-write race condition where spend logs haven't
         # been committed yet when the next response.create arrives.
         self._session_history: dict[str, list[dict[str, object]]] = {}
+        self._cut_off_call_ids: Mapping[str, frozenset[str]] = MappingProxyType({})
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -2778,15 +2992,19 @@ class ManagedResponsesWebSocketHandler:
             verbose_logger.debug("ManagedResponsesWS: failed to serialize chunk: %s", exc)
             return None
 
-    async def _send_error(self, message: str, error_type: str = "server_error") -> None:
+    async def _send_error(
+        self, message: str, error_type: str = "server_error", openai_fields: Mapping[str, str] = MappingProxyType({})
+    ) -> None:
         try:
             await self.websocket.send_text(
-                json.dumps({"type": "error", "error": {"type": error_type, "message": message}})
+                json.dumps({"type": "error", "error": {"type": error_type, "message": message, **openai_fields}})
             )
         except Exception:
             pass
 
-    def _get_history_messages(self, previous_response_id: str) -> list[dict[str, object]]:
+    def _get_history_messages(
+        self, previous_response_id: str, current_messages: Sequence[Mapping[str, object]]
+    ) -> list[dict[str, object]]:
         """
         Return accumulated message history for *previous_response_id*.
 
@@ -2795,7 +3013,8 @@ class ManagedResponsesWebSocketHandler:
         """
         decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(previous_response_id)
         raw_id: Final = decoded.get("response_id", previous_response_id)
-        return list(self._session_history.get(raw_id, []))
+        skipped_call_ids: Final = self._cut_off_call_ids.get(raw_id, frozenset()) - _call_ids(current_messages)
+        return [item for item in self._session_history.get(raw_id, []) if not _has_call_id_in(item, skipped_call_ids)]
 
     def _store_history(self, response_id: str, messages: list[dict[str, object]]) -> None:
         """
@@ -2823,25 +3042,27 @@ class ManagedResponsesWebSocketHandler:
     @staticmethod
     def _extract_output_messages(
         completed_event: _MutableJsonObject,
+        answered_approval_ids: frozenset[str] = frozenset(),
     ) -> list[dict[str, object]]:
         """
         Convert output items in a terminal (``response.completed`` or ``response.incomplete``) event into Responses
-        API message dicts suitable for the next turn's ``input``.
+        API message dicts suitable for the next turn's ``input``, keeping every item a later turn can answer.
         """
         resp_obj: Final = completed_event.get("response", {})
-        if not isinstance(resp_obj, dict):
+        if not _is_json_object(resp_obj):
             return []
+        output: Final = resp_obj.get("output")
         messages: Final[list[dict[str, object]]] = []
-        for item in resp_obj.get("output", []) or []:
-            if not isinstance(item, dict):
+        for item in output if _is_json_array(output) else []:
+            if not _is_json_object(item):
                 continue
             item_type = item.get("type")
             role = item.get("role", "assistant")
             if item_type == "message":
-                content_parts = item.get("content") or []
+                content_parts = item.get("content")
                 text_parts = [
                     p.get("text", "")
-                    for p in content_parts
+                    for p in (content_parts if _is_json_array(content_parts) else [])
                     if isinstance(p, dict) and p.get("type") in ("output_text", "text")
                 ]
                 text = "".join(text_parts)
@@ -2853,7 +3074,7 @@ class ManagedResponsesWebSocketHandler:
                             "content": [{"type": "output_text", "text": text}],
                         }
                     )
-            elif item_type == "function_call":
+            elif _is_replayed_call_item(item, answered_approval_ids):
                 messages.append(item)
         return messages
 
@@ -3105,9 +3326,14 @@ class ManagedResponsesWebSocketHandler:
         new_response_id: Final = self._extract_response_id(terminal_event)
         if not new_response_id:
             return
-        output_msgs: Final = self._extract_output_messages(terminal_event)
-        all_messages: Final = prior_history + current_messages + output_msgs
+        earlier_messages: Final = prior_history + current_messages
+        output_msgs: Final = self._extract_output_messages(terminal_event, _answered_approval_ids(earlier_messages))
+        all_messages: Final = earlier_messages + output_msgs
         self._store_history(new_response_id, all_messages)
+        if terminal_event.get("type") == "response.incomplete":
+            self._cut_off_call_ids = MappingProxyType(
+                {**self._cut_off_call_ids, new_response_id: _unanswered_call_ids(output_msgs)}
+            )
         verbose_logger.debug(
             "ManagedResponsesWS: stored %d messages for response_id=%s",
             len(all_messages),
@@ -3183,7 +3409,9 @@ class ManagedResponsesWebSocketHandler:
         current_messages: Final = self._input_to_messages(call_kwargs.get("input"))
 
         # Fetch history once; reused in both _apply_history and _save_turn_history
-        prior_history: Final = self._get_history_messages(previous_response_id) if previous_response_id else []
+        prior_history: Final = (
+            self._get_history_messages(previous_response_id, current_messages) if previous_response_id else []
+        )
 
         self._apply_history(call_kwargs, previous_response_id, current_messages, prior_history)
         self._inject_credentials(call_kwargs, model=model)
@@ -3194,7 +3422,7 @@ class ManagedResponsesWebSocketHandler:
             terminal_event: Final = await self._stream_and_forward(model, call_kwargs)
         except Exception as exc:
             verbose_logger.exception("ManagedResponsesWS: error processing response.create: %s", exc)
-            await self._send_error(str(exc))
+            await self._send_error(str(exc), _turn_failure_type(exc), _openai_error_fields(exc))
             return
 
         self._save_turn_history(terminal_event, prior_history, current_messages)

@@ -13,6 +13,7 @@ from litellm.types.decisions import (
     DecisionsIRRequest,
     DecisionsIRState,
     OpenAIDecisionInputImage,
+    OpenAIDecisionInputJSON,
     OpenAIDecisionInputMessage,
     OpenAIDecisionInputText,
     UnsupportedDecisionsRequest,
@@ -49,7 +50,7 @@ def _part_text(part: OpenAIDecisionInputText | OpenAIDecisionInputImage) -> str:
 def _message_texts(message: OpenAIDecisionInputMessage) -> tuple[str, ...]:
     if isinstance(message.content, str):
         return (message.content,)
-    return tuple(map(_part_text, message.content))
+    return tuple(_part_text(part) for part in message.content if not isinstance(part, OpenAIDecisionInputJSON))
 
 
 def _message_assets(message: OpenAIDecisionInputMessage) -> Mapping[str, DecisionsAsset]:

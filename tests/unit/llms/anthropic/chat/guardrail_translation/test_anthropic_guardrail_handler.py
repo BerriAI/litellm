@@ -6,12 +6,16 @@ with guardrail transformations, specifically testing edge cases with empty choic
 """
 
 import json
+import logging
+from collections.abc import Mapping
 from typing import Any, Literal, Optional, Final
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 
+import litellm
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.guardrail_translation.base_translation import StreamingScanKey
@@ -156,6 +160,48 @@ class MockStructuredMaskingGuardrail(CustomGuardrail):
         return masked
 
 
+class OnlyDeferredToolsGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[LiteLLMLoggingObj] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {
+            **inputs,
+            "tools": [tool for tool in inputs.get("tools") or [] if tool["function"]["name"] == "mcp__weather__get_forecast"],
+        }
+
+
+class ToolDroppingGuardrail(CustomGuardrail):
+    def __init__(self, tool_name: str) -> None:
+        super().__init__(guardrail_name="test")
+        self._tool_name: Final = tool_name
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[LiteLLMLoggingObj] = None,
+    ) -> GenericGuardrailAPIInputs:
+        kept: Final = [tool for tool in inputs.get("tools") or [] if tool["function"]["name"] != self._tool_name]
+        return {**inputs, "tools": kept}
+
+
+_DEFERRED_TOOL_REQUEST_TOOLS: Final = (
+    {"name": "Read", "description": "Read a file", "input_schema": {"type": "object", "properties": {}}},
+    {"name": "ToolSearch", "description": "Search tools", "input_schema": {"type": "object", "properties": {}}},
+    {
+        "name": "mcp__weather__get_forecast",
+        "description": "Get the forecast for a city",
+        "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+        "defer_loading": True,
+    },
+)
+
+
 class TestAnthropicMessagesHandlerStreamingRequestData:
     """Post-call guardrails on streaming /v1/messages receive the response and identity metadata"""
 
@@ -272,6 +318,14 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         return [f"event: {name}\ndata: {json.dumps(payload)}\n\n".encode() for name, payload in events]
 
     @staticmethod
+    def _guardrail_that_must_not_run() -> CustomGuardrail:
+        class MustNotRun(CustomGuardrail):
+            async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+                raise AssertionError("the guardrail ran on a stream it could not read")
+
+        return MustNotRun(guardrail_name="test")
+
+    @staticmethod
     def _masking_guardrail() -> CustomGuardrail:
         class MaskWorld(CustomGuardrail):
             async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
@@ -308,6 +362,103 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         raw = b"".join(chunks).decode()
         assert "event: message_start" in raw and "event: message_stop" in raw
         assert '"stop_reason": "end_turn"' in raw
+
+    @pytest.mark.parametrize("undecodable_payload", ["5", "[" * 100_000 + "]" * 100_000], ids=["number", "deep-array"])
+    def test_a_data_line_that_is_not_an_object_neither_cuts_the_text_scan_nor_hides_the_stop_reason(
+        self, undecodable_payload
+    ):
+        text_delta = {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "abc"}}
+        message_delta = {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}}
+        chunk = (
+            f"event: content_block_delta\ndata: {json.dumps(text_delta)}\n\n"
+            f"event: content_block_delta\ndata: {undecodable_payload}\n\n"
+            f"event: content_block_delta\ndata: {json.dumps(text_delta)}\n\n"
+            f"event: message_delta\ndata: {undecodable_payload}\n\n"
+            f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n"
+        ).encode()
+        handler = AnthropicMessagesHandler()
+
+        scan_key = handler.get_streaming_scan_key([chunk])
+
+        assert handler.get_streaming_string_so_far([chunk]) == "abcabc"
+        assert scan_key is not None
+        assert scan_key.stream_ended is True
+
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_rewrites_skip_a_data_line_it_cannot_decode(self):
+        undecodable_chunk = b"event: ping\ndata: " + b"[" * 100_000 + b"]" * 100_000 + b"\n\n"
+        ended_chunks = self._ended_sse_chunks()
+        chunks = [*ended_chunks[:2], undecodable_chunk, *ended_chunks[2:]]
+
+        result = await AnthropicMessagesHandler().process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=self._masking_guardrail(),
+            litellm_logging_obj=MagicMock(),
+            deliver_ended_stream_rewrites=True,
+        )
+
+        assert result is chunks
+        assert chunks[2] == undecodable_chunk
+        assert self._delta_texts([*chunks[:2], *chunks[3:]]) == ["hello [MASKED]", ""]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("read_size", [None, 500], ids=["one-read", "500-byte-reads"])
+    @pytest.mark.parametrize("stream_ended", [True, False], ids=["ended", "mid-stream"])
+    @pytest.mark.parametrize("padding", [b"[" * 100_000 + b"]" * 100_000, b"9" * 5000], ids=["deep", "huge-number"])
+    async def test_a_text_event_the_guardrail_cannot_decode_is_refused_before_the_guardrail_runs(
+        self, padding, stream_ended, read_size
+    ):
+        hidden_text_chunk = (
+            b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
+            b'"delta": {"type": "text_delta", "text": "world"}, "padding": ' + padding + b"}\n\n"
+        )
+        step = read_size or len(hidden_text_chunk)
+        hidden_text_reads = [hidden_text_chunk[start : start + step] for start in range(0, len(hidden_text_chunk), step)]
+        ended_chunks = self._ended_sse_chunks()
+        chunks = [*ended_chunks[:3], *hidden_text_reads, *(ended_chunks[4:] if stream_ended else ())]
+
+        with pytest.raises(GuardrailRaisedException) as refusal:
+            await AnthropicMessagesHandler().process_output_streaming_response(
+                responses_so_far=chunks,
+                guardrail_to_apply=self._guardrail_that_must_not_run(),
+                litellm_logging_obj=MagicMock(),
+                deliver_ended_stream_rewrites=True,
+            )
+
+        assert refusal.value.guardrail_name == "test"
+        assert refusal.value.blocked_content is False
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("stream_ended", [True, False], ids=["ended", "mid-stream"])
+    async def test_a_text_event_split_across_data_lines_is_refused_before_the_guardrail_runs(self, stream_ended: bool):
+        split_text_chunk = (
+            b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0,\n'
+            b'data: "delta": {"type": "text_delta", "text": "world"}}\n\n'
+        )
+        ended_chunks = self._ended_sse_chunks()
+        chunks: Final[list[bytes]] = [*ended_chunks[:3], split_text_chunk, *(ended_chunks[4:] if stream_ended else ())]
+
+        assert AnthropicMessagesHandler().get_streaming_scan_key(chunks) is None
+        with pytest.raises(GuardrailRaisedException):
+            await AnthropicMessagesHandler().process_output_streaming_response(
+                responses_so_far=chunks,
+                guardrail_to_apply=self._guardrail_that_must_not_run(),
+                litellm_logging_obj=MagicMock(),
+                deliver_ended_stream_rewrites=True,
+            )
+
+    def test_a_text_event_the_guardrail_cannot_decode_keeps_its_text_out_of_the_warning_log(self, caplog):
+        hidden_text_chunk = (
+            b'event: content_block_delta\ndata: {"type": "content_block_delta", "index": 0, '
+            b'"delta": {"type": "text_delta", "text": "4111 1111 1111 1111"}, "padding": ' + b"9" * 5000 + b"}\n\n"
+        )
+        ended_chunks = self._ended_sse_chunks()
+        chunks: Final[list[bytes]] = [*ended_chunks[:3], hidden_text_chunk, *ended_chunks[4:]]
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            AnthropicMessagesHandler().get_streaming_string_so_far(chunks)
+
+        assert "4111" not in caplog.text
 
     @staticmethod
     def _ended_tool_use_sse_chunks() -> list:
@@ -528,6 +679,64 @@ class TestAnthropicMessagesHandlerInputProcessing:
 
         assert data.get("litellm_metadata", {}).get("guardrails")
         assert guardrail.dynamic_params == {"policy_id": "policy-123"}
+
+    @pytest.mark.asyncio
+    async def test_deferred_tools_keep_defer_loading_through_a_guardrail_round_trip(self):
+        data = {
+            "model": "claude-sonnet-5-5",
+            "messages": [{"role": "user", "content": "What is the forecast for Paris?"}],
+            "tools": [dict(tool) for tool in _DEFERRED_TOOL_REQUEST_TOOLS],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockPassThroughGuardrail(guardrail_name="test")
+        )
+
+        assert {tool["name"]: tool.get("defer_loading") for tool in data["tools"]} == {
+            "Read": None,
+            "ToolSearch": None,
+            "mcp__weather__get_forecast": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_guardrail_that_keeps_only_deferred_tools_sends_them_loaded_up_front(self):
+        data = {
+            "model": "claude-sonnet-5-5",
+            "messages": [{"role": "user", "content": "What is the forecast for Paris?"}],
+            "tools": [dict(tool) for tool in _DEFERRED_TOOL_REQUEST_TOOLS],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=OnlyDeferredToolsGuardrail(guardrail_name="test")
+        )
+
+        assert [(tool["name"], tool.get("defer_loading")) for tool in data["tools"]] == [
+            ("mcp__weather__get_forecast", None)
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("dropped", "expected_deferral"),
+        [("ToolSearch", None), ("Read", True)],
+        ids=["tool-search-removed", "tool-search-kept"],
+    )
+    async def test_deferred_tools_load_up_front_only_once_the_guardrail_removed_tool_search(
+        self, dropped: str, expected_deferral: bool | None
+    ):
+        data = {
+            "model": "claude-sonnet-5-5",
+            "messages": [{"role": "user", "content": "What is the forecast for Paris?"}],
+            "tools": [dict(tool) for tool in _DEFERRED_TOOL_REQUEST_TOOLS],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=ToolDroppingGuardrail(tool_name=dropped)
+        )
+
+        assert [(tool["name"], tool.get("defer_loading")) for tool in data["tools"]] == [
+            *((str(tool["name"]), None) for tool in _DEFERRED_TOOL_REQUEST_TOOLS[:2] if tool["name"] != dropped),
+            ("mcp__weather__get_forecast", expected_deferral),
+        ]
 
     @pytest.mark.asyncio
     async def test_provider_native_tools_survive_guardrail_round_trip(self):
@@ -2823,3 +3032,38 @@ class TestAnthropicMessagesHandlerPostCallHookResponse:
         native = {"type": "message", "role": "assistant", "content": [{"type": "text", "text": "hi"}]}
 
         assert AnthropicMessagesHandler().post_call_hook_response(native) is native
+
+
+@pytest.mark.asyncio
+async def test_structured_rewrite_keeps_client_cache_control_on_a_claude_alias() -> None:
+    ephemeral: Final = {"type": "ephemeral"}
+    data: Final = {
+        "model": "best-sonnet",
+        "system": [{"type": "text", "text": "Triage POISON tickets.", "cache_control": dict(ephemeral)}],
+        "tools": [
+            {
+                "name": "search_tickets",
+                "description": "Search the ticket tracker",
+                "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}},
+                "cache_control": dict(ephemeral),
+            }
+        ],
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "text": "Find POISON tickets"}]},
+            {"role": "assistant", "content": [{"type": "text", "text": "Found 3."}]},
+            {"role": "user", "content": [{"type": "text", "text": "Which are P1?", "cache_control": dict(ephemeral)}]},
+        ],
+    }
+
+    claude_alias: Final = litellm.Router(
+        model_list=[{"model_name": "best-sonnet", "litellm_params": {"model": "bedrock/us.anthropic.claude-sonnet-5-5"}}]
+    )
+
+    await AnthropicMessagesHandler(deployment_lookup=lambda: claude_alias).process_input_messages(
+        data=data, guardrail_to_apply=StructuredMessagesRewritingGuardrail()
+    )
+
+    assert data["messages"][0]["content"] == [{"type": "text", "text": "Find [BLOCKED] tickets"}]
+    assert data["system"] == [{"type": "text", "text": "Triage [BLOCKED] tickets.", "cache_control": ephemeral}]
+    assert data["tools"][0]["cache_control"] == ephemeral
+    assert data["messages"][-1]["content"] == [{"type": "text", "text": "Which are P1?", "cache_control": ephemeral}]

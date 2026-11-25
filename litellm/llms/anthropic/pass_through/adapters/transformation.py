@@ -1,5 +1,4 @@
 import copy
-import hashlib
 import json
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -9,19 +8,25 @@ from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias, TypeVar, cast
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, attribute_items
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, attribute_items
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
+from litellm.litellm_core_utils.tool_fields import truncate_tool_name
+from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
+from litellm.llms.anthropic.pass_through.deferred_tools import is_deferred, routed_deferred_tools_mode
 from litellm.llms.anthropic.pass_through.utils import (
+    REASONING_EFFORT_OFF,
+    RESPONSES_API_PROVIDERS,
+    ClientEffort,
+    is_between_tool_calls,
     is_reasoning_auto_summary_enabled,
     json_copy_or_original,
+    local_model_name,
+    maps_bare_output_effort,
     prompt_cache_key_from_user_id,
+    reasoning_off_level,
+    thinking_off_switch,
 )
 
-# OpenAI has a 64-character limit for function/tool names
-# Anthropic does not have this limit, so we need to truncate long names
-OPENAI_MAX_TOOL_NAME_LENGTH: Final = 64
-TOOL_NAME_HASH_LENGTH: Final = 8
-TOOL_NAME_PREFIX_LENGTH: Final = OPENAI_MAX_TOOL_NAME_LENGTH - TOOL_NAME_HASH_LENGTH - 1  # 55
 PROVIDERS_PROXYING_AN_UNKNOWN_BACKEND: Final = frozenset({"litellm_proxy"})
 _COMPACTION_BLOCK: Final = TypeAdapter(dict[str, JsonValue])
 
@@ -72,27 +77,6 @@ def is_provider_native_tool_dict(tool: Mapping[str, object]) -> bool:
         return False
     key, value = next(iter(tool.items()))
     return key not in _ANTHROPIC_TOOL_SCHEMA_KEYS and isinstance(value, dict)
-
-
-def truncate_tool_name(name: str) -> str:
-    """
-    Truncate tool names that exceed OpenAI's 64-character limit.
-
-    Uses format: {55-char-prefix}_{8-char-hash} to avoid collisions
-    when multiple tools have similar long names.
-
-    Args:
-        name: The original tool name
-
-    Returns:
-        The original name if <= 64 chars, otherwise truncated with hash
-    """
-    if len(name) <= OPENAI_MAX_TOOL_NAME_LENGTH:
-        return name
-
-    # Create deterministic hash from full name to avoid collisions
-    name_hash: Final = hashlib.sha256(name.encode()).hexdigest()[:TOOL_NAME_HASH_LENGTH]
-    return f"{name[:TOOL_NAME_PREFIX_LENGTH]}_{name_hash}"
 
 
 def create_tool_name_mapping(
@@ -229,6 +213,7 @@ class ChatRouteInputs:
     api_base: str | None = None
     thinking: Mapping[str, object] | None = None
     reasoning_summary: object | None = None
+    base_model: str | None = None
 
 
 _NO_ROUTE_INPUTS: Final = ChatRouteInputs()
@@ -274,6 +259,7 @@ def _keeps_encrypted_reasoning_for_responses(
         reasoning_effort=route.reasoning_effort,
         reasoning_summary=route.reasoning_summary,
         api_base=route.api_base,
+        base_model=route.base_model,
     )
 
 
@@ -288,20 +274,27 @@ def _streamed_thinking_blocks(delta: object) -> tuple[Mapping[str, object], ...]
     return tuple(block for item in attribute_items(delta, "thinking_blocks") if (block := as_str_mapping(item)))
 
 
-def _chat_tool_param(function_chunk: ChatCompletionToolParamFunctionChunk, tool: object) -> ChatCompletionToolParam:
+def _chat_tool_param(
+    function_chunk: ChatCompletionToolParamFunctionChunk, tool: object, keeps_deferral: bool = False
+) -> ChatCompletionToolParam:
     eager_input_streaming: Final = eager_input_streaming_flag(tool)
-    if eager_input_streaming is None:
-        return ChatCompletionToolParam(type="function", function=function_chunk)
-    return ChatCompletionToolParam(
-        type="function", function=function_chunk, eager_input_streaming=eager_input_streaming
+    tool_param: Final = (
+        ChatCompletionToolParam(type="function", function=function_chunk)
+        if eager_input_streaming is None
+        else ChatCompletionToolParam(
+            type="function", function=function_chunk, eager_input_streaming=eager_input_streaming
+        )
     )
+    if keeps_deferral and is_deferred(as_str_mapping(tool) or {}):
+        return {**tool_param, "defer_loading": True}
+    return tool_param
 
 
 class AnthropicAdapter:
     def __init__(self) -> None:
         pass
 
-    def translate_completion_input_params(self, kwargs) -> ChatCompletionRequest | None:
+    def translate_completion_input_params(self, kwargs: Mapping[str, object]) -> ChatCompletionRequest | None:
         """
         Translate Anthropic request params to OpenAI format.
 
@@ -311,8 +304,27 @@ class AnthropicAdapter:
         Note: Use translate_completion_input_params_with_tool_mapping() if you need
         the tool name mapping for restoring original names in responses.
         """
+        from litellm.responses.bridge_check import empty_user_turn_for_model_turn_end
+
+        route_params: Final = MappingProxyType({**kwargs})
+        caller_messages: Final = as_object_list(route_params.get("messages"))
+        custom_llm_provider: Final = route_params.get("custom_llm_provider")
         result, _ = self.translate_completion_input_params_with_tool_mapping(kwargs)
-        return result
+        if result is None:
+            return None
+        return {
+            **result,
+            "messages": [
+                *result["messages"],
+                *empty_user_turn_for_model_turn_end(
+                    as_str_mapping(caller_messages[-1]) if caller_messages else None,
+                    result["messages"],
+                    result["model"],
+                    custom_llm_provider if isinstance(custom_llm_provider, str) else None,
+                    route_params,
+                ),
+            ],
+        }
 
     def translate_completion_input_params_with_tool_mapping(
         self,
@@ -320,7 +332,11 @@ class AnthropicAdapter:
         *,
         custom_llm_provider: str | None = None,
         api_base: str | None = None,
+        deployment_model_info: Mapping[str, object] | None = None,
         reasoning_summary: object | None = None,
+        base_model: str | None = None,
+        drop_params: bool = True,
+        translate_bare_output_effort: bool = False,
     ) -> tuple[ChatCompletionRequest | None, dict[str, str]]:
         """
         Translate Anthropic request params to OpenAI format, returning tool name mapping.
@@ -355,7 +371,11 @@ class AnthropicAdapter:
             anthropic_message_request=request_body,
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            deployment_model_info=deployment_model_info,
             reasoning_summary=reasoning_summary,
+            base_model=base_model,
+            drop_params=drop_params,
+            translate_bare_output_effort=translate_bare_output_effort,
         )
 
         return translated_body, tool_name_mapping
@@ -430,8 +450,8 @@ _BlockT: Final = TypeVar("_BlockT", bound=Mapping[str, object])
 
 
 class LiteLLMAnthropicMessagesAdapter:
-    def __init__(self):
-        pass
+    def __init__(self, *, keep_cache_control: bool = False) -> None:
+        self.keep_cache_control: Final = keep_cache_control
 
     ### FOR [BETA] `/v1/messages` endpoint support
 
@@ -483,7 +503,7 @@ class LiteLLMAnthropicMessagesAdapter:
         cache_control: Final = (
             source.get("cache_control") if isinstance(source, dict) else getattr(source, "cache_control", None)
         )
-        if cache_control and model and self.target_consumes_cache_control(model):
+        if cache_control and (self.keep_cache_control or (model and self.target_consumes_cache_control(model))):
             # TypedDict objects support dict operations at runtime
             # Use type ignore consistent with codebase pattern (see anthropic/chat/transformation.py:432)
             if isinstance(target, dict):
@@ -836,7 +856,7 @@ class LiteLLMAnthropicMessagesAdapter:
         reasoning_effort as a plain string, not a summary dict.
         """
         thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
-        if thinking_type == "disabled":
+        if thinking_type == "disabled" or reasoning_effort == REASONING_EFFORT_OFF:
             return reasoning_effort
 
         summary: Final = thinking.get("summary") if isinstance(thinking, dict) else None
@@ -865,7 +885,7 @@ class LiteLLMAnthropicMessagesAdapter:
             raise ValueError(f"Incompatible tool choice param submitted - {tool_choice}")
 
     def translate_anthropic_tools_to_openai(
-        self, tools: list[AllAnthropicToolsValues], model: str | None = None
+        self, tools: list[AllAnthropicToolsValues], model: str | None = None, keeps_deferral: bool = False
     ) -> tuple[list[ChatCompletionToolParam], dict[str, str]]:
         """
         Translate Anthropic tools to OpenAI format.
@@ -889,6 +909,7 @@ class LiteLLMAnthropicMessagesAdapter:
             "strict",
             "type",
             "eager_input_streaming",
+            "defer_loading",
         ]
 
         for idx, tool in enumerate(json_copy_or_original(tool) for tool in tools):
@@ -927,7 +948,7 @@ class LiteLLMAnthropicMessagesAdapter:
             for k, v in tool.items():
                 if k not in mapped_tool_params:  # pass additional computer kwargs
                     function_chunk.setdefault("parameters", {}).update({k: v})
-            tool_param = _chat_tool_param(function_chunk, tool)
+            tool_param = _chat_tool_param(function_chunk, tool, keeps_deferral)
             self._add_cache_control_if_applicable(tool, tool_param, model)
             new_tools.append(tool_param)
 
@@ -1037,7 +1058,7 @@ class LiteLLMAnthropicMessagesAdapter:
         """Add system message to messages list if present in request."""
         if "system" not in anthropic_message_request:
             return
-        system_content: Final = anthropic_message_request["system"]
+        system_content: Final = system_without_claude_code_billing_header(anthropic_message_request["system"])
         if not system_content:
             return
         # Handle system as string or array of content blocks
@@ -1050,8 +1071,8 @@ class LiteLLMAnthropicMessagesAdapter:
             # Convert Anthropic system content blocks to OpenAI format
             openai_system_content: Final[list[dict[str, object]]] = []
             model_name: Final = anthropic_message_request.get("model", "")
-            for block in system_content:
-                if isinstance(block, dict) and block.get("type") == "text":
+            for block in (as_str_mapping(raw_block) for raw_block in system_content):
+                if block is not None and block.get("type") == "text":
                     text_block: dict[str, object] = {
                         "type": "text",
                         "text": block.get("text", ""),
@@ -1153,6 +1174,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self,
         anthropic_message_request: AnthropicMessagesRequest,
         new_kwargs: ChatCompletionRequest,
+        keeps_deferral: bool = False,
     ) -> dict[str, str]:
         """Translate tools and extract web_search_options when needed."""
         if "tools" not in anthropic_message_request:
@@ -1180,9 +1202,27 @@ class LiteLLMAnthropicMessagesAdapter:
         translated_tools, tool_name_mapping = self.translate_anthropic_tools_to_openai(
             tools=regular_tools,
             model=new_kwargs.get("model"),
+            keeps_deferral=keeps_deferral,
         )
         new_kwargs["tools"] = translated_tools
         return tool_name_mapping
+
+    @staticmethod
+    def _bare_output_effort(
+        output_effort: object, model: str, custom_llm_provider: str | None, deployment_model_info: object
+    ) -> str | None:
+        return (
+            output_effort
+            if isinstance(output_effort, str)
+            and maps_bare_output_effort(model, custom_llm_provider, deployment_model_info=deployment_model_info)
+            else None
+        )
+
+    @staticmethod
+    def _between_tools_reasoning_effort(anthropic_message_request: Mapping[str, object], output_effort: object) -> str:
+        if not is_between_tool_calls(anthropic_message_request):
+            return REASONING_EFFORT_OFF
+        return output_effort if isinstance(output_effort, str) and output_effort else "medium"
 
     def _translate_thinking_to_openai(
         self,
@@ -1190,6 +1230,9 @@ class LiteLLMAnthropicMessagesAdapter:
         new_kwargs: ChatCompletionRequest,
         *,
         custom_llm_provider: str | None = None,
+        drop_params: bool = True,
+        translate_bare_output_effort: bool = False,
+        deployment_model_info: object = None,
     ) -> None:
         """Translate Anthropic thinking to either thinking or reasoning_effort.
 
@@ -1214,21 +1257,16 @@ class LiteLLMAnthropicMessagesAdapter:
         An adaptive request with no tier stays untouched either way, so the provider's own default
         still applies.
         """
-        if "thinking" not in anthropic_message_request:
-            return
-
-        thinking: Final = anthropic_message_request["thinking"]
-        if not thinking:
-            return
-
         model: Final = new_kwargs.get("model", "")
+        output_config: Final = anthropic_message_request.get("output_config")
+        output_effort: Final = output_config.get("effort") if isinstance(output_config, dict) else None
+        thinking: Final = anthropic_message_request.get("thinking")
         is_bedrock_target: Final = model.startswith(("bedrock/", "converse/", "invoke/")) or self.is_bedrock_arn_model(
             model
         )
         is_claude_target: Final = self.is_anthropic_claude_model(model) or self.is_bedrock_arn_model(model)
-        output_config: Final = anthropic_message_request.get("output_config")
 
-        if is_claude_target:
+        if thinking and is_claude_target:
             new_kwargs["thinking"] = thinking
             if is_bedrock_target:
                 if isinstance(output_config, dict):
@@ -1240,23 +1278,48 @@ class LiteLLMAnthropicMessagesAdapter:
                 return
 
         thinking_type: Final = thinking.get("type") if isinstance(thinking, dict) else None
-        declared_effort: Final = (
-            output_config.get("effort") if thinking_type == "adaptive" and isinstance(output_config, dict) else None
-        )
+        is_between_tools: Final = isinstance(thinking_type, str) and thinking_type == "between_tools"
+        declared_effort: Final = output_effort if thinking_type == "adaptive" else None
         if is_claude_target and not declared_effort:
             return
 
-        reasoning_effort: Final = declared_effort or self.translate_anthropic_thinking_to_reasoning_effort(
-            cast(AnthropicThinkingParam, thinking)
+        mirrors_responses_bridge: Final = custom_llm_provider in RESPONSES_API_PROVIDERS
+        reasoning_effort: Final = declared_effort or (
+            self._between_tools_reasoning_effort(anthropic_message_request, output_effort)
+            if is_between_tools and mirrors_responses_bridge
+            else self.translate_anthropic_thinking_to_reasoning_effort(cast(AnthropicThinkingParam, thinking))
+            if thinking
+            else self._bare_output_effort(output_effort, model, custom_llm_provider, deployment_model_info)
+            if translate_bare_output_effort
+            and mirrors_responses_bridge
+            and self._target_declares_reasoning_effort(
+                local_model_name(model, custom_llm_provider), custom_llm_provider
+            )
+            else None
         )
         if not reasoning_effort:
             return
 
-        new_kwargs["reasoning_effort"] = (
+        effort_sent: Final = (
             reasoning_effort
-            if is_claude_target
+            if is_claude_target or not thinking
             else self._apply_reasoning_summary_wrapping(reasoning_effort, cast(dict[str, object], thinking))
         )
+        off_switch: Final = thinking_off_switch(anthropic_message_request)
+        target_effort: Final = (
+            reasoning_off_level(
+                model,
+                custom_llm_provider,
+                deployment_model_info=deployment_model_info,
+                drop_params=drop_params,
+                between_tools=off_switch == "between_tools",
+            )
+            if mirrors_responses_bridge and off_switch is not None and effort_sent == REASONING_EFFORT_OFF
+            else effort_sent
+        )
+        if target_effort is None or target_effort is ClientEffort.DROPPED:
+            return
+        new_kwargs["reasoning_effort"] = target_effort
 
     def _translate_output_format_to_openai(
         self,
@@ -1305,6 +1368,10 @@ class LiteLLMAnthropicMessagesAdapter:
         api_base: str | None = None,
         reasoning_summary: object | None = None,
         preserve_midturn_system: bool = False,
+        base_model: str | None = None,
+        deployment_model_info: Mapping[str, object] | None = None,
+        drop_params: bool = True,
+        translate_bare_output_effort: bool = False,
     ) -> tuple[ChatCompletionRequest, dict[str, str]]:
         """
         This is used by the beta Anthropic Adapter, for translating anthropic `/v1/messages` requests to the openai format.
@@ -1337,15 +1404,25 @@ class LiteLLMAnthropicMessagesAdapter:
             new_kwargs=new_kwargs,
         )
         ## CONVERT TOOLS
+        deferral_model_info: Final = (
+            {**(deployment_model_info or {}), "base_model": base_model} if base_model else deployment_model_info
+        )
         tool_name_mapping = self._translate_tools_to_openai(
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
+            keeps_deferral=routed_deferred_tools_mode(
+                deferral_model_info, custom_llm_provider, anthropic_message_request["model"], api_base
+            )
+            == "passthrough",
         )
         ## CONVERT THINKING
         self._translate_thinking_to_openai(
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
             custom_llm_provider=custom_llm_provider,
+            drop_params=drop_params,
+            translate_bare_output_effort=translate_bare_output_effort,
+            deployment_model_info=deployment_model_info,
         )
         ## CONVERT ANTHROPIC MESSAGES TO OPENAI, after tools and thinking pick the route
         new_messages: Final = self.translate_anthropic_messages_to_openai(
@@ -1359,6 +1436,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 api_base=api_base,
                 thinking=anthropic_message_request.get("thinking"),
                 reasoning_summary=reasoning_summary,
+                base_model=base_model,
             ),
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES

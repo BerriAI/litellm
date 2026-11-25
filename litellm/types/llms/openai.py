@@ -93,6 +93,7 @@ from litellm.types.responses.main import (
     OutputFunctionToolCall,
     OutputImageGenerationCall,
     OutputToolSearchCall,
+    OutputToolSearchOutput,
 )
 
 from .base import CachedTokensDetails
@@ -1245,6 +1246,7 @@ OpenAIImageGenerationOptionalParams = Literal[
     "image_url",
     "image_prompt_strength",
     "aspect_ratio",
+    "area",
     "width",
     "height",
     "guidance",
@@ -1330,6 +1332,11 @@ class ResponsesAPIStreamOptions(TypedDict, total=False):
     include_obfuscation: bool
 
 
+class ResponsesAPIBackgroundOptions(TypedDict, total=False):
+    completion_window: ReadOnly[Literal["soonest", "2h", "8h"]]
+    continuation_id: ReadOnly[str]
+
+
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the responses API."""
 
@@ -1342,6 +1349,7 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     reasoning: Reasoning | None
     store: bool | None
     background: bool | None
+    background_options: ReadOnly[ResponsesAPIBackgroundOptions | None]
     stream: bool | None
     temperature: float | None
     text: Optional["ResponseText"]
@@ -1488,6 +1496,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
             | OutputToolSearchCall
+            | OutputToolSearchOutput
         ]
     )
     parallel_tool_calls: bool | None = None
@@ -2374,6 +2383,11 @@ class OpenAIRealtimeInputAudioBufferSpeechEvent(TypedDict):
     item_id: ReadOnly[str]
 
 
+class OpenAIRealtimeInputAudioBufferCleared(TypedDict):
+    type: ReadOnly[Literal["input_audio_buffer.cleared"]]
+    event_id: ReadOnly[str]
+
+
 class OpenAIRealtimeErrorDetail(TypedDict):
     type: ReadOnly[str]
     message: ReadOnly[str]
@@ -2498,6 +2512,7 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeFunctionCallArgumentsDone
     | OpenAIRealtimeDoneEvent
     | OpenAIRealtimeInputAudioBufferSpeechEvent
+    | OpenAIRealtimeInputAudioBufferCleared
     | OpenAIRealtimeInputAudioTranscriptionDelta
     | OpenAIRealtimeInputAudioTranscriptionCompleted
     | OpenAIRealtimeTranscriptionSessionCreated

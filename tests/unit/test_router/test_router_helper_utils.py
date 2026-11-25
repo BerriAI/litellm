@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import litellm
 import pytest
 from litellm import Router
@@ -11,6 +12,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_AUTO_ROUTER_MAX_INPUT_CHARS, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo
 from litellm.types.utils import (
     ModelResponse,
@@ -2439,6 +2441,61 @@ def test_get_first_default_fallback():
     router_empty_list = Router(model_list=model_list, fallbacks=[{"*": []}])
     result = router_empty_list._get_first_default_fallback()
     assert result is None
+
+
+class _UrlRecordingClient(AsyncHTTPHandler):
+    urls: tuple[str, ...] = ()
+
+    async def post(self, url: str, *args: object, **kwargs: object) -> httpx.Response:
+        self.urls = (*self.urls, url)
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "us.openai.gpt-6.1-sol",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+            request=httpx.Request("POST", url),
+        )
+
+
+@pytest.mark.parametrize(
+    "caller_params",
+    [
+        {"api_base": "https://caller.example.com/openai/v1/chat/completions"},
+        {"api_base": "https://caller.example.com"},
+        {"api_base": None},
+        {},
+    ],
+)
+@pytest.mark.asyncio
+async def test_caller_api_base_does_not_move_a_deployment_pinned_to_a_bedrock_runtime_endpoint(
+    caller_params: dict[str, str | None],
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "gpt",
+                "litellm_params": {
+                    "model": "bedrock/us.openai.gpt-6.1-sol",
+                    "aws_region_name": "us-east-1",
+                    "aws_access_key_id": "test-key-id",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_bedrock_runtime_endpoint": "https://runtime.example.com",
+                },
+            }
+        ]
+    )
+    client: Final = _UrlRecordingClient()
+
+    await router.acompletion(
+        model="gpt", messages=[{"role": "user", "content": "hi"}], client=client, num_retries=0, **caller_params
+    )
+
+    assert client.urls == ("https://runtime.example.com/openai/v1/chat/completions",)
 
 
 def test_resolve_model_name_from_model_id():

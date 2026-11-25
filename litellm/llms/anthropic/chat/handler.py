@@ -17,12 +17,16 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
+from litellm._logging import verbose_logger
 from litellm.anthropic_beta_headers_manager import (
     update_request_with_filtered_beta,
 )
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.exceptions import with_provider_reply
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.litellm_core_utils.json_fragment_accumulator import JSONFragmentAccumulator
+from litellm.litellm_core_utils.llm_cost_calc.guardrail_cost import is_str_keyed_dict
 from litellm.llms.base_llm.base_utils import (
     RESPONSE_FORMAT_ENVELOPE_NAME_KEYS,
     ResponseFormatSchema,
@@ -68,7 +72,12 @@ from litellm.types.utils import (
 
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers, refusal_provider_specific_fields
-from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig, JsonModeRequest
+from .transformation import (
+    ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY,
+    AnthropicConfig,
+    JsonModeRequest,
+    with_extra_body_fields,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -76,10 +85,21 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.chat.transformation import BaseConfig
 
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
+_OPTIONAL_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
-def _loads_stream_chunk(payload: str) -> dict[str, object]:
-    return json.loads(payload)
+def _loads_stream_chunk(payload: str) -> dict[str, object] | None:
+    if not payload.lstrip().startswith("{"):
+        verbose_logger.debug("Skipping an Anthropic stream data line that is not a JSON object: %.100s", payload)
+        return None
+    try:
+        decoded: Final = _DECODED_JSON.validate_python(json.loads(payload))
+    except json.JSONDecodeError:
+        raise
+    except (ValueError, RecursionError):
+        verbose_logger.debug("Skipping an Anthropic stream data line that cannot be decoded: %.100s", payload)
+        return None
+    return decoded if is_str_keyed_dict(decoded) else None
 
 
 _DECODED_JSON: Final = TypeAdapter(object)
@@ -220,10 +240,13 @@ async def make_call(
         error_response: Final[object] = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
-        raise AnthropicError(
-            status_code=e.response.status_code,
-            message=await e.response.aread(),
-            headers=error_headers,
+        raise with_provider_reply(
+            AnthropicError(
+                status_code=e.response.status_code,
+                message=await e.response.aread(),
+                headers=error_headers,
+            ),
+            e.response,
         )
     except Exception as e:
         for exception in litellm.LITELLM_EXCEPTION_TYPES:
@@ -283,10 +306,13 @@ def make_sync_call(
         error_response: Final[object] = getattr(e, "response", None)
         if error_headers is None and error_response:
             error_headers = getattr(error_response, "headers", None)
-        raise AnthropicError(
-            status_code=e.response.status_code,
-            message=e.response.read(),
-            headers=error_headers,
+        raise with_provider_reply(
+            AnthropicError(
+                status_code=e.response.status_code,
+                message=e.response.read(),
+                headers=error_headers,
+            ),
+            e.response,
         )
     except Exception as e:
         for exception in litellm.LITELLM_EXCEPTION_TYPES:
@@ -296,10 +322,13 @@ def make_sync_call(
 
     if response.status_code != 200:
         response_headers: Final = getattr(response, "headers", None)
-        raise AnthropicError(
-            status_code=response.status_code,
-            message=response.read(),
-            headers=response_headers,
+        raise with_provider_reply(
+            AnthropicError(
+                status_code=response.status_code,
+                message=response.read(),
+                headers=response_headers,
+            ),
+            response,
         )
 
     completion_stream: Final = ModelResponseIterator(
@@ -429,10 +458,13 @@ class AnthropicChatCompletion(BaseLLM):
                 error_headers = getattr(error_response, "headers", None)
             if error_response and hasattr(error_response, "text"):
                 error_text = getattr(error_response, "text", error_text)
-            raise AnthropicError(
-                message=error_text,
-                status_code=status_code,
-                headers=error_headers,
+            raise with_provider_reply(
+                AnthropicError(
+                    message=error_text,
+                    status_code=status_code,
+                    headers=error_headers,
+                ),
+                error_response,
             )
 
         return provider_config.transform_response(
@@ -484,7 +516,10 @@ class AnthropicChatCompletion(BaseLLM):
             headers=headers,
             model=model,
             messages=messages,
-            optional_params={**optional_params, "is_vertex_request": is_vertex_request},
+            optional_params={
+                **with_extra_body_fields(_OPTIONAL_PARAMS_ADAPTER.validate_python(optional_params)),
+                "is_vertex_request": is_vertex_request,
+            },
             litellm_params=litellm_params,
             api_base=api_base,
         )
@@ -649,10 +684,13 @@ class AnthropicChatCompletion(BaseLLM):
                         error_headers = getattr(error_response, "headers", None)
                     if error_response and hasattr(error_response, "text"):
                         error_text = getattr(error_response, "text", error_text)
-                    raise AnthropicError(
-                        message=error_text,
-                        status_code=status_code,
-                        headers=error_headers,
+                    raise with_provider_reply(
+                        AnthropicError(
+                            message=error_text,
+                            status_code=status_code,
+                            headers=error_headers,
+                        ),
+                        error_response,
                     )
 
         return config.transform_response(
@@ -1187,6 +1225,8 @@ class ModelResponseIterator:
                 id=self.response_id,
                 model=self.served_model,
             )
+            if type_chunk == "message_start":
+                set_hidden_params(returned_chunk, {"anthropic_message_start": True})
 
             return returned_chunk
 
@@ -1392,7 +1432,7 @@ class ModelResponseIterator:
         # Try to parse as valid JSON first
         try:
             data_json: Final = _loads_stream_chunk(data_str)
-            return self.chunk_parser(chunk=data_json)
+            return None if data_json is None else self.chunk_parser(chunk=data_json)
         except json.JSONDecodeError:
             # Switch to accumulation mode and start accumulating
             self.chunk_type = "accumulated_json"
@@ -1505,7 +1545,7 @@ class ModelResponseIterator:
             except ValueError as e:
                 raise RuntimeError(f"Error parsing chunk: {e},\nReceived chunk: {chunk}")
 
-    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream:
+    def convert_str_chunk_to_generic_chunk(self, chunk: str) -> ModelResponseStream | None:
         """
         Convert a string chunk to a GenericStreamingChunk
 
@@ -1526,6 +1566,6 @@ class ModelResponseIterator:
 
         if str_line.startswith("data:"):
             data_json: Final = _loads_stream_chunk(str_line[5:])
-            return self.chunk_parser(chunk=data_json)
+            return None if data_json is None else self.chunk_parser(chunk=data_json)
         else:
             return ModelResponseStream(id=self.response_id)

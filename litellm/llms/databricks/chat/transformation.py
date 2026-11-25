@@ -11,6 +11,7 @@ import httpx
 from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
+from litellm.litellm_core_utils.allowed_tools_tool_choice import HostedMcpToolHandling
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     handle_invalid_parallel_tool_calls,
     should_convert_tool_call_to_json_mode,
@@ -284,6 +285,15 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         complete_url: Final = f"{url_base}/chat/completions"
         return complete_url
 
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return extra_body
+
     def get_supported_openai_params(self, model: str | None = None) -> list[str]:
         return [
             "stream",
@@ -382,6 +392,9 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         # every request doesn't have to be transformed for to OpenAI and Anthropic request formats.
         return messages, tools
 
+    def hosted_mcp_tool_handling(self, model: str) -> HostedMcpToolHandling:
+        return "drops" if "claude" in model else "forwards"
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -390,10 +403,12 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         drop_params: bool,
         replace_max_completion_tokens_with_max_tokens: bool = True,
     ) -> dict:
-        request_params: Final = (
-            tool_params_without_hosted_mcp(non_default_params, model=model, route="databricks", drop_params=drop_params)
-            if "claude" in model
-            else non_default_params
+        request_params: Final = tool_params_without_hosted_mcp(
+            non_default_params,
+            model=model,
+            route="databricks",
+            drop_params=drop_params,
+            handling=self.hosted_mcp_tool_handling(model),
         )
         is_thinking_enabled: Final = self.is_thinking_enabled(request_params)
         mapped_params: Final = super().map_openai_params(request_params, optional_params, model, drop_params)

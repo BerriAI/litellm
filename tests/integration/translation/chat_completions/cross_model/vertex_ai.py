@@ -1772,6 +1772,7 @@ GEMINI_4_ARGON_AGENT_TEST_CASE: Final = replace(
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
+        "service_tier": "default",
         "id": "wErQat30Mp-hpucPhIzf2AM",
         "model": "vertex_ai/gemini-4-argon",
         "choices": [
@@ -1928,6 +1929,7 @@ GEMINI_4_ARGON_AGENT_FOLLOWUP_TEST_CASE: Final = replace(
     },
     expected_litellm_response={
         **CODING_AGENT_RESPONSE,
+        "service_tier": "default",
         "id": "xUrQatG0HcubpucPg4md8Ag",
         "model": "vertex_ai/gemini-4-argon",
         "choices": [

@@ -1,6 +1,6 @@
 import base64
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import reduce
 from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
@@ -61,6 +61,20 @@ def normalize_responses_api_stream_options(
     if not isinstance(include_obfuscation, bool):
         return None
     return ResponsesAPIStreamOptions(include_obfuscation=include_obfuscation)
+
+
+def _provider_mapped_params(
+    config: BaseResponsesAPIConfig,
+    params: ResponsesAPIOptionalRequestParams,
+    model: str,
+    drop_params: bool,
+    allowed_openai_params: Collection[str],
+) -> Mapping[str, object]:
+    from litellm.llms.openai_like.dynamic_config import MapsAllowedResponsesParams
+
+    if isinstance(config, MapsAllowedResponsesParams):
+        return config.map_openai_params_allowing(params, model, drop_params, allowed_openai_params)
+    return config.map_openai_params(response_api_optional_params=params, model=model, drop_params=drop_params)
 
 
 def _is_chat_text_part(part: object) -> bool:
@@ -235,10 +249,12 @@ class ResponsesAPIRequestUtils:
 
         # Map parameters to provider-specific format
         mapped_params: Final[dict[str, object]] = TypeAdapter(dict[str, object]).validate_python(
-            responses_api_provider_config.map_openai_params(
-                response_api_optional_params=response_api_optional_params,
-                model=model,
-                drop_params=should_drop_params,
+            _provider_mapped_params(
+                responses_api_provider_config,
+                response_api_optional_params,
+                model,
+                should_drop_params,
+                allowed_openai_param_names(allowed_openai_params),
             ),
             strict=True,
         )
@@ -1165,6 +1181,33 @@ class ResponsesAPIRequestUtils:
             oauth2_headers,
             raw_headers_from_request,
         )
+
+
+_CHAT_COMPLETION_ID_PREFIX: Final = "chatcmpl-"
+
+
+def answered_by_the_chat_bridge(response_id: object) -> bool:
+    return isinstance(
+        response_id, str
+    ) and ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(response_id).startswith(
+        _CHAT_COMPLETION_ID_PREFIX
+    )
+
+
+_RESPONSES_API_ID_PREFIX: Final = "resp_"
+
+
+def held_by_a_provider(response_id: str) -> bool:
+    from litellm.utils import ProviderConfigManager
+
+    decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id)
+    original: Final = decoded.get("response_id", response_id)
+    provider: Final = decoded.get("custom_llm_provider")
+    return original.startswith(_RESPONSES_API_ID_PREFIX) or (
+        provider is not None
+        and not original.startswith(_CHAT_COMPLETION_ID_PREFIX)
+        and ProviderConfigManager.get_provider_responses_api_config(provider=provider) is not None
+    )
 
 
 class ResponseAPILoggingUtils:

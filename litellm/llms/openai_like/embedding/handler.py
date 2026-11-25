@@ -6,6 +6,7 @@ import json
 from typing import Final
 
 import httpx
+from typing_extensions import TypedDict
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
@@ -16,6 +17,10 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.utils import EmbeddingResponse
 
 from ..common_utils import OpenAILikeBase, OpenAILikeError
+
+
+class _EmbeddingResponseFields(TypedDict, total=False, extra_items=object):
+    pass
 
 
 class OpenAILikeEmbeddingHandler(OpenAILikeBase):
@@ -159,4 +164,4 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
             original_response=response_json,
         )
 
-        return litellm.EmbeddingResponse(**response_json)
+        return EmbeddingResponse(**_EmbeddingResponseFields(**response_json))

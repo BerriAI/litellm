@@ -25,13 +25,13 @@ reason = "filelock StrictSoftFileLock claim directories ignore the lock mode, wh
 
 [[IgnoredVulns]]
 id = "GHSA-69hj-f68j-2879"
-ignoreUntil = 2026-11-20
-reason = "filelock UnixFileLock truncates and chmods a file another user renames or hard-links in at the lock path; litellm's CLI takes FileLock only inside ~/.litellm, which it creates owner-only, and huggingface_hub takes it in the Hugging Face cache, which litellm reaches only to download the Kimi K3 tokenizer for Bedrock token counting; the attack needs another local user who can rename or link files in that cache; fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
+ignoreUntil = 2026-12-04
+reason = "filelock UnixFileLock truncates and chmods a file another user renames or hard-links in at the lock path; only the Python 3.10 resolution is affected, since the lock pins filelock<3.20.4 there and 3.11+ already resolves 4.2.4; the fix is only in 4.2.1 and filelock 4.1.1+ needs Python >= 3.11; litellm's CLI takes FileLock only inside the owner-only ~/.litellm, and the attack needs another local user who can write the lock directory; remove once 3.10 is dropped"
 
 [[IgnoredVulns]]
 id = "GHSA-8mx5-7m5m-r77g"
-ignoreUntil = 2026-11-20
-reason = "filelock WindowsFileLock ignores mode; the proxy image is Linux, so only Windows installs run it; there litellm's CLI takes FileLock only inside the owner-only ~/.litellm, whose lock file holds no data, and huggingface_hub takes it in the Hugging Face cache, which litellm reaches only to download the Kimi K3 tokenizer for Bedrock token counting; fixed only in 4.2.1, and filelock 4.1.1+ needs Python >= 3.11; litellm's own filelock<4.0 cap keeps every Python on 3.32.7 until it is lifted for 3.11+ (#48635, #48802); remove once that lands and 3.10 is dropped"
+ignoreUntil = 2026-12-04
+reason = "filelock WindowsFileLock ignores mode; only the Python 3.10 resolution is affected, since the lock pins filelock<3.20.4 there and 3.11+ already resolves 4.2.4; the fix is only in 4.2.1 and filelock 4.1.1+ needs Python >= 3.11; the proxy image is Linux, so only Windows installs on Python 3.10 run it; remove once 3.10 is dropped"
 
 [[IgnoredVulns]]
 id = "GHSA-9c4x-gm8v-wgc4"

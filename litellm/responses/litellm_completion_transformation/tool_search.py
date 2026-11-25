@@ -31,6 +31,8 @@ __all__ = [
     "is_openai_tool_search_tool",
     "is_server_tool_search_tool",
     "provider_builds_anthropic_request",
+    "request_runs_tool_search",
+    "route_runs_tool_search",
     "runs_tool_search_on_the_server",
     "tool_search_call_ids",
     "tools_with_anthropic_tool_search_mapped",
@@ -171,6 +173,20 @@ def provider_builds_anthropic_request(model: str, custom_llm_provider: str | Non
     return chat_config_builds_anthropic_request(
         ProviderConfigManager.get_provider_chat_config(model=model, provider=llm_provider)
     )
+
+
+def route_runs_tool_search(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.utils import supports_tool_search
+
+    return supports_tool_search(
+        model=model, custom_llm_provider=custom_llm_provider
+    ) and provider_builds_anthropic_request(model, custom_llm_provider)
+
+
+def request_runs_tool_search(tools: Sequence[object], model: str, custom_llm_provider: str | None) -> bool:
+    if any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
+        return provider_builds_anthropic_request(model, custom_llm_provider)
+    return has_server_tool_search(tools) and route_runs_tool_search(model, custom_llm_provider)
 
 
 def chat_config_builds_anthropic_request(chat_config: object) -> bool:
