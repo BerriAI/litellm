@@ -1,5 +1,6 @@
 mod caller;
 mod error_information;
+mod failure;
 mod hidden_params;
 mod messages;
 pub mod messages_response;
@@ -15,6 +16,10 @@ mod wire;
 pub use caller::{App, Budget, Caller, Customer, Key, Named, Team, User};
 pub use error_information::{
     ClientDisconnected, CooldownDeployment, ErrorInformation, LoggedErrorInformation,
+};
+pub use failure::{
+    CLIENT_DISCONNECTED_MESSAGE, ExceptionClass, LoggedException, NormalizedError,
+    RateLimitCategory, RateLimitType, provider_request_id,
 };
 pub use hidden_params::HiddenParams;
 pub use messages::{MAX_BASE64_LENGTH_FOR_LOGGING, truncate_base64, with_system_prompt};
