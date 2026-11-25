@@ -1400,6 +1400,7 @@ pub(crate) fn attempt_outcome(outcome: &Bound<'_, PyDict>) -> PyResult<Result<u6
     failure.recorded = item::<bool>(outcome, "recorded")?.unwrap_or(false);
     failure.names_provider = item::<bool>(outcome, "llm_provider")?.unwrap_or(false);
     failure.agentic_followup = item::<bool>(outcome, "agentic_followup")?.unwrap_or(false);
+    failure.create_may_exist = item::<bool>(outcome, "create_may_exist")?.unwrap_or(false);
     failure.outside_deployment = item::<bool>(outcome, "outside_deployment")?.unwrap_or(false);
     failure.status_absent = item::<bool>(outcome, "status_absent")?.unwrap_or(false);
     failure.uncounted_request = item::<bool>(outcome, "uncounted_request")?.unwrap_or(false);
@@ -1456,7 +1457,7 @@ fn error_items(dict: &Bound<'_, PyDict>, error: &Error) -> PyResult<()> {
         | Error::MultipleModelGroups { model }
         | Error::DefaultDeploymentRaises { model }
         | Error::IndexOutOfRange { model } => dict.set_item("error_model", model),
-        Error::ContextWindowExceeded { model, detail } => {
+        Error::ContextWindowExceeded { model, detail, .. } => {
             dict.set_item("error_model", model)?;
             dict.set_item("error_detail", detail)
         }
@@ -1605,6 +1606,16 @@ fn events_list(py: Python<'_>, events: Vec<RouterEvent>) -> PyResult<Bound<'_, P
                 dict.set_item("level", level)?;
                 dict.set_item("model", model)?;
                 cause_items(&dict, cause)?;
+            }
+            RouterEvent::ContextWindowRaised {
+                level,
+                deployment_id,
+                stream_origin,
+            } => {
+                dict.set_item("kind", "context_window_raised")?;
+                dict.set_item("level", level)?;
+                dict.set_item("deployment_id", deployment_id)?;
+                dict.set_item("stream_origin", stream_origin)?;
             }
             RouterEvent::RetryCountRaised {
                 level,
@@ -1758,8 +1769,12 @@ fn host_call_items(py: Python<'_>, dict: &Bound<'_, PyDict>, call: HostCall) -> 
             max_retries,
             model_group_size,
             shape,
+            refused_ids,
+            provider_refused_window,
         } => {
             dict.set_item("shape", AttemptShape::from(shape))?;
+            dict.set_item("refused_ids", PyList::new(py, refused_ids)?)?;
+            dict.set_item("provider_refused_window", provider_refused_window)?;
             dict.set_item("routed", routed)?;
             dict.set_item("scope", scope)?;
             dict.set_item("max_retries", max_retries)?;

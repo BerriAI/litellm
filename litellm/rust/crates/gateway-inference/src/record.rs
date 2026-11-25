@@ -5,6 +5,7 @@
 //! call keeps it through [`spawn_in_call`].
 
 mod entries;
+mod trace;
 
 use std::{
     future::Future,
@@ -35,7 +36,11 @@ pub struct CallRecord(Mutex<CallState>);
 
 impl CallRecord {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self(Mutex::new(CallState::new())))
+        Self::traced(uuid::Uuid::new_v4().to_string())
+    }
+
+    fn traced(trace_id: String) -> Arc<Self> {
+        Arc::new(Self(Mutex::new(CallState::new(trace_id))))
     }
 }
 
@@ -87,11 +92,11 @@ fn missed(error: impl std::fmt::Display) {
     tracing::error!(%error, "no call record in scope");
 }
 
-/// The layer outermost on the inference routes. It makes the request's record and runs the rest
-/// of the request with it, the response body included, since hyper polls the body after the
-/// handler returned.
+/// The layer outermost on the inference routes. It makes the request's record, under the trace
+/// its headers name, and runs the rest of the request with it, the response body included, since
+/// hyper polls the body after the handler returned.
 pub(crate) async fn scoped(request: Request, next: Next) -> Response {
-    let record = CallRecord::new();
+    let record = CallRecord::traced(trace::of(request.headers()));
     let response = RECORD.scope(record.clone(), next.run(request)).await;
     response.map(|body| {
         Body::new(Scoped {
@@ -185,6 +190,29 @@ mod tests {
             serde_json::from_slice::<Value>(&body).unwrap(),
             json!({"x-handler": "yes", "x-body": "yes"})
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn a_call_is_traced_under_the_session_its_caller_names() {
+        let session = "e96634a3-fa28-4083-b354-55542e2dca01";
+        let router = Router::new()
+            .route(
+                "/",
+                get(|| async { read(|entries| entries.trace_id().to_owned()).unwrap() }),
+            )
+            .layer(axum::middleware::from_fn(scoped));
+        let request = Request::get("/")
+            .header("x-claude-code-session-id", session)
+            .body(Body::empty())
+            .unwrap();
+        let body = axum::body::to_bytes(
+            router.oneshot(request).await.unwrap().into_body(),
+            usize::MAX,
+        )
+        .await
+        .unwrap();
+        assert_eq!(body, session);
     }
 
     #[rstest]

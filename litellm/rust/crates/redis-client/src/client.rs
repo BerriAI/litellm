@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use futures_util::stream::BoxStream;
+use futures_util::{StreamExt, stream::BoxStream};
 use litellm_circuit_breaker::{Admission, Breaker, Failure};
 use redis::{Cmd, ErrorKind, RedisError, ServerErrorKind, Value};
 
@@ -13,7 +13,7 @@ use crate::{
     RedisBatch, RedisConfig, RedisEvents,
     commands::{self, Op, Plan, Trips},
     connection::Connection,
-    pubsub::{self, Subscriber},
+    pubsub::{self, Subscriber, Subscription},
 };
 
 /// One Redis client. Clones share the connection, the breaker and the subscriber.
@@ -152,7 +152,20 @@ impl RedisClient {
     /// Messages published on `channel`, on a connection of its own. After the connection is lost
     /// it reconnects and resubscribes, and messages published meanwhile are not delivered.
     pub fn subscribe(&self, channel: &str) -> BoxStream<'static, Vec<u8>> {
-        self.0.subscriber.clone().messages(channel.to_owned())
+        self.subscription(channel)
+            .filter_map(|event| {
+                std::future::ready(match event {
+                    Subscription::Message(payload) => Some(payload),
+                    Subscription::Subscribed | Subscription::Lost => None,
+                })
+            })
+            .boxed()
+    }
+
+    /// [`Self::subscribe`] with every subscribe and every lost connection reported too, for a
+    /// subscriber that has to catch up on what it missed while it was not subscribed.
+    pub fn subscription(&self, channel: &str) -> BoxStream<'static, Subscription> {
+        self.0.subscriber.clone().events(channel.to_owned())
     }
 
     /// `PUBLISH`es every payload on `channel`, sent as given, without the namespace: one alone and

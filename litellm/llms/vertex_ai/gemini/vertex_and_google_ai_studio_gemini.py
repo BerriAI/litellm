@@ -1024,7 +1024,7 @@ def _forced_function_names(name: str, tools: JsonValue) -> tuple[str, ...]:
 
 def _function_names_forced_by(tool_choice: object, tools: JsonValue) -> frozenset[str]:
     match tool_choice:
-        case "required":
+        case "required" | "validated":
             return frozenset(chain.from_iterable(_names_each_tool_declares(_listed(tools))))
         case {"function": {"name": str() as name}}:
             return frozenset(_forced_function_names(name, tools))
@@ -1336,6 +1336,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="ANY"))
         elif tool_choice == "auto":
             return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="AUTO"))
+        elif tool_choice == "validated":
+            return ToolConfig(functionCallingConfig=FunctionCallingConfig(mode="VALIDATED"))
         elif isinstance(tool_choice, dict):
             # only supported for anthropic + mistral models - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ToolChoice.html
             name: Final = tool_choice.get("function", {}).get("name", "")
@@ -1352,7 +1354,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             )
         else:
             raise litellm.utils.UnsupportedParamsError(
-                message=f"VertexAI doesn't support tool_choice={tool_choice}. Supported tool_choice values=['auto', 'required', json object]. To drop it from the call, set `litellm.drop_params = True.",
+                message=(
+                    f"Gemini doesn't support tool_choice={tool_choice}. "
+                    "Supported tool_choice values are 'none', 'auto', 'required', 'validated', "
+                    "or a named function object."
+                ),
                 status_code=400,
             )
 
@@ -3626,8 +3632,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         grounding_metadata: Final[list[dict[str, object]]] = []
         url_context_metadata: Final[list[dict[str, object]]] = []
-        safety_ratings: Final[list] = []
-        citation_metadata: Final[list] = []
+        safety_ratings: Final[list[object]] = []
+        citation_metadata: Final[list[object]] = []
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate and "finishReason" not in candidate:

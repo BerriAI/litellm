@@ -573,6 +573,7 @@ from .exceptions import (
 
 if TYPE_CHECKING:
     from litellm import MockException
+    from litellm.litellm_core_utils.reasoning_effort_strength import ReasoningEffortRounding
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -2744,6 +2745,7 @@ def client(original_function):
                     and not is_responses_litellm_router_call
                     and not is_agentic_followup_failure(e)
                     and not is_resent_failure(e)
+                    and not isinstance(e, litellm.exceptions.UnresolvablePreviousResponseError)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     if (
                         isinstance(e, openai.APIError)
@@ -3095,6 +3097,7 @@ def client(original_function):
                     and not isinstance(e, ImportError)
                     and not is_agentic_followup_failure(e)
                     and not is_resent_failure(e)
+                    and not isinstance(e, litellm.exceptions.UnresolvablePreviousResponseError)
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
                     try:
                         litellm.num_retries = None  # set retries to None to prevent infinite loops
@@ -4200,6 +4203,13 @@ def deployment_declared_mid_conversation_system_support(model_info: object) -> b
             return None
 
 
+def declares_system_first(model: str, custom_llm_provider: str | None, model_info: object) -> bool:
+    deployment_declared: Final = deployment_declared_mid_conversation_system_support(model_info)
+    if deployment_declared is not None:
+        return not deployment_declared
+    return is_explicitly_disabled_factory(model, custom_llm_provider, "supports_mid_conversation_system")
+
+
 def declared_mid_conversation_system_support(
     model: str, custom_llm_provider: str | None, model_info: object
 ) -> bool | None:
@@ -4207,12 +4217,11 @@ def declared_mid_conversation_system_support(
     The `supports_mid_conversation_system` the deployment's own model_info declares, else the one the
     cost map declares for the model, else None when neither sets it.
     """
-    deployment_declared: Final = deployment_declared_mid_conversation_system_support(model_info)
-    if deployment_declared is not None:
-        return deployment_declared
-    if is_explicitly_disabled_factory(model, custom_llm_provider, "supports_mid_conversation_system"):
+    if declares_system_first(model, custom_llm_provider, model_info):
         return False
-    if supports_mid_conversation_system(model, custom_llm_provider):
+    if deployment_declared_mid_conversation_system_support(model_info) or supports_mid_conversation_system(
+        model, custom_llm_provider
+    ):
         return True
     return None
 
@@ -5972,6 +5981,18 @@ def _declared_reasoning_efforts(model_info: Mapping[str, object] | None) -> tupl
     return deployment_reasoning_effort_levels(model_info) or ()
 
 
+def _reasoning_effort_rounding(model_info: Mapping[str, object] | None) -> ReasoningEffortRounding:
+    from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_rounding
+
+    return deployment_reasoning_effort_rounding(model_info)
+
+
+def _deployment_reasoning_effort_levels(model_info: Mapping[str, object] | None) -> tuple[str, ...] | None:
+    from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
+
+    return deployment_reasoning_effort_levels(model_info)
+
+
 def _map_params_with_provider_config(
     provider_config: BaseConfig,
     *,
@@ -5995,6 +6016,15 @@ def _map_params_with_provider_config(
             reasoning_drop_logger=reasoning_drop_logger,
             base_model=base_model,
             allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
+        )
+    if isinstance(provider_config, litellm.ZAIChatConfig):
+        return provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            reasoning_effort_rounding=_reasoning_effort_rounding(model_info),
+            declared_reasoning_efforts=_deployment_reasoning_effort_levels(model_info),
         )
     if isinstance(provider_config, litellm.OpenAIConfig):
         return provider_config.map_openai_params(
@@ -8113,6 +8143,7 @@ def _look_up_model_info(
                 output_cost_per_image_token=_model_info.get("output_cost_per_image_token", None),
                 output_cost_per_image_token_batches=_model_info.get("output_cost_per_image_token_batches", None),
                 output_cost_per_image_token_priority=_model_info.get("output_cost_per_image_token_priority", None),
+                output_cost_per_image_token_flex=_model_info.get("output_cost_per_image_token_flex", None),
                 output_cost_per_video_token=_model_info.get("output_cost_per_video_token", None),
                 output_vector_size=_model_info.get("output_vector_size", None),
                 citation_cost_per_token=_model_info.get("citation_cost_per_token", None),
@@ -12009,10 +12040,21 @@ class ProviderConfigManager:
             from litellm.llms.meta.realtime.transformation import MetaRealtimeConfig
 
             return MetaRealtimeConfig(drop_params=drop_params)
+        if LlmProviders.GNANI == provider:
+            from litellm.llms.gnani.common_utils import is_prisma_v25, supports_realtime
+            from litellm.llms.gnani.realtime.transformation import GnaniRealtimeConfig
+
+            if not supports_realtime(model):
+                return None
+            return GnaniRealtimeConfig(drop_params=drop_params, requires_explicit_language=is_prisma_v25(model))
         if LlmProviders.SONIOX == provider:
             from litellm.llms.soniox.realtime.transformation import SonioxRealtimeConfig
 
             return SonioxRealtimeConfig.from_litellm_params(litellm_params, drop_params=drop_params)
+        if LlmProviders.ELEVENLABS == provider:
+            from litellm.llms.elevenlabs.realtime.transformation import elevenlabs_realtime_config
+
+            return elevenlabs_realtime_config(litellm_params, drop_params=drop_params)
         return None
 
     @staticmethod

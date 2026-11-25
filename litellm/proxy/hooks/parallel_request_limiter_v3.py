@@ -56,7 +56,7 @@ from litellm.litellm_core_utils.add_retry_fallback_headers import (
     response_has_hidden_params,
 )
 from litellm.litellm_core_utils.attempt_settlement import release_in_background
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping
 from litellm.litellm_core_utils.model_latest_aliases import expand_model_latest_alias
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
@@ -76,6 +76,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     get_key_own_model_rate_limit,
     get_model_rate_limit_from_metadata,
+    team_models_counting_cached_tokens,
 )
 from litellm.proxy.common_utils.callback_utils import get_model_group_from_litellm_kwargs
 from litellm.proxy.common_utils.proxy_rate_limit_error import (
@@ -458,6 +459,7 @@ DEFAULT_CHARS_PER_TOKEN: Final = 4
 # gets misclassified as an embedding and skips output-token reservation/caps.
 RESPONSES_API_CALL_TYPES: Final = ("aresponses", "responses")
 CHAT_COMPLETION_API_CALL_TYPES: Final = (CallTypes.completion.value, CallTypes.acompletion.value)
+ANTHROPIC_MESSAGES_CALL_TYPES: Final = (CallTypes.anthropic_messages.value, CallTypes.aanthropic_messages.value)
 EMBEDDING_API_CALL_TYPES: Final = ("aembedding", "embedding")
 TEXT_COMPLETION_API_CALL_TYPES: Final = ("atext_completion", "text_completion")
 RERANK_API_CALL_TYPES: Final = (CallTypes.rerank.value, CallTypes.arerank.value)
@@ -1096,6 +1098,26 @@ def _embedding_input_type(request: Mapping[str, object] | None) -> str | None:
     return input_type if isinstance(input_type, str) else None
 
 
+def _instruction_text(request: Mapping[str, object], call_type: str | None) -> str:
+    instructions: Final = (
+        request.get("system")
+        if call_type in ANTHROPIC_MESSAGES_CALL_TYPES
+        else request.get("instructions")
+        if call_type in RESPONSES_API_CALL_TYPES
+        else None
+    )
+    if isinstance(instructions, str):
+        return instructions
+    texts: Final = (as_str_mapping(block) for block in as_object_list(instructions) or ())
+    return "".join(text for block in texts if block is not None and isinstance(text := block.get("text"), str))
+
+
+def _with_system_message(messages: object, system: str) -> object:
+    if not system or not isinstance(messages, list):
+        return messages
+    return [{"role": "system", "content": system}, *messages]  # pyright: ignore[reportUnknownVariableType]  # messages are validated runtime JSON
+
+
 def _is_embedding_request(data: object, call_type: str | None) -> bool:
     if call_type in EMBEDDING_API_CALL_TYPES:
         return True
@@ -1319,6 +1341,11 @@ class ParallelRequestLimiterHook(CustomLogger):
                         "user_api_key_model_max_budget": _METADATA.validate_python(
                             user_api_key_dict.model_max_budget or {}  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.model_max_budget is a bare dict
                         ),
+                        "user_api_key_team_metadata": {
+                            "model_tpm_limit_counts_cached_tokens": team_models_counting_cached_tokens(
+                                user_api_key_dict.team_metadata
+                            )
+                        },
                     }
                 },
                 "standard_logging_object": {
@@ -2251,6 +2278,13 @@ def estimate_precise_input_tokens(
         if call_type in TEXT_COMPLETION_API_CALL_TYPES
         else (None, _extraction_input_text(_REQUEST_RATE_LIMIT_DATA.validate_python(data)), None, None)
         if call_type in EXTRACTION_API_CALL_TYPES
+        else (
+            _with_system_message(request.get("messages"), _instruction_text(request, call_type)),
+            fallback_text,
+            request.get("tools"),
+            request.get("tool_choice"),
+        )
+        if call_type in ANTHROPIC_MESSAGES_CALL_TYPES
         else (request.get("messages"), fallback_text, request.get("tools"), request.get("tool_choice"))
     )
     messages, selected_text, countable_tools, countable_tool_choice = selected_inputs
@@ -2568,6 +2602,14 @@ async def increment_reservation_aware_tokens(
     )
 
 
+def _team_counts_cached_tokens_from_request_metadata(
+    request_metadata: Mapping[str, object],
+    model: RateLimitedModel,
+) -> bool:
+    models: Final = team_models_counting_cached_tokens(request_metadata.get("user_api_key_team_metadata"))
+    return models.get(model.requested, models.get(model.group, False))
+
+
 def _settlement_resolved(
     limiter: ParallelRequestLimiterHook,
     kwargs: Mapping[str, object],
@@ -2605,6 +2647,9 @@ def _settlement_resolved(
                     {
                         "group": candidate.group,
                         "key_owns": _key_owns_model_tpm_limit_from_request_metadata(request_metadata, candidate),
+                        "counts_cached_tokens": _team_counts_cached_tokens_from_request_metadata(
+                            request_metadata, candidate
+                        ),
                     }
                     for candidate in _rate_limited_models(limiter, model)
                 ],
@@ -2784,7 +2829,7 @@ def estimate_tokens_and_unpriced_media(
         estimate_media_block_tokens(block, resolved_models, fallback_model) for block in media
     )
 
-    total_chars: Final = (
+    total_chars: Final = len(_instruction_text(request_data, call_type)) + (
         len(get_str_from_messages(messages))
         if isinstance(messages, list) and messages
         else len(prompt)
