@@ -67,30 +67,33 @@ def usable_deferred_tools_mode(model_info: object, provider: str | None) -> Defe
     return mode
 
 
-def builds_tools_without_deferral(provider: str | None, model: str, chat_params: Mapping[str, object]) -> bool:
+def builds_tools_without_deferral(provider: str | None, model: str) -> bool:
     match provider:
         case "gemini":
             return True
-        case "vertex_ai":
+        case "vertex_ai" | "vertex_ai_beta":
             return get_vertex_ai_model_route(model) == VertexAIModelRoute.GEMINI
         case "bedrock":
-            return BedrockModelInfo.get_bedrock_route(model, chat_params) in ("converse", "converse_like")
+            return BedrockModelInfo.get_bedrock_route(model) in ("converse", "converse_like", "chat_completions")
         case _:
             return False
 
 
-def unusable_deferred_tools_refusal(
-    model_info: object, provider: str | None, model: str, chat_params: Mapping[str, object]
-) -> str | None:
+def routed_deferred_tools_mode(model_info: object, provider: str | None, model: str) -> DeferredToolsMode:
+    mode: Final = usable_deferred_tools_mode(model_info, provider)
+    return "drop" if mode == "passthrough" and builds_tools_without_deferral(provider, model) else mode
+
+
+def unusable_deferred_tools_refusal(model_info: object, provider: str | None, model: str) -> str | None:
     mode: Final = deferred_tools_mode(model_info)
-    if mode == "passthrough" and builds_tools_without_deferral(provider, model, chat_params):
+    if routed_deferred_tools_mode(model_info, provider, model) == mode:
+        return None
+    if mode == "passthrough" and builds_tools_without_deferral(provider, model):
         return (
-            f"model_info.deferred_tools passthrough keeps defer_loading on each tool, but the {provider} request "
-            f"LiteLLM builds for {model} has no field for it. Pick emulate or drop for this deployment, or set "
+            f"model_info.deferred_tools passthrough keeps defer_loading on each tool, but the {provider} route "
+            f"LiteLLM uses for {model} does not support it. Pick emulate or drop for this deployment, or set "
             "drop_params to send deferred tools the drop way"
         )
-    if usable_deferred_tools_mode(model_info, provider) == mode:
-        return None
     if mode == "native":
         return (
             f"model_info.deferred_tools native needs a Responses API whose client tool search keeps deferred tools "

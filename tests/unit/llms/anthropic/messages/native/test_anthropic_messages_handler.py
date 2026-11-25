@@ -3205,6 +3205,8 @@ async def test_azure_messages_send_no_tool_search_unless_deferred_tools_is_nativ
         ("bedrock/chat_completions/moonshotai.kimi-k3.1", {"deferred_tools": "passthrough"}, {}, "Pick emulate or drop"),
         ("gemini/gemini-pro-latest", {"deferred_tools": "passthrough"}, {}, "Pick emulate or drop"),
         ("vertex_ai/gemini-pro-latest", {"deferred_tools": "passthrough"}, {}, "Pick emulate or drop"),
+        ("vertex_ai_beta/gemini-pro-latest", {"deferred_tools": "passthrough"}, {}, "Pick emulate or drop"),
+        ("bedrock/us.xai.grok-4.7", {"deferred_tools": "passthrough"}, {}, "Pick emulate or drop"),
         ("deepseek/deepseek-chat", {"deferred_tools": "emulate"}, {}, "set it to passthrough"),
         ("deepseek/deepseek-chat", {"deferred_tools": "native"}, {}, "set it to passthrough"),
         ("anthropic/claude-opus-5-5", {"deferred_tools": "drop"}, {}, "set it to passthrough"),
@@ -3223,6 +3225,8 @@ async def test_azure_messages_send_no_tool_search_unless_deferred_tools_is_nativ
         "passthrough_where_bedrock_sends_a_tools_request_to_converse",
         "passthrough_where_gemini_builds_tools_without_deferral",
         "passthrough_where_vertex_gemini_builds_tools_without_deferral",
+        "passthrough_where_vertex_beta_gemini_builds_tools_without_deferral",
+        "passthrough_where_bedrock_native_chat_can_fall_back_to_converse",
         "emulate_on_a_messages_api_route",
         "native_on_a_messages_api_route",
         "drop_on_a_messages_api_route",
@@ -3306,6 +3310,46 @@ async def test_passthrough_deferred_tools_fall_back_to_drop_under_drop_params_on
         deferral_flags
     )
     assert len(_deferred_tools_fallback_warnings(caplog)) == fallback_warnings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    ["bedrock/converse/us.amazon.nova-2-lite-v1:0", "bedrock/us.xai.grok-4.7", "gemini/gemini-pro-latest"],
+    ids=["bedrock_converse", "bedrock_native_chat_that_can_fall_back_to_converse", "gemini"],
+)
+async def test_passthrough_deferred_tools_send_the_drop_request_under_drop_params_where_the_route_cannot_defer(
+    model: str, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        passthrough_body: Final = await _tool_loaded_upstream_body(model, {"deferred_tools": "passthrough"})
+    dropped_body: Final = await _tool_loaded_upstream_body(model, {"deferred_tools": "drop"})
+
+    assert passthrough_body == dropped_body
+    assert len(_deferred_tools_fallback_warnings(caplog)) == 1
+
+
+async def _tool_loaded_upstream_body(model: str, model_info: Mapping[str, object]) -> object:
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    with respx.mock(assert_all_called=True) as respx_mock:
+        upstream: Final = respx_mock.route().mock(side_effect=httpx.ConnectError("cut at the wire"))
+        with pytest.raises((openai.APIError, litellm.exceptions.APIConnectionError)):
+            await litellm.anthropic.messages.acreate(
+                max_tokens=100,
+                messages=_TOOL_LOADED_CONVERSATION,
+                model=model,
+                api_base="https://example-resource.openai.azure.com",
+                api_key="deployment-key",
+                aws_region_name="us-east-1",
+                aws_access_key_id="AKIAEXAMPLEKEY",
+                aws_secret_access_key="example-secret",
+                tools=[*_CLAUDE_CODE_TOOL_SEARCH_TOOLS, _FORECAST_TOOL],
+                model_info=model_info,
+                drop_params=True,
+            )
+    return json.loads(upstream.calls[0].request.content)
 
 
 def _deferred_tools_fallback_warnings(caplog: pytest.LogCaptureFixture) -> tuple[str, ...]:
