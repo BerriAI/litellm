@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, Type
 from pydantic import JsonValue, TypeAdapter
 
 import litellm
+from litellm.exceptions import APIConnectionError
 from litellm.litellm_core_utils.core_helpers import (
     as_object_list,
     as_str_mapping,
@@ -479,6 +480,16 @@ class AnthropicAdapter:
                 the sync handler) don't get back an async iterator they
                 can't iterate without an event loop.
         """
+        if completion_stream is None:
+            # A mid-flight upstream stream death can hand the bridge None.
+            # Fail this attempt now (retriable APIConnectionError) so the
+            # router retries/falls back, instead of deferring an AttributeError
+            # to iteration inside AnthropicStreamWrapper.
+            raise APIConnectionError(
+                message="anthropic /v1/messages bridge: completion stream is None; failing this attempt for router fallback",
+                llm_provider="anthropic",
+                model=model,
+            )
         applied_edits: Final = polyfill_result.applied_edits_for_response() if polyfill_result else None
         compaction_block: Final = polyfill_result.compaction_block if polyfill_result is not None else None
         iterations_usage: Final = polyfill_result.iterations_usage if polyfill_result is not None else None

@@ -27,6 +27,9 @@ from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH
 from litellm.llms.anthropic.messages.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
+from litellm.llms.anthropic.messages.adapters.streaming_iterator import (
+    AnthropicSSEStream,
+)
 from litellm.llms.anthropic.messages.adapters.transformation import (
     AnthropicAdapter,
     LiteLLMAnthropicMessagesAdapter,
@@ -6771,3 +6774,44 @@ def test_unsigned_thinking_is_still_replayed_to_an_open_model_through_the_chat_a
     turns: Final = _sent_assistant_turns("deepseek/deepseek-v4-pro", {"custom_llm_provider": "deepseek"})
 
     assert [turn.get("reasoning_content") for turn in turns] == ["open model plan", "call ls"]
+
+
+class _PassthroughAsyncStream:
+    """Minimal stand-in for a live upstream completion stream (empty, but valid)."""
+
+    def __init__(self) -> None:
+        self._it = iter(())
+        self.chunks: list[ModelResponseStream] = []
+        self.messages: list[dict] = [{"role": "user", "content": "hi"}]
+
+    def __aiter__(self) -> "_PassthroughAsyncStream":
+        return self
+
+    async def __anext__(self) -> "ModelResponseStream":
+        raise StopAsyncIteration
+
+
+def test_translate_completion_output_params_streaming_none_stream_raises_api_connection_error() -> None:
+    """A None completion_stream (upstream stream died mid-flight) must fail the attempt
+    as a retriable APIConnectionError before the wrapper is constructed, so the router
+    retries/falls back instead of deferring an AttributeError to iteration."""
+    adapter: Final = AnthropicAdapter()
+    model: Final = "anthropic/claude-sonnet-4-5"
+
+    with pytest.raises(litellm.APIConnectionError) as excinfo:
+        adapter.translate_completion_output_params_streaming(None, model=model)
+
+    error: Final = excinfo.value
+    assert error.llm_provider == "anthropic"
+    assert error.model == model
+
+
+@pytest.mark.asyncio
+async def test_translate_completion_output_params_streaming_passes_through_a_real_stream() -> None:
+    """A non-None stream must still be wrapped and returned, not rejected (async path)."""
+    adapter: Final = AnthropicAdapter()
+    upstream: Final = _PassthroughAsyncStream()
+
+    stream: Final = adapter.translate_completion_output_params_streaming(upstream, model="test-model")
+
+    assert isinstance(stream, AnthropicSSEStream)
