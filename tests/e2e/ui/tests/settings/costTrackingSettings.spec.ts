@@ -111,21 +111,40 @@ async function removeTestEntry(
   path: string,
   key: string,
 ) {
+  const warn = (detail: string) =>
+    test.info().annotations.push({
+      type: "cleanup-warning",
+      description: `Remove ${key} from ${path}: ${detail}`,
+    });
   try {
     const options = {
       headers: { Authorization: `Bearer ${masterKey()}`, Connection: "close" },
       timeout: 1500,
     };
     const response = await request.get(rootPath() + path, options);
-    if (!response.ok()) return;
+    if (!response.ok()) {
+      warn(`GET returned HTTP ${response.status()}`);
+      return;
+    }
     const current: CostConfig = (await response.json()).values;
-    if (!Object.hasOwn(current, key)) return;
+    if (!Object.hasOwn(current, key)) {
+      warn("Test entry was absent in the cleanup read");
+      return;
+    }
     const data = Object.fromEntries(
       Object.entries(current).filter(([entry]) => entry !== key),
     );
-    await request.patch(rootPath() + path, { ...options, data });
-  } catch {
-    return;
+    const cleanup = await request.patch(rootPath() + path, {
+      ...options,
+      data,
+    });
+    if (!cleanup.ok()) warn(`PATCH returned HTTP ${cleanup.status()}`);
+  } catch (error) {
+    warn(
+      String(error)
+        .split("\n", 1)[0]
+        .replace(/Bearer \S+/gi, "[REDACTED]"),
+    );
   }
 }
 

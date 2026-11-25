@@ -21,25 +21,41 @@ const configResponse = (page: Page, method: string, path: string) =>
   );
 
 async function removeTestAliases(request: APIRequestContext, names: string[]) {
+  const warn = (detail: string) =>
+    test.info().annotations.push({
+      type: "cleanup-warning",
+      description: `Remove test aliases ${names.join(", ")}: ${detail}`,
+    });
   try {
     const options = {
       headers: { Authorization: `Bearer ${masterKey()}`, Connection: "close" },
       timeout: 1500,
     };
     const response = await request.get(rootPath() + CALLBACKS, options);
-    if (!response.ok()) return;
+    if (!response.ok()) {
+      warn(`GET returned HTTP ${response.status()}`);
+      return;
+    }
     const aliases: StoredAliasMap =
       (await response.json()).router_settings?.model_group_alias ?? {};
-    if (!names.some((name) => Object.hasOwn(aliases, name))) return;
+    if (!names.some((name) => Object.hasOwn(aliases, name))) {
+      warn("Test aliases were absent in the cleanup read");
+      return;
+    }
     const remaining = Object.fromEntries(
       Object.entries(aliases).filter(([name]) => !names.includes(name)),
     );
-    await request.post(rootPath() + UPDATE, {
+    const cleanup = await request.post(rootPath() + UPDATE, {
       ...options,
       data: { router_settings: { model_group_alias: remaining } },
     });
-  } catch {
-    return;
+    if (!cleanup.ok()) warn(`POST returned HTTP ${cleanup.status()}`);
+  } catch (error) {
+    warn(
+      String(error)
+        .split("\n", 1)[0]
+        .replace(/Bearer \S+/gi, "[REDACTED]"),
+    );
   }
 }
 
@@ -59,6 +75,7 @@ function assertAliasMap(
   ).toEqual({ ...existing, [name]: target });
 }
 
+test.describe.configure({ mode: "serial" });
 test.use({ storageState: ADMIN_STORAGE_PATH });
 
 test("adds an alias and renames it without changing the target model group", async ({
