@@ -1,11 +1,12 @@
 """
 Handler for the Anthropic v1/messages -> OpenAI Responses API path.
 
-Used when the target model is an OpenAI or Azure model.
+Used when the target model is an OpenAI model.
 """
 
 from collections.abc import AsyncIterator, Callable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
+from dataclasses import dataclass
 from functools import partial
 from typing import Final, TypeAlias
 
@@ -26,11 +27,12 @@ from litellm.litellm_core_utils.asyncify import (
 from litellm.litellm_core_utils.core_helpers import as_object_list, as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     cache_control_as_prompt_cache_breakpoint,
+    cache_control_as_responses_prompt_cache_breakpoint,
     prompt_cache_breakpoint_with_readable_mode,
     with_prompt_cache_breakpoint,
 )
 from litellm.litellm_core_utils.reasoning_effort_capability import deployment_rounds_reasoning_effort
-from litellm.litellm_core_utils.tool_fields import drop_policy, drops_mcp_servers, tools_without_mcp_servers
+from litellm.litellm_core_utils.tool_fields import drop_policy, tools_without_mcp_servers
 from litellm.llms.base_llm.base_utils import optional_str
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.instructions_length import with_long_instructions_in_input
@@ -40,6 +42,7 @@ from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
     AllAnthropicToolsValues,
+    AnthropicMcpServerTool,
     AnthropicMessagesRequest,
     AnthropicOutputConfig,
     AnthropicOutputSchema,
@@ -91,6 +94,7 @@ AnthropicContextManagementSpec: TypeAlias = dict[str, object] | list[dict[str, o
 
 _ADAPTER: Final = LiteLLMAnthropicToResponsesAPIAdapter()
 _UNVERIFIED_ORGANIZATION_SUMMARY_REFUSAL: Final = "must be verified to generate reasoning summaries"
+_WEB_SEARCH_FILTERS_REFUSAL: Final = "Parameter 'filters' not supported with model"
 
 
 def _split_context_management(
@@ -287,13 +291,19 @@ def _without_prompt_cache_breakpoint(block: Mapping[str, object]) -> Mapping[str
     return {key: value for key, value in block.items() if key != "prompt_cache_breakpoint"}
 
 
-def _cache_control_as_wire_safe_prompt_cache_breakpoint(block: Mapping[str, object]) -> Mapping[str, object]:
+def _cache_control_as_wire_safe_prompt_cache_breakpoint(
+    block: Mapping[str, object], rename: BlockRewrite
+) -> Mapping[str, object]:
     if "prompt_cache_breakpoint" not in block:
-        return cache_control_as_prompt_cache_breakpoint(block)
+        return rename(block)
     wire_marker: Final = prompt_cache_breakpoint_with_readable_mode(block["prompt_cache_breakpoint"], drop_params=True)
-    return cache_control_as_prompt_cache_breakpoint(
-        with_prompt_cache_breakpoint(_without_prompt_cache_breakpoint(block), wire_marker)
-    )
+    return rename(with_prompt_cache_breakpoint(_without_prompt_cache_breakpoint(block), wire_marker))
+
+
+def _cache_control_rename(forwarded_kwargs: Mapping[str, object]) -> BlockRewrite:
+    if forwarded_kwargs.get("custom_llm_provider") == "openai":
+        return cache_control_as_responses_prompt_cache_breakpoint
+    return cache_control_as_prompt_cache_breakpoint
 
 
 def _prompt_cache_block_rewrite(model: str, forwarded_kwargs: Mapping[str, object]) -> BlockRewrite | None:
@@ -301,11 +311,8 @@ def _prompt_cache_block_rewrite(model: str, forwarded_kwargs: Mapping[str, objec
     drops raw ones under drop_params."""
     drops_params: Final = drops_unsupported_params(forwarded_kwargs.get("drop_params"))
     if _reads_prompt_cache_breakpoint(model, forwarded_kwargs):
-        return (
-            _cache_control_as_wire_safe_prompt_cache_breakpoint
-            if drops_params
-            else cache_control_as_prompt_cache_breakpoint
-        )
+        rename: Final = _cache_control_rename(forwarded_kwargs)
+        return partial(_cache_control_as_wire_safe_prompt_cache_breakpoint, rename=rename) if drops_params else rename
     if _model_takes_prompt_cache_breakpoint(model, forwarded_kwargs):
         return None
     if drops_params:
@@ -328,6 +335,33 @@ def _rewritten_blocks(content: object, rewrite: BlockRewrite) -> Sequence[Mappin
         return [_rewritten_block(block, rewrite) for block in _BLOCK_LIST.validate_python(content)]
     except ValidationError:
         return ()
+
+
+def _content_blocks(content: object) -> Sequence[Mapping[str, object]]:
+    if isinstance(content, str):
+        return ({"type": "text", "text": content},)
+    try:
+        return _BLOCK_LIST.validate_python(content)
+    except ValidationError:
+        return ()
+
+
+def _with_automatic_cache_mark(
+    messages: AnthropicRequestMessages, cache_control: object
+) -> Sequence[Mapping[str, object]]:
+    """Anthropic's top-level ``cache_control`` caches the conversation up to its last block, so it becomes that
+    block's own mark and maps like any client mark. An assistant prefill's blocks carry no breakpoint on the
+    Responses API, so the mark goes on the last block of the turn before it."""
+    marked: Final = next(
+        (index for index in reversed(range(len(messages))) if messages[index].get("role") != "assistant"), None
+    )
+    if marked is None or cache_control is None:
+        return messages
+    blocks: Final = _content_blocks(messages[marked].get("content"))
+    if not blocks or "cache_control" in blocks[-1]:
+        return messages
+    marked_content: Final = (*blocks[:-1], {**blocks[-1], "cache_control": cache_control})
+    return (*messages[:marked], {**messages[marked], "content": marked_content}, *messages[marked + 1 :])
 
 
 def _reasoning_for_target(
@@ -403,41 +437,82 @@ def _model_excludes_effort(
     )
 
 
-def _drops_refused_summary(responses_kwargs: Mapping[str, object], *, drop_params: bool) -> bool:
+@dataclass(frozen=True, slots=True)
+class _RefusedField:
+    refusal: str
+    reason: str
+    sent: Callable[[Mapping[str, object]], bool]
+    without: Callable[[Mapping[str, object]], Mapping[str, object]]
+
+    def refused(self, error: Exception) -> bool:
+        return isinstance(error, litellm.BadRequestError) and self.refusal in error.message
+
+
+def _sends_summary(responses_kwargs: Mapping[str, object]) -> bool:
     reasoning: Final = as_str_mapping(responses_kwargs.get("reasoning"))
-    return drop_params and reasoning is not None and "summary" in reasoning
+    return reasoning is not None and "summary" in reasoning
 
 
-def _is_refused_summary(error: Exception) -> bool:
-    return isinstance(error, litellm.BadRequestError) and _UNVERIFIED_ORGANIZATION_SUMMARY_REFUSAL in error.message
+def _without_summary(responses_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    reasoning: Final = as_str_mapping(responses_kwargs.get("reasoning")) or {}
+    return {**responses_kwargs, "reasoning": {key: value for key, value in reasoning.items() if key != "summary"}}
 
 
-def _resent_without_refused_summary(
+def _filtered_web_search(tool: object) -> Mapping[str, object] | None:
+    mapping: Final = as_str_mapping(tool)
+    return mapping if mapping is not None and mapping.get("type") == "web_search" and "filters" in mapping else None
+
+
+def _unfiltered(tool: object) -> object:
+    search: Final = _filtered_web_search(tool)
+    return tool if search is None else {key: value for key, value in search.items() if key != "filters"}
+
+
+def _sends_web_search_filters(responses_kwargs: Mapping[str, object]) -> bool:
+    return any(_filtered_web_search(tool) is not None for tool in as_object_list(responses_kwargs.get("tools")) or ())
+
+
+def _without_web_search_filters(responses_kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    tools: Final = as_object_list(responses_kwargs.get("tools")) or ()
+    return {**responses_kwargs, "tools": [_unfiltered(tool) for tool in tools]}
+
+
+_REFUSED_FIELDS: Final = (
+    _RefusedField(
+        refusal=_UNVERIFIED_ORGANIZATION_SUMMARY_REFUSAL,
+        reason="reasoning.summary, its OpenAI organization cannot get reasoning summaries until it is verified",
+        sent=_sends_summary,
+        without=_without_summary,
+    ),
+    _RefusedField(
+        refusal=_WEB_SEARCH_FILTERS_REFUSAL,
+        reason="web search domain filters, OpenAI does not take them on this model",
+        sent=_sends_web_search_filters,
+        without=_without_web_search_filters,
+    ),
+)
+
+
+def _droppable_fields(responses_kwargs: Mapping[str, object], *, drop_params: bool) -> tuple[_RefusedField, ...]:
+    return tuple(field for field in _REFUSED_FIELDS if drop_params and field.sent(responses_kwargs))
+
+
+def _resent_without_refused_fields(
     responses_kwargs: Mapping[str, object], *, drop_params: bool
 ) -> AbstractContextManager[None]:
-    return (
-        resent_on(_is_refused_summary)
-        if _drops_refused_summary(responses_kwargs, drop_params=drop_params)
-        else nullcontext()
-    )
+    droppable: Final = _droppable_fields(responses_kwargs, drop_params=drop_params)
+    return resent_on(lambda error: any(field.refused(error) for field in droppable)) if droppable else nullcontext()
 
 
-def _retry_without_refused_summary(
+def _retry_without_refused_field(
     responses_kwargs: Mapping[str, object], error: litellm.BadRequestError, *, model: str, drop_params: bool
 ) -> Mapping[str, object] | None:
-    reasoning: Final = as_str_mapping(responses_kwargs.get("reasoning"))
-    if (
-        reasoning is None
-        or not _drops_refused_summary(responses_kwargs, drop_params=drop_params)
-        or not _is_refused_summary(error)
-    ):
+    droppable: Final = _droppable_fields(responses_kwargs, drop_params=drop_params)
+    refused: Final = next((field for field in droppable if field.refused(error)), None)
+    if refused is None:
         return None
-    verbose_logger.warning(
-        "Retrying %s without reasoning.summary, its OpenAI organization cannot get reasoning summaries until it is "
-        "verified, because drop_params is set",
-        model,
-    )
-    return {**responses_kwargs, "reasoning": {key: value for key, value in reasoning.items() if key != "summary"}}
+    verbose_logger.warning("Retrying %s without %s, because drop_params is set", model, refused.reason)
+    return refused.without(responses_kwargs)
 
 
 def _maps_reasoning(
@@ -467,6 +542,9 @@ def _build_responses_kwargs(
     top_k: int | None = None,
     top_p: float | None = None,
     output_format: AnthropicOutputSchema | None = None,
+    speed: str | None = None,
+    mcp_servers: Sequence[AnthropicMcpServerTool] | None = None,
+    container: str | Mapping[str, object] | None = None,
     extra_kwargs: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """
@@ -484,21 +562,31 @@ def _build_responses_kwargs(
             llm_provider=target_provider if isinstance(target_provider, str) else None,
         )
     reject_malformed_text(messages, model, forwarded_kwargs)
-    request_tools: Final = tools_without_mcp_servers(
-        forwarded_kwargs.get("mcp_servers"),
-        tools or (),
-        model=model,
-        route=target_provider if isinstance(target_provider, str) else "this route",
-        drop_params=drops_mcp_servers(forwarded_kwargs),
+    explicitly_dropped: Final = drop_policy(forwarded_kwargs).additional_drop_params
+    explicitly_drops_mcp_servers: Final = "mcp_servers" in explicitly_dropped
+    sent_mcp_servers: Final = None if explicitly_drops_mcp_servers else mcp_servers
+    request_tools: Final = (
+        tools_without_mcp_servers(
+            mcp_servers,
+            tools or (),
+            model=model,
+            route=target_provider if isinstance(target_provider, str) else "this route",
+            drop_params=True,
+        )
+        if explicitly_drops_mcp_servers
+        else tools or ()
     )
     block_rewrite: Final = _prompt_cache_block_rewrite(model, forwarded_kwargs)
+    top_level_cache_control: Final = (
+        None if "cache_control" in explicitly_dropped else forwarded_kwargs.get("cache_control")
+    )
     request_messages: Final[AnthropicRequestMessages] = (
         [
             {
                 **message,
                 "content": list(_rewritten_blocks(message.get("content"), block_rewrite)) or message.get("content"),
             }
-            for message in messages
+            for message in _with_automatic_cache_mark(messages, top_level_cache_control)
         ]
         if block_rewrite
         else messages
@@ -526,13 +614,29 @@ def _build_responses_kwargs(
     if tool_choice and (request_tools or not tools):
         request_data["tool_choice"] = tool_choice
     if request_tools:
-        request_data["tools"] = list(request_tools)
+        request_data["tools"] = (
+            [dict(tool) for tool in _rewritten_blocks(request_tools, block_rewrite)] or list(request_tools)
+            if block_rewrite
+            else list(request_tools)
+        )
     if top_p is not None:
         request_data["top_p"] = top_p
+    if top_k is not None and "top_k" not in explicitly_dropped:
+        request_data["top_k"] = top_k
+    inference_geo: Final = forwarded_kwargs.get("inference_geo")
+    if isinstance(inference_geo, str) and "inference_geo" not in explicitly_dropped:
+        request_data["inference_geo"] = inference_geo
     if output_format:
         request_data["output_format"] = output_format
-
-    anthropic_request: Final = AnthropicMessagesRequest(**request_data)
+    if speed is not None and "speed" not in explicitly_dropped:
+        request_data["speed"] = speed
+    if sent_mcp_servers:
+        request_data["mcp_servers"] = list(sent_mcp_servers)
+    anthropic_request: Final[AnthropicMessagesRequest] = (
+        {**request_data, "container": container if isinstance(container, str) else dict(container)}
+        if container is not None and "container" not in explicitly_dropped
+        else AnthropicMessagesRequest(**request_data)
+    )
     drop_params: Final = drops_unsupported_params(forwarded_kwargs.get("drop_params"))
     auto_summary_level: Final = auto_reasoning_summary(model, forwarded_kwargs.get("custom_llm_provider"))
     responses_kwargs: Final = _ADAPTER.translate_request(
@@ -595,7 +699,7 @@ def _build_responses_kwargs(
     # Forward litellm-specific kwargs (api_key, api_base, logging obj, etc.)
     excluded: Final = (
         CONVERTED_STREAM_KEYS
-        | {"anthropic_messages", "mcp_servers"}
+        | {"anthropic_messages", "mcp_servers", "cache_control", "inference_geo"}
         | (frozenset({"reasoning_effort"}) if client_effort_dropped else frozenset())
     )
     for key, value in forwarded_kwargs.items():
@@ -617,6 +721,10 @@ def _build_responses_kwargs(
     explicit_prompt_cache_key: Final = forwarded_kwargs.get("prompt_cache_key")
     if explicit_prompt_cache_key is not None:
         responses_kwargs["prompt_cache_key"] = explicit_prompt_cache_key
+
+    explicit_service_tier: Final = forwarded_kwargs.get("service_tier")
+    if explicit_service_tier not in (None, "auto"):
+        responses_kwargs["service_tier"] = explicit_service_tier
 
     deployment_include: Final = forwarded_kwargs.get("include")
     bridge_include: Final = responses_kwargs.get("include")
@@ -648,30 +756,34 @@ def _kwarg_text(responses_kwargs: Mapping[str, object], key: str) -> str:
     return value if isinstance(value, str) else ""
 
 
-async def _aresponses(responses_kwargs: Mapping[str, object], *, drop_params: bool) -> _ResponsesResult:
+async def _aresponses_dropping_refused_fields(
+    responses_kwargs: Mapping[str, object], *, drop_params: bool
+) -> _ResponsesResult:
     try:
-        with _resent_without_refused_summary(responses_kwargs, drop_params=drop_params):
+        with _resent_without_refused_fields(responses_kwargs, drop_params=drop_params):
             return await litellm.aresponses(**responses_kwargs)
     except litellm.BadRequestError as error:
-        retry_kwargs: Final = _retry_without_refused_summary(
+        retry_kwargs: Final = _retry_without_refused_field(
             responses_kwargs, error, model=_kwarg_text(responses_kwargs, "model"), drop_params=drop_params
         )
         if retry_kwargs is None:
             raise
-        return await litellm.aresponses(**retry_kwargs)
+        return await _aresponses_dropping_refused_fields(retry_kwargs, drop_params=drop_params)
 
 
-def _responses(responses_kwargs: Mapping[str, object], *, drop_params: bool) -> _SyncResponsesResult:
+def _responses_dropping_refused_fields(
+    responses_kwargs: Mapping[str, object], *, drop_params: bool
+) -> _SyncResponsesResult:
     try:
-        with _resent_without_refused_summary(responses_kwargs, drop_params=drop_params):
+        with _resent_without_refused_fields(responses_kwargs, drop_params=drop_params):
             return litellm.responses(**responses_kwargs)
     except litellm.BadRequestError as error:
-        retry_kwargs: Final = _retry_without_refused_summary(
+        retry_kwargs: Final = _retry_without_refused_field(
             responses_kwargs, error, model=_kwarg_text(responses_kwargs, "model"), drop_params=drop_params
         )
         if retry_kwargs is None:
             raise
-        return litellm.responses(**retry_kwargs)
+        return _responses_dropping_refused_fields(retry_kwargs, drop_params=drop_params)
 
 
 def _messages_without_rejected_reasoning(
@@ -696,7 +808,9 @@ async def _aresponses_without_rejected_reasoning(
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
     try:
         with resent_without_rejected_reasoning(sent_encrypted_reasoning):
-            return responses_kwargs, await _aresponses(responses_kwargs, drop_params=drop_params)
+            return responses_kwargs, await _aresponses_dropping_refused_fields(
+                responses_kwargs, drop_params=drop_params
+            )
     except litellm.BadRequestError as error:
         replayed_messages: Final = _messages_without_rejected_reasoning(
             messages, error, responses_kwargs, sent_encrypted_reasoning
@@ -704,7 +818,7 @@ async def _aresponses_without_rejected_reasoning(
         if replayed_messages is None:
             raise
         replay_kwargs: Final = responses_kwargs_for(replayed_messages)
-        return replay_kwargs, await _aresponses(replay_kwargs, drop_params=drop_params)
+        return replay_kwargs, await _aresponses_dropping_refused_fields(replay_kwargs, drop_params=drop_params)
 
 
 def _responses_without_rejected_reasoning(
@@ -714,7 +828,7 @@ def _responses_without_rejected_reasoning(
     sent_encrypted_reasoning: Final = _sends_encrypted_reasoning(responses_kwargs)
     try:
         with resent_without_rejected_reasoning(sent_encrypted_reasoning):
-            return responses_kwargs, _responses(responses_kwargs, drop_params=drop_params)
+            return responses_kwargs, _responses_dropping_refused_fields(responses_kwargs, drop_params=drop_params)
     except litellm.BadRequestError as error:
         replayed_messages: Final = _messages_without_rejected_reasoning(
             messages, error, responses_kwargs, sent_encrypted_reasoning
@@ -722,7 +836,7 @@ def _responses_without_rejected_reasoning(
         if replayed_messages is None:
             raise
         replay_kwargs: Final = responses_kwargs_for(replayed_messages)
-        return replay_kwargs, _responses(replay_kwargs, drop_params=drop_params)
+        return replay_kwargs, _responses_dropping_refused_fields(replay_kwargs, drop_params=drop_params)
 
 
 class LiteLLMMessagesToResponsesAPIHandler:
@@ -750,6 +864,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
         top_k: int | None = None,
         top_p: float | None = None,
         output_format: AnthropicOutputSchema | None = None,
+        speed: str | None = None,
+        mcp_servers: Sequence[AnthropicMcpServerTool] | None = None,
+        container: str | Mapping[str, object] | None = None,
         **kwargs: object,
     ) -> AnthropicMessagesResponse | AsyncIterator[bytes]:
         native_context_management, polyfilled_edits = _split_context_management(context_management, kwargs)
@@ -775,6 +892,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 top_k=top_k,
                 top_p=top_p,
                 output_format=output_format,
+                speed=speed,
+                mcp_servers=mcp_servers,
+                container=container,
                 extra_kwargs=kwargs,
             )
 
@@ -827,6 +947,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
         top_k: int | None = None,
         top_p: float | None = None,
         output_format: AnthropicOutputSchema | None = None,
+        speed: str | None = None,
+        mcp_servers: Sequence[AnthropicMcpServerTool] | None = None,
+        container: str | Mapping[str, object] | None = None,
         _is_async: bool = False,
         **kwargs: object,
     ) -> (
@@ -852,6 +975,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 top_k=top_k,
                 top_p=top_p,
                 output_format=output_format,
+                speed=speed,
+                mcp_servers=mcp_servers,
+                container=container,
                 **kwargs,
             )
 
@@ -890,6 +1016,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 top_k=top_k,
                 top_p=top_p,
                 output_format=output_format,
+                speed=speed,
+                mcp_servers=mcp_servers,
+                container=container,
                 extra_kwargs=kwargs,
             )
 

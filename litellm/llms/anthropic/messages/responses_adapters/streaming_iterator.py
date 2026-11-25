@@ -220,6 +220,20 @@ class AnthropicResponsesStreamWrapper:
         )
         return block_idx
 
+    def _emit_mcp_call(self, item: object) -> None:
+        tool_use, result = LiteLLMAnthropicToResponsesAPIAdapter.mcp_blocks_from_call(item)
+        use_idx: Final = self._open_block(None, {**tool_use, "input": {}})
+        self._chunk_queue.append(
+            {
+                "type": "content_block_delta",
+                "index": use_idx,
+                "delta": {"type": "input_json_delta", "partial_json": json.dumps(tool_use["input"])},
+            }
+        )
+        self._chunk_queue.append({"type": "content_block_stop", "index": use_idx})
+        result_idx: Final = self._open_block(None, result)
+        self._chunk_queue.append({"type": "content_block_stop", "index": result_idx})
+
     @staticmethod
     def _field(source: object, name: str) -> object:
         return source.get(name) if isinstance(source, dict) else getattr(source, name, None)
@@ -445,6 +459,9 @@ class AnthropicResponsesStreamWrapper:
             item_id = done_item_id if isinstance(done_item_id, str) and done_item_id else None
             if self._field(item, "type") == "reasoning":
                 self._close_reasoning_item(item, item_id)
+                return
+            if self._field(item, "type") == "mcp_call":
+                self._emit_mcp_call(item)
                 return
             block_idx = self._item_id_to_block_index.get(item_id, -1) if item_id else self._current_block_index
             if block_idx < 0:

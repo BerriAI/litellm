@@ -233,28 +233,165 @@ class TestOutputConfigStructuredOutput:
         assert kwargs["text"]["format"]["schema"] == self._SCHEMA
         assert kwargs["text"]["format"]["strict"] is False
 
-    def test_optional_property_stays_out_of_required_list_when_not_strict(self):
-        """Without strict, a property absent from required stays absent from required in the translated schema."""
-        schema = {
+    _OPTIONAL_NICKNAME: Final = {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string"},
+            "nickname": {"type": "string", "default": "none"},
+            "address": {"type": "object", "properties": {"city": {"type": "string"}}},
+        },
+        "required": ["name"],
+    }
+
+    _NOT_JSON: Final = {"type": "object", "properties": {"size": {"enum": ("s", "m")}}}
+    _WITH_MAP: Final = {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "tags": {"type": "object", "additionalProperties": {"type": "string"}}},
+    }
+    _WITH_FREE_FORM: Final = {"type": "object", "properties": {"name": {"type": "string"}, "metadata": {"type": "object"}}}
+    _OPEN_UNDER_ITEMS: Final = {"type": "object", "properties": {"rows": {"type": "array", "items": {"type": "object"}}}}
+    _OPEN_UNDER_DEFS: Final = {
+        "type": "object",
+        "properties": {"row": {"$ref": "#/$defs/Row"}},
+        "$defs": {"Row": {"type": "object"}},
+    }
+    _OPEN_UNDER_ANY_OF: Final = {
+        "type": "object",
+        "properties": {"value": {"anyOf": [{"type": "string"}, {"type": ["object", "null"]}]}},
+    }
+
+    @pytest.mark.parametrize(
+        ("fields", "expected_format"),
+        [
+            *(
+                pytest.param(
+                    {"output_format": {"type": "json_schema", "schema": schema}},
+                    {"type": "json_schema", "name": "structured_output", "schema": schema, "strict": False},
+                    id=case_id,
+                )
+                for schema, case_id in (
+                    (_WITH_MAP, "schema-with-a-map-goes-up-as-is"),
+                    (_WITH_FREE_FORM, "schema-with-a-free-form-object-goes-up-as-is"),
+                    (_OPEN_UNDER_ITEMS, "open-object-under-items-goes-up-as-is"),
+                    (_OPEN_UNDER_DEFS, "open-object-under-defs-goes-up-as-is"),
+                    (_OPEN_UNDER_ANY_OF, "open-object-under-any-of-goes-up-as-is"),
+                )
+            ),
+            pytest.param(
+                {"output_config": {"format": {"type": "json_schema", "schema": _OPTIONAL_NICKNAME}}},
+                {
+                    "type": "json_schema",
+                    "name": "structured_output",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "nickname": {"type": "string", "default": "none"},
+                            "address": {
+                                "type": "object",
+                                "properties": {"city": {"type": "string"}},
+                                "required": ["city"],
+                                "additionalProperties": False,
+                            },
+                        },
+                        "required": ["name", "nickname", "address"],
+                        "additionalProperties": False,
+                    },
+                    "strict": True,
+                },
+                id="unset-strict-closes-every-object",
+            ),
+            pytest.param(
+                {"output_format": {"type": "json_schema", "schema": _OPTIONAL_NICKNAME, "strict": False}},
+                {"type": "json_schema", "name": "structured_output", "schema": _OPTIONAL_NICKNAME, "strict": False},
+                id="explicit-strict-false-keeps-the-schema",
+            ),
+            pytest.param(
+                {"output_format": {"type": "json_schema", "schema": _NOT_JSON}},
+                {"type": "json_schema", "name": "structured_output", "schema": _NOT_JSON, "strict": False},
+                id="schema-that-is-not-json-goes-up-as-is",
+            ),
+            pytest.param({"output_format": {"type": "text"}}, None, id="not-json-schema"),
+            pytest.param({"output_format": {"type": "json_schema", "schema": {}}}, None, id="empty-schema"),
+        ],
+    )
+    def test_json_schema_output_goes_up_strict_unless_the_caller_or_the_schema_rules_it_out(
+        self, fields: Dict[str, object], expected_format: Dict[str, object] | None
+    ):
+        """Strict mode requires every property, so an optional one becomes required. Output that fills it still
+        matches the caller's schema, which a nullable optional would not."""
+        kwargs = _ADAPTER.translate_request(_make_request(**fields))
+        assert kwargs.get("text", {}).get("format") == expected_format
+
+    _ANSWER: Final = {"type": "object", "properties": {"text": {"type": "string"}}}
+    _CLOSED_ANSWER: Final = {**_ANSWER, "required": ["text"], "additionalProperties": False}
+    _LABELS: Final = {"type": "object", "additionalProperties": {"type": "string"}}
+
+    @pytest.mark.parametrize(
+        ("schema", "expected_schema"),
+        [
+            pytest.param(
+                {"$ref": "#/$defs/Answer", "$defs": {"Answer": _ANSWER}},
+                {"$ref": "#/$defs/Answer", "$defs": {"Answer": _CLOSED_ANSWER}},
+                id="root-ref-keeps-defs",
+            ),
+        ],
+    )
+    def test_strict_schema_closes_only_objects_with_properties_on_both_adapters(
+        self, schema: Dict[str, object], expected_schema: Dict[str, object]
+    ):
+        request: Final = _make_request(output_format={"type": "json_schema", "schema": schema})
+        chat, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+
+        assert _ADAPTER.translate_request(request)["text"]["format"]["schema"] == expected_schema
+        assert chat["response_format"]["json_schema"]["schema"] == expected_schema
+
+    def test_chat_strict_schema_leaves_maps_and_free_form_objects_open(self):
+        schema: Final = {"type": "object", "properties": {"labels": self._LABELS, "extra": {"type": "object"}}}
+        request: Final = _make_request(output_format={"type": "json_schema", "schema": schema})
+        chat, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(request)
+
+        assert chat["response_format"]["json_schema"]["schema"] == {
             "type": "object",
-            "properties": {
-                "name": {"type": "string"},
-                "nickname": {"type": "string"},
-            },
-            "required": ["name"],
+            "properties": {"labels": self._LABELS, "extra": {"type": "object"}},
+            "required": ["labels", "extra"],
             "additionalProperties": False,
         }
-        req = _make_request(output_format={"type": "json_schema", "schema": schema, "strict": False})
-        kwargs = _ADAPTER.translate_request(req)
-        fmt_schema = kwargs["text"]["format"]["schema"]
-        assert fmt_schema["required"] == ["name"]
-        assert "nickname" not in fmt_schema["required"]
-        assert fmt_schema["additionalProperties"] is False
 
-    def test_translate_request_does_not_mutate_input_schema(self):
+    def test_strict_schema_keeps_properties_named_like_schema_keywords(self):
+        schema: Final = {
+            "type": "object",
+            "properties": {
+                "default": {"type": "string"},
+                "$ref": {"type": "string"},
+                "properties": {"type": "object", "properties": {"x": {"type": "integer"}}},
+                "mode": {"enum": [{"type": "object"}, "fast"]},
+            },
+        }
+        req = _make_request(output_format={"type": "json_schema", "schema": schema})
+        kwargs = _ADAPTER.translate_request(req)
+        assert kwargs["text"]["format"]["schema"] == {
+            "type": "object",
+            "properties": {
+                "default": {"type": "string"},
+                "$ref": {"type": "string"},
+                "properties": {
+                    "type": "object",
+                    "properties": {"x": {"type": "integer"}},
+                    "required": ["x"],
+                    "additionalProperties": False,
+                },
+                "mode": {"enum": [{"type": "object"}, "fast"]},
+            },
+            "required": ["default", "$ref", "properties", "mode"],
+            "additionalProperties": False,
+        }
+
+    @pytest.mark.parametrize("strict", [pytest.param({}, id="strict"), pytest.param({"strict": False}, id="loose")])
+    def test_translate_request_does_not_mutate_input_schema(self, strict: Dict[str, bool]):
         """translate_request must not mutate the caller's output_format or schema dicts."""
-        schema = {"type": "object", "properties": {"x": {"type": "number"}}, "required": ["x"]}
-        output_format = {"type": "json_schema", "schema": schema, "strict": False}
+        schema = {"type": "object", "properties": {"x": {"type": "number", "default": 1}}, "required": []}
+        output_format = {"type": "json_schema", "schema": schema, **strict}
         req = _make_request(output_format=output_format)
         snapshot = json.loads(json.dumps(output_format))
 
@@ -335,6 +472,54 @@ class TestOutputConfigStructuredOutput:
         request: Final = _make_request(output_format={"type": "json_schema", "schema": schema, "strict": False})
 
         assert _ADAPTER.translate_request(request)["text"]["format"]["schema"] == schema
+
+    @pytest.mark.parametrize(
+        "field",
+        [
+            pytest.param({"type": "string", "format": "uri", "minLength": 1, "maxLength": 2083}, id="url-format"),
+            pytest.param({"allOf": [{"$ref": "#/$defs/Answer"}], "description": "The answer"}, id="all-of-ref"),
+            pytest.param({"$ref": "#/$defs/Answer", "description": "The answer"}, id="ref-with-description"),
+            pytest.param({"const": "done"}, id="const-without-type"),
+            pytest.param({"oneOf": [{"type": "string"}, {"type": "integer"}]}, id="one-of"),
+            pytest.param({"type": "array", "items": {"type": "string"}, "uniqueItems": True}, id="unique-items"),
+            pytest.param({"type": "array", "items": {}}, id="untyped-items"),
+            pytest.param({"type": "array"}, id="array-without-items"),
+        ],
+    )
+    def test_schema_that_openai_strict_mode_rejects_goes_up_as_is(self, field: Dict[str, object]) -> None:
+        schema: Final = {"type": "object", "properties": {"field": field}, "$defs": {"Answer": self._ANSWER}}
+        request: Final = _make_request(output_format={"type": "json_schema", "schema": schema})
+
+        assert _ADAPTER.translate_request(request)["text"]["format"] == {
+            "type": "json_schema",
+            "name": "structured_output",
+            "schema": schema,
+            "strict": False,
+        }
+
+    def test_schema_within_openai_strict_mode_goes_up_strict(self) -> None:
+        fields: Final = {
+            "when": {"type": "string", "format": "date-time", "title": "When", "examples": ["2026-01-01T00:00:00Z"]},
+            "size": {"enum": ["s", "m"], "description": "Shirt size"},
+            "code": {"type": "string", "pattern": "^[a-z]+$", "minLength": 1, "maxLength": 9},
+            "count": {"type": "integer", "minimum": 0, "maximum": 9, "multipleOf": 1, "default": 1},
+            "tags": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 3},
+            "answer": {"anyOf": [{"$ref": "#/$defs/Answer"}, {"type": "null"}]},
+        }
+        schema: Final = {"type": "object", "properties": fields, "$defs": {"Answer": self._ANSWER}}
+        request: Final = _make_request(output_format={"type": "json_schema", "schema": schema})
+
+        assert _ADAPTER.translate_request(request)["text"]["format"] == {
+            "type": "json_schema",
+            "name": "structured_output",
+            "schema": {
+                **schema,
+                "$defs": {"Answer": self._CLOSED_ANSWER},
+                "required": list(fields),
+                "additionalProperties": False,
+            },
+            "strict": True,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -2746,6 +2931,300 @@ class TestPromptCacheBreakpointToResponses:
         assert kwargs["prompt_cache_options"] == {"mode": "explicit"}
 
 
+LOOKUP_TOOL: Final = {"name": "lookup", "input_schema": {"type": "object", "properties": {}}}
+DOCS_SERVER: Final = {"type": "url", "name": "docs", "url": "https://mcp.example.com/sse"}
+DOCS_MCP_TOOL: Final = {
+    "type": "mcp",
+    "server_label": "docs",
+    "server_url": "https://mcp.example.com/sse",
+    "require_approval": "never",
+}
+SF_LOCATION: Final = {"type": "approximate", "city": "San Francisco", "country": "US"}
+
+
+def _translate(drop_params: bool, **fields: object) -> dict[str, object]:
+    return _ADAPTER.translate_request(_make_request(**fields), drop_params=drop_params)
+
+
+def _unsupported_message(**fields: object) -> str:
+    with pytest.raises(litellm.UnsupportedParamsError) as rejected:
+        _translate(False, **fields)
+    assert rejected.value.status_code == 400
+    return rejected.value.message
+
+
+@pytest.mark.parametrize(
+    ("tool_choice", "expected"),
+    [
+        pytest.param({"type": "auto", "disable_parallel_tool_use": True}, {"parallel_tool_calls": False}, id="auto"),
+        pytest.param({"type": "any", "disable_parallel_tool_use": True}, {"parallel_tool_calls": False}, id="any"),
+        pytest.param(
+            {"type": "tool", "name": "lookup", "disable_parallel_tool_use": True},
+            {"parallel_tool_calls": False},
+            id="tool",
+        ),
+        pytest.param({"type": "none", "disable_parallel_tool_use": True}, {}, id="none-calls-no-tools"),
+        pytest.param({"type": "auto", "disable_parallel_tool_use": False}, {}, id="parallel-allowed"),
+        pytest.param({"type": "auto"}, {}, id="unset"),
+    ],
+)
+def test_disable_parallel_tool_use_turns_off_parallel_tool_calls(
+    tool_choice: Dict[str, object], expected: Dict[str, bool]
+):
+    kwargs: Final = _translate(False, tools=[LOOKUP_TOOL], tool_choice=tool_choice)
+    assert {key: kwargs[key] for key in ("parallel_tool_calls",) if key in kwargs} == expected
+
+
+@pytest.mark.parametrize(
+    ("speed", "expected"),
+    [
+        pytest.param("fast", {"service_tier": "priority"}, id="fast"),
+        pytest.param("standard", {}, id="standard"),
+        pytest.param(None, {}, id="null"),
+    ],
+)
+def test_speed_maps_to_the_priority_service_tier(speed: object, expected: Dict[str, str]):
+    kwargs: Final = _translate(False, speed=speed)
+    assert {key: kwargs[key] for key in ("service_tier", "speed") if key in kwargs} == expected
+
+
+def test_an_unknown_speed_answers_400_unless_drop_params_drops_it():
+    assert "speed 'turbo'" in _unsupported_message(speed="turbo")
+    dropped: Final = _translate(True, speed="turbo")
+    assert "service_tier" not in dropped and "speed" not in dropped
+
+
+@pytest.mark.parametrize(
+    ("server", "expected_tools"),
+    [
+        pytest.param(DOCS_SERVER, [DOCS_MCP_TOOL], id="every-tool"),
+        pytest.param(
+            {**DOCS_SERVER, "authorization_token": "tok"},
+            [{**DOCS_MCP_TOOL, "authorization": "tok"}],
+            id="authorization-token",
+        ),
+        pytest.param(
+            {**DOCS_SERVER, "tool_configuration": {"allowed_tools": ["search", "fetch"]}},
+            [{**DOCS_MCP_TOOL, "allowed_tools": ["search", "fetch"]}],
+            id="deprecated-allowed-tools",
+        ),
+        pytest.param(
+            {**DOCS_SERVER, "tool_configuration": {"enabled": True}}, [DOCS_MCP_TOOL], id="deprecated-enabled"
+        ),
+        pytest.param({**DOCS_SERVER, "tool_configuration": {"enabled": False}}, [], id="deprecated-disabled"),
+    ],
+)
+def test_an_mcp_server_becomes_a_responses_mcp_tool(server: Dict[str, object], expected_tools: List[object]):
+    kwargs: Final = _translate(False, mcp_servers=[server])
+    assert kwargs.get("tools", []) == expected_tools
+    assert "mcp_servers" not in kwargs
+
+
+@pytest.mark.parametrize(
+    ("toolset", "expected_tools"),
+    [
+        pytest.param({}, [DOCS_MCP_TOOL], id="defaults"),
+        pytest.param(
+            {"default_config": {"enabled": True}, "configs": {"search": {"enabled": True}}},
+            [DOCS_MCP_TOOL],
+            id="enabled-nothing-disabled",
+        ),
+        pytest.param(
+            {
+                "default_config": {"enabled": False},
+                "configs": {"search": {"enabled": True}, "fetch": {"enabled": False}, "list": {}},
+            },
+            [{**DOCS_MCP_TOOL, "allowed_tools": ["search"]}],
+            id="allowlist",
+        ),
+        pytest.param({"default_config": {"enabled": False}}, [], id="everything-disabled"),
+        pytest.param(
+            {"default_config": {"defer_loading": False}, "configs": {"search": {"defer_loading": False}}},
+            [DOCS_MCP_TOOL],
+            id="defer-loading-off",
+        ),
+    ],
+)
+def test_an_mcp_toolset_sets_the_mcp_tools_allowlist_and_never_becomes_a_function_tool(
+    toolset: Dict[str, object], expected_tools: List[object]
+):
+    kwargs: Final = _translate(
+        False,
+        mcp_servers=[{**DOCS_SERVER, "tool_configuration": {"allowed_tools": ["ignored"]}}],
+        tools=[LOOKUP_TOOL, {"type": "mcp_toolset", "mcp_server_name": "docs", **toolset}],
+    )
+    assert kwargs["tools"] == [_ADAPTER.translate_tools_to_responses_api([LOOKUP_TOOL])[0], *expected_tools]
+
+
+def test_an_mcp_toolset_naming_no_requested_server_answers_400_unless_drop_params_drops_it():
+    tools: Final = [{"type": "mcp_toolset", "mcp_server_name": "other", "default_config": {"enabled": False}}]
+    message: Final = _unsupported_message(mcp_servers=[DOCS_SERVER], tools=tools)
+    assert "mcp_toolset 'other' without a matching mcp_servers entry" in message
+    assert _translate(True, mcp_servers=[DOCS_SERVER], tools=tools)["tools"] == [DOCS_MCP_TOOL]
+
+
+UNMAPPABLE_TOOLSETS: Final = [
+    pytest.param(
+        {"configs": {"delete": {"enabled": False}, "drop": {"enabled": False}}},
+        "mcp_toolset 'docs' disabling delete, drop while its other tools stay enabled",
+        [],
+        id="denylist",
+    ),
+    pytest.param(
+        {"default_config": {"defer_loading": True}},
+        "defer_loading on mcp_toolset 'docs'",
+        [DOCS_MCP_TOOL],
+        id="default-defer-loading",
+    ),
+    pytest.param(
+        {"default_config": {"enabled": False}, "configs": {"search": {"enabled": True, "defer_loading": True}}},
+        "defer_loading on mcp_toolset 'docs'",
+        [{**DOCS_MCP_TOOL, "allowed_tools": ["search"]}],
+        id="tool-defer-loading",
+    ),
+    pytest.param({"configs": ["search"]}, "the malformed mcp_toolset for 'docs'", [], id="malformed"),
+]
+
+
+@pytest.mark.parametrize(("toolset", "field", "dropped_to"), UNMAPPABLE_TOOLSETS)
+def test_an_mcp_toolset_without_a_responses_equivalent_answers_400_naming_it(
+    toolset: Dict[str, object], field: str, dropped_to: List[object]
+):
+    message: Final = _unsupported_message(
+        mcp_servers=[DOCS_SERVER], tools=[{"type": "mcp_toolset", "mcp_server_name": "docs", **toolset}]
+    )
+    assert field in message
+
+
+@pytest.mark.parametrize(("toolset", "field", "dropped_to"), UNMAPPABLE_TOOLSETS)
+def test_drop_params_drops_what_an_mcp_toolset_cannot_map(
+    toolset: Dict[str, object], field: str, dropped_to: List[object]
+):
+    kwargs: Final = _translate(
+        True, mcp_servers=[DOCS_SERVER], tools=[{"type": "mcp_toolset", "mcp_server_name": "docs", **toolset}]
+    )
+    assert kwargs.get("tools", []) == dropped_to
+
+
+@pytest.mark.parametrize(
+    ("web_search", "expected"),
+    [
+        pytest.param({}, {"type": "web_search_preview"}, id="no-filters"),
+        pytest.param(
+            {"allowed_domains": ["docs.python.org"]},
+            {"type": "web_search", "filters": {"allowed_domains": ["docs.python.org"]}},
+            id="allowed-domains",
+        ),
+        pytest.param(
+            {"blocked_domains": ["example.com"], "allowed_domains": None, "user_location": SF_LOCATION},
+            {"type": "web_search", "filters": {"blocked_domains": ["example.com"]}, "user_location": SF_LOCATION},
+            id="blocked-domains-and-location",
+        ),
+        pytest.param(
+            {"user_location": SF_LOCATION},
+            {"type": "web_search_preview", "user_location": SF_LOCATION},
+            id="location-only",
+        ),
+    ],
+)
+def test_web_search_keeps_its_domain_filters_and_user_location(web_search: Dict[str, object], expected: object):
+    kwargs: Final = _translate(
+        False, tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 3, **web_search}]
+    )
+    assert kwargs["tools"] == [expected]
+    assert kwargs["max_tool_calls"] == 3
+
+
+@pytest.mark.parametrize(
+    ("max_uses", "expected"),
+    [
+        pytest.param({"max_uses": 2}, {"max_tool_calls": 2}, id="capped"),
+        pytest.param({}, {}, id="no-cap"),
+    ],
+)
+def test_web_search_max_uses_caps_tool_calls_next_to_function_tools(
+    max_uses: Dict[str, int], expected: Dict[str, int]
+):
+    kwargs: Final = _translate(
+        False, tools=[LOOKUP_TOOL, {"type": "web_search_20250305", "name": "web_search", **max_uses}]
+    )
+    assert {key: kwargs[key] for key in ("max_tool_calls",) if key in kwargs} == expected
+
+
+def test_web_search_max_uses_next_to_another_built_in_tool_answers_400_naming_it():
+    message: Final = _unsupported_message(
+        mcp_servers=[DOCS_SERVER], tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}]
+    )
+    assert "max_uses on tool 'web_search' next to another built-in tool" in message
+
+
+def test_drop_params_drops_a_web_search_max_uses_it_cannot_map():
+    kwargs: Final = _translate(
+        True, mcp_servers=[DOCS_SERVER], tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}]
+    )
+    assert kwargs["tools"] == [{"type": "web_search_preview"}, DOCS_MCP_TOOL]
+    assert "max_tool_calls" not in kwargs
+
+
+@pytest.mark.parametrize("allowed_callers", [["code_execution_20250825"], ["direct", "code_execution_20250825"]])
+def test_allowed_callers_answers_400_unless_drop_params_drops_it(allowed_callers: List[str]):
+    tools: Final = [{**LOOKUP_TOOL, "allowed_callers": allowed_callers}]
+    assert "allowed_callers on tool 'lookup'" in _unsupported_message(tools=tools)
+    assert _translate(True, tools=tools)["tools"] == _ADAPTER.translate_tools_to_responses_api([LOOKUP_TOOL])
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        pytest.param("container", "container_abc", id="container-id"),
+        pytest.param("container", {"id": "container_abc"}, id="container-params"),
+        pytest.param("top_k", 40, id="top-k"),
+        pytest.param("inference_geo", "us", id="inference-geo"),
+    ],
+)
+def test_a_field_without_a_responses_equivalent_answers_400_unless_drop_params_drops_it(field: str, value: object):
+    message: Final = _unsupported_message(**{field: value})
+    assert f"no equivalent for {field}. To drop it, set `litellm.drop_params=True`" in message
+    assert "`drop_params: true` in the model's `litellm_params` or under `litellm_settings`" in message
+    assert field not in _translate(True, **{field: value})
+
+
+@pytest.mark.parametrize(
+    "server",
+    [
+        pytest.param("docs", id="string"),
+        pytest.param(7, id="number"),
+        pytest.param({"type": "url", "name": "docs"}, id="no-url"),
+        pytest.param({**DOCS_SERVER, "tool_configuration": "all"}, id="tool-configuration-string"),
+    ],
+)
+def test_a_malformed_mcp_server_answers_400_unless_drop_params_drops_it(server: object):
+    assert "a malformed mcp_servers entry" in _unsupported_message(mcp_servers=[server, DOCS_SERVER])
+    assert _translate(True, mcp_servers=[server, DOCS_SERVER])["tools"] == [DOCS_MCP_TOOL]
+
+
+def test_one_400_names_every_unsupported_field_and_how_to_drop_them():
+    direct_only_tool: Final = {**LOOKUP_TOOL, "name": "fetch", "allowed_callers": ["direct"]}
+    message: Final = _unsupported_message(
+        speed="turbo",
+        container={"id": "container_abc"},
+        tools=[{**LOOKUP_TOOL, "allowed_callers": ["x"]}, direct_only_tool],
+    )
+    assert message.startswith(
+        "litellm.UnsupportedParamsError: openai.gpt-5.1-codex is served through the OpenAI Responses API, which has no "
+        "equivalent for allowed_callers on tool 'lookup'; speed 'turbo'; container. "
+    )
+    assert "To drop them, set `litellm.drop_params=True`" in message
+
+
+def test_a_function_tool_keeps_its_prompt_cache_breakpoint():
+    breakpoint: Final = {"mode": "explicit", "ttl": "12h"}
+    kwargs: Final = _translate(False, tools=[{**LOOKUP_TOOL, "prompt_cache_breakpoint": breakpoint}])
+    assert kwargs["tools"] == [
+        {**_ADAPTER.translate_tools_to_responses_api([LOOKUP_TOOL])[0], "prompt_cache_breakpoint": breakpoint}
+    ]
+
+
 class TestTranslateChatBridgedResponse:
     @staticmethod
     def _bridged(message: Message, finish_reason: str) -> ResponsesAPIResponse:
@@ -2792,6 +3271,132 @@ class TestTranslateChatBridgedResponse:
             {"type": "tool_use", "id": "call_1", "name": "get_weather", "input": {"city": "Oslo"}}
         ]
         assert result["stop_reason"] == "tool_use"
+
+
+WIKI_MCP_CALL: Final = {
+    "type": "mcp_call",
+    "id": "mcp_0abc",
+    "server_label": "docs",
+    "name": "read_wiki_structure",
+    "arguments": '{"repoName": "BerriAI/litellm"}',
+    "output": "1 Overview",
+    "error": None,
+    "status": "completed",
+}
+WIKI_MCP_TOOL_USE: Final = {
+    "type": "mcp_tool_use",
+    "id": "mcp_0abc",
+    "name": "read_wiki_structure",
+    "server_name": "docs",
+    "input": {"repoName": "BerriAI/litellm"},
+}
+
+
+@pytest.mark.parametrize(
+    ("call", "is_error", "result_text"),
+    (
+        (WIKI_MCP_CALL, False, "1 Overview"),
+        ({**WIKI_MCP_CALL, "output": None, "error": "server unreachable"}, True, "server unreachable"),
+    ),
+    ids=("output", "error"),
+)
+def test_an_mcp_call_comes_back_as_the_tool_use_and_result_blocks_anthropic_returns(
+    call: Mapping[str, object], is_error: bool, result_text: str
+) -> None:
+    response: Final = _make_mock_response(output=[call, _make_output_message(["One topic is the Overview."])])
+
+    result: Final[Any] = _ADAPTER.translate_response(response)
+
+    assert result["content"] == [
+        WIKI_MCP_TOOL_USE,
+        {
+            "type": "mcp_tool_result",
+            "tool_use_id": "mcp_0abc",
+            "is_error": is_error,
+            "content": [{"type": "text", "text": result_text}],
+        },
+        {"type": "text", "text": "One topic is the Overview."},
+    ]
+    assert result["stop_reason"] == "end_turn"
+
+
+@pytest.mark.parametrize(
+    ("call", "replayed_result"),
+    (
+        (WIKI_MCP_CALL, {"output": "1 Overview"}),
+        ({**WIKI_MCP_CALL, "output": None, "error": "server unreachable"}, {"error": "server unreachable"}),
+    ),
+    ids=("output", "error"),
+)
+def test_a_returned_mcp_call_replays_on_the_next_turn_as_the_same_call(
+    call: Mapping[str, object], replayed_result: Mapping[str, str]
+) -> None:
+    reply: Final[Any] = _ADAPTER.translate_response(
+        _make_mock_response(output=[call, _make_output_message(["One topic is the Overview."])])
+    )
+
+    items: Final = _translate_messages(
+        [
+            {"role": "user", "content": "Name one topic"},
+            {"role": "assistant", "content": reply["content"]},
+            {"role": "user", "content": "Quote what the tool returned"},
+        ]
+    )
+
+    assert items[1] == {
+        "type": "mcp_call",
+        "id": "mcp_0abc",
+        "server_label": "docs",
+        "name": "read_wiki_structure",
+        "arguments": '{"repoName": "BerriAI/litellm"}',
+        **replayed_result,
+    }
+    assert items[2]["role"] == "assistant"
+    assert sum(item.get("type") == "mcp_call" for item in items) == 1
+
+
+def _mcp_tool_use(call_id: str) -> dict[str, object]:
+    return {**WIKI_MCP_TOOL_USE, "id": call_id}
+
+
+def _mcp_tool_result(call_id: str, text: str) -> dict[str, object]:
+    return {"type": "mcp_tool_result", "tool_use_id": call_id, "content": [{"type": "text", "text": text}]}
+
+
+@pytest.mark.parametrize(
+    "assistant_content",
+    (
+        [
+            _mcp_tool_use("mcp_a"),
+            _mcp_tool_use("mcp_b"),
+            _mcp_tool_result("mcp_a", "result a"),
+            _mcp_tool_result("mcp_b", "result b"),
+        ],
+        [
+            _mcp_tool_use("mcp_a"),
+            {"type": "text", "text": "Checking the other repo too."},
+            _mcp_tool_use("mcp_b"),
+            _mcp_tool_result("mcp_b", "result b"),
+            _mcp_tool_result("mcp_a", "result a"),
+        ],
+    ),
+    ids=("results-after-both-uses", "text-between-use-and-result"),
+)
+def test_a_replayed_mcp_call_keeps_its_result_wherever_the_result_block_sits(
+    assistant_content: list[dict[str, object]],
+) -> None:
+    items: Final = _translate_messages(
+        [
+            {"role": "user", "content": "Read both wikis"},
+            {"role": "assistant", "content": assistant_content},
+            {"role": "user", "content": "Compare them"},
+        ]
+    )
+
+    assert {item["id"]: item.get("output") for item in items if item.get("type") == "mcp_call"} == {
+        "mcp_a": "result a",
+        "mcp_b": "result b",
+    }
 
 
 _TOOL_SEARCH_SCHEMA: Final = {

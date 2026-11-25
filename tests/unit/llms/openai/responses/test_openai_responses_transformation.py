@@ -3141,6 +3141,14 @@ class TestCacheControlBecomesPromptCacheBreakpoint:
         )
 
     @pytest.mark.parametrize(
+        ("cache_control", "breakpoint"),
+        [
+            pytest.param({**_EPHEMERAL, "ttl": "1h"}, {**_EXPLICIT_BREAKPOINT, "ttl": "12h"}, id="1h-asks-for-12h"),
+            pytest.param({**_EPHEMERAL, "ttl": "5m"}, _EXPLICIT_BREAKPOINT, id="5m-keeps-the-request-ttl"),
+            pytest.param(_EPHEMERAL, _EXPLICIT_BREAKPOINT, id="no-ttl-keeps-the-request-ttl"),
+        ],
+    )
+    @pytest.mark.parametrize(
         ("litellm_params", "extra_params"),
         [
             pytest.param(_OPENAI_API, {}, id="api.openai.com"),
@@ -3152,29 +3160,33 @@ class TestCacheControlBecomesPromptCacheBreakpoint:
         ],
     )
     def test_marks_reach_gpt_5_6_as_explicit_breakpoints_on_the_same_blocks(
-        self, litellm_params: GenericLiteLLMParams, extra_params: dict[str, object]
+        self,
+        litellm_params: GenericLiteLLMParams,
+        extra_params: dict[str, object],
+        cache_control: dict[str, str],
+        breakpoint: dict[str, str],
     ) -> None:
-        result = self._transform("gpt-5.6", litellm_params, {**_EPHEMERAL, "ttl": "1h"}, extra_params)
+        result = self._transform("gpt-5.6", litellm_params, cache_control, extra_params)
 
         assert result["input"] == [
             {
                 "role": "developer",
                 "content": [
                     {"type": "input_text", "text": "Be concise."},
-                    {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                    {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": breakpoint},
                 ],
             },
             {
                 "type": "message",
                 "role": "user",
-                "content": [{"type": "input_text", "text": "look", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+                "content": [{"type": "input_text", "text": "look", "prompt_cache_breakpoint": breakpoint}],
             },
             {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "looking"}]},
             {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
             {
                 "type": "function_call_output",
                 "call_id": "call_1",
-                "output": [{"type": "input_text", "text": "found", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+                "output": [{"type": "input_text", "text": "found", "prompt_cache_breakpoint": breakpoint}],
             },
             {"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{}"},
             {
@@ -3182,7 +3194,7 @@ class TestCacheControlBecomesPromptCacheBreakpoint:
                 "call_id": "call_2",
                 "output": [
                     {"type": "input_text", "text": "first"},
-                    {"type": "input_text", "text": "last", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                    {"type": "input_text", "text": "last", "prompt_cache_breakpoint": breakpoint},
                 ],
             },
         ]
@@ -4643,6 +4655,30 @@ def test_drop_params_keeps_only_a_ttl_the_target_responses_api_accepts(
     trimmed: Final = _transformed_input(config, input, GenericLiteLLMParams(drop_params=True))
     assert _single_part(trimmed) == {**_PARTS["input_text"], "prompt_cache_breakpoint": wire_marker}
     assert _transformed_input(config, input, GenericLiteLLMParams(drop_params=False)) == input
+
+
+@pytest.mark.parametrize(
+    "config, breakpoint",
+    [
+        (OpenAIResponsesAPIConfig(), {"mode": "explicit", "ttl": "12h"}),
+        (AzureAIResponsesAPIConfig(), {"mode": "explicit"}),
+    ],
+    ids=("openai-asks-for-12h", "azure-ai-takes-no-12h"),
+)
+def test_a_1h_cache_control_asks_for_12h_only_where_the_responses_api_takes_it(
+    monkeypatch: pytest.MonkeyPatch, config: BaseResponsesAPIConfig, breakpoint: Mapping[str, str]
+) -> None:
+    """Azure AI Foundry Responses answered 400 for a 12h breakpoint ttl on 2026-10-30."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    one_hour_mark: Final = [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [{**_PARTS["input_text"], "cache_control": {"type": "ephemeral", "ttl": "1h"}}],
+        }
+    ]
+    transformed: Final = _transformed_input(config, one_hour_mark, GenericLiteLLMParams())
+    assert _single_part(transformed) == {**_PARTS["input_text"], "prompt_cache_breakpoint": breakpoint}
 
 
 @pytest.mark.parametrize(
