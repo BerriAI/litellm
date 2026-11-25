@@ -9,7 +9,7 @@ import asyncio
 import contextvars
 from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from functools import partial
-from typing import Final, cast
+from typing import Final, TypeVar, cast
 
 from pydantic import TypeAdapter, ValidationError
 
@@ -21,9 +21,11 @@ from litellm.litellm_core_utils.bridged_audio_output import (
     bridged_audio_output_request,
     raise_audio_output_refusal,
 )
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, drops_unsupported_params
 from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.common_utils import (
+    AnthropicError,
     strip_provider_specific_fields_from_anthropic_messages,
     tools_marked_for_a_tool_config_point,
 )
@@ -43,7 +45,20 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes
 from litellm.utils import client
 
-from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler, request_safeguards_evaluator
+from ..adapters.handler import (
+    LiteLLMMessagesToCompletionTransformationHandler,
+    model_info_with_request_base_model,
+    request_safeguards_evaluator,
+)
+from ..deferred_tools import (
+    native_messages_deferred_tools_refusal,
+    native_stop_sequences_refusal,
+    native_tool_search_name,
+    refusal_unless_dropped,
+    routed_deferred_tools_mode,
+    unknown_deferred_tools_refusal,
+    unusable_deferred_tools_refusal,
+)
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
 from ..safeguards import (
     SafeguardsEvaluator,
@@ -98,12 +113,16 @@ def _should_route_to_responses_api(
     custom_llm_provider: str | None,
     requested_model: str | None = None,
     resolved_model: str | None = None,
+    native_deferred_tools: bool = False,
 ) -> bool:
     """Return True when the request should use the Responses API path.
 
     Set ``litellm.use_chat_completions_url_for_anthropic_messages = True`` to
-    opt out and route OpenAI/Azure requests through chat/completions instead.
+    opt out and route OpenAI/Azure requests through chat/completions instead,
+    except on deployments with ``model_info.deferred_tools: native``.
     """
+    if native_deferred_tools:
+        return True
     if litellm.use_chat_completions_url_for_anthropic_messages:
         return False
     if custom_llm_provider in RESPONSES_API_PROVIDERS:
@@ -111,6 +130,31 @@ def _should_route_to_responses_api(
     if custom_llm_provider is None or requested_model is None or resolved_model is None:
         return False
     return _responses_mode_is_lost_by_prefix_strip(requested_model, resolved_model, custom_llm_provider)
+
+
+def _refuse_deferred_tools(refusal: str | None, drop_params: bool) -> None:
+    kept_refusal: Final = refusal_unless_dropped(refusal, drop_params)
+    if kept_refusal is not None:
+        raise AnthropicError(status_code=400, message=kept_refusal)
+
+
+_ToolChoice: Final = TypeVar("_ToolChoice", bound=Mapping[str, object])
+
+
+def _without_forced_native_tool_search(
+    tool_choice: _ToolChoice | None, tool_search_name: str | None, drop_params: bool
+) -> _ToolChoice | None:
+    if tool_search_name is None or (as_str_mapping(tool_choice) or {}).get("name") != tool_search_name:
+        return tool_choice
+    if drop_params:
+        return None
+    raise AnthropicError(
+        status_code=400,
+        message=(
+            f"tool_choice cannot force {tool_search_name} when model_info.deferred_tools is native, since the Responses "
+            "API has no way to force a tool search. Remove tool_choice, or set drop_params to drop it"
+        ),
+    )
 
 
 async def _with_native_safeguard_results(
@@ -612,14 +656,54 @@ def anthropic_messages_handler(
     anthropic_messages_provider_config: Final = _native_messages_config(
         model, custom_llm_provider, kwargs.get("model_info")
     )
+    deployment_model_info: Final = as_str_mapping(kwargs.get("model_info"))
+    drops_deferred_tools_setting: Final = drops_unsupported_params(litellm_params.drop_params)
+    _refuse_deferred_tools(unknown_deferred_tools_refusal(deployment_model_info), drops_deferred_tools_setting)
     if anthropic_messages_provider_config is None:
         # Route to Responses API for OpenAI / Azure, chat/completions for everything else.
-        if kwargs.get("compaction") is None and _should_route_to_responses_api(
-            custom_llm_provider, original_model, model
-        ):
-            return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
+        request_tools: Final = cast("list[dict[str, object]] | None", tools)  # cast-ok: the handler takes untyped dicts
+        route_model_info: Final = model_info_with_request_base_model(kwargs)
+        _refuse_deferred_tools(
+            unusable_deferred_tools_refusal(route_model_info, custom_llm_provider, model, api_base),
+            drops_deferred_tools_setting,
+        )
+        deferred_tools: Final = routed_deferred_tools_mode(route_model_info, custom_llm_provider, model, api_base)
+        native_deferred_tools: Final = deferred_tools == "native"
+        routes_to_responses_api: Final = _should_route_to_responses_api(
+            custom_llm_provider,
+            original_model,
+            model,
+            native_deferred_tools=native_deferred_tools and not stop_sequences,
+        )
+        _refuse_deferred_tools(
+            None
+            if routes_to_responses_api
+            else native_stop_sequences_refusal(deferred_tools, stop_sequences, request_tools),
+            drops_deferred_tools_setting,
+        )
+        request_messages: Final = cast("list[dict[str, object]]", messages)  # cast-ok: the handler takes untyped dicts
+        request_tool_choice: Final = cast(  # cast-ok: the handler takes untyped dicts
+            "dict[str, object] | None", tool_choice
+        )
+        from ..deferred_tool_emulation import deferred_tool_emulation, deferred_tools_messages
+
+        emulation: Final = deferred_tool_emulation(
+            deployment_model_info, tools=request_tools, tool_choice=request_tool_choice, messages=request_messages
+        )
+        _refuse_deferred_tools(
+            None if emulation is None else emulation.strict_input_refusal(), drops_deferred_tools_setting
+        )
+        bridged_messages: Final = list(deferred_tools_messages(request_messages, emulation, deferred_tools))
+        bridged_tools: Final = (
+            request_tools if emulation is None or request_tools is None else list(emulation.tools(request_tools))
+        )
+        bridged_tool_choice: Final = (
+            request_tool_choice if emulation is None else emulation.tool_choice(request_tool_choice)
+        )
+        if kwargs.get("compaction") is None and routes_to_responses_api:
+            responses_result: Final = LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 max_tokens=max_tokens,
-                messages=messages,
+                messages=bridged_messages,
                 model=original_model,
                 metadata=metadata,
                 stop_sequences=stop_sequences,
@@ -629,9 +713,13 @@ def anthropic_messages_handler(
                 ),
                 temperature=temperature,
                 thinking=thinking,
-                tool_choice=tool_choice,
+                tool_choice=_without_forced_native_tool_search(
+                    bridged_tool_choice,
+                    native_tool_search_name(deployment_model_info, custom_llm_provider, request_tools),
+                    drops_deferred_tools_setting,
+                ),
                 tools=cast(  # cast-ok: dict tools already fit the handler's union
-                    "list[AllAnthropicToolsValues | dict[str, object]] | None", tools
+                    "list[AllAnthropicToolsValues | dict[str, object]] | None", bridged_tools
                 ),
                 top_k=top_k,
                 top_p=top_p,
@@ -642,6 +730,7 @@ def anthropic_messages_handler(
                 custom_llm_provider=custom_llm_provider,
                 **kwargs,
             )
+            return responses_result if emulation is None else emulation.restored(responses_result)
 
         chat_kwargs: Final = bridged_audio_output_request(kwargs, model, custom_llm_provider)
         if isinstance(chat_kwargs, AudioOnlyModel | AudioRequested):
@@ -650,9 +739,9 @@ def anthropic_messages_handler(
         # ``async_anthropic_messages_handler`` so it can ``await`` the
         # summarization model for ``compact_20260112``. ``context_management``
         # is passed through as a regular kwarg.
-        return LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
+        chat_result: Final = LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
             max_tokens=max_tokens,
-            messages=messages,
+            messages=bridged_messages,
             model=original_model,
             metadata=metadata,
             stop_sequences=stop_sequences,
@@ -662,8 +751,8 @@ def anthropic_messages_handler(
             ),
             temperature=temperature,
             thinking=thinking,
-            tool_choice=tool_choice,
-            tools=cast("list[dict[str, object]] | None", tools),  # cast-ok: dict tools fit the adapter's declared union
+            tool_choice=bridged_tool_choice,
+            tools=bridged_tools,
             top_k=top_k,
             top_p=top_p,
             _is_async=is_async,
@@ -673,12 +762,16 @@ def anthropic_messages_handler(
             custom_llm_provider=custom_llm_provider,
             **chat_kwargs,  # pyright: ignore[reportArgumentType]  # output_format only arrives through untyped **kwargs
         )
+        return chat_result if emulation is None else emulation.restored(chat_result)
 
     if custom_llm_provider is None:
         raise ValueError(
             f"custom_llm_provider is required for Anthropic messages, passed in model={model}, custom_llm_provider={custom_llm_provider}"
         )
 
+    _refuse_deferred_tools(
+        native_messages_deferred_tools_refusal(deployment_model_info, custom_llm_provider), drops_deferred_tools_setting
+    )
     request_kwargs: Final = cast(dict[str, object], kwargs)  # cast-ok: **kwargs of the handler is untyped
     marked_tools: Final = tools_marked_for_a_tool_config_point(
         local_vars.get("tools"), request_kwargs.pop("cache_control_injection_points", None)

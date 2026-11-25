@@ -7,6 +7,7 @@ with guardrail transformations, specifically testing edge cases with empty choic
 
 import json
 import logging
+from collections.abc import Mapping
 from typing import Any, Literal, Optional, Final
 from unittest.mock import MagicMock, patch
 
@@ -157,6 +158,48 @@ class MockStructuredMaskingGuardrail(CustomGuardrail):
                 {**message, "content": self._mask_content(message.get("content"))} for message in structured
             ]
         return masked
+
+
+class OnlyDeferredToolsGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[LiteLLMLoggingObj] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {
+            **inputs,
+            "tools": [tool for tool in inputs.get("tools") or [] if tool["function"]["name"] == "mcp__weather__get_forecast"],
+        }
+
+
+class ToolDroppingGuardrail(CustomGuardrail):
+    def __init__(self, tool_name: str) -> None:
+        super().__init__(guardrail_name="test")
+        self._tool_name: Final = tool_name
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[LiteLLMLoggingObj] = None,
+    ) -> GenericGuardrailAPIInputs:
+        kept: Final = [tool for tool in inputs.get("tools") or [] if tool["function"]["name"] != self._tool_name]
+        return {**inputs, "tools": kept}
+
+
+_DEFERRED_TOOL_REQUEST_TOOLS: Final = (
+    {"name": "Read", "description": "Read a file", "input_schema": {"type": "object", "properties": {}}},
+    {"name": "ToolSearch", "description": "Search tools", "input_schema": {"type": "object", "properties": {}}},
+    {
+        "name": "mcp__weather__get_forecast",
+        "description": "Get the forecast for a city",
+        "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}},
+        "defer_loading": True,
+    },
+)
 
 
 class TestAnthropicMessagesHandlerStreamingRequestData:
@@ -636,6 +679,64 @@ class TestAnthropicMessagesHandlerInputProcessing:
 
         assert data.get("litellm_metadata", {}).get("guardrails")
         assert guardrail.dynamic_params == {"policy_id": "policy-123"}
+
+    @pytest.mark.asyncio
+    async def test_deferred_tools_keep_defer_loading_through_a_guardrail_round_trip(self):
+        data = {
+            "model": "claude-sonnet-5-5",
+            "messages": [{"role": "user", "content": "What is the forecast for Paris?"}],
+            "tools": [dict(tool) for tool in _DEFERRED_TOOL_REQUEST_TOOLS],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=MockPassThroughGuardrail(guardrail_name="test")
+        )
+
+        assert {tool["name"]: tool.get("defer_loading") for tool in data["tools"]} == {
+            "Read": None,
+            "ToolSearch": None,
+            "mcp__weather__get_forecast": True,
+        }
+
+    @pytest.mark.asyncio
+    async def test_a_guardrail_that_keeps_only_deferred_tools_sends_them_loaded_up_front(self):
+        data = {
+            "model": "claude-sonnet-5-5",
+            "messages": [{"role": "user", "content": "What is the forecast for Paris?"}],
+            "tools": [dict(tool) for tool in _DEFERRED_TOOL_REQUEST_TOOLS],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=OnlyDeferredToolsGuardrail(guardrail_name="test")
+        )
+
+        assert [(tool["name"], tool.get("defer_loading")) for tool in data["tools"]] == [
+            ("mcp__weather__get_forecast", None)
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("dropped", "expected_deferral"),
+        [("ToolSearch", None), ("Read", True)],
+        ids=["tool-search-removed", "tool-search-kept"],
+    )
+    async def test_deferred_tools_load_up_front_only_once_the_guardrail_removed_tool_search(
+        self, dropped: str, expected_deferral: bool | None
+    ):
+        data = {
+            "model": "claude-sonnet-5-5",
+            "messages": [{"role": "user", "content": "What is the forecast for Paris?"}],
+            "tools": [dict(tool) for tool in _DEFERRED_TOOL_REQUEST_TOOLS],
+        }
+
+        await AnthropicMessagesHandler().process_input_messages(
+            data=data, guardrail_to_apply=ToolDroppingGuardrail(tool_name=dropped)
+        )
+
+        assert [(tool["name"], tool.get("defer_loading")) for tool in data["tools"]] == [
+            *((str(tool["name"]), None) for tool in _DEFERRED_TOOL_REQUEST_TOOLS[:2] if tool["name"] != dropped),
+            ("mcp__weather__get_forecast", expected_deferral),
+        ]
 
     @pytest.mark.asyncio
     async def test_provider_native_tools_survive_guardrail_round_trip(self):
