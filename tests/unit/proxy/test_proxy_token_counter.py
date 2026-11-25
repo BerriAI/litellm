@@ -6897,15 +6897,8 @@ async def test_responses_count_on_claude_counts_the_turns_previous_response_id_r
 async def test_responses_count_on_claude_rejects_a_previous_response_id_with_no_stored_turns_on_that_param(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    with (
-        patch.object(
-            ResponsesSessionHandler,
-            "get_all_spend_logs_for_previous_response_id",
-            new_callable=AsyncMock,
-            return_value=[],
-        ),
-        pytest.raises(ProxyException) as rejected,
-    ):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", SimpleNamespace(db=_SpendLogsTable(())))
+    with pytest.raises(ProxyException) as rejected:
         await _claude_count(
             monkeypatch,
             {},
