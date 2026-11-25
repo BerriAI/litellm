@@ -1249,7 +1249,7 @@ openai_compatible_providers: Final[list[str]] = [
     "prism",
     "hostinger_router",
     "sail",
-    "kimchi",  # Kimchi - JSON-configured provider
+    "kimchi",
     "reka",
     "streamlake",
     "wally",

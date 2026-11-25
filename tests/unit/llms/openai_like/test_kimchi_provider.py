@@ -1,12 +1,3 @@
-"""
-Tests for the Kimchi provider identity.
-
-Kimchi exposes an OpenAI-compatible /v1/chat/completions surface at
-https://llm.kimchi.dev/openai/v1. Its provider identity must resolve to a
-distinct `kimchi` slug so OpenAI-specific pricing and provider-level reporting
-never apply to traffic routed through Kimchi.
-"""
-
 import json
 from pathlib import Path
 from typing import Final
