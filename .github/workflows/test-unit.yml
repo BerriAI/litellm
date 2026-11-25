@@ -38,7 +38,7 @@ jobs:
       - name: Detect relevant changes
         id: changes
         timeout-minutes: 2
-        uses: ./.github/actions/detect-changes
+        uses: $/.github/actions/detect-changes
 
       - name: Build the gateway wheel only for runs of the full unit matrix
         id: scope
@@ -62,7 +62,7 @@ jobs:
         id: cost-map-only
         if: steps.changes.outputs.decision != 'skip' && github.event_name == 'pull_request'
         timeout-minutes: 2
-        uses: ./.github/actions/detect-changes
+        uses: $/.github/actions/detect-changes
         with:
           category: cost-map-only
 
@@ -70,7 +70,7 @@ jobs:
         id: bridge
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 20
-        uses: ./.github/actions/build-rust-bridge
+        uses: $/.github/actions/build-rust-bridge
         with:
           gateway: ${{ steps.scope.outputs.gateway }}
           save-cache: ${{ github.ref == 'refs/heads/main' }}
@@ -1036,7 +1036,7 @@ jobs:
       - name: Detect relevant changes
         id: changes
         timeout-minutes: 2
-        uses: ./.github/actions/detect-changes
+        uses: $/.github/actions/detect-changes
 
       - name: Set up Python
         if: steps.changes.outputs.decision != 'skip'
@@ -1048,19 +1048,19 @@ jobs:
       - name: Set up uv
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
       - name: Cache uv dependencies
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
-        uses: ./.github/actions/cache-uv-downloads
+        uses: $/.github/actions/cache-uv-downloads
 
       - name: Set up the Rust build
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
-        uses: ./.github/actions/rust-bridge
+        uses: $/.github/actions/rust-bridge
         with:
           artifact: ${{ needs.rust-bridge.outputs.artifact }}
 
@@ -1099,7 +1099,7 @@ jobs:
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
-        uses: ./.github/actions/cache-prisma-binaries
+        uses: $/.github/actions/cache-prisma-binaries
 
       - name: Generate Prisma client
         if: steps.changes.outputs.decision != 'skip'
@@ -1350,7 +1350,7 @@ jobs:
       - name: Detect relevant changes
         id: changes
         timeout-minutes: 2
-        uses: ./.github/actions/detect-changes
+        uses: $/.github/actions/detect-changes
 
       - name: Set up Python
         if: steps.changes.outputs.decision != 'skip'
@@ -1362,14 +1362,14 @@ jobs:
       - name: Set up uv
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
       - name: Cache uv dependencies
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
-        uses: ./.github/actions/cache-uv-downloads
+        uses: $/.github/actions/cache-uv-downloads
 
       - name: Checkout litellm-docs into docs/my-website (for documentation_tests)
         if: steps.changes.outputs.decision != 'skip'
@@ -1382,7 +1382,7 @@ jobs:
       - name: Download the Rust bridge
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
-        uses: ./.github/actions/rust-bridge
+        uses: $/.github/actions/rust-bridge
         with:
           artifact: ${{ needs.rust-bridge.outputs.artifact }}
 
@@ -1397,7 +1397,7 @@ jobs:
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
-        uses: ./.github/actions/cache-prisma-binaries
+        uses: $/.github/actions/cache-prisma-binaries
 
       - name: Generate Prisma client
         if: steps.changes.outputs.decision != 'skip'
@@ -1447,7 +1447,7 @@ jobs:
 
       - name: Detect relevant changes
         id: changes
-        uses: ./.github/actions/detect-changes
+        uses: $/.github/actions/detect-changes
         with:
           category: ui
 
@@ -1529,7 +1529,7 @@ jobs:
 
       - name: Detect relevant changes
         id: changes
-        uses: ./.github/actions/detect-changes
+        uses: $/.github/actions/detect-changes
 
       - name: Checkout litellm-docs into docs/my-website (for documentation_tests)
         if: steps.changes.outputs.decision != 'skip'
@@ -1547,7 +1547,7 @@ jobs:
 
       - name: Set up uv
         if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
@@ -1575,7 +1575,7 @@ jobs:
 
       - name: Cache the Rust build
         if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/cache-cargo-build
+        uses: $/.github/actions/cache-cargo-build
 
       - name: Install dependencies
         if: steps.changes.outputs.decision != 'skip'
@@ -1584,7 +1584,7 @@ jobs:
 
       - name: Cache Prisma binaries
         if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/cache-prisma-binaries
+        uses: $/.github/actions/cache-prisma-binaries
 
       - name: Generate Prisma client
         if: steps.changes.outputs.decision != 'skip'
@@ -1667,7 +1667,7 @@ jobs:
       - name: Detect relevant changes
         id: changes
         timeout-minutes: 2
-        uses: ./.github/actions/detect-changes
+        uses: $/.github/actions/detect-changes
 
       - name: Set up Python
         if: steps.changes.outputs.decision != 'skip'
@@ -1677,14 +1677,14 @@ jobs:
 
       - name: Set up uv
         if: steps.changes.outputs.decision != 'skip'
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
       - name: Set up the Rust bridge
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
-        uses: ./.github/actions/rust-bridge
+        uses: $/.github/actions/rust-bridge
         with:
           artifact: ${{ needs.rust-bridge.outputs.artifact }}
 
@@ -1748,7 +1748,7 @@ jobs:
       - name: Detect relevant changes
         id: changes
         timeout-minutes: 2
-        uses: ./.github/actions/detect-changes
+        uses: $/.github/actions/detect-changes
         with:
           category: redis-compat
 
@@ -1762,19 +1762,19 @@ jobs:
       - name: Set up uv
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 3
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
       - name: Cache uv dependencies
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
-        uses: ./.github/actions/cache-uv-downloads
+        uses: $/.github/actions/cache-uv-downloads
 
       - name: Set up the Rust build
         if: steps.changes.outputs.decision != 'skip'
         timeout-minutes: 5
-        uses: ./.github/actions/rust-bridge
+        uses: $/.github/actions/rust-bridge
         with:
           artifact: ${{ needs.rust-bridge.outputs.artifact }}
 

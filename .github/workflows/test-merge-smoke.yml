@@ -33,13 +33,13 @@ jobs:
       - name: Detect a cost-map-only change
         id: cost-map-only
         if: github.event_name == 'pull_request'
-        uses: ./.github/actions/detect-changes
+        uses: $/.github/actions/detect-changes
         with:
           category: cost-map-only
 
       - name: Build or restore the Rust bridge
         id: bridge
-        uses: ./.github/actions/build-rust-bridge
+        uses: $/.github/actions/build-rust-bridge
         with:
           stale-cost-map: ${{ steps.cost-map-only.outputs.decision == 'run' }}
 
@@ -79,12 +79,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Set up uv
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
       - name: Download the Rust bridge
-        uses: ./.github/actions/rust-bridge
+        uses: $/.github/actions/rust-bridge
         with:
           artifact: ${{ needs.rust-bridge.outputs.artifact }}
 
@@ -168,12 +168,12 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Set up uv
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
       - name: Download the Rust bridge
-        uses: ./.github/actions/rust-bridge
+        uses: $/.github/actions/rust-bridge
         with:
           artifact: ${{ needs.rust-bridge.outputs.artifact }}
 
@@ -214,7 +214,7 @@ jobs:
           python-version: "3.11"
 
       - name: Set up uv
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
@@ -259,7 +259,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: ./.github/actions/setup-uv-with-retries
+        uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
@@ -268,7 +268,7 @@ jobs:
 
       - name: Cache Prisma binaries
         timeout-minutes: 3
-        uses: ./.github/actions/cache-prisma-binaries
+        uses: $/.github/actions/cache-prisma-binaries
 
       - name: Install the published proxy into its own venv
         run: |

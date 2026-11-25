@@ -102,7 +102,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: ./.github/actions/setup-uv-with-retries
+      - uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
@@ -164,7 +164,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - uses: ./.github/actions/setup-uv-with-retries
+      - uses: $/.github/actions/setup-uv-with-retries
         with:
           version: "0.10.9"
 
