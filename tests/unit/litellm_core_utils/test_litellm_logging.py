@@ -15721,6 +15721,15 @@ def test_litellm_logging_no_log_param(monkeypatch, disable_no_log_param):
     )
     assert should_run_managed_files_callback is True
 
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
+
+    should_run_spend_callback = litellm_logging_obj.should_run_callback(
+        callback=ProxyDBLogger(),
+        litellm_params={"no-log": True},
+        event_hook="success_handler",
+    )
+    assert should_run_spend_callback is True
+
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_get_callback_name():

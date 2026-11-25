@@ -175,7 +175,7 @@ class VertexAILlama3StreamingHandler(OpenAIChatCompletionStreamingHandler):
         self.sent_role = False
         self._pending_chunk: ModelResponseStream | None = None
 
-    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+    def chunk_parser(self, chunk: dict[str, object]) -> ModelResponseStream:
         result: Final = super().chunk_parser(chunk)
         if not self.sent_role and result.choices:
             delta: Final = result.choices[0].delta

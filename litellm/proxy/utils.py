@@ -2465,8 +2465,8 @@ class ProxyLogging:
         alerting_threshold: float | None = None,
         redis_cache: RedisCache | None = None,
         alert_types: list[AlertType] | None = None,
-        alerting_args: dict | None = None,
-        alert_to_webhook_url: dict | None = None,
+        alerting_args: dict[str, object] | None = None,
+        alert_to_webhook_url: dict[str, object] | None = None,
         alert_type_config: dict | None = None,
     ):
         updated_slack_alerting: bool = False
@@ -3212,7 +3212,7 @@ class ProxyLogging:
         self,
         callback: CustomGuardrail,
         data: dict[str, object],  # mutable-ok: matches _process_guardrail_callback's own request-payload typing
-        raw_request_snapshot: dict | None,  # mutable-ok: same request-payload shape as data
+        raw_request_snapshot: dict[str, object] | None,  # mutable-ok: same request-payload shape as data
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ) -> dict:  # mutable-ok: callers reassign the loop's own data from this return value
@@ -3412,7 +3412,7 @@ class ProxyLogging:
         user_api_key_dict: UserAPIKeyAuth,
         call_type: str,
         event_hook: str,
-        raw_request_snapshot: dict | None = None,  # mutable-ok: same request-payload shape as data
+        raw_request_snapshot: dict[str, object] | None = None,  # mutable-ok: same request-payload shape as data
         response: LLMResponseTypes | None = None,
     ) -> tuple[dict, LLMResponseTypes | None]:  # mutable-ok: returns the request-payload dict onward
         """

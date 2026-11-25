@@ -69,6 +69,7 @@ from litellm.llms.anthropic.common_utils import (
     anthropic_pass_through_api_base,
     strip_provider_specific_fields_from_anthropic_messages,
 )
+from litellm.llms.anthropic.messages.convertible_blocks import reject_non_string_system_text
 from litellm.llms.anthropic.messages.native import handler
 from litellm.llms.anthropic.messages.native import utils as native_utils
 from litellm.llms.anthropic.messages.native.handler import (
@@ -91,6 +92,7 @@ from litellm.llms.anthropic.messages.native.handler import (
 )
 from litellm.llms.anthropic.messages.native.interceptors import MessagesInterceptor, get_messages_interceptors
 from litellm.llms.anthropic.messages.native.utils import (
+    cleaned_native_messages,
     continues_message_thread,
     diagnostics_refusal,
     message_thread_not_found_body,
@@ -756,6 +758,10 @@ _MISSING_KEY: Final = (
 
 def _rejection(error: Exception, request: Mapping[str, object], request_provider: str, asynchronous: bool) -> Exception:
     """The error Python's handler raises for a request it refuses before sending it."""
+    if getattr(error, "messages_unresolved_rejection", False):
+        return _raised(
+            litellm.BadRequestError(message=str(error), model=str(request["model"]), llm_provider=request_provider)
+        )
     metadata: Final = request.get("metadata")
     if isinstance(metadata, dict):
         try:
@@ -1533,6 +1539,18 @@ class _Answered:
 
 
 def sync_answer(request: Mapping[str, object]) -> _Answered | None:
+    _ = cleaned_native_messages(
+        optional_sequence(request.get("messages")) or (),
+        request.get("drop_params"),
+        model=str(request["model"]),
+        custom_llm_provider=optional_str(request.get("custom_llm_provider")),
+    )
+    reject_non_string_system_text(
+        request.get("system"),
+        request.get("drop_params"),
+        str(request["model"]),
+        optional_str(request.get("custom_llm_provider")),
+    )
     logger: Final = request.get("litellm_logging_obj")
     mock: Final = _mock(request, logger, asynchronous=False)
     if mock is not None:

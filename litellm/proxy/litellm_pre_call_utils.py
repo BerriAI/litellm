@@ -2585,7 +2585,11 @@ class LiteLLMProxyRequestSetup:
         )
         if key_opts_out or request_cache.get("use-cache") is not True or not request_is_allowed:
             return MappingProxyType({})
-        return {k: v for k, v in request_cache.items() if not (k == "s-max-age" and "s-maxage" in key_cache)}
+        return {
+            k: v
+            for k, v in request_cache.items()
+            if k != "namespace" and not (k == "s-max-age" and "s-maxage" in key_cache)
+        }
 
     @staticmethod
     def add_key_level_controls(
@@ -4475,7 +4479,7 @@ def check_if_token_is_service_account(valid_token: UserAPIKeyAuth) -> bool:
 
 def _enforced_params_check(
     request_body: Mapping[str, object],
-    general_settings: dict | None,
+    general_settings: dict[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
     premium_user: bool,
 ) -> bool:
