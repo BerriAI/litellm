@@ -1,0 +1,19 @@
+# With alerting on, Python sends the 80% max budget alert and the soft budget alerts, so every
+# request goes to Python.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  general_settings:
+    master_key: gateway-key
+    alerting: [slack]
+
+requests:
+  - name: the master key
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+    over: general_settings.alerting

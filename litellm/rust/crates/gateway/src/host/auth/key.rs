@@ -380,7 +380,6 @@ fn held(key: &CachedKey) -> Held {
             }),
         budget: carried![
             soft_budget_cooldown,
-            max_budget,
             soft_budget,
             budget_duration,
             budget_reset_at,
@@ -388,6 +387,7 @@ fn held(key: &CachedKey) -> Held {
             budget_fallbacks,
             budget_id,
             model_max_budget,
+            max_budget,
         ],
         aliased: aliases.is_carried(),
     }
@@ -591,6 +591,37 @@ mod tests {
         #[case] field: &str,
     ) {
         assert_eq!(read(&cached(change)).err(), Some(field));
+    }
+
+    #[rstest]
+    #[case::a_max_budget_alone(json!({"max_budget": 5.0}), "max_budget")]
+    #[case::a_soft_budget(json!({"max_budget": 5.0, "soft_budget": 4.0}), "soft_budget")]
+    #[case::a_soft_budget_alert_cooldown(json!({"max_budget": 5.0, "soft_budget_cooldown": true}), "soft_budget_cooldown")]
+    #[case::a_budget_window(json!({"max_budget": 5.0, "budget_limits": [{"budget_duration": "1d", "max_budget": 1.0}]}), "budget_limits")]
+    #[case::a_budget_fallback(json!({"max_budget": 5.0, "budget_fallbacks": {"claude": ["haiku"]}}), "budget_fallbacks")]
+    #[case::a_per_model_budget(json!({"max_budget": 5.0, "model_max_budget": {"claude": {"budget_limit": 1.0}}}), "model_max_budget")]
+    #[case::a_budget_reset(json!({"max_budget": 5.0, "budget_duration": "30d"}), "budget_duration")]
+    fn a_budget_feature_beside_a_max_budget_is_named_over_it(
+        #[case] change: Fields,
+        #[case] column: &str,
+    ) {
+        assert_eq!(
+            read(&cached(change)).map(|key| key.row.budget),
+            Ok(Some(column))
+        );
+    }
+
+    #[rstest]
+    #[case::tags(json!({"tags": ["paid"]}))]
+    #[case::a_temporary_budget_increase(json!({"temp_budget_increase": 5.0, "temp_budget_expiry": "2100-01-01T00:00:00Z"}))]
+    #[case::throttling_once_over_budget(json!({"throttle_on_budget_exceeded": true}))]
+    fn a_budget_feature_in_the_metadata_beside_a_max_budget_is_named_as_the_metadata(
+        #[case] metadata: Fields,
+    ) {
+        assert_eq!(
+            read(&cached(json!({"max_budget": 5.0, "metadata": metadata}))).err(),
+            Some("metadata")
+        );
     }
 
     #[rstest]

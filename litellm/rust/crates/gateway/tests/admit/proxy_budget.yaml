@@ -1,0 +1,19 @@
+# The proxy-wide budget, which Python checks on every request, goes to Python.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+  litellm_settings:
+    max_budget: 100
+  general_settings:
+    master_key: gateway-key
+
+requests:
+  - name: the master key
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: settings
+    over: litellm_settings.max_budget

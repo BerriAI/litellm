@@ -197,6 +197,17 @@ impl Admit {
         (!allowed).then(|| Reason::new(Refused::Credential, "models"))
     }
 
+    /// A key whose model list names a model access group goes to Python, which checks the
+    /// budget the proxy's database may hold for that group (`_model_access_group_max_budget_check`).
+    /// The gateway reads no group budget, so every group the router knows is taken as budgeted,
+    /// even one that does not serve the model asked for.
+    fn access_group_budget(&self, caller: &Authenticated<NativeRows>) -> Option<Reason> {
+        let groups = self.router.registry().access_groups();
+        host::layers(caller)
+            .any(|Layer::Key(models)| models.iter().any(|name| groups.contains_key(name)))
+            .then(|| Reason::new(Refused::Credential, "model_access_group_budget"))
+    }
+
     /// A caller with a budget is checked against it, and holds what the call may cost before it
     /// runs, unless the model is free. Only a `/v1/messages` call to a model the gateway prices as
     /// Python does is budgeted natively, so any other goes to Python. Under
@@ -279,6 +290,7 @@ impl Admit {
         }
         let over_its_caller = authenticated.as_ref().ok().and_then(|caller| {
             self.model_access(caller, &fields)
+                .or_else(|| self.access_group_budget(caller))
                 .or_else(|| token_estimate(caller, parts.uri.path(), &mut fields))
         });
         if let Some(reason) = over_its_caller {

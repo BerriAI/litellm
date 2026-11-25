@@ -10,9 +10,10 @@
 //! or `alerting` goes to Python, and a decision of either fails the call rather than letting it
 //! through unchecked.
 //!
-//! Accepted difference, while the gateway declines every caller that holds a budget: the budgets
-//! are the ones `budgets::counters` plans, so no `budget_limits` window, soft budget, tag, model
-//! access group or per-model budget is checked.
+//! Only the budgets `budgets::counters` plans are checked. A `budget_limits` window, soft budget,
+//! tag, model access group, per-model budget, temporary increase, throttle, budget alert or the
+//! proxy-wide budget is never checked here, since the key column, request or setting that asks
+//! for one sends the call to Python first.
 
 use std::sync::Arc;
 
@@ -576,8 +577,12 @@ mod tests {
 
     #[rstest]
     #[case::the_own_member_budget_before_the_key(Holds { own_member: over(), key: over(), ..Holds::default() }, "TeamMember=u1:t1 ")]
+    #[case::the_key_before_the_project(Holds { project: over(), key: over(), ..Holds::default() }, "Key=key ")]
     #[case::the_project_before_the_team(Holds { team: over(), project: over(), ..Holds::default() }, "Project=p1 ")]
+    #[case::the_team_before_the_organization(Holds { org: over(), team: over(), ..Holds::default() }, "Team=t1 ")]
+    #[case::the_organization_before_the_member(Holds { member_default: over(), org: over(), ..Holds::default() }, "Organization=o1 ")]
     #[case::the_organization_before_the_user(Holds { user: over(), org: over(), ..Holds::default() }, "Organization=o1 ")]
+    #[case::the_user_before_the_end_user(Holds { end_user: over(), user: over(), ..Holds::default() }, "User=u1 over budget")]
     #[case::the_member_before_the_end_user(Holds { end_user: over(), member_default: over(), ..Holds::default() }, "User=u1 in Team=t1 ")]
     #[tokio::test(flavor = "multi_thread")]
     async fn a_caller_over_two_budgets_is_refused_by_the_one_python_checks_first(

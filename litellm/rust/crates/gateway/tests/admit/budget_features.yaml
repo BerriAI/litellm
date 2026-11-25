@@ -1,0 +1,59 @@
+# The budgets the native app does not check send the request to Python before anything is
+# counted: a request that names tags, which a tag budget may hold, and a key that names a model
+# access group, which a group budget may hold.
+config:
+  model_list:
+    - model_name: claude
+      litellm_params:
+        model: anthropic/claude-haiku-5-5
+        api_key: provider-key
+      model_info:
+        access_groups: [haiku]
+  general_settings:
+    master_key: gateway-key
+
+keys:
+  sk-claude: [claude]
+  sk-haiku: [haiku]
+  sk-both: [claude, haiku]
+
+requests:
+  - name: tags in the body
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], tags: [paid]}
+    expect: python
+    reason: body
+    over: unread_key
+
+  - name: tags in the body's metadata
+    headers: {authorization: Bearer gateway-key}
+    body: {model: claude, max_tokens: 16, messages: [], metadata: {tags: [paid]}}
+    expect: python
+    reason: body
+    over: metadata
+
+  - name: tags in the proxy's header
+    headers: {authorization: Bearer gateway-key, x-litellm-tags: paid}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: headers
+    over: proxy_header
+
+  - name: a key granted the model through an access group
+    headers: {authorization: Bearer sk-haiku}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: model_access_group_budget
+
+  - name: a key that names the model and an access group serving it
+    headers: {authorization: Bearer sk-both}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: python
+    reason: credential
+    over: model_access_group_budget
+
+  - name: a key that names the model alone
+    headers: {authorization: Bearer sk-claude}
+    body: {model: claude, max_tokens: 16, messages: []}
+    expect: rust
