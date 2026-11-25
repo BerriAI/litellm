@@ -28,7 +28,8 @@ struct Scenario {
 }
 
 /// `unused` when `store_model_in_db` is off, `loaded` when the config holds what the database
-/// stores, and `unread` when the database could not be read.
+/// stores, `unread` when the database could not be read, and `ui_settings_unread` when it is off
+/// and the UI settings could not be read or layered in.
 #[derive(Clone, Copy, Default, Deserialize)]
 enum Stored {
     #[default]
@@ -38,6 +39,8 @@ enum Stored {
     Loaded,
     #[serde(rename = "unread")]
     Unread,
+    #[serde(rename = "ui_settings_unread")]
+    UiSettingsUnread,
 }
 
 impl From<Stored> for StoredConfig {
@@ -46,6 +49,7 @@ impl From<Stored> for StoredConfig {
             Stored::Unused => Self::Unused,
             Stored::Loaded => Self::Loaded,
             Stored::Unread => Self::Unread,
+            Stored::UiSettingsUnread => Self::UiSettingsUnread,
         }
     }
 }
@@ -127,6 +131,7 @@ impl Sent {
 #[case::database("database")]
 #[case::store_model_in_db("store_model_in_db")]
 #[case::store_model_in_db_unread("store_model_in_db_unread")]
+#[case::ui_settings_unread("ui_settings_unread")]
 #[case::store_model_in_db_objects("store_model_in_db_objects")]
 #[case::router_settings_by_group("router_settings_by_group")]
 #[case::groups_and_fallbacks("groups_and_fallbacks")]
