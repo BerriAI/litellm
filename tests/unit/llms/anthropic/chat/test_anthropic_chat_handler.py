@@ -21,7 +21,7 @@ from litellm.litellm_core_utils.prompt_templates import image_handling
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import message_field, parts_of
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call, make_sync_call
-from litellm.llms.anthropic.common_utils import anthropic_server_tool_call_params
+from litellm.llms.anthropic.common_utils import AnthropicError, anthropic_server_tool_call_params
 from litellm.llms.base_llm.base_utils import response_format_schema, unwrap_response_format_envelope
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
@@ -1475,6 +1475,73 @@ async def test_anthropic_stream_options_return_usage_after_the_finish_chunk(
     assert usage_chunk.usage.cache_read_input_tokens == 12
     assert usage_chunk.usage.cache_creation_input_tokens == 4
     assert json.loads(route.calls[0].request.content)["stream"] is True
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize(
+    "non_object_frame",
+    [
+        "data: 5\n\n",
+        "event: ping\ndata: null\n\n",
+        "data: [1]\n\n",
+        "data: " + '{"a": ' * 100_000 + "1" + "}" * 100_000 + "\n\n",
+        'event: ping\ndata: {"type": "ping", "n": ' + "9" * 5000 + "}\n\n",
+        "data: " + "9" * 5000 + "\n\n",
+    ],
+    ids=["number", "null", "array", "deep-object", "huge-number-in-object", "huge-number"],
+)
+@pytest.mark.parametrize("split_block_start", [False, True], ids=["whole-frames", "after-a-split-frame"])
+async def test_anthropic_chat_stream_skips_a_data_line_it_cannot_read_as_an_object(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    sync_mode: bool,
+    non_object_frame: str,
+    split_block_start: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_non_object",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-5-5",
+                "content": [],
+                "usage": {"input_tokens": 3, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Blue sky."}},
+        {"type": "content_block_stop", "index": 0},
+        {"type": "message_delta", "delta": {"stop_reason": "end_turn", "stop_sequence": None}, "usage": {"output_tokens": 2}},
+        {"type": "message_stop"},
+    )
+    frames: Final = tuple(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+    block_start: Final = (
+        'event: content_block_start\ndata: {"type": "content_block_start", "index": 0,\n'
+        'data: "content_block": {"type": "text", "text": ""}}\n\n'
+        if split_block_start
+        else frames[1]
+    )
+    respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            text="".join((frames[0], block_start, non_object_frame, *frames[2:])),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    chunks: Final = await _collect_anthropic_stream(
+        sync_mode,
+        model="anthropic/claude-sonnet-5-5",
+        api_key="test-key",
+        messages=[{"role": "user", "content": "Describe the weather"}],
+        stream=True,
+    )
+
+    assert _streamed_text(list(chunks)) == "Blue sky."
+    assert chunks[-1].choices[0].finish_reason == "stop"
 
 
 _SNOOZE_TOOL: Final = {
@@ -4825,3 +4892,91 @@ def test_anthropic_chat_completion_picks_the_beta_row_by_api_base(
         client.close()
 
     assert frozenset(",".join(upstream.anthropic_beta).split(",")) == forwarded_betas
+
+
+_ANTHROPIC_WIRE_REJECTION: Final = (
+    b'{"type":"error","error":{"type":"invalid_request_error","message":"wire says no"},"request_id":"req_wire"}'
+)
+_ANTHROPIC_WIRE_SECRET: Final = "sk-ant-wire-secret-value"
+
+
+class _UnreadAnthropicBody(httpx.SyncByteStream, httpx.AsyncByteStream):
+    def __iter__(self):
+        yield _ANTHROPIC_WIRE_REJECTION
+
+    async def __aiter__(self):
+        yield _ANTHROPIC_WIRE_REJECTION
+
+
+def _anthropic_rejection(stream: bool) -> httpx.MockTransport:
+    return httpx.MockTransport(
+        lambda _request: (
+            httpx.Response(400, stream=_UnreadAnthropicBody())
+            if stream
+            else httpx.Response(400, content=_ANTHROPIC_WIRE_REJECTION)
+        )
+    )
+
+
+def _assert_exposes_anthropic_rejection(error: litellm.BadRequestError) -> None:
+    assert error.response.status_code == 400
+    assert error.response.text == _ANTHROPIC_WIRE_REJECTION.decode()
+    assert error.response.json() == json.loads(_ANTHROPIC_WIRE_REJECTION)
+    assert "x-api-key" not in error.response.request.headers
+    assert _ANTHROPIC_WIRE_SECRET not in repr(error.response.request.headers.raw)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_completion_error_exposes_the_anthropic_reply(stream: bool):
+    client: Final = HTTPHandler()
+    client.client = httpx.Client(transport=_anthropic_rejection(stream))
+
+    with pytest.raises(litellm.BadRequestError) as caught:
+        litellm.completion(
+            model="anthropic/claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key=_ANTHROPIC_WIRE_SECRET,
+            stream=stream,
+            client=client,
+        )
+
+    _assert_exposes_anthropic_rejection(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_acompletion_error_exposes_the_anthropic_reply(stream: bool):
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=_anthropic_rejection(stream))
+
+    with pytest.raises(litellm.BadRequestError) as caught:
+        await litellm.acompletion(
+            model="anthropic/claude-sonnet-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            api_key=_ANTHROPIC_WIRE_SECRET,
+            stream=stream,
+            client=client,
+        )
+
+    _assert_exposes_anthropic_rejection(caught.value)
+
+
+def test_make_sync_call_exposes_a_rejection_the_client_returned_without_raising():
+    request: Final = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    client: Final = MagicMock()
+    client.post.return_value = httpx.Response(400, content=_ANTHROPIC_WIRE_REJECTION, request=request)
+
+    with pytest.raises(AnthropicError) as caught:
+        make_sync_call(
+            client=client,
+            api_base="https://api.anthropic.com/v1/messages",
+            headers={},
+            data="{}",
+            model="claude-sonnet-4-5",
+            messages=[],
+            logging_obj=MagicMock(),
+            timeout=None,
+            json_mode=False,
+        )
+
+    assert caught.value.response.json() == json.loads(_ANTHROPIC_WIRE_REJECTION)

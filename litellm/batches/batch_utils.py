@@ -1,5 +1,5 @@
 import json
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 from enum import Enum
@@ -10,9 +10,10 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.batches.native_batch_input import bedrock_batch_input, vertex_batch_input
 from litellm.litellm_core_utils import batch_utils as core_batch_utils
 from litellm.litellm_core_utils.cloud_storage_security import stored_s3_bucket_kwargs
-from litellm.litellm_core_utils.core_helpers import decoded_json_object
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, decoded_json_object
 from litellm.litellm_core_utils.get_litellm_params import AWS_CREDENTIAL_KWARGS_KEYS
 from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
@@ -22,7 +23,7 @@ from litellm.llms.vertex_ai.batches.transformation import (
     native_vertex_batch_row_model,
     native_vertex_batch_row_stats,
 )
-from litellm.types.llms.openai import Batch
+from litellm.types.llms.openai import Batch, BatchInputFormat
 from litellm.types.utils import ModelInfo, Usage
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 from litellm.utils import token_counter
@@ -200,6 +201,7 @@ class _BatchOutputLineStats:
     reasoning_tokens: int
     model: str | None
     usage: Usage | None
+    provider_failed: bool = False
 
 
 def _classify_output_line_stats(
@@ -213,13 +215,38 @@ def _classify_output_line_stats(
     a second read of a potentially huge output file. A line the provider reported as
     failed yields ``PROVIDER_FAILED``; a successful line litellm could not price
     yields ``UNCOSTABLE`` and still counts as a successful request billed at $0, so
-    the counts stay reconcilable with the provider's own ``request_counts``."""
-    for entry in entries:
-        if not _batch_response_was_successful(entry, custom_llm_provider):
-            yield _LineOutcome.PROVIDER_FAILED
-            continue
-        stats = _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
-        yield stats if stats is not None else _LineOutcome.UNCOSTABLE
+    the counts stay reconcilable with the provider's own ``request_counts``. A failed
+    line that still reports usage was billed by the provider, so it is priced and
+    counted as failed."""
+    return (
+        _classify_output_line(entry, custom_llm_provider, model_name, model_info, vertex_location) for entry in entries
+    )
+
+
+def _classify_output_line(
+    entry: Mapping[str, object],
+    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    model_name: str | None,
+    model_info: ModelInfo | None,
+    vertex_location: str | None,
+) -> _BatchOutputLineStats | _LineOutcome:
+    if _batch_response_was_successful(entry, custom_llm_provider):
+        stats: Final = _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
+        return stats if stats is not None else _LineOutcome.UNCOSTABLE
+    billed: Final = (
+        _safe_output_line_stats(entry, custom_llm_provider, model_name, model_info, vertex_location)
+        if _failed_line_reports_usage(entry, custom_llm_provider)
+        else None
+    )
+    return _LineOutcome.PROVIDER_FAILED if billed is None else dataclasses_replace(billed, provider_failed=True)
+
+
+def _failed_line_reports_usage(entry: Mapping[str, object], custom_llm_provider: str) -> bool:
+    if custom_llm_provider in ("anthropic", "bedrock"):
+        return False
+    envelope: Final = as_str_mapping(entry.get("response"))
+    body: Final = None if envelope is None else as_str_mapping(envelope.get("body"))
+    return body is not None and as_str_mapping(body.get("usage")) is not None
 
 
 def _safe_output_line_stats(
@@ -390,7 +417,12 @@ def _aggregate_batch_cost_usage_models(
         _classify_output_line_stats(entries, custom_llm_provider, model_name, model_info, vertex_location)
     )
     line_stats: Final = tuple(result for result in all_results if isinstance(result, _BatchOutputLineStats))
-    failed_requests: Final = sum(1 for result in all_results if result is _LineOutcome.PROVIDER_FAILED)
+    failed_requests: Final = sum(
+        1
+        for result in all_results
+        if result is _LineOutcome.PROVIDER_FAILED
+        or (isinstance(result, _BatchOutputLineStats) and result.provider_failed)
+    )
     successful_requests: Final = len(all_results) - failed_requests
 
     cache_token_params: Final = {
@@ -740,14 +772,41 @@ def estimate_batch_entry_tokens(raw_line: bytes) -> int:
 _estimate_batch_entry_tokens = estimate_batch_entry_tokens
 
 
-def count_entry_tokens(
-    entry: Mapping[str, object],
-    model_name: str | None = None,
-) -> int:
-    """Token-count a single batch input entry's body (chat / text / embedding)."""
-    body: Final = cast(  # cast-ok: batch payload bodies come from provider JSON
-        Mapping[str, object], entry.get("body", {}) or {}
-    )
+def _count_vertex_row(entry: Mapping[str, object]) -> int | None:
+    request: Final = as_str_mapping(entry.get("request"))
+    body: Final = vertex_batch_input(request) if request is not None else None
+    return _count_batch_body(body) if body is not None else None
+
+
+def _count_bedrock_row(entry: Mapping[str, object]) -> int | None:
+    request: Final = as_str_mapping(entry.get("modelInput"))
+    body: Final = bedrock_batch_input(request) if request is not None else None
+    return _count_batch_body(body) if body is not None else None
+
+
+def _count_openai_row(entry: Mapping[str, object]) -> int | None:
+    body: Final = as_str_mapping(entry.get("body"))
+    return _count_batch_body(body) if body is not None else None
+
+
+def batch_row_counter(input_format: BatchInputFormat) -> Callable[[Mapping[str, object]], int | None] | None:
+    match input_format:
+        case BatchInputFormat.VERTEX:
+            return _count_vertex_row
+        case BatchInputFormat.BEDROCK:
+            return _count_bedrock_row
+        case BatchInputFormat.OPENAI:
+            return _count_openai_row
+        case BatchInputFormat.UNKNOWN:
+            return None
+
+
+def count_entry_tokens(entry: Mapping[str, object], model_name: str | None = None) -> int:
+    body: Final = cast(Mapping[str, object], entry.get("body") or {})  # cast-ok: OpenAI batch bodies are JSON objects
+    return _count_batch_body(body, model_name)
+
+
+def _count_batch_body(body: Mapping[str, object], model_name: str | None = None) -> int:
     model: Final = cast(str, body.get("model", model_name or ""))  # cast-ok: provider batch model names are strings
 
     messages: Final = body.get("messages")
@@ -816,7 +875,7 @@ def _get_batch_job_usage_from_response_body(
         )
         if titan_usage is not None:
             return titan_usage
-        usage_object: Final = response_body.get("usage", None) or {}
+        usage_object: Final = response_body.get("usage", None) or dict[str, object]()
         if custom_llm_provider == "bedrock" and AmazonConverseConfig.is_converse_usage_shape(usage_object):
             return AmazonConverseConfig().usage_from_batch_output(usage_object)
         anthropic_usage: Final = AnthropicConfig().calculate_usage(
@@ -876,7 +935,7 @@ def _get_response_from_batch_job_output_file(
     _response: Final = cast(  # cast-ok: batch output response comes from provider JSON
         Mapping[str, object], batch_job_output_file.get("response", None) or {}
     )
-    _response_body: Final = _response.get("body", None) or {}
+    _response_body: Final = _response.get("body", None) or dict[str, object]()
     return cast(Mapping[str, object], _response_body)  # cast-ok: batch response body comes from provider JSON
 
 

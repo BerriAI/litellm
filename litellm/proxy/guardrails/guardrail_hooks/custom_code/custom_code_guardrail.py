@@ -174,7 +174,7 @@ class CustomCodeGuardrail(CustomGuardrail):
         self._compile_custom_code()
 
     @staticmethod
-    def get_config_model() -> type[GuardrailConfigModel] | None:
+    def get_config_model() -> type[CustomCodeGuardrailConfigModel] | None:
         """Returns the config model for the UI."""
         return CustomCodeGuardrailConfigModel
 

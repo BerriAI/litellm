@@ -16,6 +16,10 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.anthropic.messages.native.transformation import (
     AnthropicMessagesConfig,
 )
+from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
+from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude_transformation import (
+    AmazonAnthropicClaudeMessagesConfig,
+)
 from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.llms.deepseek.messages.transformation import DeepSeekAnthropicMessagesConfig
 from litellm.llms.minimax.messages.transformation import MinimaxMessagesConfig
@@ -804,6 +808,36 @@ def test_a_request_without_a_thread_still_strips_advisor_blocks_when_the_tool_is
     assert request["messages"][0]["content"] == [{"type": "text", "text": "done"}]
 
 
+_LIST_ID_ADVISOR_TURN: Final = (
+    {"type": "server_tool_use", "id": "srvtoolu_01", "name": "advisor", "input": {}},
+    {"type": "advisor_tool_result", "tool_use_id": ["srvtoolu_01"], "content": "ok"},
+    {"type": "text", "text": "done"},
+)
+
+
+@pytest.mark.parametrize(
+    ("drop_params", "expected"),
+    [
+        pytest.param(None, list(_LIST_ID_ADVISOR_TURN[1:]), id="kept-for-the-provider"),
+        pytest.param(True, [{"type": "text", "text": "done"}], id="dropped-under-drop-params"),
+    ],
+)
+def test_an_advisor_block_with_a_list_id_is_dropped_only_under_drop_params(
+    drop_params: bool | None, expected: list[dict[str, object]]
+) -> None:
+    request: Final = AnthropicMessagesConfig().transform_anthropic_messages_request(  # pyright: ignore[reportUnknownMemberType]  # bare-dict signature
+        model="claude-opus-4-8",
+        messages=[
+            {"role": "assistant", "content": list(_LIST_ID_ADVISOR_TURN)},
+            {"role": "user", "content": "and now?"},
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 64},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params),
+        headers={},
+    )
+    assert request["messages"][0]["content"] == expected
+
+
 @pytest.mark.parametrize(
     "model, expected",
     [
@@ -816,3 +850,152 @@ def test_none_disables_only_optional_default_thinking(model: str, expected: dict
     params: Final[dict[str, object]] = {"reasoning_effort": "none", "output_config": {"effort": "high"}}
     AnthropicMessagesConfig._translate_reasoning_effort_to_anthropic(model, params, 1024, "anthropic")
     assert params == ({"thinking": expected} if expected is not None else {})
+
+
+_SAMPLING_PARAMS: Final[dict[str, object]] = {"temperature": 1, "top_p": 0.9, "top_k": 40}
+_CLAUDE_ROUTES_ON_ANTHROPIC_API_VERSIONS: Final = (
+    pytest.param(AnthropicMessagesConfig, "claude-sonnet-4-6", id="anthropic"),
+    pytest.param(AzureAnthropicMessagesConfig, "claude-sonnet-4-6", id="azure_ai"),
+)
+
+
+def _request_with_sampling_params(
+    config: AnthropicMessagesConfig, model: str, version: str, drop_params: bool, api_base: str | None = None
+) -> dict[str, object]:
+    return config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "Hi"}],
+        anthropic_messages_optional_request_params={"max_tokens": 16, **_SAMPLING_PARAMS},
+        litellm_params=GenericLiteLLMParams(drop_params=drop_params, api_base=api_base),
+        headers={"Anthropic-Version": version},
+    )
+
+
+@pytest.mark.parametrize(("config_class", "model"), _CLAUDE_ROUTES_ON_ANTHROPIC_API_VERSIONS)
+def test_a_claude_route_drops_sampling_params_under_drop_params_from_anthropic_version_2026_10_21(
+    config_class: type[AnthropicMessagesConfig], model: str
+) -> None:
+    request: Final = _request_with_sampling_params(config_class(), model, "2026-10-21", drop_params=True)
+
+    assert request.keys().isdisjoint(_SAMPLING_PARAMS)
+    assert request["max_tokens"] == 16
+
+
+@pytest.mark.parametrize(("config_class", "model"), _CLAUDE_ROUTES_ON_ANTHROPIC_API_VERSIONS)
+def test_a_claude_route_answers_400_naming_the_sampling_params_under_anthropic_version_2026_10_21(
+    config_class: type[AnthropicMessagesConfig], model: str
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError) as raised:
+        _request_with_sampling_params(config_class(), model, "2026-10-21", drop_params=False)
+
+    assert raised.value.status_code == 400
+    assert raised.value.message.startswith(
+        f"litellm.UnsupportedParamsError: {model} does not support temperature=1. anthropic-version 2026-10-21 "
+        "removed temperature, top_p and top_k."
+    )
+
+
+def test_a_later_dated_anthropic_version_also_drops_sampling_params() -> None:
+    request: Final = _request_with_sampling_params(
+        AnthropicMessagesConfig(), "claude-sonnet-4-6", "2027-01-15", drop_params=True
+    )
+
+    assert request.keys().isdisjoint(_SAMPLING_PARAMS)
+
+
+@pytest.mark.parametrize(
+    ("config_class", "model", "version"),
+    [
+        pytest.param(AnthropicMessagesConfig, "claude-sonnet-4-6", "2023-06-01", id="anthropic-2023-06-01"),
+        pytest.param(AnthropicMessagesConfig, "claude-sonnet-4-6", "2026-10-20", id="anthropic-day-before"),
+        pytest.param(AnthropicMessagesConfig, "claude-sonnet-4-6", "latest", id="anthropic-undated"),
+        pytest.param(AzureAnthropicMessagesConfig, "claude-sonnet-4-6", "2023-06-01", id="azure_ai-2023-06-01"),
+        pytest.param(
+            AmazonAnthropicClaudeMessagesConfig,
+            "anthropic.claude-sonnet-4-6",
+            "2026-10-21",
+            id="bedrock_invoke-sends-its-own-version",
+        ),
+        pytest.param(MinimaxMessagesConfig, "MiniMax-M2", "2026-10-21", id="non-anthropic-platform"),
+    ],
+)
+def test_sampling_params_reach_an_upstream_whose_api_version_still_takes_them(
+    config_class: type[AnthropicMessagesConfig], model: str, version: str
+) -> None:
+    request: Final = _request_with_sampling_params(config_class(), model, version, drop_params=False)
+
+    assert {name: request.get(name) for name in _SAMPLING_PARAMS} == _SAMPLING_PARAMS
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
+@pytest.mark.parametrize(
+    ("config_class", "model", "api_base"),
+    [
+        pytest.param(
+            AnthropicMessagesConfig, "deepseek-v4-flash", "https://api.deepseek.com/anthropic", id="anthropic-deepseek"
+        ),
+        pytest.param(AnthropicMessagesConfig, "MiniMax-M3", "https://api.minimax.io/anthropic", id="anthropic-minimax"),
+        pytest.param(
+            AnthropicMessagesConfig,
+            "claude-sonnet-4-6",
+            "https://api.anthropic.com.example/v1",
+            id="anthropic-lookalike-host",
+        ),
+        pytest.param(
+            OpenAILikeAnthropicMessagesConfig,
+            "deepseek-v4-flash",
+            "https://api.deepseek.com/anthropic",
+            id="openai_like-passthrough",
+        ),
+    ],
+)
+def test_a_third_party_anthropic_api_base_receives_sampling_params_under_anthropic_version_2026_10_21(
+    config_class: type[AnthropicMessagesConfig], model: str, api_base: str, drop_params: bool
+) -> None:
+    request: Final = _request_with_sampling_params(config_class(), model, "2026-10-21", drop_params, api_base)
+
+    assert {name: request.get(name) for name in _SAMPLING_PARAMS} == _SAMPLING_PARAMS
+
+
+@pytest.mark.parametrize("drop_params", [True, False], ids=["drop_params", "no_drop_params"])
+@pytest.mark.parametrize("env_name", ["ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"])
+def test_a_third_party_anthropic_base_from_the_environment_receives_sampling_params_under_2026_10_21(
+    monkeypatch: pytest.MonkeyPatch, env_name: str, drop_params: bool
+) -> None:
+    monkeypatch.setenv(env_name, "https://api.minimax.io/anthropic")
+
+    request: Final = _request_with_sampling_params(AnthropicMessagesConfig(), "MiniMax-M3", "2026-10-21", drop_params)
+
+    assert {name: request.get(name) for name in _SAMPLING_PARAMS} == _SAMPLING_PARAMS
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        pytest.param("https://api.anthropic.com", id="anthropic"),
+        pytest.param("https://API.Anthropic.com/v1/messages", id="anthropic-any-case"),
+        pytest.param("https://team.services.ai.azure.com/anthropic", id="foundry"),
+    ],
+)
+def test_anthropic_s_own_api_base_keeps_the_anthropic_version_2026_10_21_sampling_gate(api_base: str) -> None:
+    dropped: Final = _request_with_sampling_params(
+        AnthropicMessagesConfig(), "claude-sonnet-4-6", "2026-10-21", drop_params=True, api_base=api_base
+    )
+    assert dropped.keys().isdisjoint(_SAMPLING_PARAMS)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"anthropic-version 2026-10-21 removed temperature"):
+        _request_with_sampling_params(
+            AnthropicMessagesConfig(), "claude-sonnet-4-6", "2026-10-21", drop_params=False, api_base=api_base
+        )
+
+
+def test_an_anthropic_base_from_the_environment_keeps_the_anthropic_version_2026_10_21_sampling_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com/")
+
+    request: Final = _request_with_sampling_params(
+        AnthropicMessagesConfig(), "claude-sonnet-4-6", "2026-10-21", drop_params=True
+    )
+
+    assert request.keys().isdisjoint(_SAMPLING_PARAMS)

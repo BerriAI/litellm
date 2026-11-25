@@ -2,14 +2,13 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
+import hashlib
 import json
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
-from itertools import accumulate, chain
+from itertools import accumulate, chain, count
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypedDict, TypeVar, Union, cast
 
-from openai.types.chat import ChatCompletion
-from openai.types.responses import Response
 from openai.types.responses.custom_tool_param import CustomToolParam
 from openai.types.responses.response_input_param import (
     FunctionCallOutput,
@@ -46,6 +45,7 @@ from litellm.litellm_core_utils.allowed_tools_tool_choice import (
     responses_allowed_tools_tool_choice,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
     as_str_mapping,
     attribute_or_none,
     drops_unsupported_params,
@@ -54,6 +54,7 @@ from litellm.litellm_core_utils.core_helpers import (
     require_attributes,
 )
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, get_or_create_hidden_params
+from litellm.litellm_core_utils.prompt_templates.common_utils import is_unrendered_block_without_text
 from litellm.litellm_core_utils.prompt_templates.prompt_cache_breakpoint_utils import (
     prompt_cache_breakpoint_with_readable_mode,
     whole_prompt_cache_breakpoint_or_none,
@@ -63,11 +64,13 @@ from litellm.litellm_core_utils.prompt_templates.reasoning_utils import (
     responses_reasoning_items_from_thinking_blocks,
     thinking_blocks_from_reasoning_items,
 )
+from litellm.litellm_core_utils.tool_fields import qualified_member_name
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
 from litellm.llms.custom_httpx.sse_lines import split_sse_lines
+from litellm.llms.vertex_ai.responses.transformation import is_vertex_muse_model
 from litellm.responses.additional_tools import additional_tools_in_input
 from litellm.responses.instructions_length import with_long_instructions_in_input
 from litellm.responses.litellm_completion_transformation.tool_search import is_anthropic_tool_search_chat_tool
@@ -124,8 +127,19 @@ if TYPE_CHECKING:
 
 
 _CHAT_COMPLETION_FIELDS: Final = frozenset((*ModelResponse.model_fields, "usage"))
-_RESPONSES_API_ONLY_FIELDS: Final = frozenset((*Response.model_fields, *ResponsesAPIResponse.model_fields)) - frozenset(
-    ChatCompletion.model_fields
+_HIDDEN_RESPONSES_FIELDS: Final = frozenset(
+    (
+        *ResponsesAPIResponse.model_fields,
+        "background",
+        "completed_at",
+        "conversation",
+        "max_tool_calls",
+        "prompt",
+        "prompt_cache_key",
+        "prompt_cache_retention",
+        "safety_identifier",
+        "top_logprobs",
+    )
 )
 
 
@@ -237,6 +251,30 @@ def _effort_with_requested_summary(nested_effort: object, top_level_effort: obje
             return nested_effort
 
 
+_VERTEX_CREDENTIAL_PARAMS: Final = MappingProxyType(
+    {
+        "vertex_project": ("vertex_project", "vertex_ai_project"),
+        "vertex_location": ("vertex_location", "vertex_ai_location"),
+        "vertex_credentials": ("vertex_credentials", "vertex_ai_credentials"),
+    }
+)
+
+
+def _first_non_empty(params: Mapping[str, object], names: tuple[str, ...]) -> object:
+    return next((params[name] for name in names if params.get(name)), None)
+
+
+def _vertex_credential_params(
+    model: str, custom_llm_provider: str | None, optional_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    if custom_llm_provider != LlmProviders.VERTEX_AI.value or not is_vertex_muse_model(model):
+        return {}
+    found: Final = {
+        name: _first_non_empty(optional_params, aliases) for name, aliases in _VERTEX_CREDENTIAL_PARAMS.items()
+    }
+    return {name: value for name, value in found.items() if value is not None}
+
+
 def _served_provider(litellm_params: Mapping[str, object]) -> str | None:
     custom_llm_provider: Final = litellm_params.get("custom_llm_provider")
     return custom_llm_provider if isinstance(custom_llm_provider, str) else None
@@ -307,7 +345,7 @@ def responses_provider_metadata(response_fields: Mapping[str, object] | None) ->
         {
             key: value
             for key, value in (response_fields.items() if response_fields else ())
-            if value is not None and key not in _CHAT_COMPLETION_FIELDS and key not in _RESPONSES_API_ONLY_FIELDS
+            if value is not None and key not in _CHAT_COMPLETION_FIELDS and key not in _HIDDEN_RESPONSES_FIELDS
         }
     )
 
@@ -505,10 +543,18 @@ def _top_level_namespaces(request: object) -> Iterator[object]:
     return (tool for tool in tools if _json_field(tool, "type") == "namespace")
 
 
+def _member_and_qualified_names(tool: object) -> tuple[str, ...]:
+    names: Final = tuple(chain.from_iterable(_tool_definition_name(member) for member in _namespace_members(tool)))
+    namespace: Final = _json_field(tool, "name") if _json_field(tool, "type") == "namespace" else None
+    qualified: Final = (
+        tuple(qualified_member_name(namespace, name) for name in names) if isinstance(namespace, str) else ()
+    )
+    return (*names, *qualified)
+
+
 def nested_tool_member_names(request: object) -> tuple[str, ...]:
     tools: Final = (*_top_level_namespaces(request), *additional_tools_in_input(_json_field(request, "input")))
-    members: Final = chain.from_iterable(_namespace_members(tool) for tool in tools)
-    return tuple(chain.from_iterable(_tool_definition_name(member) for member in members))
+    return tuple(chain.from_iterable(_member_and_qualified_names(tool) for tool in tools))
 
 
 def _loads_any_tool(message: object, names: frozenset[str]) -> bool:
@@ -894,6 +940,69 @@ def _incomplete_reason_from_response_payload(response_payload: object) -> str | 
 
 class _ChatToolCallDict(ChatCompletionToolCallChunk, total=False):
     provider_specific_fields: Mapping[str, object]
+
+
+_CALL_ID_LIMITED_ITEM_TYPES: Final = frozenset(
+    ("function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output")
+)
+_MAX_CALL_ID_LENGTH: Final = 64
+
+
+def _call_id(item: object) -> str | None:
+    match item:
+        case {"call_id": str() as call_id}:
+            return call_id
+        case _:
+            return None
+
+
+def _overlong_tool_call_id(item: object) -> str | None:
+    match item:
+        case {"type": str() as item_type, "call_id": str() as call_id} if (
+            item_type in _CALL_ID_LIMITED_ITEM_TYPES and len(call_id) > _MAX_CALL_ID_LENGTH
+        ):
+            return call_id
+        case _:
+            return None
+
+
+def _call_id_candidates(call_id: str) -> Iterator[str]:
+    return (
+        hashlib.sha256((f"{attempt}:{call_id}" if attempt else call_id).encode("utf-8", "surrogatepass")).hexdigest()
+        for attempt in count()
+    )
+
+
+def _call_id_replacements(items: Sequence[object], overlong: Sequence[str]) -> Mapping[str, str]:
+    taken: Final = {
+        call_id for call_id in map(_call_id, items) if call_id is not None and len(call_id) <= _MAX_CALL_ID_LENGTH
+    }
+
+    def claim(call_id: str) -> str:
+        replacement: Final = next(candidate for candidate in _call_id_candidates(call_id) if candidate not in taken)
+        taken.add(replacement)
+        return replacement
+
+    return MappingProxyType({call_id: claim(call_id) for call_id in overlong})
+
+
+def _with_replaced_call_id(item: object, replacements: Mapping[str, str]) -> object:
+    call_id: Final = _overlong_tool_call_id(item)
+    if call_id is None:
+        return item
+    fields: Final = cast(Mapping[str, object], item)  # cast-ok: matched a JSON input item above
+    return {**fields, "call_id": replacements[call_id]}
+
+
+def bounded_call_id_fields(request: Mapping[str, object]) -> Mapping[str, object]:
+    items: Final = as_object_list(request.get("input"))
+    if items is None:
+        return MappingProxyType({})
+    overlong: Final = tuple(sorted({call_id for call_id in map(_overlong_tool_call_id, items) if call_id is not None}))
+    if not overlong:
+        return MappingProxyType({})
+    replacements: Final = _call_id_replacements(items, overlong)
+    return MappingProxyType({"input": [_with_replaced_call_id(item, replacements) for item in items]})
 
 
 def tool_call_dict_from_output_item(
@@ -1356,7 +1465,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             {**existing, **update},
         )
 
-    def _build_sanitized_litellm_params(self, litellm_params: dict) -> dict[str, object]:
+    def _build_sanitized_litellm_params(self, litellm_params: Mapping[str, object]) -> dict[str, object]:
         """Build sanitized litellm_params with merged metadata."""
         responses_optional_param_keys: Final = set(ResponsesAPIOptionalRequestParams.__annotations__.keys())
         sanitized: Final[dict[str, object]] = {
@@ -1397,12 +1506,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         self,
         model: str,
         messages: list["AllMessageValues"],
-        optional_params: dict,
+        optional_params: dict[str, object],
         litellm_params: dict[str, object],
-        headers: dict,
+        headers: dict[str, object],
         litellm_logging_obj: "LiteLLMLoggingObj",
         client: object | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         request_params: Final = cast("Mapping[str, object]", optional_params)  # cast-ok: untyped dict
         sent_params: Final = (
             request_params,
@@ -1510,6 +1619,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             "input": input_items,
             "litellm_logging_obj": litellm_logging_obj,
             **sanitized_litellm_params,
+            **_vertex_credential_params(model, _served_provider(litellm_params), typed_optional_params),
             "client": client,
         }
 
@@ -1781,10 +1891,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         raw_response: "BaseModel",
         model_response: "ModelResponse",
         logging_obj: object,
-        request_data: dict,
+        request_data: dict[str, object],
         messages: list["AllMessageValues"],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         encoding: object,
         api_key: str | None = None,
         json_mode: bool | None = None,
@@ -1971,6 +2081,8 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     converted = self._convert_content_str_to_input_text(item, role)
                     result.append(converted)
                     verbose_logger.debug("Chat provider:   -> %s", converted)
+                elif is_unrendered_block_without_text(item):
+                    verbose_logger.debug("Chat provider:   unrendered block has no text; skipped")
                 elif isinstance(item, dict):
                     # Handle multimodal content
                     original_type = item.get("type")

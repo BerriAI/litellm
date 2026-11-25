@@ -38,6 +38,7 @@ pub struct Stash {
     pub rate_limit_response: Option<Response>,
     pub parallel_slot: Option<SlotAcquisition>,
     pub reserved_tokens: i64,
+    pub reservation_counts_unpriced_media: bool,
     pub reserved_model: Option<RateLimitedModel>,
     pub reserved_scopes: BTreeSet<(String, String)>,
     pub fallback_models: BTreeSet<String>,
@@ -46,11 +47,13 @@ pub struct Stash {
     pub ptu_ceiling: Option<Ceiling>,
     pub ptu_reserved_tokens: i64,
     pub ptu_windows: Vec<WindowIdentity>,
+    pub reserved_windows: Vec<WindowIdentity>,
     pub itpm: IoReservation,
     pub otpm: IoReservation,
     pub io_reservation_released: bool,
     pub batch_tpd_refunds: Vec<Op>,
     pub batch_enqueued: Option<EnqueuedReservation>,
+    pub settles_at_close: bool,
 }
 
 #[derive(Clone, Debug, Default)]

@@ -981,6 +981,46 @@ class TestSnowflakeChatCompletion:
         content = "".join(c.choices[0].delta.content for c in chunks_received if c.choices[0].delta.content)
         assert content == "The sky is blue"
 
+    @pytest.mark.parametrize(
+        "undecodable_payload",
+        ["5", '{"a": ' * 100_000 + "1" + "}" * 100_000],
+        ids=["number", "deep-object"],
+    )
+    def test_claude_stream_skips_a_data_line_it_cannot_read_as_an_object(self, undecodable_payload):
+        events = (
+            '{"type": "message_start", "message": {"id": "msg_1", "model": "claude-sonnet-5-5", '
+            '"usage": {"input_tokens": 5, "output_tokens": 0}}}',
+            undecodable_payload,
+            '{"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}',
+            '{"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Paris"}}',
+            '{"type": "content_block_stop", "index": 0}',
+            '{"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 1}}',
+            '{"type": "message_stop"}',
+        )
+        body: Final = "".join(f"data: {event}\n\n" for event in events).encode()
+        client: Final = HTTPHandler(
+            client=httpx.Client(
+                transport=httpx.MockTransport(
+                    lambda _request: httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+                )
+            )
+        )
+
+        chunks_received: Final = list(
+            completion(
+                model="snowflake/claude-sonnet-5-5",
+                messages=self.messages,
+                stream=True,
+                api_key="fake-jwt",
+                account_id="FAKE-ACCOUNT",
+                api_base=FAKE_API_BASE,
+                client=client,
+            )
+        )
+
+        assert "".join(c.choices[0].delta.content or "" for c in chunks_received) == "Paris"
+        assert chunks_received[-1].choices[0].finish_reason == "stop"
+
 
 async def test_snowflake_claude_async_completion_inlines_remote_images_off_the_event_loop(async_only_image_fetch):
     image_url = f"http://img.example/{uuid.uuid4()}.png"

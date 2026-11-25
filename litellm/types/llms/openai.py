@@ -134,12 +134,21 @@ class BinaryResponseSummary(TypedDict):
 _ResponseT = TypeVar("_ResponseT", bound=httpx.Response | SDKResponse, default=httpx.Response)
 
 
+class BatchInputFormat(str, Enum):
+    """Expected layout of batch input retrieved from a file reader."""
+
+    OPENAI = "openai"
+    VERTEX = "vertex"
+    BEDROCK = "bedrock"
+    UNKNOWN = "unknown"
+
+
 def _header_value(headers: Mapping[str, str], name: str) -> str | None:
     return headers.get(name)
 
 
 class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT]):
-    _hidden_params: dict
+    _hidden_params: dict[str, builtins.object]
     usage: "Usage | None"
     response: _ResponseT  # pyright: ignore[reportIncompatibleVariableOverride]  # SDK accepts both backends at runtime
 
@@ -151,10 +160,17 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
     def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __init__(self, response: _ResponseT, usage: "Usage | None" = None) -> None:
+    def __init__(
+        self,
+        response: _ResponseT,
+        usage: "Usage | None" = None,
+        *,
+        batch_input_format: BatchInputFormat = BatchInputFormat.UNKNOWN,
+    ) -> None:
         super().__init__(response)  # pyright: ignore[reportArgumentType]  # SDK accepts both backends at runtime
         self._hidden_params = {}
         self.usage = usage
+        self.batch_input_format = batch_input_format
 
     @property
     def content_type(self) -> str | None:
@@ -463,7 +479,7 @@ class OpenAIFileObject(LiteLLMBaseModel):
     litellm_details_fallback: bool | None = None
     """Set by the LiteLLM proxy on a saved batch output file entry built without provider metadata; stripped from API responses."""
 
-    _hidden_params: dict = PrivateAttr(default={"response_cost": 0.0})  # no cost for writing a file
+    _hidden_params: dict[str, _JsonValue] = PrivateAttr(default={"response_cost": 0.0})  # no cost for writing a file
 
     @field_validator("object", mode="before")
     @classmethod
@@ -496,19 +512,19 @@ class OpenAIFileObject(LiteLLMBaseModel):
         )
         return {key: value for key, value in serialized.items() if key not in fields_to_omit}
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         # Define custom behavior for the 'in' operator
         return hasattr(self, key)
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: _JsonValue = None) -> _JsonValue:
         # Custom .get() method to access attributes with a default value if the attribute doesn't exist
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> _JsonValue:
+    def __getitem__(self, key: str) -> _JsonValue:
         # Allow dictionary-style access to attributes
         return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
-    def json(self, **kwargs):
+    def json(self, **kwargs: _JsonValue):
         try:
             return self.model_dump()
         except Exception:
@@ -1313,6 +1329,7 @@ OpenAIImageGenerationOptionalParams = Literal[
     "image_url",
     "image_prompt_strength",
     "aspect_ratio",
+    "area",
     "width",
     "height",
     "guidance",
@@ -1402,18 +1419,24 @@ class ResponsesAPIModeration(TypedDict, total=False):
     model: Required[ReadOnly[str]]
 
 
+class ResponsesAPIBackgroundOptions(TypedDict, total=False):
+    completion_window: ReadOnly[Literal["soonest", "2h", "8h"]]
+    continuation_id: ReadOnly[str]
+
+
 class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
     """TypedDict for Optional parameters supported by the responses API."""
 
     include: list[ResponseIncludable] | None
     instructions: str | None
     max_output_tokens: int | None
-    metadata: dict[str, Any] | None
+    metadata: Mapping[str, object] | None
     parallel_tool_calls: bool | None
     previous_response_id: str | None
     reasoning: Reasoning | None
     store: bool | None
     background: bool | None
+    background_options: ReadOnly[ResponsesAPIBackgroundOptions | None]
     stream: bool | None
     temperature: float | None
     text: Optional["ResponseText"]
@@ -1647,7 +1670,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     user: str | None = None
     store: bool | None = None
     # Define private attributes using PrivateAttr
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, _JsonValue] = PrivateAttr(default_factory=dict)
 
     @property
     def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
@@ -1673,7 +1696,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
 
     @field_validator("usage", mode="before")
     @classmethod
-    def validate_usage(cls, value):
+    def validate_usage(cls, value: _JsonValue) -> _JsonValue:
         """Convert usage dict to ResponseAPIUsage object if needed"""
         if value is None:
             return value
@@ -1841,7 +1864,7 @@ class ResponseInProgressEvent(BaseResponsesStreamEvent):
 class ResponseCompletedEvent(BaseResponsesStreamEvent):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
     response: ResponsesAPIResponse
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, _JsonValue] = PrivateAttr(default_factory=dict)
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
@@ -2494,6 +2517,21 @@ class OpenAIRealtimeDoneEvent(TypedDict):
     type: Literal["response.done"]
 
 
+class OpenAIRealtimeOutputVideoDelta(TypedDict):
+    """A fragmented-MP4 chunk of a Gemini Live avatar stream; the video counterpart of
+    response.output_audio.delta. The ids are those of the open response, or None when
+    the video flows outside a turn."""
+
+    type: ReadOnly[Literal["response.output_video.delta"]]
+    event_id: ReadOnly[str]
+    response_id: ReadOnly[str | None]
+    item_id: ReadOnly[str | None]
+    output_index: ReadOnly[int]
+    content_index: ReadOnly[int]
+    mime_type: ReadOnly[str | None]
+    delta: ReadOnly[str]
+
+
 class OpenAIRealtimeInputAudioBufferSpeechEvent(TypedDict):
     type: ReadOnly[Literal["input_audio_buffer.speech_started", "input_audio_buffer.speech_stopped"]]
     event_id: ReadOnly[str]
@@ -2635,6 +2673,7 @@ OpenAIRealtimeEvents = (
     | OpenAIRealtimeFunctionCallArgumentsDone
     | OpenAIRealtimeDoneEvent
     | OpenAIRealtimeInputAudioBufferSpeechEvent
+    | OpenAIRealtimeOutputVideoDelta
     | OpenAIRealtimeInputAudioTranscriptionDelta
     | OpenAIRealtimeInputAudioTranscriptionCompleted
     | OpenAIRealtimeTranscriptionSessionCreated
@@ -2676,7 +2715,7 @@ class OpenAIModerationResponse(BaseLiteLLMOpenAIResponseObject):
     """A list of moderation objects."""
 
     # Define private attributes using PrivateAttr
-    _hidden_params: dict = PrivateAttr(default_factory=dict)
+    _hidden_params: dict[str, _JsonValue] = PrivateAttr(default_factory=dict)
 
     @property
     def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
@@ -2856,13 +2895,13 @@ class OpenAIVideoObject(LiteLLMBaseModel):
     def hidden_params(self, hidden_params: dict[str, _JsonValue]) -> None:  # mutable-ok: API requires mutation
         self._hidden_params = hidden_params
 
-    def __contains__(self, key) -> bool:
+    def __contains__(self, key: str) -> bool:
         return hasattr(self, key)
 
-    def get(self, key, default=None) -> _JsonValue:
+    def get(self, key: str, default: _JsonValue = None) -> _JsonValue:
         return getattr(self, key, default)
 
-    def __getitem__(self, key) -> _JsonValue:
+    def __getitem__(self, key: str) -> _JsonValue:
         return _ATTRIBUTE_VALUE.validate_python(getattr(self, key))
 
     def json(self, **kwargs):

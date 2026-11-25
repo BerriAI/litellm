@@ -29,6 +29,7 @@ from pydantic import JsonValue
 
 HOSTED_REGIONS: Final = ("us-east-1", "us-west-2", "eu-west-1", "us-gov-west-1", "cn-north-1")
 UNHOSTED_REGION: Final = "eu-central-1"
+CONFIGURED_CONTROL_PLANE_HOST: Final = "bedrock-fips.us-east-1.amazonaws.com"
 CONTROL_MODEL: Final = "integration-discovery-control"
 CONVERSE_MODEL: Final = "us.openai.gpt-5.6-sol"
 WORKERS: Final = 2
@@ -251,11 +252,13 @@ def assert_listing_shape(requests: tuple[ControlPlaneRequest, ...], *, pages: in
     return counts[FOUNDATION_MODELS]
 
 
-def assert_sigv4(requests: tuple[ControlPlaneRequest, ...], *, key: str, secret: str, region: str) -> None:
-    host: Final = control_plane_host(region)
+def assert_sigv4(
+    requests: tuple[ControlPlaneRequest, ...], *, key: str, secret: str, region: str, host: str | None = None
+) -> None:
+    expected_host: Final = host or control_plane_host(region)
     for request in requests:
-        assert request.host == host, request
-        assert request.headers["host"] == host, request
+        assert request.host == expected_host, request
+        assert request.headers["host"] == expected_host, request
         scope: Final = verified_scope(request, secret)
         assert scope == f"{request.headers['x-amz-date'][:8]}/{region}/bedrock/aws4_request", request
         assert request.headers["authorization"].startswith(f"AWS4-HMAC-SHA256 Credential={key}/"), request

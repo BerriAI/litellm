@@ -2,6 +2,7 @@ SELECT tm.user_id,
        tm.team_id,
        tm.budget_id,
        tm.spend,
+       tm.rollover_credit,
        tm.total_spend,
        to_jsonb(b) AS "litellm_budget_table?: Json<Budget>"
 FROM "LiteLLM_TeamMembership" AS tm

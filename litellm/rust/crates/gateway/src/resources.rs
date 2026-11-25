@@ -28,10 +28,8 @@ impl Resources {
         Self::over(config, Arc::new(ProcessEnvironment))
     }
 
-    pub(crate) fn over(
-        config: &Config,
-        process: Arc<dyn Lookup + Send + Sync>,
-    ) -> Result<Self, Error> {
+    /// The resources of `config` over `process` as the process environment.
+    pub fn over(config: &Config, process: Arc<dyn Lookup + Send + Sync>) -> Result<Self, Error> {
         let environment: Arc<dyn Lookup + Send + Sync> = Arc::new(ConfigEnvironment::new(
             environment_values(&config.environment_variables)?,
             process,

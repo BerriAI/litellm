@@ -12,13 +12,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 from fastapi import HTTPException
 
-from litellm.caching.caching import DualCache
 from litellm.proxy._types import (
     JWTKeyMappingResponse,
     LiteLLM_JWTAuth,
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
     _to_response,
     _token_hash_for_create,
@@ -28,6 +28,7 @@ from litellm.proxy.management_endpoints.jwt_key_mapping_endpoints import (
     info_jwt_key_mapping,
     update_jwt_key_mapping,
 )
+from litellm.redis.stores.auth_cache import AuthObject
 
 # ──────────────────────────────────────────────
 # Tests: _resolve_jwt_to_virtual_key
@@ -501,10 +502,9 @@ async def test_delete_evicts_cache_after_row_is_gone():
     survives until TTL and the deleted mapping stays usable.
     """
     from litellm.proxy._types import DeleteJWTKeyMappingRequest
-    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 
-    cache_key = jwt_key_mapping_cache_key("email", "user@example.com")
-    user_api_key_cache = DualCache()
+    cache_key = AuthObject.jwt_key_mapping("email", "user@example.com")
+    user_api_key_cache = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(key=cache_key, value="hashed_token")
 
     mock_prisma = _mock_prisma()
@@ -543,11 +543,10 @@ async def test_update_evicts_old_and_new_cache_keys_after_write():
     must be gone once the endpoint returns.
     """
     from litellm.proxy._types import UpdateJWTKeyMappingRequest
-    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
 
-    old_cache_key = jwt_key_mapping_cache_key("email", "user@example.com")
-    new_cache_key = jwt_key_mapping_cache_key("email", "renamed@example.com")
-    user_api_key_cache = DualCache()
+    old_cache_key = AuthObject.jwt_key_mapping("email", "user@example.com")
+    new_cache_key = AuthObject.jwt_key_mapping("email", "renamed@example.com")
+    user_api_key_cache = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(key=old_cache_key, value="hashed_token")
     await user_api_key_cache.async_set_cache(key=new_cache_key, value="__NO_MAPPING__")
 
@@ -622,11 +621,9 @@ async def _delete_global_mapping() -> None:
 async def test_writing_a_global_mapping_evicts_what_a_configured_issuer_cached_for_its_claim(
     write_global_mapping: Callable[[], Awaitable[None]],
 ) -> None:
-    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
-
-    issuer_key: Final = jwt_key_mapping_cache_key("email", "user@example.com", _ISSUER)
-    other_claim_key: Final = jwt_key_mapping_cache_key("email", "other@example.com", _ISSUER)
-    user_api_key_cache: Final = DualCache()
+    issuer_key: Final = AuthObject.jwt_key_mapping("email", "user@example.com", _ISSUER)
+    other_claim_key: Final = AuthObject.jwt_key_mapping("email", "other@example.com", _ISSUER)
+    user_api_key_cache: Final = UserApiKeyCache()
     await user_api_key_cache.async_set_cache(key=issuer_key, value="__NO_MAPPING__")
     await user_api_key_cache.async_set_cache(key=other_claim_key, value="__NO_MAPPING__")
 

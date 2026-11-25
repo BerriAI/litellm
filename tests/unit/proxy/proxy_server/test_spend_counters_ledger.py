@@ -1,3 +1,5 @@
+from collections import Counter
+from collections.abc import Sequence
 from typing import Final
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -9,6 +11,7 @@ from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.spend_tracking.committed_spend import committed_spend_key
+from litellm.redis.stores.auth_cache import AuthObject
 from litellm.redis.stores.spend_counters import user_window_counter
 from litellm.rust_bridge._native import NativeRedisStoreError
 from litellm.types.proxy.carried_budget_state import EntitySpendCounterKeys
@@ -52,8 +55,16 @@ class _EmptyUserCache:
         self.reads.extend(keys)
         return [None for _ in keys]
 
+    async def get_team_fields(self, key: AuthObject, fields: Sequence[str] | None = None, **_: object) -> None:
+        self.reads.append(key.key)
+
     async def async_set_cache_pipeline(self, *_: object, **__: object) -> None:
         return None
+
+
+def _reads_on_the_wire(redis: RespRedis) -> list[int]:
+    commands: Final = [command[0].upper() for command in redis.commands if command[0].upper() != "CLIENT"]
+    return [position for position, name in enumerate(commands) if name == "MGET"]
 
 
 def _increments(redis: RespRedis) -> set[str]:
@@ -73,7 +84,8 @@ async def test_increment_spend_counters_increments_all_buckets(monkeypatch: pyte
         reported: Final = await calls.reported(2)
 
     keys: Final = {"spend:key:hashed-tok", "spend:team:t1", "spend:team_member:u1:t1", "spend:user:u1"}
-    assert reported == ("MGET", "pipeline")
+    assert Counter[str](reported) == Counter[str]({"MGET": 1, "pipeline": 1})
+    assert _reads_on_the_wire(redis) == [0]
     assert _increments(redis) == keys
     assert redis.values == dict.fromkeys(keys, 5.0)
     assert user_cache.reads != [], "the step reads the budget windows from the auth cache"
@@ -86,7 +98,7 @@ async def test_user_spend_increments_both_windows(monkeypatch: pytest.MonkeyPatc
     )
     cache: Final = UserApiKeyCache()
     await cache.async_set_cache(
-        key="u",
+        key=AuthObject.user("u"),
         value=LiteLLM_UserTable.model_validate(
             {
                 "user_id": "u",
@@ -195,7 +207,8 @@ async def test_increment_spend_counters_failing_scope_propagates_after_siblings_
         reported: Final = await calls.reported(2)
 
     assert reservation["finalized"] is False
-    assert reported == ("MGET", "pipeline")
+    assert Counter[str](reported) == Counter[str]({"MGET": 1, "pipeline": 1})
+    assert _reads_on_the_wire(redis) == [0]
     assert redis.values == dict.fromkeys(keys, 6.0)
 
 
@@ -253,7 +266,8 @@ async def test_increment_spend_counters_pipelines_all_scopes_in_one_redis_call(m
         reported: Final = await calls.reported(2)
         memory: Final = store.snapshot()
 
-    assert reported == ("MGET", "pipeline")
+    assert Counter[str](reported) == Counter[str]({"MGET": 1, "pipeline": 1})
+    assert _reads_on_the_wire(redis) == [0]
     assert _increments(redis) == set(_PENDING_SPEND_COUNTER_KEYS)
     assert memory == dict.fromkeys(_PENDING_SPEND_COUNTER_KEYS, 1.5)
 
@@ -321,7 +335,7 @@ async def test_a_charge_outside_the_committed_scope_keeps_no_twin_and_reads_no_s
     store: Final = rust_memory_store(monkeypatch, {"spend:key:hashed": 10.0})
     tokens: Final = _VerificationTokenTable(10.0)
     key_cache: Final = UserApiKeyCache()
-    key_cache.set_cache(key="hashed", value=UserAPIKeyAuth(token="hashed"))
+    key_cache.set_cache(key=AuthObject.virtual_key("hashed"), value=UserAPIKeyAuth(token="hashed"))
     monkeypatch.setattr(ps, "user_api_key_cache", key_cache)
     monkeypatch.setattr(ps, "prisma_client", _prisma_with_tokens(tokens))
 

@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.routing_common_utils import without_router_only_
 from litellm.responses.input_items_query import INPUT_ITEMS_QUERY_KEYS
 from litellm.responses.retrieve_stream_query import without_retrieve_stream_defaults
 from litellm.router_api import RoutingContext
+from litellm.router_rust.invoke.cache_controls import report_ignored_cache_controls, with_model_cache_controls
 from litellm.router_rust.invoke.shaping import (
     ROUTER_CLIENTS_TARGET,
     STREAM_TIMEOUT_AWARE_GENERIC_HANDLERS,
@@ -130,6 +131,10 @@ class EndpointCore(Protocol):
 
     def group_members(self, model_name: str) -> Sequence[tuple[object, object]] | None: ...
 
+    def served_deployments(self) -> tuple[Mapping[str, object], ...]:
+        """Every deployment as a pick serves it, with the litellm_params values its JSON record carries as text."""
+        ...
+
     def routed_name(self, model: object) -> str:
         """``RustCore.routed_name``: what a ``model`` that is no string raises, or the name it routes under."""
         ...
@@ -157,6 +162,7 @@ class EndpointCore(Protocol):
         specific_deployment: bool | None = None,
         messages: object = None,
         batch_upload: bool = False,
+        batch_api: bool = False,
     ) -> Mapping[str, object] | Sequence[Mapping[str, object]]: ...
 
     async def acompletion(self, *args: object, **kwargs: object) -> object: ...  # kwargs-ok: endpoint payload
@@ -204,6 +210,15 @@ def _user_message(content: object) -> list[dict[str, object]]:  # mutable-ok: a 
 
 
 PINNED_DEPLOYMENT_KEY: Final = "_pinned_deployment_id"
+_PINNABLE_REALTIME_ENDPOINTS: Final = frozenset(
+    {
+        "_arealtime",
+        "acreate_realtime_client_secret",
+        "arealtime_calls",
+        "acreate_realtime_translation_client_secret",
+        "arealtime_translation_calls",
+    }
+)
 
 # Request keys the router reads to route the call; the deployment call never receives them.
 ROUTING_KEYS: Final = frozenset(
@@ -769,6 +784,7 @@ class AttemptCall:
     group: str
     # `_embedding`'s batch-size refusal, raised by the driver in place of the host call.
     refused: Exception | None = None
+    ignored_cache_controls: tuple[str, ...] = ()
 
 
 def reports_own_success(call: AttemptCall) -> bool:
@@ -882,6 +898,34 @@ def _validate_decisions_connection(plan: Plan, data: Mapping[str, object], reque
 
 
 def attempt_call(
+    core: EndpointCore,
+    plan: Plan,
+    request: Mapping[str, object],
+    deployment: Mapping[str, object],
+    *,
+    group: str,
+    requested: str,
+    fallback_model_group: str | None = None,
+    authenticated: Mapping[str, object] | None = None,
+) -> AttemptCall:
+    """``authenticated`` is the request before a fallback's own params went over it, the only place the
+    virtual key's cache controls are read from."""
+    params, merged_request, ignored = with_model_cache_controls(
+        as_dict(deployment.get("litellm_params")), request, authenticated
+    )
+    call: Final = _attempt_call(
+        core,
+        plan,
+        merged_request,
+        {**deployment, "litellm_params": params},
+        group=group,
+        requested=requested,
+        fallback_model_group=fallback_model_group,
+    )
+    return dataclasses.replace(call, ignored_cache_controls=ignored) if ignored else call
+
+
+def _attempt_call(
     core: EndpointCore,
     plan: Plan,
     request: Mapping[str, object],
@@ -1443,9 +1487,12 @@ def pinned_video_deployment(plan: Plan, request: Mapping[str, object]) -> Mappin
     return {"pinned_deployment_id": deployment_id} if deployment_id else {}
 
 
-def pinned_vector_store_file_deployment(plan: Plan, request: Mapping[str, object]) -> Mapping[str, object]:
+def pinned_request_deployment(plan: Plan, request: Mapping[str, object]) -> Mapping[str, object]:
+    """The deployment a call names because the upstream object it reaches lives on that deployment's account:
+    a vector store file, or a realtime call from its client secret to the sideband that meters it."""
     deployment_id: Final = request.get(PINNED_DEPLOYMENT_KEY)
-    if not plan.endpoint.startswith("avector_store_file_") or not isinstance(deployment_id, str) or not deployment_id:
+    pins: Final = plan.endpoint.startswith("avector_store_file_") or plan.endpoint in _PINNABLE_REALTIME_ENDPOINTS
+    if not pins or not isinstance(deployment_id, str) or not deployment_id:
         return {}
     return {"pinned_deployment_id": deployment_id}
 
@@ -1603,7 +1650,7 @@ class RustEndpoints:
 
     def _group(self, name: str) -> list[Mapping[str, object]]:  # mutable-ok: a fresh list
         """`_core_get_model_list(model_name=name)`: the deployments of the group ``name``."""
-        records: Final = self._core.handle.deployments()
+        records: Final = self._core.served_deployments()
         return [record for record in (as_dict(r) for r in records) if record.get("model_name") == name]
 
     def _is_model_group(self, name: str) -> bool:
@@ -2230,18 +2277,23 @@ class RustEndpoints:
                 specific_deployment=kwargs.pop("specific_deployment", None),  # pyright: ignore[reportArgumentType]  # the request's value, as given
                 request_kwargs=kwargs,
             )
-        data: Final = as_dict(deployment.get("litellm_params"))
+        data, merged, ignored = with_model_cache_controls(as_dict(deployment.get("litellm_params")), kwargs)
+        call_kwargs: Final = dict(merged)
         for key, value in self._core.resolved.default_litellm_params.items():
-            if key not in kwargs:
-                kwargs[key] = value
+            if key not in call_kwargs:
+                call_kwargs[key] = value
             elif key == "metadata":
-                metadata_bucket(kwargs, key).update(
-                    metadata_defaults_under_request(defaults=as_dict(value), request_metadata=as_dict(kwargs[key]))
+                metadata_bucket(call_kwargs, key).update(
+                    metadata_defaults_under_request(defaults=as_dict(value), request_metadata=as_dict(call_kwargs[key]))
                 )
         pinned: Final = deployment_model_id_pin(data)
         if pinned is not None:
-            kwargs["model_id"] = pinned
-        return self._invoke("text_completion")(**{**data, "prompt": prompt, "caching": self._cache_responses, **kwargs})
+            call_kwargs["model_id"] = pinned
+        response: Final = self._invoke("text_completion")(
+            **{**data, "prompt": prompt, "caching": self._cache_responses, **call_kwargs}
+        )
+        report_ignored_cache_controls(response, ignored)
+        return response
 
     async def aadapter_completion(
         self,
@@ -2286,9 +2338,10 @@ class RustEndpoints:
                 kind="healthy",
                 specific_deployment=bool(specific) or None,
                 messages=_user_message("retrieve-api-fake-text"),
+                batch_api=True,
             )
         else:
-            healthy = [as_dict(r) for r in self._core.handle.deployments()]  # rebind-ok: as Python rebinds it
+            healthy = [as_dict(r) for r in self._core.served_deployments()]  # rebind-ok: as Python rebinds it
         errors: Final[list[BaseException]] = []  # mutable-ok: the request kwargs the Python router mutates in place
 
         async def try_retrieve(deployment: Mapping[str, object]) -> object:
@@ -2382,6 +2435,7 @@ class RustEndpoints:
             specific_deployment=bool(specific) or None,
             messages=_user_message(_PICK_TEXTS["create_file"]),
             batch_upload=is_batch_upload(kwargs),
+            batch_api=True,
         )
         deployments: Final = list(healthy) if isinstance(healthy, Sequence) else [healthy]
 
@@ -2597,7 +2651,7 @@ __all__ = [
     "generic_plan",
     "log_refused_call",
     "log_refused_call_sync",
-    "pinned_vector_store_file_deployment",
+    "pinned_request_deployment",
     "pinned_video_deployment",
     "plan_for",
     "prepare_request",
