@@ -1401,6 +1401,8 @@ class LiteLLM_Proxy_MCP_Handler:
         served_tools: Sequence[MCPTool] | None = None,
         tool_choice: object = None,
         gateway: GatewayTools = NO_GATEWAY_TOOLS,
+        *,
+        mcp_execution_auth: "UserAPIKeyAuth | None",
         **kwargs,
     ) -> "MCPEnhancedStreamingIterator":
         """
@@ -1432,8 +1434,7 @@ class LiteLLM_Proxy_MCP_Handler:
             tool_server_map=tool_server_map,
             served_tools=served_tools,
             mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
-            user_api_key_auth=kwargs.get("user_api_key_auth")
-            or kwargs.get("litellm_metadata", {}).get("user_api_key_auth"),
+            user_api_key_auth=mcp_execution_auth,
             original_request_params=request_params,
             tool_choice=tool_choice,
             gateway=gateway,

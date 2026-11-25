@@ -662,17 +662,24 @@ def test_dashboard_viewer_runs_a_team_granted_tool(gateway: Gateway, surface: Su
         assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
 
 
-def test_dashboard_viewer_can_bill_the_model_to_a_different_team_from_the_tool(gateway: Gateway) -> None:
+@pytest.mark.parametrize("stream", [False, True])
+def test_dashboard_viewer_can_bill_the_model_to_a_different_team_from_the_tool(gateway: Gateway, stream: bool) -> None:
     with _rig(gateway, "responses") as rig:
-        model_team: Final = rig.scenario.team(models=[rig.model])
+        model_team: Final = rig.scenario.team(
+            models=[rig.model],
+            object_permission={"mcp_tool_permissions": {rig.server_id: ["subtract"]}},
+        )
         tool_team: Final = rig.scenario.team(
             models=["no-default-models"], object_permission={"mcp_servers": [rig.server_id]}
         )
         session: Final = _viewer_session(rig.scenario, tool_team, model_team, models=("no-default-models",))
-        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}])
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}], stream=stream)
 
         assert response.status_code == 200, response.text
-        assert rig.final_text(response.json()) == ANSWER, response.text
+        if stream:
+            assert ANSWER in response.text, response.text
+        else:
+            assert rig.final_text(response.json()) == ANSWER, response.text
         assert [call["body"]["params"]["name"] for call in _peer_add_calls(rig.peer)] == ["add"]
 
 
@@ -684,6 +691,20 @@ def test_dashboard_viewer_without_a_grant_cannot_run_a_tool(gateway: Gateway) ->
         assert response.status_code == 403 and rig.alias in response.text, response.text
         assert rig.upstream_tools() == ()
         assert _peer_add_calls(rig.peer) == ()
+
+
+def test_dashboard_viewer_stream_uses_the_granting_teams_mcp_rate_limit(gateway: Gateway) -> None:
+    with _rig(gateway, "responses", parallel=2) as rig:
+        team_id: Final = rig.scenario.team(
+            mcp_rpm_limit={rig.alias: 2},
+            object_permission={"mcp_servers": [rig.server_id]},
+        )
+        session: Final = _viewer_session(rig.scenario, team_id)
+        response: Final = rig.send(session, [{**AUTO, "server_url": f"litellm_proxy/mcp/{rig.alias}"}], stream=True)
+
+        assert response.status_code == 200, response.text
+        assert [_add_call_arguments(call) for call in _peer_add_calls(rig.peer)] == [ADD], response.text
+        assert f"Rate limit exceeded for mcp_per_team: {team_id}:{rig.alias}" in response.text, response.text
 
 
 def test_dashboard_viewer_only_offers_tools_in_the_requested_toolset(gateway: Gateway) -> None:

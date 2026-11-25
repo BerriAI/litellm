@@ -468,6 +468,7 @@ async def aresponses_api_with_mcp(
             served_tools=original_mcp_tools,
             tool_choice=tool_choice_in_effect,
             gateway=gateway,
+            mcp_execution_auth=user_api_key_auth,
             **kwargs,
         )
         await mcp_streaming_response.start_initial_response()
