@@ -142,7 +142,9 @@ class ReplicateConfig(BaseConfig):
             return split_model[1]
         return model
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, str] | httpx.Headers
+    ) -> BaseLLMException:
         return ReplicateError(status_code=status_code, message=error_message, headers=headers)
 
     def get_complete_url(

@@ -88,7 +88,7 @@ class VertexImageGeneration(VertexLLM):
         optional_params: Mapping[str, object] | None = None,
         timeout: int | None = None,
         aimg_generation: object = False,
-        extra_headers: dict | None = None,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> ImageResponse:
         if aimg_generation is True:
             return self.aimage_generation(
@@ -186,7 +186,7 @@ class VertexImageGeneration(VertexLLM):
         client: AsyncHTTPHandler | None = None,
         optional_params: Mapping[str, object] | None = None,
         timeout: int | None = None,
-        extra_headers: dict | None = None,
+        extra_headers: Mapping[str, str] | None = None,
     ) -> ImageResponse:
         response = None
         if client is None:

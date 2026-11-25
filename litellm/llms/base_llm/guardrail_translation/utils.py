@@ -193,6 +193,16 @@ def with_web_search_call_arguments(item: object, arguments: str) -> object:
     return {**fields, "action": action.model_dump()}
 
 
+def choice_payload(choice: object) -> object | None:
+    delta: Final = stream_item_field(choice, "delta")
+    return delta if delta is not None else stream_item_field(choice, "message")
+
+
+def choice_refusal(choice: object) -> str | None:
+    refusal: Final = stream_item_field(choice_payload(choice), "refusal")
+    return refusal if isinstance(refusal, str) and refusal else None
+
+
 def stream_item_fingerprint(item: object) -> str:
     plain: Final = item.model_dump() if isinstance(item, BaseModel) else item
     return json.dumps(plain, sort_keys=True, default=str)
@@ -311,6 +321,12 @@ def effective_scan_only_tool_results_for_guardrail(guardrail_to_apply: object) -
 
 def effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply: object) -> bool:
     return getattr(guardrail_to_apply, "scan_tool_calls_as_text", None) is True
+
+
+def tool_calls_in_guardrail_scope(guardrail_to_apply: object) -> bool:
+    return not effective_scan_only_tool_results_for_guardrail(
+        guardrail_to_apply
+    ) or effective_scan_tool_calls_as_text_for_guardrail(guardrail_to_apply)
 
 
 def role_out_of_guardrail_scope(

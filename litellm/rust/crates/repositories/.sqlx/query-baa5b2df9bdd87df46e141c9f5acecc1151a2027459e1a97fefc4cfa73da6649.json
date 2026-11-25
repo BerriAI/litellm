@@ -1,0 +1,52 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT param_name,\n       param_value AS \"param_value: RawJson\",\n       reload_revision\nFROM \"LiteLLM_Config\"\nWHERE param_name = ANY($1)\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "param_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_Config\"",
+            "name": "param_name"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "param_value: RawJson",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_Config\"",
+            "name": "param_value"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "reload_revision",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_Config\"",
+            "name": "reload_revision"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "baa5b2df9bdd87df46e141c9f5acecc1151a2027459e1a97fefc4cfa73da6649"
+}

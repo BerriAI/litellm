@@ -59,7 +59,7 @@ from ..adapters.handler import (
 from ..context_management import AnthropicContextManagementError, PolyfillResult, apply_context_management
 from ..context_management.constants import COMPACT_EDIT_TYPE
 from ..context_management.dispatcher import normalize_spec
-from ..convertible_blocks import reject_malformed_tool_result_text
+from ..convertible_blocks import reject_malformed_text
 from ..safeguards import with_safeguard_results
 from ..utils import (
     KNOWN_REASONING_EFFORTS,
@@ -134,7 +134,7 @@ async def _polyfilled(
     """Run the edits the Responses API can't run natively; raise like the chat completions path does."""
     if not edits:
         return None
-    reject_malformed_tool_result_text(messages, model, kwargs)
+    reject_malformed_text(messages, model, kwargs)
     drop_invalid_edits: Final = drops_unsupported_params(kwargs.get("drop_params"))
     blocks: Final = _system_blocks(system)
     try:
@@ -469,7 +469,9 @@ def _build_responses_kwargs(
     """
     Build the kwargs dict to pass directly to litellm.responses() / litellm.aresponses().
     """
-    forwarded_kwargs: Final = _forwarded_kwargs(extra_kwargs)
+    from litellm.responses.bridge_check import drop_refused_forwarded_reasoning
+
+    forwarded_kwargs: Final = drop_refused_forwarded_reasoning(_forwarded_kwargs(extra_kwargs), model=model)
     target_provider: Final = forwarded_kwargs.get("custom_llm_provider")
     unsupported_param_error: Final = previous_response_id_error(forwarded_kwargs)
     if unsupported_param_error is not None:
@@ -478,7 +480,7 @@ def _build_responses_kwargs(
             model=model,
             llm_provider=target_provider if isinstance(target_provider, str) else None,
         )
-    reject_malformed_tool_result_text(messages, model, forwarded_kwargs)
+    reject_malformed_text(messages, model, forwarded_kwargs)
     request_tools: Final = tools_without_mcp_servers(
         forwarded_kwargs.get("mcp_servers"),
         tools or (),

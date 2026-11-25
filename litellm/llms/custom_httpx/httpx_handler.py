@@ -1,4 +1,5 @@
 import os
+from collections.abc import Mapping, Sequence
 from typing import Final
 
 import httpx
@@ -39,16 +40,21 @@ class HTTPHandler:
         # Close the client when you're done with it
         await self.client.aclose()
 
-    async def get(self, url: str, params: dict | None = None, headers: dict | None = None):
+    async def get(
+        self,
+        url: str,
+        params: Mapping[str, str | int | float | bool | Sequence[str | int | float | bool | None] | None] | None = None,
+        headers: Mapping[str, str] | None = None,
+    ):
         response: Final = await self.client.get(url, params=params, headers=headers)
         return response
 
     async def post(
         self,
         url: str,
-        data: dict | str | None = None,
-        params: dict | None = None,
-        headers: dict | None = None,
+        data: Mapping[str, object] | str | None = None,
+        params: Mapping[str, str | int | float | bool | Sequence[str | int | float | bool | None] | None] | None = None,
+        headers: Mapping[str, str] | None = None,
     ):
         try:
             response: Final = await self.client.post(

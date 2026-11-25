@@ -633,7 +633,7 @@ if MCP_AVAILABLE:
     from litellm.proxy.mcp_server.sse_transport import SseServerTransport
 
     def _gateway_create_initialization_options(
-        self,
+        self: "MCPProtocolServer[object]",
         notification_options: NotificationOptions | None = None,
         experimental_capabilities: dict[str, dict[str, object]] | None = None,
         extensions: dict[str, dict[str, object]] | None = None,

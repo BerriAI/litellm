@@ -9,17 +9,17 @@ use std::{
 
 use litellm_router_core::{
     Attempt, AttemptError, AttemptFailure, CallbackFiltered, Deployment, Error, FailureKind,
-    FailureReport, Health, HealthState, HostStep, InMemoryRouterCache, Op, Outcomes, PreRoute,
-    PreRouted, Router, RouterCache, RouterConfig, RouterDynamicConfig, RouterEvent, RouterHost,
-    RouterRequest, RouterResponse, RoutingContext, SeededRandomness, SelectStage, Served,
-    SuccessReport, UsageCounts, UsageWindow,
+    FailureReport, Health, HealthState, HostStep, InMemoryRouterCache, LimitCounter, LimitKind, Op,
+    Outcomes, PreRoute, PreRouted, RaisedBy, Router, RouterCache, RouterConfig,
+    RouterDynamicConfig, RouterEvent, RouterHost, RouterRequest, RouterResponse, RoutingContext,
+    SeededRandomness, SelectStage, Served, SuccessReport, UsageCounts, UsageWindow,
     call::{StreamOrigin, Unanswered},
     fallback::Fallbacks,
     health::CooldownValue,
     health::current_minute,
     host::UncountedRetries,
     mock::MockFailure,
-    precall::PreCallFacts,
+    precall::{DeploymentFacts, PreCallFacts},
     select,
     select::PassThrough,
 };
@@ -54,6 +54,9 @@ struct ScriptedHost {
     pre_routes: Option<(&'static str, PreRouted)>,
     /// The params each attempt carried, in the order the attempts ran.
     params_sent: Mutex<Vec<Option<Value>>>,
+    /// What every pre-call check is answered with.
+    pre_call_facts: PreCallFacts,
+    text_only_ids: &'static [&'static str],
 }
 
 impl ScriptedHost {
@@ -199,6 +202,30 @@ impl RouterCache for RecordingCache {
     async fn count_failure(&self, id: &str) -> Result<(), litellm_cache::Error> {
         self.inner.count_failure(id).await
     }
+
+    async fn limit_usage(
+        &self,
+        counter: &LimitCounter,
+        limit: f64,
+    ) -> Result<Option<f64>, litellm_cache::Error> {
+        self.inner.limit_usage(counter, limit).await
+    }
+
+    async fn add_limit_usage(
+        &self,
+        counter: &LimitCounter,
+        amount: i64,
+        ttl: Duration,
+    ) -> Result<Option<f64>, litellm_cache::Error> {
+        self.inner.add_limit_usage(counter, amount, ttl).await
+    }
+
+    async fn add_limit_usages(
+        &self,
+        increments: &[(LimitCounter, i64, Duration)],
+    ) -> Result<Option<Vec<f64>>, litellm_cache::Error> {
+        self.inner.add_limit_usages(increments).await
+    }
 }
 
 /// The host error behind a scripted failure: the deployment it was raised on.
@@ -256,14 +283,28 @@ impl RouterHost for ScriptedHost {
 
     async fn select(
         &self,
-        _stage: &SelectStage,
+        stage: &SelectStage,
         _ctx: &RoutingContext<'_>,
         candidates: Vec<Arc<Deployment>>,
     ) -> Result<Vec<Arc<Deployment>>, Error> {
+        if matches!(stage, SelectStage::TextOnly) {
+            return Ok(candidates
+                .into_iter()
+                .filter(|deployment| self.text_only_ids.contains(&deployment.id.as_str()))
+                .collect());
+        }
         match self.pick_failures.lock().pop_front() {
             Some(failure) => Err(failure.into()),
             None => Ok(candidates),
         }
+    }
+
+    async fn pre_call_facts(
+        &self,
+        _ctx: &RoutingContext<'_>,
+        _candidates: &[Arc<Deployment>],
+    ) -> Result<PreCallFacts, Error> {
+        Ok(self.pre_call_facts.clone())
     }
 
     async fn callback_filters(
@@ -340,7 +381,7 @@ impl Hosted {
         self.router.healthy(&*self.host, op, request).await
     }
 
-    fn health(&self) -> Health<&RecordingCache> {
+    fn health(&self) -> Health<'_, RecordingCache> {
         self.router.health(self.host.cache())
     }
 
@@ -1738,6 +1779,51 @@ async fn a_context_window_error_takes_its_own_chain_only_when_the_group_matches(
     assert_eq!(response.deployment_id, expected);
 }
 
+/// A 100 token prompt for `primary`, whose only deployment has a 50 token window.
+#[rstest]
+#[case::by_its_own_chain(json!({"context_window_fallbacks": [{"primary": ["context"]}]}), Ok("c1"))]
+#[case::by_the_regular_chain(json!({"fallbacks": [{"primary": ["backup"]}]}), Ok("b1"))]
+#[case::nowhere_without_a_chain(json!({}), Err(true))]
+#[tokio::test]
+async fn a_prompt_no_deployment_of_its_group_fits_falls_back_as_a_context_window_error(
+    #[case] dynamic: Value,
+    #[case] expected: Result<&str, bool>,
+) {
+    let window = |limit| DeploymentFacts {
+        max_input_tokens: Some(limit),
+        input_tokens: Some(100),
+        ..DeploymentFacts::default()
+    };
+    let host = Arc::new(ScriptedHost {
+        pre_call_facts: PreCallFacts {
+            has_input: true,
+            countable: true,
+            deployments: [
+                ("p1".to_owned(), window(50)),
+                ("c1".to_owned(), window(1000)),
+            ]
+            .into(),
+            ..PreCallFacts::default()
+        },
+        ..ScriptedHost::default()
+    });
+    let config = RouterConfig {
+        enable_pre_call_checks: true,
+        ..tiers(false)
+    };
+    let router = router(config, dynamic, host.clone());
+
+    let answered = router.call(Op::from("acompletion"), request()).await;
+
+    assert_eq!(
+        answered
+            .as_ref()
+            .map(|response| response.deployment_id.as_str())
+            .map_err(|error| matches!(error, Error::ContextWindowExceeded { .. })),
+        expected
+    );
+}
+
 #[rstest]
 #[case::context_window_keeps_its_own_error(
     context_window(),
@@ -1960,6 +2046,155 @@ async fn a_stream_retry_is_reported_before_its_attempt(config: RouterConfig) {
         .await
         .unwrap();
     assert_eq!((response.attempted_retries, host.retries()), (1, 1));
+}
+
+fn stand_in_overflows(ids: &[&str]) -> PreCallFacts {
+    serde_json::from_value(json!({
+        "has_input": true,
+        "countable": true,
+        "deployments": ids
+            .iter()
+            .map(|id| ((*id).to_owned(), json!({"max_input_tokens": 100, "input_tokens": 150, "estimated": true})))
+            .collect::<serde_json::Map<_, _>>(),
+    }))
+    .unwrap()
+}
+
+#[rstest]
+#[case::the_provider_refused_the_window(context_window(), json!({}), 0)]
+#[case::a_context_window_fallback_applies(
+    server_error(),
+    json!({"context_window_fallbacks": [{"primary": ["backup"]}]}),
+    0
+)]
+#[case::another_failure(server_error(), json!({}), 1)]
+#[tokio::test]
+async fn a_stream_retry_resends_a_stand_in_overflow_only_without_a_window_refusal_or_context_window_fallback(
+    config: RouterConfig,
+    #[case] stream_failure: AttemptError,
+    #[case] dynamic: Value,
+    #[case] resent: usize,
+) {
+    let host = Arc::new(ScriptedHost {
+        pre_call_facts: stand_in_overflows(&["a1", "a2"]),
+        ..ScriptedHost::default()
+    });
+    let router = router(
+        RouterConfig {
+            enable_pre_call_checks: true,
+            retry_policy: serde_json::from_value(json!({"BadRequestErrorRetries": 2})).unwrap(),
+            ..config
+        },
+        dynamic,
+        host.clone(),
+    );
+    let _ = router
+        .retry_stream(
+            Op::from("acompletion"),
+            stream_request(),
+            origin(json!({"deployment_id": "a1"})),
+            stream_failure,
+        )
+        .await;
+    assert_eq!(host.selected().len(), resent);
+}
+
+#[rstest]
+#[case::the_vision_deployment_may_fit(stand_in_overflows(&["a2"]), "a2")]
+#[case::the_vision_deployment_fits(stand_in_overflows(&[]), "a2")]
+#[tokio::test]
+async fn an_image_request_goes_to_the_vision_deployment_over_a_fitting_text_only_one(
+    config: RouterConfig,
+    #[case] pre_call_facts: PreCallFacts,
+    #[case] picked: &str,
+) {
+    let host = Arc::new(ScriptedHost {
+        pre_call_facts,
+        text_only_ids: &["a1"],
+        ..ScriptedHost::default()
+    });
+    let router = router(
+        RouterConfig {
+            enable_pre_call_checks: true,
+            ..config
+        },
+        json!({}),
+        host.clone(),
+    );
+    let request = RouterRequest {
+        has_image: true,
+        ..request()
+    };
+    let chosen = router
+        .select(&Op::from("acompletion"), &request)
+        .await
+        .unwrap();
+    assert_eq!(chosen.id, picked);
+}
+
+#[rstest]
+#[case::the_provider_refused_the_window(context_window(), 0)]
+#[case::another_failure(server_error(), 1)]
+#[tokio::test]
+async fn a_stream_fallback_sends_a_stand_in_overflow_only_when_no_provider_refused_the_window(
+    config: RouterConfig,
+    #[case] stream_failure: AttemptError,
+    #[case] sent: usize,
+) {
+    let host = Arc::new(ScriptedHost {
+        pre_call_facts: stand_in_overflows(&["b1"]),
+        ..ScriptedHost::default()
+    });
+    let hosted = router(
+        RouterConfig {
+            enable_pre_call_checks: true,
+            ..config
+        },
+        json!({"fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let _ = hosted
+        .router
+        .fallback_stream(
+            &*host,
+            Op::from("acompletion"),
+            stream_request(),
+            origin(json!({"deployment_id": "a1"})),
+            stream_failure,
+        )
+        .await;
+    assert_eq!(host.selected().len(), sent);
+}
+
+#[rstest]
+#[case::a_retry_got_a_window_refusal(context_window(), false)]
+#[case::a_retry_got_another_refusal(failure(FailureKind::BadRequest, 400), true)]
+#[tokio::test]
+async fn a_stream_take_over_falls_back_to_a_stand_in_overflow_only_when_no_retry_was_refused_the_window(
+    config: RouterConfig,
+    #[case] retry_failure: AttemptError,
+    #[case] sent_to_backup: bool,
+) {
+    let host = Arc::new(ScriptedHost {
+        pre_call_facts: stand_in_overflows(&["b1"]),
+        ..ScriptedHost::failing("primary", vec![retry_failure])
+    });
+    let hosted = router(
+        RouterConfig {
+            enable_pre_call_checks: true,
+            ..config
+        },
+        json!({"fallbacks": [{"primary": ["backup"]}]}),
+        host.clone(),
+    );
+    let _ = hosted
+        .take_over(
+            stream_request(),
+            origin(json!({"deployment_id": "a1"})),
+            server_error(),
+        )
+        .await;
+    assert_eq!(host.selected().contains(&"b1".to_owned()), sent_to_backup);
 }
 
 #[rstest]
@@ -3885,6 +4120,53 @@ async fn a_chat_call_keeps_an_unhealthy_azure_chat_deployment_as_it_would_alone(
 }
 
 #[rstest]
+#[case::never_probed(None)]
+#[case::last_failure_gone_stale(Some((false, 3600.0)))]
+#[case::last_probe_healthy(Some((true, 0.0)))]
+#[tokio::test]
+async fn health_check_routing_falls_back_to_the_unhealthy_deployments_beside_a_paused_one(
+    #[case] paused_probe: Option<(bool, f64)>,
+) {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "openai/a"}, "model_info": {"id": "a1"}},
+            {"model_name": "primary", "litellm_params": {"model": "openai/p"}, "model_info": {"id": "p2", "blocked": true}},
+        ],
+        "enable_health_check_routing": true,
+    }))
+    .unwrap();
+    let host = Arc::new(ScriptedHost::default());
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    let active = HealthState {
+        is_healthy: false,
+        timestamp: now,
+    };
+    host.cache.inner.set_health_states(
+        std::iter::once(("a1".to_owned(), active))
+            .chain(paused_probe.map(|(is_healthy, age)| {
+                (
+                    "p2".to_owned(),
+                    HealthState {
+                        is_healthy,
+                        timestamp: now - age,
+                    },
+                )
+            }))
+            .collect(),
+    );
+    let picked = router(config, json!({}), host)
+        .select(&Op::from("acompletion"), &request())
+        .await;
+    assert!(
+        matches!(&picked, Ok(deployment) if deployment.id == "a1"),
+        "{picked:?}"
+    );
+}
+
+#[rstest]
 #[case::beside_a_batch_only_one(json!([
     {"model_name": "primary", "litellm_params": {"model": "azure/chat"}, "model_info": {"id": "c1", "mode": "chat"}},
     {"model_name": "primary", "litellm_params": {"model": "azure/batch"}, "model_info": {"id": "b2", "mode": "batch"}},
@@ -4189,4 +4471,341 @@ async fn a_queue_rejection_on_a_fallback_hop_ends_the_request_with_that_rejectio
         matches!(refused, Err(Error::Attempt { failure: failed, .. }) if failed.queue_rejected())
     );
     assert_eq!(host.selected(), vec!["p1".to_owned(), "b1".to_owned()]);
+}
+
+/// `primary`'s one deployment with `limits`, checked by `enforce_model_rate_limits` at 10:00 UTC
+/// on 2026-01-01 when the core is `enforcing`.
+fn rate_limiting(limits: Value, enforcing: bool, host: Arc<ScriptedHost>) -> Hosted {
+    rate_limiting_among(
+        &["p1"],
+        limits,
+        json!({"pre_call_checks": match enforcing {
+            true => vec!["enforce_model_rate_limits"],
+            false => vec![],
+        }}),
+        host,
+    )
+}
+
+/// [`rate_limiting`] with `primary` served by `ids`, each with `limits`, under `settings`.
+fn rate_limiting_among(
+    ids: &[&str],
+    limits: Value,
+    settings: Value,
+    host: Arc<ScriptedHost>,
+) -> Hosted {
+    let deployment = |id: &&str| {
+        let params = json!({"model": format!("openai/{id}")})
+            .as_object()
+            .into_iter()
+            .chain(limits.as_object())
+            .flatten()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<serde_json::Map<_, _>>();
+        json!({"model_name": "primary", "litellm_params": params, "model_info": {"id": id}})
+    };
+    let config = json!({"model_list": ids.iter().map(deployment).collect::<Vec<_>>()})
+        .as_object()
+        .into_iter()
+        .chain(settings.as_object())
+        .flatten()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<serde_json::Map<_, _>>();
+    let config: RouterConfig = serde_json::from_value(Value::Object(config)).unwrap();
+    let dynamic: RouterDynamicConfig = serde_json::from_value(json!({"num_retries": 2})).unwrap();
+    let router = Router::builder(config, dynamic)
+        .randomness(Arc::new(SeededRandomness::new(7)))
+        .clock(Arc::new(StoppedClock(utc_hour(10))))
+        .build()
+        .unwrap();
+    Hosted { router, host }
+}
+
+fn limit_counter(kind: LimitKind, window: &str) -> LimitCounter {
+    LimitCounter {
+        deployment_id: "p1".to_owned(),
+        model: "openai/p1".to_owned(),
+        kind,
+        window: window.to_owned(),
+    }
+}
+
+/// What the router refused the call with: its status, `retry-after`, retries and text.
+fn refusal(
+    ended: Result<RouterResponse<String>, Error>,
+) -> (Option<u16>, u64, Option<u32>, String) {
+    match ended {
+        Err(Error::Attempt {
+            failure,
+            raised_by: RaisedBy::PreCallCheck(refused),
+        }) => {
+            assert_eq!(
+                (refused.deployment_id.as_str(), failure.retry_after),
+                ("p1", None)
+            );
+            (
+                failure.status,
+                refused.resets_in.as_secs(),
+                failure.num_retries,
+                failure.detail.as_deref().unwrap_or_default().to_owned(),
+            )
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+/// Each success is one request and 10 tokens, so the second call is past every limit here. A
+/// daily limit is tried again when its window starts over, an hour from the clock.
+#[rstest]
+#[case::rpm(json!({"rpm": 1}), 60, "RPM limit=1, current usage=2")]
+#[case::tpm(json!({"tpm": 10}), 60, "TPM limit=10, current usage=10")]
+#[case::rpd(json!({"rpd": 1, "daily_reset_time": "11:00"}), 3600, "RPD limit=1, current usage=2")]
+#[case::tpd(json!({"tpd": 10, "daily_reset_time": "11:00"}), 3600, "TPD limit=10, current usage=10")]
+#[case::rpm_as_text(json!({"rpm": "1"}), 60, "RPM limit=1, current usage=2")]
+#[case::tpd_as_text(json!({"tpd": "10"}), 50_400, "TPD limit=10, current usage=10")]
+#[tokio::test]
+async fn a_deployment_past_a_declared_limit_is_refused_without_an_attempt_or_a_retry(
+    #[case] limits: Value,
+    #[case] retry_after: u64,
+    #[case] over: &str,
+) {
+    let host = Arc::new(ScriptedHost::default());
+    let router = rate_limiting(limits, true, host.clone());
+
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    let refused = refusal(router.call(Op::from("acompletion"), request()).await);
+
+    assert_eq!(
+        refused,
+        (
+            Some(429),
+            retry_after,
+            Some(0),
+            format!("Model rate limit exceeded. {over}"),
+        )
+    );
+    assert_eq!(host.cache.outcomes("p1").await.unwrap().successes, 1);
+    assert_eq!(host.retries(), 0);
+}
+
+#[tokio::test]
+async fn a_refused_request_is_refunded_from_both_request_windows() {
+    let host = Arc::new(ScriptedHost::default());
+    let router = rate_limiting(json!({"rpm": 1, "rpd": 5}), true, host.clone());
+
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        (
+            host.cache
+                .limit_usage(&limit_counter(LimitKind::Rpm, "10-00"), 1.0)
+                .await
+                .unwrap(),
+            host.cache
+                .limit_usage(&limit_counter(LimitKind::Rpd, "2026-01-01"), 5.0)
+                .await
+                .unwrap(),
+        ),
+        (Some(1.0), Some(1.0))
+    );
+}
+
+/// `_refused` reports the refusal with `uncounted=True`, so the group's remaining requests do not
+/// run one low for each request the limit turned away.
+#[tokio::test]
+async fn a_refused_request_counts_against_no_usage_window() {
+    let host = Arc::new(ScriptedHost::default());
+    let router = rate_limiting(json!({"rpm": 1}), true, host.clone());
+
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap_err();
+
+    let deployment = router.registry().deployment("p1").unwrap();
+    assert_eq!(router.health().usage(&deployment).await.unwrap(), (10, 1));
+}
+
+/// `async_routing_strategy_pre_call_checks` cools a refused deployment down with
+/// `set_cooldown_deployments` alone: for the router's `cooldown_time`, however far off the limit's
+/// window starts over, and with no failure counted.
+#[rstest]
+#[case::per_minute(json!({"rpm": 0, "weight": 1}))]
+#[case::per_day(json!({"rpd": 0, "weight": 1}))]
+#[tokio::test]
+async fn a_refused_deployment_cools_down_for_the_routers_cooldown_time_and_counts_no_failure(
+    #[case] limits: Value,
+) {
+    let host = Arc::new(ScriptedHost::default());
+    let ids = ["p1", "p2"];
+    let router = rate_limiting_among(
+        &ids,
+        limits,
+        json!({"pre_call_checks": ["enforce_model_rate_limits"], "cooldown_time": 7}),
+        host.clone(),
+    );
+
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap_err();
+
+    let cooled = router
+        .health()
+        .active_cooldowns(&ids.map(str::to_owned))
+        .await
+        .unwrap();
+    let fails = host.cache.outcomes("p1").await.unwrap().fails
+        + host.cache.outcomes("p2").await.unwrap().fails;
+    assert_eq!(
+        (
+            cooled
+                .iter()
+                .map(|(_, cooldown)| cooldown.cooldown_time)
+                .collect::<Vec<_>>(),
+            fails,
+        ),
+        (vec![7.0, 7.0], 0)
+    );
+}
+
+/// Puts deployment `id` of [`rate_limiting_among`] at a `rpm` of 1 for the clock's minute.
+async fn at_its_rpm(host: &ScriptedHost, id: &str) {
+    let counter = LimitCounter {
+        deployment_id: id.to_owned(),
+        model: format!("openai/{id}"),
+        kind: LimitKind::Rpm,
+        window: "10-00".to_owned(),
+    };
+    host.cache
+        .add_limit_usage(&counter, 1, Duration::from_secs(60))
+        .await
+        .unwrap();
+}
+
+/// A refused deployment with a sibling cools down, so Python's retry loop moves on to the sibling
+/// at once (`_refused`, then `should_retry_this_error` with a healthy deployment left).
+#[tokio::test]
+async fn a_refused_deployment_with_a_sibling_is_retried_on_the_sibling() {
+    let host = Arc::new(ScriptedHost::default());
+    let ids = ["p1", "p2"];
+    let router = rate_limiting_among(
+        &ids,
+        json!({"rpm": 1}),
+        json!({"pre_call_checks": ["enforce_model_rate_limits"]}),
+        host.clone(),
+    );
+    at_its_rpm(&host, "p1").await;
+
+    let served = router.call(Op::from("acompletion"), request()).await;
+
+    let cooled = router
+        .health()
+        .active_cooldowns(&ids.map(str::to_owned))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            served.is_ok(),
+            host.cache.outcomes("p2").await.unwrap().successes,
+            cooled.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            host.retries(),
+        ),
+        (true, 1, vec!["p1"], 1)
+    );
+}
+
+/// When every deployment is past its limit, each is refused once and the call ends on the last
+/// refusal, with no healthy deployment left to retry on.
+#[tokio::test]
+async fn a_group_past_every_limit_is_refused_once_per_deployment() {
+    let host = Arc::new(ScriptedHost::default());
+    let ids = ["p1", "p2"];
+    let router = rate_limiting_among(
+        &ids,
+        json!({"rpm": 1}),
+        json!({"pre_call_checks": ["enforce_model_rate_limits"]}),
+        host.clone(),
+    );
+    at_its_rpm(&host, "p1").await;
+    at_its_rpm(&host, "p2").await;
+
+    let ended = router.call(Op::from("acompletion"), request()).await;
+
+    let cooled = router
+        .health()
+        .active_cooldowns(&ids.map(str::to_owned))
+        .await
+        .unwrap();
+    let refused_with = match ended {
+        Err(error) if error.refused().is_some() => {
+            error.attempt().and_then(|failure| failure.status)
+        }
+        _ => None,
+    };
+    assert_eq!(
+        (refused_with, cooled.len(), host.retries()),
+        (Some(429), 2, 1)
+    );
+}
+
+#[tokio::test]
+async fn a_streams_tokens_count_once_the_host_reports_its_end() {
+    let host = Arc::new(ScriptedHost {
+        deferred: true,
+        ..ScriptedHost::default()
+    });
+    let router = rate_limiting(json!({"tpm": 10}), true, host.clone());
+
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    let before = router.call(Op::from("acompletion"), request()).await;
+    router
+        .report_success("p1", 10.0, 0.0, SuccessReport::default())
+        .await
+        .unwrap();
+    let after = router.call(Op::from("acompletion"), request()).await;
+
+    assert!(before.is_ok(), "{before:?}");
+    assert_eq!(
+        refusal(after).3,
+        "Model rate limit exceeded. TPM limit=10, current usage=10"
+    );
+}
+
+#[tokio::test]
+async fn a_router_not_told_to_enforce_the_limits_counts_nothing() {
+    let host = Arc::new(ScriptedHost::default());
+    let router = rate_limiting(json!({"rpm": 1}), false, host.clone());
+
+    router
+        .call(Op::from("acompletion"), request())
+        .await
+        .unwrap();
+    let second = router.call(Op::from("acompletion"), request()).await;
+
+    assert!(second.is_ok(), "{second:?}");
+    assert_eq!(
+        host.cache
+            .limit_usage(&limit_counter(LimitKind::Rpm, "10-00"), 1.0)
+            .await
+            .unwrap(),
+        None
+    );
 }

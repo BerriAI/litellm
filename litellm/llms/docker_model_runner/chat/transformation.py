@@ -114,7 +114,7 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
 
         return complete_url
 
-    def get_supported_openai_params(self, model: str) -> list:
+    def get_supported_openai_params(self, model: str) -> list[str]:
         """
         Get the supported OpenAI params for Docker Model Runner.
 
@@ -125,10 +125,10 @@ class DockerModelRunnerChatConfig(OpenAIGPTConfig):
     def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
-        optional_params: dict,
+        optional_params: dict[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         """
         Map OpenAI parameters to Docker Model Runner parameters.
 

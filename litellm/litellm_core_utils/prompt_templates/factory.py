@@ -73,11 +73,15 @@ from litellm.types.llms.vertex_ai import PartType as VertexPartType
 from litellm.types.utils import GenericImageParsingChunk
 
 from .common_utils import (
+    DEFS_MAX_INLINED_BYTES,
+    DefsInliningBudgetExceededError,
     as_openai_image_part,
     converse_redacted_content,
     convert_content_list_to_str,
     has_blank_redacted_data,
     infer_content_type_from_url_and_content,
+    inline_refs_and_drop_defs,
+    inline_refs_outside_root_defs,
     is_encrypted_reasoning_block,
     is_non_content_values_set,
     is_unsignable_thinking_block,
@@ -86,6 +90,7 @@ from .common_utils import (
     salvage_concatenated_tool_arguments,
 )
 from .image_handling import convert_url_to_base64, is_pdf_media_type
+from .json_schema_utils import schema_with_root_ref_resolved, schema_without_unreferenced_defs
 
 
 def default_pt(messages):
@@ -222,7 +227,7 @@ def convert_to_ollama_image(openai_image_url: str):
         )
 
 
-def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> tuple[str, int]:
+def _handle_ollama_system_message(messages: Sequence[AllMessageValues], prompt: str, msg_i: int) -> tuple[str, int]:
     system_content_str = ""
     ## MERGE CONSECUTIVE SYSTEM CONTENT ##
     while msg_i < len(messages) and messages[msg_i]["role"] == "system":
@@ -236,6 +241,7 @@ def _handle_ollama_system_message(messages: list, prompt: str, msg_i: int) -> tu
 
 _OLLAMA_USER_ROLES: Final = frozenset({"user", "tool", "function"})
 _DECODED_JSON: Final = TypeAdapter(object)
+_TOOL_SCHEMA: Final = TypeAdapter(dict[str, object])
 
 
 def _ollama_bad_message(model: str, message: AllMessageValues, msg_i: int, detail: str) -> "litellm.BadRequestError":
@@ -468,7 +474,11 @@ def phind_codellama_pt(messages):
 
 
 def _render_chat_template(
-    env: ImmutableSandboxedEnvironment, chat_template: str, bos_token: str, eos_token: str, messages: list
+    env: ImmutableSandboxedEnvironment,
+    chat_template: str,
+    bos_token: str,
+    eos_token: str,
+    messages: Sequence[Mapping[str, object]],
 ) -> str:
     """
     Shared template rendering logic for both sync and async hf_chat_template
@@ -653,7 +663,7 @@ def _fetch_and_extract_template(
     return chat_template, bos_token, eos_token
 
 
-async def ahf_chat_template(model: str, messages: list, chat_template: str | None = None):
+async def ahf_chat_template(model: str, messages: Sequence[Mapping[str, object]], chat_template: str | None = None):
     """HuggingFace chat template (async version)"""
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
         aget_chat_template_file,
@@ -680,7 +690,7 @@ async def ahf_chat_template(model: str, messages: list, chat_template: str | Non
     )
 
 
-def hf_chat_template(model: str, messages: list, chat_template: str | None = None):
+def hf_chat_template(model: str, messages: Sequence[Mapping[str, object]], chat_template: str | None = None):
     """HuggingFace chat template (sync version)"""
     from litellm.litellm_core_utils.prompt_templates.huggingface_template_handler import (
         get_chat_template_file,
@@ -707,13 +717,13 @@ def hf_chat_template(model: str, messages: list, chat_template: str | None = Non
     )
 
 
-def deepseek_r1_pt(messages):
+def deepseek_r1_pt(messages: Sequence[Mapping[str, object]]):
     return hf_chat_template(model="deepseek-r1/deepseek-r1-7b-instruct", messages=messages)
 
 
 # Anthropic template
 def claude_2_1_pt(
-    messages: list,
+    messages: Sequence[Mapping[str, object]],
 ):  # format - https://docs.anthropic.com/claude/docs/how-to-use-system-prompts
     """
     Claude v2.1 allows system prompts (no Human: needed), but requires it be followed by Human:
@@ -808,7 +818,7 @@ def anthropic_pt(
     return prompt
 
 
-def construct_format_parameters_prompt(parameters: dict):
+def construct_format_parameters_prompt(parameters: Mapping[str, object]):
     parameter_str = "<parameter>\n"
     for k, v in parameters.items():
         parameter_str += f"<{k}>"
@@ -818,7 +828,7 @@ def construct_format_parameters_prompt(parameters: dict):
     return parameter_str
 
 
-def construct_format_tool_for_claude_prompt(name: object, description: object, parameters):
+def construct_format_tool_for_claude_prompt(name: object, description: object, parameters: Mapping[str, object]):
     constructed_prompt: Final = (
         "<tool_description>\n"
         f"<tool_name>{name}</tool_name>\n"
@@ -1017,7 +1027,7 @@ def convert_to_anthropic_tool_result_xml(message: dict) -> str:
     return anthropic_tool_result
 
 
-def convert_to_anthropic_tool_invoke_xml(tool_calls: list) -> str:
+def convert_to_anthropic_tool_invoke_xml(tool_calls: Sequence[object]) -> str:
     invokes = ""
     for tool in tool_calls:
         if get_attribute_or_key(tool, "type") != "function":
@@ -2625,7 +2635,7 @@ def add_cache_control_to_content(
     | AnthropicMessagesDocumentParam
     | AnthropicMessagesToolUseParam
     | ChatCompletionThinkingBlock,
-    original_content_element: dict | AllMessageValues | ChatCompletionFileObject,
+    original_content_element: Mapping[str, object] | AllMessageValues | ChatCompletionFileObject,
 ):
     cache_control_param: Final = original_content_element.get("cache_control")
     if cache_control_param is not None and isinstance(cache_control_param, dict):
@@ -4133,13 +4143,13 @@ def convert_openai_message_to_cohere_tool_result(
         return cohere_tool_result
 
 
-def get_all_tool_calls(messages: list) -> list:
+def get_all_tool_calls(messages: Sequence[Mapping[str, object]]) -> list:
     """
     Returns extracted list of `tool_calls`.
 
     Done to handle openai no longer returning tool call 'name' in tool results.
     """
-    tool_calls: Final[list] = []
+    tool_calls: Final[list[object]] = []
     for m in messages:
         if m.get("tool_calls", None) is not None:
             if isinstance(m["tool_calls"], list):
@@ -4148,7 +4158,7 @@ def get_all_tool_calls(messages: list) -> list:
     return tool_calls
 
 
-def convert_to_cohere_tool_invoke(tool_calls: list) -> list[ToolCallObject]:
+def convert_to_cohere_tool_invoke(tool_calls: Sequence[object]) -> list[ToolCallObject]:
     """
     OpenAI tool invokes:
     {
@@ -4205,7 +4215,7 @@ def cohere_messages_pt_v2(
     - message must be at least 1 token long or tool results must be specified.
     - cannot specify tool_results if the last entry in chat history contains a user message
     """
-    tool_calls: Final[list] = get_all_tool_calls(messages=messages)
+    tool_calls: Final[list[object]] = get_all_tool_calls(messages=messages)
 
     ## GET MOST RECENT MESSAGE
     most_recent_message: Final = messages.pop(-1)
@@ -4307,7 +4317,7 @@ def cohere_messages_pt_v2(
 
 
 def cohere_message_pt(messages: list):
-    tool_calls: Final[list] = get_all_tool_calls(messages=messages)
+    tool_calls: Final[list[object]] = get_all_tool_calls(messages=messages)
     prompt = ""
     tool_results: Final = []
     for message in messages:
@@ -4322,7 +4332,7 @@ def cohere_message_pt(messages: list):
 
 
 def amazon_titan_pt(
-    messages: list,
+    messages: Sequence[Mapping[str, object]],
 ):  # format - https://github.com/BerriAI/litellm/issues/1896
     """
     Amazon Titan uses 'User:' and 'Bot: in it's prompt template
@@ -4372,7 +4382,7 @@ def _load_image_from_url(image_url: str):
         raise e
 
 
-def _gemini_vision_convert_messages(messages: list):
+def _gemini_vision_convert_messages(messages: Sequence[Mapping[str, object]]):
     """
     Converts given messages for GPT-4 Vision to Gemini format.
 
@@ -4439,7 +4449,7 @@ def _gemini_vision_convert_messages(messages: list):
         raise e
 
 
-def gemini_text_image_pt(messages: list):
+def gemini_text_image_pt(messages: Sequence[Mapping[str, object]]):
     """
     {
         "contents":[
@@ -4476,7 +4486,7 @@ def gemini_text_image_pt(messages: list):
     return content
 
 
-def azure_text_pt(messages: list):
+def azure_text_pt(messages: Sequence[Mapping[str, object]]):
     prompt = ""
     for message in messages:
         if isinstance(message["content"], str):
@@ -4491,7 +4501,7 @@ def azure_text_pt(messages: list):
 
 
 ###### AZURE AI #######
-def stringify_json_tool_call_content(messages: list) -> list:
+def stringify_json_tool_call_content(messages: list[AllMessageValues]) -> list[AllMessageValues]:
     """
 
     - Check 'content' in tool role -> convert to dict (if not) -> stringify
@@ -6644,7 +6654,7 @@ def add_cache_point_tool_block(
     return None
 
 
-def _is_bedrock_tool_block(tool: dict) -> bool:
+def _is_bedrock_tool_block(tool: Mapping[str, object]) -> bool:
     """
     Check if a tool is already a BedrockToolBlock.
 
@@ -6722,8 +6732,8 @@ def _bedrock_tools_pt(
         }
     ]
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
     from litellm.llms.bedrock.common_utils import (
+        bedrock_converse_resolves_tool_schema_defs,
         bedrock_converse_supports_strict_tools,
         normalize_json_schema_custom_types_to_object,
     )
@@ -6735,7 +6745,9 @@ def _bedrock_tools_pt(
     # maps toolSpec to the native Anthropic tool shape, which has no strict
     # field, even though Anthropic's native API accepts it as a top-level key.
     supports_strict_tools: Final = bool(model and bedrock_converse_supports_strict_tools(model))
+    resolves_schema_defs: Final = bedrock_converse_resolves_tool_schema_defs(model)
     tool_block_list: Final[list[BedrockToolBlock]] = []
+    inlined_bytes = 0  # rebind-ok: the inlining budget is shared by every tool in the request
     for tool_idx, tool in enumerate(tools):
         # Check if tool is already a BedrockToolBlock (e.g., systemTool for Nova grounding)
         if _is_bedrock_tool_block(tool):
@@ -6770,13 +6782,26 @@ def _bedrock_tools_pt(
         else:
             description = name
 
-        defs = parameters.pop("$defs", {})
-        defs_copy = defs if isinstance(defs, dict) else {}
-        # Expand $ref references in parameters using the definitions
-        # Note: We don't pre-flatten defs as that causes exponential memory growth
-        # with circular references (see issue #19098). unpack_defs handles nested
-        # refs recursively and correctly detects/skips circular references.
-        unpack_defs(parameters, defs_copy)
+        remaining_inline_bytes = DEFS_MAX_INLINED_BYTES - inlined_bytes
+        tool_schema = _TOOL_SCHEMA.validate_python(parameters)
+        try:
+            if resolves_schema_defs and (defs_keeping_schema := schema_with_root_ref_resolved(tool_schema)) is not None:
+                inlined, tool_inlined_bytes = inline_refs_outside_root_defs(
+                    schema_without_unreferenced_defs(defs_keeping_schema), remaining_inline_bytes
+                )
+                parameters = dict(schema_without_unreferenced_defs(inlined))
+            else:
+                inlined, tool_inlined_bytes = inline_refs_and_drop_defs(tool_schema, remaining_inline_bytes)
+                parameters = dict(inlined)
+        except DefsInliningBudgetExceededError as e:
+            raise litellm.ContextWindowExceededError(
+                message=f"Inlining the $ref definitions of tool '{raw_name}' copies more than "
+                f"{DEFS_MAX_INLINED_BYTES:,} bytes of definitions across the request's tools, "
+                "more than a model context window holds. Reference shared $defs less often or flatten the schema.",
+                model=model,
+                llm_provider="bedrock",
+            ) from e
+        inlined_bytes += tool_inlined_bytes
         normalize_json_schema_custom_types_to_object(parameters)
         if not (isinstance(root_type := parameters.get("type"), str) and root_type in _valid_json_schema_root_types):
             parameters["type"] = "object"

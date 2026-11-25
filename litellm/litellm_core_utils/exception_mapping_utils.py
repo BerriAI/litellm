@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.secret_redaction import redact_string as redact_
 from litellm.llms.base_llm.chat.transformation import RelayOnlyBodyLLMException
 from litellm.llms.bedrock.common_utils import bedrock_model_reaches_converse_by_default
 from litellm.llms.bigmodel.common_utils import raise_bigmodel_business_error
+from litellm.llms.minimax.common_utils import minimax_safety_error
 from litellm.types.utils import LlmProviders
 
 from ..exceptions import (
@@ -2306,7 +2307,7 @@ def _map_azure_exception(
     # payload in addition to string matching.
     azure_error_code: str | None = None
     try:
-        body_dict: Final = getattr(original_exception, "body", None) or {}
+        body_dict: Final[object] = getattr(original_exception, "body", None) or {}
         if isinstance(body_dict, dict):
             if isinstance(body_dict.get("error"), dict):
                 azure_error_code = body_dict["error"].get("code")
@@ -3199,6 +3200,10 @@ def exception_type(
                 )
             if custom_llm_provider == "bigmodel":
                 raise_bigmodel_business_error(model, f"{exception_provider} - {error_str}", original_exception)  # pyright: ignore[reportUnknownArgumentType]  # exception_type takes untyped parameters
+            if custom_llm_provider == "minimax" and (
+                safety_error := minimax_safety_error(model, f"{exception_provider} - {error_str}", original_exception)  # pyright: ignore[reportUnknownArgumentType]  # exception_type takes untyped parameters
+            ):
+                raise safety_error
             if custom_llm_provider == "openrouter":
                 _map_openrouter_exception(
                     model=model,

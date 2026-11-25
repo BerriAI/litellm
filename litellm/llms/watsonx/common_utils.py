@@ -204,7 +204,7 @@ async def aconvert_watsonx_messages_to_prompt(
     model: str,
     messages: list[AllMessageValues],
     provider: str,
-    custom_prompt_dict: dict,
+    custom_prompt_dict: dict[str, object],
 ) -> str:
     """Async version of convert_watsonx_messages_to_prompt"""
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
@@ -222,7 +222,7 @@ def convert_watsonx_messages_to_prompt(
     model: str,
     messages: list[AllMessageValues],
     provider: str,
-    custom_prompt_dict: dict,
+    custom_prompt_dict: dict[str, object],
 ) -> str:
     """Sync version of convert_watsonx_messages_to_prompt"""
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
@@ -240,11 +240,11 @@ def convert_watsonx_messages_to_prompt(
 class IBMWatsonXMixin:
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict:

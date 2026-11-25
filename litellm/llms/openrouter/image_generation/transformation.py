@@ -277,14 +277,14 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, object],
         model: str,
         messages: list[AllMessageValues],
         optional_params: Mapping[str, object],
         litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, object]:
         api_key = api_key or litellm.api_key or get_secret_str("OPENROUTER_API_KEY")
         headers.update(
             {
@@ -418,7 +418,9 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
                 headers={},
             )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, object] | httpx.Headers
+    ) -> BaseLLMException:
         """Get the appropriate error class for OpenRouter errors."""
         return OpenRouterException(
             message=error_message,

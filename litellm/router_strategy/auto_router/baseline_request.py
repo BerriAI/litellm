@@ -131,8 +131,8 @@ def baseline_request(
         **(_parameters(snapshot.get("extra_body")) if include_extra_body else {}),
     }
     requested: Final = {**_parameters(caller), **(_parameters(caller.get("extra_body")) if include_extra_body else {})}
-    configured_tools: Final = configured.get("tools") or []
-    caller_tools: Final = requested.get("tools") or []
+    configured_tools: Final[object] = configured.get("tools") or []
+    caller_tools: Final[object] = requested.get("tools") or []
     merged_tools: Final = (
         {"tools": [*configured_tools, *caller_tools]}
         if (configured_tools or caller_tools) and isinstance(configured_tools, list) and isinstance(caller_tools, list)

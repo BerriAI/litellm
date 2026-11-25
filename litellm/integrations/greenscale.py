@@ -39,7 +39,7 @@ class GreenscaleLogger:
                 data["invocationLatency"] = int((end_time - start_time).total_seconds() * 1000)
 
             # Add additional metadata keys to tags
-            tags: Final = []
+            tags: Final[list[dict[str, object]]] = []
             metadata: Final = kwargs.get("litellm_params", {}).get("metadata", {})
             for key, value in metadata.items():
                 if key.startswith("greenscale"):

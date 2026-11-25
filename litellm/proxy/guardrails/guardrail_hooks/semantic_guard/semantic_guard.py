@@ -9,6 +9,8 @@ than an LLM call (~20-50ms per request for embedding).
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Final, Protocol
 
+from typing_extensions import ReadOnly, TypedDict, Unpack
+
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -35,6 +37,24 @@ if TYPE_CHECKING:
     from litellm.types.utils import LLMResponseTypes
 
 
+class _CustomGuardrailOptions(TypedDict, total=False, extra_items=object):
+    """Keyword options ``CustomGuardrail.__init__`` accepts beyond the ones this guardrail sets itself."""
+
+    mask_request_content: ReadOnly[bool]
+    mask_response_content: ReadOnly[bool]
+    violation_message_template: ReadOnly[str | None]
+    end_session_after_n_fails: ReadOnly[int | None]
+    on_violation: ReadOnly[str | None]
+    realtime_violation_message: ReadOnly[str | None]
+    on_sensitive_data: ReadOnly[str | None]
+    sensitive_data_route_to_model: ReadOnly[str | None]
+    sticky_session_routing: ReadOnly[bool]
+    run_in_parallel: ReadOnly[bool]
+    scan_raw_request: ReadOnly[bool]
+    only_scan_new_messages: ReadOnly[bool]
+    timeout: ReadOnly[float | None]
+
+
 class SemanticGuardrail(CustomGuardrail):
     """
     Semantic matching guardrail that blocks requests matching known-bad patterns
@@ -57,7 +77,7 @@ class SemanticGuardrail(CustomGuardrail):
         on_flagged_action: str = "block",
         event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
-        **kwargs,
+        **kwargs: Unpack[_CustomGuardrailOptions],
     ):
         super().__init__(
             guardrail_name=guardrail_name,
