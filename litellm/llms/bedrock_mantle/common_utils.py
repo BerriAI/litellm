@@ -17,11 +17,14 @@ from collections.abc import Mapping
 from functools import partial
 from typing import Final, Literal
 
+import litellm
+from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.litellm_core_utils.optional_imports import ensure_optional_import
 from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS
 from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.router import GenericLiteLLMParams
 
 BEDROCK_MANTLE_DEFAULT_REGION: Final = "us-east-1"
 BEDROCK_REGIONS: Final = frozenset(AmazonBedrockGlobalConfig().get_all_regions())
@@ -159,8 +162,36 @@ _GEMMA_4_REJECTED_SCHEMA_KEYWORDS: Final = frozenset(
 )
 
 
-def is_mantle_gemma_4_model(model: str) -> bool:
-    return split_mantle_region_prefix(model)[1].startswith("google.gemma-4")
+def _declared_all_json_schema_keywords_support(
+    litellm_params: Mapping[str, object] | GenericLiteLLMParams,
+) -> bool | None:
+    match litellm_params:
+        case GenericLiteLLMParams(model_info={"supports_all_json_schema_keywords": bool(declared)}):
+            return declared
+        case {"model_info": {"supports_all_json_schema_keywords": bool(declared)}}:
+            return declared
+        case _:
+            return None
+
+
+def live_model_cost() -> Mapping[str, object]:
+    return litellm.model_cost  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the registry is loaded as untyped JSON
+
+
+def mantle_supports_all_json_schema_keywords(
+    model: str,
+    litellm_params: Mapping[str, object] | GenericLiteLLMParams,
+    model_cost: Mapping[str, object],
+) -> bool:
+    declared: Final = _declared_all_json_schema_keywords_support(litellm_params)
+    if declared is not None:
+        return declared
+    bare_model: Final = split_mantle_region_prefix(model)[1]
+    match as_str_mapping(model_cost.get(f"bedrock_mantle/{bare_model}")):
+        case {"supports_all_json_schema_keywords": bool(listed)}:
+            return listed
+        case _:
+            return not bare_model.startswith("google.gemma-4")
 
 
 def drop_schema_keywords_gemma_4_rejects(schema: Mapping[str, object]) -> Mapping[str, object]:

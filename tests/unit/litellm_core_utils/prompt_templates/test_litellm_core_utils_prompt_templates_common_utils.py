@@ -2913,6 +2913,26 @@ class TestDropSchemaKeywords:
         }
         assert schema == _keyword_schema()
 
+    def test_keeps_a_not_subschema_as_sent_while_dropping_the_keywords_around_it(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
+
+        tags_not: Final = {"uniqueItems": True, "items": {"type": "object", "propertyNames": {"maxLength": 3}}}
+        root_not: Final = {"if": {"type": "object"}, "then": {"required": ["tags"]}}
+        schema = {
+            "type": "object",
+            "properties": {"tags": {"type": "array", "uniqueItems": True, "not": tags_not}},
+            "not": root_not,
+        }
+
+        result = drop_schema_keywords(schema, _DROPPED_KEYWORDS)
+
+        assert result == {
+            "type": "object",
+            "properties": {"tags": {"type": "array", "not": tags_not}},
+            "not": root_not,
+        }
+        assert tags_not == {"uniqueItems": True, "items": {"type": "object", "propertyNames": {"maxLength": 3}}}
+
     def test_returns_the_same_object_when_no_keyword_is_in_a_schema_position(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import drop_schema_keywords
 

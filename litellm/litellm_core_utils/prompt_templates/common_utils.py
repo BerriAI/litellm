@@ -1758,8 +1758,9 @@ def drop_schema_keywords(schema: Mapping[str, object], keywords: frozenset[str])
 
     Only schema positions are walked, as in :func:`drop_non_python_regex_patterns`, so a
     property or ``$defs`` entry that is only named like a keyword stays, and so does a key
-    inside ``default``, ``examples`` or ``const`` data. The input is never mutated, and the
-    same object comes back when nothing was dropped.
+    inside ``default``, ``examples`` or ``const`` data. A ``not`` subschema is kept as sent,
+    since dropping a keyword under it would forbid values the caller allowed. The input is
+    never mutated, and the same object comes back when nothing was dropped.
     """
     return _schema_rebuilt(schema, partial(_node_without_keywords, keywords=keywords))
 
@@ -1956,7 +1957,7 @@ def _node_without_keywords(
     keywords: frozenset[str],
 ) -> Mapping[str, object]:
     kept: Final = {
-        key: _keyword_value_rebuilt(key, value, rebuilt, _rejects_no_regex)
+        key: value if key == "not" else _keyword_value_rebuilt(key, value, rebuilt, _rejects_no_regex)
         for key, value in node.items()
         if key not in keywords
     }

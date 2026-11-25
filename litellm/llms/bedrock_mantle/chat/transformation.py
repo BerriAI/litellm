@@ -25,7 +25,8 @@ from litellm.llms.bedrock_mantle.common_utils import (
     BEDROCK_MANTLE_DEFAULT_REGION,
     BedrockMantleAuthMixin,
     drop_schema_keywords_gemma_4_rejects,
-    is_mantle_gemma_4_model,
+    live_model_cost,
+    mantle_supports_all_json_schema_keywords,
 )
 from litellm.llms.mistral.common_utils import with_mistral_tool_call_ids
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
@@ -71,6 +72,17 @@ def _chat_value_gemma_4_accepts(key: str, value: object) -> object:
     if isinstance(value, list):
         return [_chat_entry_gemma_4_accepts(entry, path) for entry in _JSON_ARRAY.validate_python(value)]
     return _chat_entry_gemma_4_accepts(value, path)
+
+
+def _with_schemas_model_accepts(
+    params: Mapping[str, object], model: str, litellm_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    if mantle_supports_all_json_schema_keywords(model, litellm_params, live_model_cost()):
+        return params
+    verbose_logger.debug(
+        "Bedrock Mantle %s does not support all JSON schema keywords, so the ones it rejects are dropped", model
+    )
+    return MappingProxyType({key: _chat_value_gemma_4_accepts(key, value) for key, value in params.items()})
 
 
 class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
@@ -208,9 +220,18 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         request: Final = _REQUEST_BODY.validate_python(
             super().transform_request(model, sent_messages, optional_params, litellm_params, headers)  # pyright: ignore[reportUnknownMemberType]  # OpenAIGPTConfig.transform_request types its params and result as bare dicts
         )
-        if not is_mantle_gemma_4_model(model):
-            return request
-        return {key: _chat_value_gemma_4_accepts(key, value) for key, value in request.items()}
+        return dict(_with_schemas_model_accepts(request, model, litellm_params))
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return _with_schemas_model_accepts(
+            super().transform_extra_body(extra_body, request, model, litellm_params), model, litellm_params
+        )
 
     def _supports_reasoning(self, model: str) -> bool:
         try:

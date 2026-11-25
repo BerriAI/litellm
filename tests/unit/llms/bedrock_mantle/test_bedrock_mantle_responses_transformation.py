@@ -448,6 +448,29 @@ class TestBedrockMantleResponsesGemma4SchemaKeywords:
         assert body["tools"][1]["tools"][0]["parameters"] == _schema_with_gemma_4_refused_keywords()
         assert body["text"]["format"]["schema"] == _schema_with_gemma_4_refused_keywords()
 
+    def test_deployment_model_info_with_full_schema_support_keeps_every_keyword_on_gemma_4(self) -> None:
+        body: Final = BedrockMantleResponsesAPIConfig().transform_responses_api_request(
+            model="google.gemma-4-31b",
+            input="hello",
+            response_api_optional_request_params=self._params(),
+            litellm_params=GenericLiteLLMParams(model_info={"supports_all_json_schema_keywords": True}),
+            headers={},
+        )
+
+        assert body["tools"][0]["parameters"] == _schema_with_gemma_4_refused_keywords()
+        assert body["text"]["format"]["schema"] == _schema_with_gemma_4_refused_keywords()
+
+    @pytest.mark.parametrize("model, drops", [("google.gemma-4-31b", True), ("openai.gpt-oss-120b", False)])
+    def test_schemas_sent_through_extra_body_follow_the_same_rule(self, model: str, drops: bool) -> None:
+        merged: Final = BedrockMantleResponsesAPIConfig().transform_extra_body(
+            extra_body=self._params(), request={}, model=model, litellm_params=GenericLiteLLMParams()
+        )
+
+        expected: Final = _SCHEMA_GEMMA_4_ACCEPTS if drops else _schema_with_gemma_4_refused_keywords()
+        assert merged["tools"][0]["parameters"] == expected
+        assert merged["tools"][1]["tools"][0]["parameters"] == expected
+        assert merged["text"]["format"]["schema"] == expected
+
 
 class TestBedrockMantleSamplingParams:
     """Mantle serves OpenAI's gpt-5 models under their OpenAI sampling rule: top_p and a
