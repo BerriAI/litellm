@@ -4728,6 +4728,12 @@ class ProxyLogging:
                 request_data,  # pyright: ignore[reportUnknownArgumentType]  # the hook's request_data parameter is untyped on this line
                 e,
                 read_tap,
+                partial(
+                    self.post_call_failure_hook,
+                    request_data=request_data,  # pyright: ignore[reportUnknownArgumentType]  # the hook's request_data parameter is untyped on this line
+                    original_exception=e,
+                    user_api_key_dict=user_api_key_dict,
+                ),
             )
             if not refused_messages and not ProxyLogging._discard_deferred_stream_logging_for_failure(request_data, e):
                 ProxyLogging.fire_deferred_stream_logging(request_data)
@@ -5044,7 +5050,10 @@ class ProxyLogging:
 
     @staticmethod
     async def _refuse_messages_stream(
-        request_data: Mapping[str, object], error: Exception, read_tap: "_ReadBytesTap[object]"
+        request_data: Mapping[str, object],
+        error: Exception,
+        read_tap: "_ReadBytesTap[object]",
+        fail_request: Callable[[], Awaitable[object]],
     ) -> bool:
         """Drop the success log of a /v1/messages byte stream that ends in an error ``post_call_failure_hook`` logs
         as a failure, parked or still to come at teardown, and bill the stream on the failure row instead: the
@@ -5082,7 +5091,7 @@ class ProxyLogging:
                 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
                 GLOBAL_LOGGING_WORKER.ensure_initialized_and_enqueue(
-                    async_coroutine=ProxyLogging._log_refused_stream_after_disconnect(logging_obj, stopping, error)
+                    async_coroutine=ProxyLogging._fail_refused_stream_after_disconnect(stopping, fail_request)
                 )
                 raise
             return True
@@ -5102,14 +5111,11 @@ class ProxyLogging:
         return True
 
     @staticmethod
-    async def _log_refused_stream_after_disconnect(
-        logging_obj: Logging, stopping: "asyncio.Future[None]", error: Exception
+    async def _fail_refused_stream_after_disconnect(
+        stopping: "asyncio.Future[None]", fail_request: Callable[[], Awaitable[object]]
     ) -> None:
         await asyncio.wait((stopping,))
-        await logging_obj.mask_refused_stream_failure_log()
-        await ProxyLogging._dispatch_proxy_only_failure_handlers(
-            litellm_logging_obj=logging_obj, original_exception=error
-        )
+        await fail_request()
 
     async def arelease_max_parallel_requests_on_disconnect(
         self,

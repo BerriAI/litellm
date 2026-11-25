@@ -3819,7 +3819,15 @@ async def test_refused_native_messages_stream_still_bills_its_failure_when_the_c
             raise BlockedPiiEntityError(entity_type="PHONE_NUMBER", guardrail_name="pii-output")
             yield
 
-    monkeypatch.setattr(litellm, "callbacks", [RefusingHook()])
+    failure_hooks: Final[list[str]] = []
+
+    class FailureHookRecorder(CustomLogger):
+        async def async_post_call_failure_hook(
+            self, request_data, original_exception, user_api_key_dict, traceback_str=None
+        ):
+            failure_hooks.append(type(original_exception).__name__)
+
+    monkeypatch.setattr(litellm, "callbacks", [RefusingHook(), FailureHookRecorder()])
     spend_rows: Final = _SpendRows()
     logging_obj: Final = _refused_stream_logging_obj(spend_rows)
 
@@ -3856,12 +3864,13 @@ async def test_refused_native_messages_stream_still_bills_its_failure_when_the_c
     with pytest.raises(asyncio.CancelledError):
         await client[0]
     for _ in range(100):
-        if spend_rows.rows:
+        if spend_rows.rows and failure_hooks:
             break
         await asyncio.sleep(0.05)
 
     assert [row[:2] for row in spend_rows.rows] == [("failure", 30)]
     assert spend_rows.rows[0][3] > 0
+    assert failure_hooks == ["BlockedPiiEntityError"]
 
 
 @pytest.mark.asyncio

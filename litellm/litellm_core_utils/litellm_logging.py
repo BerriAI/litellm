@@ -3883,6 +3883,8 @@ class Logging(LiteLLMLoggingBaseClass):
         return hooked_result
 
     async def mask_refused_stream_failure_log(self) -> None:
+        if should_redact_message_logging(self.model_call_details):
+            return
         for callback in self._async_failure_callbacks():
             if not isinstance(callback, CustomGuardrail):
                 continue
