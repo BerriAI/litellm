@@ -125,7 +125,9 @@ async def test_passthrough_proxy_identity_reaches_sts_and_isolates_cached_sessio
         ("converse/", "bedrock"),
     ],
 )
-async def test_bedrock_passthrough_router_replaces_alias_in_endpoint(route: str, custom_llm_provider: str | None) -> None:
+async def test_bedrock_passthrough_router_replaces_alias_in_endpoint(
+    route: str, custom_llm_provider: str | None
+) -> None:
     deployment_model: Final = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
     requests: Final[list[httpx.Request]] = []
 
@@ -1140,6 +1142,35 @@ async def test_invoke_stream_relay_is_priced_at_the_service_tier_bedrock_served(
     assert await relay.wait_for_spend_flush() is True
     assert callback.kwargs is not None
     assert callback.kwargs["response_cost"] == pytest.approx(_tier_priced_cost(price_suffix))
+
+
+def _logged_converse_reply_cost(deployment_model: str) -> float:
+    endpoint: Final = f"/model/{CONVERSE_MODEL}/converse"
+    reply: Final = httpx.Response(
+        200,
+        json={
+            "output": {"message": {"role": "assistant", "content": [{"text": "pong"}]}},
+            "stopReason": "end_turn",
+            "usage": {"inputTokens": 25, "outputTokens": 12, "totalTokens": 37},
+        },
+    )
+    logged: Final = BedrockPassthroughConfig().logging_non_streaming_response(
+        model=deployment_model,
+        custom_llm_provider="bedrock",
+        httpx_response=reply,
+        request_data={},
+        logging_obj=_stream_logging_obj(endpoint),
+        endpoint=endpoint,
+    )
+    return litellm.completion_cost(model=f"bedrock/{CONVERSE_MODEL}", completion_response=logged)
+
+
+@pytest.mark.parametrize("route", ["invoke/", "converse/"])
+def test_converse_reply_on_a_route_pinned_deployment_is_priced_like_an_unpinned_one(route: str) -> None:
+    pinned_cost: Final = _logged_converse_reply_cost(f"{route}{CONVERSE_MODEL}")
+
+    assert pinned_cost > 0
+    assert pinned_cost == pytest.approx(_logged_converse_reply_cost(CONVERSE_MODEL))
 
 
 class _ImmediateExecutor:

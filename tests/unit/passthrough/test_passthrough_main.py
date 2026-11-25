@@ -38,14 +38,19 @@ def test_llm_passthrough_route():
         assert response.json == {"message": "Hello, world!"}
 
 
-def test_bedrock_application_inference_profile_url_encoding():
+@pytest.mark.parametrize(
+    "arn",
+    [
+        "arn:aws:bedrock:us-east-1:123456789123:application-inference-profile/r742sbn2zckd",
+        "arn:aws:bedrock:us-east-1:123456789123:provisioned-model/r742sbn2zckd",
+    ],
+)
+def test_bedrock_arn_model_id_url_encoding(arn: str):
     client = HTTPHandler()
 
     mock_provider_config = MagicMock()
     mock_provider_config.get_complete_url.return_value = (
-        httpx.URL(
-            "https://bedrock-runtime.us-east-1.amazonaws.com/model/arn:aws:bedrock:us-east-1:123456789123:application-inference-profile/r742sbn2zckd/converse"
-        ),
+        httpx.URL(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{arn}/converse"),
         "https://bedrock-runtime.us-east-1.amazonaws.com",
     )
     mock_provider_config.get_api_key.return_value = "test-key"
@@ -74,8 +79,8 @@ def test_bedrock_application_inference_profile_url_encoding():
         mock_logging_obj.update_environment_variables = MagicMock()
 
         response = llm_passthrough_route(
-            model="arn:aws:bedrock:us-east-1:123456789123:application-inference-profile/r742sbn2zckd",
-            endpoint="model/arn:aws:bedrock:us-east-1:123456789123:application-inference-profile/r742sbn2zckd/converse",
+            model=arn,
+            endpoint=f"model/{arn}/converse",
             method="POST",
             custom_llm_provider="bedrock",
             client=client,
@@ -86,9 +91,9 @@ def test_bedrock_application_inference_profile_url_encoding():
         mock_build_request.assert_called_once()
         call_args = mock_build_request.call_args
 
-        # The URL should have the application-inference-profile ID encoded
+        # The URL should have the ARN's resource id encoded
         actual_url = str(call_args.kwargs["url"])
-        assert "application-inference-profile%2Fr742sbn2zckd" in actual_url
+        assert f"/model/{arn.replace('/', '%2F')}/converse" in actual_url
         assert response.status_code == 200
 
 

@@ -38,6 +38,7 @@ from ..common_utils import (
     BedrockEventStreamDecoderBase,
     BedrockModelInfo,
     served_service_tier,
+    strip_bedrock_routing_prefix,
 )
 from ..request_metadata import (
     BEDROCK_REQUEST_METADATA_HEADER,
@@ -698,9 +699,9 @@ class BedrockPassthroughConfig(BaseAWSLLM, BedrockModelInfo, BedrockEventStreamD
             return embedding_response
 
         if "invoke" in endpoint:
-            chat_config_model = "invoke/" + model
+            chat_config_model = "invoke/" + strip_bedrock_routing_prefix(model)
         elif "converse" in endpoint:
-            chat_config_model = "converse/" + model
+            chat_config_model = "converse/" + strip_bedrock_routing_prefix(model)
         else:
             return None
 

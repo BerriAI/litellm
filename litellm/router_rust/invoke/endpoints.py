@@ -1032,11 +1032,13 @@ def _deployment_call_params(
 def _passthrough_route_model_id(
     core: EndpointCore, model_name: str, provider: str | None, kwargs: Mapping[str, object]
 ) -> str:
-    from litellm.llms.bedrock.common_utils import strip_bedrock_routing_prefix
+    from litellm.litellm_core_utils.model_latest_aliases import resolve_model_latest_alias
+    from litellm.llms.bedrock.common_utils import split_bedrock_region_path
     from litellm.types.utils import LlmProviders
 
     if provider == LlmProviders.BEDROCK.value:
-        return strip_bedrock_routing_prefix(model_name)
+        _, model_id = split_bedrock_region_path(model_name)
+        return resolve_model_latest_alias(model_id, provider)
     try:
         stripped, _, _, _ = core.host.invoke("get_llm_provider")(
             model=model_name,
