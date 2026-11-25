@@ -1,5 +1,5 @@
 """
-Unit tests for the service_tier Prometheus label on latency and spend metrics.
+Unit tests for the service_tier Prometheus label on latency, spend, and failure metrics.
 
 Covers the label being declared on the metrics that carry it, the precedence
 between the tier a provider served and the tier a caller requested, and the
@@ -13,7 +13,9 @@ import datetime
 from typing import Final
 
 import pytest
+from prometheus_client import generate_latest
 
+from litellm.exceptions import RateLimitError
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.litellm_core_utils.service_tier_utils import (
     KNOWN_REQUEST_SERVICE_TIERS,
@@ -25,6 +27,7 @@ from litellm.types.integrations.prometheus import (
     UserAPIKeyLabelNames,
     UserAPIKeyLabelValues,
 )
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 SERVICE_TIER_METRICS = [
     "litellm_llm_api_latency_metric",
@@ -255,3 +258,31 @@ def test_allowlist_covers_every_modeled_service_tier():
 
     missing = {tier.value for tier in ServiceTier} - KNOWN_REQUEST_SERVICE_TIERS
     assert not missing, f"ServiceTier values missing from the allowlist: {sorted(missing)}"
+
+
+@pytest.mark.parametrize("tier", (*sorted(KNOWN_REQUEST_SERVICE_TIERS), None, "", "unknown-tier", 42, []))
+@pytest.mark.asyncio
+async def test_failed_request_emits_bounded_service_tier(tier: object) -> None:
+    _clear_prometheus_registry()
+    try:
+        logger: Final = PrometheusLogger()
+        await logger.async_post_call_failure_hook(
+            request_data={"model": "test-model", "service_tier": tier},
+            original_exception=RateLimitError(
+                message="capacity unavailable", llm_provider="openai", model="test-model"
+            ),
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+        series: Final = tuple(
+            line
+            for line in generate_latest().decode().splitlines()
+            if line.startswith("litellm_proxy_failed_requests_metric_total{")
+        )
+        assert len(series) == 1
+        expected_tier: Final = tier if isinstance(tier, str) and tier in KNOWN_REQUEST_SERVICE_TIERS else "None"
+        assert f'service_tier="{expected_tier}"' in series[0]
+        assert 'exception_status="429"' in series[0]
+        assert 'exception_class="Openai.RateLimitError"' in series[0]
+        assert series[0].endswith(" 1.0")
+    finally:
+        _clear_prometheus_registry()
