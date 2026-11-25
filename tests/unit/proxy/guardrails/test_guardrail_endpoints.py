@@ -2744,6 +2744,30 @@ async def test_apply_guardrail_forwards_metadata_to_guardrail(mocker):
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_drops_proxy_owned_metadata_from_caller(mocker):
+    """Identity keys such as user_api_key_user_email are set by the proxy on the LLM routes;
+    a caller must not be able to forge them here to pick another user's guardrail policy."""
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="hello",
+        metadata={"user_api_key_user_email": "someone-else@corp.example", "forbidden_topics": ["tax"]},
+    )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["hello"]},
+        request_data={"metadata": {"forbidden_topics": ["tax"]}},
+        input_type="request",
+    )
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_forwards_metadata_and_messages_together(mocker):
     """metadata and messages must coexist in request_data; the dict merge must
     not clobber messages when both fields are sent."""

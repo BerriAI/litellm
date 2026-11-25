@@ -13,7 +13,7 @@ from litellm.proxy.guardrails.guardrail_hooks.beyondguard.beyondguard import (
     BeyondGuardGuardrail,
     BeyondGuardMissingConfig,
 )
-from litellm.types.guardrails import SupportedGuardrailIntegrations
+from litellm.types.guardrails import GuardrailEventHooks, SupportedGuardrailIntegrations
 from litellm.types.proxy.guardrails.guardrail_hooks.beyondguard import BeyondGuardConfigModel
 
 API_BASE: Final = "https://beyondguard.test/bg-gateway"
@@ -148,7 +148,40 @@ async def test_mask_multiple_texts_rechecks_each_and_keeps_positions() -> None:
         {"texts": ["You are helpful.", "", "Customer mail is jane@example.com, write an apology."]}, {}, "request"
     )
     assert result["texts"] == ["You are helpful.", "", MASKED]
-    assert len(fake.calls) == 3
+    assert [_user_text(payload) for _, payload, _ in fake.calls[1:]] == [
+        "You are helpful.",
+        "Customer mail is jane@example.com, write an apology.",
+        f"You are helpful.\n{MASKED}",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mask_that_only_matches_across_texts_fails_closed() -> None:
+    def respond(payload: dict) -> httpx.Response:
+        if "\n" in _user_text(payload):
+            return httpx.Response(200, json=_body(True, sanitized=True, masked=MASKED))
+        return httpx.Response(200, json=_body(True))
+
+    with pytest.raises(GuardrailRaisedException) as raised:
+        await _guardrail(FakeBeyondGuard(respond)).apply_guardrail({"texts": ["jane", "@example.com"]}, {}, "request")
+    assert raised.value.status_code == 503
+    assert raised.value.message == "BeyondGuard unavailable (mask_not_mappable)"
+
+
+@pytest.mark.asyncio
+async def test_mask_recheck_fan_out_is_capped() -> None:
+    fake: Final = FakeBeyondGuard(lambda _: httpx.Response(200, json=_body(True, sanitized=True, masked=MASKED)))
+    with pytest.raises(GuardrailRaisedException) as raised:
+        await _guardrail(fake).apply_guardrail({"texts": [f"part {index}" for index in range(17)]}, {}, "request")
+    assert raised.value.message == "BeyondGuard unavailable (too_many_texts_to_mask)"
+    assert len(fake.calls) == 1
+
+
+def test_during_call_is_not_offered_because_it_cannot_mask() -> None:
+    assert BeyondGuardGuardrail.get_supported_event_hooks() == [
+        GuardrailEventHooks.pre_call,
+        GuardrailEventHooks.post_call,
+    ]
 
 
 @pytest.mark.asyncio
@@ -266,11 +299,13 @@ async def test_policy_headers_default_and_absent_values() -> None:
 @pytest.mark.asyncio
 async def test_policy_headers_are_sent_on_mask_rechecks() -> None:
     def respond(payload: dict) -> httpx.Response:
-        return httpx.Response(200, json=_body(True, sanitized=True, masked=MASKED))
+        if "@" in _user_text(payload):
+            return httpx.Response(200, json=_body(True, sanitized=True, masked=MASKED))
+        return httpx.Response(200, json=_body(True))
 
     fake: Final = FakeBeyondGuard(respond)
     await _guardrail(fake, application="app").apply_guardrail(
         {"texts": ["a@example.com", "b@example.com"]}, {"model": "gpt-4o"}, "request"
     )
-    assert len(fake.calls) == 3
+    assert len(fake.calls) == 4
     assert all(headers["X-Application"] == "app" for _, _, headers in fake.calls)

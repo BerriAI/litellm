@@ -657,7 +657,7 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS: Final = (
 )
 
 
-def _is_proxy_owned_metadata_key(key: str) -> bool:
+def is_proxy_owned_metadata_key(key: str) -> bool:
     return key.startswith("user_api_key_") or key in _UNTRUSTED_METADATA_CONTROL_FIELDS
 
 
@@ -2417,7 +2417,7 @@ class LiteLLMProxyRequestSetup:
         return {
             key: field
             for key, field in _REQUEST_FIELDS.validate_python(value).items()
-            if not _is_proxy_owned_metadata_key(key)
+            if not is_proxy_owned_metadata_key(key)
         }
 
     @staticmethod
@@ -3237,7 +3237,7 @@ async def add_litellm_data_to_request(
                 _user_meta.get("headers"),
                 allow_client_message_redaction_opt_out=(_allow_client_message_redaction_opt_out),
             )
-            for _k in [k for k in _user_meta if isinstance(k, str) and _is_proxy_owned_metadata_key(k)]:
+            for _k in [k for k in _user_meta if isinstance(k, str) and is_proxy_owned_metadata_key(k)]:
                 _user_meta.pop(_k, None)
 
     data[_metadata_variable_name]["used_client_oauth_token"] = used_client_oauth_token

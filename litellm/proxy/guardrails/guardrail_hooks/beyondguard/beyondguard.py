@@ -31,6 +31,10 @@ _DESTINATION_URL_HEADER: Final = "X-Destination-Url"
 _DESTINATION_MODEL_HEADER: Final = "X-Destination-Model"
 _DEFAULT_USER_EMAIL_HEADER: Final = "X-User-Email"
 _DEFAULT_TIMEOUT_SECONDS: Final = 10.0
+# Masking a multi-text call re-checks every text; cap the fan-out per call so one caller
+# cannot turn a request into an unbounded number of BeyondGuard calls.
+_MAX_MASK_SEGMENTS: Final = 16
+_MASK_RECHECK_CONCURRENCY: Final = 4
 
 
 class _PiiOperations(TypedDict, total=False):
@@ -210,7 +214,6 @@ class BeyondGuardGuardrail(CustomGuardrail):
     def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:  # mutable-ok: CustomGuardrail signature
         return [
             GuardrailEventHooks.pre_call,
-            GuardrailEventHooks.during_call,
             GuardrailEventHooks.post_call,
         ]
 
@@ -245,14 +248,37 @@ class BeyondGuardGuardrail(CustomGuardrail):
                 assert_never(verdict)
 
     async def _mask_each(self, target: _Target, texts: tuple[str, ...], context: "_RequestContext") -> tuple[str, ...]:
-        verdicts: Final = await asyncio.gather(*(self._check(target, text, context) for text in texts))
+        """Map a mask of the joined texts back to each text, or fail closed.
+
+        The joined check found something to mask but cannot say where, so each text is
+        re-checked. The rebuilt texts must then pass as a whole: a match that only exists
+        across texts (masked jointly, allowed one by one) must never be forwarded unmasked.
+        """
+        if len(texts) > _MAX_MASK_SEGMENTS:
+            self._raise(_Failure("too_many_texts_to_mask"))
+        limit: Final = asyncio.Semaphore(_MASK_RECHECK_CONCURRENCY)
+
+        async def recheck(text: str) -> _Verdict:
+            async with limit:
+                return await self._check(target, text, context)
+
+        verdicts: Final = await asyncio.gather(*(recheck(text) for text in texts))
         for verdict in verdicts:
             if isinstance(verdict, _Block | _Failure):
                 self._raise(verdict)
-        return tuple(
+        masked: Final = tuple(
             verdict.text if isinstance(verdict, _Mask) else original
             for verdict, original in zip(verdicts, texts, strict=True)
         )
+        match await self._check(target, "\n".join(masked), context):
+            case _Allow():
+                return masked
+            case _Block() as blocked:
+                self._raise(blocked)
+            case _Failure() as failed:
+                self._raise(failed)
+            case _Mask():
+                self._raise(_Failure("mask_not_mappable"))
 
     def _request_context(self, request_data: object) -> "_RequestContext":
         """Policy-selection headers for BeyondGuard: model, model URL, application and caller email."""

@@ -21,7 +21,7 @@ class BeyondGuardConfigModel(GuardrailConfigModel):
     beyondguard_endpoint_id: str | None = Field(
         default=None,
         description=(
-            "ID of the BeyondGuard Context Guard endpoint that checks requests (pre_call / during_call). "
+            "ID of the BeyondGuard Context Guard endpoint that checks requests (pre_call). "
             "If not provided, the BEYONDGUARD_ENDPOINT_ID environment variable is used."
         ),
     )
