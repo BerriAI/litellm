@@ -1255,6 +1255,7 @@ _GOOGLE_FIELD: Final[Mapping[str, str]] = MappingProxyType({"n": "candidate_coun
 
 
 def _google_refuses(provider: Provider, field: str, value: JsonValue) -> Answer:
+    # Copied from the 400s generativelanguage.googleapis.com and Vertex AI generateContent sent on 2026-11-24
     shown: Final = json.dumps(value) if provider == "gemini" else ""
     where, message = (
         (
@@ -1291,6 +1292,19 @@ def test_count_or_cap_google_refuses_returns_its_400_from_one_request_and_is_nev
         assert field in refused.text, refused.text
         (only,) = received(wire, provider, stream, (False,))
         assert json.dumps(at(only, "generationConfig", field)) == json.dumps(value), only
+
+
+@pytest.mark.parametrize(("provider", "param", "value", "stream"), _GOOGLE_REFUSES_CELLS)
+def test_count_or_cap_google_refuses_is_dropped_under_drop_params(
+    gateway: Gateway, provider: Provider, param: str, value: JsonValue, stream: bool
+) -> None:
+    pytest.skip("BUG: drop_params forwards a malformed n or max_tokens to Gemini, which answers 400")
+    with wire_server(_halves()) as wire, gateway.scenario() as scenario:
+        model: Final = register(gateway, scenario, provider, wire)
+        body: Final = request_body("chat", model, stream, {**NO_CACHE, param: value, "drop_params": True}, cap=None)
+        assert post(gateway, "chat", body).status_code == 200
+        (only,) = received(wire, provider, stream, (False,))
+        assert at(only, "generationConfig", _GOOGLE_FIELD[param]) is None, only
 
 
 def _twice_cells() -> tuple[ParameterSet, ...]:
