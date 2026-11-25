@@ -4975,7 +4975,7 @@ def get_optional_params_transcription(
     drops_unsupported_params: Final = normalized_drop_params is True or litellm.drop_params is True
     transcription_params: Final = (
         OPENAI_TRANSCRIPTION_PARAMS
-        if sends_through_openai_sdk or drops_unsupported_params or custom_llm_provider == "gnani"
+        if sends_through_openai_sdk or drops_unsupported_params or custom_llm_provider in ("gnani", "oruk")
         else [param for param in OPENAI_TRANSCRIPTION_PARAMS if param not in _OPENAI_SDK_ONLY_TRANSCRIPTION_PARAMS]
     )
     extra_openai_params: Final = GNANI_REJECTED_OPENAI_TRANSCRIPTION_PARAMS if custom_llm_provider == "gnani" else ()
@@ -4990,7 +4990,7 @@ def get_optional_params_transcription(
             message="`stream` must be a boolean. To drop it from the call, set `litellm.drop_params = True`.",
         )
 
-    gnani_stream_off: Final = custom_llm_provider == "gnani" and transcription_stream_flag(stream) is False
+    gnani_stream_off: Final = custom_llm_provider in ("gnani", "oruk") and transcription_stream_flag(stream) is False
     stream_ignored: Final = stream_unset or malformed_stream or gnani_stream_off
     passed_entries: Final[Mapping[str, object]] = MappingProxyType(passed_params)
     non_default_params: Final = {
@@ -8820,6 +8820,8 @@ def validate_environment(
                 missing_keys.append("GEMINI_API_KEY")
         elif custom_llm_provider == "gnani" and not os.environ.get("GNANI_API_KEY"):
             missing_keys.append("GNANI_API_KEY")
+        elif custom_llm_provider == "oruk" and not os.environ.get("ORUK_API_KEY"):
+            missing_keys.append("ORUK_API_KEY")
         elif custom_llm_provider == "groq":
             if "GROQ_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -11183,6 +11185,10 @@ class ProviderConfigManager:
             from litellm.llms.gnani.audio_transcription.transformation import GnaniAudioTranscriptionConfig
 
             return GnaniAudioTranscriptionConfig()
+        elif litellm.LlmProviders.ORUK == provider:
+            from litellm.llms.oruk.audio_transcription.transformation import OrukAudioTranscriptionConfig
+
+            return OrukAudioTranscriptionConfig()
         elif litellm.LlmProviders.ELEVENLABS == provider:
             from litellm.llms.elevenlabs.audio_transcription.transformation import (
                 ElevenLabsAudioTranscriptionConfig,

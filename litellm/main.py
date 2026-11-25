@@ -9307,7 +9307,7 @@ def transcription(
                 shared_session=shared_session,
             )
         except BaseLLMException as exc:
-            if custom_llm_provider != "gnani":
+            if custom_llm_provider not in ("gnani", "oruk"):
                 raise
             raise exception_type(model=model, custom_llm_provider=custom_llm_provider, original_exception=exc)
     else:
