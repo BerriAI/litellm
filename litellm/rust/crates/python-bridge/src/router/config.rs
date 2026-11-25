@@ -39,6 +39,7 @@ const STATIC_KEYS: &[&str] = &[
     "health_check_staleness_threshold",
     "background_health_check_model_groups",
     "enable_weighted_failover",
+    "enable_cross_model_group_collision_check",
     "fallback_on_unsupported_params",
     "provider_default_deployment_ids",
 ];
@@ -190,6 +191,7 @@ struct RequestSpec {
     decisions_media: Option<bool>,
     batch_create: Option<bool>,
     batch_upload: Option<bool>,
+    batch_api: Option<bool>,
     embedding_batch: Option<bool>,
     wildcard_request: Option<String>,
     unrouted: Option<bool>,
@@ -260,6 +262,7 @@ pub(crate) fn parse_request(value: Value, model: Option<&str>) -> Result<RouterR
         decisions_media: spec.decisions_media.unwrap_or(false),
         batch_create: spec.batch_create.unwrap_or(false),
         batch_upload: spec.batch_upload.unwrap_or(false),
+        batch_api: spec.batch_api.unwrap_or(false),
         embedding_batch: spec.embedding_batch.unwrap_or(false),
         wildcard_request: spec.wildcard_request,
         unrouted: spec.unrouted.unwrap_or(false),

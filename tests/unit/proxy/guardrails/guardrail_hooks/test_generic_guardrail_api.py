@@ -2778,6 +2778,45 @@ async def test_during_mcp_call_blocked_raises() -> None:
     assert exc_info.value.message == "credential detected in tool input"
 
 
+@pytest.mark.asyncio
+async def test_per_request_extra_body_from_a_proxy_request_reaches_the_guardrail_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    sent_bodies: Final[list[bytes]] = []  # mutable-ok: records every body the guardrail endpoint received
+
+    async def answer(request: httpx.Request) -> httpx.Response:
+        sent_bodies.append(request.content)
+        return httpx.Response(200, json={"action": "NONE"}, request=request)
+
+    endpoint: Final = AsyncHTTPHandler(transport=httpx.MockTransport(answer))
+    guardrail: Final = GenericGuardrailAPI(
+        api_base="https://api.test.guardrail.com",
+        headers={"Authorization": "Bearer test-key"},
+        guardrail_name="test-generic-guardrail",
+        event_hook="pre_call",
+        default_on=True,
+        async_handler=endpoint,
+    )
+    try:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hello"]},
+            request_data={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "hello"}],
+                "guardrails": [{"test-generic-guardrail": {"extra_body": {"success_threshold": 0.9}}}],
+            },
+            input_type="request",
+        )
+    finally:
+        await endpoint.close()
+
+    [body] = sent_bodies
+    assert json.loads(body)["additional_provider_specific_params"] == {"success_threshold": 0.9}
+
+
 def _run_shell_call(arguments: str) -> dict[str, object]:
     return {"id": "call_1", "type": "function", "function": {"name": "run_shell", "arguments": arguments}}
 

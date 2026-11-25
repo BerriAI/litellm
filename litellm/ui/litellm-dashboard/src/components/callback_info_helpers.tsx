@@ -8,6 +8,7 @@ import lagoLogo from "../../public/assets/logos/lago.svg";
 import langfuseLogo from "../../public/assets/logos/langfuse.png";
 import langsmithLogo from "../../public/assets/logos/langsmith.png";
 import newrelicLogo from "../../public/assets/logos/newrelic.png";
+import mixpanelLogo from "../../public/assets/logos/mixpanel.svg";
 import openmeterLogo from "../../public/assets/logos/openmeter.png";
 import otelLogo from "../../public/assets/logos/otel.png";
 import pointfiveLogo from "../../public/assets/logos/pointfive.png";
@@ -90,6 +91,17 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       dd_site: "text",
     },
     descriptionKey: "callbackInfo.descriptions.datadog",
+  },
+  {
+    id: "mixpanel",
+    displayName: "Mixpanel",
+    logo: mixpanelLogo.src,
+    supports_key_team_logging: true,
+    dynamic_params: {
+      mixpanel_project_token: "password",
+      mixpanel_region: "text",
+    },
+    descriptionKey: "callbackInfo.descriptions.mixpanel",
   },
   {
     id: "newrelic",
@@ -278,13 +290,4 @@ export const mapDisplayToInternalNames = (displayNames: string[]): string[] => {
 // Function to map internal names to display names
 export const mapInternalToDisplayNames = (internalNames: string[]): string[] => {
   return internalNames.map((name) => reverse_callback_map[name] || name);
-};
-
-// Utility functions for easy access
-export const getCallbackById = (id: string): CallbackConfig | undefined => {
-  return CALLBACK_CONFIGS.find((callback) => callback.id === id);
-};
-
-export const getCallbackByDisplayName = (displayName: string): CallbackConfig | undefined => {
-  return CALLBACK_CONFIGS.find((callback) => callback.displayName === displayName);
 };

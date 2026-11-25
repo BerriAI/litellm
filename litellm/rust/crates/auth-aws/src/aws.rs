@@ -222,6 +222,7 @@ pub struct AwsAuthConfig {
     pub external_id: Option<SecretValue>,
     pub session_tags: Option<Vec<AwsSessionTag>>,
     pub session_policy: Option<&'static str>,
+    pub require_session_attribution: bool,
 }
 
 impl AwsAuthConfig {
@@ -249,6 +250,7 @@ impl AwsAuthConfig {
                 .or_else(|| env_lookup(AWS_EXTERNAL_ID).map(SecretValue::new)),
             session_tags: self.session_tags,
             session_policy: self.session_policy,
+            require_session_attribution: self.require_session_attribution,
         }
     }
 
@@ -592,7 +594,12 @@ async fn build_provider(
                 sts_region: sts_region.clone(),
                 loader: loader.clone(),
             };
-            if running_as.is_target(web_identity_role.as_deref()).await {
+            let attributed = resolved.require_session_attribution
+                || resolved
+                    .session_tags
+                    .as_ref()
+                    .is_some_and(|tags| !tags.is_empty());
+            if !attributed && running_as.is_target(web_identity_role.as_deref()).await {
                 return Ok(loader.ambient().await);
             }
             let sdk_config = loader.sts_config(&resolved, sts_region).await;
@@ -624,7 +631,7 @@ async fn build_provider(
             };
             Ok(SharedCredentialsProvider::new(AssumedRole {
                 provider: builder.configure(&sdk_config).build().await,
-                fallback: web_identity_role.is_none().then_some(running_as),
+                fallback: (web_identity_role.is_none() && !attributed).then_some(running_as),
             }))
         }
         AwsAuthFlow::WebIdentity {
@@ -1156,6 +1163,7 @@ pub fn aws_auth_config(
             tags
         }),
         session_policy: None,
+        require_session_attribution: false,
     }
 }
 
@@ -1176,6 +1184,13 @@ pub enum AwsCredentialSource {
 }
 
 impl AwsCredentialSource {
+    pub fn with_session_attribution(mut self, required: bool) -> Self {
+        if let Self::Chain(config) = &mut self {
+            config.require_session_attribution = required;
+        }
+        self
+    }
+
     pub fn from_params(params: &AwsParams, env_lookup: &dyn Fn(&str) -> Option<String>) -> Self {
         match host_supplied_credentials(params) {
             Some(credentials) if names_only_static_keys(params) => Self::HostSupplied(credentials),
@@ -2367,6 +2382,51 @@ mod tests {
                 .map(StsRequest::action)
                 .collect::<Vec<_>>(),
             ["GetCallerIdentity", "AssumeRole", "GetCallerIdentity"]
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::session_name(true)]
+    #[case::session_tags(false)]
+    #[tokio::test]
+    async fn attributed_sessions_cannot_fall_back_to_the_gateway_role(
+        #[case] named: bool,
+        #[values(false, true)] denied: bool,
+    ) {
+        let sts = Sts {
+            deny_assume_role: denied,
+            caller_arns: Arc::new(std::sync::Mutex::new(vec![Some(
+                "arn:aws:sts::123456789012:assumed-role/target/gateway",
+            )])),
+            ..Sts::default()
+        };
+        let source = AwsCredentialSource::Chain(Box::new(AwsAuthConfig {
+            role_name: Some(TARGET_ROLE.into()),
+            session_name: named.then(|| "attributed".into()),
+            require_session_attribution: named,
+            session_tags: (!named).then(|| {
+                vec![AwsSessionTag {
+                    key: "team".into(),
+                    value: "genai".into(),
+                }]
+            }),
+            ..AwsAuthConfig::default()
+        }));
+        let result = source
+            .resolve(
+                &sts_service(&sts, None),
+                "us-east-1",
+                BEDROCK_SERVICE,
+                &no_env,
+            )
+            .await;
+        assert_eq!(result.is_err(), denied);
+        assert_eq!(
+            sts.sent()
+                .iter()
+                .map(StsRequest::action)
+                .collect::<Vec<_>>(),
+            ["AssumeRole"]
         );
     }
 

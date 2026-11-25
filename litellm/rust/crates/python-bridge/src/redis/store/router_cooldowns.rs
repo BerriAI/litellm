@@ -56,7 +56,7 @@ impl NativeRouterCooldowns {
     #[new]
     fn new(py: Python<'_>, client: Option<PyRef<'_, NativeRedisClient>>) -> PyResult<Self> {
         let remote = client.map(|client| remote(&client));
-        let policy = router_tier_policies(py)?.cooldowns;
+        let policy = router_tier_policies(py)?.cooldowns();
         Ok(Self(Arc::new(RouterCooldowns::new(remote, policy))))
     }
 

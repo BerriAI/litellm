@@ -18,7 +18,7 @@ from litellm.a2a_protocol.litellm_completion_bridge.handler import (
     bridge_model_name,
 )
 from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
-from litellm.litellm_core_utils.core_helpers import as_str_mapping
+from litellm.litellm_core_utils.core_helpers import as_str_mapping, callable_of
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.databricks_oauth import (
@@ -31,6 +31,7 @@ from litellm.utils import get_base_model_from_metadata
 
 _HEADERS: Final = TypeAdapter(Mapping[str, str])
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_ROUTE_ENDPOINT: Final = TypeAdapter(object)
 _AGENT_PINNED_KWARGS: Final = ("api_base", "api_key")
 _AGENT_LAYERED_KWARGS: Final = ("custom_inputs", "extra_body")
 _CLIENT_TARGET_KWARGS: Final = ("api_base", "base_url")
@@ -257,4 +258,5 @@ def _agent_params_under_client_prices(
 
 
 def _call_route(route_type: str, request_data: Mapping[str, object]) -> object:
-    return getattr(litellm, route_type)(**request_data)
+    endpoint: Final = _ROUTE_ENDPOINT.validate_python(getattr(litellm, route_type))
+    return callable_of(endpoint)(**request_data)

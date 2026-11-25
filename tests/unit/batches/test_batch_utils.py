@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Mapping
 from typing import Final, Literal
 from unittest.mock import AsyncMock, patch
 
@@ -36,6 +37,7 @@ from litellm.batches.batch_utils import (
 from litellm.cost_calculator import batch_cost_calculator
 from litellm.types.utils import LiteLLMBatch, ModelInfo, Usage
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+from litellm.types.llms.openai import BatchInputFormat
 
 # --------------------------------------------------------------------------- #
 # Builders for batch OUTPUT file rows.
@@ -2310,6 +2312,48 @@ async def test_raw_vertex_claude_rows_are_priced_like_with_the_native_output_fla
 
 
 @pytest.mark.asyncio
+async def test_gemini_malformed_rows_without_output_are_billed_like_with_the_native_output_flag(monkeypatch):
+    from litellm.llms.vertex_ai.files.transformation import VertexAIFilesConfig
+
+    def native_row(custom_id: str, candidate: Mapping[str, object]) -> Mapping[str, object]:
+        return {
+            "status": "",
+            "processed_time": "2026-11-23T18:13:16.826+00:00",
+            "request": {"contents": [], "labels": {"litellm_custom_id": custom_id}},
+            "response": {
+                "candidates": [candidate],
+                "modelVersion": "gemini-3.8-flash",
+                "usageMetadata": {"promptTokenCount": 900, "candidatesTokenCount": 40, "totalTokenCount": 940},
+            },
+        }
+
+    native_rows: Final = [
+        native_row("ok", {"content": {"role": "model", "parts": [{"text": "Paris is 12C."}]}, "finishReason": "STOP"}),
+        native_row("malformed", {"content": {"role": "model", "parts": []}, "finishReason": "MALFORMED_FUNCTION_CALL"}),
+    ]
+    transformed: Final = VertexAIFilesConfig()._try_transform_vertex_batch_output_to_openai(
+        "\n".join(json.dumps(row) for row in native_rows).encode("utf-8")
+    )
+    openai_rows: Final = [json.loads(line) for line in transformed.decode("utf-8").splitlines()]
+
+    async def cost(rows: list[Mapping[str, object]], flag: bool) -> bu.BatchCostUsageResult:
+        monkeypatch.setattr(litellm, "disable_vertex_batch_output_transformation", flag, raising=False)
+        return await bu.calculate_batch_cost_and_usage(
+            file_content_dictionary=rows, custom_llm_provider="vertex_ai", model_name="gemini-3.8-flash"
+        )
+
+    from_openai_rows: Final = await cost(openai_rows, False)
+    from_native_rows: Final = await cost(native_rows, True)
+
+    assert from_native_rows.cost > 0
+    assert (from_openai_rows.cost, from_openai_rows.usage.total_tokens) == (
+        pytest.approx(from_native_rows.cost),
+        from_native_rows.usage.total_tokens,
+    )
+    assert (from_openai_rows.successful_requests, from_openai_rows.failed_requests) == (1, 1)
+
+
+@pytest.mark.asyncio
 async def test_openai_shaped_vertex_rows_keep_the_generic_path_without_flag(monkeypatch):
     monkeypatch.setattr(litellm, "disable_vertex_batch_output_transformation", False, raising=False)
     monkeypatch.setattr(
@@ -3559,3 +3603,63 @@ async def test_gemini_native_output_rows_are_priced_from_usage_metadata(monkeypa
     assert (result.usage.prompt_tokens, result.usage.completion_tokens, result.usage.total_tokens) == (3, 62, 65)
     assert result.cost == pytest.approx((3 * 3.75e-7) + (62 * 1.875e-6))
     assert (result.successful_requests, result.failed_requests) == (1, 1)
+
+
+@pytest.mark.parametrize(
+    ("entry", "body"),
+    [
+        (
+            {"request": {"contents": [{"parts": [{"text": "hello"}]}]}},
+            {"messages": [{"role": "user", "content": "hello"}]},
+        ),
+        (
+            {
+                "modelInput": {
+                    "system": [{"text": "brief"}],
+                    "messages": [{"role": "user", "content": [{"text": "hello"}]}],
+                }
+            },
+            {"messages": [{"role": "system", "content": "brief"}, {"role": "user", "content": "hello"}]},
+        ),
+        (
+            {"request": {"messages": [{"role": "user", "content": "hello"}]}},
+            {"messages": [{"role": "user", "content": "hello"}]},
+        ),
+        ({"request": {"content": {"parts": [{"text": "hello"}]}}}, {"input": "hello"}),
+        (
+            {"request": {"content": {"parts": [{"text": "hello"}]}, "embed_content_config": {"auto_truncate": True}}},
+            {"input": "hello"},
+        ),
+        (
+            {
+                "modelInput": {
+                    "messages": [{"role": "user", "content": "hello"}],
+                    "max_completion_tokens": 5,
+                    "service_tier": "priority",
+                }
+            },
+            {"messages": [{"role": "user", "content": "hello"}]},
+        ),
+        (
+            {"request": {"content": {"parts": [{"text": "hello"}]}, "title": "greeting"}},
+            {"input": "greeting\nhello"},
+        ),
+        ({"modelInput": {"inputText": "hello"}}, {"input": "hello"}),
+        ({"modelInput": {"prompt": "hello"}}, {"prompt": "hello"}),
+    ],
+)
+def test_native_row_matches_canonical_input_count(entry: Mapping[str, object], body: Mapping[str, object]) -> None:
+    canonical: Final = bu.count_entry_tokens({"body": body})
+    assert canonical is not None and canonical > 0
+    counter: Final = bu.batch_row_counter(BatchInputFormat.VERTEX if "request" in entry else BatchInputFormat.BEDROCK)
+    assert counter is not None
+    assert counter(entry) == canonical
+
+
+def test_file_format_selects_only_its_own_parser() -> None:
+    entry: Final = {"body": {"input": "hello"}, "request": {"content": {"parts": [{"text": "hello world"}]}}}
+    vertex: Final = bu.batch_row_counter(BatchInputFormat.VERTEX)
+    assert vertex is not None
+    assert vertex(entry) == bu.count_entry_tokens({"body": {"input": "hello world"}})
+    assert vertex({"body": {"input": "hello"}}) is None
+    assert bu.batch_row_counter(BatchInputFormat.UNKNOWN) is None

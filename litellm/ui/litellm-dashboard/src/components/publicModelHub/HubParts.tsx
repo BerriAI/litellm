@@ -7,9 +7,7 @@ import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Field, FieldLabel } from "@/components/ui/field";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
-import { ItemTitle } from "@/components/ui/item";
 import { Kbd } from "@/components/ui/kbd";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cva.config";
@@ -134,21 +132,6 @@ export function Facts({ groups }: { groups: Fact[][] }) {
   );
 }
 
-export function EndpointField({ id, value }: { id: string; value: string }) {
-  const { t } = useTranslation();
-  return (
-    <Field>
-      <FieldLabel htmlFor={id}>{t("publicModelHub.endpointField.label")}</FieldLabel>
-      <InputGroup>
-        <InputGroupInput id={id} readOnly value={value} className="font-mono text-xs md:text-xs" />
-        <InputGroupAddon align="inline-end">
-          <CopyIconButton value={value} label={t("publicModelHub.endpointField.copy")} className="size-6" />
-        </InputGroupAddon>
-      </InputGroup>
-    </Field>
-  );
-}
-
 export function SearchInput({
   value,
   onChange,
@@ -205,14 +188,6 @@ export function SearchInput({
         </InputGroupAddon>
       )}
     </InputGroup>
-  );
-}
-
-export function RowTitle({ children }: { children: React.ReactNode }) {
-  return (
-    <ItemTitle className="w-full min-w-0">
-      <span className="line-clamp-2 wrap-anywhere">{children}</span>
-    </ItemTitle>
   );
 }
 

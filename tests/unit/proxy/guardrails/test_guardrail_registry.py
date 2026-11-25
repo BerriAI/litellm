@@ -1183,6 +1183,76 @@ class TestScanOnlyToolResultsInitRefusal:
                 },
             )
 
+    @pytest.mark.parametrize("flag", ["scan_tool_descriptions_as_text", "scan_tool_calls_as_text"])
+    def test_tool_text_scans_are_rejected_on_bedrock_latest_role_only(self, flag):
+        with pytest.raises(ValueError, match=f"{flag} is only supported"):
+            self._initialize(
+                "bedrock-tool-text-latest-role",
+                {
+                    "guardrail": "bedrock",
+                    "mode": "pre_call",
+                    "guardrailIdentifier": "gr-1",
+                    "guardrailVersion": "1",
+                    "experimental_use_latest_role_message_only": True,
+                    flag: True,
+                },
+            )
+
+    @pytest.mark.parametrize("flag", ["scan_tool_descriptions_as_text", "scan_tool_calls_as_text"])
+    @pytest.mark.parametrize("mode", ["during_call", ["pre_call", "during_call"]])
+    def test_tool_text_scans_are_rejected_on_bedrock_during_call(self, flag, mode):
+        with pytest.raises(ValueError, match=f"{flag} is only supported"):
+            self._initialize(
+                "bedrock-tool-text-during-call",
+                {
+                    "guardrail": "bedrock",
+                    "mode": mode,
+                    "guardrailIdentifier": "gr-1",
+                    "guardrailVersion": "1",
+                    flag: True,
+                },
+            )
+
+    @pytest.mark.parametrize("flag", ["scan_tool_descriptions_as_text", "scan_tool_calls_as_text"])
+    def test_tool_text_scans_are_accepted_on_bedrock(self, flag):
+        result = self._initialize(
+            "bedrock-tool-text",
+            {
+                "guardrail": "bedrock",
+                "mode": "pre_call",
+                "guardrailIdentifier": "gr-1",
+                "guardrailVersion": "1",
+                flag: True,
+            },
+        )
+        assert result is not None
+
+    def test_scan_tool_calls_as_text_is_rejected_on_guardrails_other_than_bedrock(self):
+        with pytest.raises(ValueError, match="scan_tool_calls_as_text is only supported"):
+            self._initialize(
+                "panw-tool-calls",
+                {
+                    "guardrail": "panw_prisma_airs",
+                    "mode": "pre_call",
+                    "api_key": "test-key",
+                    "profile_name": "test-profile",
+                    "scan_tool_calls_as_text": True,
+                },
+            )
+
+    def test_scan_tool_descriptions_as_text_is_accepted_on_panw(self):
+        result = self._initialize(
+            "panw-tool-descriptions",
+            {
+                "guardrail": "panw_prisma_airs",
+                "mode": "pre_call",
+                "api_key": "test-key",
+                "profile_name": "test-profile",
+                "scan_tool_descriptions_as_text": True,
+            },
+        )
+        assert result is not None
+
     def test_bedrock_without_latest_role_accepts_scan_only_tool_results(self):
         result = self._initialize(
             "bedrock-scan-only-ok",
@@ -1550,9 +1620,7 @@ class TestLoggingOnlyScopeValidation:
 
     def test_invalid_continue_flag_raises_without_tolerance(self) -> None:
         with pytest.raises(ValidationError):
-            LitellmParams(
-                guardrail="test", mode="logging_only", logging_only_continue_on_input_failure="banana"
-            )
+            LitellmParams(guardrail="test", mode="logging_only", logging_only_continue_on_input_failure="banana")
 
     def test_invalid_scope_literal_does_not_tolerate_other_litellm_params_errors(self) -> None:
         with pytest.raises(ValidationError):
@@ -2014,3 +2082,82 @@ async def test_rotate_guardrail_params_gives_up_on_a_row_that_keeps_changing(mon
     assert rows_updated == 0
     assert prisma_client.db.litellm_guardrailstable.update_many.await_count == GUARDRAIL_ROTATION_ATTEMPTS
     assert prisma_client.db.litellm_guardrailstable.find_unique.await_count == GUARDRAIL_ROTATION_ATTEMPTS - 1
+
+
+class TestToolDescriptionScanNeedsARequestScan:
+    _NEVER_SCANS_THE_REQUEST: Final = (
+        pytest.param({"mode": "post_call"}, id="post_call"),
+        pytest.param({"mode": ["logging_only"], "logging_only_scope": "output"}, id="logging_only-output"),
+        pytest.param(
+            {
+                "guardrail": "presidio",
+                "mode": "logging_only",
+                "presidio_analyzer_api_base": "http://presidio-analyzer.invalid",
+                "presidio_anonymizer_api_base": "http://presidio-anonymizer.invalid",
+            },
+            id="presidio-logging_only",
+        ),
+    )
+
+    @staticmethod
+    def _row(params: dict[str, object]) -> Guardrail:
+        return Guardrail(
+            guardrail_id="tool-descriptions-test",
+            guardrail_name="tool-descriptions",
+            litellm_params={
+                "guardrail": "bedrock",
+                "guardrailIdentifier": "gr-1",
+                "guardrailVersion": "1",
+                "scan_tool_descriptions_as_text": True,
+                **params,
+            },
+            guardrail_info={},
+        )
+
+    def _initialize(self, params: dict[str, object], *, reject: bool) -> CustomGuardrail:
+        lists: Final = _all_callback_lists()
+        snapshots: Final = [list(cb_list) for cb_list in lists]
+        try:
+            handler: Final = InMemoryGuardrailHandler()
+            handler.initialize_guardrail(guardrail=self._row(params), reject_invalid_logging_only_scope=reject)
+            callback: Final = handler.guardrail_id_to_custom_guardrail["tool-descriptions-test"]
+            assert callback is not None
+            return callback
+        finally:
+            for cb_list, snapshot in zip(lists, snapshots):
+                cb_list[:] = snapshot
+
+    @pytest.mark.parametrize("params", _NEVER_SCANS_THE_REQUEST)
+    def test_api_write_is_rejected(self, params: dict[str, object]) -> None:
+        with pytest.raises(ValueError, match="tool descriptions would never be scanned"):
+            self._initialize(params, reject=True)
+
+    @pytest.mark.parametrize("params", _NEVER_SCANS_THE_REQUEST)
+    def test_config_load_ignores_the_setting(self, params: dict[str, object]) -> None:
+        assert self._initialize(params, reject=False).scan_tool_descriptions_as_text is None
+
+    @pytest.mark.parametrize(
+        "params",
+        [
+            {"mode": "pre_call"},
+            {"mode": ["post_call", "pre_call"]},
+            {"mode": "logging_only"},
+            {"mode": ["logging_only"], "logging_only_scope": "input"},
+        ],
+    )
+    def test_a_mode_that_scans_the_request_keeps_the_setting(self, params: dict[str, object]) -> None:
+        assert self._initialize(params, reject=True).scan_tool_descriptions_as_text is True
+
+    def test_unchanged_row_is_rejected_on_a_strict_sync(self) -> None:
+        lists: Final = _all_callback_lists()
+        snapshots: Final = [list(cb_list) for cb_list in lists]
+        row: Final = self._row({"mode": "post_call"})
+        try:
+            handler: Final = InMemoryGuardrailHandler()
+            handler.initialize_guardrail(guardrail=row, source="db")
+
+            with pytest.raises(ValueError, match="tool descriptions would never be scanned"):
+                handler.sync_guardrail_from_db(guardrail=row, reject_invalid_logging_only_scope=True)
+        finally:
+            for cb_list, snapshot in zip(lists, snapshots):
+                cb_list[:] = snapshot

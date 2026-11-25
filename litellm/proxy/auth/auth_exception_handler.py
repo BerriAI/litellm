@@ -13,6 +13,7 @@ from litellm._logging import verbose_proxy_logger, verbose_proxy_stdout_logger
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, is_expected_client_error
+from litellm.litellm_core_utils.redact_messages import MESSAGE_REDACTION_ENABLE_HEADERS
 from litellm.proxy._types import (
     LitellmUserRoles,
     ModelAccessDeniedProxyException,
@@ -74,7 +75,10 @@ def _as_proxy_exception(e: Exception) -> ProxyException:
         )
     if isinstance(e, ProxyException):
         return e
-    if PrismaDBExceptionHandler.is_database_service_unavailable_error(e):
+    database_unavailable: Final = PrismaDBExceptionHandler.is_database_connection_error(e) or (
+        PrismaDBExceptionHandler.is_database_service_unavailable_error(e)
+    )
+    if database_unavailable:
         return PrismaDBExceptionHandler.service_unavailable_proxy_exception(e)
     return ProxyException(
         message="Authentication Error, " + str(e),
@@ -119,6 +123,22 @@ def _with_client_context(
 def _metadata_bucket(request_data: Mapping[str, object], key: str) -> Mapping[str, object]:
     metadata: Final = request_data.get(key)
     return metadata if isinstance(metadata, Mapping) else EMPTY_MAPPING
+
+
+def _with_redaction_headers(request_data: Mapping[str, object], request: Request) -> Mapping[str, object]:
+    """Auth gate rejections are raised before `add_litellm_data_to_request` records the request
+    headers, so a caller's redaction header would otherwise never reach the failure log."""
+    if "headers" not in request.scope:
+        return request_data
+    redaction_headers: Final = {
+        name: value for name in MESSAGE_REDACTION_ENABLE_HEADERS if (value := request.headers.get(name))
+    }
+    if not redaction_headers:
+        return request_data
+    key: Final = "litellm_metadata" if "litellm_metadata" in request_data else "metadata"
+    base: Final = as_str_mapping(request_data.get(key)) or EMPTY_MAPPING
+    known: Final = as_str_mapping(base.get("headers")) or EMPTY_MAPPING
+    return {**request_data, key: {**base, "headers": {**known, **redaction_headers}}}
 
 
 def _with_spend_logs_metadata(
@@ -284,7 +304,11 @@ class UserAPIKeyAuthExceptionHandler:
             # Allow callbacks to transform the error response
             transformed_exception: Final = await proxy_logging_obj.post_call_failure_hook(
                 request_data=_with_spend_logs_metadata(
-                    _with_client_context(request_context, requester_ip, user_agent),
+                    dict(
+                        _with_redaction_headers(
+                            _with_client_context(request_context, requester_ip, user_agent), request
+                        )
+                    ),
                     normalize_request_route(route),
                     _get_spend_logs_metadata(request),
                 ),

@@ -15,7 +15,5 @@ class ReadmeApiTokenDetector(RegexBasedDetector):
         return "Readme API Token"
 
     @property
-    def denylist(self) -> list[re.Pattern]:
-        return [
-            re.compile(r"""(?i)\b(rdme_[a-z0-9]{70})(?:['|\"|\n|\r|\s|\x60|;]|$)""")
-        ]
+    def denylist(self) -> list[re.Pattern[str]]:
+        return [re.compile(r"""(?i)\b(rdme_[a-z0-9]{70})(?:['|\"|\n|\r|\s|\x60|;]|$)""")]

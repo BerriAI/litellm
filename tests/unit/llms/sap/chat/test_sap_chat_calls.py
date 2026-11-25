@@ -1,7 +1,11 @@
 import httpx
+from typing import Final
 from unittest.mock import patch, PropertyMock
 
 import pytest
+import respx
+
+from tests.unit.llms.sap.conftest import MockAICore
 
 mock_response = {
     "request_id": "e86a0b4e-53e3-97dc-a5f7-82e451376b23",
@@ -204,3 +208,63 @@ async def test_sap_chat_required_headers(
                 f"Header '{header_name}' has incorrect value. "
                 f"Expected: '{expected_value}', Got: '{request.headers[header_name]}'"
             )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_sap_chat_reuses_oauth_token_across_calls(
+    respx_mock: respx.MockRouter, aicore: MockAICore, sap_api_response: dict[str, object], sync_mode: bool
+) -> None:
+    import litellm
+
+    aicore.token.respond(json={"access_token": "mock-token", "expires_in": 43200})
+    completion: Final = respx_mock.post(f"{aicore.deployment_url}/v2/completion").respond(json=sap_api_response)
+    messages: Final = [{"role": "user", "content": "Hello"}]
+
+    for _ in range(3):
+        if sync_mode:
+            litellm.completion(model="sap/gpt-4o", messages=messages)
+        else:
+            await litellm.acompletion(model="sap/gpt-4o", messages=messages)
+
+    assert (aicore.token.call_count, completion.call_count) == (1, 3)
+
+
+def test_sap_chat_replaces_a_cached_token_ai_core_rejects_within_the_same_call(
+    respx_mock: respx.MockRouter, aicore: MockAICore, sap_api_response: dict[str, object]
+) -> None:
+    import litellm
+
+    aicore.token.side_effect = [
+        httpx.Response(200, json={"access_token": "revoked", "expires_in": 43200}),
+        httpx.Response(200, json={"access_token": "fresh", "expires_in": 43200}),
+    ]
+    completion: Final = respx_mock.post(f"{aicore.deployment_url}/v2/completion").respond(json=sap_api_response)
+    aicore.reject_token(aicore.deployments, "Bearer revoked")
+    aicore.reject_token(completion, "Bearer revoked")
+
+    response: Final = litellm.completion(model="sap/gpt-4o", messages=[{"role": "user", "content": "Hello"}])
+
+    assert response.choices[0].message.content == "Hello from SAP!"
+    assert aicore.token.call_count == 2
+
+
+def test_sap_chat_fetches_a_new_token_after_the_completion_rejects_the_cached_one(
+    respx_mock: respx.MockRouter, aicore: MockAICore, sap_api_response: dict[str, object]
+) -> None:
+    import litellm
+
+    aicore.token.side_effect = [
+        httpx.Response(200, json={"access_token": "revoked", "expires_in": 43200}),
+        httpx.Response(200, json={"access_token": "fresh", "expires_in": 43200}),
+    ]
+    completion: Final = respx_mock.post(f"{aicore.deployment_url}/v2/completion").respond(json=sap_api_response)
+    aicore.reject_token(completion, "Bearer revoked")
+    messages: Final = [{"role": "user", "content": "Hello"}]
+
+    with pytest.raises(litellm.AuthenticationError):
+        litellm.completion(model="sap/gpt-4o", messages=messages)
+    response: Final = litellm.completion(model="sap/gpt-4o", messages=messages)
+
+    assert response.choices[0].message.content == "Hello from SAP!"
+    assert aicore.token.call_count == 2

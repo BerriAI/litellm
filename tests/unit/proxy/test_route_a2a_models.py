@@ -926,20 +926,21 @@ async def test_route_a2a_bridge_per_query_agent_reports_no_input_or_output_cost(
         ("cost_discount_config", ["databricks_agent"]),
     ],
 )
-async def test_route_a2a_bridge_agent_with_a_malformed_cost_config_still_answers(
+async def test_route_a2a_bridge_agent_with_a_malformed_cost_config_answers_and_bills_its_unadjusted_price(
     httpx_transport: None, monkeypatch: pytest.MonkeyPatch, config_name: str, config: object
 ) -> None:
     respx.post(f"{WORKSPACE}/serving-endpoints/my-agent/invocations").mock(
         return_value=httpx.Response(200, json=AGENT_REPLY)
     )
+    registry: Final = _registry_with(_priced_dbx_agent("per-query", PER_QUERY_PRICE))
+    unadjusted_cost, _, _ = await _billed_chat_call(registry, "per-query")
     monkeypatch.setattr(litellm, config_name, config)
 
-    cost, response, _ = await _billed_chat_call(
-        _registry_with(_priced_dbx_agent("per-query", PER_QUERY_PRICE)), "per-query"
-    )
+    cost, response, _ = await _billed_chat_call(registry, "per-query")
 
     assert response.choices[0].message.content == "pong"
-    assert cost is None
+    assert unadjusted_cost is not None
+    assert cost == pytest.approx(unadjusted_cost)
 
 
 @respx.mock

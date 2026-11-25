@@ -1121,7 +1121,7 @@ def test_prometheus_parity_values_cross_as_python_holds_them() -> None:
             hash_error="unhashable type: 'list'",
         ),
     )
-    assert cost == Cost(response_cost=0.5, zero_cost=ZeroCost(reason_present=False))
+    assert cost == Cost(response_cost=0.5, zero_cost=ZeroCost(reason_present=False), cost_finalized=False)
     assert timing is not None
     assert (timing.queue_seconds, timing.overhead_ms) == ("slow", "slow")
     assert state == RateLimitState(
@@ -1334,6 +1334,13 @@ _MODEL_GROUP_REQUESTS: Final = (
     pytest.param({"litellm_params": {"metadata": "g"}}, id="metadata_not_a_mapping"),
     pytest.param({"litellm_params": {"metadata": []}}, id="falsy_metadata"),
     pytest.param({}, id="no_params"),
+    pytest.param(
+        {
+            "call_type": "_arealtime",
+            "litellm_params": {"metadata": {"user_api_key": "k"}, "litellm_metadata": {"model_group": "lg"}},
+        },
+        id="realtime_session",
+    ),
 )
 
 
