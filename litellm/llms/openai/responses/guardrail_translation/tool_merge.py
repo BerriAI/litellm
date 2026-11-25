@@ -164,8 +164,19 @@ def _nearest_pairs(kept: Sequence[int], candidates: Sequence[int], distance: Dis
     return reduce(partial(_with_nearest, candidates, distance), kept, no_pairs)
 
 
+Claim: TypeAlias = Callable[[Sequence[int], Sequence[int]], tuple[int, ...]]
+
+
+def _nearest_claim(distance: Distance, kept: Sequence[int], candidates: Sequence[int]) -> tuple[int, ...]:
+    return tuple(sorted(candidate for _, candidate in _nearest_pairs(kept, candidates, distance)))
+
+
+def _ordered_claim(kept: Sequence[int], candidates: Sequence[int]) -> tuple[int, ...]:
+    return tuple(candidates[: len(kept)])
+
+
 def _class_resolution(
-    kept: tuple[int, ...], candidates: tuple[int, ...], rebuildable: Sequence[Tool | None], distance: Distance
+    kept: tuple[int, ...], candidates: tuple[int, ...], rebuildable: Sequence[Tool | None], claim: Claim
 ) -> _Resolution | None:
     if not kept or len(kept) >= len(candidates):
         return _Resolution(
@@ -176,10 +187,11 @@ def _class_resolution(
     if any(rebuildable[candidate] is None for candidate in candidates):
         return None
     rebuilt: Final = any(rebuildable[candidate] != rebuildable[candidates[0]] for candidate in candidates)
-    claimed: Final = frozenset(candidate for _, candidate in _nearest_pairs(kept, candidates, distance))
+    claimed: Final = claim(kept, candidates)
+    taken: Final = frozenset(claimed)
     return _Resolution(
-        pairs=_paired(kept, sorted(claimed), rebuilt=rebuilt),
-        remaining=tuple(candidate for candidate in candidates if candidate not in claimed),
+        pairs=_paired(kept, claimed, rebuilt=rebuilt),
+        remaining=tuple(candidate for candidate in candidates if candidate not in taken),
     )
 
 
@@ -195,14 +207,14 @@ def _round(
     guardrailed: Sequence[Tool],
     rebuildable: Sequence[Tool | None],
     previous: _Resolution,
-    distance: Distance,
+    claim: Claim,
     *,
     with_description: bool,
 ) -> _Resolution | None:
     candidate_classes: Final = _classes(originals, previous.remaining, with_description=with_description)
     kept_classes: Final = _classes(guardrailed, previous.passed, with_description=with_description)
     resolved: Final = tuple(
-        _class_resolution(kept, candidate_classes.get(view, ()), rebuildable, distance)
+        _class_resolution(kept, candidate_classes.get(view, ()), rebuildable, claim)
         for view, kept in kept_classes.items()
     )
     if any(resolution is None for resolution in resolved):
@@ -220,17 +232,16 @@ def _content_matches(
     originals: Sequence[Tool],
     guardrailed: Sequence[Tool],
     rebuildable: Sequence[Tool | None],
-    order_breaks: OrderBreaks,
+    claim: Claim,
 ) -> tuple[_Match | None, ...] | None:
     start: Final = _Resolution(passed=tuple(range(len(guardrailed))), remaining=tuple(range(len(originals))))
-    distance: Final = partial(_kept_distance, guardrailed, originals, order_breaks)
-    exact: Final = _round(originals, guardrailed, rebuildable, start, distance, with_description=True)
+    exact: Final = _round(originals, guardrailed, rebuildable, start, claim, with_description=True)
     if exact is None:
         return None
-    loose: Final = _round(originals, guardrailed, rebuildable, exact, distance, with_description=False)
+    loose: Final = _round(originals, guardrailed, rebuildable, exact, claim, with_description=False)
     if loose is None:
         return None
-    leftover: Final = _class_resolution(loose.passed, loose.remaining, rebuildable, distance)
+    leftover: Final = _class_resolution(loose.passed, loose.remaining, rebuildable, claim)
     if leftover is None:
         return None
     match_by_index: Final = MappingProxyType(dict(chain(loose.pairs, leftover.pairs)))
@@ -244,12 +255,19 @@ def _positioned_matches(
     guardrailed_positions: Sequence[int],
     rebuildable_originals: Mapping[int, Tool],
     anchors: Sequence[Anchor],
+    *,
+    scored: bool,
 ) -> tuple[tuple[int, _Match], ...] | None:
+    originals: Final = tuple(map(flattened.__getitem__, flattened_positions))
+    kept_tools: Final = tuple(map(guardrailed.__getitem__, guardrailed_positions))
+    order_breaks: Final = partial(_order_breaks, anchors, guardrailed_positions, flattened_positions)
+    claim: Final[Claim] = (
+        partial(_nearest_claim, partial(_kept_distance, kept_tools, originals, order_breaks))
+        if scored
+        else _ordered_claim
+    )
     matches: Final = _content_matches(
-        tuple(map(flattened.__getitem__, flattened_positions)),
-        tuple(map(guardrailed.__getitem__, guardrailed_positions)),
-        tuple(map(rebuildable_originals.get, flattened_positions)),
-        partial(_order_breaks, anchors, guardrailed_positions, flattened_positions),
+        originals, kept_tools, tuple(map(rebuildable_originals.get, flattened_positions)), claim
     )
     if matches is None:
         return None
@@ -300,11 +318,18 @@ def _guardrailed_keys(
         if len(kept) == 1 and len(flattened_positions.get(key, ())) == 1
     )
     shared: Final = tuple((key, kept) for key, kept in positions.items() if len(flattened_positions.get(key, ())) > 1)
-    matched_by_content: Final = _keys_within_budget(shared, flattened_positions, len(anchors))
+    scored_keys: Final = _keys_within_budget(shared, flattened_positions, len(anchors))
     realigned: Final = tuple(
-        _positioned_matches(flattened, guardrailed, flattened_positions[key], kept, rebuildable_originals, anchors)
+        _positioned_matches(
+            flattened,
+            guardrailed,
+            flattened_positions[key],
+            kept,
+            rebuildable_originals,
+            anchors,
+            scored=key in scored_keys,
+        )
         for key, kept in shared
-        if key in matched_by_content
     )
     if any(group is None for group in realigned):
         return None
