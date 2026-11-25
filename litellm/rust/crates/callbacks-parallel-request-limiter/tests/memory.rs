@@ -720,6 +720,34 @@ fn key_tokens(store: &RateLimits) -> Option<f64> {
 }
 
 #[rstest]
+#[case::no_slot(json!({"tokens_per_unit": 10000}))]
+#[case::reused_slot(json!({"tokens_per_unit": 10000, "max_parallel_requests": 1}))]
+#[tokio::test]
+async fn a_tool_call_inside_the_request_keeps_the_requests_rate_limit_headers(
+    #[case] limits: serde_json::Value,
+) {
+    let (limiter, _, _) = limiter(true);
+    let limited = descriptors(json!([{"key": "api_key", "value": "k", "rate_limit": limits}]));
+    let state = Arc::new(LimiterState::default());
+    assert_eq!(
+        limiter
+            .pre_call(&state, facts(limited.clone(), Some(52)), None)
+            .await,
+        None
+    );
+    let tool_call = PreCallFacts {
+        call_id: None,
+        nested_tool_call: true,
+        reuses_request_slot: state.snapshot().parallel_slot.is_some(),
+        ..facts(limited, Some(1026))
+    };
+    assert_eq!(limiter.pre_call(&state, tool_call, None).await, None);
+    let response = state.snapshot().rate_limit_response.unwrap();
+    let headers = litellm_callbacks_parallel_request_limiter::header_map(&response.statuses);
+    assert_eq!(headers["x-ratelimit-api_key-remaining-tokens"], json!(9948));
+}
+
+#[rstest]
 #[case::turns_finished(SocketClose::TurnsFinished, 0.0)]
 #[case::relay_failed(SocketClose::RelayFailed, 0.0)]
 #[case::refused_at_open(SocketClose::RefusedAtOpen, 0.0)]

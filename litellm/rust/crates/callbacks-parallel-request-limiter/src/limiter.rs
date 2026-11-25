@@ -679,7 +679,9 @@ impl ParallelRequestLimiter {
             stash.owned = true;
             stash.first_pass_admitted = false;
             stash.ptu_ceiling = facts.ptu_ceiling.clone();
-            stash.rate_limit_response = facts.prior_response.clone().map(Response::from);
+            if !facts.nested_tool_call {
+                stash.rate_limit_response = facts.prior_response.clone().map(Response::from);
+            }
             if let Some(call_id) = &facts.call_id {
                 stash.owner_call_id = Some(call_id.clone());
             }
@@ -741,7 +743,7 @@ impl ParallelRequestLimiter {
         {
             let mut stash = state.stash();
             stash.first_pass_admitted = true;
-            if !reuse {
+            if !reuse && !facts.nested_tool_call {
                 stash.rate_limit_response = Some(response);
             }
             if let Some(slot_id) = slot_id {
