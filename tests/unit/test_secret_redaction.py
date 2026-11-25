@@ -254,6 +254,18 @@ def test_an_authorization_key_inside_another_name_or_holding_a_literal_is_kept(
 
 
 @pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
+@pytest.mark.parametrize(
+    "credential", ("null-opaque-mcp-credential", "false.opaque-mcp-credential", "None:opaque-mcp-credential")
+)
+def test_an_authorization_value_that_only_starts_with_a_literal_is_redacted(
+    monkeypatch: pytest.MonkeyPatch, native: bool, credential: str
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+
+    assert redact_string(f'{{"authorization": "{credential}"}}') == '{"REDACTED"}'
+
+
+@pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
 @pytest.mark.parametrize("masked", ("Bearer sk-p****abcd", "Bearer sk-***", "sk-p****abcd"))
 def test_an_authorization_value_litellm_already_masked_keeps_its_hint(
     monkeypatch: pytest.MonkeyPatch, native: bool, masked: str
