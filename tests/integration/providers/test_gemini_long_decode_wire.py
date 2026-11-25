@@ -1254,7 +1254,8 @@ _GOOGLE_REFUSES_CELLS: Final[tuple[ParameterSet, ...]] = tuple(
 _GOOGLE_FIELD: Final[Mapping[str, str]] = MappingProxyType({"n": "candidate_count", "max_tokens": "max_output_tokens"})
 
 
-def _google_refuses(field: str, value: JsonValue) -> Answer:
+def _google_refuses(provider: Provider, field: str, value: JsonValue) -> Answer:
+    shown: Final = json.dumps(value) if provider == "gemini" else ""
     where, message = (
         (
             "generation_config",
@@ -1264,7 +1265,7 @@ def _google_refuses(field: str, value: JsonValue) -> Answer:
         if isinstance(value, list)
         else (
             f"generation_config.{field}",
-            f"Invalid value at 'generation_config.{field}' (TYPE_INT32), {json.dumps(value)}",
+            f"Invalid value at 'generation_config.{field}' (TYPE_INT32), {shown}",
         )
     )
     violation: Final = {
@@ -1283,7 +1284,7 @@ def test_count_or_cap_google_refuses_returns_its_400_from_one_request_and_is_nev
     gateway: Gateway, provider: Provider, param: str, value: JsonValue, stream: bool
 ) -> None:
     field: Final = _GOOGLE_FIELD[param]
-    with wire_server(upstream(_google_refuses(field, value))) as wire, gateway.scenario() as scenario:
+    with wire_server(upstream(_google_refuses(provider, field, value))) as wire, gateway.scenario() as scenario:
         model: Final = register(gateway, scenario, provider, wire)
         refused: Final = post(gateway, "chat", request_body("chat", model, stream, {**NO_CACHE, param: value}))
         assert refused.status_code == 400, refused.text
