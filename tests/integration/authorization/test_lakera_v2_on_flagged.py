@@ -9,7 +9,7 @@ from typing import Final
 import httpx
 import pytest
 from integration._support import responses_stream
-from integration._support.client import Gateway, object_value
+from integration._support.client import Gateway, eventually, object_value
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
@@ -26,6 +26,25 @@ _BENIGN_PROMPT: Final = "What is the capital of France?"
 _BENIGN_REPLY: Final = "The capital of France is Paris."
 _REASONING_PROMPT: Final = "Think about which card is on file, then say only that it is on file."
 _ENDPOINTS: Final = ("/v1/chat/completions", "/v1/messages", "/v1/responses")
+_PASS_THROUGH_ENDPOINTS: Final = (
+    pytest.param("/v1/responses", id="responses"),
+    pytest.param("/v1/messages", id="messages"),
+)
+_ANTHROPIC_REPLY: Final = {
+    "id": "msg_lakera",
+    "type": "message",
+    "role": "assistant",
+    "model": "claude-lakera",
+    "content": [{"type": "text", "text": _REPLY}],
+    "stop_reason": "end_turn",
+    "usage": {"input_tokens": 1, "output_tokens": 1},
+}
+_EMBEDDING_REPLY: Final = {
+    "object": "list",
+    "model": "gpt-4o-mini",
+    "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+    "usage": {"prompt_tokens": 1, "total_tokens": 1},
+}
 _CHAT_REPLY: Final = {
     "id": "chatcmpl-lakera-on-flagged",
     "object": "chat.completion",
@@ -81,7 +100,11 @@ class _GuardrailCreated(BaseModel):
 
 
 def _lakera_verdict(request: Request) -> Reply:
-    texts: Final = tuple(enumerate(m.content for m in _LakeraRequest.model_validate_json(request.body).messages))
+    messages: Final = _LakeraRequest.model_validate_json(request.body).messages
+    if not messages:
+        # Real /v2/guard answers 400 "either content, messages, or tools must be provided" (verified live 2026-11-24)
+        return Reply(status=400, body=b'{"error": "either content, messages, or tools must be provided"}')
+    texts: Final = tuple(enumerate(m.content for m in messages))
     cards: Final = tuple((index, text.index(_CARD)) for index, text in texts if _CARD in text)
     attacks: Final = tuple(index for index, text in texts if _ATTACK in text)
     breakdown: Final = tuple(
@@ -105,6 +128,10 @@ def _reasoning_response() -> JsonValue:
 
 
 def _provider_reply(request: Request) -> Reply:
+    if request.target.endswith("/embeddings"):
+        return Reply(body=json.dumps(_EMBEDDING_REPLY).encode())
+    if request.target.endswith("/messages"):
+        return Reply(body=json.dumps(_ANTHROPIC_REPLY).encode())
     streaming: Final = _JSON_OBJECT.validate_json(request.body).get("stream") is True
     text: Final = _BENIGN_REPLY if _BENIGN_PROMPT.encode() in request.body else _REPLY
     if request.target.endswith("/responses"):
@@ -171,6 +198,18 @@ def _send(
     return gateway.request(
         "POST", endpoint, {**_request_body(endpoint, model, prompt), "guardrails": [guardrail], "stream": stream}
     )
+
+
+def _create_pass_through(gateway: Gateway, cleanups: ExitStack, target: str, guardrail: str) -> str:
+    path: Final = f"/lakera-pass-through-{uuid.uuid4().hex}"
+    created: Final = gateway.post(
+        "/config/pass_through_endpoint", {"path": path, "target": target, "guardrails": {guardrail: None}}
+    )
+    endpoint: Final = object_value(_LIST.validate_python(created["endpoints"])[0])
+    cleanups.callback(
+        gateway.request, "DELETE", "/config/pass_through_endpoint", params={"endpoint_id": str(endpoint["id"])}
+    )
+    return path
 
 
 def _assert_blocked(response: httpx.Response) -> None:
@@ -310,6 +349,56 @@ def test_lakera_v2_post_call_inspects_prompt_and_reply(gateway: Gateway, endpoin
             for message in _LakeraRequest.model_validate_json(lakera.drain()[0].body).messages
         )
         assert inspected == (("user", _BENIGN_PROMPT), ("assistant", _BENIGN_REPLY))
+
+
+@pytest.mark.parametrize("endpoint", _PASS_THROUGH_ENDPOINTS)
+@pytest.mark.parametrize("on_flagged", ["block", "mask"])
+def test_lakera_v2_pass_through_reply_follows_on_flagged(gateway: Gateway, on_flagged: str, endpoint: str) -> None:
+    with (
+        wire_server(_provider_reply) as provider,
+        wire_server(_lakera_verdict) as lakera,
+        gateway.scenario() as scenario,
+    ):
+        guardrail: Final = _create_lakera_guardrail(gateway, scenario.cleanups, lakera.url, "post_call", on_flagged)
+        path: Final = _create_pass_through(gateway, scenario.cleanups, f"{provider.url}{endpoint}", guardrail)
+
+        response: Final = eventually(
+            lambda: gateway.request("POST", path, _request_body(endpoint, "gpt-4o-mini", _CLEAN_PROMPT)),
+            lambda answered: answered.status_code != 404,
+            seconds=30,
+        )
+
+        assert _CARD.encode() not in response.content, response.text
+        assert provider.drain() and lakera.drain()
+        if on_flagged == "block":
+            assert response.status_code == 400, response.text
+            assert "Violated guardrail policy" in response.text, response.text
+            return
+        assert response.status_code == 200, response.text
+        assert _served_reply_text(endpoint, response) == _REPLY.replace(_CARD, _MASKED.decode()), response.text
+
+
+def test_lakera_v2_post_call_embeddings_sends_input(gateway: Gateway) -> None:
+    with (
+        wire_server(_provider_reply) as provider,
+        wire_server(_lakera_verdict) as lakera,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(api_base=f"{provider.url}/v1", api_key="synthetic-provider-key")
+        guardrail: Final = _create_lakera_guardrail(gateway, scenario.cleanups, lakera.url, "post_call", "block")
+
+        response: Final = gateway.request(
+            "POST", "/v1/embeddings", {"model": model, "input": _BENIGN_PROMPT, "guardrails": [guardrail]}
+        )
+
+        assert response.status_code == 200, response.text
+        assert len(provider.drain()) == 1
+        inspected: Final = tuple(
+            message.content
+            for request in lakera.drain()
+            for message in _LakeraRequest.model_validate_json(request.body).messages
+        )
+        assert _BENIGN_PROMPT in inspected, inspected
 
 
 @pytest.mark.parametrize("on_flagged", ["block", "mask"])
