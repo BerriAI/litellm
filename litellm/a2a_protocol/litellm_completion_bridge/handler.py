@@ -10,6 +10,8 @@ A2A Streaming Events (in order):
 4. Status update (kind: "status-update") - Final status "completed" with final=true
 """
 
+import datetime
+import uuid
 from collections.abc import AsyncIterator, Callable, Coroutine, Mapping
 from types import MappingProxyType
 from typing import Any, Final
@@ -24,8 +26,10 @@ from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
 from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
 from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
 from litellm.interactions.agents.utils import merge_agent_headers
+from litellm.litellm_core_utils.per_call_pricing import per_call_model_info
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-from litellm.types.utils import CustomPricingLiteLLMParams, ModelResponse
+from litellm.types.utils import CustomPricingLiteLLMParams, ModelInfo, ModelResponse
+from litellm.utils import Rules, function_setup
 
 # litellm_params key carrying the authenticated principal (hashed virtual key) so
 # A2A provider configs can scope provider-side state (e.g. LangFlow session memory)
@@ -71,6 +75,11 @@ def agent_completion_kwargs(litellm_params: Mapping[str, object]) -> Mapping[str
             if key not in ("model", "custom_llm_provider") and key not in _AGENT_ONLY_PARAMS
         }
     )
+
+
+def _agent_price_entry(litellm_params: Mapping[str, object]) -> ModelInfo | None:
+    custom_llm_provider, _, model = bridge_model_name(litellm_params).partition("/")
+    return per_call_model_info(model, custom_llm_provider, agent_completion_kwargs(litellm_params), "chat")
 
 
 class A2ACompletionBridgeHandler:
@@ -132,11 +141,25 @@ class A2ACompletionBridgeHandler:
         return completion_params
 
     @staticmethod
-    async def _acompletion(completion_params: Mapping[str, object]) -> ModelResponse | CustomStreamWrapper:
+    async def _acompletion(
+        completion_params: Mapping[str, object], litellm_params: Mapping[str, object]
+    ) -> ModelResponse | CustomStreamWrapper:
         acompletion_fn: Final[Callable[..., Coroutine[object, object, ModelResponse | CustomStreamWrapper]]] = vars(
             litellm
         )["acompletion"]
-        return await acompletion_fn(**completion_params)
+        price_entry: Final = _agent_price_entry(litellm_params)
+        if price_entry is None:
+            return await acompletion_fn(**completion_params)
+        setup_params: Final[Mapping[str, object]] = {"litellm_call_id": str(uuid.uuid4()), **completion_params}
+        logging_obj, call_params = function_setup(
+            "acompletion",
+            Rules(),
+            datetime.datetime.now(),  # noqa: DTZ005  # naive to match the logging pipeline's end_time
+            is_async_call=True,
+            **setup_params,
+        )
+        logging_obj.bill_as_a2a_agent(agent_id=None, cost_per_query=None, price_entry=price_entry)
+        return await acompletion_fn(**{**call_params, "litellm_logging_obj": logging_obj})
 
     @staticmethod
     async def handle_non_streaming(
@@ -189,7 +212,7 @@ class A2ACompletionBridgeHandler:
         )
 
         # Call litellm.acompletion
-        response: Final = await A2ACompletionBridgeHandler._acompletion(completion_params)
+        response: Final = await A2ACompletionBridgeHandler._acompletion(completion_params, litellm_params)
 
         # Transform response to A2A format
         a2a_response: Final = A2ACompletionBridgeTransformation.openai_response_to_a2a_response(
@@ -280,7 +303,7 @@ class A2ACompletionBridgeHandler:
         yield working_event
 
         # Call litellm.acompletion with streaming
-        response: Final = await A2ACompletionBridgeHandler._acompletion(completion_params)
+        response: Final = await A2ACompletionBridgeHandler._acompletion(completion_params, litellm_params)
 
         # 3. Accumulate content and emit artifact update
         accumulated_text = ""

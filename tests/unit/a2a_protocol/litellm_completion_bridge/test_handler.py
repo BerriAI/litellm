@@ -1,3 +1,5 @@
+import asyncio
+import datetime
 import json
 from typing import Final
 
@@ -12,6 +14,8 @@ from litellm.a2a_protocol.litellm_completion_bridge.handler import (
     agent_completion_kwargs,
     bridge_model_name,
 )
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import ModelResponse
 
 WORKSPACE: Final = "https://adb-1.azuredatabricks.net"
 INVOCATIONS_URL: Final = f"{WORKSPACE}/serving-endpoints/my-agent/invocations"
@@ -149,3 +153,50 @@ async def test_databricks_agent_message_stream_through_the_bridge(httpx_transpor
     assert kinds == ["task", "status-update", "artifact-update", "status-update"]
     assert chunks[2]["result"]["artifact"]["parts"] == [{"kind": "text", "text": "pong"}]
     assert chunks[3]["result"]["status"]["state"] == "completed"
+
+
+class _CallCostCapture(CustomLogger):
+    def __init__(self, logged: asyncio.Future[tuple[object, ModelResponse]]) -> None:
+        super().__init__()
+        self._logged = logged
+
+    async def async_log_success_event(
+        self,
+        kwargs: dict[str, object],
+        response_obj: ModelResponse,
+        start_time: datetime.datetime,
+        end_time: datetime.datetime,
+    ) -> None:
+        self._logged.set_result((kwargs.get("response_cost"), response_obj))
+
+
+@respx.mock
+async def test_priced_agent_call_reports_the_agents_token_price_to_callbacks(
+    httpx_transport: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    respx.post(INVOCATIONS_URL).mock(
+        return_value=httpx.Response(200, json={"object": "response", "output": [MESSAGE_ITEM]})
+    )
+    logged: Final[asyncio.Future[tuple[object, ModelResponse]]] = asyncio.get_running_loop().create_future()
+    capture: Final = _CallCostCapture(logged)
+    monkeypatch.setattr(litellm, "callbacks", [capture])
+    monkeypatch.setattr(litellm, "_async_success_callback", [capture])
+
+    await A2ACompletionBridgeHandler.handle_non_streaming(
+        request_id="req-1",
+        params=_a2a_params(),
+        litellm_params={
+            "custom_llm_provider": "databricks_agent",
+            "model": "my-agent",
+            "api_base": WORKSPACE,
+            "api_key": "pat-1",
+            "input_cost_per_token": 0.0001,
+            "output_cost_per_token": 0.0002,
+        },
+    )
+    cost, response = await asyncio.wait_for(logged, timeout=5)
+
+    usage: Final = response.model_dump()["usage"]
+    assert usage["prompt_tokens"] > 0
+    assert cost == pytest.approx(usage["prompt_tokens"] * 0.0001 + usage["completion_tokens"] * 0.0002)
+    assert litellm.model_cost.get("databricks_agent/my-agent", {}).get("input_cost_per_token") != 0.0001
