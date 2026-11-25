@@ -81,7 +81,12 @@ from .competitor_intent import (
     AirlineCompetitorIntentChecker,
     BaseCompetitorIntentChecker,
 )
-from .patterns import PATTERN_EXTRA_CONFIG, PATTERN_STREAMING_HOLDBACK_CHARS, get_compiled_pattern
+from .patterns import (
+    PATTERN_EXTRA_CONFIG,
+    PATTERN_STREAMING_HOLDBACK_CHARS,
+    PATTERN_VALIDATORS,
+    get_compiled_pattern,
+)
 
 MAX_KEYWORD_VALUE_GAP_WORDS: Final = 1
 _DECODED_ARGUMENTS: Final = TypeAdapter(object)
@@ -133,6 +138,7 @@ class CompiledPatternEntry(TypedDict):
     action: ContentFilterAction
     keyword_regex: Pattern[str] | None
     allow_word_numbers: bool
+    validator: Callable[[str], bool] | None
 
 
 class _PatternExtraLookup(TypedDict):
@@ -898,12 +904,14 @@ class ContentFilterGuardrail(CustomGuardrail):
         """
         try:
             extra_config: _PatternExtraLookup = {"keyword_pattern": None, "allow_word_numbers": False}
+            validator: Callable[[str], bool] | None = None
             if pattern_config.pattern_type == "prebuilt":
                 if not pattern_config.pattern_name:
                     raise ValueError("pattern_name is required for prebuilt patterns")
                 compiled = get_compiled_pattern(pattern_config.pattern_name)
                 pattern_name = pattern_config.pattern_name
                 extra_config = self._lookup_pattern_extra(pattern_name)
+                validator = PATTERN_VALIDATORS.get(pattern_name)
             elif pattern_config.pattern_type == "regex":
                 if not pattern_config.pattern:
                     raise ValueError("pattern is required for regex patterns")
@@ -922,6 +930,7 @@ class ContentFilterGuardrail(CustomGuardrail):
                     "action": pattern_config.action,
                     "keyword_regex": keyword_regex,
                     "allow_word_numbers": extra_config["allow_word_numbers"],
+                    "validator": validator,
                 }
             )
             verbose_proxy_logger.debug("Added pattern: %s with action %s", pattern_name, pattern_config.action)
@@ -987,14 +996,32 @@ class ContentFilterGuardrail(CustomGuardrail):
         if keyword_matches is not None and not keyword_matches:
             return []
 
+        validator: Final = pattern_entry.get("validator")
         match_spans: Final[list[tuple[int, int]]] = []
 
-        for match in regex.finditer(text):
-            if keyword_matches is not None and not self._match_near_keyword(
-                match.start(), match.end(), keyword_matches, text
-            ):
-                continue
-            match_spans.append((match.start(), match.end()))
+        if validator is None:
+            for match in regex.finditer(text):
+                if keyword_matches is not None and not self._match_near_keyword(
+                    match.start(), match.end(), keyword_matches, text
+                ):
+                    continue
+                match_spans.append((match.start(), match.end()))
+        else:
+            search_pos: int = 0  # rebind-ok: candidate scan pointer
+            while search_pos < len(text):
+                match = regex.search(text, search_pos)
+                if match is None:
+                    break
+                if not validator(text[match.start() : match.end()]):
+                    search_pos = match.start() + 1
+                    continue
+                if keyword_matches is not None and not self._match_near_keyword(
+                    match.start(), match.end(), keyword_matches, text
+                ):
+                    search_pos = max(match.end(), match.start() + 1)
+                    continue
+                match_spans.append((match.start(), match.end()))
+                search_pos = max(match.end(), match.start() + 1)
 
         if allow_word_numbers:
             for word_match in WORD_NUMBER_SEQUENCE_PATTERN.finditer(text):
@@ -1002,6 +1029,8 @@ class ContentFilterGuardrail(CustomGuardrail):
                 if not digits:
                     continue
                 if not regex.fullmatch(digits):
+                    continue
+                if validator is not None and not validator(digits):
                     continue
                 if keyword_matches is not None and not self._match_near_keyword(
                     word_match.start(), word_match.end(), keyword_matches, text
