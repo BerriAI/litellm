@@ -34,6 +34,20 @@ type NameId = usize;
 
 const ROOT: NodeId = 0;
 
+/// The most nodes that may reach one part of the value. Paths reach a part through one node per
+/// distinct run of `[*]` and index steps above it, and matching the part costs a lookup per node,
+/// so the cap keeps the walk within a fixed multiple of the value's size however the paths overlap.
+const MAX_NODES_AT_ONE_VALUE: usize = 64;
+
+/// The walk stopped because more than `MAX_NODES_AT_ONE_VALUE` nodes reached one part of the value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OverlappingPaths;
+
+impl OverlappingPaths {
+    pub const EXPECTED: &'static str =
+        "paths that reach no value through more than 64 different runs of `[*]` and index steps";
+}
+
 /// What the paths sharing one prefix address below it. `pending` holds the rest of each of those
 /// paths until a part of the body reaches the prefix and `expand` reads one more segment of each,
 /// so no path is read deeper than the body goes and each segment is read once.
@@ -115,15 +129,22 @@ impl<'a> Removals<'a> {
     /// from the object holding it, and a path that ends on an element or `[*]` deletes nothing.
     /// Each part of `value` is visited once, with every node that reaches it, so paths that overlap
     /// through `[*]` and an index never walk the same element twice.
-    fn prune(&mut self, nodes: &[NodeId], value: &mut Value) {
+    fn prune(&mut self, nodes: &[NodeId], value: &mut Value) -> Result<(), OverlappingPaths> {
+        if nodes.len() > MAX_NODES_AT_ONE_VALUE {
+            return Err(OverlappingPaths);
+        }
         match value {
             Value::Object(object) => self.prune_object(nodes, object),
             Value::Array(items) => self.prune_array(nodes, items),
-            _ => {}
+            _ => Ok(()),
         }
     }
 
-    fn prune_object(&mut self, nodes: &[NodeId], object: &mut Map<String, Value>) {
+    fn prune_object(
+        &mut self,
+        nodes: &[NodeId],
+        object: &mut Map<String, Value>,
+    ) -> Result<(), OverlappingPaths> {
         nodes.iter().for_each(|node| self.expand(*node));
         let reached = self.fields_in(nodes, object);
         let ending: HashSet<NameId> = reached
@@ -141,11 +162,12 @@ impl<'a> Removals<'a> {
         reached
             .into_iter()
             .filter(|(name, _)| !ending.contains(name))
-            .for_each(|(name, children)| {
-                if let Some(item) = object.get_mut(self.spelled[name]) {
-                    self.prune(&children, item);
-                }
-            });
+            .try_for_each(
+                |(name, children)| match object.get_mut(self.spelled[name]) {
+                    Some(item) => self.prune(&children, item),
+                    None => Ok(()),
+                },
+            )
     }
 
     /// The fields of `object` that any of `nodes` names, each with the nodes below it. The match
@@ -182,30 +204,55 @@ impl<'a> Removals<'a> {
         reached
     }
 
-    fn prune_array(&mut self, nodes: &[NodeId], items: &mut [Value]) {
+    /// The elements of a list `len` long that any of `nodes` indexes, each with the nodes below it,
+    /// read from whichever is smaller, the indexes or the list, so a short list costs no more to
+    /// match than its own length however many indexes the paths name.
+    fn indexes_in(&self, nodes: &[NodeId], len: usize) -> HashMap<usize, Vec<NodeId>> {
+        let mut at: HashMap<usize, Vec<NodeId>> = HashMap::new();
+        let named: usize = nodes
+            .iter()
+            .map(|node| self.nodes[*node].indexes.len())
+            .sum();
+        if named <= len {
+            nodes
+                .iter()
+                .flat_map(|node| &self.nodes[*node].indexes)
+                .filter(|(index, _)| **index < len)
+                .for_each(|(index, child)| at.entry(*index).or_default().push(*child));
+            return at;
+        }
+        (0..len).for_each(|index| {
+            nodes
+                .iter()
+                .filter_map(|node| self.nodes[*node].indexes.get(&index))
+                .for_each(|child| at.entry(index).or_default().push(*child));
+        });
+        at
+    }
+
+    fn prune_array(
+        &mut self,
+        nodes: &[NodeId],
+        items: &mut [Value],
+    ) -> Result<(), OverlappingPaths> {
         nodes.iter().for_each(|node| self.expand(*node));
         let every: Vec<NodeId> = nodes
             .iter()
             .filter_map(|node| self.nodes[*node].every)
             .collect();
-        let mut at: HashMap<usize, Vec<NodeId>> = HashMap::new();
-        nodes
-            .iter()
-            .flat_map(|node| &self.nodes[*node].indexes)
-            .filter(|(index, _)| **index < items.len())
-            .for_each(|(index, child)| at.entry(*index).or_default().push(*child));
+        let at = self.indexes_in(nodes, items.len());
         if every.is_empty() {
-            at.into_iter()
-                .for_each(|(index, indexed)| self.prune(&indexed, &mut items[index]));
-            return;
+            return at
+                .into_iter()
+                .try_for_each(|(index, indexed)| self.prune(&indexed, &mut items[index]));
         }
         items
             .iter_mut()
             .enumerate()
-            .for_each(|(index, item)| match at.get(&index) {
+            .try_for_each(|(index, item)| match at.get(&index) {
                 Some(indexed) => self.prune(&[every.as_slice(), indexed].concat(), item),
                 None => self.prune(&every, item),
-            });
+            })
     }
 }
 
@@ -214,9 +261,9 @@ impl<'a> Removals<'a> {
 pub fn delete_nested_values<'a>(
     mut value: Value,
     paths: impl IntoIterator<Item = &'a str>,
-) -> Value {
-    Removals::new(paths).prune(&[ROOT], &mut value);
-    value
+) -> Result<Value, OverlappingPaths> {
+    Removals::new(paths).prune(&[ROOT], &mut value)?;
+    Ok(value)
 }
 
 #[cfg(test)]
@@ -342,7 +389,7 @@ mod tests {
         "top": 0.7
     }))]
     fn deletes_the_addressed_field(body: Value, #[case] path: &str, #[case] expected: Value) {
-        assert_eq!(delete_nested_values(body, [path]), expected);
+        assert_eq!(delete_nested_values(body, [path]), Ok(expected));
     }
 
     #[rstest]
@@ -363,7 +410,7 @@ mod tests {
     #[case::empty_index("tools[].name")]
     #[case::unclosed_bracket("top[0")]
     fn leaves_the_value_untouched(body: Value, #[case] path: &str) {
-        assert_eq!(delete_nested_values(body.clone(), [path]), body);
+        assert_eq!(delete_nested_values(body.clone(), [path]), Ok(body));
     }
 
     #[rstest]
@@ -371,7 +418,10 @@ mod tests {
     #[case::through_fields_the_value_holds(json!({"a": {"a": {"keep": 1}}}))]
     fn a_path_far_deeper_than_the_value_leaves_it_untouched(#[case] body: Value) {
         let path = vec!["a"; 100_000].join(".");
-        assert_eq!(delete_nested_values(body.clone(), [path.as_str()]), body);
+        assert_eq!(
+            delete_nested_values(body.clone(), [path.as_str()]),
+            Ok(body)
+        );
     }
 
     #[rstest]
@@ -383,7 +433,7 @@ mod tests {
         let started = std::time::Instant::now();
         let trimmed = delete_nested_values(body.clone(), [path.as_str()]);
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
-        assert_eq!(trimmed, body);
+        assert_eq!(trimmed, Ok(body));
     }
 
     #[rstest]
@@ -396,7 +446,10 @@ mod tests {
         let schema = json!({"properties": {"a": 1, "b": 2, "c": 3, "d": 4}});
         let trimmed = delete_nested_values(schema, [path]);
         assert_eq!(
-            serde_json::to_string(&trimmed).ok().as_deref(),
+            trimmed
+                .ok()
+                .and_then(|value| serde_json::to_string(&value).ok())
+                .as_deref(),
             Some(expected)
         );
     }
@@ -414,7 +467,7 @@ mod tests {
         let started = std::time::Instant::now();
         let trimmed = delete_nested_values(body.clone(), paths.iter().map(String::as_str));
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
-        assert_eq!(trimmed, body);
+        assert_eq!(trimmed, Ok(body));
     }
 
     #[rstest]
@@ -432,7 +485,7 @@ mod tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
         assert_eq!(
             trimmed,
-            json!({"tools": [{"name": "t", "input_schema": {"properties": {}}}]})
+            Ok(json!({"tools": [{"name": "t", "input_schema": {"properties": {}}}]}))
         );
     }
 
@@ -501,11 +554,29 @@ mod tests {
         json!({"meta": {}, "top": 0.7}),
     )]
     fn applies_every_path(#[case] value: Value, #[case] paths: &[&str], #[case] expected: Value) {
-        assert_eq!(delete_nested_values(value, paths.iter().copied()), expected);
+        assert_eq!(
+            delete_nested_values(value, paths.iter().copied()),
+            Ok(expected)
+        );
+    }
+
+    fn every_and_first_element_runs(depth: usize) -> impl Iterator<Item = (usize, String)> {
+        (0..1usize << depth).map(move |combo| {
+            let steps = (0..depth)
+                .map(|level| {
+                    if combo >> level & 1 == 1 {
+                        "[*]"
+                    } else {
+                        "[0]"
+                    }
+                })
+                .collect();
+            (combo, steps)
+        })
     }
 
     #[rstest]
-    #[case::twelve_levels_over_twenty_thousand_properties(12, 20_000)]
+    #[case::six_levels_over_twenty_thousand_properties(6, 20_000)]
     fn paths_overlapping_through_every_and_an_index_finish_well_inside_one_request(
         #[case] depth: usize,
         #[case] width: usize,
@@ -513,29 +584,54 @@ mod tests {
         let properties: serde_json::Map<String, Value> =
             (0..width).map(|n| (format!("p{n}"), json!(n))).collect();
         let nested = (0..depth).fold(Value::Object(properties), |inner, _| json!([inner]));
-        let combos = 1usize << depth;
-        let paths: Vec<String> = (0..combos)
-            .map(|combo| {
-                let steps: String = (0..depth)
-                    .map(|level| {
-                        if combo >> level & 1 == 1 {
-                            "[*]"
-                        } else {
-                            "[0]"
-                        }
-                    })
-                    .collect();
-                format!("tools{steps}.p{combo}")
-            })
+        let paths: Vec<String> = every_and_first_element_runs(depth)
+            .map(|(combo, steps)| format!("tools{steps}.p{combo}"))
             .collect();
         let started = std::time::Instant::now();
         let trimmed =
             delete_nested_values(json!({"tools": nested}), paths.iter().map(String::as_str));
         assert!(started.elapsed() < std::time::Duration::from_secs(5));
-        let kept: serde_json::Map<String, Value> = (combos..width)
+        let kept: serde_json::Map<String, Value> = (paths.len()..width)
             .map(|n| (format!("p{n}"), json!(n)))
             .collect();
         let expected = (0..depth).fold(Value::Object(kept), |inner, _| json!([inner]));
-        assert_eq!(trimmed, json!({"tools": expected}));
+        assert_eq!(trimmed, Ok(json!({"tools": expected})));
+    }
+
+    #[rstest]
+    #[case::one_level_past_the_cap(7)]
+    #[case::sixteen_levels(16)]
+    fn paths_overlapping_past_the_cap_fail_before_walking_the_list_they_reach(
+        #[case] depth: usize,
+    ) {
+        let elements = json!(vec![json!({"drop": 1, "keep": 1}); 1_000]);
+        let nested = (0..depth).fold(elements, |inner, _| json!([inner]));
+        let body = json!({"tools": [{"input_schema": {"x": nested}}]});
+        let paths: Vec<String> = every_and_first_element_runs(depth)
+            .map(|(_, steps)| format!("tools[0].input_schema.x{steps}[*].drop"))
+            .collect();
+        let started = std::time::Instant::now();
+        let trimmed = delete_nested_values(body, paths.iter().map(String::as_str));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert_eq!(trimmed, Err(OverlappingPaths));
+    }
+
+    #[rstest]
+    #[case::two_hundred_thousand_indexes_over_five_thousand_short_lists(200_000, 5_000)]
+    fn many_indexes_over_many_short_lists_finish_well_inside_one_request(
+        #[case] indexes: usize,
+        #[case] lists: usize,
+    ) {
+        let body = json!({"tools": vec![json!({"arr": [{"x": 1, "k": 1}]}); lists]});
+        let paths: Vec<String> = (0..indexes)
+            .map(|index| format!("tools[*].arr[{index}].x"))
+            .collect();
+        let started = std::time::Instant::now();
+        let trimmed = delete_nested_values(body, paths.iter().map(String::as_str));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert_eq!(
+            trimmed,
+            Ok(json!({"tools": vec![json!({"arr": [{"k": 1}]}); lists]}))
+        );
     }
 }
