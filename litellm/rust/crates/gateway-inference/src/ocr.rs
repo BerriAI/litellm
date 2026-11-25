@@ -8,7 +8,7 @@ use litellm_inference_ocr::{
     types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput},
 };
 use litellm_llms::base_llm::ocr::transformation::decode_request_value;
-use litellm_llms_types::formats::ocr::OcrDocument;
+use litellm_llms_types::formats::{chat_completions::ChatCompletionsUsage, ocr::OcrDocument};
 use litellm_router_core::{Attempt, Op};
 use serde_json::{Map, Value};
 
@@ -86,6 +86,21 @@ impl Endpoint for OcrAttempt<'_> {
     const OP: Op = Op::OCR;
     const PATH: &'static str = "/ocr";
     const ERRORS: ErrorFormat = ErrorFormat::OpenAi;
+
+    /// OCR counts pages, not tokens.
+    fn usage(_counts: Counts) -> Option<ChatCompletionsUsage> {
+        None
+    }
+
+    /// The `id` an OCR answer names, as Python's `get_spend_logs_id` reads `response_obj["id"]`.
+    fn response_id(outcome: &Value) -> Option<String> {
+        outcome.get("id").and_then(Value::as_str).map(str::to_owned)
+    }
+
+    /// OCR never streams.
+    fn stream_response_id(_data: &str) -> Option<String> {
+        None
+    }
 
     fn render(outcome: Value, _reported: ReportedModel<'_>) -> Result<Response, Error> {
         Ok(Json(outcome).into_response())

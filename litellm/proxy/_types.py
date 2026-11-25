@@ -436,7 +436,6 @@ class LiteLLMRoutes(enum.Enum):
         "/tinyfish",
         "/vllm",
         "/mistral",
-        "/typesafe",
         "/laya",
         "/bespoke",
         "/openrouter",
@@ -2069,6 +2068,7 @@ class NewTeamRequest(TeamBase):
     )
 
     model_tpm_limit: dict[str, int] | None = None
+    model_tpm_limit_counts_cached_tokens: Mapping[str, bool] | None = None
     default_estimated_output_tokens: PositiveInt | None = None
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
@@ -2149,6 +2149,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     prompts: list[str] | None = None
     model_rpm_limit: dict[str, int] | None = None
     model_tpm_limit: dict[str, int] | None = None
+    model_tpm_limit_counts_cached_tokens: Mapping[str, bool] | None = None
     default_estimated_output_tokens: PositiveInt | None = None
     default_estimated_output_tokens_per_model: Mapping[str, PositiveInt] | None = None
     mcp_rpm_limit: dict[str, int] | None = None
@@ -4934,6 +4935,7 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields: Final = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "model_tpm_limit_counts_cached_tokens",
     "model_itpm_limit",
     "model_otpm_limit",
     "default_estimated_output_tokens",

@@ -47,6 +47,7 @@ def _routes_nowhere(_model_name: str) -> bool:
 class FileListModelScope:
     model_mapping_keys: frozenset[str]
     routes_stored_model_name: Callable[[str], bool] = _routes_nowhere
+    routes_uploaded_model_name: Callable[[str], bool] | None = None
 
     def holds(self, model_mapping_keys: Iterable[str], stored: bool) -> bool:
         mapped_keys: Final = frozenset(model_mapping_keys)

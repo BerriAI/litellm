@@ -28,7 +28,7 @@ fn config(variable: &str) -> Option<LiveConfig> {
 
 async fn roundtrip(config: LiveConfig) {
     if rustls::crypto::CryptoProvider::get_default().is_none() {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     }
     let lookup = |name: &str| std::env::var(name).ok();
     let resolved = litellm_redis_resolve::interpret(

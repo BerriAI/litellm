@@ -1473,7 +1473,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
         api_base: str,
         optional_params: dict[str, object],
         s3_encryption_key_id: str | None = None,
-    ) -> tuple[dict, str]:
+    ) -> tuple[dict[str, object], str]:
         """
         Sign S3 PUT request using the same proven logic as S3Logger.
         Reuses the exact pattern from litellm/integrations/s3_v2.py
