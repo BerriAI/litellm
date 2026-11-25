@@ -21,11 +21,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     _bedrock_converse_messages_pt,
 )
+from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH
 from litellm.llms.anthropic.pass_through.adapters.handler import (
     LiteLLMMessagesToCompletionTransformationHandler,
 )
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
-    OPENAI_MAX_TOOL_NAME_LENGTH,
     AnthropicAdapter,
     LiteLLMAnthropicMessagesAdapter,
     create_tool_name_mapping,
@@ -6232,6 +6232,24 @@ async def test_an_empty_trailing_user_message_reaches_gemini_as_a_user_turn(
         {"role": "model", "parts": [{"text": "Hello!"}]},
         {"role": "user", "parts": [{"text": " "}]},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("_chat_bridge_httpx")
+@pytest.mark.parametrize("blank_text", ("", " "), ids=("empty", "blank"))
+async def test_a_request_with_only_blank_user_text_reaches_gemini_as_a_user_turn(
+    respx_mock: respx.MockRouter, blank_text: str
+) -> None:
+    route: Final = respx_mock.post(url__regex=_GEMINI_URL).mock(return_value=httpx.Response(200, json=_GEMINI_REPLY))
+
+    await litellm.anthropic.messages.acreate(
+        model=_GEMINI_MODEL,
+        api_key="test-key",
+        max_tokens=64,
+        messages=[{"role": "user", "content": [{"type": "text", "text": blank_text}]}],
+    )
+
+    assert json.loads(route.calls.last.request.read())["contents"] == [{"role": "user", "parts": [{"text": " "}]}]
 
 
 @pytest.mark.asyncio

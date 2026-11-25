@@ -357,6 +357,7 @@ from litellm.litellm_core_utils.audio_utils.utils import resolve_speech_media_ty
 from litellm.litellm_core_utils.core_helpers import (
     as_str_mapping,
     drop_params_flag,
+    drops_unsupported_params,
     get_litellm_metadata_from_kwargs,
     get_parent_otel_span_from_kwargs,
     iter_items,
@@ -373,6 +374,13 @@ from litellm.litellm_core_utils.sensitive_data_masker import (
     mask_sensitive_keys,
 )
 from litellm.llms.anthropic.common_utils import system_without_claude_code_billing_header
+from litellm.llms.anthropic.pass_through.convertible_blocks import (
+    emptied_messages_error,
+    non_string_system_text_error,
+    non_string_user_text_error,
+    without_non_string_system_texts,
+)
+from litellm.llms.anthropic.pass_through.messages.utils import native_messages_to_send
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.openai.live import parse_live_session_start
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
@@ -14678,6 +14686,44 @@ def _drops_params(deployment: Mapping[str, object] | None) -> bool:
     return litellm.drop_params is True or (litellm_params is not None and litellm_params.get("drop_params") is True)
 
 
+def _count_drops_params(deployment: Mapping[str, object] | None, sent_params: Mapping[str, object]) -> bool:
+    if "drop_params" in sent_params:
+        return drops_unsupported_params(sent_params["drop_params"])
+    return _drops_params(deployment)
+
+
+def _counted_request_messages(
+    messages: Sequence[dict[str, object]] | None,  # mutable-ok: TokenCountRequest.messages is typed list[dict]
+    messages_format: TokenCountMessagesFormat,
+    drops: bool,
+) -> list[dict[str, object]] | None:  # mutable-ok: BaseTokenCounter.count_tokens takes list messages
+    if messages is None:
+        return None
+    if messages_format != "anthropic":
+        return list(messages)
+    user_text_error: Final = None if drops else non_string_user_text_error(messages)
+    if user_text_error is not None:
+        raise ProxyException(message=user_text_error, type="invalid_request_error", param="messages", code=400)
+    kept: Final = native_messages_to_send(messages, drops)
+    emptied_error: Final = emptied_messages_error(messages, kept)
+    if emptied_error is not None:
+        raise ProxyException(message=emptied_error, type="invalid_request_error", param="messages", code=400)
+    return kept or list(messages)
+
+
+def _counted_request_system(
+    system: str | list[object] | None,  # mutable-ok: Anthropic system blocks
+    messages_format: TokenCountMessagesFormat,
+    drops: bool,
+) -> str | list[object] | None:  # mutable-ok: _try_provider_token_count takes Anthropic system blocks as a list
+    error: Final = None if messages_format != "anthropic" else non_string_system_text_error(system)
+    if error is None or not isinstance(system, list):
+        return system
+    if not drops:
+        raise ProxyException(message=error, type="invalid_request_error", param="system", code=400)
+    return without_non_string_system_texts(system)
+
+
 _ESTIMABLE_GOOGLE_PART_KEYS: Final = frozenset({"text", "functionCall", "functionResponse", "thoughtSignature"})
 
 
@@ -14815,11 +14861,6 @@ async def count_request_tokens(
     deployment_view: Final = _TOKEN_COUNT_DEPLOYMENT.validate_python(
         deployment or _model_group_deployment(llm_router, request.model) or {}
     )
-    bridged_system: Final = (
-        system_without_claude_code_billing_header(system)
-        if messages_format == "anthropic" and _messages_count_bridges(deployment_view, request.model)
-        else system
-    )
     settings: Final = await asyncify(resolve_token_count_settings)(
         configured=deployment_view.get("model_info", {}),
         default=await asyncify(cost_map_entry)(*_token_count_settings_model(deployment_view, request.model)),
@@ -14844,6 +14885,17 @@ async def count_request_tokens(
             code=400,
         )
     prompt_only: Final = bool(prompt) and conversation_empty
+    router_defaults: Final[Mapping[str, object]] = (
+        {} if llm_router is None else _router_default_litellm_params(llm_router)
+    )
+    count_drops: Final = _count_drops_params(deployment, {**router_defaults, **request_litellm_params})
+    request_messages: Final = _counted_request_messages(messages, messages_format, count_drops)
+    request_system: Final = _counted_request_system(system, messages_format, count_drops)
+    bridged_system: Final = (
+        system_without_claude_code_billing_header(request_system)
+        if messages_format == "anthropic" and _messages_count_bridges(deployment_view, request.model)
+        else request_system
+    )
     contents_estimable: Final = not contents or (bool(messages) and _estimable_contents(contents))
     prompt_as_message: Final = prompt_only and custom_llm_provider in _PROVIDERS_COUNTING_WITHOUT_MESSAGES
     ladder: Final = (
@@ -14854,7 +14906,7 @@ async def count_request_tokens(
                 _try_provider_token_count,
                 provider_counter,
                 custom_llm_provider,
-                messages=[{"role": "user", "content": prompt}] if prompt_as_message else messages,
+                messages=[{"role": "user", "content": prompt}] if prompt_as_message else request_messages,
                 contents=None if prompt_as_message else contents,
                 deployment=(
                     _deployment_for_messages_responses_count(deployment, llm_router, request_litellm_params)
@@ -14863,7 +14915,7 @@ async def count_request_tokens(
                 ),
                 request_model=request.model,
                 tools=tools,
-                system=system if isinstance(provider_counter, OpenAITokenCounter) else bridged_system,
+                system=request_system if isinstance(provider_counter, OpenAITokenCounter) else bridged_system,
                 messages_format=messages_format,
                 output_format=output_format,
                 context_management=_count_context_management(context_management, request.model, request_litellm_params),
@@ -14896,7 +14948,7 @@ async def count_request_tokens(
     prompt_turn: Final = prompt_only and not (system_message is None and not tools)
     typed_messages: Final = cast(  # cast-ok: request messages are raw chat-shaped dicts that token_counter normalizes
         Sequence[AllMessageValues] | None,
-        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else messages),
+        [{"role": "user", "content": prompt}] if prompt_turn else (None if prompt_only else request_messages),
     )
     counted_messages: Final = (
         typed_messages if typed_messages is None or system_message is None else (system_message, *typed_messages)

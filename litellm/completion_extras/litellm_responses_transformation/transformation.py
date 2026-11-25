@@ -40,10 +40,12 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     thinking_blocks_from_reasoning_items,
     with_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.tool_fields import qualified_member_name
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
+from litellm.llms.vertex_ai.responses.transformation import is_vertex_muse_model
 from litellm.responses.litellm_completion_transformation.tool_search import is_anthropic_tool_search_chat_tool
 from litellm.responses.sse_output_recovery import (
     parse_sse_json_chunk,
@@ -212,6 +214,30 @@ def _without_audio_input_parts_in_item(value: object) -> object:
 
 def _without_audio_input_parts(input_items: list[object]) -> list[object]:
     return [_without_audio_input_parts_in_item(item) for item in input_items]
+
+
+_VERTEX_CREDENTIAL_PARAMS: Final = MappingProxyType(
+    {
+        "vertex_project": ("vertex_project", "vertex_ai_project"),
+        "vertex_location": ("vertex_location", "vertex_ai_location"),
+        "vertex_credentials": ("vertex_credentials", "vertex_ai_credentials"),
+    }
+)
+
+
+def _first_non_empty(params: Mapping[str, object], names: tuple[str, ...]) -> object:
+    return next((params[name] for name in names if params.get(name)), None)
+
+
+def _vertex_credential_params(
+    model: str, custom_llm_provider: str | None, optional_params: Mapping[str, object]
+) -> Mapping[str, object]:
+    if custom_llm_provider != LlmProviders.VERTEX_AI.value or not is_vertex_muse_model(model):
+        return {}
+    found: Final = {
+        name: _first_non_empty(optional_params, aliases) for name, aliases in _VERTEX_CREDENTIAL_PARAMS.items()
+    }
+    return {name: value for name, value in found.items() if value is not None}
 
 
 def _served_provider(litellm_params: Mapping[str, object]) -> str | None:
@@ -449,6 +475,19 @@ def replayed_tool_search_tools(request: object) -> tuple[object, ...]:
 
 def replayed_tool_search_tool_names(request: object) -> tuple[str, ...]:
     return tuple(chain.from_iterable(_tool_definition_name(tool) for tool in replayed_tool_search_tools(request)))
+
+
+def _qualified_member_names(tool: object) -> tuple[str, ...]:
+    namespace: Final = _json_field(tool, "name") if _json_field(tool, "type") == "namespace" else None
+    if not isinstance(namespace, str):
+        return ()
+    names: Final = chain.from_iterable(_tool_definition_name(member) for member in _namespace_members(tool))
+    return tuple(qualified_member_name(namespace, name) for name in names)
+
+
+def namespace_member_qualified_names(request: object) -> tuple[str, ...]:
+    tools: Final = _json_list(_json_field(request, "tools")) or ()
+    return tuple(chain.from_iterable(_qualified_member_names(tool) for tool in tools))
 
 
 def _loads_any_tool(message: object, names: frozenset[str]) -> bool:
@@ -1374,6 +1413,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             "input": input_items,
             "litellm_logging_obj": litellm_logging_obj,
             **sanitized_litellm_params,
+            **_vertex_credential_params(model, _served_provider(litellm_params), typed_optional_params),
             "client": client,
         }
 

@@ -1,6 +1,7 @@
 import base64
 import json
 from collections.abc import Mapping
+from io import BytesIO
 from typing import Final
 
 import httpx
@@ -187,3 +188,31 @@ def test_flux2_image_edit_accepts_and_drops_openai_only_parameters():
     )
 
     assert optional_params == {"num_images": 1}
+
+
+def test_flux_kontext_image_edit_drops_markup_without_an_error():
+    captured: Final[list[httpx.Request]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"created": 1712697600, "data": [{"b64_json": "aW1n"}]})
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler)))
+    png: Final = b"\x89PNG\r\n\x1a\nfakepng"
+    request: Final[dict[str, object]] = {
+        "model": "azure_ai/FLUX.1-Kontext-pro",
+        "image": png,
+        "prompt": "add a hat",
+        "api_base": "https://test-endpoint.services.ai.azure.com",
+        "api_key": "test-key",
+        "api_version": "2025-04-01-preview",
+        "client": client,
+        "markup": BytesIO(png),
+    }
+
+    litellm.image_edit(**request)
+    litellm.image_edit(**request, drop_params=True)
+
+    assert len(captured) == 2
+    assert all(b'name="markup"' not in sent.content for sent in captured)
+    assert all(b'name="prompt"\r\n\r\nadd a hat' in sent.content for sent in captured)
