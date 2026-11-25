@@ -28,7 +28,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._internal_context import current_service_target, service_target
 from litellm._logging import verbose_logger
-from litellm.constants import CACHED_STREAMING_CHUNK_DELAY, SEMANTIC_CACHE_POLICY_KEY
+from litellm.constants import CACHED_STREAMING_CHUNK_DELAY, CALLER_MESSAGE_COUNT_KEY, SEMANTIC_CACHE_POLICY_KEY
 from litellm.integrations.otel.runtime import phase_span
 from litellm.litellm_core_utils.core_helpers import as_str_mapping, has_attributes, require_attributes
 from litellm.litellm_core_utils.model_param_helper import (
@@ -37,6 +37,7 @@ from litellm.litellm_core_utils.model_param_helper import (
     peek_reasoning_summary_aliases,
 )
 from litellm.types.caching import *
+from litellm.types.caching import CallerMessageCount
 from litellm.types.semantic_cache import response_cache_policy_ttl, semantic_cache_policy
 from litellm.types.utils import EmbeddingResponse, Usage, is_litellm_owned_kwarg
 
@@ -325,16 +326,41 @@ def _is_conversation_item(item: object) -> bool:
     return block.get("type") not in ("file", "text")
 
 
+def _trusted_caller_message_count(controls: object) -> int | None:
+    fields: Final = as_str_mapping(controls)
+    stamped: Final = fields.get(CALLER_MESSAGE_COUNT_KEY) if fields is not None else None
+    return stamped.count if isinstance(stamped, CallerMessageCount) else None
+
+
+def responses_input_message_count(input_items: object) -> int | None:
+    if not isinstance(input_items, list):
+        return None
+    items: Final = cast(list[object], input_items)  # cast-ok: isinstance leaves the element type unknown
+    return sum(1 for item in items if _is_conversation_item(item))
+
+
 def _request_message_count(kwargs: Mapping[str, object]) -> int:
-    """Chat and Messages API `messages`, else Responses API `input` items; embedding strings and blocks count as none"""
+    """A count a bridge stamped for its caller, else Chat and Messages API `messages`, else Responses API `input`
+    items; embedding strings and blocks count as none"""
+    caller_count: Final = _trusted_caller_message_count(kwargs.get("cache"))
+    if caller_count is not None:
+        return caller_count
     messages: Final = kwargs.get("messages")
     if isinstance(messages, list):
         return len(messages)
-    input_items: Final = kwargs.get("input")
-    if not isinstance(input_items, list):
-        return 0
-    items: Final = cast(list[object], input_items)  # cast-ok: isinstance leaves the element type unknown
-    return sum(1 for item in items if _is_conversation_item(item))
+    return responses_input_message_count(kwargs.get("input")) or 0
+
+
+def with_caller_message_count(request_kwargs: Mapping[str, object], count: int | None) -> Mapping[str, object]:
+    """The `cache` kwarg a bridge's inner call takes so `max_messages` counts what the caller sent, keeping a count
+    an outer bridge already stamped"""
+    controls: Final = request_kwargs.get("cache")
+    if count is None or _trusted_caller_message_count(controls) is not None:
+        return MappingProxyType({})
+    fields: Final[Mapping[str, object] | None] = MappingProxyType({}) if controls is None else as_str_mapping(controls)
+    if fields is None:
+        return MappingProxyType({})
+    return MappingProxyType({"cache": {**fields, CALLER_MESSAGE_COUNT_KEY: CallerMessageCount(count=count)}})
 
 
 def _is_positive_finite_ttl(value: object) -> bool:

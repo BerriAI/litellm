@@ -508,20 +508,21 @@ fn agentic_followup() -> AttemptError {
 
 fn follow_up_to_a_provider_held_response() -> AttemptError {
     let mut failed = failure(FailureKind::Declined, 400);
-    failed.classes = vec![
+    failed.classes = [
         "UnresolvablePreviousResponseError".into(),
         "MalformedRequestFieldError".into(),
         "BadRequestError".into(),
-    ];
+    ]
+    .into();
     failed.names_provider = true;
     failed
 }
 
 fn follow_up_to_an_unknown_response() -> AttemptError {
     let mut failed = follow_up_to_a_provider_held_response();
-    failed
-        .classes
-        .insert(0, "UnknownPreviousResponseError".into());
+    failed.classes = std::iter::once("UnknownPreviousResponseError".into())
+        .chain(failed.classes.iter().cloned())
+        .collect();
     failed
 }
 
@@ -533,10 +534,11 @@ fn create_may_exist() -> AttemptError {
 
 fn over_every_tpm_limit() -> AttemptError {
     let mut failed = failure(FailureKind::RateLimit, 429);
-    failed.classes = vec![
+    failed.classes = [
         "RequestOverDeploymentTpmError".into(),
         "RateLimitError".into(),
-    ];
+    ]
+    .into();
     failed
 }
 
@@ -1471,6 +1473,29 @@ async fn a_failed_attempt_counts_its_request_only_when_its_callback_ran(
     let usage = router.health().usage(&deployment).await.unwrap();
     let counted = host.cache.outcomes("a1").await.unwrap().fails;
     assert_eq!((usage.1, counted), (requests, fails));
+}
+
+#[rstest]
+#[case::an_async_call(false)]
+#[case::a_sync_call(true)]
+#[tokio::test]
+async fn a_failed_attempt_on_a_billed_answer_counts_its_tokens_with_its_request(
+    #[case] uncounted_request: bool,
+) {
+    let config: RouterConfig = serde_json::from_value(json!({
+        "model_list": [
+            {"model_name": "primary", "litellm_params": {"model": "gemini/a", "tpm": 1000}, "model_info": {"id": "a1"}},
+        ]
+    }))
+    .unwrap();
+    let mut failure = AttemptError::new(FailureKind::ContentPolicyViolation, Some(400));
+    failure.uncounted_request = uncounted_request;
+    failure.answered_tokens = 1110;
+    let host = Arc::new(ScriptedHost::failing("primary", vec![failure]));
+    let router = router(config, json!({"num_retries": 0}), host.clone());
+    let _ = router.call(Op::from("aimage_generation"), request()).await;
+    let deployment = router.registry().deployment("a1").unwrap();
+    assert_eq!(router.health().usage(&deployment).await.unwrap(), (1110, 1));
 }
 
 #[rstest]
@@ -5455,10 +5480,11 @@ async fn every_event_of_a_retried_and_fallen_back_call_serializes_tagged_by_its_
 
 fn queue_rejected() -> AttemptError {
     let mut rejected = AttemptError::new(FailureKind::QueueRejected, Some(503));
-    rejected.classes = vec![
+    rejected.classes = [
         "DynamicQueueFullError".into(),
         "ServiceUnavailableError".into(),
-    ];
+    ]
+    .into();
     rejected
 }
 

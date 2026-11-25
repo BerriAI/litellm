@@ -3549,9 +3549,14 @@ class NativeParallelRequestLimiter:
         /,
         request: NativeRequestRedis | None = None,
         turn: bool = False,
+        provider_billed: bool = False,
     ) -> Future[None]: ...
     def log_post_call_failure(
-        self, state: NativeParallelRequestLimiterState, request_data: Mapping[str, object], rate_limit_type: str
+        self,
+        state: NativeParallelRequestLimiterState,
+        request_data: Mapping[str, object],
+        rate_limit_type: str,
+        provider_billed: bool = False,
     ) -> Future[None]: ...
     def reservation_aware(
         self,
