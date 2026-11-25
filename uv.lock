@@ -4988,7 +4988,7 @@ wheels = [
 
 [[package]]
 name = "litellm"
-version = "1.109.4"
+version = "1.109.5"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -5510,7 +5510,7 @@ source = { editable = "enterprise" }
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.113"
+version = "0.4.113.post1"
 source = { editable = "litellm-proxy-extras" }
 dependencies = [
     { name = "psycopg" },
