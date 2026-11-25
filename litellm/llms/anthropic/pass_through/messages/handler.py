@@ -143,7 +143,7 @@ _ToolChoice: Final = TypeVar("_ToolChoice", bound=Mapping[str, object])
 def _without_forced_native_tool_search(
     tool_choice: _ToolChoice | None, tool_search_name: str | None, drop_params: bool
 ) -> _ToolChoice | None:
-    if tool_choice is None or tool_search_name is None or tool_choice.get("name") != tool_search_name:
+    if tool_search_name is None or (as_str_mapping(tool_choice) or {}).get("name") != tool_search_name:
         return tool_choice
     if drop_params:
         return None

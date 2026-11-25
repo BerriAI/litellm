@@ -1404,11 +1404,14 @@ class LiteLLMAnthropicMessagesAdapter:
             new_kwargs=new_kwargs,
         )
         ## CONVERT TOOLS
+        deferral_model_info: Final = (
+            {**(deployment_model_info or {}), "base_model": base_model} if base_model else deployment_model_info
+        )
         tool_name_mapping = self._translate_tools_to_openai(
             anthropic_message_request=anthropic_message_request,
             new_kwargs=new_kwargs,
             keeps_deferral=routed_deferred_tools_mode(
-                deployment_model_info, custom_llm_provider, anthropic_message_request["model"], api_base
+                deferral_model_info, custom_llm_provider, anthropic_message_request["model"], api_base
             )
             == "passthrough",
         )

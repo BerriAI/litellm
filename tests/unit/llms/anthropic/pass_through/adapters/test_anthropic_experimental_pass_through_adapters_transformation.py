@@ -6464,6 +6464,17 @@ def test_chat_route_passthrough_sends_plain_functions_to_a_vertex_psc_endpoint(m
     assert not any("defer_loading" in tool for tool in openai_request["tools"])
 
 
+def test_chat_route_passthrough_sends_plain_functions_when_the_request_base_model_is_gemini():
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        _deferred_tool_request("vertex_ai/1234567890"),
+        custom_llm_provider="vertex_ai",
+        base_model="gemini-pro-latest",
+        deployment_model_info={"deferred_tools": "passthrough"},
+    )
+
+    assert not any("defer_loading" in tool for tool in openai_request["tools"])
+
+
 def test_chat_route_passthrough_keeps_defer_loading_on_the_deferred_tool():
     openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
         _deferred_tool_request(), deployment_model_info={"deferred_tools": "passthrough"}
