@@ -20,6 +20,7 @@ pub const GENAI_CALL_TYPES: [&str; 4] = genai::CALL_TYPES;
 pub use genai::config_field as genai_config_field;
 const CHARS_PER_TOKEN: i128 = 4;
 const RESPONSES: [&str; 2] = ["aresponses", "responses"];
+const ANTHROPIC_MESSAGES: [&str; 2] = ["anthropic_messages", "aanthropic_messages"];
 const EMBEDDING: [&str; 2] = ["aembedding", "embedding"];
 const TEXT_COMPLETION: [&str; 2] = ["atext_completion", "text_completion"];
 const EXTRACTION: [&str; 2] = ["extraction", "aextraction"];
@@ -39,8 +40,10 @@ const MEDIA_TYPES: [&str; 10] = [
 
 /// Every top-level request member the estimator reads. A host may leave out any other member whose
 /// value it cannot hand over as JSON, since no estimate depends on it.
-pub const REQUEST_KEYS: [&str; 19] = [
+pub const REQUEST_KEYS: [&str; 21] = [
     "messages",
+    "system",
+    "instructions",
     "prompt",
     "input",
     "max_tokens",
@@ -236,6 +239,29 @@ fn messages_length(messages: &[Value]) -> Out<i128> {
     Ok(total)
 }
 
+/// The characters of the instruction text a request carries outside its messages or input, which is
+/// `system` on Anthropic Messages and `instructions` on Responses.
+fn instruction_length(request: &Map<String, Value>, call_type: &str) -> Out<i128> {
+    let instructions = if ANTHROPIC_MESSAGES.contains(&call_type) {
+        get(request, "system")
+    } else if RESPONSES.contains(&call_type) {
+        get(request, "instructions")
+    } else {
+        return Ok(0);
+    };
+    match py(instructions)? {
+        Py::Str(found) => Ok(length(found)),
+        Py::List(blocks) => blocks
+            .iter()
+            .map(|block| match block {
+                Value::Object(block) => Ok(text(get(block, "text"))?.map_or(0, length)),
+                _ => Ok(0),
+            })
+            .sum(),
+        _ => Ok(0),
+    }
+}
+
 fn may_hold_media(value: &Value) -> bool {
     match value {
         Value::Array(items) => items.iter().any(may_hold_media),
@@ -335,14 +361,15 @@ pub fn input_and_output_tokens(
             return Err(PythonServed);
         }
     }
-    let total_chars = match (messages, extraction_length) {
-        (_, Some(extraction)) => extraction,
-        (Value::Array(items), None) if !items.is_empty() => messages_length(items)?,
-        _ => match py(prompt)? {
-            Py::Str(_) | Py::List(_) => sequence_length(prompt)?,
-            _ => sequence_length(raw_input)?,
-        },
-    };
+    let total_chars = instruction_length(request, call_type)?
+        + match (messages, extraction_length) {
+            (_, Some(extraction)) => extraction,
+            (Value::Array(items), None) if !items.is_empty() => messages_length(items)?,
+            _ => match py(prompt)? {
+                Py::Str(_) | Py::List(_) => sequence_length(prompt)?,
+                _ => sequence_length(raw_input)?,
+            },
+        };
     let estimated_input = if total_chars > 0 {
         (total_chars / CHARS_PER_TOKEN).max(1)
     } else {
@@ -438,6 +465,27 @@ mod tests {
     )]
     // No messages, no prompt: nothing to reserve.
     #[case::chat_empty(json!({"messages": []}), "acompletion", None, None, (0, 0))]
+    // 12 characters of messages plus 40 of system: 52 // 4 = 13 input.
+    #[case::messages_system(
+        json!({"system": "x".repeat(40), "messages": [{"role": "user", "content": "hello world!"}], "max_tokens": 50}),
+        "anthropic_messages", None, None, (13, 50)
+    )]
+    // Only the text of each system block counts: (12 + 40 + 8) // 4 = 15 input.
+    #[case::messages_system_blocks(
+        json!({"system": [{"type": "text", "text": "x".repeat(40), "cache_control": {"type": "ephemeral"}}, {"type": "text", "text": "abcdefgh"}],
+               "messages": [{"role": "user", "content": "hello world!"}], "max_tokens": 50}),
+        "anthropic_messages", None, None, (15, 50)
+    )]
+    // A chat request has no top-level system member, so a stray one is not counted.
+    #[case::chat_ignores_system(
+        json!({"system": "x".repeat(40), "messages": [{"role": "user", "content": "hello world!"}], "max_tokens": 50}),
+        "acompletion", None, None, (3, 50)
+    )]
+    // 40 characters of input plus 80 of instructions: 120 // 4 = 30 input.
+    #[case::responses_instructions(
+        json!({"instructions": "y".repeat(80), "input": "x".repeat(40), "max_output_tokens": 50}),
+        "aresponses", None, None, (30, 50)
+    )]
     // 8 characters of prompt: 2 input; the floor capped at int(1000 * 0.25) = 250.
     #[case::text_completion(json!({"prompt": "abcdefgh"}), "atext_completion", Some(1000), None, (2, 250))]
     // A prompt list sums str() of each item.
