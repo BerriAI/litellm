@@ -1966,12 +1966,29 @@ def _append_slg_to_litellm_params(lp: object, entries: Sequence[object]) -> None
     """Merge guardrail entries into a single litellm_params dict."""
     if not isinstance(lp, dict):
         return
-    if lp.get("metadata") is None:
-        lp["metadata"] = {}
-    existing: Final = lp["metadata"].setdefault("standard_logging_guardrail_information", [])
+    lp_dict: Final = cast("dict[str, object]", lp)  # cast-ok: litellm_params dicts are str-keyed
+    metadata_obj: Final = lp_dict.get("metadata")
+    metadata: Final = (
+        cast("dict[str, object]", metadata_obj)  # cast-ok: metadata buckets are str-keyed
+        if isinstance(metadata_obj, dict)
+        else {}
+    )
+    if not isinstance(metadata_obj, dict):
+        lp_dict["metadata"] = metadata
+    existing_obj: Final = metadata.get("standard_logging_guardrail_information")
+    existing: Final = (
+        cast("list[object]", existing_obj)  # cast-ok: guardrail info entries are stored in a list
+        if isinstance(existing_obj, list)
+        else []
+    )
+    if not isinstance(existing_obj, list):
+        metadata["standard_logging_guardrail_information"] = existing
+    merged_ids: Final = {id(entry) for entry in existing}
     for entry in entries:
-        if entry not in existing:
-            existing.append(entry)
+        if id(entry) in merged_ids or entry in existing:
+            continue
+        existing.append(entry)
+        merged_ids.add(id(entry))
 
 
 def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object) -> None:

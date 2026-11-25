@@ -32,16 +32,12 @@ class _FakeLogging:
 def test_syncs_from_litellm_metadata_key():
     """When guardrail info is in request_data["litellm_metadata"], it is copied."""
     entry = _make_slg_entry()
-    request_data = {
-        "litellm_metadata": {"standard_logging_guardrail_information": [entry]}
-    }
+    request_data = {"litellm_metadata": {"standard_logging_guardrail_information": [entry]}}
     logging_obj = _FakeLogging()
 
     _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
-    result = logging_obj.litellm_params["metadata"].get(
-        "standard_logging_guardrail_information"
-    )
+    result = logging_obj.litellm_params["metadata"].get("standard_logging_guardrail_information")
     assert result == [entry]
 
 
@@ -53,9 +49,7 @@ def test_syncs_from_metadata_key():
 
     _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
-    result = logging_obj.litellm_params["metadata"].get(
-        "standard_logging_guardrail_information"
-    )
+    result = logging_obj.litellm_params["metadata"].get("standard_logging_guardrail_information")
     assert result == [entry]
 
 
@@ -74,9 +68,7 @@ def test_litellm_metadata_wins_over_caller_metadata():
 
     _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
-    result = logging_obj.litellm_params["metadata"].get(
-        "standard_logging_guardrail_information"
-    )
+    result = logging_obj.litellm_params["metadata"].get("standard_logging_guardrail_information")
     assert result == [entry_lm]
 
 
@@ -92,9 +84,7 @@ def test_syncs_when_caller_sends_its_own_metadata():
 
     _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
-    result = logging_obj.litellm_params["metadata"].get(
-        "standard_logging_guardrail_information"
-    )
+    result = logging_obj.litellm_params["metadata"].get("standard_logging_guardrail_information")
     assert result == [entry]
 
 
@@ -105,29 +95,20 @@ def test_noop_when_no_guardrail_info():
 
     _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
-    assert (
-        logging_obj.litellm_params["metadata"].get(
-            "standard_logging_guardrail_information"
-        )
-        is None
-    )
+    assert logging_obj.litellm_params["metadata"].get("standard_logging_guardrail_information") is None
 
 
 def test_noop_when_logging_obj_is_none():
     """Does nothing when logging_obj is None."""
     entry = _make_slg_entry()
-    request_data = {
-        "litellm_metadata": {"standard_logging_guardrail_information": [entry]}
-    }
+    request_data = {"litellm_metadata": {"standard_logging_guardrail_information": [entry]}}
     _sync_guardrail_info_to_logging_obj(request_data, None)
 
 
 def test_writes_to_model_call_details_too():
     """Also writes into model_call_details["litellm_params"]["metadata"]."""
     entry = _make_slg_entry()
-    request_data = {
-        "litellm_metadata": {"standard_logging_guardrail_information": [entry]}
-    }
+    request_data = {"litellm_metadata": {"standard_logging_guardrail_information": [entry]}}
 
     logging_obj = _FakeLogging()
     # Simulate litellm_params reassignment (creating a new dict) — model_call_details
@@ -139,7 +120,55 @@ def test_writes_to_model_call_details_too():
     _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
 
     # Both dicts should have the info.
-    assert logging_obj.litellm_params["metadata"].get(
-        "standard_logging_guardrail_information"
-    ) == [entry]
+    assert logging_obj.litellm_params["metadata"].get("standard_logging_guardrail_information") == [entry]
     assert old_lp["metadata"].get("standard_logging_guardrail_information") == [entry]
+
+
+def test_sync_skips_equality_scans_for_already_merged_entries():
+    """Already-merged entries are skipped by object identity without O(k^2) equality scans."""
+
+    class _CountingDict(dict):
+        eq_calls = 0
+
+        def __eq__(self, other: object) -> bool:
+            _CountingDict.eq_calls += 1
+            return super().__eq__(other)
+
+    n = 300
+    entries = [_CountingDict({"guardrail_name": f"g-{i}", "guardrail_status": "success"}) for i in range(n)]
+    request_data: dict = {"litellm_metadata": {"standard_logging_guardrail_information": []}}
+    logging_obj = _FakeLogging()
+    logging_obj.model_call_details = {"litellm_params": {"metadata": {}}}
+
+    _CountingDict.eq_calls = 0
+    for entry in entries:
+        request_data["litellm_metadata"]["standard_logging_guardrail_information"].append(entry)
+        _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
+
+    expected_calls = n * (n - 1)
+    assert _CountingDict.eq_calls == expected_calls
+
+    _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
+    assert _CountingDict.eq_calls == expected_calls
+
+    synced_lp = logging_obj.litellm_params["metadata"]["standard_logging_guardrail_information"]
+    synced_mcd = logging_obj.model_call_details["litellm_params"]["metadata"]["standard_logging_guardrail_information"]
+    assert len(synced_lp) == n
+    assert len(synced_mcd) == n
+    assert all(a is b for a, b in zip(synced_lp, entries, strict=True))
+    assert all(a is b for a, b in zip(synced_mcd, entries, strict=True))
+
+
+def test_sync_still_deduplicates_equal_distinct_copies():
+    """Equal-but-distinct dict copies are still deduplicated against existing entries."""
+    first = _make_slg_entry("dup")
+    duplicate_copy = dict(first)
+    in_batch_copy = dict(first)
+    request_data = {"litellm_metadata": {"standard_logging_guardrail_information": [first, in_batch_copy]}}
+    logging_obj = _FakeLogging(lp_metadata={"standard_logging_guardrail_information": [duplicate_copy]})
+
+    _sync_guardrail_info_to_logging_obj(request_data, logging_obj)
+
+    result = logging_obj.litellm_params["metadata"]["standard_logging_guardrail_information"]
+    assert result == [duplicate_copy]
+    assert result[0] is duplicate_copy
