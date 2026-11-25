@@ -6327,6 +6327,63 @@ async def test_responses_bridged_tool_call_stream_sets_the_model_on_every_chunk(
     assert [c.model for c in received] == [_BRIDGED_MODEL] * len(received), [c.model for c in received]
 
 
+_BRIDGED_REFUSAL: Final = "I can't help with that."
+_BRIDGED_REFUSAL_PART: Final = MappingProxyType({"type": "refusal", "refusal": _BRIDGED_REFUSAL})
+_BRIDGED_REFUSAL_EVENTS: Final = (
+    {"type": "response.created", "sequence_number": 0, "response": {**_BRIDGED_RESPONSE, "output": []}},
+    {
+        "type": "response.output_item.added",
+        "sequence_number": 1,
+        "output_index": 0,
+        "item": {**_BRIDGED_MESSAGE, "status": "in_progress", "content": []},
+    },
+    *(
+        {
+            "type": "response.refusal.delta",
+            "sequence_number": 2 + position,
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": delta,
+        }
+        for position, delta in enumerate(("I can't ", "help ", "with that."))
+    ),
+    {
+        "type": "response.refusal.done",
+        "sequence_number": 5,
+        "item_id": "msg_1",
+        "output_index": 0,
+        "content_index": 0,
+        "refusal": _BRIDGED_REFUSAL,
+    },
+    {
+        "type": "response.completed",
+        "sequence_number": 6,
+        "response": {
+            **_BRIDGED_RESPONSE,
+            "status": "completed",
+            "output": [{**_BRIDGED_MESSAGE, "status": "completed", "content": [dict(_BRIDGED_REFUSAL_PART)]}],
+            "usage": dict(_BRIDGED_USAGE),
+        },
+    },
+)
+
+
+@pytest.mark.parametrize("provider", ["azure", "azure_ai", "openai"])
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_responses_bridged_refusal_stream_reaches_the_client_once_as_content(
+    provider: str, sync_mode: bool, logging_obj: Logging
+) -> None:
+    received: Final = await _collect(
+        _bridged_stream(_BRIDGED_REFUSAL_EVENTS, provider, sync_mode, logging_obj), sync_mode
+    )
+
+    assert "".join(c.choices[0].delta.content or "" for c in received if c.choices) == _BRIDGED_REFUSAL
+    assert [c.choices[0].finish_reason for c in received if c.choices and c.choices[0].finish_reason] == ["stop"]
+    assert litellm.stream_chunk_builder(chunks=received).choices[0].message.content == _BRIDGED_REFUSAL
+
+
 @pytest.mark.parametrize("provider", ["azure", "azure_ai"])
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio

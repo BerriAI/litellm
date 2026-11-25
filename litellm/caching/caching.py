@@ -666,7 +666,9 @@ class Cache:
 
     def _keyed_param_values(self, kwargs: dict[str, object], is_semantic_cache: bool) -> Iterator[tuple[str, object]]:
         combined_kwargs: Final = ModelParamHelper.get_all_llm_api_params()
-        scope_excluded_params: Final = self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
+        scope_excluded_params: Final[frozenset[str]] = (
+            self._SEMANTIC_CACHE_SCOPE_EXCLUDED_PARAMS if is_semantic_cache else frozenset()
+        )
         for param in kwargs:
             if param in scope_excluded_params:
                 continue

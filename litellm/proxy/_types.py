@@ -3893,6 +3893,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "OTEL_ENDPOINT",
             "OTEL_TRACES_ENDPOINT",
             "OTEL_HEADERS",
+            "LITELLM_OTEL_EMIT_BACKGROUND_SERVICE_SPANS",
         ],
     )
 
@@ -4011,6 +4012,12 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
             "POINTFIVE_API_KEY",
             "POINTFIVE_API_URL",
         ],
+    )
+
+    mixpanel: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="mixpanel",
+        ui_callback_name="Mixpanel",
+        litellm_callback_params=("MIXPANEL_PROJECT_TOKEN", "MIXPANEL_REGION", "MIXPANEL_ENDPOINT"),
     )
 
     signoz: CallbackOnUI = CallbackOnUI(

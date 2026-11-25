@@ -5139,7 +5139,9 @@ def test_get_logging_payload_uses_recovered_combined_usage_on_failure():
 
 
 def _fallback_after_a_failed_follow_up(
-    cache_hit: bool, request_params: Mapping[str, object] = MappingProxyType({})
+    cache_hit: bool,
+    request_params: Mapping[str, object] = MappingProxyType({}),
+    served_cost: float | None = 0.1,
 ):
     from litellm.litellm_core_utils.hidden_params import set_hidden_param
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -5162,7 +5164,7 @@ def _fallback_after_a_failed_follow_up(
         optional_params=dict(request_params),
     )
     fallback: Final = ModelResponse(id="fallback", usage=Usage(prompt_tokens=3, completion_tokens=1, total_tokens=4))
-    set_hidden_param(fallback, "response_cost", 0.1)
+    set_hidden_param(fallback, "response_cost", served_cost)
     logger.record_served_rounds_for_failure(((Usage(prompt_tokens=5, completion_tokens=2, total_tokens=7), 0.4),))
     logger.carry_failed_attempt_usage()
     logger.model_call_details["cache_hit"] = cache_hit
@@ -5180,6 +5182,17 @@ def test_success_row_bills_a_failed_follow_ups_cost_and_tokens(cache_hit: bool, 
     )
 
     assert payload["spend"] == pytest.approx(own_cost + 0.4)
+    assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (3 + 5, 1 + 2, 4 + 7)
+
+
+def test_success_row_keeps_a_failed_attempts_charge_when_the_served_answer_has_no_price():
+    logger, fallback, _, now = _fallback_after_a_failed_follow_up(False, served_cost=None)
+
+    payload: Final = get_logging_payload(
+        kwargs=logger.model_call_details, response_obj=fallback, start_time=now, end_time=now
+    )
+
+    assert payload["spend"] == pytest.approx(0.4)
     assert (payload["prompt_tokens"], payload["completion_tokens"], payload["total_tokens"]) == (3 + 5, 1 + 2, 4 + 7)
 
 

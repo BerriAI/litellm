@@ -15,5 +15,11 @@
   "tests/e2e/ui/tests/integrationCritical/anthropicFederationCredential.spec.ts::the Edit Credential dialog sends only the changed values and deletes the keys the new choice leaves behind",
   "tests/e2e/ui/tests/integrationCritical/anthropicFederationCredential.spec.ts::a proxy admin saves a federation credential from the Add Model tab and the model is created against it",
   "tests/e2e/ui/tests/integrationCritical/anthropicFederationCredential.spec.ts::a team admin who is not a proxy admin gets no federation shortcut on the Add Model tab",
-  "tests/e2e/ui/tests/integrationCritical/addModelCoralBricks.spec.ts::the Add Model form offers CoralBricks and the deployment it creates serves and bills a chat"
+  "tests/e2e/ui/tests/integrationCritical/addModelCoralBricks.spec.ts::the Add Model form offers CoralBricks and the deployment it creates serves and bills a chat",
+  "tests/e2e/ui/tests/integrationCritical/editCustomer.spec.ts::saving a new alias and budget updates the customer and reopens with the saved values",
+  "tests/e2e/ui/tests/integrationCritical/editCustomer.spec.ts::the budget field keeps only the digits and decimal point the user types",
+  "tests/e2e/ui/tests/integrationCritical/editCustomer.spec.ts::clearing the alias and budget sends null for both",
+  "tests/e2e/ui/tests/integrationCritical/editCustomer.spec.ts::a save the server rejects shows its error, keeps the typed values, and the retry goes through",
+  "tests/e2e/ui/tests/integrationCritical/editCustomer.spec.ts::cancel discards the draft without sending anything",
+  "tests/e2e/ui/tests/integrationCritical/editCustomer.spec.ts::the Chinese dialog saves a non-ASCII alias on mobile"
 ]

@@ -1,11 +1,6 @@
 import type { MCPToolSearchSettings } from "@/app/(dashboard)/hooks/mcpToolSearchSettings/useMCPToolSearchSettings";
 
-export interface ToolSearchFormValues {
-  embedding_model: string | null;
-  top_k: number;
-  similarity_threshold: number;
-  core_tools_text: string;
-}
+import type { ToolSearchFormValues } from "./schema";
 
 export const TOP_K_MIN = 1;
 export const TOP_K_MAX = 100;

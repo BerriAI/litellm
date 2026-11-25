@@ -17,7 +17,7 @@ import os
 import posixpath
 import re
 import sys
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
 from types import MappingProxyType
@@ -28,7 +28,7 @@ import httpx
 import openai
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, Security, WebSocket
 from fastapi.responses import StreamingResponse
-from pydantic import ConfigDict, TypeAdapter, ValidationError
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError
 from starlette.websockets import WebSocketState
 from typing_extensions import ReadOnly, TypedDict
 
@@ -538,6 +538,61 @@ class _ProviderFileAccessGuard(Protocol):
     async def enforce_provider_file_access(self, file_id: str, user_api_key_dict: UserAPIKeyAuth) -> None: ...
 
 
+@runtime_checkable
+class _ProviderFileListGuard(Protocol):
+    async def provider_file_ids_denied_to(
+        self, file_ids: Sequence[str], user_api_key_dict: UserAPIKeyAuth
+    ) -> Sequence[str]: ...
+
+
+_GEMINI_FILE_LIST_PATH: Final = re.compile(r"(?:^|/)files/?$")
+
+_JSON_VALUE: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
+def _decoded_json(raw: bytes) -> JsonValue:
+    try:
+        return _JSON_VALUE.validate_json(raw)
+    except ValidationError:
+        return None
+
+
+def _listed_file_ids(listed: JsonValue) -> tuple[str, ...]:
+    if not isinstance(listed, dict):
+        return ()
+    return tuple(value for value in (listed.get("name"), listed.get("uri")) if isinstance(value, str))
+
+
+def _iter_listed_file_ids(files: Sequence[JsonValue]) -> Iterator[str]:
+    for listed in files:
+        yield from _listed_file_ids(listed)
+
+
+async def _without_files_denied_to_caller(
+    response: object, guard: _ProviderFileListGuard, user_api_key_dict: UserAPIKeyAuth
+) -> object:
+    """A file the response gives no id for cannot be checked, so it is left out"""
+    if not isinstance(response, Response) or response.status_code != 200:
+        return response
+    listing: Final = None if isinstance(response, StreamingResponse) else _decoded_json(bytes(response.body))
+    if not isinstance(listing, dict):
+        raise HTTPException(status_code=502, detail="The provider returned a file list that is not a JSON object")
+    files: Final = listing.get("files")
+    if not isinstance(files, list):
+        return response
+    denied: Final = frozenset(
+        await guard.provider_file_ids_denied_to(tuple(_iter_listed_file_ids(files)), user_api_key_dict)
+    )
+    visible: Final = [listed for listed in files if (ids := _listed_file_ids(listed)) and denied.isdisjoint(ids)]
+    if len(visible) == len(files):
+        return response
+    return Response(
+        content=json.dumps({**listing, "files": visible}),
+        status_code=response.status_code,
+        headers={name: value for name, value in response.headers.items() if name.lower() != "content-length"},
+    )
+
+
 _METHOD_OVERRIDE_HEADERS: Final = ("x-http-method-override", "x-pass-x-http-method-override")
 
 
@@ -549,9 +604,12 @@ def _fully_decoded_path(path: str) -> str | None:
     return decoded if unquote(decoded) == decoded else None
 
 
+def _gemini_methods(method: str, headers: Mapping[str, str]) -> frozenset[str]:
+    return frozenset((method.upper(), *(headers.get(name, "").upper() for name in _METHOD_OVERRIDE_HEADERS)))
+
+
 def _is_gemini_get_or_delete(method: str, headers: Mapping[str, str]) -> bool:
-    methods: Final = {method.upper(), *(headers.get(name, "").upper() for name in _METHOD_OVERRIDE_HEADERS)}
-    return not methods.isdisjoint(("GET", "DELETE"))
+    return not _gemini_methods(method, headers).isdisjoint(("GET", "DELETE"))
 
 
 def _gemini_passthrough_file_id(decoded_path: str) -> str | None:
@@ -559,22 +617,31 @@ def _gemini_passthrough_file_id(decoded_path: str) -> str | None:
     return single_file.group(1) if single_file is not None else None
 
 
+def _is_gemini_file_list(decoded_path: str) -> bool:
+    normalized: Final = posixpath.normpath(f"/{decoded_path}".replace("\\", "/"))
+    return _GEMINI_FILE_LIST_PATH.search(normalized) is not None
+
+
 async def _enforce_gemini_passthrough_file_ownership(
     request: Request, path: str, user_api_key_dict: UserAPIKeyAuth
-) -> None:
-    if not _is_gemini_get_or_delete(request.method, request.headers):
-        return
-    decoded_path: Final = _fully_decoded_path(path)
-    if decoded_path is None:
-        raise HTTPException(status_code=400, detail="The request path is percent-encoded too many times")
-    file_id: Final = _gemini_passthrough_file_id(decoded_path)
-    if file_id is None:
-        return
+) -> _ProviderFileListGuard | None:
+    """Refuse a file the caller does not own, and return the guard to filter the response with when it lists files"""
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     hook: Final = proxy_logging_obj.get_proxy_hook("managed_files")
-    if isinstance(hook, _ProviderFileAccessGuard):
+    decoded_path: Final = _fully_decoded_path(path)
+    is_single_file_method: Final = _is_gemini_get_or_delete(request.method, request.headers)
+    if decoded_path is None:
+        if is_single_file_method:
+            raise HTTPException(status_code=400, detail="The request path is percent-encoded too many times")
+        return None
+    file_id: Final = _gemini_passthrough_file_id(decoded_path) if is_single_file_method else None
+    if file_id is not None and isinstance(hook, _ProviderFileAccessGuard):
         await hook.enforce_provider_file_access(file_id, user_api_key_dict)
+    lists_files: Final = "GET" in _gemini_methods(request.method, request.headers) and _is_gemini_file_list(
+        decoded_path
+    )
+    return hook if isinstance(hook, _ProviderFileListGuard) and lists_files else None
 
 
 @router.api_route(
@@ -608,7 +675,9 @@ async def gemini_proxy_route(
     updated_url: Final = base_url.copy_with(
         path=HttpPassThroughEndpointHelpers.join_base_and_endpoint_path(base_url, encoded_endpoint)
     )
-    await _enforce_gemini_passthrough_file_ownership(request, updated_url.path, user_api_key_dict)
+    file_list_guard: Final = await _enforce_gemini_passthrough_file_ownership(
+        request, updated_url.path, user_api_key_dict
+    )
 
     # Add or update query parameters
     gemini_api_key: Final[str | None] = passthrough_endpoint_router.get_credentials(
@@ -642,7 +711,9 @@ async def gemini_proxy_route(
         user_api_key_dict,
     )
 
-    return received_value
+    if file_list_guard is None:
+        return received_value
+    return await _without_files_denied_to_caller(received_value, file_list_guard, user_api_key_dict)
 
 
 @router.api_route(
