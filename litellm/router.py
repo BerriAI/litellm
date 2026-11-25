@@ -77,6 +77,7 @@ from litellm.constants import (
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
 from litellm.decisions.call import validate_router_connection
+from litellm.exceptions import UnknownPreviousResponseError, UnresolvablePreviousResponseError
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.routing import routing_decision_attributes
@@ -224,10 +225,10 @@ from litellm.router_utils.cooldown_handlers import (
     async_get_cooldown_deployments,
     async_get_cooldown_deployments_with_debug_info,
     get_cooldown_deployments,
-    is_advisor_orchestration_failure,
     is_background_response_poll_not_found,
     is_caller_scoped_auth_failure,
     is_caller_timeout_408,
+    is_failure_outside_selected_deployment,
     is_video_lookup_not_found,
     set_cooldown_deployments,
 )
@@ -8024,6 +8025,8 @@ class Router:
         }
         try:
             return await run_async_fallback(*args, **failover_kwargs)
+        except UnresolvablePreviousResponseError:
+            raise
         except (openai.APIError, RouterRateLimitError, RouterRateLimitErrorBasic):
             # Expected model-level failure on the retried deployment. All
             # litellm provider errors derive from openai.APIError; if every
@@ -8070,6 +8073,7 @@ class Router:
             disable_fallbacks is True
             or original_model_group is None
             or is_guardrail_intervention(e)
+            or isinstance(e, UnknownPreviousResponseError)
             or unsupported_params_without_fallback
         ):
             raise e
@@ -8285,6 +8289,8 @@ class Router:
                 )
 
                 return response
+        except UnknownPreviousResponseError:
+            raise
         except Exception as new_exception:
             parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             fallback_failure_exception_str = truncate_fallback_error_detail(redact_string(str(new_exception)))
@@ -8489,7 +8495,7 @@ class Router:
             response = add_retry_headers_to_response(response=response, attempted_retries=0, max_retries=None)
             return response
         except Exception as e:
-            if is_guardrail_intervention(e):
+            if is_guardrail_intervention(e) or isinstance(e, UnresolvablePreviousResponseError):
                 raise
             current_attempt = None
             original_exception = e
@@ -8591,6 +8597,8 @@ class Router:
                     return response
 
                 except Exception as e:
+                    if isinstance(e, UnresolvablePreviousResponseError):
+                        raise
                     # Always track the latest error so we raise the most
                     # recent exception instead of the first one.
                     original_exception = e
@@ -9045,10 +9053,10 @@ class Router:
         try:
             exception: Final = kwargs.get("exception", None)
 
-            if is_advisor_orchestration_failure(exception):
+            if is_failure_outside_selected_deployment(exception):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
-                    "Failure originated from advisor orchestration, not the selected deployment."
+                    "Failure did not come from the selected deployment."
                 )
                 return False
 

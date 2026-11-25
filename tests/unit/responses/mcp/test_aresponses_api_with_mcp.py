@@ -1971,3 +1971,104 @@ async def test_a_streamed_mcp_tool_the_choice_excludes_never_runs_when_the_model
     assert isinstance(last, ResponseCompletedEvent)
     assert _output_types(last.response.output) == ("function_call",)
     assert not any("mcp_call" in str(getattr(event, "type", "")) for event in events)
+
+
+_PRIOR_BRIDGED_TURN: Final = MappingProxyType(
+    {
+        "request_id": "chatcmpl-prior-turn",
+        "session_id": "prior-session",
+        "proxy_server_request": {"input": "My favorite color is teal."},
+        "response": {
+            "id": "chatcmpl-prior-turn",
+            "object": "chat.completion",
+            "created": 1767225600,
+            "model": "claude-haiku-4-5",
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "Noted."}}],
+        },
+    }
+)
+
+
+class _PriorTurnSpendLogs:
+    def __init__(self, rows: Sequence[Mapping[str, object]]) -> None:
+        self.rows: Final = tuple(rows)
+
+    async def query_raw(self, query: str, request_ids: list[str]) -> list[dict[str, object]]:
+        return [dict(row) for row in self.rows if row["request_id"] in request_ids]
+
+
+def _anthropic_message_round(message_id: str, content: Sequence[Mapping[str, object]], stop: str) -> dict[str, object]:
+    return {
+        "id": message_id,
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-haiku-4-5",
+        "content": [dict(block) for block in content],
+        "stop_reason": stop,
+        "usage": {"input_tokens": 50, "output_tokens": 10},
+    }
+
+
+@pytest.mark.asyncio
+async def test_bridged_auto_execute_follow_up_keeps_the_client_conversation_and_the_first_round_thinking(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        SimpleNamespace(
+            proxy_logging_obj=None,
+            prisma_client=SimpleNamespace(db=_PriorTurnSpendLogs((_PRIOR_BRIDGED_TURN,))),
+            disable_spend_logs=False,
+        ),
+    )
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    thinking: Final = {"type": "thinking", "thinking": "Echo PING back.", "signature": "sig-round-one"}
+    provider: Final = respx_mock.post("https://mcp-rounds.example.com/v1/messages").mock(
+        side_effect=[
+            httpx.Response(
+                200,
+                json=_anthropic_message_round(
+                    "msg_tool_round",
+                    (thinking, {"type": "tool_use", "id": "toolu_echo", "name": "echo", "input": {"value": "PING"}}),
+                    "tool_use",
+                ),
+            ),
+            httpx.Response(
+                200, json=_anthropic_message_round("msg_answer", ({"type": "text", "text": "PING"},), "end_turn")
+            ),
+        ]
+    )
+    echo_tool: Final = MCPTool.model_validate(
+        {"name": "echo", "inputSchema": {"type": "object", "properties": {"value": {"type": "string"}}}},
+        by_name=False,
+    )
+
+    with (
+        patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            "process_mcp_tools_without_openai_transform",
+            AsyncMock(return_value=([echo_tool], {"echo": "demo"})),
+        ),
+        patch.object(
+            LiteLLM_Proxy_MCP_Handler,
+            "execute_tool_calls",
+            AsyncMock(return_value=[{"tool_call_id": "toolu_echo", "result": "PING", "name": "echo"}]),
+        ),
+    ):
+        await litellm.aresponses(
+            model="anthropic/claude-haiku-4-5",
+            input="Call echo with PING",
+            previous_response_id="chatcmpl-prior-turn",
+            tools=[dict(_ECHO_MCP_TOOL)],
+            api_key="sk-mcp-rounds",
+            api_base="https://mcp-rounds.example.com",
+        )
+
+    follow_up: Final = json.loads(provider.calls[1].request.content)["messages"]
+    assert [message["role"] for message in follow_up] == ["user", "assistant", "user", "assistant", "user"]
+    assert json.dumps(follow_up).count("My favorite color is teal.") == 1
+    assert [block["type"] for block in follow_up[3]["content"]] == ["thinking", "tool_use"]
+    assert follow_up[3]["content"][0]["signature"] == "sig-round-one"

@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.tool_fields import drop_policy, tools_without_mc
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.responses.stored_system_prompt import awithout_stored_instructions, without_stored_instructions
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
+from litellm.rust_bridge.public_call import optional_str
 from litellm.types.integrations.custom_logger import CONVERTED_STREAM_KEYS
 from litellm.types.llms.anthropic import (
     AllAnthropicMessageValues,
@@ -49,6 +50,7 @@ from ..adapters.handler import (
     request_safeguards_evaluator,
     resent_without_rejected_reasoning,
 )
+from ..deferred_tools import native_tool_search_name, usable_deferred_tools_mode
 from ..safeguards import with_safeguard_results
 from ..utils import (
     KNOWN_REASONING_EFFORTS,
@@ -447,6 +449,9 @@ def _build_responses_kwargs(
         ),
         drop_params=drops_unsupported_params(forwarded_kwargs.get("drop_params")),
         preserve_system_instructions=preserves_system_instructions(forwarded_kwargs),
+        deferred_tools=usable_deferred_tools_mode(
+            forwarded_kwargs.get("model_info"), optional_str(forwarded_kwargs.get("custom_llm_provider"))
+        ),
     )
     system_instructions: Final = responses_kwargs.get("instructions")
 
@@ -679,6 +684,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
             )
 
         safeguards_evaluator: Final = request_safeguards_evaluator(kwargs, messages)
+        tool_search_name: Final = native_tool_search_name(
+            kwargs.get("model_info"), optional_str(kwargs.get("custom_llm_provider")), tools
+        )
         responses_kwargs, result = await _aresponses_without_rejected_reasoning(
             messages, responses_kwargs_for, drop_params=drops_unsupported_params(kwargs.get("drop_params"))
         )
@@ -689,13 +697,16 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
                 safeguards_evaluator=safeguards_evaluator,
+                tool_search_name=tool_search_name,
             )
             return wrapper.async_anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")
 
-        served: Final = await with_safeguard_results(_ADAPTER.translate_response(result), safeguards_evaluator)
+        served: Final = await with_safeguard_results(
+            _ADAPTER.translate_response(result, tool_search_name), safeguards_evaluator
+        )
         _record_bridged_response(responses_kwargs, result)
         return served
 
@@ -775,6 +786,9 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 extra_kwargs=kwargs,
             )
 
+        tool_search_name: Final = native_tool_search_name(
+            kwargs.get("model_info"), optional_str(kwargs.get("custom_llm_provider")), tools
+        )
         responses_kwargs, result = _responses_without_rejected_reasoning(
             messages, responses_kwargs_for, drop_params=drops_unsupported_params(kwargs.get("drop_params"))
         )
@@ -784,10 +798,11 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 responses_stream=result,
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
+                tool_search_name=tool_search_name,
             )
             return wrapper.anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")
 
-        return _ADAPTER.translate_response(result)
+        return _ADAPTER.translate_response(result, tool_search_name)

@@ -408,13 +408,13 @@ def _sse_data_payload(line: bytes) -> bytes | None:
     return line[len(b"data:") :].removeprefix(b" ") if line.startswith(b"data:") else None
 
 
-def _sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
+def sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
     payloads: Final = (_sse_data_payload(line) for line in frame.splitlines())
     return loads_json_object(b"\n".join(payload for payload in payloads if payload is not None))
 
 
 async def _stamped_sse_frame(frame: bytes, safeguard_results: StreamedSafeguardResults) -> bytes:
-    event: Final = _sse_frame_event(frame)
+    event: Final = sse_frame_event(frame)
     if event is None:
         return frame
     stamped: Final = await safeguard_results.observe(event)
@@ -440,6 +440,32 @@ async def _stamped_sse_frames(
             yield await _stamped_sse_frame(frame, safeguard_results)
     if open_frame:
         yield await _stamped_sse_frame(bytes(open_frame), safeguard_results)
+
+
+async def sse_frames(stream: AsyncIterator[bytes]) -> AsyncGenerator[bytes, None]:
+    open_frame: Final = bytearray()
+    try:
+        async for chunk in stream:
+            if not isinstance(chunk, (bytes, bytearray)):  # pyright: ignore[reportUnnecessaryIsInstance]  # bridge-path chunks are not always bytes
+                if open_frame:
+                    yield bytes(open_frame)
+                    open_frame.clear()
+                yield chunk
+                continue
+            scan_from = max(len(open_frame) - _SSE_TERMINATOR_OVERLAP, 0)
+            open_frame.extend(chunk)
+            if not _ends_a_frame(open_frame, scan_from):
+                continue
+            *frames, unterminated = _SSE_FRAME_END.split(open_frame)
+            open_frame[:] = unterminated
+            for frame in frames:
+                yield bytes(frame)
+    except Exception:
+        if open_frame:
+            yield bytes(open_frame)
+        raise
+    if open_frame:
+        yield bytes(open_frame)
 
 
 class SafeguardedAnthropicSSEStream:

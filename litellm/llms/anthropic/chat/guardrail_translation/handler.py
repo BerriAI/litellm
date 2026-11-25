@@ -26,7 +26,12 @@ from typing_extensions import assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
-from litellm.litellm_core_utils.core_helpers import as_str_mapping, is_undecodable_json_object, loads_json_object
+from litellm.litellm_core_utils.core_helpers import (
+    as_object_list,
+    as_str_mapping,
+    is_undecodable_json_object,
+    loads_json_object,
+)
 from litellm.litellm_core_utils.tool_fields import OPENAI_MAX_TOOL_NAME_LENGTH, truncate_tool_name
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.anthropic.pass_through.adapters.transformation import (
@@ -34,6 +39,7 @@ from litellm.llms.anthropic.pass_through.adapters.transformation import (
     is_provider_native_tool_dict,
 )
 from litellm.llms.anthropic.pass_through.convertible_blocks import tool_result_text_part
+from litellm.llms.anthropic.pass_through.deferred_tools import client_tool_search_name, is_deferred
 from litellm.llms.anthropic.pass_through.stream_assembly import (
     build_complete_streaming_response,
     build_usage_only_response_from_chunks,
@@ -267,6 +273,38 @@ def _restore_tool_use_names(messages: Sequence[object], original_names: Mapping[
                 block["name"] = original_names[name]
 
 
+def _deferred_tool_names(tools: Iterable[object]) -> frozenset[str]:
+    names: Final = (
+        (as_str_mapping(tool) or {}).get("name") for tool in tools if is_deferred(as_str_mapping(tool) or {})
+    )
+    return frozenset(name for name in names if isinstance(name, str))
+
+
+def _with_request_deferral(tool: AllAnthropicToolsValues, deferred_names: frozenset[str]) -> AllAnthropicToolsValues:
+    name: Final = (as_str_mapping(tool) or {}).get("name")
+    if not isinstance(name, str) or name not in deferred_names:
+        return tool
+    return cast(AllAnthropicToolsValues, {**tool, "defer_loading": True})  # cast-ok: same tool, one more field
+
+
+def _without_deferral(tool: object) -> object:
+    fields: Final = as_str_mapping(tool)
+    if fields is None:
+        return tool
+    return {key: value for key, value in fields.items() if key != "defer_loading"}
+
+
+def _loaded_up_front(tools: Sequence[object], removed_tool_search: bool) -> Sequence[object]:
+    """
+    Deferred tools load only through the tool search tool, and Anthropic rejects a request whose tools
+    are all deferred, so when a guardrail removed the search tool or every tool that was not deferred,
+    the ones it kept are sent without `defer_loading`.
+    """
+    if not tools or not (removed_tool_search or all(is_deferred(as_str_mapping(tool) or {}) for tool in tools)):
+        return tools
+    return tuple(map(_without_deferral, tools))
+
+
 def _with_original_name(tool: ChatCompletionToolParam, original_names: Mapping[str, str]) -> ChatCompletionToolParam:
     if "function" not in tool:
         return tool
@@ -292,7 +330,8 @@ def _is_sent_as_is(tool: Mapping[str, object]) -> bool:
 
 
 def _without_mcp_toolsets(tools: object) -> object:
-    return [tool for tool in tools if not _is_mcp_toolset(tool)] if isinstance(tools, list) else tools
+    tool_list: Final = as_object_list(tools)
+    return tools if tool_list is None else [tool for tool in tool_list if not _is_mcp_toolset(tool)]
 
 
 def _write_back_system_block(system: object, block_idx: int, response: str) -> None:
@@ -822,6 +861,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                 # Convert tools back from OpenAI format to Anthropic format
                 anthropic_config: Final = AnthropicConfig()
                 anthropic_tools: Final[list[AllAnthropicToolsValues]] = []
+                request_tools: Final = list_field(data, "tools")
+                request_deferred_names: Final = _deferred_tool_names(request_tools)
                 for tool in guardrailed_tools:
                     converted_tool, mcp_server = anthropic_config.map_tool_helper(
                         _with_original_name(tool, original_tool_names.declared)
@@ -836,10 +877,16 @@ class AnthropicMessagesHandler(BaseTranslation):
                         tool_name=anthropic_tool_name,
                     )
                     if scan_only_tool_results
-                    else [
-                        *(tool for tool in data.get("tools") or [] if _is_sent_as_is(tool)),
-                        *anthropic_tools,
-                    ]
+                    else list(
+                        _loaded_up_front(
+                            [
+                                *(tool for tool in data.get("tools") or [] if _is_sent_as_is(tool)),
+                                *(_with_request_deferral(tool, request_deferred_names) for tool in anthropic_tools),
+                            ],
+                            client_tool_search_name(request_tools) is not None
+                            and client_tool_search_name(anthropic_tools) is None,
+                        )
+                    )
                 )
 
             guardrailed_structured_messages: Final = guardrailed_inputs.get("structured_messages")
