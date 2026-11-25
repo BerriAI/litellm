@@ -562,3 +562,48 @@ async def test_expired_unverified_credential_never_reaches_refresh(monkeypatch):
     store = LazyPerUserOAuthTokenStore(lambda _: server, redis_available=lambda: False)
     assert await store.fetch("alice", "srv") is None
     post.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("refresh_token, expected", [("rt-1", "at-2"), (None, None)])
+async def test_a_token_the_upstream_rejected_is_refreshed_or_asks_for_sign_in(
+    credentials_prisma: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: "MockRouter",
+    refresh_token: str | None,
+    expected: str | None,
+) -> None:
+    import httpx
+
+    from litellm.proxy.mcp_server.db import (
+        get_user_oauth_credential,
+        record_oauth_access_rejection,
+        store_user_oauth_credential,
+    )
+    from litellm.proxy.mcp_server.outbound_credentials.per_user_oauth_store import build_per_user_oauth_token_store
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    server: Final = MCPServer(
+        server_id="srv-rejected",
+        name="srv-rejected",
+        transport="http",
+        auth_type="oauth2",
+        token_url="https://idp.example/token",
+        client_id="client",
+        client_secret="secret",
+    )
+    route: Final = respx_mock.post("https://idp.example/token").mock(
+        return_value=httpx.Response(200, json={"access_token": "at-2", "refresh_token": "rt-2"})
+    )
+    await store_user_oauth_credential(credentials_prisma, "alice", "srv-rejected", "at-1", refresh_token=refresh_token)
+    await record_oauth_access_rejection(credentials_prisma, "alice", "srv-rejected", "at-1")
+    store: Final = build_per_user_oauth_token_store(lambda _: server)
+
+    token: Final = await store.fetch("alice", "srv-rejected")
+    saved: Final = await get_user_oauth_credential(credentials_prisma, "alice", "srv-rejected")
+
+    assert (token.access_token if token else None) == expected, "a rejected token is never sent again"
+    assert route.call_count == (1 if refresh_token else 0)
+    assert saved is not None and saved["access_token"] == (expected or "at-1")
+    assert saved.get("access_token_rejected") is (None if refresh_token else True), "a saved refresh clears the mark"

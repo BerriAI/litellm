@@ -273,6 +273,7 @@ class OAuthCredentialPayload(_OAuthCredentialAccessToken, total=False):
     server_id: str
     needs_scopes: ReadOnly[Sequence[str]]
     refresh_refused: ReadOnly[bool]
+    access_token_rejected: ReadOnly[bool]
 
 
 _OAUTH_CREDENTIAL_PAYLOAD_ADAPTER: Final[TypeAdapter[OAuthCredentialPayload]] = TypeAdapter(OAuthCredentialPayload)
@@ -1993,7 +1994,9 @@ def oauth_grant_state(cred: OAuthCredentialPayload | None) -> OAuthGrantState:
     """Classify local grant readiness without attempting a refresh or checking upstream revocation."""
     if not cred or not cred.get("access_token"):
         return "absent"
-    if not is_oauth_credential_expired(cred, buffer_seconds=MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS):
+    if cred.get("access_token_rejected") is not True and not is_oauth_credential_expired(
+        cred, buffer_seconds=MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS
+    ):
         return "valid"
     return "refreshable" if cred.get("refresh_token") and cred.get("refresh_refused") is not True else "absent"
 
@@ -2053,6 +2056,38 @@ async def _record_oauth_refresh_refusal(
     if latest is None or latest.credential_b64 == row.credential_b64:
         return
     await _record_oauth_refresh_refusal(prisma_client, latest, refused_refresh_token)
+
+
+async def record_oauth_access_rejection(
+    prisma_client: PrismaClient, user_id: str, server_id: str, rejected_access_token: str
+) -> None:
+    row: Final = await _db_find_user_credential_row(prisma_client, user_id, server_id, use_writer=True)
+    await _record_oauth_access_rejection(prisma_client, row, rejected_access_token)
+
+
+async def _record_oauth_access_rejection(
+    prisma_client: PrismaClient,
+    row: "prisma_db_models.LiteLLM_MCPUserCredentials | None",
+    rejected_access_token: str,
+) -> None:
+    grant: Final = None if row is None else decode_oauth_payload(row.credential_b64)
+    if row is None or grant is None or grant.get("access_token") != rejected_access_token:
+        return
+    if grant.get("access_token_rejected") is True:
+        return
+    written: Final = await _user_credential_actions(prisma_client).update_many(
+        where={"user_id": row.user_id, "server_id": row.server_id, "credential_b64": row.credential_b64},
+        data={
+            "credential_b64": encrypt_value_helper(json.dumps({**grant, "access_token_rejected": True})),
+            "updated_at": row.updated_at,
+        },
+    )
+    if written > 0:
+        return
+    latest: Final = await _db_find_user_credential_row(prisma_client, row.user_id, row.server_id, use_writer=True)
+    if latest is None or latest.credential_b64 == row.credential_b64:
+        return
+    await _record_oauth_access_rejection(prisma_client, latest, rejected_access_token)
 
 
 async def _note_refused_refresh(
@@ -2480,7 +2515,10 @@ async def resolve_valid_user_oauth_token(
 
     async def usable_after_waiting(latest: OAuthCredentialPayload) -> bool:
         renewed: Final = latest.get("access_token") != cred.get("access_token")
-        fresh: Final = oauth_grant_state(latest) == "valid" or (renewed and not is_oauth_credential_expired(latest))
+        unrejected: Final = latest.get("access_token_rejected") is not True
+        fresh: Final = oauth_grant_state(latest) == "valid" or (
+            renewed and unrejected and not is_oauth_credential_expired(latest)
+        )
         return fresh and await bound(latest)
 
     coordinator: Final = refresh_coordinator or runtime_refresh_coordinator() or _V1_REFRESHES

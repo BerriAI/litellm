@@ -83,3 +83,28 @@ async def test_a_refused_refresh_token_is_not_handed_to_the_refresher() -> None:
 
     token: Final = await V2PerUserTokenStore(read_credential).fetch("alice", "srv")
     assert token is not None and token.refresh_token is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "marks, expires_at, refresh_token",
+    [
+        ({}, 4070908800.0, "rt"),
+        ({"access_token_rejected": False}, 4070908800.0, "rt"),
+        ({"access_token_rejected": True}, 0.0, "rt"),
+        ({"access_token_rejected": True, "expires_at": None}, 0.0, "rt"),
+        ({"access_token_rejected": True, "refresh_refused": True}, 0.0, None),
+    ],
+)
+async def test_a_token_the_upstream_rejected_reads_as_expired(
+    marks: Mapping[str, object], expires_at: float, refresh_token: str | None
+) -> None:
+    async def read_credential(_user_id: str, _server_id: str) -> Mapping[str, object]:
+        return {"access_token": "at", "refresh_token": "rt", "expires_at": "2099-01-01T00:00:00+00:00", **marks}
+
+    token: Final = await V2PerUserTokenStore(read_credential).fetch("alice", "srv")
+    assert token is not None and (token.access_token, token.expires_at, token.refresh_token) == (
+        "at",
+        expires_at,
+        refresh_token,
+    )

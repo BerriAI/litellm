@@ -562,6 +562,36 @@ def test_custom_admission_header_controls_authorization_forwarding(
     assert _openapi_forwarded_extra_headers(server, raw_headers, user) == expected_headers
 
 
+class _InvalidationLog:
+    def __init__(self) -> None:
+        self.dropped: tuple[tuple[str, str], ...] = ()
+
+    async def fetch(self, user_id: str, server_id: str) -> None:
+        return None
+
+    async def invalidate(self, user_id: str, server_id: str) -> None:
+        self.dropped = (*self.dropped, (user_id, server_id))
+
+    async def delete(self, user_id: str, server_id: str) -> None:
+        self.dropped = (*self.dropped, (user_id, server_id))
+
+
+class _RejectedTokenRecorder:
+    def __init__(self, fails: bool = False, release: asyncio.Event | None = None) -> None:
+        self.marks: tuple[tuple[str, str, str], ...] = ()
+        self.writing = asyncio.Event()
+        self.release = release
+        self._fails = fails
+
+    async def __call__(self, user_id: str, server_id: str, access_token: str) -> None:
+        self.marks = (*self.marks, (user_id, server_id, access_token))
+        self.writing.set()
+        if self.release is not None:
+            await self.release.wait()
+        if self._fails:
+            raise RuntimeError("database down")
+
+
 class TestMCPServerManager:
     """Test MCP Server Manager stdio functionality"""
 
@@ -7329,6 +7359,42 @@ class TestMCPServerManager:
 
         manager = MCPServerManager(per_user_oauth_token_store=_Store(), per_user_token_cache=_RaisingLegacyCache())
         await manager.invalidate_user_oauth_token_cache("alice", "srv-1")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("outcome", ["already marked", "write failed"])
+    async def test_a_rejected_user_token_is_dropped_from_both_caches_whatever_the_mark_outcome(
+        self, outcome: str
+    ) -> None:
+        from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+        recorder: Final = _RejectedTokenRecorder(fails=outcome == "write failed")
+        store: Final = _InvalidationLog()
+        legacy: Final = _InvalidationLog()
+        manager: Final = MCPServerManager(
+            per_user_oauth_token_store=store, per_user_token_cache=legacy, record_rejected_user_token=recorder
+        )
+        await manager.forget_rejected_user_token("alice", "srv-1", "at-1", "invalid_token")
+
+        assert recorder.marks == (("alice", "srv-1", "at-1"),)
+        assert store.dropped == (("alice", "srv-1"),) and legacy.dropped == (("alice", "srv-1"),)
+
+    @pytest.mark.asyncio
+    async def test_a_rejected_user_token_is_still_forgotten_after_the_client_hangs_up(self) -> None:
+        from litellm.proxy.mcp_server.mcp_server_manager import MCPServerManager
+
+        recorder: Final = _RejectedTokenRecorder(release=asyncio.Event())
+        store: Final = _InvalidationLog()
+        manager: Final = MCPServerManager(per_user_oauth_token_store=store, record_rejected_user_token=recorder)
+        request: Final = asyncio.create_task(manager.forget_rejected_user_token("alice", "srv-1", "at-1"))
+        await recorder.writing.wait()
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        recorder.release.set()
+        for _ in range(20):
+            await asyncio.sleep(0)
+
+        assert store.dropped == (("alice", "srv-1"),), "a hang-up must not keep the dead token cached"
 
     @pytest.mark.asyncio
     async def test_resolve_oauth2_headers_no_user_id(self):
@@ -18425,6 +18491,47 @@ async def test_discovery_resolves_stored_oauth_for_the_requesting_user() -> None
     assert store.calls == (("requesting-user", "discovery"), ("requesting-user", "discovery"))
     assert upstream.initializes == 2
     assert ("prompts/list", "Bearer stored-token") in upstream.requests
+
+
+class _RejectingVendor:
+    def __init__(self) -> None:
+        self.bearers: tuple[str, ...] = ()
+
+    def respond(self, request: httpx2.Request) -> httpx2.Response:
+        self.bearers = (*self.bearers, request.headers.get("authorization", ""))
+        return httpx2.Response(401, headers={"WWW-Authenticate": 'Bearer error="invalid_token"'})
+
+
+@pytest.mark.asyncio
+async def test_an_upstream_401_marks_the_stored_token_and_drops_it_from_the_cache(
+    credentials_prisma: SimpleNamespace,
+) -> None:
+    from litellm.proxy.mcp_server.db import get_user_oauth_credential, oauth_grant_state, store_user_oauth_credential
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="rejects-stored-token",
+        name="rejects-stored-token",
+        url="https://vendor.example/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        oauth2_flow="authorization_code",
+        client_id="vendor-client",
+        authorization_url="https://vendor.example/authorize",
+        token_url="https://vendor.example/token",
+    )
+    user: Final = UserAPIKeyAuth(user_id="alice")
+    vendor: Final = _RejectingVendor()
+    await store_user_oauth_credential(credentials_prisma, "alice", server.server_id, "at-1")
+    assert await manager.has_user_oauth_token(server, user) is True
+
+    with _mcp_upstream(vendor.respond):
+        await manager.get_prompts_from_server(server, user)
+
+    saved: Final = await get_user_oauth_credential(credentials_prisma, "alice", server.server_id)
+    assert vendor.bearers and set(vendor.bearers) == {"Bearer at-1"}
+    assert oauth_grant_state(saved) == "absent", "a token the vendor rejected no longer counts as connected"
+    assert await manager.has_user_oauth_token(server, user) is False, "the cached copy of the dead token is gone"
 
 
 @pytest.mark.asyncio

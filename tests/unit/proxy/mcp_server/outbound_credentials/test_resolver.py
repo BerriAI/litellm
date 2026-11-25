@@ -292,6 +292,43 @@ async def test_authorization_code_isolates_by_server_id_even_when_servers_share_
     assert await provider.has_user_token(subject, spec_b) is False
 
 
+class _RejectedTokens:
+    def __init__(self) -> None:
+        self.reported: tuple[tuple[str, str, str, str | None], ...] = ()
+
+    async def __call__(self, user_id: str, server_id: str, access_token: str, upstream_error: str | None) -> None:
+        self.reported = (*self.reported, (user_id, server_id, access_token, upstream_error))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status, handler, reported",
+    [
+        (200, _RejectedTokens(), ()),
+        (401, _RejectedTokens(), (("alice", "s", "at-alice", "invalid_token"),)),
+        (401, None, None),
+    ],
+)
+async def test_authorization_code_reports_the_users_token_when_the_upstream_rejects_it(
+    status: int, handler: _RejectedTokens | None, reported: tuple[tuple[str, str, str, str | None], ...] | None
+) -> None:
+    store: Final = _FakeTokenStore({("alice", "s"): OAuthToken(access_token="at-alice")})
+    provider: Final = (
+        UpstreamCredentialProvider(oauth_token_store=store)
+        if handler is None
+        else UpstreamCredentialProvider(oauth_token_store=store, on_rejected_user_token=handler)
+    )
+    result: Final = await provider.resolve_credentials(
+        Subject(tenant_id="", subject_id="alice"), _spec(AuthorizationCodeConfig())
+    )
+    assert isinstance(result, Ok)
+    headers, _ = await _emitted_async(
+        result.ok, lambda _r: httpx2.Response(status, headers={"WWW-Authenticate": 'Bearer error="invalid_token"'})
+    )
+    assert headers["Authorization"] == "Bearer at-alice"
+    assert (handler.reported if handler else None) == reported
+
+
 @pytest.mark.asyncio
 async def test_has_user_token_reflects_the_stored_token():
     present = UpstreamCredentialProvider(
