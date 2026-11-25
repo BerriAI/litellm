@@ -2,17 +2,108 @@
 //! each with who answers it, `rust` or `python`. A request for Python names the `reason` the client
 //! sees in `x-litellm-gateway`, and may name the setting or trait it goes to Python `over`.
 
+mod keys;
+
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use axum::{body::Body, extract::Request, http::Method};
 use litellm_config::{Config, Environment};
+use litellm_gateway::{StoredConfig, host::auth::AuthStore};
+use litellm_repositories::StoredObjects;
 use rstest::rstest;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
 struct Scenario {
     config: serde_yaml_ng::Value,
+    /// The virtual keys the database holds, each token with its model list.
+    #[serde(default)]
+    keys: BTreeMap<String, Vec<String>>,
+    /// The `tpm_limit` of each key that holds one.
+    #[serde(default)]
+    tpm_limits: BTreeMap<String, i64>,
+    /// What boot read of the config the proxy stores in its database.
+    #[serde(default)]
+    stored: Stored,
+    /// Which other stored objects the database holds, when `stored` is `loaded`.
+    #[serde(default)]
+    held: Held,
     requests: Vec<Sent>,
+}
+
+/// `unused` when `store_model_in_db` is off, `loaded` when the config holds what the database
+/// stores, `unread` when the database could not be read, and `ui_settings_unread` when it is off
+/// and the UI settings could not be read or layered in.
+#[derive(Clone, Copy, Default, Deserialize)]
+enum Stored {
+    #[default]
+    #[serde(rename = "unused")]
+    Unused,
+    #[serde(rename = "loaded")]
+    Loaded,
+    #[serde(rename = "unread")]
+    Unread,
+    #[serde(rename = "ui_settings_unread")]
+    UiSettingsUnread,
+}
+
+/// Each field of `StoredObjects`, `false` when the scenario leaves it out.
+#[derive(Clone, Copy, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Held {
+    default_on_guardrails: bool,
+    policy_attachments: bool,
+    tool_policies: bool,
+    cache_settings: bool,
+    config_overrides: bool,
+    anthropic_beta_headers_reload: bool,
+    model_cost_map_reload: bool,
+}
+
+impl From<Held> for StoredObjects {
+    fn from(held: Held) -> Self {
+        let Held {
+            default_on_guardrails,
+            policy_attachments,
+            tool_policies,
+            cache_settings,
+            config_overrides,
+            anthropic_beta_headers_reload,
+            model_cost_map_reload,
+        } = held;
+        Self {
+            default_on_guardrails,
+            policy_attachments,
+            tool_policies,
+            cache_settings,
+            config_overrides,
+            anthropic_beta_headers_reload,
+            model_cost_map_reload,
+        }
+    }
+}
+
+fn stored_config(stored: Stored, held: Held) -> StoredConfig {
+    match stored {
+        Stored::Unused => StoredConfig::Unused,
+        Stored::Loaded => StoredConfig::Loaded(held.into()),
+        Stored::Unread => StoredConfig::Unread,
+        Stored::UiSettingsUnread => StoredConfig::UiSettingsUnread,
+    }
+}
+
+/// The database holding each key of the scenario, a plain row with the model list and the token
+/// limit it gives.
+async fn listed(
+    keys: &BTreeMap<String, Vec<String>>,
+    tpm_limits: &BTreeMap<String, i64>,
+) -> keys::Held {
+    let held = keys::Held::start().await;
+    for (token, models) in keys {
+        let columns = serde_json::json!({"models": models, "tpm_limit": tpm_limits.get(token)});
+        held.key(token, columns).await;
+    }
+    held
 }
 
 #[derive(Deserialize)]
@@ -77,13 +168,29 @@ impl Sent {
 #[case::drop_params_set("drop_params_set")]
 #[case::database("database")]
 #[case::store_model_in_db("store_model_in_db")]
+#[case::store_model_in_db_unread("store_model_in_db_unread")]
+#[case::ui_settings_unread("ui_settings_unread")]
+#[case::environment_variables("environment_variables")]
+#[case::store_model_in_db_objects("store_model_in_db_objects")]
+#[case::store_model_in_db_nothing_held("store_model_in_db_nothing_held")]
 #[case::router_settings_by_group("router_settings_by_group")]
 #[case::groups_and_fallbacks("groups_and_fallbacks")]
 #[case::model_aliases("model_aliases")]
 #[case::router_setting_for_every_request("router_setting_for_every_request")]
 #[case::router_host_steps("router_host_steps")]
 #[case::callers("callers")]
-#[tokio::test]
+#[case::virtual_key_models("virtual_key_models")]
+#[case::virtual_key_token_limits("virtual_key_token_limits")]
+#[case::dynamic_rate_limiter("dynamic_rate_limiter")]
+#[case::dynamic_rate_limiter_borrowing("dynamic_rate_limiter_borrowing")]
+#[case::messages_settings("messages_settings")]
+#[case::request_timeout_float_refuses("request_timeout_float_refuses")]
+#[case::request_timeout_beside_router_timeout("request_timeout_beside_router_timeout")]
+#[case::request_timeout_beside_router_request_timeout(
+    "request_timeout_beside_router_request_timeout"
+)]
+#[case::pre_call_checks("pre_call_checks")]
+#[tokio::test(flavor = "multi_thread")]
 async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     litellm_gateway::install_crypto_provider();
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/admit/{name}.yaml"));
@@ -96,10 +203,24 @@ async fn admit_answers_each_request_as_its_scenario_says(#[case] name: &str) {
     let state = litellm_gateway::AppState::over(&config, &Environment::default(), &resources)
         .await
         .unwrap();
+    let held = match scenario.keys.is_empty() {
+        true => None,
+        false => Some(listed(&scenario.keys, &scenario.tpm_limits).await),
+    };
+    let state = match &held {
+        None => state,
+        Some(held) => litellm_gateway::AppState {
+            keys: Some(Arc::new(AuthStore::new(
+                keys::memory_cache(),
+                held.database(),
+            ))),
+            ..state
+        },
+    };
     let admit = Arc::new(litellm_gateway::Admit::new(
         &config,
-        &Environment::default(),
         &state,
+        stored_config(scenario.stored, scenario.held),
     ));
 
     let answered = futures_util::future::join_all(scenario.requests.iter().map(|sent| {

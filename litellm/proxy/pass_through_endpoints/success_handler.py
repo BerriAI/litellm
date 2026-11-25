@@ -1,12 +1,12 @@
 import asyncio
 import functools
 import json
-from collections.abc import Callable, Coroutine, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from contextlib import suppress
 from datetime import datetime
 from types import MappingProxyType
-from typing import Final, ParamSpec
-from urllib.parse import urlparse
+from typing import TYPE_CHECKING, Final, ParamSpec
+from urllib.parse import quote, urlparse
 
 import anyio
 import httpx
@@ -14,16 +14,59 @@ from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import AZURE_SPEECH_CUSTOM_LLM_PROVIDER
-from litellm.litellm_core_utils.core_helpers import bind_budget_reservation_to_callbacks
+from litellm.constants import (
+    AZURE_SPEECH_CUSTOM_LLM_PROVIDER,
+    BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS,
+    USAGE_ONLY_SETTLEMENT_KEY,
+)
+from litellm.interactions.background_cost_polling import rebuild_logging_obj
+from litellm.litellm_core_utils.core_helpers import (
+    as_str_mapping,
+    bind_budget_reservation_to_callbacks,
+    proxy_request_headers,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues, PassThroughEndpointLoggingTypedDict
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import StandardPassThroughResponseObject, Usage
+from litellm.types.utils import LlmProviders, StandardPassThroughResponseObject, Usage
 
-from .background_response_settlement import BackgroundResponseSettlementStore, PrismaBackgroundResponseSettlementStore
+from .background_response_creator import (
+    CREATOR_BILL_DEFERRED,
+    NOT_A_SETTLEMENT,
+    SETTLED_BEFORE,
+    SETTLES_FOR_CALLER,
+    BackgroundResponseCreateContext,
+    BackgroundResponseCreator,
+    BackgroundResponseCreatorStore,
+    BackgroundResponseSettlementDecision,
+    CreatorLookupFailed,
+    PrismaBackgroundResponseCreatorStore,
+    SettlesForCreator,
+    background_response_creator,
+    leaves_the_caller_unbilled,
+)
+from .background_response_polling import (
+    BACKGROUND_RESPONSE_SWEEP_INTERVAL_SECONDS,
+    BackgroundResponsePoller,
+    BackgroundResponsePollRequest,
+    Fetched,
+    PollHeaders,
+    is_pollable_response_id,
+    poll_request_for_create,
+    pollable_at,
+    response_url,
+    sweep_background_response_polls,
+    sweep_periodically,
+)
+from .background_response_settlement import (
+    BackgroundResponseSettlementStore,
+    Claimed,
+    ClaimedBefore,
+    ClaimUnrecorded,
+    PrismaBackgroundResponseSettlementStore,
+)
 from .llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
@@ -46,6 +89,14 @@ from .llm_provider_handlers.fal_ai_passthrough_logging_handler import (
 from .llm_provider_handlers.gemini_passthrough_logging_handler import (
     GeminiPassthroughLoggingHandler,
 )
+from .llm_provider_handlers.openai_agents_turn_billing import (
+    AgentsTurnStart,
+    DeferredAgentsRow,
+    OpenAIAgentsTurnBiller,
+    agents_turn_start_from_response,
+    openai_agents_sessions_call,
+    openai_agents_turn_biller,
+)
 from .llm_provider_handlers.tinyfish_passthrough_logging_handler import (
     TinyFishPassthroughLoggingHandler,
     is_tinyfish_agent_url,
@@ -61,13 +112,77 @@ from .llm_provider_handlers.vertex_passthrough_logging_handler import (
 from .managed_id_codec import decode as decode_managed_id
 from .upstream_usage_headers import has_upstream_reported_usage
 
+if TYPE_CHECKING:
+    from .pass_through_endpoints import TeamCallbackWiring
+
+CreatorLoggingWiring = Callable[[BackgroundResponseCreateContext], Awaitable["TeamCallbackWiring | None"]]
+
 cohere_passthrough_logging_handler: Final = CoherePassthroughLoggingHandler()
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 _RESPONSE_BODY: Final = TypeAdapter(dict[str, object])
 
 
 class NormalizedPassThroughLoggingPayload(TypedDict):
     standard_logging_response_object: ReadOnly[PassThroughEndpointLoggingResultValues | None]
     kwargs: ReadOnly[dict[str, object]]
+
+
+def _upstream_response_id(response_id: str) -> str:
+    managed_id: Final = decode_managed_id(response_id)
+    return response_id if managed_id is None else managed_id.raw_provider_id
+
+
+def _created_model(request_body: Mapping[str, object], response_body: Mapping[str, object]) -> str:
+    return next(
+        (model for model in (request_body.get("model"), response_body.get("model")) if isinstance(model, str)), ""
+    )
+
+
+def _response_time(response_body: Mapping[str, object], field: str, start_time: datetime) -> datetime | None:
+    timestamp: Final = response_body.get(field)
+    if isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)):
+        return None
+    return datetime.fromtimestamp(timestamp, tz=start_time.tzinfo)
+
+
+def _run_window(response_body: Mapping[str, object], start_time: datetime) -> tuple[datetime, datetime]:
+    completed: Final = _response_time(response_body, "completed_at", start_time)
+    end: Final = completed if completed is not None and completed >= start_time else datetime.now(tz=start_time.tzinfo)
+    created: Final = _response_time(response_body, "created_at", start_time)
+    return (created if created is not None and created <= end else end), end
+
+
+def _creator_litellm_params(context: BackgroundResponseCreateContext, spend_only: bool) -> Mapping[str, object]:
+    metadata: Final = dict(context.metadata)
+    return {"metadata": metadata, "no-log": True} if spend_only else {"metadata": metadata}
+
+
+def _wires_logging(wiring: "TeamCallbackWiring | None") -> bool:
+    return wiring is not None and bool(wiring.success_callbacks or wiring.failure_callbacks or wiring.logging_kwargs)
+
+
+async def proxy_creator_logging_wiring(
+    context: BackgroundResponseCreateContext, timeout_seconds: float = BACKGROUND_RESPONSE_SETTLEMENT_TIMEOUT_SECONDS
+) -> "TeamCallbackWiring | None":
+    from litellm.proxy.auth.auth_checks import get_key_object
+    from litellm.proxy.proxy_server import prisma_client, proxy_config, user_api_key_cache
+
+    from .pass_through_endpoints import resolve_team_callback_wiring
+
+    key_hash: Final = context.metadata.get("user_api_key")
+    if not isinstance(key_hash, str):
+        return None
+    try:
+        creator_key: Final = await asyncio.wait_for(
+            get_key_object(hashed_token=key_hash, prisma_client=prisma_client, user_api_key_cache=user_api_key_cache),
+            timeout=timeout_seconds,
+        )
+    except (TimeoutError, asyncio.TimeoutError):
+        raise
+    except Exception as e:  # noqa: BLE001  # an unresolved creator key bills spend only instead of failing the bill
+        verbose_proxy_logger.warning("Could not load the key that created a background response: %s", e)
+        return None
+    return resolve_team_callback_wiring(creator_key, proxy_config, "background response creator bill")
 
 
 async def complete_despite_cancellation(work: Coroutine[object, object, None]) -> None:
@@ -83,7 +198,7 @@ async def complete_despite_cancellation(work: Coroutine[object, object, None]) -
         raise
 
 
-_HandlerParams: Final = ParamSpec("_HandlerParams")
+_HandlerParams = ParamSpec("_HandlerParams")
 
 
 def _finishes_despite_cancellation_when_finalizing(
@@ -137,16 +252,32 @@ class PassThroughEndpointLogging:
         self,
         transcribe_handler: TranscribePassthroughLoggingHandler | None = None,
         log_dispatch: PassThroughLogDispatch | None = None,
+        agents_turn_biller: OpenAIAgentsTurnBiller | None = None,
         background_response_settlement: BackgroundResponseSettlementStore | None = None,
+        background_response_creators: BackgroundResponseCreatorStore | None = None,
+        background_response_poller: BackgroundResponsePoller | None = None,
+        creator_logging_wiring: CreatorLoggingWiring = proxy_creator_logging_wiring,
     ):
+        self.creator_logging_wiring: Final = creator_logging_wiring
         self.transcribe_passthrough_logging_handler: Final = (
             transcribe_handler if transcribe_handler is not None else TranscribePassthroughLoggingHandler()
         )
         self._injected_log_dispatch: Final = log_dispatch
+        self._agents_turn_biller: Final = (
+            agents_turn_biller if agents_turn_biller is not None else openai_agents_turn_biller
+        )
         self.background_response_settlement: Final[BackgroundResponseSettlementStore] = (
             background_response_settlement
             if background_response_settlement is not None
             else PrismaBackgroundResponseSettlementStore()
+        )
+        self.background_response_creators: Final[BackgroundResponseCreatorStore] = (
+            background_response_creators
+            if background_response_creators is not None
+            else PrismaBackgroundResponseCreatorStore()
+        )
+        self.background_response_poller: Final = (
+            background_response_poller if background_response_poller is not None else BackgroundResponsePoller()
         )
         self.TRACKED_VERTEX_METHOD_ROUTES = (
             "generateContent",
@@ -194,6 +325,31 @@ class PassThroughEndpointLogging:
     @property
     def _log_dispatch(self) -> PassThroughLogDispatch:
         return self._injected_log_dispatch if self._injected_log_dispatch is not None else self.handle_logging
+
+    def defer_agents_turn_logging(
+        self,
+        turn_start: AgentsTurnStart,
+        logging_obj: LiteLLMLoggingObj,
+        standard_logging_response_object: PassThroughEndpointLoggingResultValues,
+        result: str,
+        start_time: datetime,
+        end_time: datetime,
+        cache_hit: bool,
+        kwargs: Mapping[str, object],
+    ) -> None:
+        _ = self._agents_turn_biller.schedule(
+            turn_start,
+            DeferredAgentsRow(
+                logging_obj=logging_obj,
+                response_object=standard_logging_response_object,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                kwargs=kwargs,
+                log=self._log_dispatch,
+            ),
+        )
 
     async def handle_logging(
         self,
@@ -248,18 +404,244 @@ class PassThroughEndpointLogging:
 
     _handle_logging = handle_logging
 
-    async def background_response_settled_before(self, settled_response_id: str | None) -> bool:
+    async def background_response_settlement_for(
+        self, settled_response_id: str, response_body: Mapping[str, object], url_route: str
+    ) -> BackgroundResponseSettlementDecision:
+        from .llm_provider_handlers.openai_passthrough_logging_handler import targets_openai_api
+
+        upstream_response_id: Final = _upstream_response_id(settled_response_id)
+        creator: Final = (
+            await self.background_response_creators.creator(upstream_response_id)
+            if targets_openai_api(url_route)
+            else None
+        )
+        if isinstance(creator, CreatorLookupFailed):
+            return CREATOR_BILL_DEFERRED
+        match await self.background_response_settlement.claim_outcome(
+            upstream_response_id, release_if_late=creator is not None
+        ):
+            case ClaimedBefore():
+                return SETTLED_BEFORE
+            case Claimed() if creator is not None:
+                return SettlesForCreator(creator=creator, response_body=response_body)
+            case ClaimUnrecorded() if creator is not None:
+                return CREATOR_BILL_DEFERRED
+            case Claimed() | ClaimUnrecorded():
+                return SETTLES_FOR_CALLER
+
+    async def background_response_settlement_of_call(
+        self,
+        method: str,
+        url_route: str,
+        response_fields: Mapping[str, object] | None,
+    ) -> BackgroundResponseSettlementDecision:
+        from .llm_provider_handlers.openai_passthrough_logging_handler import (
+            OpenAIPassthroughLoggingHandler,
+        )
+
+        if response_fields is None or not OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route):
+            return NOT_A_SETTLEMENT
+        settled_response_id: Final = OpenAIPassthroughLoggingHandler.background_response_settled_by_call(
+            method, url_route, response_fields
+        )
         if settled_response_id is None:
+            return NOT_A_SETTLEMENT
+        return await self.background_response_settlement_for(settled_response_id, response_fields, url_route)
+
+    async def settle_for_creator(self, settlement: SettlesForCreator) -> None:
+        await self._bill_creator_once(settlement.creator, settlement.response_body)
+
+    async def settle_polled_background_response(
+        self, creator: BackgroundResponseCreator, response_body: Mapping[str, object]
+    ) -> bool:
+        from .llm_provider_handlers.openai_passthrough_logging_handler import is_finished_background_response
+
+        if not is_finished_background_response(response_body):
+            await self.background_response_creators.forget(creator.response_id)
+            return True
+        match await self.background_response_settlement.claim_outcome(creator.response_id, release_if_late=True):
+            case Claimed():
+                return await self._bill_creator_once(creator, response_body)
+            case ClaimedBefore():
+                return True
+            case ClaimUnrecorded():
+                return False
+
+    async def _bill_creator_once(self, creator: BackgroundResponseCreator, response_body: Mapping[str, object]) -> bool:
+        if not await self.bill_background_response_creator(creator, response_body):
+            await self.background_response_settlement.release(creator.response_id)
             return False
-        managed_id: Final = decode_managed_id(settled_response_id)
-        upstream_response_id: Final = settled_response_id if managed_id is None else managed_id.raw_provider_id
-        return not await self.background_response_settlement.claim(upstream_response_id)
+        await self.background_response_creators.forget(creator.response_id)
+        return True
+
+    async def bill_background_response_creator(
+        self, creator: BackgroundResponseCreator, response_body: Mapping[str, object]
+    ) -> bool:
+        try:
+            return await self._bill_background_response_creator(creator, response_body)
+        except Exception:  # noqa: BLE001  # a failed creator bill is retried, so it must not fail the read or the poll
+            verbose_proxy_logger.exception(
+                "Could not bill background response %s to the key that created it", creator.response_id
+            )
+            return False
+
+    async def _bill_background_response_creator(
+        self, creator: BackgroundResponseCreator, response_body: Mapping[str, object]
+    ) -> bool:
+        context: Final = creator.context
+        url_route: Final = f"{creator.upstream_url}/{quote(creator.response_id, safe='')}"
+        wiring: Final = await self.creator_logging_wiring(context) if context.key_or_team_logging else None
+        rewired: Final = _wires_logging(wiring)
+        run_started_at, run_ended_at = _run_window(response_body, context.start_time)
+        litellm_params: Final = _creator_litellm_params(
+            context, spend_only=context.no_log or (context.key_or_team_logging and not rewired)
+        )
+        logging_obj: Final = rebuild_logging_obj(
+            model=context.model,
+            custom_llm_provider=context.custom_llm_provider,
+            call_type="pass_through_endpoint",
+            litellm_call_id=context.litellm_call_id,
+            function_id=context.litellm_call_id,
+            litellm_trace_id=context.litellm_trace_id,
+            start_time=run_started_at,
+            litellm_params=litellm_params,
+            dynamic_success_callbacks=None if wiring is None else wiring.success_callbacks,
+            dynamic_failure_callbacks=None if wiring is None else wiring.failure_callbacks,
+            logging_kwargs=None if wiring is None else wiring.logging_kwargs,
+        )
+        if context.disabled_callbacks:
+            logging_obj.standard_callback_dynamic_params["litellm_disabled_callbacks"] = list(
+                context.disabled_callbacks
+            )
+        passthrough_logging_payload: Final = PassthroughStandardLoggingPayload(
+            url=url_route, request_body={"model": context.model}, request_method="GET"
+        )
+        logging_obj.model_call_details["passthrough_logging_payload"] = passthrough_logging_payload
+        logging_obj.model_call_details[USAGE_ONLY_SETTLEMENT_KEY] = True
+        return await self._log_llm_pass_through(
+            httpx_response=httpx.Response(200, json=response_body, request=httpx.Request("GET", url_route)),
+            response_body=dict(response_body),
+            request_body={"model": context.model},
+            logging_obj=logging_obj,
+            url_route=url_route,
+            result="",
+            start_time=run_started_at,
+            end_time=run_ended_at,
+            cache_hit=False,
+            passthrough_logging_payload=passthrough_logging_payload,
+            custom_llm_provider=context.custom_llm_provider,
+            finalize_before_dispatch=True,
+            background_response_settled_before=False,
+            forwarded={
+                "litellm_params": litellm_params,
+                "call_type": "pass_through_endpoint",
+                "litellm_call_id": context.litellm_call_id,
+                "passthrough_logging_payload": passthrough_logging_payload,
+            },
+        )
+
+    async def register_background_response_create(
+        self,
+        create_request: httpx.Request,
+        response_fields: Mapping[str, object] | None,
+        request_body: Mapping[str, object],
+        logging_obj: LiteLLMLoggingObj,
+        url_route: str,
+        start_time: datetime,
+        custom_llm_provider: str | None,
+    ) -> None:
+        from .llm_provider_handlers.openai_passthrough_logging_handler import (
+            OpenAIPassthroughLoggingHandler,
+        )
+
+        if (
+            custom_llm_provider != LlmProviders.OPENAI.value
+            or response_fields is None
+            or not OpenAIPassthroughLoggingHandler.creates_pollable_background_response(
+                create_request.method, url_route, request_body, response_fields
+            )
+        ):
+            return
+        response_id: Final = _upstream_response_id(str(response_fields["id"]))
+        if not is_pollable_response_id(response_id):
+            verbose_proxy_logger.warning(
+                "Not tracking background response %r for billing: its id cannot be part of a URL path", response_id
+            )
+            return
+        creator: Final = background_response_creator(
+            logging_obj=logging_obj,
+            response_id=response_id,
+            create_url=create_request.url,
+            model=_created_model(request_body, response_fields),
+            custom_llm_provider=custom_llm_provider,
+            start_time=start_time,
+        )
+        await self.background_response_creators.register(creator, self.background_response_poller.lease_until())
+        self.background_response_poller.start(
+            creator,
+            poll_request_for_create(create_request, response_id),
+            self.settle_polled_background_response,
+            self.background_response_creators,
+        )
+
+    async def sweep_background_response_polls(
+        self, api_base: str, poll_headers: PollHeaders
+    ) -> tuple["asyncio.Task[None]", ...]:
+        return await sweep_background_response_polls(
+            creators=self.background_response_creators,
+            poller=self.background_response_poller,
+            settle=self.settle_polled_background_response,
+            api_base=api_base,
+            poll_headers=poll_headers,
+        )
+
+    async def sweep_background_response_polls_periodically(self, api_base: str, poll_headers: PollHeaders) -> None:
+        await sweep_periodically(
+            lambda: self.sweep_background_response_polls(api_base, poll_headers),
+            BACKGROUND_RESPONSE_SWEEP_INTERVAL_SECONDS,
+        )
+
+    async def settle_background_response_before_delete(
+        self, method: str, target_url: str, headers: Mapping[str, str]
+    ) -> None:
+        from .llm_provider_handlers.openai_passthrough_logging_handler import targets_openai_api
+
+        if method != "DELETE" or not targets_openai_api(target_url):
+            return
+        try:
+            await self._settle_background_response_before_delete(httpx.URL(target_url), headers)
+        except Exception:  # noqa: BLE001  # settling first must never block or fail the delete it runs before
+            verbose_proxy_logger.exception("Could not settle background response %s before deleting it", target_url)
+
+    async def _settle_background_response_before_delete(
+        self, target_url: httpx.URL, headers: Mapping[str, str]
+    ) -> None:
+        from .llm_provider_handlers.openai_passthrough_logging_handler import (
+            deleted_response_id,
+            is_finished_background_response,
+        )
+
+        response_id: Final = deleted_response_id(target_url.path)
+        if response_id is None:
+            return
+        creator: Final = await self.background_response_creators.creator(_upstream_response_id(response_id))
+        if not isinstance(creator, BackgroundResponseCreator) or not pollable_at(creator, target_url):
+            return
+        match await self.background_response_poller.fetch(
+            BackgroundResponsePollRequest(
+                url=response_url(httpx.URL(creator.upstream_url), creator.response_id), headers=tuple(headers.items())
+            )
+        ):
+            case Fetched(body=body) if is_finished_background_response(body):
+                await self.settle_polled_background_response(creator, body)
+            case _:
+                return
 
     def normalize_llm_passthrough_logging_payload(
         self,
         httpx_response: httpx.Response,
-        response_body: dict | list[dict[str, object]] | None,
-        request_body: dict,
+        response_body: Mapping[str, object] | list[dict[str, object]] | None,
+        request_body: dict[str, object],
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         result: str,
@@ -439,10 +821,8 @@ class PassThroughEndpointLogging:
             )
             standard_logging_response_object = transcribe_handler_result["result"]  # rebind-ok: elif-chain
             kwargs = transcribe_handler_result["kwargs"]  # rebind-ok: elif-chain contract
-        elif (
-            self.is_typesafe_route(custom_llm_provider)
-            or custom_llm_provider in ("eu_jev", "laya", "bespoke")
-            or self.is_openrouter_decisions_route(url_route, custom_llm_provider)
+        elif custom_llm_provider in ("eu_jev", "laya", "bespoke") or self.is_openrouter_decisions_route(
+            url_route, custom_llm_provider
         ):
             from .llm_provider_handlers.typesafe_passthrough_logging_handler import (
                 TypeSafePassthroughLoggingHandler,
@@ -550,20 +930,19 @@ class PassThroughEndpointLogging:
     async def pass_through_async_success_handler(
         self,
         httpx_response: httpx.Response,
-        response_body: dict | list[dict[str, object]] | None,
+        response_body: dict[str, object] | list[dict[str, object]] | None,
         logging_obj: LiteLLMLoggingObj,
         url_route: str,
         result: str,
         start_time: datetime,
         end_time: datetime,
         cache_hit: bool,
-        request_body: dict,
+        request_body: dict[str, object],
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
         custom_llm_provider: str | None = None,
         finalize_before_dispatch: bool = False,
-        **kwargs,
+        **kwargs: object,
     ) -> None:
-        standard_logging_response_object: PassThroughEndpointLoggingResultValues | None = None
         logging_obj.model_call_details["passthrough_logging_payload"] = passthrough_logging_payload
         if self.is_tinyfish_route(url_route, custom_llm_provider):
             # polls and cancels never write spend rows; run-async bills once from the background poller
@@ -620,53 +999,120 @@ class PassThroughEndpointLogging:
                 OpenAIPassthroughLoggingHandler,
             )
 
-            try:
-                settled_response_id: Final = (
-                    OpenAIPassthroughLoggingHandler.background_response_settled_by_call(
-                        httpx_response.request.method, url_route, _RESPONSE_BODY.validate_python(response_body)
-                    )
-                    if isinstance(response_body, dict)
-                    and OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
-                    else None
-                )
-                background_response_settled_before: Final = await self.background_response_settled_before(
-                    settled_response_id
-                )
-                normalized_llm_passthrough_logging_payload: Final = self.normalize_llm_passthrough_logging_payload(
-                    httpx_response=httpx_response,
-                    response_body=response_body,
-                    request_body=request_body,
-                    logging_obj=logging_obj,
-                    url_route=url_route,
-                    result=result,
-                    start_time=start_time,
-                    end_time=end_time,
-                    cache_hit=cache_hit,
-                    custom_llm_provider=custom_llm_provider,
-                    background_response_settled_before=background_response_settled_before,
-                    **kwargs,
-                )
-                standard_logging_response_object = normalized_llm_passthrough_logging_payload[
-                    "standard_logging_response_object"
-                ]
-                kwargs = (  # rebind-ok: provider normalization replaces the forwarded logging kwargs
-                    normalized_llm_passthrough_logging_payload["kwargs"] or {}
-                )
-            except Exception:
-                if not finalize_before_dispatch:
-                    raise
-                verbose_proxy_logger.exception("Unable to prepare pass-through success logging")
-                return
-        if standard_logging_response_object is None:
-            standard_logging_response_object = StandardPassThroughResponseObject(
-                response=_safe_response_text(httpx_response)
+            response_fields: Final = (
+                _RESPONSE_BODY.validate_python(response_body)
+                if isinstance(response_body, dict)
+                and OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+                else None
+            )
+            settlement: Final = await self.background_response_settlement_of_call(
+                httpx_response.request.method, url_route, response_fields
+            )
+            if isinstance(settlement, SettlesForCreator):
+                await self.settle_for_creator(settlement)
+            await self._log_llm_pass_through(
+                httpx_response=httpx_response,
+                response_body=response_body,
+                request_body=request_body,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                passthrough_logging_payload=passthrough_logging_payload,
+                custom_llm_provider=custom_llm_provider,
+                finalize_before_dispatch=finalize_before_dispatch,
+                background_response_settled_before=leaves_the_caller_unbilled(settlement),
+                forwarded=kwargs,
+            )
+            await self.register_background_response_create(
+                create_request=httpx_response.request,
+                response_fields=response_fields,
+                request_body=request_body,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                start_time=start_time,
+                custom_llm_provider=custom_llm_provider,
             )
 
-        kwargs = self._set_cost_per_request(
+    async def _log_llm_pass_through(
+        self,
+        httpx_response: httpx.Response,
+        response_body: dict[str, object] | list[dict[str, object]] | None,  # mutable-ok: normalize takes dicts
+        request_body: dict[str, object],  # mutable-ok: normalize takes dicts
+        logging_obj: LiteLLMLoggingObj,
+        url_route: str,
+        result: str,
+        start_time: datetime,
+        end_time: datetime,
+        cache_hit: bool,
+        passthrough_logging_payload: PassthroughStandardLoggingPayload,
+        custom_llm_provider: str | None,
+        finalize_before_dispatch: bool,
+        background_response_settled_before: bool,
+        forwarded: Mapping[str, object],
+    ) -> bool:
+        try:
+            normalized_llm_passthrough_logging_payload: Final = self.normalize_llm_passthrough_logging_payload(
+                httpx_response=httpx_response,
+                response_body=response_body,
+                request_body=request_body,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                custom_llm_provider=custom_llm_provider,
+                background_response_settled_before=background_response_settled_before,
+                **forwarded,
+            )
+        except Exception:
+            if not finalize_before_dispatch:
+                raise
+            verbose_proxy_logger.exception("Unable to prepare pass-through success logging")
+            return False
+        normalized_response_object: Final = normalized_llm_passthrough_logging_payload[
+            "standard_logging_response_object"
+        ]
+        standard_logging_response_object: Final[PassThroughEndpointLoggingResultValues] = (
+            StandardPassThroughResponseObject(response=_safe_response_text(httpx_response))
+            if normalized_response_object is None
+            else normalized_response_object
+        )
+        kwargs: Final = self._set_cost_per_request(
             logging_obj=logging_obj,
             passthrough_logging_payload=passthrough_logging_payload,
-            kwargs=kwargs,
+            kwargs=normalized_llm_passthrough_logging_payload["kwargs"] or {},
         )
+        agents_call: Final = openai_agents_sessions_call(url_route, custom_llm_provider)
+        agents_turn_start: Final = (
+            None
+            if agents_call is None
+            else agents_turn_start_from_response(
+                call=agents_call,
+                httpx_response=httpx_response,
+                request_body=_JSON_OBJECT.validate_python(request_body),
+                request_headers=proxy_request_headers(
+                    as_str_mapping(logging_obj.model_call_details.get("litellm_params"))
+                ),
+                response_body=_JSON_OBJECT.validate_python(response_body) if isinstance(response_body, dict) else None,
+                start_time=start_time,
+            )
+        )
+        if agents_turn_start is not None:
+            self.defer_agents_turn_logging(
+                turn_start=agents_turn_start,
+                logging_obj=logging_obj,
+                standard_logging_response_object=standard_logging_response_object,
+                result=result,
+                start_time=start_time,
+                end_time=end_time,
+                cache_hit=cache_hit,
+                kwargs={**kwargs, "standard_pass_through_logging_payload": passthrough_logging_payload},
+            )
+            return True
 
         await self._log_dispatch(
             logging_obj=logging_obj,
@@ -679,6 +1125,7 @@ class PassThroughEndpointLogging:
             standard_pass_through_logging_payload=passthrough_logging_payload,
             **kwargs,
         )
+        return True
 
     def is_vertex_route(self, url_route: str) -> bool:
         if any(f":{method}" in url_route for method in self.TRACKED_VERTEX_METHOD_ROUTES):
@@ -713,9 +1160,6 @@ class PassThroughEndpointLogging:
 
     def is_transcribe_route(self, custom_llm_provider: str | None) -> bool:
         return custom_llm_provider == TRANSCRIBE_CUSTOM_LLM_PROVIDER
-
-    def is_typesafe_route(self, custom_llm_provider: str | None) -> bool:
-        return custom_llm_provider == "typesafe"
 
     def is_openrouter_decisions_route(self, url_route: str, custom_llm_provider: str | None) -> bool:
         return custom_llm_provider == "openrouter" and urlparse(url_route).path.endswith("/alpha/decisions")
@@ -790,8 +1234,8 @@ class PassThroughEndpointLogging:
         self,
         logging_obj: LiteLLMLoggingObj,
         passthrough_logging_payload: PassthroughStandardLoggingPayload,
-        kwargs: dict,
-    ):
+        kwargs: Mapping[str, object],
+    ) -> Mapping[str, object]:
         """
         Helper function to set the cost per request in the logging object
 
@@ -811,8 +1255,8 @@ class PassThroughEndpointLogging:
         if has_upstream_reported_usage(logging_obj):
             return kwargs
 
-        if passthrough_logging_payload.get("cost_per_request") is not None:
-            kwargs["response_cost"] = passthrough_logging_payload.get("cost_per_request")
-            logging_obj.model_call_details["response_cost"] = passthrough_logging_payload.get("cost_per_request")
-
-        return kwargs
+        cost_per_request: Final = passthrough_logging_payload.get("cost_per_request")
+        if cost_per_request is None:
+            return kwargs
+        logging_obj.model_call_details["response_cost"] = cost_per_request
+        return {**kwargs, "response_cost": cost_per_request}

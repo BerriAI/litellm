@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { Page, PageContent } from "@/components/shared/Page";
+import { PageContent } from "@/components/shared/Page";
 import { DeprecationBanner } from "@/components/DeprecationBanner";
 import { PageHeader, PageHeaderTitle, PageHeaderDescription } from "@/components/shared/PageHeader";
 import { ArrowLeft, ChevronDown, RefreshCw, Workflow } from "lucide-react";
@@ -521,7 +521,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
   const statusLabels = Object.fromEntries(RUN_STATUS_OPTIONS.map((status) => [status, t(STATUS_LABEL_KEYS[status])]));
 
   return (
-    <Page>
+    <>
       <PageHeader>
         <PageHeaderTitle>
           <Workflow />
@@ -664,7 +664,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
           </SheetContent>
         </Sheet>
       </PageContent>
-    </Page>
+    </>
   );
 };
 

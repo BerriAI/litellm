@@ -199,6 +199,7 @@ from litellm.proxy.mcp_server.upstream import (
 from litellm.proxy.mcp_server.utils import (
     MCP_SERVERS_TARGET,
     MCP_TOOL_PREFIX_SEPARATOR,
+    TOOL_DISPLAY_NAME_PATTERN,
     MCPMissingUserEnvVarsError,
     add_server_prefix_to_name,
     build_env_var_setup_url,
@@ -241,6 +242,7 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPInfo,
     MCPOAuthMetadata,
     MCPServer,
+    MCPServerEventsConfig,
     parse_pinned_tools,
 )
 from litellm.types.utils import CallTypes
@@ -443,6 +445,8 @@ class MCPServerConfig(TypedDict, total=False):
     extra_headers: _StringList
     allowed_tools: _StringList
     disallowed_tools: _StringList
+    tool_name_to_display_name: ReadOnly[_StringMap]
+    tool_name_to_description: ReadOnly[_StringMap]
     allowed_params: _ToolParamMap
     access_groups: _StringList
     static_headers: _StringMap
@@ -569,6 +573,39 @@ def _assigned_alias(
     """
     alias: Final = server_config.get("alias")
     return _first_mapped_alias(server_name, mcp_aliases) if alias is None else alias
+
+
+_CONFIG_TOOL_TEXT_MAP: Final = TypeAdapter(Mapping[str, str])
+
+
+def _config_tool_text_map(server_name: str, field: str, value: object) -> _StringMap | None:
+    if value is None:
+        return None
+    try:
+        return dict(_CONFIG_TOOL_TEXT_MAP.validate_python(value))
+    except ValidationError:
+        verbose_logger.warning("MCP server %s: ignoring %s, it must map tool names to text", server_name, field)
+        return None
+
+
+def _config_tool_display_names(server_name: str, value: object) -> _StringMap | None:
+    display_names: Final = _config_tool_text_map(server_name, "tool_name_to_display_name", value)
+    if display_names is None:
+        return None
+    accepted: Final = {
+        tool_name: display_name
+        for tool_name, display_name in display_names.items()
+        if TOOL_DISPLAY_NAME_PATTERN.match(display_name)
+    }
+    for tool_name in display_names.keys() - accepted.keys():
+        verbose_logger.warning(
+            "MCP server %s: ignoring display name %r for tool %r, it must match %s",
+            server_name,
+            display_names[tool_name],
+            tool_name,
+            TOOL_DISPLAY_NAME_PATTERN.pattern,
+        )
+    return accepted
 
 
 def _validate_config_server_names(mcp_servers_config: Mapping[str, MCPServerConfig]) -> None:
@@ -1829,6 +1866,22 @@ def _warn_config_id_jag_server_outruns_sso(server: MCPServer) -> None:
     )
 
 
+def _stored_events_config(value: object) -> MCPServerEventsConfig | None:
+    if isinstance(value, MCPServerEventsConfig):
+        return value
+    if not isinstance(value, (str, Mapping)) or not value:
+        return None
+    try:
+        return (
+            MCPServerEventsConfig.model_validate_json(value)
+            if isinstance(value, str)
+            else MCPServerEventsConfig.model_validate(value)
+        )
+    except ValidationError:
+        verbose_logger.warning("Ignoring an unreadable MCP server events configuration")
+        return None
+
+
 def _deserialize_json_dict(data: str | _StringMap | None) -> dict[str, str] | None:
     """
     Deserialize optional JSON mappings stored in the database.
@@ -2006,7 +2059,7 @@ class _InternalNetworkSettings(Protocol):
     def get(self, key: Literal["mcp_internal_ip_ranges"], /) -> list[str] | None: ...
 
 
-_Gathered: Final = TypeVar("_Gathered")
+_Gathered = TypeVar("_Gathered")
 
 
 async def _gather_before_relaying_url_elicitation(tasks: Sequence[asyncio.Task[_Gathered]]) -> Sequence[_Gathered]:
@@ -2646,7 +2699,7 @@ class MCPServerManager:
                 stdio_env=None,
             )
 
-            async def _noop(_session):
+            async def _noop(_session: object) -> str:
                 return "ok"
 
             await asyncio.wait_for(client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT)
@@ -2688,7 +2741,7 @@ class MCPServerManager:
         self,
         mcp_servers_config: dict[str, MCPServerConfig],
         mcp_aliases: dict[str, str] | None = None,
-    ):
+    ) -> None:
         """
         Load the MCP Servers from the config
 
@@ -2701,7 +2754,7 @@ class MCPServerManager:
         self._upstream_initialize_instructions_probed_at.clear()
 
         # Track which aliases have been used to ensure only first occurrence is used
-        used_aliases: Final = set()
+        used_aliases: Final = set[str]()
         # server_id -> the config server_name that claimed it, so a pinned id cannot silently
         # overwrite another server's entry in self.config_mcp_servers.
         assigned_server_ids: MutableMapping[str, str] = {}  # mutable-ok: per-load collision index
@@ -2942,6 +2995,12 @@ class MCPServerManager:
                 extra_headers=server_config.get("extra_headers", None),
                 allowed_tools=server_config.get("allowed_tools", None),
                 disallowed_tools=server_config.get("disallowed_tools", None),
+                tool_name_to_display_name=_config_tool_display_names(
+                    server_name, server_config.get("tool_name_to_display_name", None)
+                ),
+                tool_name_to_description=_config_tool_text_map(
+                    server_name, "tool_name_to_description", server_config.get("tool_name_to_description", None)
+                ),
                 allowed_params=server_config.get("allowed_params", None),
                 pinned_tools=server_config.get("pinned_tools", None),
                 access_groups=server_config.get("access_groups", None),
@@ -2983,6 +3042,7 @@ class MCPServerManager:
                 token_exchange_profile=server_config.get("token_exchange_profile", "rfc8693"),
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
+                events=_stored_events_config(server_config.get("events", None)),
                 timeout=server_config.get("timeout", None),
                 max_concurrent_requests=server_config.get("max_concurrent_requests", None),
                 rpm=server_config.get("rpm", None),
@@ -3025,22 +3085,10 @@ class MCPServerManager:
         store) onto its in-memory object so token refresh authenticates after a restart. A
         best-effort no-op when the DB is unreachable at config-load time."""
         from litellm.proxy.mcp_server.discoverable_endpoints import (  # noqa: PLC0415  # circular import
-            hydrate_config_server_dcr_client,
+            hydrate_config_dcr_clients,
         )
 
-        for server in servers if servers is not None else self.config_mcp_servers.values():
-            try:
-                if await hydrate_config_server_dcr_client(server):
-                    verbose_logger.debug(
-                        "hydrated persisted DCR client onto config MCP server server_id=%s",
-                        server.server_id,
-                    )
-            except Exception as exc:  # noqa: BLE001  # best-effort hydration; never fail config load
-                verbose_logger.debug(
-                    "load_servers_from_config: failed to hydrate DCR client for server_id=%s: %s",
-                    server.server_id,
-                    exc,
-                )
+        await hydrate_config_dcr_clients(servers if servers is not None else tuple(self.config_mcp_servers.values()))
 
     async def _register_openapi_tools(self, spec_path: str, server: MCPServer, base_url: str):
         """
@@ -3590,6 +3638,7 @@ class MCPServerManager:
             timeout=getattr(mcp_server, "timeout", None),
             max_concurrent_requests=getattr(mcp_server, "max_concurrent_requests", None),
             rpm=mcp_server.rpm,
+            events=_stored_events_config(getattr(mcp_server, "events", None)),
         )
         _warn_legacy_delegate_auth_if_applicable(new_server, source="database")
         if register_oauth_discovery:
@@ -4100,7 +4149,7 @@ class MCPServerManager:
         """
         if client_ip is None:
             return server_ids, 0
-        allowed: Final = []
+        allowed: Final = list[str]()
         blocked = 0
         for sid in server_ids:
             s = self.get_mcp_server_by_id(sid)
@@ -6108,7 +6157,7 @@ class MCPServerManager:
             listing_updates.callback(self._create_prefixed_tools, tools, server, add_prefix=add_prefix)
             register_bare_names = False
 
-        prefixed_tools: Final = []
+        prefixed_tools: Final = list[MCPTool]()
         prefix: Final = get_server_prefix(server)
 
         for tool in tools:
@@ -6151,7 +6200,7 @@ class MCPServerManager:
         Returns:
             List of prompts with prefixed names
         """
-        prefixed_prompts: Final = []
+        prefixed_prompts: Final = list[Prompt]()
         prefix: Final = get_server_prefix(server)
 
         for prompt in prompts:
@@ -6853,7 +6902,7 @@ class MCPServerManager:
         mcp_server: MCPServer,
         original_tool_name: str,
         arguments: _ToolArguments,
-        tasks: list,
+        tasks: list[asyncio.Task[object]],
         mcp_auth_header: str | None,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None,
         oauth2_headers: dict[str, str] | None,
@@ -7033,7 +7082,7 @@ class MCPServerManager:
             managed_per_user: Final = mcp_server.is_gateway_managed_oauth2 and mcp_server.needs_user_oauth_token
             server_label: Final = mcp_server.name or mcp_server.server_name or mcp_server.alias or ""
 
-            async def _call_tool_via_client(client, params):
+            async def _call_tool_via_client(client: MCPClient, params: MCPCallToolRequestParams):
                 async with self._outbound_limit(mcp_server, persistent_session):
                     if not relays_upstream_auth and not managed_per_user:
                         return await client.call_tool(
@@ -7613,7 +7662,7 @@ class MCPServerManager:
         await self.catalog.reload()
 
     def get_mcp_servers_from_ids(self, server_ids: list[str]) -> list[MCPServer]:
-        servers: Final = []
+        servers: Final = list[MCPServer]()
         registry: Final = self.get_registry()
         for server in registry.values():
             if server.server_id in server_ids:
@@ -7931,7 +7980,7 @@ class MCPServerManager:
                     stdio_env=None,
                 )
 
-                async def _noop(session):
+                async def _noop(session: object) -> str:
                     return "ok"
 
                 # Add timeout wrapper to prevent hanging
@@ -7996,6 +8045,7 @@ class MCPServerManager:
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
             rpm=server.rpm,
+            events=server.events,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -8120,6 +8170,7 @@ class MCPServerManager:
             timeout=server.timeout,
             max_concurrent_requests=server.max_concurrent_requests,
             rpm=server.rpm,
+            events=server.events,
         )
 
     _build_mcp_server_table = build_mcp_server_table

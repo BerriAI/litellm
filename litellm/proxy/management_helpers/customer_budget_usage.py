@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
     from litellm.proxy.spend_tracking.budget_reservation import BudgetCounter
 
-Entity: Final = TypeVar("Entity", Organization, Team, CustomerMember)
+Entity = TypeVar("Entity", Organization, Team, CustomerMember)
 
 
 def _identity(entity: Organization | Team | CustomerMember) -> tuple[CustomerScopeKey, str, Budget | None]:

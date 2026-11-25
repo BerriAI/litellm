@@ -73,7 +73,7 @@ def _add(kind: str, record: dict) -> None:
 
 
 def _outermost(function: Callable) -> Callable:
-    def call(*args, **kwargs):
+    def call(*args: object, **kwargs: object):
         token = _inside.set(True)
         try:
             return function(*args, **kwargs)
@@ -205,7 +205,7 @@ def _install() -> None:
         return accounting
 
     def recording_helper(name: str, function: Callable) -> Callable:
-        def call(*args, **kwargs):
+        def call(*args: object, **kwargs: object):
             outermost = not _inside.get()
             result = _outermost(function)(*args, **kwargs)
             if outermost:

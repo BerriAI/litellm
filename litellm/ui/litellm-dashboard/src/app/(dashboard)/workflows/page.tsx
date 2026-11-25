@@ -12,7 +12,7 @@ export default function Workflows() {
   const canViewWorkflowRuns = useCan("viewWorkflowRuns");
 
   if (!canViewWorkflowRuns) {
-    return <AdminOnlyNotice pageTitle={t("workflows.page.title")} />;
+    return <AdminOnlyNotice framed pageTitle={t("workflows.page.title")} />;
   }
 
   return (

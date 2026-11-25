@@ -142,10 +142,10 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         self,
         model: str,
         input: str | ResponseInputParam,
-        response_api_optional_request_params: dict,
+        response_api_optional_request_params: dict[str, object],
         litellm_params: GenericLiteLLMParams,
-        headers: dict,
-    ) -> dict:
+        headers: dict[str, object],
+    ) -> dict[str, object]:
         request: Final = super().transform_responses_api_request(
             model,
             [{"role": "user", "content": input}]
@@ -320,7 +320,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def get_complete_url(
         self,
         api_base: str | None,
-        litellm_params: dict,
+        litellm_params: dict[str, object],
     ) -> str:
         api_base = api_base or self.authenticator.get_api_base() or CHATGPT_API_BASE
         return join_api_base(api_base, "responses")

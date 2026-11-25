@@ -85,6 +85,13 @@ jobs:
           retry git fetch --no-tags --depth=1 origin "$MERGE_BASE"
           echo "GATE_BASE_SHA=$MERGE_BASE" >> "$GITHUB_ENV"
 
+      - &head-tool-paths
+        name: Find the lint tool paths the PR head carries
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          if [ -d litellm/scripts ]; then echo "SCRIPTS_DIR=litellm/scripts" >> "$GITHUB_ENV"; else echo "SCRIPTS_DIR=scripts" >> "$GITHUB_ENV"; fi
+          if [ -f .github/linters/ruff-tests.toml ]; then echo "RUFF_TESTS_CONFIG=.github/linters/ruff-tests.toml" >> "$GITHUB_ENV"; else echo "RUFF_TESTS_CONFIG=ruff-tests.toml" >> "$GITHUB_ENV"; fi
+
       - &setup-python
         name: Set up Python
         if: steps.changes.outputs.decision != 'skip'
@@ -149,7 +156,7 @@ jobs:
 
       - name: Check MCP operation boundary
         if: steps.changes.outputs.decision != 'skip'
-        run: uv run --no-sync python litellm/scripts/check_mcp_operation_boundary.py
+        run: uv run --no-sync python "$SCRIPTS_DIR/check_mcp_operation_boundary.py"
 
       - name: Run Ruff linting
         if: steps.changes.outputs.decision != 'skip'
@@ -161,28 +168,28 @@ jobs:
       - name: Run Ruff linting (test tree)
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          uv run --no-sync ruff check --config .github/linters/ruff-tests.toml tests
+          uv run --no-sync ruff check --config "$RUFF_TESTS_CONFIG" tests
 
       - name: Check strict ruff rules (delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-sync python litellm/scripts/ruff_strict_gate.py --base "$GATE_BASE_SHA"
+          uv run --no-sync python "$SCRIPTS_DIR/ruff_strict_gate.py" --base "$GATE_BASE_SHA"
 
       - name: Check type discipline (mutable collections / casts / type guards / kwargs / unexplained suppressions, delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-sync python litellm/scripts/type_discipline_gate.py --base "$GATE_BASE_SHA"
+          uv run --no-sync python "$SCRIPTS_DIR/type_discipline_gate.py" --base "$GATE_BASE_SHA"
 
       - name: Check test quality (zero-assert / mock-echo tests, sys.path.insert, raw env writes, litellm global mutation, credential-gated skips, conftest snapshot inventory, delta vs merge-base counts)
         if: steps.changes.outputs.decision != 'skip'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          uv run --no-sync python litellm/scripts/test_quality_gate.py --base "$GATE_BASE_SHA"
+          uv run --no-sync python "$SCRIPTS_DIR/test_quality_gate.py" --base "$GATE_BASE_SHA"
 
       - name: Check for circular imports
         if: steps.changes.outputs.decision != 'skip'
@@ -213,6 +220,7 @@ jobs:
       - *checkout-head
       - *detect-changes
       - *fetch-gate-base
+      - *head-tool-paths
       - *setup-python
       - *setup-uv
       - *cache-uv
@@ -225,16 +233,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python litellm/scripts/type_check_gate.py --base "$GATE_BASE_SHA"
+          python "$SCRIPTS_DIR/type_check_gate.py" --base "$GATE_BASE_SHA"
 
       - name: Check tests/e2e basedpyright (zero errors)
         if: steps.changes.outputs.decision != 'skip'
         run: |
-          if git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- ':(glob)tests/e2e/**/*.py' ':(glob)tests/e2e_harness/**/*.py' pyproject.toml | grep -q .; then
+          if git diff --name-only --diff-filter=ACMRD "$GATE_BASE_SHA" HEAD -- ':(glob)tests/e2e/**/*.py' ':(glob)tests/e2e_harness/**/*.py' ':(glob)litellm/**/*.py' pyproject.toml uv.lock | grep -q .; then
             uv sync --frozen --no-install-project --group proxy-dev --group e2e-dev --extra proxy
             uv run --no-sync basedpyright tests/e2e tests/e2e_harness
           else
-            echo "No changed tests/e2e Python files; skipping."
+            echo "No changed tests/e2e or litellm Python, or dependency files; skipping."
           fi
 
   e2e-harness:
@@ -623,6 +631,7 @@ jobs:
           python ./tests/code_coverage_tests/check_fastuuid_usage.py
           python ./tests/code_coverage_tests/check_py310_typing_imports.py
           python ./tests/code_coverage_tests/check_e2e_no_raw_requests.py
+          python ./tests/code_coverage_tests/check_router_constructor_stub.py
           python ./tests/code_coverage_tests/check_no_none_string_error_fields.py
           pytest -q --noconftest -p no:cacheprovider -c /dev/null tests/code_coverage_tests/test_check_no_none_string_error_fields.py
           python ./tests/code_coverage_tests/check_no_publicly_known_master_key.py

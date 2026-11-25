@@ -7,11 +7,12 @@ from typing import TYPE_CHECKING, ClassVar, Final, Literal, cast
 from httpx import Headers, Response
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.exceptions import ModelNotMappedError
 from litellm.litellm_core_utils.aws_partition import is_bedrock_arn
 from litellm.litellm_core_utils.cloud_storage_security import (
     BEDROCK_MANAGED_S3_BATCH_PREFIX,
 )
-from litellm.litellm_core_utils.core_helpers import require_get
+from litellm.litellm_core_utils.core_helpers import SupportsGet, require_get
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -34,6 +35,7 @@ from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import (
     CommonBatchFilesUtils,
     bedrock_control_plane_base_url,
+    get_cached_model_info,
     merge_bedrock_aws_request_params,
     resolve_s3_bucket_owner,
     resolve_s3_encryption_key_id,
@@ -83,6 +85,21 @@ def _validate_bedrock_tags(raw_tags: object) -> list[BedrockTag]:
             "Invalid 'bedrock_tags' value. Expected a list of {'key': <str>, 'value': <str>} dicts, "
             f"e.g. [{{'key': 'team', 'value': 'genai'}}]. Got: {raw_tags!r}"
         ) from e
+
+
+def openai_endpoint_for_bedrock_job_model(
+    model_id: object,
+) -> Literal["/v1/chat/completions", "/v1/embeddings"]:
+    if not isinstance(model_id, str) or not model_id:
+        return "/v1/chat/completions"
+    try:
+        model_info: Final = get_cached_model_info()(model=model_id, custom_llm_provider="bedrock")
+    except ModelNotMappedError:
+        return "/v1/chat/completions"
+    is_embedding_model: Final = (
+        model_info.get("mode") == "embedding" or model_info.get("output_vector_size") is not None
+    )
+    return "/v1/embeddings" if is_embedding_model else "/v1/chat/completions"
 
 
 def titan_embedding_usage_from_batch_output(model_output: Mapping[str, object]) -> Usage | None:
@@ -151,14 +168,14 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict[str, str],
         model: str,
         messages: list[AllMessageValues],
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         api_key: str | None = None,
         api_base: str | None = None,
-    ) -> dict:
+    ) -> dict[str, str]:
         """
         Validate and prepare environment for Bedrock batch requests.
         AWS credentials are handled by BaseAWSLLM.
@@ -171,8 +188,8 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         data: CreateBatchRequest,
     ) -> str:
         """
@@ -403,8 +420,8 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     def transform_retrieve_batch_request(
         self,
         batch_id: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
     ) -> dict[str, object]:
         """
         Transform batch retrieval request for Bedrock.
@@ -461,7 +478,9 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             "data": None,
         }
 
-    def _parse_timestamps_and_status(self, response_data, status_str: str):
+    def _parse_timestamps_and_status(
+        self, response_data: SupportsGet, status_str: str
+    ) -> tuple[int | None, int | None, int | None, int | None, int | None, int | None]:
         """Helper to parse timestamps based on status."""
         import datetime
 
@@ -522,7 +541,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
     ) -> tuple[int | None, int | None, int | None, int | None, int | None, int | None]:
         return self._parse_timestamps_and_status(response_data, status_str)
 
-    def _extract_file_configs(self, response_data):
+    def _extract_file_configs(self, response_data: SupportsGet) -> tuple[object, object]:
         """Helper to extract input and output file configurations."""
         # Extract input file ID
         input_file_id = ""
@@ -542,7 +561,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
 
         return input_file_id, output_file_id
 
-    def _extract_errors_and_metadata(self, response_data, raw_response):
+    def _extract_errors_and_metadata(self, response_data, raw_response: Response):
         """Helper to extract errors and enriched metadata."""
         # Extract errors
         message: Final = response_data.get("message")
@@ -586,7 +605,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
         model: str | None,
         raw_response: Response,
         logging_obj: "LiteLLMLoggingObj",
-        litellm_params: dict,
+        litellm_params: Mapping[str, object],
     ) -> LiteLLMBatch:
         """
         Transform Bedrock batch retrieval response to LiteLLM format.
@@ -648,7 +667,7 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             {
                 "id": job_arn,
                 "object": "batch",
-                "endpoint": "/v1/chat/completions",
+                "endpoint": openai_endpoint_for_bedrock_job_model(response_data.get("modelId")),
                 "errors": errors,
                 "input_file_id": input_file_id,
                 "completion_window": "24h",
@@ -669,7 +688,9 @@ class BedrockBatchesConfig(BaseAWSLLM, BaseBatchesConfig):
             }
         )
 
-    def get_error_class(self, error_message: str, status_code: int, headers: dict | Headers) -> BaseLLMException:
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: dict[str, str] | Headers
+    ) -> BaseLLMException:
         """
         Get Bedrock-specific error class using common utility.
         """

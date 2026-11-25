@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from datetime import datetime
 from typing import Final
 from unittest.mock import MagicMock
@@ -10,9 +10,17 @@ import httpx
 import pytest
 
 import litellm
+from litellm.interactions.background_cost_polling import PollSchedule
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.proxy.pass_through_endpoints.background_response_creator import PrismaBackgroundResponseCreatorStore
+from litellm.proxy.pass_through_endpoints.background_response_polling import (
+    BackgroundResponsePoller,
+    BackgroundResponsePollRequest,
+    FetchOutcome,
+    StopPolling,
+)
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
@@ -419,3 +427,179 @@ async def test_interrupted_vertex_stream_bills_the_deployment_custom_price(monke
     await GLOBAL_LOGGING_WORKER.flush()
 
     assert recorded == pytest.approx(PROMPT_TOKENS * 2e-09 + COMPLETION_TOKENS * 3e-09)
+
+
+RESPONSES_URL: Final = "https://api.openai.com/v1/responses"
+BACKGROUND_RESPONSE_ID: Final = "resp_0b7f3c2a9d1e4f5a8b6c0d2e4f6a8b0c"
+BACKGROUND_STREAM_REQUEST: Final = {
+    "model": "gpt-5.4-mini",
+    "input": "Write a haiku",
+    "background": True,
+    "stream": True,
+}
+
+
+def _background_response(status: str, usage: Mapping[str, int] | None) -> dict[str, object]:
+    return {
+        "id": BACKGROUND_RESPONSE_ID,
+        "object": "response",
+        "created_at": 1792269939,
+        "status": status,
+        "background": True,
+        "model": "gpt-5.4-mini",
+        "output": [],
+        "parallel_tool_calls": True,
+        "tool_choice": "auto",
+        "tools": [],
+        "usage": usage,
+    }
+
+
+def _responses_event(event_type: str, sequence_number: int, response: Mapping[str, object]) -> bytes:
+    event: Final = {"type": event_type, "sequence_number": sequence_number, "response": response}
+    return f"event: {event_type}\ndata: {json.dumps(event)}\n\n".encode()
+
+
+class _UpstreamStream(httpx.AsyncByteStream):
+    def __init__(self, chunks: tuple[bytes, ...]) -> None:
+        self.chunks: Final = chunks
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
+        for chunk in self.chunks:
+            yield chunk
+
+
+class _CreatorRows:
+    def __init__(self) -> None:
+        self.rows: Final[dict[str, Mapping[str, object]]] = {}
+
+    async def create(self, *, data: Mapping[str, object]) -> Mapping[str, object]:
+        self.rows[str(data["response_id"])] = data
+        return data
+
+    async def update_many(self, *, data: Mapping[str, object], where: Mapping[str, str]) -> int:
+        return int(where["response_id"] in self.rows)
+
+
+class _FirstPoll:
+    def __init__(self) -> None:
+        self.request: Final[asyncio.Future[BackgroundResponsePollRequest]] = (
+            asyncio.get_running_loop().create_future()
+        )
+
+    async def __call__(self, request: BackgroundResponsePollRequest) -> FetchOutcome:
+        if not self.request.done():
+            self.request.set_result(request)
+        return StopPolling(status_code=404)
+
+
+def _background_create_logging_obj(custom_llm_provider: str | None) -> LiteLLMLoggingObj:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="unknown",
+        messages=[],
+        stream=True,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="0d4b7e19-6a2c-4f83-9e51-2c8a7f3b6d40",
+        function_id="background-stream",
+    )
+    logging_obj.update_environment_variables(
+        model="unknown",
+        user="unknown",
+        optional_params={},
+        litellm_params={"metadata": {"user_api_key_team_id": "team-creator"}},
+        call_type="pass_through_endpoint",
+    )
+    if custom_llm_provider is not None:
+        logging_obj.model_call_details["custom_llm_provider"] = custom_llm_provider
+    return logging_obj
+
+
+async def _no_stream_end_logging(**kwargs: object) -> None:
+    return None
+
+
+async def _streamed_background_create(
+    chunks: tuple[bytes, ...],
+    creators: _CreatorRows,
+    fetch: _FirstPoll,
+    client_disconnects: bool,
+    custom_llm_provider: str | None = "openai",
+) -> None:
+    passthrough_logging: Final = PassThroughEndpointLogging(
+        background_response_creators=PrismaBackgroundResponseCreatorStore(table=lambda: creators, timeout_seconds=5),
+        background_response_poller=BackgroundResponsePoller(
+            fetch=fetch,
+            schedule=PollSchedule(initial_interval_seconds=0.001, max_interval_seconds=0.001, timeout_seconds=5.0),
+            database_configured=lambda: True,
+        ),
+    )
+    create_request: Final = httpx.Request(
+        "POST", RESPONSES_URL, headers={"authorization": "Bearer upstream-openai-key"}, json=BACKGROUND_STREAM_REQUEST
+    )
+    stream: Final = PassThroughStreamingHandler.chunk_processor(
+        response=httpx.Response(200, request=create_request, stream=_UpstreamStream(chunks)),
+        request_body=dict(BACKGROUND_STREAM_REQUEST),
+        litellm_logging_obj=_background_create_logging_obj(custom_llm_provider),
+        endpoint_type=EndpointType.OPENAI,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=passthrough_logging,
+        url_route=RESPONSES_URL,
+        route_streaming_logging=_no_stream_end_logging,
+    )
+    relayed: Final = [await stream.__anext__()] if client_disconnects else [chunk async for chunk in stream]
+    if client_disconnects:
+        await stream.aclose()
+    assert relayed == list(chunks[: len(relayed)])
+    await GLOBAL_LOGGING_WORKER.flush()
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_background_create_the_client_leaves_early_records_its_creator_and_polls_it():
+    creators: Final = _CreatorRows()
+    fetch: Final = _FirstPoll()
+    chunks: Final = (
+        _responses_event("response.created", 0, _background_response("queued", None)),
+        _responses_event("response.in_progress", 1, _background_response("in_progress", None)),
+    )
+
+    await _streamed_background_create(chunks, creators, fetch, client_disconnects=True)
+
+    polled: Final = await asyncio.wait_for(fetch.request, timeout=5)
+    assert set(creators.rows) == {BACKGROUND_RESPONSE_ID}
+    assert polled.url == httpx.URL(f"{RESPONSES_URL}/{BACKGROUND_RESPONSE_ID}")
+    assert ("authorization", "Bearer upstream-openai-key") in polled.headers
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_background_create_through_a_configured_route_records_no_creator():
+    creators: Final = _CreatorRows()
+    fetch: Final = _FirstPoll()
+    chunks: Final = (_responses_event("response.created", 0, _background_response("queued", None)),)
+
+    await _streamed_background_create(chunks, creators, fetch, client_disconnects=True, custom_llm_provider=None)
+
+    assert creators.rows == {}
+    assert not fetch.request.done()
+
+
+@pytest.mark.asyncio
+async def test_a_streamed_background_create_that_ran_to_completion_records_no_creator():
+    creators: Final = _CreatorRows()
+    fetch: Final = _FirstPoll()
+    usage: Final = {
+        "input_tokens": 11,
+        "input_tokens_details": {"cached_tokens": 0},
+        "output_tokens": 5,
+        "output_tokens_details": {"reasoning_tokens": 0},
+        "total_tokens": 16,
+    }
+    chunks: Final = (
+        _responses_event("response.created", 0, _background_response("queued", None)),
+        _responses_event("response.completed", 1, _background_response("completed", usage)),
+    )
+
+    await _streamed_background_create(chunks, creators, fetch, client_disconnects=False)
+
+    assert creators.rows == {}
+    assert not fetch.request.done()

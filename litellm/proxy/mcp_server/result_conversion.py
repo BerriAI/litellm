@@ -80,7 +80,7 @@ def is_url_elicitation_required(exc: BaseException) -> bool:
     return isinstance(exc, MCPError) and exc.error.code == URL_ELICITATION_REQUIRED
 
 
-_ToolResult: Final = TypeVar("_ToolResult")
+_ToolResult = TypeVar("_ToolResult")
 
 
 async def url_elicitation_as_error_result(execution: Awaitable[_ToolResult]) -> _ToolResult | CallToolResult:

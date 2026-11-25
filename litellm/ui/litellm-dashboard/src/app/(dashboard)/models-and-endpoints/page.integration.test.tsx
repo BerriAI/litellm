@@ -161,7 +161,6 @@ vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => {
 vi.mock("@/components/key_team_helpers/filter_helpers", () => ({
   fetchTeamFilterOptions: vi.fn().mockResolvedValue({ keyAliases: [], organizationIds: [], userIds: [] }),
   fetchAllKeyAliases: vi.fn().mockResolvedValue([]),
-  fetchAllOrganizations: vi.fn().mockResolvedValue([]),
 }));
 
 const createMockTeamData = (overrides = {}) => ({
