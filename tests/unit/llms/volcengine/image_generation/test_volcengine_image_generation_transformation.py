@@ -334,6 +334,29 @@ def test_the_global_litellm_api_key_authenticates_generation_and_edit(monkeypatc
     assert edit["authorization"] == generation["authorization"]
 
 
+@pytest.mark.parametrize("environment_key", ["VOLCENGINE_API_KEY", "ARK_API_KEY"])
+def test_a_volcengine_environment_key_wins_over_the_global_litellm_api_key(
+    monkeypatch: pytest.MonkeyPatch, environment_key: str
+) -> None:
+    monkeypatch.delenv("ARK_API_KEY", raising=False)
+    monkeypatch.delenv("VOLCENGINE_API_KEY", raising=False)
+    monkeypatch.setenv(environment_key, "volcengine-key")
+    monkeypatch.setattr(litellm, "api_key", "global-key-for-another-provider")
+    generation: Final[dict[str, object]] = {}
+    edit: Final[dict[str, object]] = {}
+
+    litellm.image_generation(model=f"volcengine/{SEEDREAM_5_5}", prompt="a cat", client=_capturing_client(generation))
+    litellm.image_edit(
+        model=f"volcengine/{SEEDREAM_5_5}",
+        prompt="a cat",
+        image="https://ark.example/input.png",
+        client=_capturing_client(edit),
+    )
+
+    assert generation["authorization"] == "Bearer volcengine-key"
+    assert edit["authorization"] == generation["authorization"]
+
+
 def test_usage_reports_ark_output_tokens_as_completion_tokens() -> None:
     usage: Final = ARK_RESPONSE["usage"]
     assert isinstance(usage, dict)
