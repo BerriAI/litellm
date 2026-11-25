@@ -124,7 +124,7 @@ def test_interleaved_duplicate_names_keep_their_own_ordinals():
 _DOC_ID = {"type": "object", "properties": {"doc_id": {"type": "string"}}}
 
 
-def _doc_getter(name, description):
+def _doc_getter(name: str, description: str):
     return {**_function(name, description), "parameters": _DOC_ID}
 
 
@@ -312,6 +312,31 @@ def test_a_kept_member_stays_in_its_own_namespace_when_other_same_named_tools_ar
     assert merged is not None
     assert merged[0] is second_namespace
     assert list(merged[1:]) == mcp_tools
+
+
+def test_a_kept_member_stays_in_its_own_namespace_when_its_same_named_group_is_too_large_to_score() -> None:
+    first_namespace: Final = {
+        "type": "namespace",
+        "name": "a__b",
+        "description": "First namespace",
+        "tools": [_doc_getter("c", "First namespace member.")],
+    }
+    second_namespace: Final = {
+        "type": "namespace",
+        "name": "a",
+        "description": "Second namespace",
+        "tools": [_doc_getter("b__c", "Second namespace member.")],
+    }
+    top_level: Final = [_doc_getter("a__b__c", f"Top-level getter {index}.") for index in range(22)]
+    original: Final = [first_namespace, second_namespace, *top_level]
+    groups: Final = _groups(original)
+    flat: Final = _flat(groups)
+
+    merged: Final = merge_guardrailed_tools(original, groups, flat[1:])
+
+    assert merged is not None
+    assert merged[0] is second_namespace
+    assert list(merged[1:]) == top_level
 
 
 def test_edited_mcp_tool_is_rewritten():
