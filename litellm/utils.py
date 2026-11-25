@@ -4816,9 +4816,20 @@ def _map_params_with_provider_config(
     optional_params: dict[str, object],  # mutable-ok: map_openai_params fills and returns the caller's dict
     model: str,
     drop_params: bool,
+    model_info: Mapping[str, object] | None,
     base_model: str | None,
     allowed_openai_params: Sequence[str] | None,
 ) -> dict[str, object]:  # mutable-ok: get_optional_params keeps building on the mapped params
+    if isinstance(provider_config, litellm.ZAIChatConfig):
+        from litellm.router_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
+
+        return provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            declared_reasoning_efforts=deployment_reasoning_effort_levels(model_info),
+        )
     if custom_llm_provider == "azure_ai" and isinstance(provider_config, litellm.AzureAIStudioConfig):
         return provider_config.map_openai_params(
             non_default_params=non_default_params,
@@ -5415,6 +5426,7 @@ def get_optional_params(
             optional_params=optional_params,
             model=model,
             drop_params=bool(drop_params),
+            model_info=model_info,
             base_model=base_model,
             allowed_openai_params=allowed_openai_params,
         )

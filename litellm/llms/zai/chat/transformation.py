@@ -6,7 +6,7 @@ from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing on
 import litellm
 from litellm._logging import verbose_logger
 from litellm.router_utils.reasoning_effort_capability import (
-    declared_reasoning_efforts_for_model,
+    catalog_reasoning_efforts_for_model,
     nearest_declared_reasoning_effort,
 )
 from litellm.secret_managers.main import get_secret_str
@@ -15,6 +15,7 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
 ZAI_API_BASE: Final = "https://api.z.ai/api/paas/v4"
+REASONING_OFF: Final = "none"
 
 
 def _is_json_object(
@@ -27,21 +28,16 @@ def _requested_level(requested: object) -> object:
     return requested.get("effort") if _is_json_object(requested) else requested
 
 
-def _weakest_declared(declared: Sequence[str]) -> str:
-    return nearest_declared_reasoning_effort("minimal", declared)
-
-
 def _declared_effort(level: str, declared: Sequence[str], drop_params: bool) -> str | None:
     rounded: Final = nearest_declared_reasoning_effort(level, declared)
-    if rounded in declared or not drop_params:
-        return rounded
-    return _weakest_declared(declared) if level == "none" else None
+    return rounded if rounded in declared or not drop_params else None
 
 
-def _accepted_effort(model: str, requested: object, drop_params: bool) -> object:
+def _accepted_effort(model: str, requested: object, drop_params: bool, declared: Sequence[str] | None) -> object:
     level: Final = _requested_level(requested)
-    declared: Final = declared_reasoning_efforts_for_model(model, "zai")
-    if not isinstance(level, str) or declared is None:
+    if not isinstance(level, str):
+        return None if drop_params else level
+    if declared is None:
         return level
     accepted: Final = _declared_effort(level, declared, drop_params)
     if accepted is not None and accepted != level:
@@ -109,17 +105,25 @@ class ZAIChatConfig(OpenAIGPTConfig):
         optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
+        declared_reasoning_efforts: Sequence[str] | None = None,
     ) -> dict[str, object]:  # mutable-ok: request pipeline adds parameters to the returned body
         supported_params: Final = self.get_supported_openai_params(model)
         sent: Final = {param: value for param, value in non_default_params.items() if param in supported_params}
         requested_effort: Final = sent.get("reasoning_effort")
+        turns_thinking_off: Final = _requested_level(requested_effort) == REASONING_OFF and "thinking" not in sent
+        declared: Final = (
+            declared_reasoning_efforts
+            if declared_reasoning_efforts is not None
+            else catalog_reasoning_efforts_for_model(model, "zai")
+        )
         reasoning_effort: Final = (
             None
-            if requested_effort is None
-            else _accepted_effort(model, requested_effort, litellm.drop_params or drop_params)
+            if requested_effort is None or turns_thinking_off
+            else _accepted_effort(model, requested_effort, litellm.drop_params or drop_params, declared)
         )
         return {
             **optional_params,
             **{param: value for param, value in sent.items() if param != "reasoning_effort"},
+            **({"thinking": {"type": "disabled"}} if turns_thinking_off else {}),
             **({} if reasoning_effort is None else {"reasoning_effort": reasoning_effort}),
         }

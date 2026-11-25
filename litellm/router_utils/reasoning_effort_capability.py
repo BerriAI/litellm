@@ -29,6 +29,7 @@ from types import MappingProxyType
 from typing import Final, get_args
 
 import litellm
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.types.llms.openai import REASONING_EFFORT
 
 REASONING_EFFORT_ADVERTISEMENT_ORDER: Final[tuple[str, ...]] = get_args(REASONING_EFFORT)
@@ -82,6 +83,18 @@ def declared_reasoning_efforts(model_info: Mapping[str, object]) -> tuple[str, .
         return None
     declared: Final = frozenset(effort for effort in raw if isinstance(effort, str))
     return tuple(effort for effort in REASONING_EFFORT_ADVERTISEMENT_ORDER if effort in declared)
+
+
+def deployment_reasoning_effort_levels(model_info: Mapping[str, object] | None) -> tuple[str, ...] | None:
+    if model_info is None:
+        return None
+    return declared_reasoning_efforts(MappingProxyType({_DECLARED_EFFORTS_KEY: model_info.get(_DECLARED_EFFORTS_KEY)}))
+
+
+def catalog_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -> tuple[str, ...] | None:
+    catalog: Final = GetModelCostMap.loaded_model_cost_map()
+    entry: Final = catalog.get(f"{custom_llm_provider}/{model}") or catalog.get(model)
+    return declared_reasoning_efforts(entry) if entry is not None else None
 
 
 def declared_reasoning_efforts_for_model(model: str, custom_llm_provider: str) -> tuple[str, ...] | None:
