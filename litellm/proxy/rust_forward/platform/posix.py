@@ -31,7 +31,7 @@ class PosixPlatform:
             yield PlatformListener(InheritedFd(private.fileno()), port, (private.fileno(),))
 
     def spawn_options(self, pass_fds: tuple[int, ...]) -> SpawnOptions:
-        return SpawnOptions(pass_fds=pass_fds, start_new_session=True, creationflags=0)
+        return SpawnOptions(pass_fds=pass_fds, start_new_session=False, creationflags=0)
 
     @property
     def relayed_signals(self) -> tuple[signal.Signals, ...]:
