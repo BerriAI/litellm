@@ -318,17 +318,24 @@ def _inherited_cache_pricing(
 
 
 def _inherited_clip_rates(
-    host: "PythonHost", model_info: Mapping[str, object], backend_model: str, provider: str | None
+    host: "PythonHost", model_info: Mapping[str, object], backend_model: str, provider: str | None, region: object
 ) -> Mapping[str, object]:
-    """The per-second audio and video input rates a token-priced entry inherits. A clip is billed by its length and
-    has no tokens, so a token price alone would bill it at nothing."""
+    """The per-second audio and video input rates a token-priced entry inherits, from the region's own cost map entry
+    when it has one. A clip is billed by its length and has no tokens, so a token price alone would bill it at
+    nothing."""
     if not model_info.get("input_cost_per_token"):
         return {}
     missing_fields: Final = tuple(field for field in _CLIP_RATE_FIELDS if model_info.get(field) is None)
     if not missing_fields:
         return {}
+    backend_provider, _, bare_model = backend_model.partition("/")
+    regional_entry: Final[object] = host.dynamic().model_cost.get(f"{backend_provider}/{region}/{bare_model}")
     try:
-        backend_info: Final = _backend_model_info(host, backend_model, provider)
+        backend_info: Final = (
+            _MODEL_INFO_ADAPTER.validate_python(regional_entry)
+            if isinstance(regional_entry, dict)
+            else _backend_model_info(host, backend_model, provider)
+        )
     except Exception:  # noqa: BLE001  # an unmapped backend model contributes nothing
         return {}
     return {field: backend_info[field] for field in missing_fields if backend_info.get(field) is not None}
@@ -481,7 +488,10 @@ def deployment_model_cost_payload(host: "PythonHost", deployment: Deployment) ->
     )
     tiers: Final = {**cached, **_inherited_service_tier_pricing(host, cached, rates_model, provider)}
     tiered_output: Final = {**tiers, **_inherited_tiered_output_rate(host, tiers, rates_model, provider)}
-    return {**tiered_output, **_inherited_clip_rates(host, tiered_output, rates_model, provider)}
+    return {
+        **tiered_output,
+        **_inherited_clip_rates(host, tiered_output, rates_model, provider, params.get("aws_region_name")),
+    }
 
 
 def _bedrock_profile_pricing(backend_model: str, priced: Mapping[str, object]) -> Mapping[str, object]:

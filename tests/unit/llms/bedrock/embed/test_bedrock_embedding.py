@@ -2336,8 +2336,8 @@ def _nova_usage_and_cost(
     return response.usage, response._hidden_params["response_cost"]
 
 
-def _nova_deployment_clip_cost(respx_mock: respx.MockRouter, **prices: float) -> float:
-    respx_mock.post(f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{_NOVA_MODEL_ID}/invoke").mock(
+def _nova_deployment_clip_cost(respx_mock: respx.MockRouter, region: str = "us-east-1", **prices: float) -> float:
+    respx_mock.post(f"https://bedrock-runtime.{region}.amazonaws.com/model/{_NOVA_MODEL_ID}/invoke").mock(
         side_effect=[
             httpx.Response(
                 200,
@@ -2354,7 +2354,7 @@ def _nova_deployment_clip_cost(respx_mock: respx.MockRouter, **prices: float) ->
                 "litellm_params": {
                     "model": f"bedrock/{_NOVA_MODEL_ID}",
                     "api_key": "test-bearer-token",
-                    "aws_region_name": "us-east-1",
+                    "aws_region_name": region,
                     **prices,
                 },
             }
@@ -2385,6 +2385,16 @@ def test_bedrock_nova_deployment_bills_a_clip_kind_it_does_not_price_at_the_list
     assert _nova_deployment_clip_cost(
         respx_mock, input_cost_per_token=0.001, input_cost_per_audio_per_second=2.0
     ) == pytest.approx(2.5 * 2.0 + 6.5 * listed["input_cost_per_video_per_second"])
+
+
+def test_bedrock_nova_deployment_with_only_a_token_price_bills_clips_at_its_region_rates(
+    respx_mock: respx.MockRouter,
+) -> None:
+    unpriced: Final = _nova_deployment_clip_cost(respx_mock, "us-gov-west-1")
+    token_priced: Final = _nova_deployment_clip_cost(respx_mock, "us-gov-west-1", input_cost_per_token=0.001)
+
+    assert unpriced != _nova_deployment_clip_cost(respx_mock), "the region needs its own clip rates for this test"
+    assert token_priced == pytest.approx(unpriced)
 
 
 def test_bedrock_nova_deployment_priced_at_zero_per_token_bills_clips_at_nothing(
