@@ -3,12 +3,14 @@
  */
 
 import i18n from "@/i18n/i18n";
-import type { Plugin, PluginSource } from "./types";
+import type { Plugin, PluginSource, SkillImport } from "./types";
 
 export interface SkillSourcePreview {
   parsed: PluginSource;
   label: string;
   suggestedName: string;
+  pathFromUrl?: boolean;
+  fileFromUrl?: string;
 }
 
 export const SUBDIR_PATH_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._-]*(\/[a-zA-Z0-9][a-zA-Z0-9._-]*)*$/;
@@ -21,8 +23,7 @@ export const isValidSubPath = (subPath: string): boolean => {
 };
 
 const GITHUB_HOST = "github.com";
-
-const SKILL_FILE_EXTENSION_REGEX = /\.(md|markdown|txt|json|ya?ml|toml)$/i;
+const withoutWww = (host: string): string => host.replace(/^www\./, "");
 
 const ZIP_ARCHIVE_REGEX = /\.zip$/i;
 
@@ -89,7 +90,57 @@ const toKebabCase = (value: string): string =>
     .replace(/-+/g, "-")
     .replace(/^-+|-+$/g, "");
 
-const parseGitHubSource = (url: URL, subPath?: string): SkillSourcePreview | null => {
+const withGitRef = (preview: SkillSourcePreview | null, ref?: string): SkillSourcePreview | null => {
+  const target = ref?.trim();
+  if (!preview || !target) return preview;
+  return {
+    ...preview,
+    parsed: {
+      ...preview.parsed,
+      ...(/^[a-fA-F0-9]{40}$/.test(target) ? { sha: target.toLowerCase() } : { ref: target }),
+    },
+    label: `${preview.label} (${target})`,
+  };
+};
+
+interface BrowserLocation {
+  ref: string;
+  path: string;
+  pathFromUrl: boolean;
+  fileFromUrl?: string;
+}
+
+const browserLocation = (
+  parts: string[],
+  kind: "tree" | "blob",
+  explicitRef?: string,
+  subPath?: string,
+): BrowserLocation | null => {
+  if (!parts.length) return null;
+  try {
+    const ref = explicitRef?.trim() || decodeURIComponent(parts[0]);
+    const refLength = explicitRef?.trim()
+      ? parts.findIndex((_, index) => decodeURIComponent(parts.slice(0, index + 1).join("/")) === ref) + 1
+      : 1;
+    if (!refLength || (kind === "blob" && parts.length === refLength)) return null;
+    const path = parts
+      .slice(refLength, kind === "blob" ? -1 : undefined)
+      .map(decodeURIComponent)
+      .join("/");
+    const fileFromUrl = kind === "blob" ? decodeURIComponent(parts[parts.length - 1]) : undefined;
+    const pathFromUrl = Boolean(path || fileFromUrl);
+    return { ref, path: pathFromUrl ? path : normalizeSubPath(subPath ?? ""), pathFromUrl, fileFromUrl };
+  } catch {
+    return null;
+  }
+};
+
+const parseGitHubSource = (
+  url: URL,
+  subPath?: string,
+  ref?: string,
+  pathContract: "reference" | "portable" = "reference",
+): SkillSourcePreview | null => {
   const parts = pathSegments(url);
   if (parts.length < 2) {
     return null;
@@ -108,42 +159,29 @@ const parseGitHubSource = (url: URL, subPath?: string): SkillSourcePreview | nul
     suggestedName: toKebabCase(repoBase),
   };
 
-  const isTreeOrBlob = parts.length >= 4 && (parts[2] === "tree" || parts[2] === "blob");
-  if (isTreeOrBlob) {
-    const pathParts = parts.slice(4);
-    const last = lastSegment(pathParts.join("/"));
-    const effective = SKILL_FILE_EXTENSION_REGEX.test(last) ? pathParts.slice(0, -1) : pathParts;
-    if (effective.length === 0) {
-      return repoPreview;
-    }
-    const path = normalizeSubPath(effective.join("/"));
-    if (!SUBDIR_PATH_REGEX.test(path)) {
-      return null;
-    }
-    return {
-      parsed: { source: "git-subdir", url: repoUrl, path },
-      label: i18n.t("claudeCodePlugins.sources.githubSubdir", { repo: repoFull, path }),
-      suggestedName: toKebabCase(lastSegment(path)),
-    };
-  }
-
-  if (parts.length !== 2) {
+  const kind = parts[2];
+  const location = kind === "tree" || kind === "blob" ? browserLocation(parts.slice(3), kind, ref, subPath) : undefined;
+  if (location === null || (location === undefined && parts.length !== 2)) {
     return null;
   }
-
-  const normalized = normalizeSubPath(subPath ?? "");
-  if (normalized !== "") {
-    if (!SUBDIR_PATH_REGEX.test(normalized)) {
-      return null;
-    }
-    return {
-      parsed: { source: "git-subdir", url: repoUrl, path: normalized },
-      label: i18n.t("claudeCodePlugins.sources.githubSubdir", { repo: repoFull, path: normalized }),
-      suggestedName: toKebabCase(lastSegment(normalized)),
-    };
+  const path = location?.path ?? normalizeSubPath(subPath ?? "");
+  if (pathContract === "reference" && path && !SUBDIR_PATH_REGEX.test(path)) {
+    return null;
   }
-
-  return repoPreview;
+  const preview: SkillSourcePreview = path
+    ? {
+        parsed: { source: "git-subdir", url: repoUrl, path },
+        label: i18n.t("claudeCodePlugins.sources.githubSubdir", { repo: repoFull, path }),
+        suggestedName: toKebabCase(lastSegment(path)),
+      }
+    : repoPreview;
+  return withGitRef(
+    {
+      ...preview,
+      ...(location ? { pathFromUrl: location.pathFromUrl, fileFromUrl: location.fileFromUrl } : {}),
+    },
+    location?.ref ?? ref,
+  );
 };
 
 const buildGitSourcePreview = (
@@ -179,6 +217,21 @@ const parseRawGitSource = (url: URL, subPath?: string): SkillSourcePreview | nul
   return buildGitSourcePreview("Git", buildRepoUrl(url), repoName, subPath);
 };
 
+const parseGitLabBrowserSource = (url: URL, subPath?: string, ref?: string): SkillSourcePreview | null => {
+  const parts = pathSegments(url);
+  const separator = parts.findIndex((part, index) => part === "-" && ["tree", "blob"].includes(parts[index + 1]));
+  const kind = parts[separator + 1];
+  if (separator < 2 || (kind !== "tree" && kind !== "blob")) return null;
+  const location = browserLocation(parts.slice(separator + 2), kind, ref, subPath);
+  if (!location) return null;
+  const repoUrl = `${url.protocol}//${withoutWww(url.host)}/${parts.slice(0, separator).join("/")}`;
+  const preview = buildGitSourcePreview("Git", repoUrl, parts[separator - 1].replace(/\.git$/, ""), location.path);
+  const selected = preview
+    ? { ...preview, pathFromUrl: location.pathFromUrl, fileFromUrl: location.fileFromUrl }
+    : null;
+  return withGitRef(selected, location.ref);
+};
+
 /**
  * Parse an scp-style `git@host:org/repo` or `ssh://git@host/org/repo` clone URL, registering it
  * exactly as typed: git treats the `.git` suffix as optional, and forcing one on breaks hosts whose
@@ -210,6 +263,81 @@ const parseArchiveSource = (url: URL): SkillSourcePreview => ({
   suggestedName: toKebabCase(lastSegment(url.pathname).replace(ZIP_ARCHIVE_REGEX, "")),
 });
 
+const parseSkillImportUrl = (rawUrl: string): URL | null => {
+  const url = parseRepoUrl(rawUrl);
+  if (!url) return null;
+  const host = withoutWww(url.host);
+  return [GITHUB_HOST, "skills.sh"].includes(host)
+    ? toUrl(`${url.protocol}//${host}${url.pathname}${url.search}${url.hash}`)
+    : null;
+};
+
+export const requiresBrowserRefConfirmation = (preview: SkillSourcePreview | null | undefined, ref: string): boolean =>
+  Boolean(
+    preview?.pathFromUrl &&
+      preview.parsed.path &&
+      !(ref.trim() || preview.parsed.sha || preview.parsed.ref?.includes("/")),
+  );
+
+export const availableSkillUrlModes = (rawUrl: string) => {
+  const url = parseSkillImportUrl(rawUrl);
+  if (url?.host === "skills.sh") return ["import"] as const;
+  return url ? (["register", "import"] as const) : (["register"] as const);
+};
+
+interface SkillImportSource {
+  selection: Pick<SkillImport, "url" | "skill" | "ref" | "path">;
+  preview: SkillSourcePreview | null;
+  skillFromUrl?: string;
+}
+
+const parseDirectorySkillSource = (url: URL, path?: string, ref?: string): SkillImportSource | null => {
+  try {
+    const parts = url.pathname
+      .replace(/^\/+|\/+$/g, "")
+      .split("/")
+      .map(decodeURIComponent);
+    if (parts.length !== 3 || parts.slice(0, 2).some((part) => !GITHUB_REPO_REGEX.test(part))) return null;
+    const skillFromUrl = parts[2];
+    if (!skillFromUrl) return null;
+    return {
+      selection: {
+        url: url.href,
+        ...(ref?.trim() ? { ref: ref.trim() } : {}),
+        ...(path?.trim() ? { path: path.trim() } : {}),
+      },
+      preview: null,
+      skillFromUrl,
+    };
+  } catch {
+    return null;
+  }
+};
+
+export const parseSkillImportSource = (
+  rawUrl: string,
+  path?: string,
+  ref?: string,
+  skill?: string,
+): SkillImportSource | null => {
+  const url = parseSkillImportUrl(rawUrl);
+  if (!url || url.search || url.hash) return null;
+  if (url.host === "skills.sh") return parseDirectorySkillSource(url, path, ref);
+  const preview = parseGitHubSource(url, path, ref, "portable");
+  if (!preview || (preview.fileFromUrl && preview.fileFromUrl !== "SKILL.md")) return null;
+  const source = preview.parsed;
+  const revision = source.sha ?? source.ref;
+  return {
+    selection: {
+      url: source.source === "github" ? `https://github.com/${source.repo}` : source.url ?? url.href,
+      ...(skill?.trim() ? { skill: skill.trim() } : {}),
+      ...(revision ? { ref: revision } : {}),
+      ...(source.path || preview.fileFromUrl ? { path: source.path ?? "" } : {}),
+    },
+    preview,
+  };
+};
+
 /**
  * Parse any git-accessible repository URL or https zip archive URL into a registerable skill
  * source. A `.zip` path is an `archive` source (S3, Artifactory, any static host). GitHub URLs
@@ -217,22 +345,29 @@ const parseArchiveSource = (url: URL): SkillSourcePreview => ({
  * authenticates with the user's own key; every other host is treated as a raw repo URL,
  * with an optional subfolder turning it into git-subdir.
  */
-export const parseSkillSource = (rawUrl: string, subPath?: string): SkillSourcePreview | null => {
+export const parseSkillSource = (rawUrl: string, subPath?: string, ref?: string): SkillSourcePreview | null => {
   const ssh = parseSshSource(rawUrl, subPath);
   if (ssh) {
-    return ssh;
+    return withGitRef(ssh, ref);
   }
   const url = parseRepoUrl(rawUrl);
   if (!url) {
     return null;
   }
+  const host = withoutWww(url.hostname);
+  if (host === GITHUB_HOST && ["tree", "blob"].includes(pathSegments(url)[2])) {
+    return parseGitHubSource(url, subPath, ref);
+  }
+  if (host === "gitlab.com" && /\/-\/(?:tree|blob)(?:\/|$)/.test(url.pathname)) {
+    return parseGitLabBrowserSource(url, subPath, ref);
+  }
   if (ZIP_ARCHIVE_REGEX.test(url.pathname)) {
     return parseArchiveSource(url);
   }
-  if (url.hostname.replace(/^www\./, "") === GITHUB_HOST) {
-    return parseGitHubSource(url, subPath);
+  if (host === GITHUB_HOST) {
+    return parseGitHubSource(url, subPath, ref);
   }
-  return parseRawGitSource(url, subPath);
+  return withGitRef(parseRawGitSource(url, subPath), ref);
 };
 
 /**
@@ -298,11 +433,22 @@ export const getSourceDisplayText = (source: Plugin["source"]): string => {
  * Get clickable link for plugin source. Ssh clone urls are not browsable, so they yield null.
  */
 export const getSourceLink = (source: Plugin["source"]): string | null => {
-  if (source.source === "github" && source.repo) {
-    return `https://github.com/${source.repo}`;
-  }
-  const linksToUrl = source.source === "url" || source.source === "git-subdir" || source.source === "archive";
-  return linksToUrl && source.url && BROWSABLE_URL_REGEX.test(source.url) ? source.url : null;
+  if (!["github", "url", "git-subdir", "archive"].includes(source.source)) return null;
+  const link = source.source === "github" ? source.repo && `https://github.com/${source.repo}` : source.url;
+  if (!link || !BROWSABLE_URL_REGEX.test(link)) return null;
+  if (source.source === "archive") return link;
+  const url = toUrl(link);
+  const host = url && withoutWww(url.hostname);
+  if (!url || (host !== GITHUB_HOST && host !== "gitlab.com")) return link;
+  const parts = pathSegments(url);
+  const isRepository = host === GITHUB_HOST ? parts.length === 2 : parts.length >= 2 && !parts.includes("-");
+  if (!isRepository) return link;
+  const root = buildRepoUrl(url).replace(/\.git$/, "");
+  const ref = source.sha || source.ref;
+  if (!ref) return root;
+  const path =
+    source.source === "git-subdir" && source.path ? `/${source.path.split("/").map(encodeURIComponent).join("/")}` : "";
+  return `${root}/${host === GITHUB_HOST ? "tree" : "-/tree"}/${encodeURIComponent(ref)}${path}`;
 };
 
 export const getManagedSkillArchivePath = (

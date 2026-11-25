@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use litellm_host_python::{PythonFileReader, py_bytes};
 use litellm_inference_ocr::types::OcrDocumentInput;
 use pyo3::{
-    exceptions::PyValueError,
+    exceptions::{PyKeyError, PyValueError},
     prelude::*,
     sync::PyOnceLock,
-    types::{PyBytes, PyString, PyType},
+    types::{PyBytes, PyMapping, PyString, PyType},
 };
 
 /// A `type='file'` document the bridge cannot read, with the text Python's OCR path raises.
@@ -58,23 +58,29 @@ impl FileDocumentInput {
     }
 }
 
+fn optional_field<'py>(
+    document: Borrowed<'_, 'py, PyAny>,
+    key: &str,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
+    if document.cast::<PyMapping>().is_ok() && !document.contains(key)? {
+        return Ok(None);
+    }
+    match document.get_item(key) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.is_instance_of::<PyKeyError>(document.py()) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
 impl FromPyObject<'_, '_> for FileDocumentInput {
     type Error = PyErr;
 
     fn extract(document: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
         let py = document.py();
-        let mime_type = match document.get_item("mime_type") {
-            Ok(value) => Some(value.extract::<String>()?),
-            Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) => None,
-            Err(error) => return Err(error),
-        };
-        let file = match document.get_item("file") {
-            Ok(file) => file,
-            Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) => {
-                return Err(DocumentError::MissingFile.into());
-            }
-            Err(error) => return Err(error),
-        };
+        let mime_type = optional_field(document, "mime_type")?
+            .map(|value| value.extract::<String>())
+            .transpose()?;
+        let file = optional_field(document, "file")?.ok_or(DocumentError::MissingFile)?;
         if file.is_none() {
             return Err(DocumentError::MissingFile.into());
         }
@@ -156,6 +162,59 @@ mod tests {
                 }
                 Rejection::Type => assert!(error.is_instance_of::<PyTypeError>(py)),
             }
+        });
+    }
+
+    const DEFAULTING_DICT: &std::ffi::CStr = c"class Document(dict):
+    def __missing__(self, key):
+        return Document()
+    def __getattr__(self, name):
+        return self[name]";
+
+    const ITEM_LOOKUP_ONLY: &std::ffi::CStr = c"class Document:
+    def __init__(self, items=()):
+        self._items = dict(items)
+    def __getitem__(self, key):
+        return self._items[key]";
+
+    #[rstest]
+    #[case::without_mime_type(c"{'file': b'abc'}", None)]
+    #[case::with_mime_type(c"{'file': b'abc', 'mime_type': 'image/png'}", Some("image/png"))]
+    fn a_document_yields_only_the_keys_the_caller_set(
+        #[values(DEFAULTING_DICT, ITEM_LOOKUP_ONLY)] class: &std::ffi::CStr,
+        #[case] items: &std::ffi::CStr,
+        #[case] mime_type: Option<&str>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = eval(py, class);
+            let document = locals
+                .get_item("Document")
+                .unwrap()
+                .unwrap()
+                .call1((py.eval(items, None, None).unwrap(),))
+                .unwrap();
+            assert_eq!(
+                ready(document.extract().unwrap()),
+                OcrDocumentInput::Bytes {
+                    bytes: b"abc".as_slice().into(),
+                    file_name: None,
+                    mime_type: mime_type.map(str::to_owned),
+                }
+            );
+            let error = locals
+                .get_item("Document")
+                .unwrap()
+                .unwrap()
+                .call0()
+                .unwrap()
+                .extract::<FileDocumentInput>()
+                .err()
+                .unwrap();
+            assert!(
+                error.to_string().contains("must include a 'file' field"),
+                "{error}"
+            );
         });
     }
 

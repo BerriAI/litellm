@@ -208,8 +208,7 @@ async fn trait_read_applies_cyberark_operation_timeout_to_authentication() {
 
 #[rstest]
 fn new_validates_credentials_before_license_and_configuration() {
-    let empty: Arc<dyn litellm_core_utils::settings::Lookup + Send + Sync> =
-        Arc::new(|_: &str| None);
+    let empty: Arc<dyn litellm_env::Lookup + Send + Sync> = Arc::new(|_: &str| None);
     assert!(matches!(
         from_environment(empty, true),
         Err(Error::MissingCredentials)

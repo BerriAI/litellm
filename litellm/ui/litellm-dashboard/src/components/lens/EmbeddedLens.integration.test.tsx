@@ -1,124 +1,191 @@
-import { screen, within } from "@testing-library/react";
+import { act, fireEvent, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { ThemeProvider, useTheme } from "next-themes";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
-import { registerAuthTokenGetter } from "@/lib/http/runtime";
-import { setGlobalLitellmHeaderName, switchToWorkerUrl } from "@/components/networking";
+import { renderWithProviders } from "../../../tests/test-utils";
 import { EmbeddedLens } from "./EmbeddedLens";
+import { GatewayLensNavigation, GatewayLensNavigationProvider } from "./GatewayLensNavigation";
+import { SidebarProvider } from "@/components/ui/sidebar";
 
 const network = vi.fn<typeof fetch>();
+const connection = (configured = true, connected = true, browserUrl = "https://lens.example.test") =>
+  Response.json({ configured, connected, browser_url: browserUrl });
 
 beforeEach(() => {
-  testQueryClient.clear();
   network.mockReset();
-  window.localStorage.clear();
-  window.sessionStorage.clear();
-  registerAuthTokenGetter(() => "gateway-session");
-  setGlobalLitellmHeaderName("X-Gateway-Key");
-  switchToWorkerUrl("https://gateway.test/prefix");
   vi.stubGlobal("fetch", network);
+  window.history.replaceState(null, "", "/ui/lens/?tab=traces");
 });
 
 afterEach(() => {
-  switchToWorkerUrl(null);
-  setGlobalLitellmHeaderName();
   vi.unstubAllGlobals();
 });
 
-it("renders the published Lens settings and uses the gateway session, prefix, and public contract", async () => {
-  const user = userEvent.setup();
-  network.mockImplementation(async (input, init) => {
-    const request = input instanceof Request ? input : new Request(String(input), init);
-    expect(request.url).toMatch(/^https:\/\/gateway\.test\/prefix\/lens/);
-    expect(request.headers.get("X-Gateway-Key")).toBe("Bearer gateway-session");
-    expect(request.headers.get("X-Lens-Contract")).toBe("1");
-    const path = new URL(request.url).pathname;
-    if (path === "/prefix/lens") return Response.json({ lenses: [], workers: [], tracing_enabled: true });
-    if (path === "/prefix/lens/signals") return Response.json({ model: "", threshold: 0.5, signals: [] });
-    if (path === "/prefix/lens/model_group/info") return Response.json({ data: [] });
-    if (path === "/prefix/lens/service")
-      return Response.json({ configured: false, connected: false, status: { storage_ready: false } });
-    throw new Error(`Unexpected Lens request ${path}`);
-  });
-  renderWithProviders(<EmbeddedLens accessToken="gateway-session" userRole="Admin" readOnly={false} />, {
-    searchParams: "?tab=settings",
-  });
-  expect(await screen.findByRole("heading", { name: "Add an analysis provider" })).toBeVisible();
-  expect(screen.getByRole("link", { name: "Configure analysis models" })).toHaveAttribute(
-    "href",
-    "https://github.com/BerriAI/lens/blob/main/docs/analysis.md",
-  );
-  expect(screen.getByText("Tracing enabled")).toBeVisible();
-  const analysis = within(screen.getByRole("region", { name: "Analysis", exact: true }));
-  const copyPrompt = analysis.getByRole("button", { name: "Set it up for me" });
-  await user.click(copyPrompt);
-  const prompt = await navigator.clipboard.readText();
-  expect(prompt).toContain("I opened Lens from an existing LiteLLM admin dashboard.");
-  expect(prompt).toContain('LiteLLM API base: "https://gateway.test/prefix"');
-  expect(prompt).toContain("Configure Lens investigations");
-  expect(prompt).not.toContain("standalone Lens app");
-  expect(prompt).not.toContain("gateway-session");
-  expect(copyPrompt).toHaveTextContent("Prompt copied");
-  expect(analysis.getByRole("button", { name: "Check configuration" })).toBeVisible();
-  expect(network).toHaveBeenCalled();
+const render = () => renderWithProviders(<EmbeddedLens />);
+
+it("frames the connected Lens at the tab in the dashboard URL", async () => {
+  network.mockResolvedValueOnce(connection()).mockResolvedValueOnce(new Response("<html></html>"));
+  render();
+  expect(await screen.findByTitle("Lens")).toHaveAttribute("src", `${window.location.origin}/lens/ui/?tab=traces`);
 });
 
-it("opens the packaged demo trace and preserves its shareable selection in the gateway URL", async () => {
+it("renders the connected frame's Lens navigation in the gateway sidebar and keeps the theme in sync", async () => {
+  network.mockResolvedValueOnce(connection()).mockResolvedValueOnce(new Response("<html></html>"));
   const user = userEvent.setup();
-  const onUrlUpdate = vi.fn();
-  renderWithProviders(<EmbeddedLens accessToken="gateway-session" userRole="Admin" readOnly={false} />, {
-    searchParams: "?demo=true",
-    onUrlUpdate,
-  });
-  await user.click(await screen.findByText("Where is order #1042?"));
-  const details = await screen.findByRole("complementary", { name: "Trace details" });
-  expect(await within(details).findByRole("tab", { name: "Thread" })).toBeVisible();
-  const query = new URLSearchParams(String(onUrlUpdate.mock.lastCall?.[0].queryString));
-  expect(query.get("demo")).toBe("true");
-  expect(query.get("trace")).toBeTruthy();
-  expect(network).not.toHaveBeenCalled();
+  function ToggleTheme() {
+    const { setTheme } = useTheme();
+    return <button onClick={() => setTheme("dark")}>Dark</button>;
+  }
+  const { unmount } = renderWithProviders(
+    <ThemeProvider defaultTheme="light" storageKey="gateway-lens-test">
+      <ToggleTheme />
+      <SidebarProvider>
+        <GatewayLensNavigationProvider>
+          <aside aria-label="Gateway navigation">
+            <GatewayLensNavigation collapsed={false} />
+          </aside>
+          <EmbeddedLens />
+        </GatewayLensNavigationProvider>
+      </SidebarProvider>
+    </ThemeProvider>,
+  );
+  const iframe = await screen.findByTitle<HTMLIFrameElement>("Lens");
+  const child = iframe.contentWindow!;
+  const postMessage = vi.spyOn(child, "postMessage").mockImplementation(() => {});
+  const message = {
+    type: "navigation",
+    navigation: {
+      activeTab: "traces",
+      tabs: [
+        { value: "traces", label: "Traces" },
+        { value: "findings", label: "Findings" },
+      ],
+      currentAgent: "support_agent",
+      agents: [
+        { value: "support_agent", label: "support_agent" },
+        { value: "release_agent", label: "release_agent" },
+      ],
+      agentLabel: "Agent",
+      bookCallLabel: "Book a call",
+    },
+  };
+  const send = (data: object, source: Window = child, origin = window.location.origin) => {
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent("message", { source, origin, data: { channel: "litellm-lens:v1", ...data } }),
+      );
+    });
+  };
+  const sidebar = within(screen.getByRole("complementary", { name: "Gateway navigation" }));
+  try {
+    send({ type: "ready" });
+    expect(postMessage).toHaveBeenCalledWith(
+      { channel: "litellm-lens:v1", command: { type: "theme", theme: "light" } },
+      window.location.origin,
+    );
+    send(message, window);
+    send(message, child, "https://other.example");
+    expect(sidebar.queryByRole("button", { name: "Findings" })).not.toBeInTheDocument();
+
+    send(message);
+    expect(sidebar.getByRole("button", { name: "Traces" })).toHaveAttribute("aria-current", "page");
+    expect(sidebar.getByRole("link", { name: "Lens documentation" })).toBeVisible();
+    await user.click(sidebar.getByRole("button", { name: "Findings" }));
+    expect(postMessage).toHaveBeenLastCalledWith(
+      { channel: "litellm-lens:v1", command: { type: "tab", value: "findings" } },
+      window.location.origin,
+    );
+    const agent = sidebar.getByRole("combobox", { name: "Agent: support_agent" });
+    await user.click(agent);
+    await user.type(await screen.findByRole("combobox", { name: "Agent" }), "release");
+    await user.keyboard("{ArrowDown}");
+    await user.click(await screen.findByRole("option", { name: "release_agent" }));
+    expect(postMessage).toHaveBeenLastCalledWith(
+      { channel: "litellm-lens:v1", command: { type: "agent", value: "release_agent" } },
+      window.location.origin,
+    );
+    await user.click(screen.getByRole("button", { name: "Dark" }));
+    expect(postMessage).toHaveBeenLastCalledWith(
+      { channel: "litellm-lens:v1", command: { type: "theme", theme: "dark" } },
+      window.location.origin,
+    );
+  } finally {
+    postMessage.mockRestore();
+    unmount();
+    window.localStorage.removeItem("gateway-lens-test");
+    document.documentElement.removeAttribute("data-theme");
+    document.documentElement.style.removeProperty("color-scheme");
+  }
 });
 
-it("keeps manual installation on the unconfigured gateway landing and copies its observed setup context", async () => {
-  const user = userEvent.setup();
-  network.mockImplementation(async (input, init) => {
-    const request = input instanceof Request ? input : new Request(String(input), init);
-    const path = new URL(request.url).pathname;
-    if (path === "/prefix/lens/service") {
-      const connection = { url: "", configured: false, connected: false, status: { storage_ready: false } };
-      return Response.json(connection);
-    }
-    if (path === "/prefix/lens")
-      return Response.json(
-        { detail: "Configure LITELLM_LENS_URL and LENS_GATEWAY_SECRET for the Lens service" },
-        { status: 503 },
-      );
-    if (path === "/prefix/v1/traces" || path === "/prefix/v1/traces/agents")
-      return Response.json(
-        { detail: "Agent tracing is not enabled. Configure the Lens service and LITELLM_LENS_URL." },
-        { status: 501 },
-      );
-    throw new Error(`Unexpected Lens request ${path}`);
-  });
-  renderWithProviders(<EmbeddedLens accessToken="gateway-session" userRole="Admin" readOnly={false} />);
-
-  const setup = within(await screen.findByRole("region", { name: "Get Lens running" }));
-  expect(setup.getByRole("button", { name: /Install Lens/ })).toHaveAttribute("aria-expanded", "true");
-  expect(await setup.findByRole("link", { name: "Helm setup" })).toHaveAttribute(
+it("shows the original introduction and linked sample evidence when Lens is not configured", async () => {
+  network.mockResolvedValueOnce(connection(false, false));
+  render();
+  expect(await screen.findByRole("heading", { name: "The gateway that helps your agents improve" })).toBeVisible();
+  expect(screen.getByRole("link", { name: "Set up Lens" })).toHaveAttribute(
     "href",
-    "https://docs.litellm.ai/docs/proxy/lens/deployment/kubernetes#existing-deployment",
+    "https://docs.litellm.ai/docs/proxy/lens",
   );
-  expect(setup.getByRole("link", { name: "Docker setup" })).toHaveAttribute(
-    "href",
-    "https://docs.litellm.ai/docs/proxy/lens/deployment/docker-compose",
-  );
-  expect(setup.getByRole("button", { name: "Check setup" })).toBeEnabled();
+  expect(screen.getByRole("list", { name: "Sample trace timeline" })).toBeVisible();
+  const finding = screen.getByRole("button", { name: "Claims numbers it never measured" });
+  fireEvent.click(finding);
+  expect(finding).toHaveAttribute("aria-pressed", "true");
+  expect(screen.queryByRole("link", { name: "Open Lens" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("heading", { name: "Update Lens to use it here" })).not.toBeInTheDocument();
+});
 
-  await user.click(setup.getByRole("button", { name: "Set it up for me" }));
-  const prompt = await navigator.clipboard.readText();
-  expect(prompt).toContain("existing LiteLLM admin dashboard");
-  expect(prompt).toContain('LiteLLM API base: "https://gateway.test/prefix"');
-  expect(prompt).toContain("Lens connection is not configured");
-  expect(prompt).toContain("Check for an existing Lens service before installing another");
-  expect(prompt).not.toContain("gateway-session");
+it("opens the workspace after setup succeeds and the user checks the connection again", async () => {
+  network
+    .mockResolvedValueOnce(connection(false, false))
+    .mockResolvedValueOnce(connection())
+    .mockResolvedValueOnce(new Response("<html></html>"));
+  render();
+  fireEvent.click(await screen.findByRole("button", { name: "Check connection" }));
+  expect(await screen.findByTitle("Lens")).toBeVisible();
+  expect(screen.queryByRole("heading", { name: "The gateway that helps your agents improve" })).not.toBeInTheDocument();
+});
+
+it("offers the standalone launch only for a connected older Lens with a browser address", async () => {
+  network.mockResolvedValueOnce(connection()).mockResolvedValueOnce(new Response("", { status: 404 }));
+  render();
+  expect(await screen.findByRole("heading", { name: "Update Lens to use it here" })).toBeVisible();
+  expect(screen.getByRole("link", { name: "Open Lens" })).toHaveAttribute(
+    "href",
+    `${window.location.origin}/lens/login`,
+  );
+  expect(screen.queryByTitle("Lens")).not.toBeInTheDocument();
+});
+
+it("does not offer the localhost launch when the gateway has no valid browser address", async () => {
+  network.mockResolvedValueOnce(connection(true, true, "")).mockResolvedValueOnce(new Response("", { status: 404 }));
+  render();
+  expect(await screen.findByRole("heading", { name: "Update Lens to use it here" })).toBeVisible();
+  expect(screen.queryByRole("link", { name: "Open Lens" })).not.toBeInTheDocument();
+  expect(screen.getByText(/configure a Lens address that is accessible from your browser/)).toBeVisible();
+});
+
+it("shows a connection problem rather than installation or upgrade for a configured disconnected service", async () => {
+  network.mockResolvedValueOnce(connection(true, false));
+  render();
+  expect(await screen.findByRole("heading", { name: "Could not connect to Lens" })).toBeVisible();
+  expect(screen.queryByRole("link", { name: "Set up Lens" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("link", { name: "Open Lens" })).not.toBeInTheDocument();
+});
+
+it.each([401, 403, 404, 503])("does not mistake a failed connection check (%s) for missing setup", async (status) => {
+  network.mockResolvedValueOnce(Response.json({ detail: "Unavailable" }, { status }));
+  render();
+  expect(await screen.findByRole("heading", { name: "Could not connect to Lens" })).toBeVisible();
+  expect(screen.queryByRole("link", { name: "Set up Lens" })).not.toBeInTheDocument();
+});
+
+it("can retry a failed request without reloading the dashboard", async () => {
+  network
+    .mockRejectedValueOnce(new TypeError("network"))
+    .mockResolvedValueOnce(connection())
+    .mockResolvedValueOnce(new Response("<html></html>"));
+  render();
+  expect(await screen.findByRole("heading", { name: "Could not connect to Lens" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "Check connection" }));
+  expect(await screen.findByTitle("Lens")).toBeVisible();
 });

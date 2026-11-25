@@ -1,35 +1,38 @@
 use litellm_host::interceptors::{RetriedRequest, RetryReason};
 use litellm_llms::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
-    azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
+    azure_ai::messages::transformation::AZURE_AI_MESSAGES_CONFIG,
     base_llm::messages::{context::MessagesTransformContext, transformation::BaseMessagesConfig},
     bedrock::{
-        claude_platform::messages::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
-        messages::invoke_transformations::anthropic_claude_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+        messages::claude_platform::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
+        messages::invoke::transformation::BEDROCK_INVOKE_MESSAGES_CONFIG,
     },
-    bedrock_mantle::messages::transformation::BEDROCK_MANTLE_MESSAGES_CONFIG,
-    deepseek::messages::transformation::DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
+    bedrock_mantle::messages::transformation::{
+        BEDROCK_MANTLE_MESSAGES_CONFIG, BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG,
+    },
+    deepseek::messages::transformation::DEEPSEEK_MESSAGES_CONFIG,
     edenai::messages::transformation::EDENAI_MESSAGES_CONFIG,
     minimax::messages::transformation::MINIMAX_MESSAGES_CONFIG,
     openrouter::messages::transformation::OPENROUTER_MESSAGES_CONFIG,
     tencent::messages::transformation::TENCENT_MESSAGES_CONFIG,
-    vertex_ai::messages::transformation::VERTEX_ANTHROPIC_MESSAGES_CONFIG,
+    vertex_ai::messages::transformation::VERTEX_AI_MESSAGES_CONFIG,
 };
 use rstest::rstest;
 use serde_json::Value;
 
 #[rstest]
 #[case::anthropic(&ANTHROPIC_MESSAGES_CONFIG)]
-#[case::azure_ai(&AZURE_ANTHROPIC_MESSAGES_CONFIG)]
-#[case::bedrock_invoke(&BEDROCK_ANTHROPIC_MESSAGES_CONFIG)]
+#[case::azure_ai(&AZURE_AI_MESSAGES_CONFIG)]
+#[case::bedrock_invoke(&BEDROCK_INVOKE_MESSAGES_CONFIG)]
 #[case::bedrock_claude_platform(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG)]
 #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
-#[case::deepseek(&DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG)]
+#[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG)]
+#[case::deepseek(&DEEPSEEK_MESSAGES_CONFIG)]
 #[case::edenai(&EDENAI_MESSAGES_CONFIG)]
 #[case::minimax(&MINIMAX_MESSAGES_CONFIG)]
 #[case::openrouter(&OPENROUTER_MESSAGES_CONFIG)]
 #[case::tencent(&TENCENT_MESSAGES_CONFIG)]
-#[case::vertex_ai(&VERTEX_ANTHROPIC_MESSAGES_CONFIG)]
+#[case::vertex_ai(&VERTEX_AI_MESSAGES_CONFIG)]
 fn every_messages_provider_retries_like_the_python_base_config(
     #[case] config: &dyn BaseMessagesConfig,
 ) {
@@ -73,16 +76,17 @@ fn every_messages_provider_retries_like_the_python_base_config(
 
 #[rstest]
 #[case::anthropic(&ANTHROPIC_MESSAGES_CONFIG)]
-#[case::azure_ai(&AZURE_ANTHROPIC_MESSAGES_CONFIG)]
-#[case::bedrock_invoke(&BEDROCK_ANTHROPIC_MESSAGES_CONFIG)]
+#[case::azure_ai(&AZURE_AI_MESSAGES_CONFIG)]
+#[case::bedrock_invoke(&BEDROCK_INVOKE_MESSAGES_CONFIG)]
 #[case::bedrock_claude_platform(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG)]
 #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
-#[case::deepseek(&DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG)]
+#[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG)]
+#[case::deepseek(&DEEPSEEK_MESSAGES_CONFIG)]
 #[case::edenai(&EDENAI_MESSAGES_CONFIG)]
 #[case::minimax(&MINIMAX_MESSAGES_CONFIG)]
 #[case::openrouter(&OPENROUTER_MESSAGES_CONFIG)]
 #[case::tencent(&TENCENT_MESSAGES_CONFIG)]
-#[case::vertex_ai(&VERTEX_ANTHROPIC_MESSAGES_CONFIG)]
+#[case::vertex_ai(&VERTEX_AI_MESSAGES_CONFIG)]
 fn every_messages_provider_drops_rejected_strict_tools_like_the_python_base_config(
     #[case] config: &dyn BaseMessagesConfig,
 ) {
@@ -139,16 +143,17 @@ fn every_messages_provider_drops_rejected_strict_tools_like_the_python_base_conf
 
 #[rstest]
 #[case::anthropic(&ANTHROPIC_MESSAGES_CONFIG)]
-#[case::azure_ai(&AZURE_ANTHROPIC_MESSAGES_CONFIG)]
-#[case::bedrock_invoke(&BEDROCK_ANTHROPIC_MESSAGES_CONFIG)]
+#[case::azure_ai(&AZURE_AI_MESSAGES_CONFIG)]
+#[case::bedrock_invoke(&BEDROCK_INVOKE_MESSAGES_CONFIG)]
 #[case::bedrock_claude_platform(&BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG)]
 #[case::bedrock_mantle(&BEDROCK_MANTLE_MESSAGES_CONFIG)]
-#[case::deepseek(&DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG)]
+#[case::bedrock_mantle_route(&BEDROCK_MANTLE_ROUTE_MESSAGES_CONFIG)]
+#[case::deepseek(&DEEPSEEK_MESSAGES_CONFIG)]
 #[case::edenai(&EDENAI_MESSAGES_CONFIG)]
 #[case::minimax(&MINIMAX_MESSAGES_CONFIG)]
 #[case::openrouter(&OPENROUTER_MESSAGES_CONFIG)]
 #[case::tencent(&TENCENT_MESSAGES_CONFIG)]
-#[case::vertex_ai(&VERTEX_ANTHROPIC_MESSAGES_CONFIG)]
+#[case::vertex_ai(&VERTEX_AI_MESSAGES_CONFIG)]
 fn every_messages_provider_keeps_thinking_for_a_clear_thinking_edit_like_the_python_base_config(
     #[case] config: &dyn BaseMessagesConfig,
 ) {

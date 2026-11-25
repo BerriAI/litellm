@@ -4,14 +4,9 @@ from typing import Final
 
 from litellm.litellm_core_utils.url_utils import join_api_base
 from litellm.llms.anthropic.common_utils import drop_clear_thinking_edits_for_model
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import MANTLE_MESSAGES_PATH
 from litellm.llms.bedrock.messages.mantle_transformation import AmazonMantleMessagesConfig
-from litellm.llms.bedrock_mantle.common_utils import (
-    MANTLE_HOST_RE,
-    BedrockMantleAuthMixin,
-    resolve_mantle_region,
-)
+from litellm.llms.bedrock_mantle.common_utils import MANTLE_HOST_RE, resolve_mantle_region
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
 
@@ -38,7 +33,7 @@ def build_mantle_native_messages_url(api_base: str | None, litellm_params: Mappi
     return join_api_base(host, MANTLE_MESSAGES_PATH)
 
 
-class BedrockMantleAnthropicMessagesConfig(BedrockMantleAuthMixin, AmazonMantleMessagesConfig):
+class BedrockMantleAnthropicMessagesConfig(AmazonMantleMessagesConfig):
     _BEDROCK_INVOKE_SUPPORTED_CONTEXT_MANAGEMENT_EDITS: Mapping[str, str] = MappingProxyType(
         {
             **AmazonMantleMessagesConfig._BEDROCK_INVOKE_SUPPORTED_CONTEXT_MANAGEMENT_EDITS,
@@ -65,10 +60,6 @@ class BedrockMantleAnthropicMessagesConfig(BedrockMantleAuthMixin, AmazonMantleM
         }
         return self._ensure_thinking_for_clear_thinking_context_management(trial_request, model, drop_params=False)
 
-    def __init__(self, aws_signer: BaseAWSLLM | None = None) -> None:
-        AmazonMantleMessagesConfig.__init__(self)
-        self._aws_signer = aws_signer or self
-
     @property
     def custom_llm_provider(self) -> str | None:
         return "bedrock_mantle"
@@ -81,8 +72,8 @@ class BedrockMantleAnthropicMessagesConfig(BedrockMantleAuthMixin, AmazonMantleM
         api_base: str | None,
         api_key: str | None,
         model: str,
-        optional_params: dict,
-        litellm_params: dict,
+        optional_params: dict[str, object],
+        litellm_params: dict[str, object],
         stream: bool | None = None,
     ) -> str:
         return build_mantle_native_messages_url(api_base=api_base, litellm_params=litellm_params)

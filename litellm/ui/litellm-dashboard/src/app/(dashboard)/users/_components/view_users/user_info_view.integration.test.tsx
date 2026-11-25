@@ -230,7 +230,7 @@ describe("UserInfoView add-to-team form", () => {
 
     const openEditor = async (user: ReturnType<typeof userEvent.setup>) => {
       await user.click(await screen.findByRole("button", { name: /edit settings/i }));
-      return screen.findByPlaceholderText("Max spend ($)");
+      return screen.findByPlaceholderText("Max Budget");
     };
 
     beforeEach(() => {

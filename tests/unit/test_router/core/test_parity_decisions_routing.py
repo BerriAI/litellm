@@ -2,8 +2,8 @@
 Parity of the Rust core with ``router_python_core.py`` on routing a Decisions call: a group's
 deployments whose provider has no Decisions config are dropped before any later stage, unless that
 leaves none (``_without_deployments_that_cannot_serve_route``), and a Decisions or SystemOne call
-carrying audio or videos skips the deployments that refuse them, unless that leaves none
-(``_without_decisions_deployments_refusing_media``).
+carrying audio, videos or an ``input_json`` part skips the deployments that refuse them, unless that
+leaves none (``_without_decisions_deployments_refusing_media``).
 
 The weights put the deployment that must be skipped first, so a core that does not narrow the
 group picks it every time.
@@ -17,9 +17,10 @@ import pytest
 
 import litellm
 from litellm.router_core import RouterCore
+from litellm.types.decisions import OpenAIDecisionInputMessage
 from litellm.types.router import RouterRateLimitError
 from tests.unit.test_router.core.endpoints_helpers import EndpointHost, patch_direct_endpoints
-from tests.unit.test_router.core.scripted_host import auth_error, deployment
+from tests.unit.test_router.core.scripted_host import auth_error, deployment, rate_limit
 
 MakeCore = Callable[..., RouterCore]
 
@@ -116,6 +117,28 @@ def test_the_route_filter_runs_before_order(make_core: MakeCore, host: EndpointH
     _call(core, op, model="e", **QUESTION)
 
     assert host.deployments_called(op) == ["p7-openai"]
+
+
+_T1_PUBLIC: Final = {"team_id": "T1", "team_public_model_name": "team-e"}
+_T2_PUBLIC: Final = {"team_id": "T2", "team_public_model_name": "team-e"}
+
+
+def test_adecisions_walks_the_order_tiers_of_the_litellm_metadata_team(
+    make_core: MakeCore, host: EndpointHost
+) -> None:
+    host.answer("openai/t1-first", rate_limit())
+    core: Final = make_core(
+        model_list=[
+            deployment("t1-first", "t1-first", order=1, model_info=_T1_PUBLIC),
+            deployment("t2-first", "t2-first", order=2, model_info=_T2_PUBLIC),
+            deployment("t1-second", "t1-second", order=3, model_info=_T1_PUBLIC),
+        ],
+        num_retries=0,
+    )
+
+    _call(core, "adecisions", model="team-e", litellm_metadata={"user_api_key_team_id": "T1"}, **QUESTION)
+
+    assert host.deployments_called("adecisions") == ["t1-first", "t1-second"]
 
 
 def test_the_route_filter_runs_before_cooldown(make_core: MakeCore, host: EndpointHost) -> None:
@@ -224,6 +247,122 @@ def test_the_media_filter_runs_before_order(make_core: MakeCore, host: EndpointH
     _call(core, "adecisions", model="m", audio=CLIP, **QUESTION)
 
     assert host.deployments_called("adecisions") == ["take"]
+
+
+def _json_group() -> list[dict[str, object]]:  # mutable-ok: a fresh model_list
+    """``no-json`` is a provider without JSON input and weighs more; ``json`` takes it."""
+    return [
+        deployment("j", "no-json", model="typesafe/jev-1.14.0", weight=1),
+        deployment("j", "json", model="openai/gpt-4o", weight=0),
+    ]
+
+
+_EVIDENCE: Final = {"type": "input_json", "data": {"order_id": "A1", "charges": [49, 49]}}
+_TICKET: Final = {"type": "input_text", "text": "Refund the duplicate charge."}
+_RECEIPT: Final = {"type": "input_image", "image_url": "https://example.com/receipt.png"}
+_POLICY: Final = {"role": "developer", "content": "Refund duplicate charges only."}
+
+
+@pytest.mark.parametrize(
+    "message",
+    [{"role": "user", "content": [_TICKET, _EVIDENCE]}, OpenAIDecisionInputMessage(content=[_TICKET, _EVIDENCE])],
+    ids=["as-sent", "validated"],
+)
+@pytest.mark.parametrize("op", ["adecisions", "decisions"])
+def test_a_call_carrying_json_input_skips_the_deployment_refusing_it(
+    make_core: MakeCore, host: EndpointHost, op: str, message: object
+) -> None:
+    core: Final = make_core(model_list=_json_group(), num_retries=0)
+
+    for _ in range(3):
+        _call(core, op, model="j", **{**QUESTION, "input": [message]})
+
+    assert host.deployments_called(op) == ["json"] * 3
+
+
+@pytest.mark.parametrize("op", ["adecisions", "decisions"])
+def test_a_tuple_input_carrying_json_input_skips_the_deployment_refusing_it(
+    make_core: MakeCore, host: EndpointHost, op: str
+) -> None:
+    core: Final = make_core(model_list=_json_group(), num_retries=0)
+    message: Final = {"role": "user", "content": (_TICKET, _EVIDENCE)}
+
+    for _ in range(3):
+        _call(core, op, model="j", **{**QUESTION, "input": (message,)})
+
+    assert host.deployments_called(op) == ["json"] * 3
+
+
+@pytest.mark.parametrize(
+    ("decision_input", "expected"),
+    [
+        ([{"role": "user", "content": [_EVIDENCE]}], ["json"] * 3),
+        ([_POLICY, {"role": "user", "content": [_EVIDENCE]}], ["json"] * 3),
+        ([{"role": "user", "content": [_RECEIPT, _EVIDENCE]}], ["json"] * 3),
+        ([{"role": "user", "content": [_TICKET, _EVIDENCE]}], ["no-json"] * 3),
+    ],
+    ids=["only-json", "dropped-developer-message-and-json", "dropped-image-and-json", "json-and-text"],
+)
+def test_drop_params_skips_the_deployment_refusing_json_input_only_when_dropping_it_leaves_no_input(
+    make_core: MakeCore, host: EndpointHost, decision_input: list[object], expected: list[str]
+) -> None:
+    core: Final = make_core(model_list=_json_group(), num_retries=0)
+
+    for _ in range(3):
+        _call(
+            core,
+            "adecisions",
+            model="j",
+            drop_params=True,
+            **{**QUESTION, "input": decision_input},
+        )
+
+    assert host.deployments_called("adecisions") == expected
+
+
+_GIF_RECEIPT: Final = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+_PNG_RECEIPT: Final = (
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+@pytest.mark.parametrize(
+    ("image_url", "expected"),
+    [
+        (_GIF_RECEIPT, ["json"] * 3),
+        (_PNG_RECEIPT, ["no-json"] * 3),
+        ("https://example.com/receipt.gif", ["json"] * 3),
+        ("data:image/png;base64,", ["json"] * 3),
+    ],
+    ids=["gif-the-deployment-drops", "png-the-deployment-keeps", "remote-url-of-unknown-type", "malformed-data-url"],
+)
+def test_drop_params_counts_only_the_image_types_a_deployment_keeps(
+    make_core: MakeCore, host: EndpointHost, image_url: str, expected: list[str]
+) -> None:
+    core: Final = make_core(model_list=_json_group(), num_retries=0)
+
+    for _ in range(3):
+        _call(
+            core,
+            "adecisions",
+            model="j",
+            drop_params=True,
+            extra_headers={"typesafe-danger-zone-images": "true"},
+            **{**QUESTION, "input": [{"role": "user", "content": [{"type": "input_image", "image_url": image_url}, _EVIDENCE]}]},
+        )
+
+    assert host.deployments_called("adecisions") == expected
+
+
+@pytest.mark.parametrize("op", ["adecisions", "decisions"])
+def test_a_call_with_only_text_parts_keeps_the_deployment_refusing_json_input(
+    make_core: MakeCore, host: EndpointHost, op: str
+) -> None:
+    core: Final = make_core(model_list=_json_group(), num_retries=0)
+
+    _call(core, op, model="j", **{**QUESTION, "input": [{"role": "user", "content": [_TICKET]}]})
+
+    assert host.deployments_called(op) == ["no-json"]
 
 
 def test_every_deployment_refusing_media_still_picks(make_core: MakeCore, host: EndpointHost) -> None:

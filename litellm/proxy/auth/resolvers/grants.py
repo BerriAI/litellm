@@ -54,6 +54,7 @@ class UserLoader(Protocol):
         proxy_logging_obj: ProxyLogging | None,
         sso_user_id: str | None,
         user_email: str | None,
+        email_verified: bool | None = None,
     ) -> Coroutine[object, object, LiteLLM_UserTable | None]: ...
 
 
@@ -91,6 +92,7 @@ class UserLookup:
     user_email: str | None = None
     sso_user_id: str | None = None
     upsert: bool = False
+    email_verified: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +260,7 @@ class GrantResolver:
             proxy_logging_obj=self._proxy_logging_obj,
             user_email=lookup.user_email,
             sso_user_id=lookup.sso_user_id,
+            email_verified=lookup.email_verified,
         )
 
     async def _membership(self, user_id: str, team_id: str) -> LiteLLM_TeamMembership | None:

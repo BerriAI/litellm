@@ -218,7 +218,7 @@ async def _moyai_key_alias(prisma_client: "PrismaClient", moyai_url: str) -> str
 
 @with_service_target(CONFIG_PARAMS_TARGET)
 async def _persist_moyai_url(prisma_client: "PrismaClient", moyai_url: str) -> None:
-    from litellm.proxy.proxy_server import user_api_key_cache
+    from litellm.proxy.proxy_server import ui_settings_cache
 
     db_existing: Final = await _ui_settings_db(UISettingsRepository(prisma_client)).find_unique(
         where={"id": "ui_settings"}
@@ -234,7 +234,7 @@ async def _persist_moyai_url(prisma_client: "PrismaClient", moyai_url: str) -> N
             "update": {"ui_settings": json.dumps(ui_settings)},
         },
     )
-    await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
+    await ui_settings_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=ui_settings, ttl=UI_SETTINGS_CACHE_TTL)
 
 
 @router.post(

@@ -8,14 +8,19 @@ use litellm_llms_types::{
             ThinkingDisplay,
         },
     },
-    recognized::Recognized,
+    recognized::{Recognized, is_one, python_str},
 };
 use litellm_python_compat::{
-    Value as PythonValue, json::from_json, repr::repr, reprlib::reprlib, truthy::truthy,
+    BigInt, Value as PythonValue,
+    json::{from_json, type_name as python_type_name},
+    number,
+    repr::repr,
+    reprlib::reprlib,
+    scalar::{python_number, python_value},
+    truthy::truthy,
 };
 use serde_json::Value;
 
-use super::scalar::{is_one, python_number, python_str, python_value};
 use crate::base_llm::messages::context::{
     MessagesModelCapabilities, ThinkingBudgets, ThinkingContext,
 };
@@ -86,7 +91,7 @@ fn warn_dropped_reasoning(
     } else {
         ""
     };
-    litellm_tracing::warn!(
+    tracing::warn!(
         "Dropping {param}={} for model={}{gate} because {reason}",
         reprlib(value),
         repr(&PythonValue::Str(model.to_owned()))
@@ -197,6 +202,7 @@ fn known_effort(request: &MessagesRequest) -> Option<&Recognized<EffortLevel>> {
         .as_ref()
         .and_then(Recognized::known)
         .and_then(|config| config.effort.as_ref())
+        .filter(|effort| !matches!(effort, Recognized::Unrecognized(Value::Null)))
 }
 
 fn with_default_effort(
@@ -258,7 +264,7 @@ fn without_clear_thinking_edits(
 ) -> Option<Recognized<ContextManagement>> {
     match context_management {
         Some(Recognized::Known(ContextManagement {
-            edits: Some(edits),
+            edits: Some(Recognized::Known(edits)),
             extra,
         })) if edits.iter().any(is_clear_thinking_edit) => {
             let kept: Vec<_> = edits
@@ -267,7 +273,7 @@ fn without_clear_thinking_edits(
                 .collect();
             (!kept.is_empty() || !extra.is_empty()).then(|| {
                 Recognized::Known(ContextManagement {
-                    edits: Some(kept),
+                    edits: Some(Recognized::Known(kept)),
                     extra,
                 })
             })
@@ -390,7 +396,7 @@ fn translate_reasoning_effort(
         });
     }
     let Some(budget) = fit_budget_to_max_tokens(budget, request.params.max_tokens.as_ref())? else {
-        litellm_tracing::warn!(
+        tracing::warn!(
             "Dropping `thinking` mapped from reasoning_effort={} for model={}: max_tokens={} is too small to fit the minimum thinking budget.",
             <&'static str>::from(effort),
             request.model,
@@ -429,6 +435,12 @@ fn drop_disabled_thinking(request: MessagesRequest, context: &ThinkingContext) -
     {
         return request;
     }
+    if context.warns_dropped_disabled_thinking {
+        tracing::warn!(
+            "Dropping `thinking={{'type': 'disabled'}}` for model={}: thinking is always on for this model and cannot be disabled (the alternative is a provider 400). The model will still think adaptively, its response can contain thinking blocks, and those thinking tokens are billed as output tokens.",
+            request.model
+        );
+    }
     MessagesRequest {
         params: MessagesOptionalParams {
             thinking: None,
@@ -454,39 +466,14 @@ fn numeric_budget_tokens(budget: &Recognized<u64>) -> Option<i64> {
     }
 }
 
-/// Python's `int(str)`: surrounding whitespace, a sign, and single underscores between digits.
+/// Python's `int(str)`, saturating at the `i64` bounds.
 fn python_int(text: &str) -> Option<i64> {
-    let trimmed = text.trim();
-    let digits = trimmed.trim_start_matches(['+', '-']);
-    let well_formed = trimmed.len() - digits.len() <= 1
-        && !digits.is_empty()
-        && !digits.starts_with('_')
-        && !digits.ends_with('_')
-        && !digits.contains("__")
-        && digits.chars().all(|ch| ch.is_ascii_digit() || ch == '_');
-    if !well_formed {
-        return None;
-    }
-    let cleaned: String = trimmed.chars().filter(|ch| *ch != '_').collect();
-    cleaned.parse::<i64>().ok().or_else(|| {
-        Some(if cleaned.starts_with('-') {
-            i64::MIN
-        } else {
-            i64::MAX
-        })
-    })
-}
-
-fn python_type_name(value: &Value) -> &'static str {
-    match value {
-        Value::Null => "NoneType",
-        Value::Bool(_) => "bool",
-        Value::Number(number) if number.is_f64() => "float",
-        Value::Number(_) => "int",
-        Value::String(_) => "str",
-        Value::Array(_) => "list",
-        Value::Object(_) => "dict",
-    }
+    let value = number::int(text)?;
+    Some(i64::try_from(&value).unwrap_or(if value < BigInt::from(0) {
+        i64::MIN
+    } else {
+        i64::MAX
+    }))
 }
 
 fn kept_display(
@@ -609,7 +596,7 @@ fn translate_adaptive_effort_for_non_adaptive_model(
         None => None,
     };
     if thinking.is_none() {
-        litellm_tracing::warn!(
+        tracing::warn!(
             "Dropping adaptive `thinking`/`output_config.effort` for model={}: the model does not support extended thinking, or max_tokens is too small to fit the minimum thinking budget.",
             request.model
         );
@@ -627,21 +614,57 @@ fn translate_adaptive_effort_for_non_adaptive_model(
     })
 }
 
+pub(crate) fn drop_unsupported_effort(
+    request: MessagesRequest,
+    capabilities: &MessagesModelCapabilities,
+) -> MessagesRequest {
+    let rejected = |level: EffortLevel| !accepts_effort(capabilities, level);
+    let drops_reasoning_effort = capabilities.supports_adaptive_thinking
+        && matches!(
+            &request.params.reasoning_effort,
+            Some(Recognized::Known(effort)) if output_effort(*effort).is_some_and(rejected)
+        );
+    let reshaped_to_budget = !capabilities.supports_adaptive_thinking
+        && matches!(known_thinking(&request), Some(ThinkingConfig::Adaptive(_)));
+    let drops_output_effort = supports_effort_param(capabilities)
+        && !reshaped_to_budget
+        && matches!(known_effort(&request), Some(Recognized::Known(level)) if rejected(*level));
+    MessagesRequest {
+        params: MessagesOptionalParams {
+            reasoning_effort: request
+                .params
+                .reasoning_effort
+                .filter(|_| !drops_reasoning_effort),
+            output_config: if drops_output_effort {
+                without_effort(request.params.output_config)
+            } else {
+                request.params.output_config
+            },
+            ..request.params
+        },
+        ..request
+    }
+}
+
 fn drop_incompatible_temperature_for_thinking(
     request: MessagesRequest,
     context: &ThinkingContext,
 ) -> MessagesRequest {
-    if context.capabilities.supports_adaptive_thinking {
-        return request;
-    }
     let pinned = request
         .params
         .temperature
         .as_ref()
         .is_some_and(|temperature| !is_one(temperature));
-    let thinking_enabled = matches!(known_thinking(&request), Some(ThinkingConfig::Enabled(_)));
-    let effort_enabled = known_effort(&request).is_some();
-    if !pinned || !(thinking_enabled || effort_enabled) {
+    let thinking_on = matches!(
+        known_thinking(&request),
+        Some(ThinkingConfig::Enabled(_) | ThinkingConfig::Adaptive(_))
+    );
+    let droppable = if context.capabilities.supports_adaptive_thinking {
+        context.drop_params && thinking_on
+    } else {
+        thinking_on || known_effort(&request).is_some()
+    };
+    if !pinned || !droppable {
         return request;
     }
     MessagesRequest {
@@ -694,6 +717,17 @@ mod tests {
         fields: Value,
     ) -> Result<MessagesRequest, Error> {
         translate_thinking(request(fields), &context(capabilities))
+    }
+
+    fn translate_dropping_params(
+        capabilities: MessagesModelCapabilities,
+        fields: Value,
+    ) -> Result<MessagesRequest, Error> {
+        let context = ThinkingContext {
+            drop_params: true,
+            ..context(capabilities)
+        };
+        translate_thinking(request(fields), &context)
     }
 
     fn overridden_budgets(overrides: &[(&str, &str)]) -> ThinkingBudgets {
@@ -836,6 +870,16 @@ mod tests {
         opus_4_7(),
         serde_json::json!({"max_tokens": 1024, "reasoning_effort": "low", "output_config": {"effort": "max"}}),
         serde_json::json!({"max_tokens": 1024, "thinking": {"type": "adaptive", "display": "summarized"}, "output_config": {"effort": "max"}})
+    )]
+    #[case::caller_null_output_config_effort_is_kept(
+        opus_4_7(),
+        serde_json::json!({"max_tokens": 1024, "reasoning_effort": "low", "output_config": {"effort": null}}),
+        serde_json::json!({"max_tokens": 1024, "thinking": {"type": "adaptive", "display": "summarized"}, "output_config": {"effort": null}})
+    )]
+    #[case::null_output_config_effort_is_not_an_effort_on_non_adaptive_model(
+        opus_4_5(),
+        serde_json::json!({"max_tokens": 1024, "temperature": 0.5, "output_config": {"effort": null}}),
+        serde_json::json!({"max_tokens": 1024, "temperature": 0.5, "output_config": {"effort": null}})
     )]
     #[case::effort_merges_into_caller_output_config(
         opus_4_7(),
@@ -1572,6 +1616,47 @@ mod tests {
     }
 
     #[rstest]
+    #[case::claude_code_payload(
+        opus_4_7(),
+        claude_code_payload("medium", 8192),
+        0.0,
+        claude_code_payload("medium", 8192)
+    )]
+    #[case::legacy_thinking_kept_on_legacy_capable_model(
+        sonnet_4_6(),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}}),
+        0.5,
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
+    )]
+    #[case::bare_adaptive_thinking(
+        sonnet_4_6(),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}}),
+        0.5,
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}})
+    )]
+    #[case::reasoning_effort_synthesized_adaptive_thinking(
+        sonnet_4_6(),
+        serde_json::json!({"max_tokens": 8192, "reasoning_effort": "high"}),
+        0.0,
+        serde_json::json!({
+            "max_tokens": 8192,
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": "high"}
+        })
+    )]
+    fn pinned_temperature_is_dropped_under_drop_params_when_thinking_survives_on_adaptive_model(
+        #[case] capabilities: MessagesModelCapabilities,
+        #[case] input: Value,
+        #[case] temperature: f64,
+        #[case] expected: Value,
+    ) {
+        assert_eq!(
+            translate_dropping_params(capabilities, with_temperature(input, temperature)),
+            Ok(request(expected))
+        );
+    }
+
+    #[rstest]
     #[case::temperature_one_with_enabled_thinking(
         haiku_4_5(),
         claude_code_payload("medium", 8192),
@@ -1603,17 +1688,35 @@ mod tests {
         0.0,
         serde_json::json!({"max_tokens": 8192, "output_config": {"format": {"type": "json_schema"}}})
     )]
-    #[case::adaptive_model(
+    #[case::claude_code_payload_on_adaptive_model_without_drop_params(
         opus_4_7(),
         claude_code_payload("medium", 8192),
         0.0,
         claude_code_payload("medium", 8192)
     )]
-    #[case::legacy_thinking_on_adaptive_model(
+    #[case::adaptive_thinking_without_drop_params(
+        sonnet_4_6(),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}}),
+        0.5,
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive"}})
+    )]
+    #[case::legacy_thinking_on_adaptive_model_without_drop_params(
         sonnet_4_6(),
         serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}}),
         0.0,
         serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
+    )]
+    #[case::effort_without_thinking_on_adaptive_model(
+        sonnet_4_6(),
+        serde_json::json!({"max_tokens": 8192, "output_config": {"effort": "high"}}),
+        0.5,
+        serde_json::json!({"max_tokens": 8192, "output_config": {"effort": "high"}})
+    )]
+    #[case::disabled_thinking_on_adaptive_model(
+        sonnet_4_6(),
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "disabled"}}),
+        0.5,
+        serde_json::json!({"max_tokens": 8192, "thinking": {"type": "disabled"}})
     )]
     fn temperature_is_kept(
         #[case] capabilities: MessagesModelCapabilities,
