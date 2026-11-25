@@ -898,6 +898,7 @@
         "audio_transcriptions": false,
         "audio_speech": true,
         "moderations": false,
+        "realtime": true,
         "batches": false,
         "rerank": false,
         "a2a": true,
@@ -2373,8 +2374,8 @@
         "messages": true,
         "responses": true,
         "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
+        "image_generations": true,
+        "audio_transcriptions": true,
         "audio_speech": false,
         "moderations": false,
         "batches": false,
@@ -2755,7 +2756,9 @@
       "endpoints": {
         "chat_completions": true,
         "messages": true,
-        "responses": true
+        "responses": true,
+        "image_generations": true,
+        "image_edits": true
       }
     },
     "pg_vector": {

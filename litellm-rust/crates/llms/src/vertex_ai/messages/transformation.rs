@@ -760,6 +760,7 @@ mod tests {
                 },
                 drop_params: false,
                 claude_base_model: false,
+                keeps_unsigned_thinking: false,
             },
         );
         assert_eq!(body["system"], json!("be terse"));
@@ -778,6 +779,7 @@ mod tests {
             },
             drop_params: false,
             claude_base_model: false,
+            keeps_unsigned_thinking: false,
         }
     }
 

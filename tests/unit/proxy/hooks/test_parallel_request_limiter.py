@@ -16,6 +16,7 @@ from litellm.proxy.hooks.parallel_request_limiter import (
     PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import CallTypes, EmbeddingResponse, ModelResponse, TextCompletionResponse, Usage
 
 FROZEN_INSTANT: Final = datetime(2026, 1, 31, 23, 59, 30)
@@ -353,6 +354,60 @@ async def test_websocket_turn_callbacks_keep_the_sockets_slot_until_the_disconne
     await handler.async_release_max_parallel_requests_on_disconnect(UserAPIKeyAuth(api_key=api_key))
     after_disconnect = await handler.internal_usage_cache.async_get_cache(key=bucket, litellm_parent_otel_span=None)
     assert after_disconnect["current_requests"] == 0, after_disconnect
+
+
+@pytest.mark.parametrize(
+    "call_type,response_obj",
+    [
+        (
+            CallTypes.aresponses.value,
+            ResponsesAPIResponse(
+                id="resp_uncounted",
+                created_at=0,
+                output=[],
+                status="completed",
+                usage=ResponseAPIUsage(input_tokens=1407, output_tokens=10, total_tokens=1417),
+            ),
+        ),
+        (
+            CallTypes.anthropic_messages.value,
+            {"type": "message", "usage": {"input_tokens": 1407, "output_tokens": 10}},
+        ),
+    ],
+    ids=["responses", "messages"],
+)
+@pytest.mark.asyncio
+async def test_a_response_the_legacy_limiter_does_not_count_stays_uncounted_when_its_row_carries_combined_usage(
+    call_type: str, response_obj: object
+):
+    api_key: Final = hash_token("sk-uncounted-route")
+    handler: Final = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache()), clock=_frozen_clock
+    )
+    key: Final = UserAPIKeyAuth(api_key=api_key, tpm_limit=1000)
+
+    async def call() -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key, cache=DualCache(), data={"model": "gpt-5.4-mini"}, call_type=call_type
+        )
+
+    await call()
+    await handler.async_log_success_event(
+        kwargs={
+            "call_type": call_type,
+            "litellm_params": {"metadata": {"user_api_key": api_key, "user_api_key_model_max_budget": {}}},
+            "combined_usage_object": Usage(prompt_tokens=1407, completion_tokens=10, total_tokens=1417),
+        },
+        response_obj=response_obj,
+        start_time=FROZEN_INSTANT,
+        end_time=FROZEN_INSTANT,
+    )
+    await call()
+
+    counted: Final = await handler.internal_usage_cache.async_get_cache(
+        key=f"{api_key}::{FROZEN_INSTANT.strftime('%Y-%m-%d-%H-%M')}::request_count", litellm_parent_otel_span=None
+    )
+    assert counted == {"current_requests": 1, "current_tpm": 0, "current_rpm": 2}, counted
 
 
 @pytest.mark.asyncio

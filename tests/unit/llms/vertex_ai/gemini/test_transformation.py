@@ -9,7 +9,7 @@ import uuid
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from itertools import chain
-from typing import Final
+from typing import Final, cast
 from unittest.mock import Mock
 
 import httpx
@@ -24,9 +24,9 @@ from litellm.llms.vertex_ai.gemini import transformation
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
-from litellm.types.llms import openai
 from litellm.types import completion
-from litellm.types.llms.vertex_ai import RequestBody
+from litellm.types.llms import openai
+from litellm.types.llms.vertex_ai import ContentType, RequestBody
 from tests.unit.conftest import AsyncOnlyImageFetch
 
 
@@ -482,6 +482,104 @@ async def test_vertex_ai_async_transform_inlines_only_the_urls_gemini_cannot_fet
         {"file_data": {"mime_type": "application/pdf", "file_uri": files_api_pdf}},
     ]
     assert sorted(async_only_image_fetch.fetched) == sorted([plain_http_png, extensionless_https])
+
+
+_EMPTY_USER_MESSAGES: Final = (
+    pytest.param({"role": "user", "content": ""}, id="empty_string"),
+    pytest.param({"role": "user", "content": []}, id="empty_list"),
+    pytest.param({"role": "user", "content": None}, id="null"),
+    pytest.param({"role": "user"}, id="missing"),
+    pytest.param({"role": "user", "content": [{"type": "text", "text": ""}]}, id="empty_text_block"),
+)
+
+
+@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+def test_an_empty_trailing_user_message_still_ends_the_request_on_a_user_turn(
+    empty_user_message: openai.AllMessageValues,
+) -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Hello! How can I help?"},
+            empty_user_message,
+        ]
+    )
+
+    assert contents == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello! How can I help?"}]},
+        {"role": "user", "parts": [{"text": " "}]},
+    ]
+
+
+@pytest.mark.parametrize("malformed_content", [pytest.param(0, id="int"), pytest.param({}, id="object")])
+def test_a_trailing_user_message_with_malformed_content_gets_no_blank_user_turn(malformed_content: object) -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        cast(
+            list[openai.AllMessageValues],
+            [
+                {"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": "Hello!"},
+                {"role": "user", "content": malformed_content},
+            ],
+        )
+    )
+
+    assert contents == [
+        {"role": "user", "parts": [{"text": "Hi"}]},
+        {"role": "model", "parts": [{"text": "Hello!"}]},
+    ]
+
+
+_WEATHER_TOOL_CALL: Final = {
+    "role": "assistant",
+    "content": None,
+    "tool_calls": [
+        {
+            "id": "call_weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+        }
+    ],
+}
+_WEATHER_TOOL_RESULT: Final = {"role": "tool", "tool_call_id": "call_weather", "content": "Sunny"}
+
+
+def _all_parts(contents: list[ContentType]) -> list[object]:
+    return list(chain.from_iterable(content["parts"] for content in contents))
+
+
+@pytest.mark.parametrize(
+    "later_turns",
+    [
+        pytest.param(
+            [{"role": "assistant", "content": "Still there?"}, {"role": "user", "content": "Yes"}],
+            id="assistant_reply",
+        ),
+        pytest.param([_WEATHER_TOOL_CALL, _WEATHER_TOOL_RESULT], id="function_call"),
+    ],
+)
+@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+def test_an_empty_user_message_before_later_turns_gets_no_blank_user_turn(
+    empty_user_message: openai.AllMessageValues, later_turns: list[openai.AllMessageValues]
+) -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, empty_user_message, *later_turns]
+    )
+
+    assert {"text": " "} not in _all_parts(contents)
+
+
+@pytest.mark.parametrize("empty_user_message", _EMPTY_USER_MESSAGES)
+def test_an_empty_user_message_after_tool_results_gets_no_blank_user_turn(
+    empty_user_message: openai.AllMessageValues,
+) -> None:
+    contents: Final = transformation.gemini_convert_messages_with_history(
+        [{"role": "user", "content": "Weather in Paris?"}, _WEATHER_TOOL_CALL, _WEATHER_TOOL_RESULT, empty_user_message]
+    )
+
+    assert [tuple(part) for part in contents[2]["parts"]] == [("function_response",)]
+    assert {"text": " "} not in _all_parts(contents)
 
 
 def _echo_request_parts(request: httpx.Request) -> httpx.Response:
