@@ -7,10 +7,13 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.factory import response_schema_prompt
 from litellm.litellm_core_utils.reasoning_effort_capability import (
+    catalog_reasoning_efforts_for_model,
     configured_reasoning_effort_rounding,
-    declared_reasoning_efforts_for_model,
 )
-from litellm.litellm_core_utils.reasoning_effort_strength import nearest_declared_reasoning_effort
+from litellm.litellm_core_utils.reasoning_effort_strength import (
+    ReasoningEffortRounding,
+    nearest_declared_reasoning_effort,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam, ChatCompletionUserMessage
 from litellm.utils import ModelInfoLookupMiss, lookup_model_info_for_registration
@@ -20,6 +23,7 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 ZAI_API_BASE: Final = "https://api.z.ai/api/paas/v4"
 TOKEN_LIMIT_PARAMS: Final = frozenset({"max_tokens", "max_completion_tokens"})
 REWRITTEN_PARAMS: Final = TOKEN_LIMIT_PARAMS | {"reasoning_effort"}
+REASONING_OFF: Final = "none"
 
 
 def _is_json_object(
@@ -42,23 +46,26 @@ def _requested_level(requested: object) -> object:
     return _json_field(requested, "effort") if _is_json_object(requested) else requested
 
 
-def _weakest_declared(declared: Sequence[str]) -> str:
-    return nearest_declared_reasoning_effort("minimal", declared, "up")
+def _declared_effort(
+    level: str, declared: Sequence[str], drop_params: bool, rounding: ReasoningEffortRounding
+) -> str | None:
+    rounded: Final = nearest_declared_reasoning_effort(level, declared, rounding)
+    return rounded if rounded in declared or not drop_params else None
 
 
-def _declared_effort(level: str, declared: Sequence[str], drop_params: bool) -> str | None:
-    rounded: Final = nearest_declared_reasoning_effort(level, declared, configured_reasoning_effort_rounding())
-    if rounded in declared or not drop_params:
-        return rounded
-    return _weakest_declared(declared) if level == "none" else None
-
-
-def _accepted_effort(model: str, requested: object, drop_params: bool) -> object:
+def _accepted_effort(
+    model: str,
+    requested: object,
+    drop_params: bool,
+    rounding: ReasoningEffortRounding,
+    declared: Sequence[str] | None,
+) -> object:
     level: Final = _requested_level(requested)
-    declared: Final = declared_reasoning_efforts_for_model(model, "zai")
-    if not isinstance(level, str) or declared is None:
+    if not isinstance(level, str):
+        return None if drop_params else level
+    if declared is None:
         return level
-    accepted: Final = _declared_effort(level, declared, drop_params)
+    accepted: Final = _declared_effort(level, declared, drop_params, rounding)
     if accepted is not None and accepted != level:
         verbose_logger.debug(
             "zai: %s takes reasoning_effort %s, sending %s in place of %s", model, declared, accepted, level
@@ -139,6 +146,8 @@ class ZAIChatConfig(OpenAIGPTConfig):
         optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
+        reasoning_effort_rounding: ReasoningEffortRounding | None = None,
+        declared_reasoning_efforts: Sequence[str] | None = None,
     ) -> dict[str, object]:  # mutable-ok: request pipeline adds parameters to the returned body
         supported_params: Final = self.get_supported_openai_params(model)
         sent: Final = {param: value for param, value in non_default_params.items() if param in supported_params}
@@ -149,13 +158,23 @@ class ZAIChatConfig(OpenAIGPTConfig):
         )
         max_tokens: Final = sent.get("max_tokens") if falls_back_to_max_tokens else max_completion_tokens
         requested_effort: Final = sent.get("reasoning_effort")
+        turns_thinking_off: Final = _requested_level(requested_effort) == REASONING_OFF and "thinking" not in sent
+        rounding: Final = reasoning_effort_rounding or configured_reasoning_effort_rounding()
+        declared: Final = (
+            declared_reasoning_efforts
+            if declared_reasoning_efforts is not None
+            else catalog_reasoning_efforts_for_model(model, "zai")
+        )
         reasoning_effort: Final = (
-            None if requested_effort is None else _accepted_effort(model, requested_effort, drops_unsupported)
+            None
+            if requested_effort is None or turns_thinking_off
+            else _accepted_effort(model, requested_effort, drops_unsupported, rounding, declared)
         )
         return {
             **optional_params,
             **{param: value for param, value in sent.items() if param not in REWRITTEN_PARAMS},
             **({} if max_tokens is None else {"max_tokens": max_tokens}),
+            **({"thinking": {"type": "disabled"}} if turns_thinking_off else {}),
             **({} if reasoning_effort is None else {"reasoning_effort": reasoning_effort}),
         }
 

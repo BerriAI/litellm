@@ -570,6 +570,7 @@ from .exceptions import (
 
 if TYPE_CHECKING:
     from litellm import MockException
+    from litellm.litellm_core_utils.reasoning_effort_strength import ReasoningEffortRounding
 
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
@@ -5805,6 +5806,18 @@ def _declared_reasoning_efforts(model_info: Mapping[str, object] | None) -> tupl
     return deployment_reasoning_effort_levels(model_info) or ()
 
 
+def _reasoning_effort_rounding(model_info: Mapping[str, object] | None) -> ReasoningEffortRounding:
+    from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_rounding
+
+    return deployment_reasoning_effort_rounding(model_info)
+
+
+def _deployment_reasoning_effort_levels(model_info: Mapping[str, object] | None) -> tuple[str, ...] | None:
+    from litellm.litellm_core_utils.reasoning_effort_capability import deployment_reasoning_effort_levels
+
+    return deployment_reasoning_effort_levels(model_info)
+
+
 def _map_params_with_provider_config(
     provider_config: BaseConfig,
     *,
@@ -5828,6 +5841,15 @@ def _map_params_with_provider_config(
             reasoning_drop_logger=reasoning_drop_logger,
             base_model=base_model,
             allowed_openai_params=allowed_openai_param_names(allowed_openai_params),
+        )
+    if isinstance(provider_config, litellm.ZAIChatConfig):
+        return provider_config.map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=drop_params,
+            reasoning_effort_rounding=_reasoning_effort_rounding(model_info),
+            declared_reasoning_efforts=_deployment_reasoning_effort_levels(model_info),
         )
     if isinstance(provider_config, (litellm.ChatGPTConfig, litellm.GithubCopilotConfig)):
         return provider_config.map_openai_params(
