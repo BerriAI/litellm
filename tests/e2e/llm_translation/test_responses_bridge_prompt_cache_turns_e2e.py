@@ -335,7 +335,7 @@ def _continued(turns: tuple[Turn, ...]) -> tuple[Turn, ...]:
 
 def _direct_caches_the_first_prompt_on_every_continued_turn(turns: tuple[Turn, ...]) -> bool:
     floor: Final = SHARE_OF_FIRST_PROMPT * turns[0].input_tokens
-    return all(turn.cached_tokens >= floor for turn in _continued(turns))
+    return turns[0].input_tokens > 0 and all(turn.cached_tokens >= floor for turn in _continued(turns))
 
 
 def _matches_direct(direct: tuple[Turn, ...]) -> Callable[[tuple[Turn, ...]], bool]:
