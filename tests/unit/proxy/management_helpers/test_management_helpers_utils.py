@@ -1684,8 +1684,8 @@ async def test_add_new_member_gives_a_new_user_the_default_budget_windows(new_me
     ids=["licensed", "no-enterprise-license"],
 )
 def test_licensed_default_internal_user_params_drops_model_max_budget_without_a_license(
-    monkeypatch, caplog, premium_user, expected, warned
-):
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, premium_user: bool, expected: dict[str, object], warned: bool
+) -> None:
     import logging
 
     from litellm.proxy.management_helpers.utils import licensed_default_internal_user_params
@@ -1699,7 +1699,7 @@ def test_licensed_default_internal_user_params_drops_model_max_budget_without_a_
         {"max_budget": 7.0, "model_max_budget": {"gpt-4o": {"budget_limit": 5.0}}},
     )
 
-    applied = licensed_default_internal_user_params()
+    applied: Final = licensed_default_internal_user_params()
 
     assert applied == expected
     assert [record.getMessage() for record in caplog.records if "model_max_budget" in record.getMessage()] == (
@@ -1710,15 +1710,15 @@ def test_licensed_default_internal_user_params_drops_model_max_budget_without_a_
 
 
 def test_licensed_default_internal_user_params_does_not_warn_when_no_model_max_budget_is_configured(
-    monkeypatch, caplog
-):
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     import logging
 
     from litellm.proxy.management_helpers.utils import licensed_default_internal_user_params
 
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
     caplog.set_level(logging.WARNING, logger="LiteLLM Proxy")
-    defaults = {"max_budget": 7.0, "model_max_budget": {}}
+    defaults: Final = {"max_budget": 7.0, "model_max_budget": {}}
     monkeypatch.setattr(litellm, "default_internal_user_params", defaults)
 
     assert licensed_default_internal_user_params() is defaults

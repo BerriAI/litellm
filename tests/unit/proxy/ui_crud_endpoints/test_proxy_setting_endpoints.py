@@ -4919,20 +4919,24 @@ def test_background_chat_settings_failed_save_does_not_enable_runtime(background
     audit.assert_not_awaited()
 
 
-def test_update_internal_user_settings_stores_and_returns_model_max_budget(mock_proxy_config, mock_auth, monkeypatch):
+def test_update_internal_user_settings_stores_and_returns_model_max_budget(
+    mock_proxy_config: dict[str, object], mock_auth: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import litellm
 
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     monkeypatch.setattr(litellm, "default_internal_user_params", {})
-    budget = {"gpt-4o": {"budget_limit": 5.0, "time_period": "30d"}}
+    budget: Final = {"gpt-4o": {"budget_limit": 5.0, "time_period": "30d"}}
 
-    updated = client.patch("/update/internal_user_settings", json={"max_budget": 10.0, "model_max_budget": budget})
+    updated: Final = client.patch(
+        "/update/internal_user_settings", json={"max_budget": 10.0, "model_max_budget": budget}
+    )
 
     assert updated.status_code == 200, updated.text
     assert updated.json()["settings"]["model_max_budget"] == budget
     assert litellm.default_internal_user_params["model_max_budget"] == budget
-    fetched = client.get("/get/internal_user_settings").json()
+    fetched: Final = client.get("/get/internal_user_settings").json()
     assert fetched["values"]["model_max_budget"] == budget
     assert fetched["field_schema"]["properties"]["model_max_budget"]["description"].startswith(
         "Default per-model budgets"
@@ -4953,15 +4957,20 @@ def test_update_internal_user_settings_stores_and_returns_model_max_budget(mock_
     ids=["no-enterprise-license", "malformed-budget-limit", "budget-not-an-object"],
 )
 def test_update_internal_user_settings_rejects_model_max_budget_and_saves_nothing(
-    mock_proxy_config, mock_auth, monkeypatch, premium_user, model_max_budget, expected_error
-):
+    mock_proxy_config: dict[str, Callable[[], int]],
+    mock_auth: None,
+    monkeypatch: pytest.MonkeyPatch,
+    premium_user: bool,
+    model_max_budget: dict[str, object],
+    expected_error: str,
+) -> None:
     import litellm
 
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", premium_user)
     monkeypatch.setattr(litellm, "default_internal_user_params", {})
 
-    rejected = client.patch(
+    rejected: Final = client.patch(
         "/update/internal_user_settings", json={"max_budget": 10.0, "model_max_budget": model_max_budget}
     )
 
@@ -4973,15 +4982,15 @@ def test_update_internal_user_settings_rejects_model_max_budget_and_saves_nothin
 
 @pytest.mark.parametrize("model_max_budget", [{}, None], ids=["empty", "null"])
 def test_update_internal_user_settings_accepts_an_empty_model_max_budget_without_a_license(
-    mock_proxy_config, mock_auth, monkeypatch, model_max_budget
-):
+    mock_proxy_config: dict[str, object], mock_auth: None, monkeypatch: pytest.MonkeyPatch, model_max_budget: dict[str, object] | None
+) -> None:
     import litellm
 
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", False)
     monkeypatch.setattr(litellm, "default_internal_user_params", {})
 
-    updated = client.patch(
+    updated: Final = client.patch(
         "/update/internal_user_settings", json={"max_budget": 10.0, "model_max_budget": model_max_budget}
     )
 

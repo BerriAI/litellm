@@ -1627,8 +1627,8 @@ async def test_get_user_object_upsert_stores_every_default_column_prisma_stored(
 
 @pytest.mark.asyncio
 async def test_get_user_object_upsert_without_an_enterprise_license_drops_only_the_default_model_max_budget(
-    caplog, rust_auth_stores: RustAuthStores, monkeypatch
-):
+    caplog: pytest.LogCaptureFixture, rust_auth_stores: RustAuthStores, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(
         litellm, "default_internal_user_params", {"max_budget": 7.0, "model_max_budget": {"gpt-4o": 5.0}}
     )
@@ -5781,8 +5781,7 @@ async def test_team_max_budget_check_dispatches_team_alert_from_the_shared_spend
 @pytest.mark.parametrize("send_percentage_alerts", [False, True])
 @pytest.mark.asyncio
 async def test_team_max_budget_check_still_rejects_over_budget_after_dispatching_the_alert(
-    send_percentage_alerts: bool,
-    monkeypatch: pytest.MonkeyPatch,
+    send_percentage_alerts: bool, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     team_object: Final = LiteLLM_TeamTable(
         team_id="team-1",
