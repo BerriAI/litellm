@@ -5,7 +5,7 @@ from typing import Final
 
 import httpx
 import pytest
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm.completion_extras.litellm_interactions_transformation import (
     InteractionsToCompletionBridgeHandler,
@@ -686,7 +686,7 @@ def test_reply_that_is_not_json_still_reaches_post_call_with_its_raw_body() -> N
     )
     log_obj: Final = _logging_stub("gemini-3-flash-preview")
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValidationError):
         _ = InteractionsToCompletionBridgeHandler().completion(
             model="gemini-3-flash-preview",
             messages=[{"role": "user", "content": "ping"}],
