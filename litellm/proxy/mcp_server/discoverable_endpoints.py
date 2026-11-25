@@ -1787,7 +1787,7 @@ async def hydrate_config_dcr_clients(servers: Sequence[MCPServer]) -> bool:
                     "hydrated persisted DCR client onto config MCP server server_id=%s", server.server_id
                 )
         except Exception as exc:  # noqa: BLE001  # one bad client must not block other servers
-            had_error = True  # rebind-ok: record a failure without skipping remaining servers
+            had_error = True
             verbose_logger.debug(
                 "load_servers_from_config: failed to hydrate DCR client for server_id=%s: %s", server.server_id, exc
             )
